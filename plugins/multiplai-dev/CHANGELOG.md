@@ -17,6 +17,160 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-10-10
+
+### Added
+- review: each need can now say where to look (`where`) when no single
+  command gets the information: a console page and its path, a dashboard, a
+  file outside the repository, or the team that owns it. The finder and
+  verifier prompts ask for it whenever the command is empty and tell the
+  agent never to leave both empty. `findings.json` carries it on every need
+  (an older file without it still loads), and `review-<slug>.md` and
+  `summary-<slug>.md` print it as "Where to look:". A need with neither now
+  says "The review named no command and no place to look." instead of "No
+  command is known."
+- review-viewer: an item on the **Needs you** tab with no command and no
+  place to look has an **Ask the session** button. It puts a question about
+  the item in the chat, for you to read and send.
+- review: the verifier labels what each finding is about (`topic`: code,
+  tests, docs, config, infra, data, security, performance or process),
+  exported in `findings.json`. review-viewer shows it as a badge on the list
+  and the finding; for an older review it guesses from the file path and
+  shows the guess in italics.
+- review-viewer: **Copy as markdown** on a finding copies it for whoever will
+  fix it: claim, file and lines (with a GitHub link when the remote is on
+  GitHub), failure scenario, explanation, expected behaviour, verdict and
+  cited code. **Download .md** saves the same text as a file, to
+  attach or send.
+- review-viewer: **Show all files** above the file list shows every file in
+  the repository at the reviewed commit, grouped by directory, with the
+  files the change did not touch greyed. Opening one shows the file whole,
+  with no diff. Directories fold, and the filter and Go to (Cmd/Ctrl+K)
+  search all files while it is on. Large repositories are cut at 20,000
+  files, with a note saying so.
+- review-viewer: Cmd+click (Ctrl+click on Linux and Windows) on a name in
+  the code lists where it is defined at the reviewed commit, from a text
+  search for definitions (`def`, `class`, `function`, `const`, `func`,
+  `type`, SQL `CREATE FUNCTION` and the like, and `NAME =`). Each result
+  opens that file at the line. Holding the key underlines the name under
+  the pointer. It finds only definitions written in a recognisable form, in
+  files the page may show.
+- review-viewer: **GitHub** and **Slack** buttons on a finding open a dialog
+  with the finding as markdown, which you can edit, and the choice of a PR
+  comment or a comment on the finding's line (for a review of a PR), or a
+  Slack recipient and an optional note. **Send** in the dialog is the
+  confirmation: the session posts the text exactly as written, once, and
+  asks nothing more in the terminal. Slack needs the `multiplai-messaging`
+  Slack skill in the session (`serve --share slack`); without it, or for a
+  review that is not of a PR, the button says why it is off.
+
+- review: `--mode critical|full` on `review` and `batch` (default `full`;
+  `resume` keeps the mode; recorded as `mode` in `findings.json`). `full`
+  lists every finding to act on, as before. `critical` lists and counts only
+  the findings the verifier rates as breaking users or the business after
+  merge; the rest go to the appendix of `review-<slug>.md`, and review-viewer
+  shows **Critical only** and hides them. Both modes run the same finders and
+  verifiers, so they cost the same. Use `critical` before a merge or release,
+  when only what will break matters.
+- review: the verifier rates each finding's `impact`: what goes wrong in
+  production if the change is merged as it is. The values are
+  `breaks-users`, `breaks-business` (money, a failing deploy or job, access
+  wider than intended, a wrong audit or billing record, or a document that
+  would lead an operator to a wrong action in production),
+  `correctness-only` (wrong, but no path after merge reaches anyone; every
+  missing or weak test) and `hygiene`. It is exported in `findings.json` and
+  printed under each finding. review-viewer shows it as a badge beside the
+  topic.
+- review, review-viewer: findings are listed in **Code**, **Tests** and
+  **Docs** sections by topic, with severity read within each section. A
+  HIGH test gap is listed and counted under Tests, not beside the code
+  defects. The counts in `review-<slug>.md`, `summary-<slug>.md` and the
+  final `review finished:` line are per section. In review-viewer each
+  section folds: Code starts open, Tests and Docs folded, and picking a
+  finding opens its section.
+- review-viewer: hovering a finding in the list shows ✓ and ✕ to accept or
+  reject it without opening it, and **Accept all**, beside the "N of M still
+  need a decision" count, accepts every finding that still needs one after
+  a confirmation. Refuted and decided findings are left as they are.
+- review-viewer: once the Findings list scrolls out of sight, a bar under
+  the tabs offers **Back to the list**, with Prev and Next and where you
+  are.
+- review-viewer: hovering a status, topic, impact or label badge shows the
+  help's definition of its word. The help now defines each topic.
+
+### Changed
+- review-viewer: **Needs you** is its own tab, with a count, instead of a
+  block at the top of the Summary tab, so the Summary opens on what the
+  change is about. Items are grouped by what they block, so a finding's
+  claim shows once above its needs; the review's own gaps come first.
+- review-viewer: an accepted or deferred finding now leaves the Findings
+  list, as a rejected one already did, so the list holds only what still
+  needs a decision. The checkbox is now **Show decided and refuted**.
+  j/k go on from a finding a decision just hid. Deciding the open finding
+  opens the next one that still needs a decision and scrolls back up to the
+  list; after the last, the finding page is empty. A decided finding keeps
+  its marker in the code and its Go to entry; only a refuted one loses them.
+- review-viewer: findings a gate rejected, and findings the review labelled
+  low-value or a repeat of one you rejected, are no longer shown at all. No
+  list, count, code marker, Go to result or risk score includes them, and a
+  complete walkthrough need not link them. The Checked tab still lists the
+  gate-rejected ones with the rule that rejected them. Before, repeats and
+  low-value findings sat in a folded group and were counted.
+- review: `review-<slug>.md`, `summary-<slug>.md` and the `<SEV>-only.md`
+  rollups list and count only findings to act on: confirmed or unverifiable,
+  and not low-value or a repeat. Low-value and repeat findings move to the
+  appendix of `review-<slug>.md`, with the refuted, gate-rejected and merged
+  ones; the summary no longer lists dropped findings. `findings.json` keeps
+  every finding.
+- review: a rerun on the same commit now keeps the previous run as an
+  earlier round (`rounds/<sha>/`, then `<sha>-2/` for a second one), so it
+  is checked for repeats against your decisions on that run. Before, a
+  same-commit rerun had nothing to compare with.
+- review: a verify call that fails is now tried up to three times, and an
+  answer without an impact, or without a topic from the list, is re-asked.
+  A finding still without a verdict stops the run with exit code 5 after the
+  other verifiers finish, keeping their verdicts; `resume` asks again only
+  for that finding. Before, such a
+  finding was recorded as `unverifiable` with the reason "the verifier
+  failed", lowered one step, and shown.
+- review: `post` without `--decisions` posts the HIGH and MEDIUM findings
+  the review lists, so never a low-value or repeat finding, and in critical
+  mode only `breaks-*` ones.
+- review: a finding labelled a repeat of one you rejected takes that
+  rejection under its new wording. The next round matches the same wording
+  by id, with no agent call, and the repeat stays hidden however many rounds
+  it comes back.
+- review-viewer: lines are picked to ask about on the line numbers only. A +
+  shows on hover; click, drag down the numbers, or Shift+click to extend. A
+  bar with **Ask about these lines** and ✕ appears, and Esc or ✕ clears it.
+  Clicking a changed line no longer puts its block into the chat, and
+  selecting code text no longer opens a popup.
+- review-viewer: a finding on the Findings tab now reads in this order: the
+  claim, **Failure scenario**, **Explanation** (the review's assessment and
+  its reason, previously labelled "Assessment" and hidden for a useful
+  finding), expected behaviour, verdict, cited code, needs, **Checked by**,
+  **Explained in the walkthrough**, then the decision.
+
+### Fixed
+- review-viewer: a critical review whose findings are all below
+  `breaks-*` no longer says they "were rejected by its checks or labelled
+  low-value or repeat"; the empty list says how many critical mode left out.
+- review-viewer: `serve --share slack` against a running viewer started
+  without it now restarts that viewer, so the page offers Slack; before, it
+  reused the viewer and the Slack button stayed disabled.
+- review-viewer: changed lines no longer show a pointer cursor, since a
+  plain click on them does nothing.
+- review: the Needs you headings in `review-<slug>.md` and
+  `summary-<slug>.md` no longer say every need has a command. A need that
+  blocks a finding the review does not list (critical mode, low-value,
+  repeat) is printed under that finding in the review's appendix, and the
+  summary says how many it left out; before, it was in `findings.json`
+  only.
+- review-viewer: the count on the selected tab (Reviews, Findings, Checked)
+  is legible again. It kept the muted text colour on the tab's selected
+  background, 1.2:1 contrast on Solarized; it now takes the tab's own text
+  colour.
+
 ## [0.31.0] - 2026-10-09
 
 ### Added

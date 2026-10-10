@@ -20,7 +20,9 @@ a final `plan: <path>` line, and calls no model.
 
 Exit codes: 0 done; 1 a target failed; 2 bad input, unresolvable target, or
 post refused; 3 repository not trusted; 4 the budget circuit breaker stopped
-the run (resume with a higher --max-cost-usd to continue).
+the run (resume with a higher --max-cost-usd to continue); 5 the verifier gave
+no usable answer for some findings after three tries each (resume retries only
+those).
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ import sys
 from pathlib import Path
 
 from .budget import DEFAULT_MAX_USD
+from .models import MODES
 
 log = logging.getLogger("review_pipeline")
 
@@ -68,6 +71,13 @@ def _trust_flag(p: argparse.ArgumentParser) -> None:
 def _budget_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument("--max-cost-usd", type=float, default=DEFAULT_MAX_USD,
                    help=f"Circuit breaker per target, in USD (default {DEFAULT_MAX_USD:g}; 0 = no ceiling).")
+
+
+def _mode_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--mode", choices=MODES, default="full",
+                   help="full (default): list every finding to act on, in Code, Tests and Docs sections. "
+                        "critical: list only findings the verifier rates as breaking users or the business "
+                        "after merge; the rest go to the review's appendix")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -109,12 +119,14 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--deployed-in", help="Branch to report whether head is deployed in (origin/<name>)")
     _trust_flag(rv)
     _budget_flag(rv)
+    _mode_flag(rv)
 
     bt = sub.add_parser("batch", parents=[common], help="Review a YAML list of targets, then write rollups")
     bt.add_argument("file", help="YAML list of {repo, branch|pr|range, tickets, deployed_in}")
     bt.add_argument("--parallel", type=int, default=2, help="Targets reviewed at once (default 2)")
     _trust_flag(bt)
     _budget_flag(bt)
+    _mode_flag(bt)
 
     ru = sub.add_parser("rollup", parents=[common], help="Regenerate HIGH/MEDIUM/LOW-only.md and runs.jsonl from findings.json files")
     ru.add_argument("paths", nargs="*", help="findings.json files in order (default: <out>/*/findings.json)")
@@ -160,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     from . import orchestrator, render, sdk, target
     from .config import load_config
     from .post import PostError, post
+    from .stages.verify import VerifyIncomplete
 
     out = Path(args.out).expanduser().resolve() if args.out else default_out()
 
@@ -197,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         spec = orchestrator.TargetSpec(repo=args.repo or "", branch=args.branch, pr=args.pr, range=args.range_,
                                        tickets=args.ticket, deployed_in=args.deployed_in,
                                        base_branch=args.base_branch, fetch=args.fetch,
-                                       tree=args.tree, path=args.path, dir=args.dir)
+                                       tree=args.tree, path=args.path, dir=args.dir, mode=args.mode)
         if args.plan_only:
             # Reads git only: nothing reaches a model, so no trust is needed and no ledger is kept.
             try:
@@ -271,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "batch":
-            specs = orchestrator.load_batch(Path(args.file))
+            specs = orchestrator.load_batch(Path(args.file), args.mode)
             out.mkdir(parents=True, exist_ok=True)
             print(f"out: {out}", flush=True)
             written, failures = asyncio.run(orchestrator.batch(
@@ -290,6 +303,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"STOPPED: {e}\n{e.diagnosis}\nResume with: python -m review_pipeline resume <out>/<slug> "
               f"--max-cost-usd <higher>", file=sys.stderr)
         return 4
+    except VerifyIncomplete as e:
+        print(f"STOPPED: {e}\nThe other verdicts are kept. Retry only these findings with: "
+              f"python -m review_pipeline resume <out>/<slug> --trust-repo", file=sys.stderr)
+        return 5
     except sdk.AgentCallError as e:
         log.error("review failed: %s", e, exc_info=True)
         print(f"ERROR: {e}", file=sys.stderr)

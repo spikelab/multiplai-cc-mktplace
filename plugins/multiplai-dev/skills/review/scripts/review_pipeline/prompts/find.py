@@ -114,7 +114,8 @@ SCHEMA = """\
                "dimension": "" }],
  "needs": [{"what": "one sentence naming what you could not check, and why it matters here",
             "cause": "no-access" | "unreachable",
-            "command": "one read-only shell command that fetches it, or empty"}]}"""
+            "command": "one read-only shell command that fetches it, or empty",
+            "where": "where a person finds it when no single command does, or empty"}]}"""
 
 NEEDS_RULES = """\
 When you could not check something your task asks for, because you could not read it (a provider's
@@ -124,7 +125,11 @@ instead of guessing. Never write a finding to say you could not check something.
 reach it. `command` is ONE read-only shell command, on one line with no pipes, redirects or `;`,
 that a person with normal access to this project would run to get it, such as
 `gh api repos/<owner>/<repo>/rules/branches/main` with the real names filled in; leave it empty when
-you know of none. Leave `needs` empty when you checked everything."""
+you know of none. `where` tells a person where to find it when no such command gets it: the console
+page and its path (Console > Dataform > <repository> > Workflow execution logs), the API method,
+the dashboard, the file outside this repository, or the team that owns it, with the real names you
+read filled in. Fill `where` whenever `command` is empty; never leave both empty. Leave `needs`
+empty when you checked everything."""
 
 
 FILE_RULE = (

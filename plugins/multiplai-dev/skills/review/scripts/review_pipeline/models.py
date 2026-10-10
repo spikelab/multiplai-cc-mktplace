@@ -95,6 +95,20 @@ class Finding(_Model):
 
 
 NEED_CAUSES: tuple[str, ...] = ("no-access", "lookup-failed", "unreachable")
+# What a finding is about, as the verifier labels it. The page shows it as a badge.
+TOPICS: tuple[str, ...] = ("code", "tests", "docs", "config", "infra", "data", "security", "performance",
+                           "process")
+# What goes wrong in production if the change is merged as it is, as the
+# verifier rates it. `--mode critical` lists only CRITICAL_IMPACTS.
+IMPACTS: tuple[str, ...] = ("breaks-users", "breaks-business", "correctness-only", "hygiene")
+CRITICAL_IMPACTS: tuple[str, ...] = ("breaks-users", "breaks-business")
+MODES: tuple[str, ...] = ("full", "critical")
+# The section a finding is listed in, by topic; any other topic, or none, is "code".
+SECTIONS: tuple[str, ...] = ("code", "tests", "docs")
+
+
+def section_of(topic: str | None) -> str:
+    return topic if topic in ("tests", "docs") else "code"
 
 
 class NeedAsk(_Model):
@@ -106,6 +120,7 @@ class NeedAsk(_Model):
     what: str
     cause: str = "no-access"
     command: str = ""
+    where: str = ""
 
     @field_validator("cause", mode="before")
     @classmethod
@@ -119,12 +134,15 @@ class Need(BaseModel):
     `blocks` is a finding id, or "review" for what the finders and the
     pipeline's own lookups could not check. `command` is one read-only shell
     command, or "" when none is known or `need_gate` blanked it. The pipeline
-    never runs it.
+    never runs it. `where` says where a person would look when one command
+    does not get it: a console page, a dashboard, a file outside the repo, or
+    the team that owns it; "" when the agent named none.
     """
     what: str
     blocks: str = "review"
     cause: Literal["no-access", "lookup-failed", "unreachable"] = "no-access"
     command: str = ""
+    where: str = ""
     source: Literal["verifier", "finder", "pipeline"] = "pipeline"
 
 
@@ -138,6 +156,42 @@ class Verdict(_Model):
     expected_behaviour: str = ""
     # What the verifier could not read, each with a command a person could run.
     needs: list[NeedAsk] = Field(default_factory=list)
+    # What the finding is about, one of TOPICS; "" when the verifier gave none
+    # or one not in the list. Exported on the finding as `topic`.
+    topic: str = ""
+    # What breaks in production if merged as is, one of IMPACTS; "" for a
+    # refuted finding and in checkpoints written before 0.32.
+    impact: str = ""
+
+    @field_validator("topic", mode="before")
+    @classmethod
+    def _known_topic(cls, value) -> str:
+        value = str(value or "").strip().lower()
+        return value if value in TOPICS else ""
+
+    @field_validator("impact", mode="before")
+    @classmethod
+    def _known_impact(cls, value) -> str:
+        value = str(value or "").strip().lower()
+        return value if value in IMPACTS else ""
+
+
+class VerifierAnswer(Verdict):
+    """The verifier's answer as parsed: `impact` and `topic` are required unless refuted.
+
+    A missing or unknown impact or topic fails the parse, so
+    `agent_call_structured` re-asks; the stage stores a plain `Verdict`. The
+    topic decides a finding's section and whether its impact is capped, so a
+    blanked one would put a test gap in Code with a `breaks-*` impact.
+    """
+
+    @model_validator(mode="after")
+    def _impact_required(self) -> "VerifierAnswer":
+        if self.status != "refuted" and not self.impact:
+            raise ValueError(f"impact is required unless status is refuted: one of {', '.join(IMPACTS)}")
+        if self.status != "refuted" and not self.topic:
+            raise ValueError(f"topic is required unless status is refuted: one of {', '.join(TOPICS)}")
+        return self
 
 
 class DuplicateSet(_Model):
@@ -269,6 +323,9 @@ class Assessment(BaseModel):
 class ReviewState(BaseModel):
     target: TargetInfo
     stage: str = "target"  # last stage completed
+    # `full` lists every section; `critical` only findings whose impact is in
+    # CRITICAL_IMPACTS. Set when the review starts; `resume` keeps it.
+    mode: Literal["full", "critical"] = "full"
     findings: list[Finding] = Field(default_factory=list)
     verdicts: dict[str, Verdict] = Field(default_factory=dict)  # by finding id
     rejected: list[Rejected] = Field(default_factory=list)

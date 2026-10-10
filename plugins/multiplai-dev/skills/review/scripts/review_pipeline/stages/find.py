@@ -251,7 +251,7 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
     state.findings = kept
     # What the finders could not check blocks no one finding: it is a gap in the review.
     state.needs.extend(gated_need(Need(what=n.what, blocks="review", cause=n.cause, command=n.command,
-                                       source="finder"))
+                                       where=n.where, source="finder"))
                        for r in results for n in r.needs)
     ctx.counts = {"found": len(kept) + len([r for r in state.rejected if r.stage == "find"]),
                   "kept": len(kept), "rejected": len([r for r in state.rejected if r.stage == "find"]),

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from multiplai_core.log_utils import log_event
 
-from .render import SHOWN_STATUSES
+from .render import SHOWN_STATUSES, listed
 from .state import load_state
 from .target import github_web_base
 
@@ -30,12 +30,14 @@ class PostError(Exception):
     """Refused or failed; the message says why. Exit code 2."""
 
 
-def select(findings: list[dict], decisions: dict | None) -> list[dict]:
-    chosen = [f for f in findings if f["severity"] in POSTED_SEVERITIES and f["status"] in SHOWN_STATUSES]
+def select(findings: list[dict], decisions: dict | None, mode: str | None = None) -> list[dict]:
+    """HIGH and MEDIUM findings: the accepted ones with *decisions*, else the ones the review lists
+    (`render.listed`: no low-value or repeat, and in critical mode only `breaks-*`)."""
     if decisions is not None:
-        chosen = [f for f in chosen if (decisions.get(f["id"]) or {}).get("decision") == "accept"]
+        chosen = [f for f in findings if f["severity"] in POSTED_SEVERITIES and f["status"] in SHOWN_STATUSES
+                  and (decisions.get(f["id"]) or {}).get("decision") == "accept"]
     else:
-        chosen = [f for f in chosen if (f.get("assessment") or {}).get("label") != "repeat"]
+        chosen = [f for f in listed(findings, mode) if f["severity"] in POSTED_SEVERITIES]
     order = {s: i for i, s in enumerate(POSTED_SEVERITIES)}
     return sorted(chosen, key=lambda f: order[f["severity"]])
 
@@ -82,7 +84,7 @@ def post(target_dir: Path, decisions_path: Path | None, *, session_id: str = "")
             raise PostError(f"decisions file not found: {decisions_path}")
         decisions = json.loads(decisions_path.read_text(encoding="utf-8"))
     findings_file = json.loads((target_dir / "findings.json").read_text(encoding="utf-8"))
-    chosen = select(findings_file["findings"], decisions)
+    chosen = select(findings_file["findings"], decisions, findings_file.get("mode"))
     if not chosen:
         return "nothing to post: no accepted HIGH or MEDIUM findings"
     body = comment_body(findings_file, chosen)

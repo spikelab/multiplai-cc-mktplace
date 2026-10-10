@@ -27,6 +27,8 @@
     slug: null,
     detail: null,
     findingsById: new Map(),
+    shown: [],
+    shownFile: null,
     selected: null,
     filePath: null,
     view: null,
@@ -34,7 +36,12 @@
     openRows: new Map(),
     shownRows: new Set(),
     showHidden: false,
+    // The Findings list's sections a reader opened; Code starts open.
+    openSections: new Set(["code"]),
     fileFilter: "",
+    changed: new Set(),
+    showAllFiles: false,
+    dirToggled: new Map(),
     questions: [],
     replyRows: [],
     replies: new Map(),
@@ -65,6 +72,9 @@
     fatal: null,
     toastTimer: null,
     palette: { items: [], index: 0 },
+    defGen: 0,
+    defEvent: null,
+    pointer: null,
   };
 
   // --- small helpers ---------------------------------------------------------
@@ -299,7 +309,14 @@
     state.pollGen += 1;
     state.slug = slug;
     state.detail = await api(targetUrl());
-    state.findingsById = new Map(state.detail.findings.findings.map((f) => [f.id, f]));
+    // Gate-rejected, low-value and repeat findings are never shown or counted
+    // (L.shownFindings); everything below reads state.shown.
+    state.shownFile = L.shownFile(state.detail.findings);
+    state.shown = state.shownFile.findings;
+    state.findingsById = new Map(state.shown.map((f) => [f.id, f]));
+    state.changed = new Set(state.detail.files);
+    state.dirToggled = new Map();
+    renderAllFilesToggle();
     state.viewed = state.detail.viewed || {};
     state.questions = state.detail.questions || [];
     state.replyRows = [];
@@ -336,7 +353,7 @@
       renderSummary();
     }, WALK_WAIT_MS + 50);
     await Promise.all([pollOnce(), pollWalk()]);
-    const first = L.findingOrder(L.groupFindings(state.detail.findings.findings, state.detail.decisions, state.showHidden))[0];
+    const first = L.findingOrder(L.groupFindings(state.shown, state.detail.decisions, state.showHidden))[0];
     if (first) await selectFinding(first, { stay: true });
     else {
       renderDetail();
@@ -382,6 +399,7 @@
         pr.author ? el("span", { class: "muted", text: " by " + pr.author }) : null,
         url ? el("a", { href: url, target: "_blank", rel: "noreferrer noopener", text: " open on GitHub" }) : null);
     }
+    $("mode-pill").hidden = state.detail.findings.mode !== "critical";
     const notice = $("notice");
     notice.textContent = state.detail.notice || "";
     notice.hidden = !state.detail.notice;
@@ -393,16 +411,21 @@
     renderTabs();
     if (state.view) renderCode();
     renderThread();
+    updateFindingNav();
   }
 
   const TABS = { summary: ["tab-summary", "summary"], walk: ["tab-walk", "walkthrough"], finding: ["tab-finding", "finding"],
-    checked: ["tab-checked", "checked"] };
+    needs: ["tab-needs", "needs"], checked: ["tab-checked", "checked"] };
 
   function renderTabs() {
     if (state.view) renderFileNav();
     const checks = state.detail && state.detail.checks;
     if (state.tab === "checked" && !checks) state.tab = "summary";
     $("tab-checked").hidden = !checks;
+    const needs = state.detail ? L.needsItems(state.shownFile).length : 0;
+    if (state.tab === "needs" && !needs) state.tab = "summary";
+    $("tab-needs").hidden = !needs;
+    $("needs-count").textContent = needs ? String(needs) : "";
     $("checked-count").textContent = checks ? String(checks.agents.length) : "";
     for (const [name, [tab, panel]] of Object.entries(TABS)) {
       const on = state.tab === name;
@@ -414,7 +437,8 @@
     $("walk-count").textContent = state.walk ? String(n) : "";
     $("walk-count").classList.toggle("live", !state.walk || !state.walk.complete);
     $("walk-count").title = !state.walk ? "Waiting for the session" : state.walk.complete ? "" : "Still being written";
-    const nf = state.detail ? state.detail.findings.findings.length : 0;
+    // The same number as "N of M findings still need a decision": M.
+    const nf = state.detail ? L.undecidedCount(state.shown, state.detail.decisions).total : 0;
     $("finding-count").textContent = nf ? String(nf) : "";
   }
 
@@ -460,7 +484,7 @@
 
   /* The risk score, or null until the walkthrough has its risk block. */
   function currentRisk() {
-    const r = L.riskInputs(state.detail.stats, state.walk, state.detail.findings.findings,
+    const r = L.riskInputs(state.detail.stats, state.walk, state.shown,
       state.detail.decisions, state.detail.findings.target.files_changed);
     return r ? Object.assign({ inputs: r }, L.riskLevel(r)) : null;
   }
@@ -507,41 +531,56 @@
 
   // --- summary ---------------------------------------------------------------------
 
-  /* A suggested command, in a code block with a Copy button. Written by a
-   * model or the pipeline, so it is labelled to be read before running, and
-   * nothing here runs it. */
-  function needCommand(command) {
-    if (!command) return el("p", { class: "muted small", text: "No command is known." });
-    const box = el("div", {}, [
-      el("div", { class: "muted small", text: "suggested by the review: read it before running" }),
-      el("pre", {}, [el("code", { text: command })]),
-    ]);
-    addCopyButtons(box);
-    return box;
+  /* How a person gets what a need asks for: the suggested command, in a code
+   * block with a Copy button; where to look; or, when the review named
+   * neither, a button that puts a question about it in the chat. The command
+   * was written by a model or the pipeline, so it is labelled to be read
+   * before running, and nothing here runs it. */
+  function needAction(n) {
+    const out = [];
+    if (n.command) {
+      const box = el("div", {}, [
+        el("div", { class: "muted small", text: "suggested by the review: read it before running" }),
+        el("pre", {}, [el("code", { text: n.command })]),
+      ]);
+      addCopyButtons(box);
+      out.push(box);
+    }
+    if (n.where) out.push(el("div", { class: "need-where" }, [el("span", { class: "muted small", text: "Where to look: " }), n.where]));
+    if (!n.command && !n.where) {
+      out.push(el("div", { class: "need-ask" }, [
+        el("span", { class: "muted small", text: "The review named no command and no place to look. " }),
+        el("button", { class: "ctl ctl-sm", type: "button", text: "Ask the session",
+          title: "Put a question about this in the chat, for you to send",
+          onclick: () => { $("question").value = L.needQuestion(n); setChatOpen(true); renderAskAbout(); renderFab(); } }),
+      ]));
+    }
+    return out;
   }
 
   function renderNeeds() {
     const box = $("needs");
-    const items = L.needsItems(state.detail.findings);
-    box.hidden = !items.length;
+    const groups = L.needsGroups(state.shownFile);
     box.replaceChildren();
-    if (!items.length) return;
+    if (!groups.length) return;
     box.appendChild(el("h3", { class: "label-help" }, [el("span", { text: "Needs you" }), helpButton("needs", "Needs you")]));
-    box.appendChild(el("p", { class: "muted small", text: "The review could not get these. Run a command yourself " +
+    box.appendChild(el("p", { class: "muted small", text: "The review could not get these. Get each one yourself " +
       "to settle what it blocks." }));
-    const ul = el("ul");
-    for (const n of items) {
-      const blocks = n.findingId
-        ? el("button", { class: "cite-link", text: n.blocks,
-            onclick: () => { setTab("finding"); selectFinding(n.findingId); } })
-        : el("span", { text: n.blocks });
-      ul.appendChild(el("li", {}, [
-        el("div", { text: n.what }),
-        el("div", { class: "muted small" }, ["Blocks: ", blocks, " · Why: " + n.cause]),
-        needCommand(n.command),
-      ]));
+    for (const g of groups) {
+      const head = g.findingId
+        ? el("button", { class: "cite-link", text: g.blocks,
+            onclick: () => { setTab("finding"); selectFinding(g.findingId); } })
+        : el("span", { text: "the review as a whole" });
+      const ul = el("ul");
+      for (const n of g.items) {
+        ul.appendChild(el("li", {}, [
+          el("div", { text: n.what }),
+          el("div", { class: "muted small", text: "Why: " + n.cause }),
+        ].concat(needAction(n))));
+      }
+      box.appendChild(el("section", { class: "needs" }, [
+        el("div", { class: "need-blocks" }, [el("b", { text: "Blocks " }), head]), ul]));
     }
-    box.appendChild(ul);
   }
 
   function renderSummary() {
@@ -600,7 +639,7 @@
     } else {
       renderMarkdown(overview, state.walk.overview_md);
       overview.insertBefore(el("div", { class: "label", text: "Overview" }), overview.firstChild);
-      const cov = L.walkCoverage(state.walk, state.detail.files, state.detail.findings.findings);
+      const cov = L.walkCoverage(state.walk, state.detail.files, state.shown);
       overview.appendChild(el("p", { class: "coverage", text: "The reviews cover " + cov.files + " of " + cov.filesTotal +
         " changed files" + (cov.findingsTotal ? " and link " + cov.findings + " of " + cov.findingsTotal + " findings" : "") + "." }));
       if (!state.walk.complete) {
@@ -672,7 +711,7 @@
     renderWalk();
     renderSummary();
     if (!state.tabChosen && walk && state.tab === "walk" && !state.stepId && walk.steps.length) {
-      await selectStep(walk.steps[0].id, { open: !state.filePath || !state.detail.findings.findings.length });
+      await selectStep(walk.steps[0].id, { open: !state.filePath || !state.shown.length });
     }
   }
 
@@ -844,43 +883,91 @@
   function renderFindingList() {
     const box = $("findings");
     box.replaceChildren();
-    const findings = state.detail.findings.findings;
+    const findings = state.shown;
     const grouped = L.groupFindings(findings, state.detail.decisions, state.showHidden);
-    $("hidden-label").textContent = "Show refuted and rejected (" + grouped.hidden + ")";
+    $("hidden-label").textContent = "Show decided and refuted (" + grouped.hidden + ")";
     $("show-hidden").parentElement.hidden = !grouped.hidden;
     if (!findings.length) {
-      box.appendChild(emptyState("✓", (L.isTreeReview(state.detail.findings.target)
-        ? "No findings for this tree: every file is shown as added. "
-        : "No code review for these commits: this is the plain diff. ") +
-        "Select lines in the code to ask about them."));
+      // The only read of the unfiltered list: to say why nothing is shown.
+      const ff = state.detail.findings;
+      box.appendChild(emptyState("✓", (ff.findings.length
+        ? L.emptyListText(ff) + " "
+        : L.isTreeReview(ff.target)
+          ? "No findings for this tree: every file is shown as added. "
+          : "No code review for these commits: this is the plain diff. ") +
+        "Pick line numbers in the code to ask about them."));
     }
     const undecided = L.undecidedCount(findings, state.detail.decisions);
     if (undecided.total) {
-      box.appendChild(el("p", { class: "muted undecided",
-        text: undecided.open + " of " + undecided.total + " findings still need a decision" }));
-    }
-    for (const sev of L.SEVERITIES) {
-      const items = grouped.groups[sev] || [];
-      if (!items.length) continue;
-      box.appendChild(el("h2", { class: "sev-h " + sev, text: sev + " (" + items.length + ")" }));
-      for (const f of items) box.appendChild(findingItem(f));
-    }
-    if (grouped.folded.length) {
-      // Repeats of rejected findings and low-value ones: still findings, still
-      // decidable, collapsed so the rest come first.
-      const open = grouped.folded.some((f) => f.id === state.selected);
-      box.appendChild(el("details", { class: "folded-group", open: open }, [
-        el("summary", { text: "Repeats and low-value (" + grouped.folded.length + ")" }),
-        ...grouped.folded.map((f) => findingItem(f, true)),
+      box.appendChild(el("div", { class: "undecided" }, [
+        el("span", { class: "muted", text: undecided.open + " of " + undecided.total + " findings still need a decision" }),
+        undecided.open ? el("button", { class: "ctl ctl-sm accept-all", type: "button", text: "Accept all " + undecided.open,
+          title: "Accept every finding that still needs a decision; refuted and decided ones are left as they are",
+          onclick: acceptAll }) : null,
       ]));
+    }
+    if (findings.length && !L.findingOrder(grouped).length) {
+      box.appendChild(emptyState("✓", (undecided.total ? "Every finding has a decision." : "Every finding was refuted.") +
+        " Show decided and refuted brings them back."));
+    }
+    // Severity is read within a section: a HIGH under Tests is not a HIGH in the code.
+    // Each section folds; Code starts open, and selecting a finding opens its section.
+    for (const s of grouped.sections) {
+      const n = L.SEVERITIES.reduce((k, sev) => k + (s.groups[sev] || []).length, 0);
+      if (!n) continue;
+      const sec = el("details", { class: "finding-section", "data-section": s.section },
+        [el("summary", { class: "section-h", text: s.title + " (" + n + ")" })]);
+      sec.open = state.openSections.has(s.section);
+      sec.addEventListener("toggle", () => {
+        if (sec.open) state.openSections.add(s.section);
+        else state.openSections.delete(s.section);
+      });
+      for (const sev of L.SEVERITIES) {
+        const items = s.groups[sev] || [];
+        if (!items.length) continue;
+        sec.appendChild(el("h3", { class: "sev-h " + sev, text: sev + " (" + items.length + ")" }));
+        for (const f of items) sec.appendChild(findingItem(f));
+      }
+      box.appendChild(sec);
     }
   }
 
-  function findingItem(f, folded) {
+  /* The help dialog's definition of a badge word, read from its Findings
+   * section, so a badge's tooltip says what the help says. */
+  let helpDefs = null;
+  function helpDef(word) {
+    if (!helpDefs) {
+      helpDefs = new Map();
+      for (const dt of document.querySelectorAll("#help-findings dt")) {
+        const dd = dt.nextElementSibling;
+        if (dd && dd.tagName === "DD") helpDefs.set(dt.textContent.trim(), dd.textContent.replace(/\s+/g, " ").trim());
+      }
+    }
+    return helpDefs.get(word) || "";
+  }
+
+  const BADGE_TITLES = {
+    severity: "Severity, read within its section",
+    status: "The verifier's answer",
+    impact: "What breaks after merge, as the verifier rated it",
+    label: "The assess step's label",
+  };
+
+  /* A finding's badges (L.findingBadges), each with the help's definition as its tooltip. */
+  function findingBadgeEls(f, inList) {
+    return L.findingBadges(f, inList).map((b) => {
+      const head = b.kind === "topic"
+        ? (b.guessed ? "What it is about, guessed from the file path" : "What it is about, as the verifier labelled it")
+        : BADGE_TITLES[b.kind];
+      const def = helpDef(b.value);
+      return el("span", { class: "badge " + b.cls, text: b.value, title: head + (def ? ". " + b.value + ": " + def : "") });
+    });
+  }
+
+  function findingItem(f) {
     const sev = f.severity;
     const d = L.effectiveDecision(f, state.detail.decisions);
-    const label = L.assessLabel(f);
-    return el("button", {
+    const item = el("button", {
       class: "finding-item " + sev + (f.id === state.selected ? " selected" : "") +
         (L.isHidden(f, state.detail.decisions) ? " hidden-finding" : ""),
       "data-id": f.id,
@@ -888,17 +975,39 @@
         await selectFinding(f.id);
         $("finding-detail").scrollIntoView({ block: "start", behavior: "smooth" });
       },
-    }, [
-      el("span", { class: "badge " + sev, text: f.status }),
-      label && label !== "useful" ? el("span", { class: "badge assess " + label, text: label }) : null,
+    }, findingBadgeEls(f, true).concat([
       d ? el("span", {
         class: "badge " + d.decision,
         text: d.decision + (d.implied ? " (earlier round)" : ""),
       }) : null,
       el("span", { class: "claim", text: f.claim }),
       el("span", { class: "where", text: f.file + ":" + f.line_start }),
-      folded ? el("span", { class: "assess-reason", text: L.assessmentText(f.assessment) }) : null,
-    ]);
+    ]));
+    // Accept and Reject without opening the finding; shown on hover or focus.
+    const quick = (k, sym) => el("button", { class: "ctl ctl-sm quick-" + k, type: "button", text: sym,
+      title: k[0].toUpperCase() + k.slice(1) + " this finding", "aria-label": k[0].toUpperCase() + k.slice(1) + ": " + f.claim,
+      "aria-pressed": String(!!d && !d.implied && d.decision === k),
+      onclick: () => decide(f.id, k, "", { from: "list" }) });
+    return el("div", { class: "finding-row" }, [item,
+      el("div", { class: "quick-actions" }, [quick("accept", "✓"), quick("reject", "✕")])]);
+  }
+
+  /* Accept every finding that still needs a decision, after one confirmation. */
+  async function acceptAll() {
+    const ids = L.pendingIds(state.shown, state.detail.decisions);
+    if (!ids.length) return;
+    if (!window.confirm("Accept all " + ids.length + " finding" + (ids.length === 1 ? "" : "s") +
+      " that still need a decision? Refuted and decided findings are left as they are.")) return;
+    for (const id of ids) {
+      try {
+        const res = await api("/api/decision", { target: state.slug, finding_id: id, decision: "accept", note: "" });
+        state.detail.decisions[id] = res.decision;
+      } catch (err) {
+        showToast("Could not record a decision: " + err.message);
+        break;
+      }
+    }
+    afterDecide(state.selected);
   }
 
   // --- file status, counts, viewed ----------------------------------------------
@@ -949,16 +1058,52 @@
     renderFileHead();
   }
 
+  /* "Show all files in the repo": offered when git listed files the change
+   * leaves alone (a tree review lists every file it reviewed as changed). */
+  function renderAllFilesToggle() {
+    const all = state.detail.repo_files || [];
+    const extra = all.some((p) => !state.changed.has(p));
+    $("all-files").hidden = !extra;
+    if (!extra) state.showAllFiles = false;
+    $("show-all-files").checked = state.showAllFiles;
+    const total = state.detail.repo_files_total || 0;
+    const cut = $("all-files-cut");
+    cut.hidden = !state.showAllFiles || total <= all.length;
+    cut.textContent = "Showing the first " + L.formatTokens(all.length) + " of " + L.formatTokens(total) +
+      " files; changed files are always listed.";
+    $("side-title").textContent = state.showAllFiles ? "Files" : "Changed files";
+    $("file-search").placeholder = state.showAllFiles ? "Filter all files" : "Filter files";
+  }
+
   function renderFiles() {
     if (state.view) renderFileNav();
     const list = $("files");
     list.replaceChildren();
-    const filter = state.fileFilter.toLowerCase();
-    const shown = state.detail.files.filter((p) => !filter || p.toLowerCase().includes(filter));
+    const groups = L.sidebarGroups(state.detail.files, state.showAllFiles ? state.detail.repo_files || [] : null,
+      state.fileFilter);
     const inStep = state.tab === "walk" ? L.stepFiles(currentStep()) : new Set();
-    for (const group of L.groupFilesByDir(shown)) {
-      list.appendChild(el("li", { class: "dir-h", title: group.dir || "(repository root)", text: L.shortDir(group.dir) }));
+    for (const group of groups) {
+      const open = !state.showAllFiles || L.dirOpen(group, state.dirToggled, state.fileFilter, state.filePath);
+      if (state.showAllFiles) {
+        list.appendChild(el("li", { class: "dir-h" + (group.changed ? "" : " unchanged") }, [el("button", {
+          class: "dir-btn", type: "button", "aria-expanded": String(open),
+          title: (group.dir || "(repository root)") + (group.changed ? "" : " (nothing here changed)"),
+          onclick: () => { state.dirToggled.set(group.dir, !open); renderFiles(); },
+        }, [el("span", { class: "dir-caret", "aria-hidden": "true", text: open ? "▾" : "▸" }),
+          L.shortDir(group.dir) + (open ? "" : " (" + group.files.length + ")")])]));
+      } else {
+        list.appendChild(el("li", { class: "dir-h", title: group.dir || "(repository root)", text: L.shortDir(group.dir) }));
+      }
+      if (!open) continue;
       for (const f of group.files) {
+        if (!f.changed) {
+          list.appendChild(el("li", { class: "file-row unchanged" + (f.path === state.filePath ? " selected" : "") }, [
+            el("span", { class: "fstatus none", "aria-hidden": "true" }),
+            el("button", { class: "file-btn", title: f.path + " (not changed)", text: f.name,
+              onclick: async () => { clearPick(); await openFile(f.path); } }),
+          ]));
+          continue;
+        }
         const info = fileInfo(f.path);
         const viewed = isViewed(f.path);
         const box = el("input", { type: "checkbox", title: viewed ? "Viewed; click to unmark" : "Mark viewed",
@@ -980,7 +1125,9 @@
         ]));
       }
     }
-    if (!shown.length) list.appendChild(el("li", { class: "empty small", text: "No changed file matches." }));
+    if (!groups.length) {
+      list.appendChild(el("li", { class: "empty small", text: state.showAllFiles ? "No file matches." : "No changed file matches." }));
+    }
     const vc = L.viewedCount(state.detail.files, state.viewed);
     $("viewed-count").textContent = vc.done + " of " + vc.total + " viewed";
     $("viewed-bar").style.width = (vc.total ? Math.round(100 * vc.done / vc.total) : 0) + "%";
@@ -1195,6 +1342,8 @@
 
   async function selectFinding(id, opts) {
     state.selected = id;
+    const picked = state.findingsById.get(id);
+    if (picked) state.openSections.add(L.findingSection(picked));
     if (state.tab !== "finding" && !(opts && opts.stay)) {
       state.tab = "finding";
       renderTabs();
@@ -1202,8 +1351,39 @@
     clearPick();
     renderFindingList();
     renderDetail();
+    updateFindingNav();
     const f = state.findingsById.get(id);
     if (f) await openFile(f.file, f.line_start, f.line_end);
+  }
+
+  /* j/k and the bar's Prev/Next: the finding `delta` steps from the open one. */
+  function stepFindingBy(delta) {
+    const order = L.navOrder(state.shown, state.detail.decisions, state.showHidden, state.selected);
+    const next = L.stepFinding(order, state.selected, delta);
+    if (state.tab !== "finding") setTab("finding");
+    if (next && next !== state.selected) selectFinding(next);
+  }
+
+  /* The bar under the tabs that leads back to the list. It shows on the
+   * Findings tab once the list has scrolled out of sight under the tabs. */
+  function updateFindingNav() {
+    const nav = $("finding-nav");
+    const list = $("findings");
+    const on = state.tab === "finding" && !!state.selected && !!state.detail &&
+      list.getBoundingClientRect().bottom < document.querySelector(".detail-top").getBoundingClientRect().bottom;
+    nav.hidden = !on;
+    if (!on) return;
+    const pending = L.pendingIds(state.shown, state.detail.decisions).length;
+    $("nav-list").textContent = "↑ Back to the list" + (pending ? " (" + pending + " to decide)" : "");
+    const order = L.navOrder(state.shown, state.detail.decisions, state.showHidden, state.selected);
+    const i = order.indexOf(state.selected);
+    $("nav-pos").textContent = i >= 0 ? (i + 1) + " of " + order.length : "";
+    $("nav-prev").disabled = i <= 0;
+    $("nav-next").disabled = i < 0 || i >= order.length - 1;
+  }
+
+  function scrollPanelTop() {
+    $("detail").scrollTo({ top: 0, behavior: reducedMotion() ? "auto" : "smooth" });
   }
 
   function citationLink(c) {
@@ -1235,7 +1415,7 @@
         out.push(el("div", { class: "label", text: "Needs you" }));
         for (const n of L.needsItems({ needs: f.needs, findings: [] })) {
           out.push(el("div", { class: "needs" }, [el("div", { text: n.what }),
-            el("div", { class: "muted small", text: "Why: " + n.cause }), needCommand(n.command)]));
+            el("div", { class: "muted small", text: "Why: " + n.cause })].concat(needAction(n))));
         }
       } else if (part === "verifier-cited") {
         out.push(el("div", { class: "label", text: "The verifier's citations" }));
@@ -1250,19 +1430,59 @@
     box.replaceChildren();
     const f = state.selected && state.findingsById.get(state.selected);
     if (!f) {
-      if (state.detail.findings.findings.length) box.appendChild(emptyState("☝", "Pick a finding above, or press j."));
+      if (L.pendingIds(state.shown, state.detail.decisions).length) {
+        box.appendChild(emptyState("☝", "Pick a finding above, or press j."));
+      }
       renderThread();
       return;
     }
-    box.appendChild(el("div", {}, [
-      el("span", { class: "badge " + f.severity, text: f.severity }),
-      el("span", { class: "badge", text: f.status }),
-    ]));
+    const copy = el("button", { class: "ctl ctl-sm copy-finding", type: "button", text: "Copy as markdown",
+      title: "Copy this finding (claim, where, failure scenario, explanation, cited code) to paste to whoever fixes it" });
+    copy.addEventListener("click", () => {
+      const md = L.findingMarkdown(f, state.detail.findings.target, L.explanationText(f.assessment));
+      copyText(md).then(() => {
+        copy.textContent = "Copied";
+        setTimeout(() => { copy.textContent = "Copy as markdown"; }, 1500);
+      }).catch(() => showToast("Could not copy."));
+    });
+    const download = el("button", { class: "ctl ctl-sm", type: "button", text: "Download .md",
+      title: "Save this finding as a markdown file, to attach or send" });
+    download.addEventListener("click", () => {
+      const md = L.findingMarkdown(f, state.detail.findings.target, L.explanationText(f.assessment));
+      const a = el("a", { href: URL.createObjectURL(new Blob([md + "\n"], { type: "text/markdown" })),
+        download: L.findingFileName(f) });
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+    });
+    const opts = L.shareOptions(state.detail.share, f, state.detail.files);
+    const shareBtn = (to, label) => el("button", {
+      class: "ctl ctl-sm share-btn", type: "button", text: label, disabled: !opts[to].enabled,
+      title: opts[to].enabled ? opts[to].why + ": you see the text before it goes" : opts[to].why,
+      onclick: () => openShare(f, to),
+    });
+    box.appendChild(el("div", { class: "finding-head" }, findingBadgeEls(f, false).concat([
+      copy,
+      download,
+      shareBtn("github", "GitHub"),
+      shareBtn("slack", "Slack"),
+    ])));
     box.appendChild(el("h2", { text: f.claim }));
-    // With a verifier entry on the Checked tab, the link replaces the citation
+    // The failure scenario first, so the problem reads before anything about
+    // it; then the review's explanation; then the rest of the facts. With a
+    // verifier entry on the Checked tab, a link to it replaces the citation
     // lists (the entry shows what the verifier read and cited); without one,
     // findingParts keeps the lists.
     const shown = L.findingParts(f, state.detail.checks, "finding");
+    const add = (nodes) => { for (const node of nodes) box.appendChild(node); };
+    add(findingFacts(f, ["scenario"]));
+    const explained = L.explanationText(f.assessment);
+    if (explained) {
+      const label = L.assessLabel(f);
+      box.appendChild(el("div", { class: "label", text: "Explanation" + (label ? " (" + label + ")" : "") }));
+      box.appendChild(el("p", { text: explained }));
+    }
+    add(findingFacts(f, shown.parts.filter((p) => p !== "scenario")));
     const vi = shown.checkedBy;
     if (vi >= 0) {
       box.appendChild(el("div", { class: "label", text: "Checked by" }));
@@ -1270,12 +1490,6 @@
         [el("span", { text: "The verifier's entry on the Checked tab: what it read and cited" }),
           el("span", { "aria-hidden": "true", text: " →" })]));
     }
-    const assessed = L.assessmentText(f.assessment);
-    if (assessed) {
-      box.appendChild(el("div", { class: "label", text: "Assessment: " + L.assessLabel(f) }));
-      box.appendChild(el("p", { text: assessed }));
-    }
-    for (const node of findingFacts(f, shown.parts)) box.appendChild(node);
     const steps = L.stepsForFinding(state.walk, f.id);
     if (steps.length) {
       box.appendChild(el("div", { class: "label", text: "Explained in the walkthrough" }));
@@ -1285,6 +1499,89 @@
     }
     box.appendChild(decisionBox(f));
     renderThread();
+  }
+
+  // --- send a finding to the PR or to Slack -----------------------------------------
+
+  /* The dialog shows exactly the text that will go, editable. Send writes a
+   * `share` row; the session posts the text unchanged and replies with the
+   * link. The page never posts anything itself. */
+  function openShare(f, to) {
+    const dlg = $("share");
+    const opts = L.shareOptions(state.detail.share, f, state.detail.files);
+    if (!opts[to].enabled) return;
+    const agent = state.who ? state.who.agent : "the session";
+    const text = el("textarea", { id: "share-text", class: "share-text", rows: "14", spellcheck: "false",
+      "aria-label": "The text that will be sent" });
+    text.value = L.findingMarkdown(f, state.detail.findings.target, L.explanationText(f.assessment));
+    const count = el("span", { class: "muted small" });
+    const send = el("button", { class: "ctl primary", type: "button", text: "Send" });
+    let form = null;
+    let note = null;
+    const fields = [];
+    if (to === "github") {
+      const pr = state.detail.share.pr;
+      const radio = (value, label, o) => el("label", { class: "share-choice" + (o.enabled ? "" : " muted"), title: o.why }, [
+        el("input", { type: "radio", name: "share-where", value: value, disabled: !o.enabled,
+          checked: value === "pr" }), label]);
+      fields.push(el("div", { class: "share-where", role: "radiogroup", "aria-label": "Where on GitHub" }, [
+        radio("pr", "A comment on PR #" + pr, opts.github),
+        radio("line", "A comment on the line, " + f.file + ":" + f.line_start + ", at " +
+          state.detail.findings.target.head_sha.slice(0, 8), opts.line),
+      ]));
+      form = () => ({ choice: (dlg.querySelector("input[name=share-where]:checked") || {}).value, text: text.value });
+    } else {
+      const who = el("input", { type: "text", class: "share-to", placeholder: "A person, @handle or #channel",
+        "aria-label": "Send to", maxlength: "100" });
+      note = el("input", { type: "text", class: "share-note", placeholder: "A note above the finding (optional)",
+        "aria-label": "Note" });
+      fields.push(el("label", { class: "share-field" }, [el("span", { class: "label", text: "To" }), who]),
+        el("label", { class: "share-field" }, [el("span", { class: "label", text: "Note" }), note]));
+      form = () => ({ to: who.value, note: note.value, text: text.value });
+      who.addEventListener("input", () => update());
+    }
+    const request = () => L.shareRequest(state.slug, f.id, to, form());
+    const update = () => {
+      const body = request();
+      count.textContent = L.formatTokens(body.text.length) + " of 20,000 characters";
+      send.disabled = !text.value.trim() || body.text.length > 20000 || !body.where;
+    };
+    text.addEventListener("input", update);
+    send.addEventListener("click", async () => {
+      send.disabled = true;
+      const body = request();
+      try {
+        const res = await api("/api/share", body);
+        state.questions.push({ id: res.id, ts: new Date().toISOString(), kind: "share", finding_id: f.id,
+          to: to, where: body.where, text: body.text });
+        dlg.close();
+        state.chatJustOpened = true;
+        setChatOpen(true);
+        renderThread();
+        schedulePoll(0);
+      } catch (err) {
+        showToast("Could not send: " + err.message);
+        update();
+      }
+    });
+    dlg.replaceChildren(
+      el("div", { class: "help-head" }, [
+        el("h2", { id: "share-title", text: to === "github" ? "Comment on GitHub" : "Send on Slack" }),
+        el("button", { class: "ctl", type: "button", "aria-label": "Cancel", text: "Esc", onclick: () => dlg.close() }),
+      ]),
+      el("div", { class: "share-body" }, fields.concat([
+        el("div", { class: "label", text: "The text that will be sent (edit it here)" }),
+        text,
+        el("p", { class: "muted small", text: "Send asks " + agent + " to post this text as it is, " +
+          (to === "github" ? "as your GitHub account" : "as your Slack account") +
+          ", and to reply in the chat with a link to it. Pressing Send is your go-ahead: nothing is asked again." }),
+        el("div", { class: "share-foot" }, [count,
+          el("button", { class: "ctl", type: "button", text: "Cancel", onclick: () => dlg.close() }), send]),
+      ])));
+    update();
+    if ($("palette").open) $("palette").close();
+    dlg.showModal();
+    (to === "slack" ? dlg.querySelector(".share-to") : text).focus();
   }
 
   // --- accept / reject / defer -------------------------------------------------
@@ -1297,7 +1594,7 @@
       class: "ctl",
       "aria-pressed": String(!!d && d.decision === k),
       text: k[0].toUpperCase() + k.slice(1),
-      onclick: () => decide(f.id, k, note.value.trim()),
+      onclick: () => decide(f.id, k, note.value.trim(), { from: "page" }),
     }));
     return el("section", { class: "decide" }, [
       el("div", { class: "label", text: "Decision" }),
@@ -1307,18 +1604,38 @@
     ]);
   }
 
-  async function decide(id, decision, note) {
+  async function decide(id, decision, note, opts) {
     try {
       const res = await api("/api/decision", { target: state.slug, finding_id: id, decision: decision, note: note });
       state.detail.decisions[id] = res.decision;
-      renderFindingList();
-      renderDetail();
-      // renderSummary rebuilds the Summary tab's risk badge and calls renderRisk
-      // for the header pill, so both show the score after this decision.
-      renderSummary();
     } catch (err) {
       showToast("Could not record the decision: " + err.message);
+      return;
     }
+    await afterDecide(id, opts);
+  }
+
+  /* After a decision on `id`. When it was the open finding, the next one that
+   * still needs a decision opens, or none after the last, so the finding page
+   * is left empty; a decision made on the finding page scrolls the panel back
+   * up to the list. */
+  async function afterDecide(id, opts) {
+    // renderSummary rebuilds the Summary tab's risk badge and calls renderRisk
+    // for the header pill, so both show the score after this decision.
+    renderSummary();
+    renderTabs();
+    if (id && id === state.selected) {
+      if (!(opts && opts.from === "list")) scrollPanelTop();
+      const next = L.afterDecision(state.shown, state.detail.decisions, id);
+      if (next) {
+        await selectFinding(next);
+        return;
+      }
+      state.selected = null;
+    }
+    renderFindingList();
+    renderDetail();
+    updateFindingNav();
   }
 
   // --- threads ---------------------------------------------------------------
@@ -1329,6 +1646,12 @@
 
   /* What a chat message was about, for its label. */
   function chatContext(q) {
+    if (q.kind === "share") {
+      const f = state.findingsById.get(q.finding_id);
+      const what = f ? f.file + ":" + f.line_start : q.finding_id;
+      if (q.to === "slack") return "Send on Slack to " + q.where + ": " + what;
+      return q.where === "line" ? "Comment on GitHub at " + what : "Comment on GitHub PR: " + what;
+    }
     if (q.anchor) return L.walkAnchorLabel(q.anchor);
     if (q.step_id) {
       const st = state.walk && state.walk.steps.find((x) => x.id === q.step_id);
@@ -1382,7 +1705,10 @@
             el("span", { class: "who", text: "You" }),
             q.ts ? el("time", { datetime: q.ts, text: clock(q.ts) }) : null,
           ]),
-          el("div", { class: "q", text: q.text }),
+          q.kind === "share"
+            ? el("details", { class: "q share-sent" }, [el("summary", { text: "The text sent (" + q.text.length + " characters)" }),
+              el("pre", { text: q.text })])
+            : el("div", { class: "q", text: q.text }),
         ]),
         el("div", { class: "a-wrap" }, [
           el("div", { class: "msg-meta" }, [
@@ -1557,8 +1883,8 @@
   }
 
   function findingsIn(path) {
-    return state.detail.findings.findings.filter((f) => f.file === path &&
-      (state.showHidden || !L.isHidden(f, state.detail.decisions)));
+    return state.shown.filter((f) => f.file === path &&
+      (state.showHidden || !L.isHiddenInCode(f)));
   }
 
   /* Above the code: status, path, line counts, viewed, and the layout buttons. */
@@ -1578,10 +1904,15 @@
     $("file-counts").replaceChildren(...countsNode(info).childNodes);
     const flags = [];
     if (view.deleted) flags.push("deleted at head; first lines shown");
-    if (view.truncated && !view.deleted) flags.push("large file: changes and cited lines only");
+    if (view.truncated && !view.deleted) {
+      flags.push(state.changed.has(view.path) ? "large file: changes and cited lines only" : "large file: first lines and cited lines only");
+    }
     if (view.binary) flags.push("binary");
+    const changed = state.changed.has(view.path);
+    if (!changed) flags.unshift("not changed");
     $("file-flags").textContent = flags.join(" · ");
     $("file-viewed").checked = isViewed(view.path);
+    $("file-viewed").parentElement.hidden = !changed;
     $("layout-unified").setAttribute("aria-pressed", String(!state.split));
     $("layout-split").setAttribute("aria-pressed", String(state.split));
     $("wrap-btn").setAttribute("aria-pressed", String(state.wrap));
@@ -1641,7 +1972,9 @@
       for (const i of L.citationRows(view.rows, state.pick.start, state.pick.end)) keep.add(i);
     }
     const open = openRows(view.path);
-    const items = L.foldRows(view.rows, keep, open, FOLD_CONTEXT, FOLD_MIN);
+    // A file the change leaves alone has nothing to fold around: show all of it.
+    const items = state.changed.has(view.path) ? L.foldRows(view.rows, keep, open, FOLD_CONTEXT, FOLD_MIN)
+      : view.rows.map((r, i) => ({ row: i }));
     const starts = L.blockStarts(view.rows);
     const explained = L.explainByBlock(state.questions, view.path);
     state.shownRows = new Set(items.filter((it) => it.row != null).map((it) => it.row));
@@ -1970,15 +2303,29 @@
 
   // --- asking about selected lines ------------------------------------------------
 
-  function setPick(a, b, x, y) {
+  /* Selects lines a..b of the open file to ask about, and shows the bar
+   * under the last of them. Nothing goes into the chat until Ask is pressed. */
+  function setPick(a, b) {
     const [start, end] = L.lineRange(a, b);
     state.pick = { path: state.view.path, start: start, end: end };
     renderCode();
-    const btn = $("ask-lines");
-    const centre = btn.parentElement.getBoundingClientRect();
-    btn.style.left = Math.max(8, Math.min(x - centre.left, centre.width - 200)) + "px";
-    btn.style.top = Math.max(8, y - centre.top + 12) + "px";
-    btn.hidden = false;
+    const bar = $("ask-lines");
+    $("ask-lines-label").textContent = start === end ? "Line " + start : "Lines " + start + "–" + end;
+    bar.hidden = false;
+    const row = $("code").querySelector('tr[data-n="' + end + '"]');
+    const box = bar.parentElement.getBoundingClientRect();
+    const at = row ? row.getBoundingClientRect() : box;
+    bar.style.left = "48px";
+    bar.style.top = Math.max(8, Math.min(at.bottom - box.top + 4, box.height - 48)) + "px";
+  }
+
+  /* While the mouse is held on the line numbers, rows it passes join the range. */
+  function markPicked(a, b) {
+    const [start, end] = L.lineRange(a, b);
+    for (const tr of $("code").querySelectorAll("tr[data-n]")) {
+      const n = Number(tr.getAttribute("data-n"));
+      tr.classList.toggle("picked", n >= start && n <= end);
+    }
   }
 
   function clearPickState() {
@@ -2000,38 +2347,172 @@
     return row ? Number(row.getAttribute("data-n")) : null;
   }
 
-  function onCodeMouseUp(ev) {
-    if (ev.target.closest("td.ln, .dot")) return;
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed) return;
-    const a = rowNumber(sel.anchorNode);
-    const b = rowNumber(sel.focusNode);
-    if (a == null || b == null) return;
-    setPick(a, b, ev.clientX, ev.clientY);
-  }
-
-  function onCodeClick(ev) {
+  /* A press on a line number starts a selection (Shift extends the one there
+   * is); dragging down the numbers extends it; letting go shows the bar.
+   * Clicks and text selections in the code itself never touch the chat. */
+  function onGutterDown(ev) {
+    if (ev.button !== 0 || !state.view) return;
     const cell = ev.target.closest("td.ln");
-    if (!cell) {
-      // A click (not a drag) on an added or deleted row puts its whole
-      // contiguous block into the question.
-      const hit = ev.target.closest("tr.add[data-ri], tr.del[data-ri], td.src.add[data-ri], td.src.del[data-ri]");
-      const sel = window.getSelection();
-      if (!hit || ev.target.closest(".dot, button") || (sel && !sel.isCollapsed)) return;
-      const block = L.diffBlock(state.view.rows, Number(hit.getAttribute("data-ri")));
-      if (block) insertRef(state.view.path, block);
-      return;
-    }
+    if (!cell) return;
     const n = rowNumber(cell);
     if (n == null) return;
-    const start = ev.shiftKey && state.pick && state.pick.path === state.view.path ? state.pick.start : n;
-    setPick(start, n, ev.clientX, ev.clientY);
+    ev.preventDefault();  // no text selection while dragging the numbers
+    const anchor = ev.shiftKey && state.pick && state.pick.path === state.view.path ? state.pick.start : n;
+    state.pickDrag = { anchor: anchor, last: n };
+    markPicked(anchor, n);
+  }
+
+  function onGutterOver(ev) {
+    if (!state.pickDrag) return;
+    const n = rowNumber(ev.target);
+    if (n == null || n === state.pickDrag.last) return;
+    state.pickDrag.last = n;
+    markPicked(state.pickDrag.anchor, n);
+  }
+
+  function onGutterUp() {
+    const drag = state.pickDrag;
+    if (!drag) return;
+    state.pickDrag = null;
+    setPick(drag.anchor, drag.last);
   }
 
   function askAboutPick() {
     if (!state.pick) return;
     insertRef(state.pick.path, { side: "head", line_start: state.pick.start, line_end: state.pick.end }, { open: true });
     $("ask-lines").hidden = true;
+  }
+
+  // --- where a name is defined (Cmd/Ctrl+click) -----------------------------------
+
+  const DEF_HIGHLIGHT = "def-name";
+
+  /* The character offset in a code cell's text of the caret the browser
+   * would put at (x, y), or null when that is outside the cell. */
+  function caretOffset(td, x, y) {
+    let node = null;
+    let offset = 0;
+    if (document.caretPositionFromPoint) {
+      const pos = document.caretPositionFromPoint(x, y);
+      if (pos) { node = pos.offsetNode; offset = pos.offset; }
+    } else if (document.caretRangeFromPoint) {
+      const r = document.caretRangeFromPoint(x, y);
+      if (r) { node = r.startContainer; offset = r.startOffset; }
+    }
+    if (!node || !td.contains(node)) return null;
+    const range = document.createRange();
+    range.setStart(td, 0);
+    range.setEnd(node, offset);
+    return range.toString().length;
+  }
+
+  /* The identifier under the pointer of a mouse event in the code, with its cell. */
+  function nameAt(ev) {
+    const td = ev.target && ev.target.closest && ev.target.closest("td.src");
+    if (!td) return null;
+    const at = caretOffset(td, ev.clientX, ev.clientY);
+    const id = at == null ? null : L.identifierAt(td.textContent, at);
+    return id ? Object.assign({ td: td }, id) : null;
+  }
+
+  /* A DOM range over characters start..end of a cell's text, across the highlighter's spans. */
+  function textRange(td, start, end) {
+    const walker = document.createTreeWalker(td, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    let pos = 0;
+    let began = false;
+    let n;
+    while ((n = walker.nextNode())) {
+      const len = n.nodeValue.length;
+      if (!began && start <= pos + len) { range.setStart(n, start - pos); began = true; }
+      if (began && end <= pos + len) { range.setEnd(n, end - pos); return range; }
+      pos += len;
+    }
+    return null;
+  }
+
+  /* While Cmd or Ctrl is held, underline the name under the pointer (CSS
+   * highlights, where the browser has them) and show a pointer cursor. */
+  function markNameUnder(ev) {
+    const held = !!(ev && (ev.metaKey || ev.ctrlKey));
+    $("code").classList.toggle("def-key", held);
+    const hl = window.CSS && window.CSS.highlights;
+    if (!hl || typeof window.Highlight !== "function") return;
+    const id = held ? nameAt(ev) : null;
+    const range = id ? textRange(id.td, id.start, id.end) : null;
+    if (range) hl.set(DEF_HIGHLIGHT, new window.Highlight(range));
+    else hl.delete(DEF_HIGHLIGHT);
+  }
+
+  function onCodeMove(ev) {
+    state.pointer = { x: ev.clientX, y: ev.clientY };
+    if (ev.metaKey || ev.ctrlKey || $("code").classList.contains("def-key")) markNameUnder(ev);
+  }
+
+  /* Cmd or Ctrl pressed or let go with the pointer still: mark again where it is. */
+  function onModifierKey(ev) {
+    if (ev.key !== "Meta" && ev.key !== "Control") return;
+    const p = state.pointer;
+    const target = p && document.elementFromPoint(p.x, p.y);
+    if (!target || !$("code").contains(target)) { markNameUnder(null); return; }
+    markNameUnder({ metaKey: ev.type === "keydown", ctrlKey: false, clientX: p.x, clientY: p.y, target: target });
+  }
+
+  /* Cmd/Ctrl+click on a name: where it is defined. Plain clicks in the code do nothing. */
+  function onCodeDown(ev) {
+    if (ev.button !== 0 || !(ev.metaKey || ev.ctrlKey) || !state.view) return;
+    const id = nameAt(ev);
+    if (!id) return;
+    ev.preventDefault();
+    state.defEvent = ev;
+    showDefinitions(id.name, ev.clientX, ev.clientY);
+  }
+
+  function placePopover(pop, x, y) {
+    const w = pop.offsetWidth;
+    const h = pop.offsetHeight;
+    pop.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + "px";
+    pop.style.top = (y + 12 + h > window.innerHeight - 8 ? Math.max(8, y - h - 8) : y + 12) + "px";
+  }
+
+  function closeDefinitions() {
+    state.defGen += 1;
+    $("def-pop").hidden = true;
+  }
+
+  async function showDefinitions(name, x, y) {
+    const pop = $("def-pop");
+    const gen = ++state.defGen;
+    const list = el("ul", { class: "def-list" },
+      [el("li", { class: "muted small" }, [el("span", { class: "spinner" }), "Searching the repo…"])]);
+    pop.replaceChildren(el("div", { class: "def-head" }, [
+      el("span", {}, ["Where ", el("code", { text: name }), " is defined"]),
+      el("button", { class: "ctl ctl-sm", type: "button", title: "Close (Esc)", "aria-label": "Close", text: "✕",
+        onclick: closeDefinitions }),
+    ]), list);
+    pop.hidden = false;
+    placePopover(pop, x, y);
+    let res;
+    try {
+      res = await api(targetUrl("/definitions") + "?name=" + encodeURIComponent(name));
+    } catch (err) {
+      if (gen === state.defGen) list.replaceChildren(el("li", { class: "muted", text: "Could not search: " + err.message }));
+      return;
+    }
+    if (gen !== state.defGen) return;
+    list.replaceChildren();
+    if (!res.hits.length) list.appendChild(el("li", { class: "muted", text: "No definition found in the repo." }));
+    for (const h of res.hits) {
+      list.appendChild(el("li", {}, [el("button", {
+        class: "def-hit", type: "button", title: h.path + ":" + h.line,
+        onclick: async () => { closeDefinitions(); clearPickState(); await openFile(h.path, h.line, h.line); },
+      }, [el("span", { class: "mono def-where", text: h.path + ":" + h.line }),
+        el("span", { class: "mono def-text", text: h.text })])]));
+    }
+    if (res.hits.length >= 50) list.appendChild(el("li", { class: "muted small", text: "The first 50 shown." }));
+    placePopover(pop, x, y);
+    const first = pop.querySelector(".def-hit");
+    if (first) first.focus({ preventScroll: true });
   }
 
   // --- the question box (footer) ---------------------------------------------
@@ -2149,15 +2630,16 @@
 
   function paletteEntries() {
     const out = [];
-    for (const path of state.detail.files) {
+    const files = state.showAllFiles ? [...new Set(state.detail.files.concat(state.detail.repo_files || []))] : state.detail.files;
+    for (const path of files) {
       const cut = path.lastIndexOf("/");
       out.push({ kind: "file", label: path.slice(cut + 1), sub: cut > 0 ? path.slice(0, cut) : "", path: path });
     }
     ((state.walk && state.walk.steps) || []).forEach((st, i) => {
       out.push({ kind: "review", label: st.title, sub: "review " + (i + 1), step: st.id });
     });
-    for (const f of state.detail.findings.findings) {
-      if (!state.showHidden && L.isHidden(f, state.detail.decisions)) continue;
+    for (const f of state.shown) {
+      if (!state.showHidden && L.isHiddenInCode(f)) continue;
       out.push({ kind: f.severity, label: f.claim, sub: f.file + ":" + f.line_start, finding: f.id });
     }
     return out;
@@ -2211,7 +2693,7 @@
     const it = state.palette.items[i];
     $("palette").close();
     if (!it) return;
-    if (it.path) { clearPick(); await openFile(it.path); await showFileReview(it.path); }
+    if (it.path) { clearPick(); await openFile(it.path); if (state.changed.has(it.path)) await showFileReview(it.path); }
     else if (it.step) { state.tabChosen = true; await selectStep(it.step, { open: true }); }
     else if (it.finding) { setTab("finding"); await selectFinding(it.finding); }
   }
@@ -2285,6 +2767,13 @@
     $("question").addEventListener("input", () => { updateAc(); renderAskAbout(); });
     $("question").addEventListener("click", updateAc);
     $("question").addEventListener("blur", () => setTimeout(closeAc, 100));
+    let navFrame = 0;
+    $("detail").addEventListener("scroll", () => {
+      if (!navFrame) navFrame = requestAnimationFrame(() => { navFrame = 0; updateFindingNav(); });
+    }, { passive: true });
+    $("nav-list").addEventListener("click", scrollPanelTop);
+    $("nav-prev").addEventListener("click", () => stepFindingBy(-1));
+    $("nav-next").addEventListener("click", () => stepFindingBy(1));
     $("show-hidden").addEventListener("change", (ev) => {
       state.showHidden = ev.target.checked;
       renderFindingList();
@@ -2294,7 +2783,26 @@
       state.fileFilter = ev.target.value;
       renderFiles();
     });
-    $("code").addEventListener("mouseup", onCodeMouseUp);
+    $("show-all-files").addEventListener("change", (ev) => {
+      state.showAllFiles = ev.target.checked;
+      renderAllFilesToggle();
+      renderFiles();
+    });
+    $("code").addEventListener("mousedown", onGutterDown);
+    $("code").addEventListener("mousedown", onCodeDown);
+    $("code").addEventListener("mousemove", onCodeMove);
+    $("code").addEventListener("mouseleave", () => markNameUnder(null));
+    // On a Mac, Ctrl+click also asks for the context menu.
+    $("code").addEventListener("contextmenu", (ev) => { if (ev.ctrlKey && nameAt(ev)) ev.preventDefault(); });
+    document.addEventListener("keydown", onModifierKey);
+    document.addEventListener("keyup", onModifierKey);
+    window.addEventListener("blur", () => markNameUnder(null));
+    document.addEventListener("mousedown", (ev) => {
+      const pop = $("def-pop");
+      if (!pop.hidden && ev !== state.defEvent && !pop.contains(ev.target)) closeDefinitions();
+    });
+    $("code").addEventListener("mouseover", onGutterOver);
+    window.addEventListener("mouseup", onGutterUp);
     $("file-prev").addEventListener("click", () => goFile(-1));
     const code = $("code");
     const setCodeWidth = () => code.style.setProperty("--code-w", code.clientWidth + "px");
@@ -2302,12 +2810,13 @@
     new ResizeObserver(setCodeWidth).observe(code);
     window.addEventListener("resize", setCodeWidth);
     $("file-next").addEventListener("click", () => goFile(1));
-    $("code").addEventListener("click", onCodeClick);
-    $("ask-lines").addEventListener("click", askAboutPick);
+    $("ask-lines-go").addEventListener("click", askAboutPick);
+    $("ask-lines-close").addEventListener("click", clearPick);
     $("tab-finding").addEventListener("click", () => setTab("finding"));
     $("tab-summary").addEventListener("click", () => setTab("summary"));
     $("tab-walk").addEventListener("click", () => setTab("walk"));
     $("tab-checked").addEventListener("click", () => setTab("checked"));
+    $("tab-needs").addEventListener("click", () => setTab("needs"));
     $("help-btn").addEventListener("click", () => openHelp("top"));
     $("keys-btn").addEventListener("click", () => openHelp("keys"));
     $("palette-input").addEventListener("input", () => { state.palette.index = 0; renderPalette(); });
@@ -2326,6 +2835,7 @@
       requestAnimationFrame(() => { scrollQueued = false; updateBlockLine(); });
     }, { passive: true });
     $("help-close").addEventListener("click", () => $("help").close());
+    $("share").addEventListener("click", (ev) => { if (ev.target === $("share")) $("share").close(); });
     // A click on the backdrop lands on the dialog itself, outside its content.
     $("help").addEventListener("click", (ev) => { if (ev.target === $("help")) $("help").close(); });
     // Links between help sections scroll the dialog; the address bar stays as it is.
@@ -2353,7 +2863,12 @@
         else openPalette();
         return;
       }
-      if ($("palette").open) return;
+      if ($("palette").open || $("share").open) return;
+      if (ev.key === "Escape" && !$("def-pop").hidden) {
+        ev.preventDefault();
+        closeDefinitions();
+        return;
+      }
       if ($("help").open) {
         if (ev.key === "?") { ev.preventDefault(); toggleHelp(); }
         return;  // Esc closes the dialog natively
@@ -2367,10 +2882,7 @@
       }
       if (typing || ev.metaKey || ev.ctrlKey || ev.altKey) return;
       if (ev.key === "j" || ev.key === "k") {
-        const order = L.findingOrder(L.groupFindings(state.detail.findings.findings, state.detail.decisions, state.showHidden));
-        const next = L.stepFinding(order, state.selected, ev.key === "j" ? 1 : -1);
-        if (state.tab !== "finding") setTab("finding");
-        if (next && next !== state.selected) selectFinding(next);
+        stepFindingBy(ev.key === "j" ? 1 : -1);
       } else if (ev.key === "]" || ev.key === "[") {
         state.tabChosen = true;
         moveStep(ev.key === "]" ? 1 : -1);
@@ -2383,7 +2895,7 @@
       } else if (ev.key === "n" || ev.key === "p") {
         moveBlock(ev.key === "n" ? 1 : -1);
       } else if (ev.key === "v") {
-        if (state.view) setViewed(state.view.path, !isViewed(state.view.path));
+        if (state.view && state.changed.has(state.view.path)) setViewed(state.view.path, !isViewed(state.view.path));
       } else if (ev.key === "s") {
         setSplit(!state.split);
       } else if (ev.key === "w") {

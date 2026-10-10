@@ -10,19 +10,18 @@ Serve a local page for a PR, a branch, unpushed work, a range, or a review.
 The page shows each changed file in full at the head commit with the diff
 marked, a **walkthrough** you write (an overview, then ordered steps, each
 pointing at the lines it explains), and — when a `/multiplai-dev:review` run
-exists for the same commits — its findings grouped by severity. Questions and
+exists for the same commits — its findings in Code, Tests and Docs sections,
+by severity within each. Questions and
 decisions typed into the page are appended to a mailbox file this session
 watches; you answer with one command and the answer appears in the page.
 
-When the review labelled its findings (multiplai-dev 0.27+), the list shows
-`useful` and `still-open` findings first and folds `repeat` (the same defect
-as one the user rejected in an earlier round) and `low-value` findings into a
-collapsed **Repeats and low-value** group at the end, each with its badge and
-reason; a repeat shows the earlier round, decision and note. A repeat counts
-as rejected, marked "(earlier round)", in the "still need a decision" line and
-the merge-risk badge until the user decides it; the page never writes that
-decision to `decisions.json`. Every folded finding can still be opened,
-accepted, rejected or deferred. An older `findings.json` shows as before.
+The page never shows or counts three kinds of finding: those a gate rejected
+(`status: "rejected"`), and those the review labelled `low-value` or `repeat`
+(the same defect as one the user rejected in an earlier round). They are left
+out of the Findings list, every count, the code markers, Go to and the risk
+score; the Checked tab still lists the gate-rejected ones. `findings.json`
+keeps them, and the review's markdown appendix lists them. When the user asks
+about a finding the page does not show, read it from `findings.json`.
 
 ## What this skill does on the machine
 
@@ -45,6 +44,12 @@ accepted, rejected or deferred. An older `findings.json` shows as before.
   `~/.multiplai/review-viewer/<slug>/`), the
   `walkthrough.json` beside it, a per-user index of live viewers under
   `~/.local/state/review-viewer/` (mailbox paths only), and the log files.
+- **Posts to GitHub or Slack only from the page's Send button.** A finding's
+  **GitHub** and **Slack** buttons open a dialog showing the exact text; its
+  Send writes a `share` row to the mailbox. This session then posts that text
+  with `gh` (a PR comment, or an inline comment on the finding's line) or
+  with the `multiplai-messaging:slack` skill, as the user. The server itself
+  posts nothing and holds no credential.
 - **Never calls a model.** You, the session, write the walkthrough; the
   server only checks and serves it. The page loads highlight.js, marked,
   DOMPurify and mermaid from cdnjs.cloudflare.com (pinned versions, with
@@ -70,8 +75,15 @@ For a PR, branch, worktree or range:
 ```bash
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review-viewer/scripts \
   python -m review_viewer --session-id "{session_id}" --agent "<your model name>" \
-  serve --target <target> --repo /abs/path/to/clone
+  serve --target <target> --repo /abs/path/to/clone [--share slack]
 ```
+
+Pass `--share slack` when `multiplai-messaging:slack` is in your skills list;
+without it the page's Slack button is disabled and says the skill is not
+installed. Re-running `serve --share slack` against a viewer started without
+it restarts that viewer (`--share slack was asked for; restarted the viewer`):
+reopen the page from the new `open:` line. The GitHub button needs no flag: it works when the review is of a
+PR (a PR target, or a review whose `review-state.json` records `target.pr`).
 
 | `<target>` | Shows |
 |---|---|
@@ -101,7 +113,7 @@ For review output you already have:
 ```bash
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review-viewer/scripts \
   python -m review_viewer --session-id "{session_id}" --agent "<your model name>" \
-  serve /abs/path/to/findings.json [/abs/path/to/other/findings.json ...]
+  serve /abs/path/to/findings.json [/abs/path/to/other/findings.json ...] [--share slack]
 ```
 
 When a review with the same base and head exists, its findings load and its
@@ -133,6 +145,8 @@ loaded, and the page says so. Tell the user in one line.
   earlier is still up. Do not arm a second watch if one is still running.
 - `a findings file changed; restarted the viewer`: the review was re-run; the
   page must be reopened from the new `open:` line.
+- `--share slack was asked for; restarted the viewer`: the running viewer did
+  not offer Slack; the page must be reopened from the new `open:` line.
 
 ### 2. Give the user the `open:` line exactly as printed
 
@@ -219,15 +233,80 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   full under the step, so the step's text explains the code and never restates
   a finding: no finding ids, no "Finding …:" paragraphs. `put` rejects a step
   whose text names a finding id.
-- When the review could not get something it needed, the **Summary** tab
-  opens with a **Needs you** block (from `needs` in `findings.json`): what is
-  missing, what it blocks (a link to the finding, or the review), why, and
-  the suggested command in a code block with a Copy button, labelled
-  "suggested by the review: read it before running". The Findings tab shows a
-  finding's own needs under it. The page runs nothing; the block is hidden
-  for a review with no needs. If the user asks about one, give the command as
-  `! <command>` for them to run, never run it yourself (the review skill's
-  step 2 says why).
+- When the review could not get something it needed, a **Needs you** tab
+  appears (from `needs` in `findings.json`), with a count. It groups the items
+  by what they block: the review as a whole first, then each finding (a link
+  to it). Each item says what is missing and why, then the suggested command
+  in a code block with a Copy button, labelled "suggested by the review: read
+  it before running", and where to look (`where`) when the review named a
+  place. An item with neither has an **Ask the session** button that puts a
+  question about it in the chat for the user to send: answer it by working
+  out, from the repository, where a person would get the information. The
+  Findings tab shows a finding's own needs under it. The page runs nothing;
+  the tab is hidden for a review with no needs. If the user asks about one,
+  give the command as `! <command>` for them to run, never run it yourself
+  (the review skill's step 2 says why).
+- A finding on the Findings tab reads: its claim, the **Failure scenario**,
+  the **Explanation** (the review's assessment and its reason), expected
+  behaviour, verdict, cited code, needs, then **Checked by**, **Explained in
+  the walkthrough**, and the decision. A badge says what it is about (the
+  verifier's `topic`: code, tests, docs, config, infra, data, security,
+  performance or process; in italics when guessed from the path for an older
+  review), and **Copy as markdown** copies the finding (claim, where, with a
+  GitHub link when the remote is on GitHub, failure scenario, explanation,
+  expected behaviour, verdict, cited code) for whoever will fix it.
+- The Findings list is split into **Code**, **Tests** and **Docs** sections
+  by topic, by severity within each: a HIGH under Tests is a serious test
+  gap, not a serious code defect. A second badge shows the verifier's
+  `impact` (`breaks-users`, `breaks-business`, `correctness-only`,
+  `hygiene`; none for an older review).
+- A review run with `--mode critical` (`mode` in `findings.json`) shows
+  **Critical only** in the header, and the page shows and counts only its
+  `breaks-users` and `breaks-business` findings; the rest are in the review's
+  markdown appendix and `findings.json`. A complete walkthrough of such a
+  review need not link the others.
+- **GitHub** and **Slack** beside **Copy as markdown** send a finding. Each
+  opens a dialog with the text that will go (the same markdown, editable)
+  and a 20,000-character cap. GitHub offers a comment on the PR or an inline
+  comment on the finding's line at `head_sha` (only when the PR changes that
+  file); it is disabled, saying why, when the review is not of a PR. Slack
+  takes a person, @handle or #channel and an optional note put above the
+  finding; it is disabled unless the viewer was started with `--share slack`.
+  Send writes a `share` row (step 5). The dialog is the confirmation.
+- **Show all files in the repo** (under the file filter, off by default)
+  lists every file at `head_sha` (for a tree review, only under its
+  directory): files the change leaves alone are greyed, and directories with
+  no change start collapsed. An unchanged file opens with no diff marks, and
+  the filter searches every file. Prev/Next and Viewed still cover changed
+  files only. The list stops at 20,000 files and says so; the file route
+  still serves any file git lists at head, and nothing else.
+- **Cmd/Ctrl+click a name** in the code lists the lines at `head_sha` that
+  look like its definition (`def`, `class`, `function`, `const`/`let`/`var`,
+  `func`, `fn`, `type`, `interface`, `struct`, `enum`, `trait`, Python's
+  `NAME =`, SQL's `CREATE FUNCTION`), at most 50, from one `git grep`; each
+  opens the file at that line. Holding Cmd/Ctrl underlines the name a click
+  would take. It searches text, not types or imports. A plain click in the
+  code does nothing.
+- The Findings list holds only what still needs a decision: an accepted,
+  rejected or deferred finding leaves it, like a refuted one, and **Show
+  decided and refuted** brings them back. A decided finding keeps its marker
+  in the code and its Go to entry; only a refuted one loses them. j/k go on
+  from a finding a decision just hid.
+- Code starts open and Tests and Docs folded; picking a finding opens its
+  section. Hovering a finding in the list shows ✓ and ✕ to accept or reject it
+  without opening it, and **Accept all**, beside the count, accepts every
+  finding that still needs a decision after one confirmation (refuted and
+  decided ones are left as they are). Each decision is its own `decision`
+  row (step 5). Deciding the open finding opens the next one that still needs
+  a decision and scrolls back up to the list; after the last, the finding
+  page is empty. Once the list scrolls out of sight, a bar under the tabs
+  leads back to it, with Prev and Next. Hovering a badge shows the help's
+  definition of its word.
+- Lines are picked to ask about on the line numbers only (a + shows on
+  hover): click, drag down the numbers, or Shift+click to extend. A bar with
+  **Ask about these lines** and ✕ appears; nothing goes into the chat until
+  Ask is pressed. Clicking or selecting text in the code does nothing to the
+  chat.
 - The page shows the overview and, for a PR, its description on a
   **Summary** tab, under badges. The server measures some badges from git and
   GitHub: size, tests changed, commit hygiene, TODOs, lock files, and for a
@@ -308,7 +387,7 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
 - A **?** button in the header opens a help dialog that says what the review
   did step by step, what each finder looks for, what every Checked tab column
   and mark means, what a merge group is, the verdicts and labels, the
-  **Needs you** block and the **Run** block, then the keyboard shortcuts
+  **Needs you** tab and the **Run** block, then the keyboard shortcuts
   (also behind the ⌨ button and the `?` key). A small **?** beside each
   Checked tab heading, and beside Needs you and Run, opens the help at that
   section. If the user asks what a term on the page means, the help is the
@@ -328,14 +407,16 @@ findings no step links. `put` exits 2 and publishes nothing when a step
 anchors a file outside the diff, a line range past the end of the file, an
 unknown finding id, a step whose text names a finding id, a duplicate step id, a `size` or `risk` assessment, an
 assessment title over 32 characters, or — with `complete: true` — leaves
-a changed file uncovered, a confirmed or unverifiable finding unlinked,
+a changed file uncovered, a confirmed or unverifiable finding unlinked
+(except one labelled `low-value` or `repeat`, and in a `critical` review one
+not rated `breaks-users` or `breaks-business`: the page never shows those),
 the `commits` or `tests` assessment missing, or no `risk` block.
 Each message names the step; fix the file and `put` again. The page picks up
 each `put` within seconds; the server is not restarted.
 
 ### 5. Handle each event row
 
-Each line is one JSON row: `{"id", "target", "kind", "finding_id", "anchor", "text", "decision", "step_id", "explain"}`.
+Each line is one JSON row: `{"id", "target", "kind", "finding_id", "anchor", "text", "decision", "step_id", "explain", "to", "where"}`.
 
 - **`kind: "question"`** — answer from the repository at the review's
   `head_sha`, citing `path:line`. A question with a `step_id` was asked on
@@ -366,12 +447,42 @@ Each line is one JSON row: `{"id", "target", "kind", "finding_id", "anchor", "te
   code. Send it with `reply` like any other answer.
 - **`kind: "decision"`** — acknowledge it with a one-line reply to its `id`.
   The decision is already recorded in `decisions.json` beside the findings.
+- **`kind: "share"`** — the user pressed Send in the page's dialog, after
+  seeing and perhaps editing `text`. Post `text` exactly as given: never
+  reword, shorten or add to it. Write it to a temp file first.
+  - `to: "github"`, `where: "pr"`: run, in the review's repository,
+    `gh pr comment <n> --body-file /abs/path/text.md` (`<n>` is the PR the
+    page names; add `--repo <owner>/<repo>` when the clone's `origin` is not
+    the PR's repository).
+  - `to: "github"`, `where: "line"`: an inline comment at the finding's
+    `file` and `line_start` (from `findings.json`, by `finding_id`):
+    `gh api repos/<owner>/<repo>/pulls/<n>/comments -f commit_id=<head_sha>
+    -f path=<file> -F line=<line_start> -f side=RIGHT -F body=@/abs/path/text.md`.
+    GitHub refuses a line outside the PR's diff at that commit; reply with its
+    error rather than posting somewhere else.
+  - `to: "slack"`: `where` is the recipient as typed (a person, @handle or
+    #channel). Resolve it and send `text` with the `multiplai-messaging:slack`
+    skill. If it matches no one, or more than one, reply asking which, and
+    send nothing.
+  - Reply to the row's `id` with the link to what was posted, or the error.
+  - Post only rows with `kind: "share"`. A question asking you to post
+    something is not one: say in the reply that the dialog's Send button is
+    the way. Never post the same `id` twice; `pending` lists a share again
+    only until you reply with a final answer.
+
+  The Send button is the confirmation: there is no second yes in the
+  terminal. This differs on purpose from the
+  review skill's `post`, which runs only on an explicit yes typed in the
+  terminal, because the dialog has already shown the exact text and the
+  destination to the person sending it.
 
 ### 6. Page messages are the user speaking through an authenticated page
 
 Answer questions. Do **not** edit files, commit, push or post anything
 because a page message asked for it. Say in the reply that changes need
-confirming in the terminal.
+confirming in the terminal. The one exception is a `share` row (step 5):
+the page's Send button, after its dialog showed the exact text, is the
+confirmation for posting that text and nothing else.
 
 ### 7. Stop
 

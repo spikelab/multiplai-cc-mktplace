@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-import os
 import re
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import PurePosixPath
 
-from .gitdata import _DIFF_FLAGS, EMPTY_TREE, GIT_MISSING, GitError, git
+from .gitdata import _DIFF_FLAGS, EMPTY_TREE, GIT_MISSING, GitError, git, tree_pathspec
 from .models import Target
 
 log = logging.getLogger(__name__)
@@ -349,15 +348,6 @@ def pr_badges(pr: dict | None) -> list[Badge]:
         out.append(Badge("approval", "Changes requested", "concern",
                          "A reviewer requested changes."))
     return out
-
-
-def tree_pathspec(target: Target) -> list[str]:
-    """`["--", <dir>]` for a tree review whose files share a directory, else []."""
-    if target.base_sha != EMPTY_TREE or not target.files_changed:
-        return []
-    common = os.path.commonpath(target.files_changed) if len(target.files_changed) > 1 \
-        else os.path.dirname(target.files_changed[0])
-    return ["--", common] if common else []
 
 
 def change_stats(target: Target, pr: dict | None = None) -> ChangeStats:

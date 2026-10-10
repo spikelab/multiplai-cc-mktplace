@@ -56,16 +56,19 @@ class Fix(_Strict):
 
 
 class Need(_Strict):
-    """Information the review could not get, and one command a person could run to get it.
+    """Information the review could not get, and how a person would get it.
 
     `blocks` is a finding id, or "review" for a gap in the review as a whole.
     `command` was written by a model or by the pipeline; the page shows it to
-    be read before running, and nothing runs it.
+    be read before running, and nothing runs it. `where` says where to look
+    when one command does not get it (a console page, a dashboard, a team);
+    files before multiplai-dev 0.32 have none.
     """
     what: str
     blocks: str
     cause: Literal["no-access", "lookup-failed", "unreachable"]
     command: str = ""
+    where: str = ""
     source: Literal["verifier", "finder", "pipeline"]
 class Assessment(_Strict):
     """The review's own judgement of a finding against the rest of the review
@@ -105,6 +108,14 @@ class Finding(_Strict):
     # files written before multiplai-dev 0.26.
     verifier_citations: list[Citation] | None = None
     assessment: Assessment | None = None
+    # What the finding is about, as the verifier labelled it (multiplai-dev
+    # 0.32+). Absent in older files; the page then guesses from the path.
+    topic: Literal["code", "tests", "docs", "config", "infra", "data", "security", "performance",
+                   "process"] | None = None
+    # What breaks in production if the change is merged as is, as the verifier
+    # rated it (multiplai-dev 0.32+). Absent on refuted and rejected findings
+    # and in older files. A `critical` review lists only the two `breaks-*`.
+    impact: Literal["breaks-users", "breaks-business", "correctness-only", "hygiene"] | None = None
 
 
 class Target(_Strict):
@@ -176,6 +187,8 @@ class FindingsFile(_Strict):
     # Every need of the review, the findings' and its own. Absent in older files.
     needs: list[Need] = Field(default_factory=list)
     run: Run | None = None  # absent in files written before multiplai-dev 0.28
+    # The mode the review ran in (multiplai-dev 0.32+); absent means `full`.
+    mode: Literal["full", "critical"] | None = None
 
 
 # --- checks.json v1 ------------------------------------------------------------------
@@ -392,12 +405,19 @@ class Anchor(_Strict):
     line_end: int = Field(ge=1)
 
 
+# A `share` row's text: the finding as markdown, edited in the page's dialog.
+SHARE_TEXT_MAX = 20_000
+# A Slack recipient as typed: a person, a @handle or a #channel. The session
+# resolves it; this only keeps it to one short line.
+SHARE_RECIPIENT_RE = r"^[^\x00-\x1f\x7f]{1,100}$"
+
+
 class InboxRow(_Strict):
     v: Literal[1] = 1
     id: str
     ts: str
     target: str
-    kind: Literal["question", "decision"]
+    kind: Literal["question", "decision", "share"]
     finding_id: str | None = None
     anchor: Anchor | None = None
     text: str
@@ -406,6 +426,11 @@ class InboxRow(_Strict):
     # Sent by a block's light-bulb button: explain exactly `anchor`. The page
     # shows the answer in a strip above that block, not in the thread.
     explain: bool = False
+    # kind "share" only: the page's Send button asks the session to post
+    # `text`, unchanged, to the PR (`where` "pr" or "line") or to Slack
+    # (`where` is the recipient). Pressing Send is the confirmation.
+    to: Literal["github", "slack"] | None = None
+    where: str | None = Field(default=None, pattern=SHARE_RECIPIENT_RE)
 
 
 class OutboxRow(_Strict):

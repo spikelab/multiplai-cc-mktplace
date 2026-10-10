@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from conftest import DEF_CITATION, KEYWORD_CITATION, SCHEMA, high_finding
-from review_pipeline import budget, sdk
+from review_pipeline import budget, orchestrator, sdk
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS
 from review_pipeline.models import (AssessOutput, DuplicateSet, FinderOutput, MergeOutput, RepeatsOutput,
@@ -66,7 +66,7 @@ class FakeAgents:
         if stage == "find":
             return FinderOutput()
         if stage == "verify":
-            return Verdict(status="confirmed", reason="the keyword is the only filter", citations=[KEYWORD_CITATION],
+            return Verdict(status="confirmed", impact="breaks-users", reason="the keyword is the only filter", citations=[KEYWORD_CITATION],
                            expected_behaviour="Rate plans match whatever the channel is titled.")
         if stage == "merge":
             return MergeOutput(duplicate_sets=[DuplicateSet(
@@ -123,7 +123,7 @@ def test_review_end_to_end(fixture_repo, tmp_path, agents, capsys):
     for rollup in ("HIGH-only.md", "MEDIUM-only.md", "LOW-only.md"):
         assert (out / rollup).is_file()
     progress = (target_dir / "progress.log").read_text()
-    assert "STARTED" in progress and "DONE review finished: 1 HIGH" in progress
+    assert "STARTED" in progress and "DONE review finished: Code 1 HIGH" in progress
     assert ReviewState.model_validate_json((target_dir / "review-state.json").read_text()).stage == "done"
     assert "verify done: 2 confirmed, 0 refuted, 0 unverifiable" in stdout
     assert "merge done: 1 groups, 1 merged, 0 agent failures" in stdout
@@ -173,6 +173,29 @@ def test_batch_reviews_every_target_and_writes_rollups(fixture_repo, tmp_path, a
     assert high.startswith("# HIGH findings — 2 across 2 of 2 targets")
     review = (out / "booking-engine--feature_db-2038" / "review-booking-engine--feature_db-2038.md").read_text()
     assert "- **Deployed in main:** no" in review
+
+
+def test_batch_mode_flag_reaches_each_target_and_an_entrys_own_mode_wins(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    batch_file = tmp_path / "batch.yaml"
+    batch_file.write_text(
+        f"- repo: {repo}\n  range: {base}..{head}\n"
+        f"- repo: {repo}\n  branch: feature/db-2038\n  mode: full\n"
+    )
+    agents()
+    assert main(["--out", str(out), "batch", str(batch_file), "--mode", "critical", "--trust-repo"]) == 0
+    paths = _findings_line(capsys.readouterr().out)
+    assert [json.loads(p.read_text())["mode"] for p in paths] == ["critical", "full"]
+
+
+def test_batch_entry_mode_overrides_the_default_and_an_unknown_one_stops(tmp_path):
+    batch_file = tmp_path / "batch.yaml"
+    batch_file.write_text("- repo: /r\n  branch: a\n  mode: critical\n- repo: /r\n  branch: b\n")
+    assert [s.mode for s in orchestrator.load_batch(batch_file)] == ["critical", "full"]
+    batch_file.write_text("- repo: /r\n  branch: a\n  mode: urgent\n")
+    with pytest.raises(orchestrator.ReviewError, match="entry 0 has mode 'urgent'"):
+        orchestrator.load_batch(batch_file, "critical")
 
 
 def test_untrusted_repo_exits_3_without_output(fixture_repo, tmp_path, agents, capsys):
@@ -430,7 +453,7 @@ def test_a_run_on_a_new_head_keeps_the_earlier_round(fixture_repo, tmp_path, age
     assert json.loads((target_dir / "findings.json").read_text())["target"]["head_sha"] == head
 
 
-def test_a_repeat_run_and_a_resume_on_the_same_head_keep_no_round(fixture_repo, tmp_path, agents, capsys):
+def test_a_resume_keeps_no_round_and_a_rerun_on_the_same_head_keeps_one(fixture_repo, tmp_path, agents, capsys):
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     target_dir = out / f"booking-engine--{base}..{head}"
@@ -438,5 +461,45 @@ def test_a_repeat_run_and_a_resume_on_the_same_head_keep_no_round(fixture_repo, 
     with pytest.raises(RuntimeError):
         main(_review_args(repo, base, head, out))
     assert main(["resume", str(target_dir), "--trust-repo"]) == 0
-    assert main(_review_args(repo, base, head, out)) == 0  # a second full run on the same head
     assert not (target_dir / "rounds").exists()
+    first = json.loads((target_dir / "findings.json").read_text())["generated_at"]
+    assert main(_review_args(repo, base, head, out)) == 0  # a second full run on the same head
+    (kept,) = (target_dir / "rounds").iterdir()
+    assert kept.name == head[:12]
+    assert json.loads((kept / "findings.json").read_text())["generated_at"] == first
+
+
+def test_mode_critical_is_recorded_and_kept_by_resume(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / f"booking-engine--{base}..{head}"
+    agents(kill_at="merge")
+    with pytest.raises(RuntimeError):
+        main(_review_args(repo, base, head, out, "--mode", "critical"))
+    assert main(["resume", str(target_dir), "--trust-repo"]) == 0
+    data = json.loads((target_dir / "findings.json").read_text())
+    assert data["mode"] == "critical"
+    assert "Critical mode" in next(target_dir.glob("summary-*.md")).read_text()
+
+
+def test_a_verifier_that_never_answers_stops_the_run_with_exit_5(fixture_repo, tmp_path, agents, monkeypatch, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    fake = agents()
+    real = fake.__call__
+
+    async def failing(prompt, schema, *, budget_label="", **kwargs):
+        if budget_label == "verify":
+            raise sdk.AgentCallError("verify: no valid answer after a re-ask")
+        return await real(prompt, schema, budget_label=budget_label, **kwargs)
+
+    monkeypatch.setattr(sdk, "agent_call_structured", failing)
+    assert main(_review_args(repo, base, head, out)) == 5
+    err = capsys.readouterr().err
+    assert "STOPPED: the verifier gave no usable answer" in err and "after 3 tries each" in err
+    assert "resume" in err
+    target_dir = out / f"booking-engine--{base}..{head}"
+    assert not (target_dir / "findings.json").exists()
+    monkeypatch.setattr(sdk, "agent_call_structured", fake)
+    assert main(["resume", str(target_dir), "--trust-repo"]) == 0
+    assert json.loads((target_dir / "findings.json").read_text())["findings"][0]["impact"] == "breaks-users"

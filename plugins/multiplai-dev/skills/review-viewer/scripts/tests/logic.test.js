@@ -57,53 +57,106 @@ test("citations map to row indices, skipping deleted rows", () => {
   assert.deepEqual(L.citationRows(rows, 20, 30), []);
 });
 
-test("findings group by severity and hide refuted/rejected", () => {
+test("findings group by severity and hide refuted, rejected and decided", () => {
   const fs = [
     { id: "a", severity: "LOW", status: "confirmed" },
     { id: "b", severity: "HIGH", status: "confirmed" },
     { id: "c", severity: "HIGH", status: "refuted" },
     { id: "d", severity: "MEDIUM", status: "unverifiable" },
+    { id: "e", severity: "MEDIUM", status: "confirmed" },
+    { id: "f", severity: "LOW", status: "confirmed" },
   ];
-  const decisions = { d: { decision: "reject" } };
+  const decisions = { d: { decision: "reject" }, e: { decision: "accept" }, f: { decision: "defer" } };
   const shown = L.groupFindings(fs, decisions, false);
-  assert.equal(shown.hidden, 2);
+  assert.equal(shown.hidden, 4);
   assert.deepEqual(L.findingOrder(shown), ["b", "a"]);
   const all = L.groupFindings(fs, decisions, true);
-  assert.deepEqual(L.findingOrder(all), ["b", "c", "d", "a"]);
+  assert.deepEqual(L.findingOrder(all), ["b", "c", "d", "e", "a", "f"]);
+  // j/k from a finding a decision just hid: it keeps its place, so j goes on to the next.
+  assert.deepEqual(L.navOrder(fs, decisions, false, "e"), ["b", "e", "a"]);
+  assert.deepEqual(L.navOrder(fs, decisions, false, "b"), ["b", "a"]);
+  assert.equal(L.stepFinding(L.navOrder(fs, decisions, false, "e"), "e", 1), "a");
 });
 
-test("repeats and low-value findings fold after the rest, most severe first", () => {
+test("gate-rejected, low-value and repeat findings are never shown or counted", () => {
   const fs = [
     { id: "a", severity: "LOW", status: "confirmed", assessment: { label: "low-value", reason: "[speculative] r" } },
     { id: "b", severity: "HIGH", status: "confirmed", assessment: { label: "useful" } },
-    { id: "c", severity: "MEDIUM", status: "confirmed", assessment: { label: "repeat", earlier_id: "x" } },
+    { id: "c", severity: "HIGH", status: "confirmed", assessment: { label: "repeat", earlier_id: "x" } },
     { id: "d", severity: "MEDIUM", status: "unverifiable", assessment: { label: "still-open", earlier_id: "y" } },
     { id: "e", severity: "LOW", status: "confirmed" },
+    { id: "g", severity: "HIGH", status: "rejected" },
+    { id: "r", severity: "LOW", status: "refuted" },
   ];
+  assert.deepEqual(L.shownFindings(fs).map((f) => f.id), ["b", "d", "e", "r"]);
   const g = L.groupFindings(fs, {}, false);
-  assert.deepEqual(g.folded.map((f) => f.id), ["c", "a"]);
-  assert.deepEqual(L.findingOrder(g), ["b", "d", "e", "c", "a"]);
-  // A file written before the assess stage has no labels: nothing folds.
-  const old = L.groupFindings([{ id: "e", severity: "LOW", status: "confirmed" }], {}, false);
-  assert.deepEqual(old.folded, []);
-  assert.deepEqual(L.findingOrder(old), ["e"]);
+  assert.equal(g.folded, undefined, "no folded group any more");
+  assert.deepEqual(L.findingOrder(g), ["b", "d", "e"]);
+  assert.equal(g.hidden, 1, "only the refuted one waits behind the checkbox");
+  assert.deepEqual(L.findingOrder(L.groupFindings(fs, {}, true)), ["b", "d", "e", "r"]);
+  // Decided findings still hide behind the checkbox, so a decision can be undone.
+  const decided = L.groupFindings(fs, { b: { decision: "reject" } }, false);
+  assert.deepEqual([L.findingOrder(decided), decided.hidden], [["d", "e"], 2]);
+  assert.deepEqual(L.navOrder(fs, {}, false, "c"), ["b", "d", "e"], "j/k never lands on a dropped one");
+  // Every count agrees with the list.
+  assert.deepEqual(L.undecidedCount(fs, {}), { open: 3, total: 3 });
+  const walk = { risk: { tier: 1, tier_why: "w", revertable: true, revert_why: "x" }, assessments: [] };
+  assert.equal(L.riskInputs({}, walk, fs, {}, []).openHigh, 1, "the repeat and the gate-rejected HIGH do not count");
+  assert.equal(L.walkCoverage({ steps: [], skipped: [] }, [], fs).findingsTotal, 3, "b, d and e");
+  // A file written before the assess stage has no labels: nothing is dropped but gate rejections.
+  assert.deepEqual(L.findingOrder(L.groupFindings([{ id: "e", severity: "LOW", status: "confirmed" }], {}, false)), ["e"]);
 });
 
-test("a repeat counts as decided (rejected) until the person decides otherwise", () => {
+test("the list is split into Code, Tests and Docs, by severity within each", () => {
+  const fs = [
+    { id: "t", severity: "HIGH", status: "confirmed", topic: "tests", file: "a.py" },
+    { id: "c2", severity: "LOW", status: "confirmed", topic: "config", file: "a.yaml" },
+    { id: "d", severity: "MEDIUM", status: "confirmed", file: "docs/run.md" },
+    { id: "c1", severity: "MEDIUM", status: "unverifiable", topic: "code", file: "a.py" },
+  ];
+  const g = L.groupFindings(fs, {}, false);
+  assert.deepEqual(g.sections.map((s) => s.title), ["Code", "Tests", "Docs"]);
+  assert.deepEqual(L.findingOrder(g), ["c1", "c2", "t", "d"], "a HIGH test gap comes after the code findings");
+  assert.equal(L.findingSection({ file: "tests/test_a.py" }), "tests", "no topic: the path guess decides");
+  assert.equal(L.findingSection({ topic: "security", file: "tests/x.py" }), "code");
+  assert.deepEqual(L.navOrder(fs, {}, false, null), ["c1", "c2", "t", "d"]);
+});
+
+test("a critical review shows and counts only findings that break users or the business", () => {
+  const ff = { mode: "critical", findings: [
+    { id: "u", severity: "LOW", status: "confirmed", impact: "breaks-users" },
+    { id: "b", severity: "MEDIUM", status: "unverifiable", impact: "breaks-business" },
+    { id: "c", severity: "HIGH", status: "confirmed", impact: "correctness-only" },
+    { id: "h", severity: "HIGH", status: "confirmed", impact: "hygiene" },
+    { id: "n", severity: "HIGH", status: "confirmed" },
+  ], needs: [{ what: "w", blocks: "c", cause: "no-access" }] };
+  const shown = L.shownFile(ff);
+  assert.deepEqual(shown.findings.map((f) => f.id), ["u", "b"]);
+  assert.deepEqual(shown.needs, [], "a need of a finding the page hides goes with it");
+  assert.deepEqual(L.undecidedCount(shown.findings, {}), { open: 2, total: 2 });
+  assert.deepEqual(L.shownFile(Object.assign({}, ff, { mode: "full" })).findings.length, 5);
+  assert.deepEqual(L.shownFile(Object.assign({}, ff, { mode: undefined })).findings.length, 5, "no mode is full");
+});
+
+test("needs that block a dropped finding are dropped with it", () => {
+  const ff = {
+    findings: [{ id: "b", severity: "HIGH", status: "confirmed", file: "x", line_start: 1, claim: "B" },
+      { id: "a", severity: "LOW", status: "confirmed", assessment: { label: "low-value" } }],
+    needs: [{ what: "w1", blocks: "review", cause: "no-access" }, { what: "w2", blocks: "b", cause: "no-access" },
+      { what: "w3", blocks: "a", cause: "no-access" }],
+  };
+  const shown = L.shownFile(ff);
+  assert.deepEqual(shown.findings.map((f) => f.id), ["b"]);
+  assert.deepEqual(L.needsItems(shown).map((n) => n.what), ["w1", "w2"]);
+  assert.equal(ff.findings.length, 2, "the file itself is left as it is");
+});
+
+test("an explicit decision still overrides an earlier round's", () => {
   const repeat = { id: "c", severity: "HIGH", status: "confirmed",
     assessment: { label: "repeat", earlier_id: "x", earlier_note: "by design" } };
-  const plain = { id: "b", severity: "LOW", status: "confirmed" };
-  const refuted = { id: "r", severity: "LOW", status: "refuted" };
   assert.deepEqual(L.effectiveDecision(repeat, {}), { decision: "reject", note: "by design", implied: true });
-  assert.equal(L.effectiveDecision(plain, {}), null);
+  assert.equal(L.effectiveDecision({ id: "b" }, {}), null);
   assert.equal(L.effectiveDecision(repeat, { c: { decision: "accept" } }).decision, "accept");
-  assert.deepEqual(L.undecidedCount([repeat, plain, refuted], {}), { open: 1, total: 2 });
-  assert.deepEqual(L.undecidedCount([repeat, plain], { c: { decision: "accept" }, b: { decision: "defer" } }),
-    { open: 0, total: 2 });
-  // The merge-risk count treats it as rejected too.
-  const walk = { risk: { tier: 1, tier_why: "w", revertable: true, revert_why: "x" }, assessments: [] };
-  assert.equal(L.riskInputs({}, walk, [repeat], {}, []).openHigh, 0);
-  assert.equal(L.riskInputs({}, walk, [repeat], { c: { decision: "accept" } }, []).openHigh, 1);
 });
 
 test("assessment text names the earlier round, decision and note", () => {
@@ -115,6 +168,10 @@ test("assessment text names the earlier round, decision and note", () => {
   assert.equal(L.assessmentText({ label: "still-open", earlier_id: "y", earlier_decision: "accept", reason: "" }),
     "Still open from y, your decision accept");
   assert.equal(L.assessmentText({ label: "low-value", reason: "[covered] by b" }), "Low value: [covered] by b");
+  assert.equal(L.explanationText({ label: "useful", reason: "r" }), "r");
+  assert.equal(L.explanationText({ label: "useful" }), "");
+  assert.equal(L.explanationText(null), "");
+  assert.equal(L.explanationText({ label: "low-value", reason: "[covered] by b" }), "Low value: [covered] by b");
 });
 
 test("j/k stepping clamps at both ends", () => {
@@ -652,6 +709,31 @@ test("the Needs you block is hidden without needs, and each item says what it bl
   assert.equal(items[1].blocks, "the review");
   assert.equal(items[1].command, "gh api repos/o/r/rules/branches/main");
   assert.equal(items[2].blocks, "finding ffffffffff");
+  assert.equal(items[0].where, "");
+});
+
+test("the Needs you tab groups items by what they block, the review's own gaps first", () => {
+  assert.deepEqual(L.needsGroups(null), []);
+  const ff = {
+    findings: [{ id: "a1b2c3d4e5", file: "app.py", line_start: 7, claim: "The timeout is ignored." }],
+    needs: [
+      { what: "Probe defaults.", blocks: "a1b2c3d4e5", cause: "unreachable", command: "", source: "verifier",
+        where: "The vendor's docs, Health checks page" },
+      { what: "Rules on main.", blocks: "review", cause: "lookup-failed", command: "gh api x", source: "pipeline" },
+      { what: "Deployed config.", blocks: "a1b2c3d4e5", cause: "no-access", command: "", source: "verifier" },
+    ],
+  };
+  const groups = L.needsGroups(ff);
+  assert.deepEqual(groups.map((g) => [g.blocks, g.findingId, g.items.length]),
+    [["the review", null, 1], ["app.py:7 — The timeout is ignored.", "a1b2c3d4e5", 2]]);
+  assert.equal(groups[1].items[0].where, "The vendor's docs, Health checks page");
+});
+
+test("asking the session about a need names it and what it blocks", () => {
+  const q = L.needQuestion({ what: "The column type.", blocks: "app.py:7 — The timeout is ignored." });
+  assert.match(q, /The column type\./);
+  assert.match(q, /It blocks: app\.py:7 — The timeout is ignored\./);
+  assert.match(L.needQuestion({ what: "w", blocks: "the review" }), /It blocks: the review as a whole/);
 });
 
 const RUN = {
@@ -866,6 +948,8 @@ test("the help explains every value the Checked and Findings tabs can show", () 
     status: findings.Finding.properties.status.enum,
     // `useful` shows no badge, so the help names it in prose only.
     label: findings.Assessment.properties.label.enum.filter((v) => v !== "useful"),
+    impact: findings.Finding.properties.impact.anyOf.find((a) => a.enum).enum,
+    topic: findings.Finding.properties.topic.anyOf.find((a) => a.enum).enum,
   };
   for (const [name, values] of Object.entries(groups)) {
     assert.ok(values.length, name + " has values in the schema");
@@ -875,6 +959,223 @@ test("the help explains every value the Checked and Findings tabs can show", () 
     "finding", "finder", "verdict", "gate", "fate", "group", "outcome"]) {
     assert.ok(helpTerms.has(column), "the help does not explain the Checked tab's \"" + column + "\" column");
   }
+});
+
+test("a GitHub link to lines takes https and ssh remotes, and nothing else", () => {
+  const sha = "454e493f82f28689553833f91c510af68e10eb7e";
+  assert.equal(L.githubBlobUrl("https://github.com/DolceTech/DolceDataform.git", sha, "docs/history.md", 194, 198),
+    "https://github.com/DolceTech/DolceDataform/blob/" + sha + "/docs/history.md#L194-L198");
+  assert.equal(L.githubBlobUrl("git@github.com:o/r.git", sha, "a b.py", 3, 3),
+    "https://github.com/o/r/blob/" + sha + "/a%20b.py#L3");
+  assert.equal(L.githubBlobUrl("https://gitlab.com/o/r.git", sha, "a.py", 1, 1), null);
+  assert.equal(L.githubBlobUrl("https://github.com/o/r", "not-a-sha", "a.py", 1, 1), null);
+});
+
+test("a finding copies as markdown with where, scenario, explanation and cited code", () => {
+  const f = { id: "a1b2c3d4e5", severity: "MEDIUM", status: "confirmed", claim: "The timeout is ignored.",
+    file: "app.py", line_start: 7, line_end: 9, topic: "code", failure_scenario: "A slow call hangs.",
+    expected_behaviour: "It stops after 5 s.", verdict_reason: "Line 8 drops it.",
+    citations: [{ path: "app.py", line_start: 8, line_end: 8, quote: "call(url)" }] };
+  const md = L.findingMarkdown(f, { label: "o/r PR #1", head_sha: "a".repeat(40),
+    remote_url: "https://github.com/o/r.git" }, "Worth fixing.");
+  assert.match(md, /^### \[MEDIUM\] The timeout is ignored\.\n/);
+  assert.match(md, /`app\.py:7-9` · code · https:\/\/github\.com\/o\/r\/blob\/a{40}\/app\.py#L7-L9/);
+  assert.match(md, /\*\*Failure scenario:\*\* A slow call hangs\./);
+  assert.match(md, /\*\*Explanation:\*\* Worth fixing\./);
+  assert.match(md, /\*\*Verifier \(confirmed\):\*\* Line 8 drops it\./);
+  assert.match(md, /- `app\.py:8`\n\n  ```\n  call\(url\)\n  ```/);
+  assert.match(md, /_From the review of o\/r PR #1 at aaaaaaaa, finding a1b2c3d4e5\._$/);
+  assert.doesNotMatch(L.findingMarkdown({ ...f, expected_behaviour: "" }, {}, ""), /Explanation|Expected/);
+});
+
+
+test("a finding's topic is the verifier's, else a guess from its path", () => {
+  assert.deepEqual(L.findingTopic({ topic: "process", file: "docs/history.md" }), { topic: "process", guessed: false });
+  const guess = (file) => L.findingTopic({ file: file }).topic;
+  assert.equal(guess("tests/test_needs.py"), "tests");
+  assert.equal(guess("src/app.test.ts"), "tests");
+  assert.equal(guess("pkg/thing_test.go"), "tests");
+  assert.equal(guess("docs/history.md"), "docs");
+  assert.equal(guess("README.md"), "docs");
+  assert.equal(guess("infra/main.tf"), "infra");
+  assert.equal(guess(".github/workflows/ci.yml"), "infra");
+  assert.equal(guess("Dockerfile"), "infra");
+  assert.equal(guess("workflow_settings.yaml"), "config");
+  assert.equal(guess("includes/pii_utils.js"), "code");
+  assert.equal(L.findingTopic({ file: "a.py" }).guessed, true);
+});
+
+test("a downloaded finding is named by severity, file name and id", () => {
+  assert.equal(L.findingFileName({ id: "a1b2c3d4e5", severity: "MEDIUM", file: "docs/history notes.md" }),
+    "finding-medium-history-notes.md-a1b2c3d4e5.md");
+});
+
+test("the sidebar lists every repo file, unchanged ones marked, when asked", () => {
+  const changed = ["app/main.py", "app/gone.py"];
+  const all = ["lib/util.py", "app/main.py", "README.md", "lib/sub/x.py"];
+  assert.deepEqual(L.sidebarGroups(changed, null, "").map((g) => g.dir), ["app"]);
+  const g = L.sidebarGroups(changed, all, "");
+  assert.deepEqual(g.map((x) => [x.dir, x.changed]), [["", false], ["app", true], ["lib", false], ["lib/sub", false]]);
+  // A deleted file is not at head, but stays listed with the change.
+  assert.deepEqual(g[1].files.map((f) => [f.name, f.changed]), [["gone.py", true], ["main.py", true]]);
+  assert.deepEqual(g[2].files, [{ path: "lib/util.py", name: "util.py", changed: false }]);
+  // The filter searches every file when every file is listed.
+  assert.deepEqual(L.sidebarGroups(changed, all, "UTIL").map((x) => x.dir), ["lib"]);
+  assert.deepEqual(L.sidebarGroups(changed, null, "util"), []);
+});
+
+test("a directory the change does not touch starts closed", () => {
+  const [, app, lib] = L.sidebarGroups(["app/main.py"], ["README.md", "app/main.py", "lib/util.py"], "");
+  assert.equal(L.dirOpen(app, new Map(), "", null), true);
+  assert.equal(L.dirOpen(lib, new Map(), "", null), false);
+  assert.equal(L.dirOpen(lib, new Map([["lib", true]]), "", null), true);
+  assert.equal(L.dirOpen(app, new Map([["app", false]]), "", null), false);
+  assert.equal(L.dirOpen(lib, new Map(), "", "lib/util.py"), true, "the open file's directory");
+  assert.equal(L.dirOpen(lib, new Map([["lib", false]]), "ut", null), true, "a filter opens every match");
+});
+
+test("cmd/ctrl+click takes the whole identifier under the pointer", () => {
+  const line = "  return helper(x) + $el.value_2 * 10;";
+  assert.deepEqual(L.identifierAt(line, 11), { name: "helper", start: 9, end: 15 });
+  assert.deepEqual(L.identifierAt(line, 9), { name: "helper", start: 9, end: 15 }, "first character");
+  assert.deepEqual(L.identifierAt(line, 15), { name: "helper", start: 9, end: 15 }, "just after the last");
+  assert.equal(L.identifierAt(line, 21).name, "$el");
+  assert.equal(L.identifierAt(line, 27).name, "value_2");
+  assert.equal(L.identifierAt(line, 36), null, "a number is not a name");
+  assert.equal(L.identifierAt(line, 0), null, "a space");
+  assert.equal(L.identifierAt(line, 19), null, "an operator between spaces");
+  assert.equal(L.identifierAt("x".repeat(101), 3), null, "longer than the server takes");
+  assert.equal(L.identifierAt("", 0), null);
+  assert.equal(L.identifierAt("abc", 99).name, "abc", "an offset past the end is clamped");
+});
+
+test("the GitHub and Slack buttons work only where the session can send", () => {
+  const f = { file: "app/a.py", line_start: 4 };
+  const none = L.shareOptions({ github: false, pr: null, slack: false }, f, ["app/a.py"]);
+  assert.deepEqual([none.github.enabled, none.line.enabled, none.slack.enabled], [false, false, false]);
+  assert.equal(none.github.why, "This review is not of a PR");
+  assert.equal(none.slack.why, "The Slack skill is not installed in this session");
+  const all = L.shareOptions({ github: true, pr: 278, slack: true }, f, ["app/a.py"]);
+  assert.deepEqual([all.github.enabled, all.line.enabled, all.slack.enabled], [true, true, true]);
+  assert.equal(all.github.why, "Comment on PR #278");
+  assert.equal(all.line.why, "Comment on app/a.py:4");
+  // A finding in a file the PR does not change can go on the PR, not on a line.
+  const outside = L.shareOptions({ github: true, pr: 278, slack: false }, { file: "lib/u.py", line_start: 1 }, ["app/a.py"]);
+  assert.deepEqual([outside.github.enabled, outside.line.enabled], [true, false]);
+  assert.match(outside.line.why, /does not change lib\/u\.py/);
+  assert.equal(L.shareOptions(null, f, []).github.enabled, false, "a server without the share field");
+});
+
+test("a Slack share puts the note above the finding", () => {
+  assert.equal(L.shareText("  Marco, this one  ", "### finding"), "Marco, this one\n\n### finding");
+  assert.equal(L.shareText("", "### finding"), "### finding");
+});
+
+// --- deciding, badges and sharing on the Findings tab ---------------------------------
+
+const decidable = [
+  { id: "c1", severity: "HIGH", status: "confirmed", topic: "code", file: "a.py" },
+  { id: "c2", severity: "LOW", status: "confirmed", topic: "code", file: "a.py" },
+  { id: "r", severity: "MEDIUM", status: "refuted", topic: "code", file: "a.py" },
+  { id: "t", severity: "HIGH", status: "confirmed", topic: "tests", file: "t.py" },
+  { id: "g", severity: "HIGH", status: "rejected", file: "a.py" },
+];
+
+test("a decided finding keeps its code marker and Go to entry; a refuted one does not", () => {
+  const byId = Object.fromEntries(decidable.map((f) => [f.id, f]));
+  assert.equal(L.isHidden(byId.c1, { c1: { decision: "accept" } }), true, "it leaves the list");
+  assert.equal(L.isHiddenInCode(byId.c1), false, "but keeps its marker");
+  assert.equal(L.isHiddenInCode(byId.r), true);
+});
+
+test("Accept all takes only the shown findings that still need a decision, in list order", () => {
+  assert.deepEqual(L.pendingIds(decidable, {}), ["c1", "c2", "t"], "not the refuted or the gate-rejected one");
+  assert.deepEqual(L.pendingIds(decidable, { c2: { decision: "defer" } }), ["c1", "t"]);
+  const repeat = { id: "p", severity: "HIGH", status: "confirmed", assessment: { label: "repeat" } };
+  assert.deepEqual(L.pendingIds(decidable.concat([repeat]), {}), ["c1", "c2", "t"], "a repeat is never shown");
+});
+
+test("a decision opens the next finding that needs one, and none after the last", () => {
+  assert.equal(L.afterDecision(decidable, { c1: { decision: "accept" } }, "c1"), "c2");
+  assert.equal(L.afterDecision(decidable, { c2: { decision: "reject" } }, "c2"), "t", "across a section");
+  assert.equal(L.afterDecision(decidable, { t: { decision: "accept" } }, "t"), "c2", "after the last, the nearest one left before it");
+  const all = { c1: { decision: "accept" }, c2: { decision: "accept" }, t: { decision: "reject" } };
+  assert.equal(L.afterDecision(decidable, all, "t"), null, "nothing left: the finding page empties");
+  assert.equal(L.afterDecision(decidable, { c1: { decision: "accept" } }, "zz"), "c2", "an unknown id starts at the top");
+});
+
+test("an empty list says which findings critical mode left out and which the checks did", () => {
+  const critical = { mode: "critical", findings: [
+    { id: "a", severity: "HIGH", status: "confirmed", impact: "correctness-only" },
+    { id: "b", severity: "LOW", status: "confirmed", impact: "hygiene" },
+    { id: "c", severity: "LOW", status: "confirmed", impact: "hygiene" }] };
+  const text = L.emptyListText(critical);
+  assert.match(text, /of the review's 3 findings, 3 are not rated breaks-users or breaks-business/);
+  assert.doesNotMatch(text, /rejected by its checks/, "critical mode alone hid them");
+  const mixed = L.emptyListText({ mode: "critical", findings: critical.findings.concat([
+    { id: "g", severity: "HIGH", status: "rejected", impact: "breaks-users" }]) });
+  assert.match(mixed, /4 findings, 1 was rejected by its checks .*, and 3 are not rated/);
+  assert.match(L.emptyListText({ findings: [{ id: "g", status: "rejected" }] }),
+    /of the review's 1 finding, 1 was rejected by its checks or labelled low-value or repeat; findings.json keeps them/);
+});
+
+test("the list and the finding page show the impact badge, with the other badges in order", () => {
+  const f = { id: "x", severity: "HIGH", status: "confirmed", topic: "tests", impact: "correctness-only",
+    assessment: { label: "still-open" } };
+  const kinds = (bs) => bs.map((b) => b.kind + ":" + b.value);
+  assert.deepEqual(kinds(L.findingBadges(f, true)),
+    ["status:confirmed", "topic:tests", "impact:correctness-only", "label:still-open"]);
+  assert.deepEqual(kinds(L.findingBadges(f, false)),
+    ["severity:HIGH", "status:confirmed", "topic:tests", "impact:correctness-only", "label:still-open"]);
+  assert.equal(L.findingBadges(f, true)[0].cls, "HIGH", "the list colours the status by severity");
+  const old = L.findingBadges({ id: "y", severity: "LOW", status: "confirmed", file: "tests/test_a.py",
+    assessment: { label: "useful" } }, true);
+  assert.deepEqual(kinds(old), ["status:confirmed", "topic:tests"], "no impact, no useful label");
+  assert.equal(old[1].guessed, true);
+});
+
+test("the share request carries the destination the dialog picked", () => {
+  assert.deepEqual(L.shareRequest("s", "f1", "github", { choice: "line", text: "T" }),
+    { target: "s", finding_id: "f1", to: "github", where: "line", text: "T" });
+  assert.equal(L.shareRequest("s", "f1", "github", { choice: undefined, text: "T" }).where, "",
+    "no radio picked: no destination, so Send stays off");
+  assert.deepEqual(L.shareRequest("s", "f1", "slack", { to: "  #eng ", note: "Look", text: "T" }),
+    { target: "s", finding_id: "f1", to: "slack", where: "#eng", text: "Look\n\nT" });
+});
+
+// app.js is not loaded by any test (no DOM here), so these read its source to
+// hold the call sites to the tested helpers.
+const appJs = fs.readFileSync(path.join(STATIC, "app.js"), "utf8");
+
+test("app.js reads the unfiltered findings only to filter them or to say why the list is empty", () => {
+  const reads = [...appJs.matchAll(/state\.detail\.findings(?!\.(?:target|mode|run)\b)[^\n]*/g)].map((m) => m[0]);
+  assert.deepEqual(reads, ["state.detail.findings);", "state.detail.findings;"],
+    "every other list, count, marker, Go to entry and risk input must read state.shown");
+  assert.match(appJs, /state\.shownFile = L\.shownFile\(state\.detail\.findings\);/);
+  assert.match(appJs, /const ff = state\.detail\.findings;\n\s*box\.appendChild\(emptyState\("✓", \(ff\.findings\.length\n\s*\? L\.emptyListText\(ff\)/);
+  assert.doesNotMatch(appJs, /\.findings\.findings/);
+});
+
+test("app.js builds every finding badge, and the share request, through the tested helpers", () => {
+  assert.match(appJs, /function findingItem[\s\S]*?findingBadgeEls\(f, true\)/);
+  assert.match(appJs, /function renderDetail[\s\S]*?findingBadgeEls\(f, false\)/);
+  assert.doesNotMatch(appJs, /class: "badge impact/, "the impact badge comes from L.findingBadges");
+  assert.match(appJs, /name: "share-where"/);
+  assert.match(appJs, /input\[name=share-where\]:checked/);
+  assert.match(appJs, /const request = \(\) => L\.shareRequest\(state\.slug, f\.id, to, form\(\)\);/);
+  assert.match(appJs, /const body = request\(\);\n\s*try \{\n\s*const res = await api\("\/api\/share", body\)/);
+});
+
+test("a badge's tooltip comes from the help: every badge word has an entry in its Findings section", () => {
+  const findingsHelp = (helpHtml.match(/<section id="help-findings"[\s\S]*?<\/section>/) || [""])[0];
+  const words = new Set([...findingsHelp.matchAll(/<dt><code>([^<]+)<\/code><\/dt>/g)].map((m) => m[1]));
+  const findings = JSON.parse(fs.readFileSync(path.join(SCHEMA, "findings.v1.schema.json"), "utf8")).$defs;
+  for (const v of findings.Finding.properties.topic.anyOf.find((a) => a.enum).enum
+    .concat(findings.Finding.properties.impact.anyOf.find((a) => a.enum).enum, ["confirmed", "unverifiable", "refuted",
+      "repeat", "still-open", "low-value"])) {
+    assert.ok(words.has(v), "the Findings help has no <dt> for \"" + v + "\", so its badge has no tooltip");
+  }
+  assert.match(appJs, /document\.querySelectorAll\("#help-findings dt"\)/);
 });
 
 let failed = 0;

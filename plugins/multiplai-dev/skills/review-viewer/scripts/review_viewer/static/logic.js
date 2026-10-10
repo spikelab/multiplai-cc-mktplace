@@ -8,7 +8,7 @@
   "use strict";
 
   const SEVERITIES = ["HIGH", "MEDIUM", "LOW"];
-  const HIDDEN_STATUSES = new Set(["refuted", "rejected"]);
+  const HIDDEN_STATUSES = new Set(["refuted"]);
 
   /* Join the parts of one answer. Parts split by `reply` to fit the row size
    * limit end on a line break and are joined as they are; separate replies
@@ -80,13 +80,9 @@
     return out;
   }
 
-  function isHidden(finding, decisions) {
-    const d = decisions && decisions[finding.id];
-    return HIDDEN_STATUSES.has(finding.status) || !!(d && d.decision === "reject");
-  }
-
-  /* Assess labels whose findings fold into a collapsed group after the rest. */
-  const FOLDED_LABELS = new Set(["repeat", "low-value"]);
+  /* Assess labels whose findings the page never shows or counts: low-value,
+   * and repeat (the same defect as one you rejected in an earlier round). */
+  const DROPPED_LABELS = new Set(["repeat", "low-value"]);
 
   /* The review's assess label for a finding, or "" for a file written before
    * the assess stage existed. */
@@ -94,36 +90,73 @@
     return (finding && finding.assessment && finding.assessment.label) || "";
   }
 
-  function isFolded(finding) {
-    return FOLDED_LABELS.has(assessLabel(finding));
+  /* The findings the page shows and counts. Gate-rejected findings (status
+   * `rejected`), and those labelled low-value or repeat, are left out of the
+   * list, every count, the code markers, the palette and the risk score;
+   * findings.json keeps them, and the Checked tab still lists what the gates
+   * rejected. */
+  function shownFindings(findings, mode) {
+    return (findings || []).filter((f) => f.status !== "rejected" && !DROPPED_LABELS.has(assessLabel(f)) &&
+      (mode !== "critical" || CRITICAL_IMPACTS.has(f.impact)));
   }
 
-  /* Findings by severity, in the input order within each severity. Refuted
-   * and rejected findings are left out unless showHidden. Findings labelled
-   * repeat or low-value go to `folded` instead (severity order), shown after
-   * the rest in a collapsed group. */
+  /* A review run with `--mode critical` lists only findings the verifier rated
+   * as breaking users or the business after merge. */
+  const CRITICAL_IMPACTS = new Set(["breaks-users", "breaks-business"]);
+
+  /* The sections the list is split into; severity is read within a section. */
+  const SECTIONS = ["code", "tests", "docs"];
+  const SECTION_TITLES = { code: "Code", tests: "Tests", docs: "Docs" };
+
+  /* `tests` or `docs` from the finding's topic (or the path guess), else `code`. */
+  function findingSection(f) {
+    const t = findingTopic(f).topic;
+    return t === "tests" || t === "docs" ? t : "code";
+  }
+
+  /* A findings file with only the shown findings (in a critical review, only
+   * the `breaks-*` ones), and only the needs that block the review or a shown
+   * finding. */
+  function shownFile(ff) {
+    const findings = shownFindings(ff && ff.findings, ff && ff.mode);
+    const ids = new Set(findings.map((f) => f.id));
+    const all = new Set(((ff && ff.findings) || []).map((f) => f.id));
+    const needs = ((ff && ff.needs) || []).filter((n) => ids.has(n.blocks) || !all.has(n.blocks));
+    return Object.assign({}, ff, { findings: findings, needs: needs });
+  }
+
+  /* Refuted findings, and any finding you decided (accept, reject or defer),
+   * leave the list, so what is left is what still needs you. */
+  function isHidden(finding, decisions) {
+    const d = decisions && decisions[finding.id];
+    return HIDDEN_STATUSES.has(finding.status) || !!(d && d.decision);
+  }
+
+  /* The shown findings by section (Code, Tests, Docs), then severity, in the
+   * input order within each.
+   * Refuted and decided findings are left out unless showHidden; `hidden`
+   * counts them. Gate-rejected, low-value and repeat findings are never here
+   * (shownFindings). */
   function groupFindings(findings, decisions, showHidden) {
-    const groups = { HIGH: [], MEDIUM: [], LOW: [] };
-    const folded = [];
+    const sections = SECTIONS.map((name) => ({ section: name, title: SECTION_TITLES[name],
+      groups: { HIGH: [], MEDIUM: [], LOW: [] } }));
     let hidden = 0;
-    for (const f of findings || []) {
+    for (const f of shownFindings(findings)) {
       if (isHidden(f, decisions)) {
         hidden += 1;
         if (!showHidden) continue;
       }
-      if (isFolded(f)) folded.push(f);
-      else (groups[f.severity] || (groups[f.severity] = [])).push(f);
+      const groups = sections[SECTIONS.indexOf(findingSection(f))].groups;
+      (groups[f.severity] || (groups[f.severity] = [])).push(f);
     }
-    const rank = (f) => { const i = SEVERITIES.indexOf(f.severity); return i < 0 ? SEVERITIES.length : i; };
-    folded.sort((a, b) => rank(a) - rank(b));
-    return { groups: groups, hidden: hidden, folded: folded };
+    return { sections: sections, hidden: hidden };
   }
 
-  /* Ids in the order the sidebar shows them: the severity groups, then the folded group. */
+  /* Ids in the order the list shows them: Code, Tests, Docs, and HIGH,
+   * MEDIUM, LOW within each. */
   function findingOrder(grouped) {
     const ids = [];
-    for (const sev of SEVERITIES) for (const f of grouped.groups[sev] || []) ids.push(f.id);
-    for (const f of grouped.folded || []) ids.push(f.id);
+    for (const s of grouped.sections) for (const sev of SEVERITIES) for (const f of s.groups[sev] || []) ids.push(f.id);
     return ids;
   }
 
@@ -138,15 +171,73 @@
     return null;
   }
 
-  /* How many shown (not refuted or rejected) findings still need a decision. */
+  /* How many shown, not refuted findings still need a decision, of how many. */
   function undecidedCount(findings, decisions) {
     let open = 0, total = 0;
-    for (const f of findings || []) {
+    for (const f of shownFindings(findings)) {
       if (HIDDEN_STATUSES.has(f.status)) continue;
       total += 1;
       if (!effectiveDecision(f, decisions)) open += 1;
     }
     return { open: open, total: total };
+  }
+
+  /* Only refuted findings lose their code marker and Go to entry. A decided
+   * finding leaves the list but keeps both, so the lines you accepted to fix
+   * stay easy to reach. */
+  function isHiddenInCode(finding) {
+    return HIDDEN_STATUSES.has(finding.status);
+  }
+
+  /* Ids of the shown, not refuted findings with no decision yet, in list
+   * order: what the list holds with Show decided off, and what Accept all
+   * accepts. */
+  function pendingIds(findings, decisions) {
+    return findingOrder(groupFindings(findings, decisions, false));
+  }
+
+  /* The finding to open once `current` is decided: the next one still
+   * needing a decision after it in list order, else the nearest before it,
+   * else null, so the last decision leaves the finding page empty. */
+  function afterDecision(findings, decisions, current) {
+    const pending = new Set(pendingIds(findings, decisions));
+    const order = findingOrder(groupFindings(findings, decisions, true));
+    const i = order.indexOf(current);
+    for (let j = i + 1; j < order.length; j++) if (pending.has(order[j])) return order[j];
+    for (let j = Math.min(i, order.length) - 1; j >= 0; j--) if (pending.has(order[j])) return order[j];
+    return null;
+  }
+
+  /* Why the Findings list is empty while findings.json has findings: those the
+   * review's checks or labels set aside, and those a critical review leaves
+   * out, each counted. */
+  function emptyListText(ff) {
+    const all = (ff && ff.findings) || [];
+    const kept = shownFindings(all).length;
+    const dropped = all.length - kept;
+    const critical = kept - shownFindings(all, ff && ff.mode).length;
+    const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
+    const parts = [];
+    if (dropped) parts.push(plural(dropped, "was", "were") + " rejected by its checks or labelled low-value or repeat");
+    if (critical) parts.push(plural(critical, "is", "are") + " not rated breaks-users or breaks-business, " +
+      "which a critical review leaves out");
+    return "Nothing to show: of the review's " + plural(all.length, "finding", "findings") + ", " +
+      parts.join(", and ") + "; findings.json keeps them.";
+  }
+
+  /* The badges a finding shows, in order: on its page the severity and then
+   * the status; in the list the status, coloured by severity. Then the topic,
+   * the impact (none in a file older than impact) and the assess label
+   * (none for useful). `value` is the word the help dialog defines. */
+  function findingBadges(f, inList) {
+    const t = findingTopic(f);
+    const label = assessLabel(f);
+    const out = inList ? [{ kind: "status", value: f.status, cls: f.severity }]
+      : [{ kind: "severity", value: f.severity, cls: f.severity }, { kind: "status", value: f.status, cls: "" }];
+    out.push({ kind: "topic", value: t.topic, cls: "topic" + (t.guessed ? " guessed" : ""), guessed: t.guessed });
+    if (f.impact) out.push({ kind: "impact", value: f.impact, cls: "impact " + f.impact });
+    if (label && label !== "useful") out.push({ kind: "label", value: label, cls: "assess " + label });
+    return out;
   }
 
   /* One line saying how the review assessed a finding, or "" for useful and none. */
@@ -162,6 +253,113 @@
       return head + (a.reason ? ". " + a.reason : "");
     }
     return "Low value: " + (a.reason || "no reason given");
+  }
+
+  /* The finding page's Explanation: the review's reason for a useful finding,
+   * which assessmentText leaves out, and assessmentText for every other label. */
+  function explanationText(a) {
+    if (a && a.label === "useful") return a.reason || "";
+    return assessmentText(a);
+  }
+
+  /* What a finding is about: the verifier's `topic`, or, for a file written
+   * before topics (multiplai-dev 0.32) or a finding no verifier labelled, a
+   * guess from the file's path, marked `guessed`. */
+  function findingTopic(f) {
+    if (f && f.topic) return { topic: f.topic, guessed: false };
+    const p = String((f && f.file) || "").toLowerCase();
+    const name = p.slice(p.lastIndexOf("/") + 1);
+    let topic = "code";
+    if (/(^|\/)(tests?|__tests__|spec|specs)\//.test(p) || /(^test_|_test\.|\.test\.|\.spec\.|_spec\.)/.test(name)) topic = "tests";
+    else if (/(^|\/)docs?\//.test(p) || /\.(md|mdx|rst|adoc|txt)$/.test(name)) topic = "docs";
+    else if (/\.tf$|^dockerfile/.test(name) || /(^|\/)\.github\/workflows\//.test(p)) topic = "infra";
+    else if (/\.(ya?ml|json|toml|ini|cfg|conf)$/.test(name) || name.startsWith(".env")) topic = "config";
+    return { topic: topic, guessed: true };
+  }
+
+  /* A GitHub link to lines of a file at a commit, or null when the remote is
+   * not on github.com. Takes https and ssh remotes. */
+  function githubBlobUrl(remote, sha, path, start, end) {
+    const m = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/
+      .exec(String(remote || ""));
+    if (!m || !/^[0-9a-f]{7,40}$/.test(String(sha || ""))) return null;
+    const lines = start ? "#L" + start + (end && end !== start ? "-L" + end : "") : "";
+    return "https://github.com/" + m[1] + "/blob/" + sha + "/" + String(path).split("/").map(encodeURIComponent).join("/") + lines;
+  }
+
+  /* One finding as markdown, to paste to whoever will fix it: what is wrong,
+   * where, how it fails, what correct looks like, and the code it cites. */
+  function findingMarkdown(f, target, explanation) {
+    const t = target || {};
+    const where = f.file + ":" + f.line_start + (f.line_end && f.line_end !== f.line_start ? "-" + f.line_end : "");
+    const link = githubBlobUrl(t.remote_url, t.head_sha, f.file, f.line_start, f.line_end);
+    const out = ["### [" + f.severity + "] " + f.claim, "",
+      "`" + where + "` · " + findingTopic(f).topic + (link ? " · " + link : ""), ""];
+    out.push("**Failure scenario:** " + f.failure_scenario, "");
+    if (explanation) out.push("**Explanation:** " + explanation, "");
+    if (f.expected_behaviour) out.push("**Expected behaviour:** " + f.expected_behaviour, "");
+    if (f.verdict_reason) out.push("**Verifier (" + f.status + "):** " + f.verdict_reason, "");
+    const cites = (f.citations || []).concat(f.verifier_citations || []);
+    if (cites.length) {
+      out.push("**Cited code:**", "");
+      for (const c of cites) {
+        out.push("- `" + c.path + ":" + c.line_start + (c.line_end !== c.line_start ? "-" + c.line_end : "") + "`");
+        if (c.quote) out.push("", "  ```", ...String(c.quote).split("\n").map((l) => "  " + l), "  ```");
+      }
+      out.push("");
+    }
+    out.push("_From the review of " + (t.label || "this change") + (t.head_sha ? " at " + t.head_sha.slice(0, 8) : "") +
+      ", finding " + f.id + "._");
+    return out.join("\n");
+  }
+
+  /* Whether a finding's GitHub and Slack buttons work, and why not. `share`
+   * is the server's {github, pr, slack}; `changed` the changed files. A line
+   * comment needs the finding's file in the PR's diff, or GitHub refuses it.
+   * {github, line, slack}: each {enabled, why}. */
+  function shareOptions(share, finding, changed) {
+    const s = share || {};
+    const github = s.github ? { enabled: true, why: "Comment on PR #" + s.pr }
+      : { enabled: false, why: "This review is not of a PR" };
+    const inDiff = !!finding && (changed || []).indexOf(finding.file) >= 0;
+    const line = !github.enabled ? github
+      : inDiff ? { enabled: true, why: "Comment on " + finding.file + ":" + finding.line_start }
+        : { enabled: false, why: "The PR does not change " + ((finding && finding.file) || "this file") +
+          ", so GitHub takes no comment on its lines" };
+    const slack = s.slack ? { enabled: true, why: "Send to a person or a channel on Slack" }
+      : { enabled: false, why: "The Slack skill is not installed in this session" };
+    return { github: github, line: line, slack: slack };
+  }
+
+  /* The text a Slack share sends: the optional note, a blank line, the finding. */
+  function shareText(note, body) {
+    const n = String(note || "").trim();
+    return n ? n + "\n\n" + body : body;
+  }
+
+  /* The /api/share body the dialog sends. `form` is what the dialog holds:
+   * for GitHub the radio picked (`pr` or `line`) as `choice`; for Slack the
+   * recipient typed as `to` and the note, which goes above the text. */
+  function shareRequest(slug, findingId, to, form) {
+    const github = to === "github";
+    return { target: slug, finding_id: findingId, to: to,
+      where: github ? form.choice || "" : String(form.to || "").trim(),
+      text: github ? form.text : shareText(form.note, form.text) };
+  }
+
+  /* The file name a downloaded finding gets: its severity, file name and id. */
+  function findingFileName(f) {
+    const base = String(f.file || "finding").split("/").pop().replace(/[^\w.-]+/g, "-").slice(0, 60);
+    return "finding-" + String(f.severity || "").toLowerCase() + "-" + base + "-" + f.id + ".md";
+  }
+
+  /* The ids j/k step through: the list as shown, plus `current` in its place
+   * when a decision just hid it, so j goes on to the finding after it. */
+  function navOrder(findings, decisions, showHidden, current) {
+    const shown = findingOrder(groupFindings(findings, decisions, showHidden));
+    if (!current || shown.indexOf(current) >= 0) return shown;
+    const keep = new Set(shown.concat([current]));
+    return findingOrder(groupFindings(findings, decisions, true)).filter((id) => keep.has(id));
   }
 
   /* The id `delta` steps from `current`, clamped to the list (j/k). */
@@ -240,7 +438,7 @@
       for (const id of s.finding_ids || []) linked.add(id);
     }
     for (const k of (walk && walk.skipped) || []) covered.add(k.path);
-    const must = (findings || []).filter(function (f) {
+    const must = shownFindings(findings).filter(function (f) {
       return f.status === "confirmed" || f.status === "unverifiable";
     });
     return {
@@ -292,6 +490,42 @@
       groups.get(dir).files.push({ path: path, name: path.slice(cut + 1) });
     }
     return [...groups.values()];
+  }
+
+  /* The sidebar's directories. With `all` null, the changed files grouped as
+   * groupFilesByDir does. With `all` (every file at head, from the server's
+   * `repo_files`), every file and every changed file (a deleted one is not at
+   * head) in path order. Each directory and file says whether the change
+   * touches it; `filter` keeps paths that contain it, ignoring case.
+   * [{dir, changed, files: [{path, name, changed}]}]. */
+  function sidebarGroups(changed, all, filter) {
+    const f = (filter || "").toLowerCase();
+    const touched = new Set(changed || []);
+    let paths = (changed || []).slice();
+    if (all) {
+      const union = new Set(all);
+      for (const p of touched) union.add(p);
+      // By directory, then name, so a directory's files come before its subdirectories'.
+      const key = (p) => { const i = p.lastIndexOf("/"); return [i < 0 ? "" : p.slice(0, i), p.slice(i + 1)]; };
+      paths = [...union].map((p) => [key(p), p])
+        .sort((a, b) => (a[0][0] < b[0][0] ? -1 : a[0][0] > b[0][0] ? 1 : a[0][1] < b[0][1] ? -1 : a[0][1] > b[0][1] ? 1 : 0))
+        .map((x) => x[1]);
+    }
+    return groupFilesByDir(paths.filter((p) => !f || p.toLowerCase().includes(f))).map((g) => ({
+      dir: g.dir,
+      changed: g.files.some((x) => touched.has(x.path)),
+      files: g.files.map((x) => ({ path: x.path, name: x.name, changed: touched.has(x.path) })),
+    }));
+  }
+
+  /* Whether a sidebar directory shows its files. One the change does not
+   * touch starts closed; a click (`toggled`: dir -> open) overrides that; a
+   * filter, or the open file being inside it, opens it. */
+  function dirOpen(group, toggled, filter, current) {
+    if (filter) return true;
+    if (current && group.files.some((x) => x.path === current)) return true;
+    if (toggled && toggled.has(group.dir)) return toggled.get(group.dir);
+    return group.changed;
   }
 
   /* A directory as its last `keep` folders after "…/", for the file list's
@@ -415,9 +649,9 @@
     "unreachable": "not reachable on the web",
   };
 
-  /* The Summary tab's "Needs you" items, from a findings file. An empty list
-   * hides the block: older files have no `needs`. A need that blocks a finding
-   * the file holds links to it; any other blocks the review as a whole. */
+  /* The "Needs you" items, from a findings file. An empty list hides the tab:
+   * older files have no `needs`. A need that blocks a finding the file holds
+   * links to it; any other blocks the review as a whole. */
   function needsItems(findingsFile) {
     const needs = (findingsFile && Array.isArray(findingsFile.needs)) ? findingsFile.needs : [];
     const byId = new Map(((findingsFile && findingsFile.findings) || []).map((f) => [f.id, f]));
@@ -429,9 +663,32 @@
         blocks: f ? f.file + ":" + f.line_start + " — " + f.claim : n.blocks === "review" ? "the review" : "finding " + n.blocks,
         cause: NEED_CAUSES[n.cause] || String(n.cause || ""),
         command: String(n.command || ""),
+        where: String(n.where || ""),
         source: String(n.source || ""),
       };
     });
+  }
+
+  /* The "Needs you" tab's groups: one per thing blocked, so a finding's long
+   * claim shows once above its needs. The review's own gaps come first, then
+   * findings in the order their first need appears. */
+  function needsGroups(findingsFile) {
+    const groups = new Map();
+    for (const n of needsItems(findingsFile)) {
+      const key = n.findingId || n.blocks;
+      if (!groups.has(key)) groups.set(key, { blocks: n.blocks, findingId: n.findingId, items: [] });
+      groups.get(key).items.push(n);
+    }
+    const all = Array.from(groups.values());
+    return all.filter((g) => g.blocks === "the review").concat(all.filter((g) => g.blocks !== "the review"));
+  }
+
+  /* The message the page puts in the chat when a need gives no command and no
+   * place to look: it asks the session how a person would get the information. */
+  function needQuestion(n) {
+    const blocks = n.blocks === "the review" ? "the review as a whole" : n.blocks;
+    return "The review could not get this, and named no command or place to look: " + n.what +
+      "\nIt blocks: " + blocks + "\nWhere would I find it, and what exactly should I run or open?";
   }
 
   /* Badges for the Summary tab: measured ones from the server, then the
@@ -481,7 +738,7 @@
     const badge = (id) => ((stats && stats.badges) || []).find((b) => b.id === id);
     const tests = ((walk.assessments || []).find((a) => a.topic === "tests") || {}).verdict || null;
     const open = { HIGH: 0, MEDIUM: 0 };
-    for (const f of findings || []) {
+    for (const f of shownFindings(findings)) {
       const d = effectiveDecision(f, decisions);
       if (f.status === "confirmed" && !(d && d.decision === "reject") && f.severity in open) open[f.severity] += 1;
     }
@@ -932,6 +1189,28 @@
     return next >= 0 && next < starts.length ? next : -1;
   }
 
+  // --- where a name is defined (Cmd/Ctrl+click) ------------------------------------
+
+  /* The identifier at character `offset` of `text` (a line of code): the run
+   * of letters, digits, _ and $ around it, or the one just before it when
+   * `offset` is right after its last character. {name, start, end} (end
+   * exclusive), or null on anything else: a number, an operator, a space,
+   * or a run longer than the server takes (100). */
+  function identifierAt(text, offset) {
+    const t = String(text || "");
+    const word = (c) => /[A-Za-z0-9_$]/.test(c || "");
+    let i = Math.max(0, Math.min(Number(offset) || 0, t.length));
+    if (!word(t[i]) && word(t[i - 1])) i -= 1;
+    if (!word(t[i])) return null;
+    let start = i;
+    let end = i + 1;
+    while (start > 0 && word(t[start - 1])) start--;
+    while (end < t.length && word(t[end])) end++;
+    const name = t.slice(start, end);
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]{0,99}$/.test(name)) return null;
+    return { name: name, start: start, end: end };
+  }
+
   // --- the Go to palette -------------------------------------------------------------
 
   /* Entries whose text matches `query` as a subsequence, best first:
@@ -1159,20 +1438,25 @@
   const api = {
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
-    isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder,
-    assessLabel: assessLabel, isFolded: isFolded, effectiveDecision: effectiveDecision,
-    undecidedCount: undecidedCount, assessmentText: assessmentText,
+    isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder, navOrder: navOrder,
+    githubBlobUrl: githubBlobUrl, findingFileName: findingFileName, shareOptions: shareOptions, shareText: shareText, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
+    assessLabel: assessLabel, shownFindings: shownFindings, shownFile: shownFile, findingSection: findingSection,
+    CRITICAL_IMPACTS: CRITICAL_IMPACTS, effectiveDecision: effectiveDecision,
+    undecidedCount: undecidedCount, isHiddenInCode: isHiddenInCode, pendingIds: pendingIds,
+    afterDecision: afterDecision, emptyListText: emptyListText, findingBadges: findingBadges,
+    shareRequest: shareRequest, assessmentText: assessmentText, explanationText: explanationText,
     stepFinding: stepFinding, anchorLabel: anchorLabel, escapeHtml: escapeHtml,
     splitHighlighted: splitHighlighted, lineRange: lineRange,
     stepOrder: stepOrder, moveStep: moveStep, stepPosition: stepPosition,
     walkCoverage: walkCoverage, anchorRows: anchorRows,
     walkAnchorLabel: walkAnchorLabel, stepsForFinding: stepsForFinding,
     svgDataUrl: svgDataUrl, safePrUrl: safePrUrl,
-    groupFilesByDir: groupFilesByDir, shortDir: shortDir, clampWidth: clampWidth,
+    groupFilesByDir: groupFilesByDir, sidebarGroups: sidebarGroups, dirOpen: dirOpen, shortDir: shortDir, clampWidth: clampWidth,
     foldRows: foldRows, expandFold: expandFold, fileOrder: fileOrder,
     neighbourFile: neighbourFile, navFiles: navFiles,
     stepsForFile: stepsForFile, skippedReason: skippedReason, stepFiles: stepFiles,
-    summaryBadges: summaryBadges, needsItems: needsItems,
+    summaryBadges: summaryBadges, needsItems: needsItems, needsGroups: needsGroups,
+    needQuestion: needQuestion,
     diffBlock: diffBlock, formatRef: formatRef, parseRefs: parseRefs, refAnchor: refAnchor,
     completion: completion, matchFiles: matchFiles,
     blockStarts: blockStarts, blockKey: blockKey, explainByBlock: explainByBlock,
@@ -1182,7 +1466,7 @@
     riskInputs: riskInputs, riskLevel: riskLevel, TIER_NAMES: TIER_NAMES,
     EMPTY_TREE: EMPTY_TREE, isTreeReview: isTreeReview,
     currentBlock: currentBlock, stepCurrent: stepCurrent,
-    paletteMatch: paletteMatch, viewedCount: viewedCount,
+    paletteMatch: paletteMatch, viewedCount: viewedCount, identifierAt: identifierAt,
     formatUsd: formatUsd, formatTokens: formatTokens, formatSeconds: formatSeconds,
     runBlock: runBlock, runTotal: runTotal,
     agentOrder: agentOrder, finderRows: finderRows, checkedFindingRows: checkedFindingRows,

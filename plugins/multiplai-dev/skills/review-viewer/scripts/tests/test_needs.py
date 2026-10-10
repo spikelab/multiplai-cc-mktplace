@@ -17,7 +17,8 @@ NEED = {"what": "GitHub's rules on main.", "blocks": "review", "cause": "lookup-
 
 def with_needs(data: dict) -> dict:
     finding_need = {**NEED, "blocks": data["findings"][1]["id"], "source": "verifier",
-                    "cause": "no-access", "command": ""}
+                    "cause": "no-access", "command": "",
+                    "where": "Console > Dataform > example > Workflow execution logs"}
     data["findings"][1]["needs"] = [finding_need]
     data["needs"] = [NEED, finding_need]
     return data
@@ -52,5 +53,6 @@ def test_server_serves_needs_and_a_file_without_them(start_live, findings_path):
     live = start_live(path=findings_path)
     status, detail = live.request("GET", f"/api/targets/{live.slug}")
     assert status == 200
-    assert detail["findings"]["needs"][0] == NEED
-    assert detail["findings"]["findings"][1]["needs"][0]["source"] == "verifier"
+    assert detail["findings"]["needs"][0] == {**NEED, "where": ""}  # a need written without `where` gets ""
+    served = detail["findings"]["findings"][1]["needs"][0]
+    assert served["source"] == "verifier" and served["where"].startswith("Console > Dataform")

@@ -36,6 +36,8 @@
 <header class="top">
   <h1 id="title">Review viewer</h1>
   <span id="pr-info" class="pr-info" hidden></span>
+  <span id="mode-pill" class="mode-pill" hidden
+        title="This review lists only findings the verifier rated as breaking users or the business after merge">Critical only</span>
   <button id="risk-pill" class="risk-pill" type="button" hidden></button>
   <select id="target-select" class="ctl target-select" hidden aria-label="Review target"></select>
   <div class="top-tools">
@@ -52,10 +54,12 @@
     <button id="side-rail" class="rail" type="button" title="Show the files (Ctrl+B)" aria-label="Show the files">
       <span class="rail-arrow" aria-hidden="true">›</span><span class="rail-label">Files</span></button>
     <div class="side-top">
-      <h2 class="side-h">Changed files <span id="viewed-count" class="count"></span>
+      <h2 class="side-h"><span id="side-title">Changed files</span> <span id="viewed-count" class="count"></span>
         <button id="side-hide" class="ctl ctl-sm hide-btn" type="button" title="Hide the files (Ctrl+B)" aria-label="Hide the files">‹</button></h2>
       <div class="progress" aria-hidden="true"><div id="viewed-bar" class="progress-bar"></div></div>
       <input id="file-search" type="search" placeholder="Filter files" aria-label="Filter files">
+      <label id="all-files" class="toggle all-files small" hidden><input type="checkbox" id="show-all-files"> Show all files in the repo</label>
+      <p id="all-files-cut" class="muted small" hidden></p>
     </div>
     <ul id="files" class="files"></ul>
   </nav>
@@ -93,7 +97,12 @@
       </div>
     </div>
     <div id="code" class="code" tabindex="0"></div>
-    <button id="ask-lines" class="float-btn" hidden>Ask about these lines</button>
+    <div id="def-pop" class="def-pop" role="dialog" aria-label="Where a name is defined" hidden></div>
+    <div id="ask-lines" class="float-bar" role="group" aria-label="Selected lines" hidden>
+      <span id="ask-lines-label" class="small"></span>
+      <button id="ask-lines-go" type="button" class="ctl ctl-sm">Ask about these lines</button>
+      <button id="ask-lines-close" type="button" class="ctl ctl-sm" title="Clear the selection (Esc)" aria-label="Clear the selection">✕</button>
+    </div>
   </section>
   <div id="detail-resize" class="resizer" role="separator" aria-orientation="vertical"
        aria-controls="detail" aria-label="Resize the right panel (arrow keys; double-click resets)"
@@ -106,12 +115,18 @@
       <button id="tab-summary" role="tab" aria-controls="summary">Summary</button>
       <button id="tab-walk" role="tab" aria-controls="walkthrough">Reviews <span id="walk-count" class="count"></span></button>
       <button id="tab-finding" role="tab" aria-controls="finding">Findings <span id="finding-count" class="count"></span></button>
+      <button id="tab-needs" role="tab" aria-controls="needs" hidden>Needs you <span id="needs-count" class="count"></span></button>
       <button id="tab-checked" role="tab" aria-controls="checked" hidden>Checked <span id="checked-count" class="count"></span></button>
     </div>
     <button id="detail-hide" class="ctl ctl-sm hide-btn" type="button" title="Hide this panel (Ctrl+Alt+B)" aria-label="Hide the review panel">›</button>
+    <div id="finding-nav" class="finding-nav" role="navigation" aria-label="Findings" hidden>
+      <button id="nav-list" type="button" class="ctl ctl-sm" title="Scroll up to the findings list">↑ Back to the list</button>
+      <span id="nav-pos" class="muted small"></span>
+      <button id="nav-prev" type="button" class="ctl ctl-sm" title="Previous finding (k)">‹ Prev</button>
+      <button id="nav-next" type="button" class="ctl ctl-sm" title="Next finding (j)">Next ›</button>
+    </div>
     </div>
     <div id="summary" role="tabpanel" class="panel">
-      <section id="needs" class="needs" hidden></section>
       <div id="badges" class="badges"></div>
       <div id="badge-detail" class="badge-detail md" hidden></div>
       <div id="walk-overview" class="md"></div>
@@ -126,10 +141,11 @@
       <div id="walk-step" class="walk-step"></div>
     </div>
     <div id="finding" role="tabpanel" class="panel" hidden>
-      <label class="toggle"><input type="checkbox" id="show-hidden"> <span id="hidden-label">Show refuted and rejected</span></label>
+      <label class="toggle"><input type="checkbox" id="show-hidden"> <span id="hidden-label">Show decided and refuted</span></label>
       <div id="findings" class="finding-list"></div>
       <div id="finding-detail" class="finding-detail"></div>
     </div>
+    <div id="needs" role="tabpanel" class="panel needs-panel" hidden></div>
     <div id="checked" role="tabpanel" class="panel" hidden></div>
   </aside>
 </main>
@@ -177,6 +193,7 @@
   <ul id="palette-list" class="palette-list" role="listbox"></ul>
   <div class="palette-foot muted small"><kbd>↑</kbd> <kbd>↓</kbd> move · <kbd>Enter</kbd> open · <kbd>Esc</kbd> close</div>
 </dialog>
+<dialog id="share" class="share-dlg" aria-labelledby="share-title"></dialog>
 <dialog id="help" class="help" aria-labelledby="help-title">
   <div class="help-head">
     <h2 id="help-title">Help</h2>
@@ -360,25 +377,37 @@
 
     <section id="help-findings" class="help-sec" tabindex="-1" aria-labelledby="help-h-findings">
       <h3 id="help-h-findings">Findings, verdicts and labels</h3>
-      <p>The Findings tab lists findings by severity. Picking one moves the code to its lines and shows the
+      <p>The Findings tab lists findings in three sections, <strong>Code</strong>, <strong>Tests</strong>
+        and <strong>Docs</strong>, by the finding's topic (or, for an older review, a guess from its path), and
+        by severity within each. Severity is read within its section: a HIGH under Tests is a serious test
+        gap, not a serious defect in the code. Picking one moves the code to its lines and shows the
         claim, the failure scenario, the expected behaviour and the verdict's reason. When the Checked tab has
         the finding's verifier, a link opens its entry there, with every line it read and cited; otherwise the
-        finding lists its cited code and the verifier's citations. Each finding shows a status:</p>
+        finding lists its cited code and the verifier's citations. Code starts open; Tests and Docs fold
+        until you open them or pick a finding in them. Once the list scrolls out of sight, a bar under the tabs
+        leads back to it, with Prev and Next.</p>
+      <p>Accept, reject or defer a finding at the bottom of its page, or press ✓ or ✕ on it in the list
+        (they show on hover). Deciding the open finding opens the next one that still needs a decision and
+        scrolls back to the list; after the last, the finding page is empty. <strong>Accept all</strong>, beside
+        the count, accepts every finding that still needs a decision, after you confirm; refuted and decided
+        findings are left as they are. Hovering a badge shows what its word means. Each finding shows a
+        status:</p>
       <dl>
         <dt><code>confirmed</code></dt><dd>The verifier showed the failure can happen, citing lines that
           code found at the reviewed commit.</dd>
-        <dt><code>unverifiable</code></dt><dd>It depends on something the verifier could not read, the code
-          does not settle it, or the verifier's call failed. Its severity was lowered one step.</dd>
+        <dt><code>unverifiable</code></dt><dd>It depends on something the verifier could not read, or the
+          code does not settle it. Its severity was lowered one step.</dd>
         <dt><code>refuted</code></dt><dd>The verifier showed it cannot happen. Hidden unless you tick
-          Show refuted and rejected.</dd>
-        <dt><code>rejected</code></dt><dd>The check in code rejected it before any verifier saw it. Hidden
-          the same way, as is a finding you reject.</dd>
+          Show decided and refuted, as is every finding you accept, reject or defer, so the list holds
+          only what still needs a decision.</dd>
+        <dt><code>rejected</code></dt><dd>The check in code rejected it before any verifier saw it. Never
+          shown on the Findings tab or counted; the Checked tab lists it with the rule that rejected it.</dd>
       </dl>
       <p>The assess step's label shows as a badge. A finding without one was labelled useful, or the review
         is older than labels.</p>
       <dl>
-        <dt><code>repeat</code></dt><dd>The same defect as a finding you rejected in an earlier round. It
-          counts as rejected, marked "earlier round", until you decide again.</dd>
+        <dt><code>repeat</code></dt><dd>The same defect as a finding you rejected in an earlier round.
+          Never shown or counted: your earlier rejection stands.</dd>
         <dt><code>still-open</code></dt><dd>The same defect as an earlier-round finding you accepted,
           deferred or have not decided: it is not fixed yet.</dd>
         <dt><code>low-value</code></dt><dd>True, but not worth acting on, for one of three reasons named at
@@ -386,24 +415,63 @@
           file or a note on an earlier decision says the affected thing does not matter.
           <code>[covered]</code>: fixing another finding fixes this one too. <code>[speculative]</code>: it
           fails only after a future change nobody has proposed, and the code is correct now; this does not
-          apply when the change's own tests, comments or description promise to catch such a change.</dd>
+          apply when the change's own tests, comments or description promise to catch such a change.
+          Never shown or counted.</dd>
       </dl>
-      <p>Repeats and low-value findings are folded into a closed group after the rest. Accept, Reject or
-        Defer records your decision; a later round of the review reads it.</p>
+      <p>The verifier also labels each finding's <strong>topic</strong>, what it is about, which sets its
+        section: <code>tests</code> and <code>docs</code> have their own, every other topic is under Code. A
+        topic in italics was guessed from the file's path, for a review older than topics.</p>
+      <dl>
+        <dt><code>code</code></dt><dd>The behaviour of the program.</dd>
+        <dt><code>tests</code></dt><dd>A missing, weak or wrong test.</dd>
+        <dt><code>docs</code></dt><dd>Documentation, comments or decision logs.</dd>
+        <dt><code>config</code></dt><dd>Configuration: settings, flags, environment.</dd>
+        <dt><code>infra</code></dt><dd>Deployment, CI or cloud resources.</dd>
+        <dt><code>data</code></dt><dd>Schemas, migrations or stored data.</dd>
+        <dt><code>security</code></dt><dd>Who can reach or change what: access, secrets, injection.</dd>
+        <dt><code>performance</code></dt><dd>Speed, memory or cost at the size the code runs at.</dd>
+        <dt><code>process</code></dt><dd>The order of steps a person must follow, such as merge before deploy.</dd>
+      </dl>
+      <p>The verifier also rates each finding's <strong>impact</strong>: what goes wrong in production if
+        the change is merged as it is. It shows as a badge beside the topic. A review older than impact has
+        none.</p>
+      <dl>
+        <dt><code>breaks-users</code></dt><dd>People who use the product see a failure, a wrong result, lost
+          or exposed data, on a path they will take.</dd>
+        <dt><code>breaks-business</code></dt><dd>The company is harmed without a user necessarily seeing it:
+          money lost or miscounted, a deploy or job that fails, access granted wider than intended, a record
+          audits or billing rely on that is wrong, or a document that would lead an operator to a wrong
+          action in production.</dd>
+        <dt><code>correctness-only</code></dt><dd>The code is wrong, but no path after merge reaches a user
+          or the business: an edge case no caller reaches, a trap for the next change. Every missing or weak
+          test is rated this.</dd>
+        <dt><code>hygiene</code></dt><dd>Nothing behaves wrongly: naming, dead code, a convention breached
+          with no consequence, a stale comment that misleads nobody.</dd>
+      </dl>
+      <p>A review run with <code>--mode critical</code> shows <strong>Critical only</strong> in the header and
+        lists only <code>breaks-users</code> and <code>breaks-business</code> findings; the rest are in the
+        review's markdown appendix.</p>
+      <p>Gate-rejected, repeat and low-value findings stay in <code>findings.json</code> and in the
+        review's markdown appendix; the page leaves them out of the list, every count, the code markers,
+        Go to and the risk score. Accept, Reject or Defer records your decision; a later round of the
+        review reads it.</p>
     </section>
 
     <section id="help-needs" class="help-sec" tabindex="-1" aria-labelledby="help-h-needs">
       <h3 id="help-h-needs">Needs you</h3>
-      <p>Shown at the top of the Summary tab when the review could not get something it needed. Each item
-        says what is missing; what it blocks (a finding, which links to it, or the review as a whole); why
-        (the review has no access, a lookup failed, or it is not reachable on the web); and a command a
-        person with access could run to get it.</p>
+      <p>A tab of its own, shown when the review could not get something it needed. Items are grouped by
+        what they block: the review as a whole first, then each finding, which links to it. Each item says
+        what is missing; why (the review has no access, a lookup failed, or it is not reachable on the web);
+        a command a person with access could run to get it, where to look when no one command gets it
+        (a console page, a dashboard, a team), or both.</p>
+      <p>When the review named neither, <b>Ask the session</b> puts a question about the item in the chat,
+        for you to read and send.</p>
       <p>A verifier lists what kept it from settling its finding. A finder's gaps, and a failed GitHub
         lookup of the PR or its branch rules, block the review as a whole. A finding's own needs also show
         under it on the Findings tab.</p>
       <p>The page runs nothing: read a command before you run it. Code keeps a command only when it is one
         short line, has no pipes, redirects or chained commands, and is a known read-only form; otherwise the item
-        says no command is known.</p>
+        shows where to look instead, when the review named a place.</p>
     </section>
 
     <section id="help-run" class="help-sec" tabindex="-1" aria-labelledby="help-h-run">
@@ -434,7 +502,7 @@
             <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Next / previous finding</dd>
             <dt><kbd>]</kbd> <kbd>[</kbd></dt><dd>Next / previous review step</dd>
             <dt><kbd>n</kbd> <kbd>p</kbd></dt><dd>Next / previous change in this file</dd>
-            <dt><kbd>/</kbd></dt><dd>Filter the changed files</dd>
+            <dt><kbd>/</kbd></dt><dd>Filter the files (every file in the repo while <b>Show all files in the repo</b> is on)</dd>
             <dt><kbd>Ctrl</kbd>+<kbd>B</kbd></dt><dd>Hide or show the files panel</dd>
             <dt><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>B</kbd></dt><dd>Hide or show the review panel</dd>
             <dt>‹ Prev / Next ›</dt><dd>Beside the file name: the previous or next file of the open review, or of the whole change</dd>
@@ -445,6 +513,9 @@
             <dt><kbd>v</kbd></dt><dd>Mark this file viewed, or not</dd>
             <dt><kbd>s</kbd></dt><dd>Switch between unified and split</dd>
             <dt><kbd>w</kbd></dt><dd>Wrap long lines, or not</dd>
+            <dt><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click a name</dt><dd>Where it is defined: a list of the lines
+              in the repo, at the reviewed commit, that look like its definition. Hold <kbd>Cmd</kbd> or
+              <kbd>Ctrl</kbd> to see which name a click would take. A plain click in the code does nothing.</dd>
             <dt><kbd>?</kbd></dt><dd>Show this list (the ⌨ button too); the <strong>?</strong> button and the ? beside a heading open the rest of this help</dd>
           </dl>
         </section>
@@ -455,8 +526,9 @@
             <dt><kbd>@</kbd></dt><dd>Point at a changed file; <code>@file:12</code> or <code>@file:12-20</code> for lines</dd>
             <dt><kbd>Tab</kbd> <kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Pick from the file list while typing <kbd>@</kbd></dd>
             <dt><kbd>Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>Send the message</dd>
-            <dt>Click a changed line</dt><dd>Add its whole block to the message</dd>
-            <dt>Click a line number</dt><dd>Select that line; <kbd>Shift</kbd>+click another to extend</dd>
+            <dt>Click a line number</dt><dd>Select that line to ask about it (a <b>+</b> shows on hover); drag
+              down the numbers, or <kbd>Shift</kbd>+click another, to select several. Nothing goes into the
+              chat until you press Ask about these lines; <kbd>Esc</kbd> or ✕ clears the selection.</dd>
             <dt>💡 Explain</dt><dd>Ask for an explanation of one block, shown above it</dd>
           </dl>
         </section>

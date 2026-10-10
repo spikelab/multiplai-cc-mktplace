@@ -266,7 +266,8 @@ def need_gate(need: Need) -> GateResult:
 
 def gated_need(need: Need) -> Need:
     """*need* with its command stripped, or blanked when `need_gate` fails. Never dropped."""
-    need = need.model_copy(update={"command": need.command.strip(), "what": need.what.strip()})
+    need = need.model_copy(update={"command": need.command.strip(), "what": need.what.strip(),
+                                   "where": need.where.strip()})
     result = need_gate(need)
     if not result.passed:
         log.info("need_gate blanked a command: %s", result.reason)

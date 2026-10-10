@@ -345,3 +345,56 @@ def test_pr_status_reads_only_the_changing_fields(tmp_path, monkeypatch):
     argv = log.read_text().split()
     assert argv[:4] == ["pr", "view", "7", "--repo"] and argv[4] == "o/r"
     assert argv[-1] == "statusCheckRollup,mergeable,isDraft,reviewDecision"
+
+
+# --- every file at head: the page's "Show all files in the repo" ---------------------
+
+from fixture_repo import build_wide  # noqa: E402
+from review_viewer.gitdata import repo_files  # noqa: E402
+
+
+@pytest.fixture
+def wide(tmp_path):
+    repo = tmp_path / "wide"
+    base, head = build_wide(repo)
+    target = diff_target(repo, f"{base}..{head}")
+    return target, repo_files(target)
+
+
+def test_repo_files_lists_every_file_at_head(wide):
+    target, listed = wide
+    assert target.files_changed == ["app/main.py"]
+    assert set(listed) == {"app/main.py", "lib/util.py", "web/view.ts", "db/refresh.sql",
+                           "assets/icon.bin", "lib/huge.py"}
+
+
+def test_unchanged_file_is_served_with_no_diff_marks(wide):
+    target, listed = wide
+    view = file_view(target, "lib/util.py", None, allowed_paths(target, None, listed))
+    assert view.rows and all(r.k == "ctx" for r in view.rows)
+    assert view.rows[5].t == "def helper(x):" and view.rows[5].n == 6
+
+
+def test_unchanged_binary_and_large_files(wide):
+    target, listed = wide
+    allowed = allowed_paths(target, None, listed)
+    assert file_view(target, "assets/icon.bin", None, allowed).binary
+    big = file_view(target, "lib/huge.py", None, allowed)
+    assert big.truncated and all(r.k in ("ctx", "gap") for r in big.rows)
+    assert big.rows[0].n == 1 and big.rows[-1].k == "gap" and "4001–4500" in big.rows[-1].t
+
+
+def test_widened_allowlist_still_refuses_paths_git_does_not_list(wide):
+    target, listed = wide
+    allowed = allowed_paths(target, None, listed)
+    for bad in ("../../etc/passwd", "/etc/passwd", "lib/../lib/util.py", "lib", "nope.py"):
+        with pytest.raises(PathNotInReview):
+            file_view(target, bad, None, allowed)
+
+
+def test_tree_review_lists_only_its_directory(tmp_path):
+    from review_viewer.gitdata import tree_target
+    repo = tmp_path / "wide"
+    build_wide(repo)
+    target = tree_target(repo, "HEAD", "lib")
+    assert sorted(repo_files(target)) == ["lib/huge.py", "lib/util.py"]

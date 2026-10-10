@@ -12,9 +12,32 @@ SCHEMA = """\
  "reason": "what you read and why it settles the question",
  "citations": [{"path": "...", "line_start": 1, "line_end": 1, "quote": "exact text"}],
  "expected_behaviour": "one sentence: what correct behaviour would be",
+ "topic": "code" | "tests" | "docs" | "config" | "infra" | "data" | "security" | "performance" | "process",
+ "impact": "breaks-users" | "breaks-business" | "correctness-only" | "hygiene",
  "needs": [{"what": "one sentence naming the information you could not read",
             "cause": "no-access" | "unreachable",
-            "command": "one read-only shell command that fetches it, or empty"}]}"""
+            "command": "one read-only shell command that fetches it, or empty",
+            "where": "where a person finds it when no single command does, or empty"}]}"""
+
+IMPACT_RULES = """\
+Unless you answer `refuted`, set `impact`: if this change is merged as it is, what goes wrong in
+production, for whom, on a path that will really be taken? Rate the consequence, not how tidy the
+code is, and not the severity the claim was given.
+- `breaks-users`: after merge, people who use the product see a failure, a wrong result, lost data
+  or exposed data, on a path they will take. Example: rate plans match a literal keyword, so a
+  booking gets the wrong price.
+- `breaks-business`: after merge, the company is harmed without a user necessarily seeing it: money
+  is lost or miscounted, a deploy or scheduled job fails, access is granted wider than intended, a
+  record that audits or billing rely on is wrong, or a document or runbook would lead an operator
+  to a wrong action in production. Example: a role granted to the whole organisation instead of
+  one project.
+- `correctness-only`: the code is wrong, but no path after merge reaches a user or the business: an
+  edge case no caller reaches, a trap for the next change. A missing or weak test is always
+  `correctness-only`; when the code it fails to cover is itself wrong now, the finding is about
+  that code (`topic` `code`), and you rate the code's failure.
+- `hygiene`: nothing behaves wrongly: naming, dead code, a convention breached with no consequence,
+  a stale comment or document that misleads nobody about production.
+`impact` is required on every answer but `refuted`; an answer without it is rejected."""
 
 NEEDS_RULES = """\
 When your answer is `unverifiable` because something could not be read, fill `needs`: one item per
@@ -27,7 +50,11 @@ with normal access to this project would run to get it, on one line, with no pip
 - `gcloud run services describe <service> --region <region> --format json`
 - `pip download tavily-python==0.8.4 --no-deps`
 Fill in the real names you read in the repository. Leave `command` empty when you know of no such
-command. Leave `needs` empty for any other answer."""
+command. `where` tells a person where to find it when no such command gets it: the console page and
+its path (Console > Dataform > <repository> > Workflow execution logs), the API method, the
+dashboard, the file outside this repository, or the team that owns it, with the real names filled
+in. Fill `where` whenever `command` is empty; never leave both empty. Leave `needs` empty for any
+other answer."""
 
 
 def build(target: TargetInfo, finding: Finding) -> str:
@@ -56,6 +83,14 @@ def build(target: TargetInfo, finding: Finding) -> str:
         "Unless you answer `refuted`, set `expected_behaviour`: state what correct behaviour would be, in "
         "one sentence, without proposing a code change. For example: \"A null timeout is rejected, not "
         "skipped.\" Say what the code should do, not how to change it.",
+        "Set `topic` to what the finding is about, whatever your answer: `code` (behaviour of the "
+        "program), `tests`, `docs` (documentation, comments, decision logs), `config`, `infra` "
+        "(deployment, CI, cloud resources), `data` (schemas, migrations, stored data), `security`, "
+        "`performance`, or `process` (the order of steps a person must follow, such as merge before "
+        "deploy). Pick the one a reader would file it under, not the file's type. Use one of these words "
+        "exactly (`tests`, not `test`): `topic` is required on every answer but `refuted`, and an answer "
+        "without one from this list is rejected.",
+        IMPACT_RULES,
         NEEDS_RULES,
         CITATION_RULES,
         f"Schema:\n{SCHEMA}",

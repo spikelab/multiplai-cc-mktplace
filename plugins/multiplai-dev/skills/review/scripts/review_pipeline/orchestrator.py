@@ -18,17 +18,17 @@ from multiplai_core.log_utils import log_event
 
 from . import budget, rounds, target as target_mod, timings
 from .config import ReviewConfig, run_config
-from .export import write_checks_file, write_findings_file
+from .export import to_findings_file, write_checks_file, write_findings_file
 from .gates import gated_need, reason_kind
-from .models import SEVERITIES, ReviewState
+from .models import MODES, SEVERITIES, ReviewState
 from .progress import ProgressWriter
-from .render import summary_path, write_review, write_rollups, write_runs
+from .render import count_line, listed, summary_path, write_review, write_rollups, write_runs
 from .stages import RunContext
 from .stages.assess import run_assess
 from .stages.find import file_chars, file_groups, finder_dimensions, run_find
 from .stages.merge import run_merge
 from .stages.repeats import run_repeats
-from .stages.verify import run_verify
+from .stages.verify import VerifyIncomplete, run_verify
 from .state import load_state, save_state
 
 log = logging.getLogger(__name__)
@@ -58,6 +58,7 @@ class TargetSpec:
     tree: str | None = None  # a commit-ish: review every file at it, not a change
     path: str | None = None  # with tree: only this directory
     dir: str | None = None   # a directory not under git, copied and reviewed as a tree
+    mode: str = "full"  # `full` or `critical` (models.MODES)
 
 
 def _count_line(counts: dict[str, int]) -> str:
@@ -115,6 +116,16 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
             log_event("review", "budget_stop", str(e), session_id=session_id, level="WARNING",
                       target=t.slug, cost_usd=round(e.cost_usd, 4), stage=name)
             raise
+        except VerifyIncomplete as e:
+            # The verdicts that came back are kept; `resume` asks only for the rest.
+            timings.close_interval(state, name)
+            timings.close_interval(state, "run")
+            state.budget = ledger.to_state()
+            save_state(state, target_dir)
+            progress.failed(str(e))
+            log_event("review", "verify_incomplete", f"verify stopped: {len(e.finding_ids)} findings have no verdict",
+                      session_id=session_id, level="WARNING", target=t.slug, findings=e.finding_ids)
+            raise
         timings.close_interval(state, name)
         timings.close_interval(state, "run")  # moved forward at each checkpoint; see timings.py
         state.budget = ledger.to_state()
@@ -147,9 +158,10 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
     save_state(state, target_dir)
     shutil.rmtree(snapshot, ignore_errors=True)
 
-    shown = [f for f in state.findings if getattr(state.verdicts.get(f.id), "status", "") in ("confirmed", "unverifiable")]
-    counts = {s: sum(1 for f in shown if f.severity == s) for s in SEVERITIES}
-    message = f"review finished: {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW"
+    rows = to_findings_file(state)["findings"]
+    shown = listed(rows, state.mode)
+    counts = {s: sum(1 for f in shown if f["severity"] == s) for s in SEVERITIES}
+    message = f"review finished: {count_line(rows, state.mode)}"
     progress.done(f"{message} (${ledger.cost_usd:.2f})")
     print(f"{t.slug}: {message}; output in {target_dir}", flush=True)
     print(f"summary: {summary_path(state, target_dir)}", flush=True)
@@ -191,13 +203,13 @@ def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
     if info is None:
         info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in, needs=needs)
     target_dir = out_dir / info.slug
-    # A new head in a directory an earlier round wrote: keep that round's
-    # findings before this run writes over them. The same head keeps nothing.
+    # A directory an earlier round wrote: keep that round's findings before
+    # this run writes over them, also when this run is on the same head (a rerun).
     kept = rounds.keep_round(target_dir, info.slug, info.head_sha)
     if kept is not None:
         log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
-    return ReviewState(target=info, needs=[gated_need(n) for n in needs]), target_dir
+    return ReviewState(target=info, mode=spec.mode, needs=[gated_need(n) for n in needs]), target_dir
 
 
 def plan_text(state: ReviewState, config: ReviewConfig) -> str:
@@ -314,7 +326,7 @@ def assess_report(results: list[AssessOnly], skipped: list[str]) -> str:
     return "\n".join(out) + "\n"
 
 
-def load_batch(path: Path) -> list[TargetSpec]:
+def load_batch(path: Path, default_mode: str = "full") -> list[TargetSpec]:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as e:
@@ -337,8 +349,10 @@ def load_batch(path: Path) -> list[TargetSpec]:
             range=entry.get("range"),
             tickets=[str(x) for x in (tickets if isinstance(tickets, list) else [tickets])],
             deployed_in=entry.get("deployed_in"), base_branch=entry.get("base_branch"),
-            fetch=bool(entry.get("fetch", False)),
+            fetch=bool(entry.get("fetch", False)), mode=str(entry.get("mode") or default_mode),
         ))
+        if specs[-1].mode not in MODES:
+            raise ReviewError(f"{path}: entry {i} has mode {specs[-1].mode!r}; expected one of {', '.join(MODES)}")
     return specs
 
 
@@ -356,7 +370,7 @@ async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *,
                 # Each task has its own context, so budget.start() gives this
                 # target its own ledger.
                 results[i] = await review(spec, out_dir, config, session_id=session_id)
-            except (ReviewError, budget.BudgetExceededError) as e:
+            except (ReviewError, budget.BudgetExceededError, VerifyIncomplete) as e:
                 failures.append(f"{label}: {e}")
                 print(f"FAILED {label}: {e}", flush=True)
             except Exception as e:  # one broken target must not take the batch down

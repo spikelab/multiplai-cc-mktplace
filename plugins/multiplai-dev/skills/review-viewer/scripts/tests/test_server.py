@@ -550,3 +550,242 @@ def test_findings_with_and_without_assessment_both_serve(start_live, findings_pa
     got = [f.get("assessment") for f in detail["findings"]["findings"]]
     assert got[0]["label"] == "repeat" and got[0]["earlier_note"] == "by design"
     assert got[1]["label"] == "low-value" and got[1]["earlier_id"] is None
+
+
+# --- every file at head ---------------------------------------------------------------
+
+def _wide_findings(tmp_path):
+    from fixture_repo import build_wide
+    from review_viewer.gitdata import diff_findings, diff_target
+    repo = tmp_path / "wide"
+    base, head = build_wide(repo)
+    review = tmp_path / "wide-review"
+    review.mkdir()
+    path = review / "findings.json"
+    path.write_text(diff_findings(diff_target(repo, f"{base}..{head}")).model_dump_json(), encoding="utf-8")
+    return path
+
+
+def test_detail_lists_every_repo_file_and_serves_unchanged_ones(start_live, tmp_path):
+    live = start_live(path=_wide_findings(tmp_path))
+    status, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert status == 200 and detail["files"] == ["app/main.py"]
+    assert "lib/util.py" in detail["repo_files"] and detail["repo_files_total"] == 6
+    status, view = live.request("GET", f"/api/targets/{live.slug}/file?path=lib/util.py")
+    assert status == 200 and {r["k"] for r in view["rows"]} == {"ctx"}
+    for bad in ("../../etc/passwd", "/etc/passwd", "lib/../lib/util.py", "missing.py"):
+        assert live.request("GET", f"/api/targets/{live.slug}/file?path={bad}")[0] == 404
+
+
+def test_repo_files_list_is_cut_at_the_cap(start_live, tmp_path, monkeypatch):
+    from review_viewer import server
+    monkeypatch.setattr(server, "REPO_FILES_MAX", 2)
+    live = start_live(path=_wide_findings(tmp_path))
+    _, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert len(detail["repo_files"]) == 2 and detail["repo_files_total"] == 6
+    # The cap is on the list the page gets, not on what the file route serves.
+    assert live.request("GET", f"/api/targets/{live.slug}/file?path=web/view.ts")[0] == 200
+
+
+# --- where a name is defined ------------------------------------------------------------
+
+def test_definitions_finds_each_form_in_the_repo(start_live, tmp_path):
+    live = start_live(path=_wide_findings(tmp_path))
+    url = f"/api/targets/{live.slug}/definitions?name="
+
+    def hits(name):
+        status, body = live.request("GET", url + name)
+        assert status == 200, body
+        return [(h["path"], h["line"]) for h in body["hits"]]
+
+    assert hits("helper") == [("lib/util.py", 6)]          # def, in a file the change leaves alone
+    assert hits("Widget") == [("lib/util.py", 10)]          # class
+    assert hits("RATE") == [("lib/util.py", 3)]             # NAME = at line start
+    assert hits("thing") == [("web/view.ts", 1)]            # export const
+    assert hits("render") == [("web/view.ts", 2)]           # export function
+    assert hits("counter") == [("web/view.ts", 5)]          # let
+    assert hits("Props") == [("web/view.ts", 6)]            # interface
+    assert hits("refresh_totals") == [("db/refresh.sql", 1)]  # CREATE OR REPLACE FUNCTION
+    assert hits("total") == [("lib/util.py", 11)]           # a method; `total(` calls are not hits
+    assert hits("nowhere") == []
+    _, body = live.request("GET", url + "helper")
+    assert body["hits"][0]["text"] == "def helper(x):"
+
+
+def test_definitions_refuses_anything_but_an_identifier(start_live, tmp_path):
+    live = start_live(path=_wide_findings(tmp_path))
+    url = f"/api/targets/{live.slug}/definitions?name="
+    for bad in ("", "1abc", "a-b", "a%20b", "a.b", "x" * 101, "%27%3B", "-e", "a*"):
+        assert live.request("GET", url + bad)[0] == 400, bad
+    assert live.request("GET", url + "helper", token="wrong")[0] == 401
+
+
+def test_definitions_stop_at_the_cap(start_live, tmp_path, monkeypatch):
+    from review_viewer import gitdata
+    import subprocess
+    from fixture_repo import build_wide
+    repo = tmp_path / "wide"
+    build_wide(repo)
+    many = "".join(f"def dup():\n    return {i}\n\n" for i in range(60))
+    (repo / "lib" / "dups.py").write_text(many, encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com",
+                    "-c", "commit.gpgsign=false", "commit", "-qm", "dups"], check=True)
+    target = gitdata.diff_target(repo, "HEAD~1..HEAD")
+    listed = gitdata.repo_files(target)
+    hits = gitdata.definitions(target, "dup", gitdata.allowed_paths(target, None, listed))
+    assert len(hits) == gitdata.DEFINITIONS_MAX == 50
+    # A path the file route would not serve is never a hit.
+    assert gitdata.definitions(target, "dup", {"app/main.py"}) == []
+
+
+# --- send a finding to the PR or to Slack -------------------------------------------------
+
+def _share_body(live, **kw):
+    return {"target": live.slug, "finding_id": HIGH, "to": "slack", "where": "#reviews",
+            "text": "### [HIGH] a finding", **kw}
+
+
+def test_share_flags_in_the_detail(start_live):
+    live = start_live()
+    _, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert detail["share"] == {"github": False, "pr": None, "slack": False}
+    live.viewer.share_slack = True
+    live.viewer.targets[live.slug].pr_number = 7
+    _, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert detail["share"] == {"github": True, "pr": 7, "slack": True}
+
+
+def test_share_is_refused_when_the_destination_is_not_available(start_live):
+    live = start_live()
+    status, body = live.request("POST", "/api/share", _share_body(live))
+    assert status == 403 and "Slack skill" in body["error"]
+    status, body = live.request("POST", "/api/share", _share_body(live, to="github", where="pr"))
+    assert status == 403 and "not of a PR" in body["error"]
+    assert not any(r.get("kind") == "share" for r in live.viewer.targets[live.slug].mailbox.read_inbox())
+
+
+def test_share_validation(start_live):
+    from review_viewer.models import SHARE_TEXT_MAX
+    live = start_live()
+    live.viewer.share_slack = True
+    live.viewer.targets[live.slug].pr_number = 7
+    post = lambda **kw: live.request("POST", "/api/share", _share_body(live, **kw))[0]  # noqa: E731
+    assert post(to="email") == 400
+    assert post(finding_id="0000000000") == 404
+    assert post(finding_id=None) == 404
+    assert post(text="") == 400 and post(text="   ") == 400
+    assert post(text="x" * (SHARE_TEXT_MAX + 1)) in (400, 413)
+    assert post(where="") == 400 and post(where="a\nb") == 400 and post(where=None) == 400
+    assert post(to="github", where="#reviews") == 400
+    assert live.request("POST", "/api/share", _share_body(live), token="bad")[0] == 401
+
+
+def test_share_writes_one_inbox_row_for_the_session(start_live):
+    live = start_live()
+    live.viewer.share_slack = True
+    live.viewer.targets[live.slug].pr_number = 7
+    status, res = live.request("POST", "/api/share", _share_body(live, where="  Marco Rossi "))
+    assert status == 200
+    status, res2 = live.request("POST", "/api/share", _share_body(live, to="github", where="line"))
+    assert status == 200
+    rows = [r for r in live.viewer.targets[live.slug].mailbox.read_inbox() if r["kind"] == "share"]
+    assert [(r["id"], r["to"], r["where"]) for r in rows] == [
+        (res["id"], "slack", "Marco Rossi"), (res2["id"], "github", "line")]
+    assert rows[0]["text"] == "### [HIGH] a finding" and rows[0]["finding_id"] == HIGH
+    # The page gets them back with its questions, so replies thread under them.
+    _, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert {q["id"] for q in detail["questions"]} >= {res["id"], res2["id"]}
+
+
+def test_pr_number_is_read_from_the_review_state(tmp_path):
+    from review_viewer.server import pr_number_of
+    assert pr_number_of({"pr": {"number": 12}}, tmp_path) == 12
+    assert pr_number_of({}, tmp_path) is None
+    (tmp_path / "review-state.json").write_text(json.dumps({"target": {"pr": 278}}), encoding="utf-8")
+    assert pr_number_of({}, tmp_path) == 278
+    (tmp_path / "review-state.json").write_text(json.dumps({"target": {"pr": None}}), encoding="utf-8")
+    assert pr_number_of({}, tmp_path) is None
+
+
+# --- serve as the session runs it: the share flags and a gone repository ---------------------
+
+def _serve_process(*args, env_extra=None):
+    """`serve` in a subprocess, read up to its `pending:` line; returns the
+    process and the lines it printed."""
+    env = dict(os.environ, PYTHONUNBUFFERED="1", **(env_extra or {}))
+    proc = subprocess.Popen([PYTHON, "-m", "review_viewer", *args], stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True, env=env)
+    out = []
+    for line in proc.stdout:
+        out.append(line)
+        if line.startswith("pending:"):
+            break
+    return proc, out
+
+
+def _served_detail(box: Path, slug: str) -> dict:
+    import urllib.request
+    token = (box / "server.token").read_text().strip()
+    port = json.loads((box / "server.json").read_text())["port"]
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/targets/{slug}",
+                                 headers={"X-Review-Token": token})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return json.loads(r.read())
+
+
+def _stop_process(proc, box: Path) -> None:
+    from review_viewer import registry
+    try:
+        who = registry.existing(box)
+        if who:
+            registry.shutdown(who, (box / "server.token").read_text().strip())
+        proc.wait(10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+def test_serve_share_slack_reaches_the_page_and_restarts_a_viewer_without_it(start_live):
+    live = start_live(session_id="sess-A")
+    _, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert detail["share"]["slack"] is False
+    proc, out = _serve_process("--session-id", "sess-A", "serve", str(live.findings), "--idle", "0",
+                               "--share", "slack")
+    try:
+        assert "--share slack was asked for; restarted the viewer\n" in out
+        live.thread.join(5)
+        assert not live.thread.is_alive()
+        assert _served_detail(live.box, live.slug)["share"]["slack"] is True
+        # Asked again, with or without the flag, the viewer that offers Slack is reused.
+        for extra in (["--share", "slack"], []):
+            code, again = _serve_in_process("--session-id", "sess-A", "serve", str(live.findings), *extra)
+            assert code == 0 and "reusing" in again
+        assert _served_detail(live.box, live.slug)["share"]["slack"] is True
+    finally:
+        _stop_process(proc, live.box)
+
+
+def test_a_saved_review_of_a_pr_turns_the_github_share_on(findings_path, start_live):
+    (findings_path.parent / "review-state.json").write_text(json.dumps({"target": {"pr": 278}}),
+                                                             encoding="utf-8")
+    live = start_live()
+    _, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert detail["share"] == {"github": True, "pr": 278, "slack": False}
+    status, _ = live.request("POST", "/api/share", _share_body(live, to="github", where="pr"))
+    assert status == 200
+
+
+def test_serve_starts_when_the_reviewed_repository_is_gone(findings_path, tmp_path):
+    data = json.loads(findings_path.read_text())
+    data["target"]["repo_path"] = str(tmp_path / "deleted-worktree")
+    findings_path.write_text(json.dumps(data))
+    box = findings_path.parent / "viewer"
+    proc, out = _serve_process("--session-id", "sess-G", "serve", str(findings_path), "--idle", "0",
+                               env_extra={"WORKSPACE": str(tmp_path / "ws")})
+    try:
+        assert any(line.startswith("open: file://") for line in out), out
+        detail = _served_detail(box, data["target"]["slug"])
+        assert detail["repo_files"] == []
+    finally:
+        _stop_process(proc, box)

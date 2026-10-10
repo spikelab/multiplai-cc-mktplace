@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from multiplai_core.agent_runner import AgentRunError
 from review_pipeline import budget, sdk
+from review_pipeline.models import VerifierAnswer
 
 
 class Answer(BaseModel):
@@ -84,6 +85,15 @@ async def test_an_unparsable_answer_is_reformatted_without_tools_not_rerun(trust
     assert reformat["allowed_tools"] == [] and reformat["max_turns"] == sdk.REFORMAT_MAX_TURNS
     assert {"Read", "Grep", "Glob", "Bash"} <= set(reformat["disallowed_tools"])
     assert reformat["label"] == "verify:reformat"
+
+
+async def test_a_verifier_answer_with_an_unknown_topic_is_asked_again(trusted, fake_run):
+    calls, replies = fake_run
+    answer = {"status": "confirmed", "reason": "r", "impact": "breaks-users"}
+    replies += [_result(json.dumps({**answer, "topic": "test"})), _result(json.dumps({**answer, "topic": "tests"}))]
+    out = await sdk.agent_call_structured("p", VerifierAnswer, allowed_tools=sdk.VERIFIER_TOOLS, budget_label="verify")
+    assert out.topic == "tests" and len(calls) == 2
+    assert "topic is required" in calls[1]["prompt"]
 
 
 def test_a_prose_answer_is_reported_as_having_no_json():
