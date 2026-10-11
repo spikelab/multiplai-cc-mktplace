@@ -37,7 +37,7 @@ from .pr_marker import format_marker, parse_markers
 from .render import SHOWN_STATUSES, listed, section
 from .rounds import round_name
 from .state import load_state
-from .target import TargetError, diff_text, github_web_base
+from .target import _DIFF_FLAGS, TargetError, git, github_web_base
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +84,19 @@ def _new_path(line: str) -> str | None:
     if name == "/dev/null":
         return None
     return name[2:] if name.startswith("b/") else name
+
+
+# GitHub's PR diff, whatever the user's diff.* settings say: 3 lines of context,
+# hunks merged only when they touch, the default algorithm and indent heuristic,
+# renames found, a/ and b/ prefixes. A wider local hunk would send a comment
+# GitHub refuses (422), and the one POST would then post nothing.
+_PR_DIFF_FLAGS = ["-U3", "--inter-hunk-context=0", "--diff-algorithm=myers", "--indent-heuristic",
+                  "--find-renames", "--src-prefix=a/", "--dst-prefix=b/"]
+
+
+def pr_diff(repo: str | Path, base: str, head: str) -> str:
+    """The base..head diff with GitHub's hunks, for `commentable_lines`. The review finders keep `diff_text`."""
+    return git(repo, "diff", *_DIFF_FLAGS, *_PR_DIFF_FLAGS, f"{base}..{head}").stdout
 
 
 def commentable_lines(diff: str) -> dict[str, set[int]]:
@@ -288,7 +301,7 @@ def post(target_dir: Path, decisions_path: Path | None, *, session_id: str = "")
         raise PostError("posting needs the GitHub CLI (`gh`), which is not installed. Install it from "
                         "https://cli.github.com and run `gh auth login`.")
     try:
-        lines = commentable_lines(diff_text(Path(t.repo_path), t.base_sha, t.head_sha))
+        lines = commentable_lines(pr_diff(t.repo_path, t.base_sha, t.head_sha))
     except TargetError as e:
         raise PostError(f"could not read the PR's diff to place the comments: {e}") from e
     to_post, again, earlier = drop_posted(chosen, posted_ids(gh, t.repo_path, t.pr))

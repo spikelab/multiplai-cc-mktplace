@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 
@@ -164,6 +165,67 @@ def test_several_files_in_one_diff():
 def test_a_quoted_path_is_unquoted():
     diff = ADDED.replace("b/new.py", '"b/caf\\303\\251.py"')
     assert post_mod.commentable_lines(diff) == {"café.py": {1, 2, 3}}
+
+
+def _git(repo, *args):
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+
+
+@pytest.fixture(scope="module")
+def pr_repo(tmp_path_factory):
+    """`b/app.py` (40 lines) gets lines 5, 14 and 30 changed; `old.py` (30 lines) is renamed with one line changed."""
+    repo = tmp_path_factory.mktemp("pr-repo")
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    (repo / "b").mkdir()
+    (repo / "b" / "app.py").write_text("".join(f"line {n}\n" for n in range(1, 41)))
+    (repo / "old.py").write_text("".join(f"kept {n}\n" for n in range(1, 31)))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "base")
+    base = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    app = (repo / "b" / "app.py").read_text().splitlines(keepends=True)
+    for n in (5, 14, 30):
+        app[n - 1] = f"changed {n}\n"
+    (repo / "b" / "app.py").write_text("".join(app))
+    _git(repo, "mv", "old.py", "new.py")
+    moved = (repo / "new.py").read_text().splitlines(keepends=True)
+    moved[9] = "changed 10\n"
+    (repo / "new.py").write_text("".join(moved))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "head")
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    return repo, base, head
+
+
+# GitHub's PR diff: 3 lines of context, hunks merged only when they touch, renames found.
+GITHUB_LINES = {
+    "b/app.py": set(range(2, 9)) | set(range(11, 18)) | set(range(27, 34)),
+    "new.py": set(range(7, 14)),
+}
+
+
+def test_the_pr_diff_has_githubs_hunks(pr_repo):
+    repo, base, head = pr_repo
+    assert post_mod.commentable_lines(post_mod.pr_diff(repo, base, head)) == GITHUB_LINES
+
+
+@pytest.mark.parametrize("key, value", [
+    ("diff.context", "10"),
+    ("diff.interHunkContext", "5"),
+    ("diff.algorithm", "patience"),
+    ("diff.indentHeuristic", "false"),
+    ("diff.noprefix", "true"),
+    ("diff.mnemonicPrefix", "true"),
+    ("diff.renames", "false"),
+])
+def test_a_users_diff_setting_does_not_change_the_commentable_lines(pr_repo, key, value):
+    repo, base, head = pr_repo
+    _git(repo, "config", key, value)
+    try:
+        assert post_mod.commentable_lines(post_mod.pr_diff(repo, base, head)) == GITHUB_LINES
+    finally:
+        _git(repo, "config", "--unset", key)
 
 
 # --- the review payload --------------------------------------------------------------
