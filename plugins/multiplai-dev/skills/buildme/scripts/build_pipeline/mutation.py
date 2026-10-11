@@ -379,8 +379,8 @@ def render_report(
             f"- Sampled: {final.candidates - final.sampled_out} of {final.candidates} "
             "mutants ran (`mutation.max_mutants`); the sample is deterministic")
     if first.mutant_left_on_disk or final.mutant_left_on_disk:
-        lines.append("- A run left a mutated file in the tree; buildme discarded "
-                     "back to the committed tree")
+        lines.append("- A run left the tree changed (a mutated file, or files the "
+                     "test command wrote); buildme discarded back to the committed tree")
     lines += ["", "## Files mutated", ""]
     lines += [f"- `{p}`" for p in (final.files or first.files)] or ["- (none)"]
     lines += ["", "## Survivor round", "", round_note, "", "## Surviving mutants", ""]

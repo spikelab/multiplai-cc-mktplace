@@ -482,8 +482,9 @@ class MutationResult(BaseModel):
     sampled_out: int = 0
     score: float | None = None
     survivors: list[SurvivingMutant] = Field(default_factory=list)
-    # True when cosmic-ray left a mutated file in the tree and buildme had to
-    # discard back to the committed sha.
+    # True when the tree was not clean after the run — a mutated file
+    # cosmic-ray did not restore, or files the test command wrote — and
+    # buildme discarded back to the committed sha.
     mutant_left_on_disk: bool = False
     elapsed_seconds: float = 0.0
 
