@@ -9,13 +9,12 @@ Names must not start with `test`, or pytest collects them.
 
 from __future__ import annotations
 
-import functools
 import logging
 import re
-import subprocess
+
+from multiplai_core.citations import check_quote, file_at, lines_at
 
 from .models import SEVERITIES, Citation, Finding, GateResult, Need, TargetInfo, Verdict
-from .target import _GIT, _env
 
 log = logging.getLogger(__name__)
 
@@ -36,32 +35,14 @@ def reason_kind(reason: str) -> str:
     return "other"
 
 
-def _normalise(text: str) -> str:
-    return " ".join(text.split())
-
-
-@functools.lru_cache(maxsize=512)
-def _show(repo: str, sha: str, path: str) -> str | None:
-    """File text at *sha*, or None when the path is not in that commit."""
-    proc = subprocess.run(
-        [*_GIT, "-C", repo, "show", f"{sha}:{path}"],
-        capture_output=True, stdin=subprocess.DEVNULL, env=_env(), shell=False, check=False,
-    )
-    if proc.returncode != 0:
-        return None
-    return proc.stdout.decode("utf-8", errors="replace")
-
-
 def file_at_head(target: TargetInfo, path: str) -> str | None:
-    return _show(target.repo_path, target.head_sha, path)
+    """File text at head, or None when the path is not in that commit."""
+    return file_at(target.repo_path, target.head_sha, path)
 
 
 def lines_at_head(target: TargetInfo, path: str, start: int, end: int) -> list[str] | None:
     """Lines start..end (1-based, inclusive) at head, split on \\n like git numbers them."""
-    text = file_at_head(target, path)
-    if text is None:
-        return None
-    return text.split("\n")[start - 1:end]
+    return lines_at(target.repo_path, target.head_sha, path, start, end)
 
 
 # --- citations ----------------------------------------------------------------
@@ -69,16 +50,15 @@ def lines_at_head(target: TargetInfo, path: str, start: int, end: int) -> list[s
 
 def citation_gate(target: TargetInfo, citation: Citation) -> GateResult:
     """The quote, whitespace-normalised, is inside lines line_start..line_end at head."""
-    quote = _normalise(citation.quote)
-    if not quote:
-        return GateResult(passed=False, reason="empty quote", action="reject")
-    text = file_at_head(target, citation.path)
-    if text is None:
-        return GateResult(passed=False, reason="path not at head", action="reject")
-    window = _normalise("\n".join(text.split("\n")[citation.line_start - 1:citation.line_end]))
-    if quote not in window:
-        return GateResult(passed=False, reason="quote not at cited lines", action="reject")
-    return GateResult(passed=True)
+    reason = check_quote(
+        target.repo_path, target.head_sha, citation.path, citation.line_start, citation.line_end, citation.quote,
+    )
+    if reason is None:
+        return GateResult(passed=True)
+    # Core says "path not at commit"; review's reason kinds and checks.json name it "path not at head".
+    if reason == "path not at commit":
+        reason = "path not at head"
+    return GateResult(passed=False, reason=reason, action="reject")
 
 
 def finding_gate(target: TargetInfo, finding: Finding) -> GateResult:
