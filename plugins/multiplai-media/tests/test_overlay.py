@@ -534,6 +534,7 @@ def test_render_adds_overlay_inputs_after_the_segments(tmp_path, monkeypatch) ->
     calls: list[list[str]] = []
     monkeypatch.setattr(composite.subprocess, "run", lambda cmd, *a, **k: calls.append([str(c) for c in cmd]) or _Done())
     monkeypatch.setattr(composite, "_render_overlays", lambda edl: [Path("/c/p.mov"), Path("/c/k.mov")])
+    monkeypatch.setattr(composite, "lint_overlays", lambda edl: None)    # the pages do not exist
     e = EDL.from_dict({"source": "/rec/x.mp4",
                        "segments": [{"src_start": 0, "src_end": 10}, {"src_start": 20, "src_end": 30}],
                        "overlays": [_ov(mode="panel", region={"x": 0, "y": 0, "w": 640, "h": 360}),

@@ -391,6 +391,7 @@ def _burn_subtitles(edl: EDL, words: list[dict] | None, brand, work: Path) -> st
 
 KEY_SIMILARITY = 0.30          # colorkey: how close to the key colour counts as background
 KEY_BLEND = 0.08               # colorkey: soft edge width
+KEYED_OUT_BELOW = KEY_SIMILARITY + KEY_BLEND   # a colour nearer the key than this turns (partly) transparent
 
 
 def _despill_type(hex_colour: str) -> str | None:
@@ -425,6 +426,23 @@ def overlay_graph(overlays: list[Overlay], movs: list[Path], first_input: int,
     return "; ".join(parts), vlabel
 
 
+def lint_overlays(edl: EDL) -> None:
+    """Check every overlay page before anything renders: print warnings,
+    and refuse the EDL if any page has an error (stages/overlay_lint.py)."""
+    from stages import overlay_lint
+    problems = []
+    for o in edl.overlays:
+        page = Path(o.html)
+        findings = overlay_lint.lint(page.read_text(encoding="utf-8"), mode=o.mode,
+                                     key_color=o.key_color, key_reach=KEYED_OUT_BELOW)
+        for f in findings:
+            if f.severity == "warning":
+                print(f"⚠ overlay {page.name}: {f}")
+        problems += [f"{page.name}: {f}" for f in overlay_lint.errors(findings)]
+    if problems:
+        raise ValueError("overlay pages that would not render as written:\n  " + "\n  ".join(problems))
+
+
 def _render_overlays(edl: EDL) -> list[Path]:
     from stages import overlay as overlay_mod
     from stages.prep import cache_dir_for
@@ -443,6 +461,7 @@ def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
     source_size = probe_size(edl.source) if _needs_source_size(edl) else None
     for w in edl.validate(source_size=source_size, words=words):
         print(f"⚠ EDL warning: {w}")
+    lint_overlays(edl)
     if brand.logo and not edl.logo:
         edl.logo = Logo(path=brand.logo.path, position=brand.logo.position,
                         scale=brand.logo.scale, start_at=0.0)

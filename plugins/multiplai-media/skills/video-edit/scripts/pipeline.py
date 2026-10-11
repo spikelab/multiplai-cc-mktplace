@@ -5,6 +5,7 @@ Subcommands (see --help for all):
   render <edl.json>             Deterministic render (walking skeleton).
   correct <cache> <fixes.json>  Fix misheard words before they become captions.
   proof <mp4> --edl E --out P   One PNG of the reel, moment by moment, to check before reporting.
+  lint-overlay <page.html>      Check an overlay page for what breaks a seeked render.
   shots <cache> --from --to     The shots in a range, 3 frames each, for framing a broadcast feed.
   make <source> --prompt TEXT   Natural-language → EDL → render (not yet implemented).
 """
@@ -56,6 +57,19 @@ def cmd_render(args: argparse.Namespace) -> int:
     part.replace(out)
     print(f"✓ wrote {out} ({out.stat().st_size/1e6:.1f} MB)")
     return 0
+
+
+def cmd_lint_overlay(args: argparse.Namespace) -> int:
+    from stages import overlay_lint
+    page = Path(args.page)
+    findings = overlay_lint.lint(page.read_text(encoding="utf-8"), mode=args.mode,
+                                 key_color=args.key_color,
+                                 key_reach=composite.KEYED_OUT_BELOW)
+    for f in findings:
+        print(f"{page.name}: {f}")
+    if not findings:
+        print(f"✓ {page.name}: no problems found")
+    return 1 if overlay_lint.errors(findings) else 0
 
 
 def cmd_prep(args: argparse.Namespace) -> int:
@@ -325,6 +339,13 @@ def main() -> int:
                    help="synthesize an ambient bed via ffmpeg (no model, container-native fallback)")
     r.add_argument("--music-volume-db", type=float, default=None, help="bed volume in dB (default -18)")
     r.set_defaults(func=cmd_render)
+
+    lo = sub.add_parser("lint-overlay", help="check an overlay page before rendering it (render runs this too)")
+    lo.add_argument("page", help="the overlay's HTML file")
+    lo.add_argument("--mode", default="keyed", choices=["alpha", "panel", "keyed"],
+                    help="the overlay's EDL mode (default keyed, as in the EDL)")
+    lo.add_argument("--key-color", default="#00FF00", help="keyed mode: the key colour (default #00FF00)")
+    lo.set_defaults(func=cmd_lint_overlay)
 
     pp = sub.add_parser("prep", help="detect cuts + transcribe + write context bundle")
     pp.add_argument("source", help="path to screen recording")
