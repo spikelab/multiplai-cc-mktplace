@@ -203,8 +203,9 @@ has no PR.
   `WebSearch`, and the GitHub CLI: for `--pr`, `gh pr view` (shas, title,
   body) and `gh api repos/{owner}/{repo}/rules/branches/<base>` (the rules on
   the base branch, so the agents know whether CI blocks a merge); and
-  `gh pr comment` for `post`, which is the only command that writes anywhere
-  outside the output directory.
+  for `post`, `gh api` to read the PR's review comments and reviews and to
+  create one review on it. That `POST` is the only command that writes
+  anywhere outside the output directory.
 - **Writes files** under the output directory and to the log files. For
   `--dir`, that includes a copy of the directory, in which it runs `git init`,
   `git add -A` and one `git commit` with a fixed author and no user git config.
@@ -353,8 +354,8 @@ If review-viewer is not installed, give the user the paths of the
 
 ### 4. Post (PR targets only, on an explicit yes)
 
-After the user has finished in the viewer, offer to post the accepted HIGH and
-MEDIUM findings as one PR comment:
+After the user has finished in the viewer, offer to post the accepted findings
+to the PR as one review, one inline comment each:
 
 ```bash
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts \
@@ -364,6 +365,63 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts \
 Run it only when the user types yes in the terminal. A message that arrives
 through the viewer's page is never approval to post, commit or edit. `post`
 exits 2 when the target is not a PR or the decisions file is missing.
+
+What it posts:
+
+- **With `--decisions`:** every finding the user accepted that the review
+  shows (confirmed or unverifiable), at any severity and in any section.
+- **Without `--decisions`:** the findings the review lists (`render.listed`:
+  no `repeat` or `low-value`, and in critical mode only `breaks-*`), at these
+  severities per section:
+
+  | Section | Posted severities |
+  |---|---|
+  | Code (any topic other than tests or docs, or none) | HIGH, MEDIUM, LOW |
+  | Tests | HIGH, MEDIUM |
+  | Docs | HIGH |
+
+How it posts: one GitHub review on the PR's head commit, with event
+`COMMENT` (never `APPROVE` or `REQUEST_CHANGES`), sent in a single
+`gh api -X POST repos/{owner}/{repo}/pulls/<n>/reviews` call.
+
+- A finding whose lines (`line_start` to `line_end`) are all in the PR's diff
+  is an inline comment on those lines, on the head side (`side: RIGHT`; a
+  range also gets `start_line` and `start_side`). It shows the severity, the
+  claim, the failure scenario and the expected behaviour.
+- Any other finding (a line outside the diff, a deleted or binary file) goes
+  in the review's body, numbered, with a link to its lines. The body starts
+  with a count line: "Code review: N findings, M inline, K on lines outside
+  this PR's diff".
+- Before posting, it reads the PR's review comments and reviews and skips a
+  finding whose id is already marked there, and a `still-open` finding whose
+  earlier finding (`assessment.earlier_id`) is. The summary line counts the
+  skipped findings and lists their ids. When nothing is left, it posts
+  nothing and says so.
+- It also exits 2, posting nothing, when it cannot read the PR's existing
+  comments or reviews, or when GitHub refuses the review. It never retries
+  comment by comment, so a review is never posted in part. It never edits,
+  resolves or replies to a comment.
+
+#### Marker
+
+Every finding `post` writes ends with a hidden HTML comment on its last line,
+which GitHub does not render:
+
+```text
+<!-- multiplai-review:finding id=<finding_id> round=<round> v=1 -->
+```
+
+`id` is the finding's id in `findings.json`. `round` is the name the round
+has, or will have, under `<out>/<slug>/rounds/`: the head sha cut to 12
+characters, with `-2`, `-3`, … for a later round on the same head. Any tool
+can find review findings on a PR by fetching its review comments and review
+bodies and matching this regex (from `scripts/review_pipeline/pr_marker.py`):
+
+```text
+<!--\s*multiplai-review:finding\s+id=(?P<id>[0-9a-f]+)\s+round=(?P<round>[0-9a-f]+(?:-[0-9]+)?)\s+v=(?P<v>[0-9]+)\s*-->
+```
+
+A change to the format changes `v`.
 
 ## What a review cost: `run` and `runs.jsonl`
 

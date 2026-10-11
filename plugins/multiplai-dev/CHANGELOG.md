@@ -17,6 +17,34 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-11
+
+### Changed
+- review: `post` now writes one GitHub review on the PR instead of one PR
+  comment. Each finding whose lines are in the PR's diff is an inline
+  comment on those lines, in its own thread, showing the severity, the claim,
+  the failure scenario and the expected behaviour. Findings on lines outside
+  the diff go in the review's body with a link, under a count line
+  ("Code review: N findings, M inline, K on lines outside this PR's diff").
+  The review's event is always `COMMENT`.
+- review: with `--decisions`, `post` posts every finding you accepted, at any
+  severity and in any section, not only HIGH and MEDIUM. Without it, it posts
+  what the review lists at these severities: Code every severity, Tests HIGH
+  and MEDIUM, Docs HIGH.
+- review: `post` no longer posts a finding twice. It reads the PR's review
+  comments and reviews first and skips findings already posted there, and
+  `still-open` findings whose earlier finding was posted; the summary line
+  lists the skipped ids. If it cannot read the PR, or GitHub refuses the
+  review, it posts nothing and exits 2.
+
+### Added
+- review: every finding `post` writes ends with a hidden marker,
+  `<!-- multiplai-review:finding id=<id> round=<round> v=1 -->`, so other
+  tools can tell review findings apart on a PR. The format and its regex are
+  in the review skill's SKILL.md under "Marker".
+- review-viewer: a finding sent to GitHub as a line comment from the page
+  ends with the same marker.
+
 ## [0.32.0] - 2026-10-10
 
 ### Added
