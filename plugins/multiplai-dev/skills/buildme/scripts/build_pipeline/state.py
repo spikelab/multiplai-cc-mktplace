@@ -88,7 +88,6 @@ class TDDState(BaseModel):
     # `mutation.min_score` (or the step was skipped); a failed step stays False
     # so a resume runs it again. Old checkpoints default to False.
     mutation_done: bool = False
-    final_review_done: bool = False
     e2e_done: bool = False
 
 

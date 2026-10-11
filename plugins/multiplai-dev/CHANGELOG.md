@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.34.0] - 2026-10-11
+## [0.35.0] - 2026-10-11
 
 ### Added
 - buildme: on Python projects (a `pyproject.toml`, `setup.py`, `setup.cfg`,
@@ -40,6 +40,19 @@ time, not derived from a tag.
   `specs/config.yaml` to turn the step off; `timeout` and `max_mutants` tune
   its cost. A test suite slower than `timeout` still works: each mutant gets
   three times the unmutated suite's measured run when that is longer.
+
+## [0.34.0] - 2026-10-11
+
+### Removed
+- buildme: the final review is gone. buildme no longer runs a whole-change
+  model review after the last block, so a build no longer fails at the end on
+  a FAILED or errored final verdict, and no `FINAL_REVIEW` line appears in
+  its log. Each block is still reviewed and fixed as before. For a review of
+  the whole change, run `/multiplai-dev:review` on the PR buildme opens.
+- buildme: `--lenient-review` now covers one case only, a block whose code
+  review stays below threshold after all fix rounds.
+
+A checkpoint written by an older buildme still loads and resumes where it was.
 
 ## [0.33.1] - 2026-10-11
 

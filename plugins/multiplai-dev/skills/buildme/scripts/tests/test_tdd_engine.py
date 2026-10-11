@@ -19,13 +19,11 @@ from build_pipeline.tdd_engine import (
     _detect_entry_point,
     _read_block_test_files,
     _git_commit_block_phase,
-    _run_final_review,
     _run_integration_and_review,
     _run_refactor_all,
     _snapshot_all_test_files,
     _run_quality_review,
     _adjudicate_review_findings,
-    _build_trajectory_text,
     _enforce_test_integrity,
     _snapshot_test_files,
     _TEST_FILE_RE,
@@ -45,7 +43,6 @@ from build_pipeline.models import (
     BlockInfo,
     BlockStatus,
     BuildPhase,
-    FinalReviewVerdict,
     FindingAdjudication,
     FindingVerdict,
     GateResult,
@@ -2042,153 +2039,6 @@ class TestReviewExhaustionEnforcement:
         assert "GREEN evidence" in progress.path.read_text()
 
 
-class TestFinalReviewFailClosed:
-    """The final review returns a structured verdict and fails closed on errors."""
-
-    def _make(self, tmp_path, with_rubric=True):
-        project_dir = tmp_path / "project"
-        project_dir.mkdir()
-        specs_root = project_dir / "specs"
-        change_dir = specs_root / "changes" / "feat"
-        change_dir.mkdir(parents=True)
-        if with_rubric:
-            (change_dir / "rubric.md").write_text("# Rubric\nQuality criteria.")
-        config = BuildConfig(project_dir=project_dir, change_name="feat")
-        config.specs_dir = specs_root
-        state = BuildState(
-            change_name="feat", mode="only", tier="advanced",
-            state_file=str(tmp_path / "state.json"),
-            tdd=TDDState(blocks=[BlockInfo(number=1, name="B", description="d")]),
-        )
-        return config, state
-
-    @pytest.mark.asyncio
-    async def test_no_rubric_skips(self, tmp_path):
-        config, state = self._make(tmp_path, with_rubric=False)
-        result = await _run_final_review(config, state)
-        assert result.passed is True
-        assert "No rubric" in result.reason
-
-    @pytest.mark.asyncio
-    async def test_llm_error_fails_closed(self, tmp_path):
-        config, state = self._make(tmp_path)
-        with patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
-                   side_effect=RuntimeError("api down")):
-            result = await _run_final_review(config, state)
-        assert result.passed is False
-        assert result.action == "final_review_error"
-
-    @pytest.mark.asyncio
-    async def test_structured_verdict_passes_through(self, tmp_path):
-        config, state = self._make(tmp_path)
-        verdict = FinalReviewVerdict(passed=True, summary="Coherent build, blocks integrate.")
-        with patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
-                   return_value=verdict):
-            result = await _run_final_review(config, state)
-        assert result.passed is True
-        assert "Coherent build" in result.reason
-
-    @pytest.mark.asyncio
-    async def test_structured_verdict_failure_carries_issues(self, tmp_path):
-        config, state = self._make(tmp_path)
-        verdict = FinalReviewVerdict(
-            passed=False, summary="Block 2 wired to a stub.",
-            issues=["api.py: handler returns hardcoded value"],
-        )
-        with patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
-                   return_value=verdict):
-            result = await _run_final_review(config, state)
-        assert result.passed is False
-        assert "hardcoded value" in result.reason
-
-    @pytest.mark.asyncio
-    async def test_engine_fails_build_on_final_review_error(self, tmp_path):
-        config, state = self._make(tmp_path)
-        (config.change_dir / "tasks.md").write_text("## 1. Setup\n\nInit.\n\nSatisfies: s\n")
-        config.test_command = "true"
-        config.config_dir = tmp_path / "config"
-        config.core_memory_files = []
-        args = MagicMock()
-        args.block = None
-
-        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
-             patch("build_pipeline.tdd_engine.run_block_tdd", new_callable=AsyncMock, return_value=True), \
-             patch("build_pipeline.tdd_engine._run_integration_and_review", new_callable=AsyncMock, return_value=True), \
-             patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
-                   side_effect=RuntimeError("api down")):
-            result = await run_tdd_engine(config, args)
-
-        assert result == EXIT_BUILD_FAILURE
-
-    @pytest.mark.asyncio
-    async def test_engine_lenient_continues_past_final_review_error(self, tmp_path):
-        config, state = self._make(tmp_path)
-        (config.change_dir / "tasks.md").write_text("## 1. Setup\n\nInit.\n\nSatisfies: s\n")
-        config.test_command = "true"
-        config.config_dir = tmp_path / "config"
-        config.core_memory_files = []
-        config.lenient_review = True
-        args = MagicMock()
-        args.block = None
-
-        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
-             patch("build_pipeline.tdd_engine.run_block_tdd", new_callable=AsyncMock, return_value=True), \
-             patch("build_pipeline.tdd_engine._run_integration_and_review", new_callable=AsyncMock, return_value=True), \
-             patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
-                   side_effect=RuntimeError("api down")):
-            result = await run_tdd_engine(config, args)
-
-        assert result == EXIT_SUCCESS
-
-    @pytest.mark.asyncio
-    async def test_engine_fails_build_on_failed_verdict(self, tmp_path):
-        """A genuine FAILED verdict fails the build — not only an errored
-        review. Not marked done, so a resume re-runs the review."""
-        config, state = self._make(tmp_path)
-        (config.change_dir / "tasks.md").write_text("## 1. Setup\n\nInit.\n\nSatisfies: s\n")
-        config.test_command = "true"
-        config.config_dir = tmp_path / "config"
-        config.core_memory_files = []
-        args = MagicMock()
-        args.block = None
-        verdict = FinalReviewVerdict(
-            passed=False, summary="Block 2 wired to a stub.",
-            issues=["api.py: handler returns hardcoded value"],
-        )
-
-        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
-             patch("build_pipeline.tdd_engine.run_block_tdd", new_callable=AsyncMock, return_value=True), \
-             patch("build_pipeline.tdd_engine._run_integration_and_review", new_callable=AsyncMock, return_value=True), \
-             patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
-                   return_value=verdict):
-            result = await run_tdd_engine(config, args)
-
-        assert result == EXIT_BUILD_FAILURE
-        persisted = BuildState.load(config.state_file_path())
-        assert persisted.tdd.final_review_done is False
-
-    @pytest.mark.asyncio
-    async def test_engine_lenient_continues_past_failed_verdict(self, tmp_path):
-        config, state = self._make(tmp_path)
-        (config.change_dir / "tasks.md").write_text("## 1. Setup\n\nInit.\n\nSatisfies: s\n")
-        config.test_command = "true"
-        config.config_dir = tmp_path / "config"
-        config.core_memory_files = []
-        config.lenient_review = True
-        args = MagicMock()
-        args.block = None
-        verdict = FinalReviewVerdict(passed=False, summary="Stub wiring.")
-
-        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
-             patch("build_pipeline.tdd_engine.run_block_tdd", new_callable=AsyncMock, return_value=True), \
-             patch("build_pipeline.tdd_engine._run_integration_and_review", new_callable=AsyncMock, return_value=True), \
-             patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
-                   return_value=verdict):
-            result = await run_tdd_engine(config, args)
-
-        assert result == EXIT_SUCCESS
-
-
 class TestEntryPointSmokeRun:
     """_verify_entry_point actually executes the entry point — no fabricated pass."""
 
@@ -2700,29 +2550,6 @@ class TestEnforceTestIntegrity:
         assert block.test_file_hashes == {"t.py": "h"}
 
 
-class TestBuildTrajectoryText:
-    def test_no_blocks(self):
-        state = BuildState(change_name="c", mode="scratch", tier="standard")
-        assert "no per-block trajectory" in _build_trajectory_text(state)
-
-    def test_surfaces_iterations_scores_and_declared_test_changes(self):
-        block = BlockInfo(number=1, name="Parser", description="d", status=BlockStatus.DONE)
-        block.review_iterations = 3
-        block.review_scores = ReviewResult(
-            scores=[ReviewScore(dimension="Q", weight=2, score=4, evidence="e")],
-            rejected_findings=[ReviewFinding(claim="bogus")],
-        )
-        block.test_change_claims = ["fixture path was wrong"]
-        state = BuildState(change_name="c", mode="scratch", tier="standard",
-                           tdd=TDDState(blocks=[block]))
-        text = _build_trajectory_text(state)
-        assert "Block 1 (Parser)" in text
-        assert "3 review iteration(s)" in text
-        assert "1 finding(s) rejected" in text
-        assert "TEST FILES CHANGED after RED" in text
-        assert "fixture path was wrong" in text
-
-
 class TestAdjudicateReviewFindings:
     def _inputs(self):
         review = ReviewResult(
@@ -2798,7 +2625,7 @@ SUITE_RED_IF_BROKEN = (
 
 class TestWholeChangeRefactor:
     """One conservative pass over the finished change, between the last block
-    and the final review — with the same harness as the per-block step."""
+    and the entry-point check — with the same harness as the per-block step."""
 
     @pytest.fixture(autouse=True)
     def _clean_budget(self, monkeypatch):
@@ -3030,20 +2857,22 @@ class TestWholeChangeRefactor:
 
 
 class TestRefactorAllOrdering:
-    """The whole-change pass runs after the last block and before the final
-    review — the final review must grade the code that ships."""
+    """The whole-change pass runs after the last block and before the
+    entry-point check. No whole-change review follows it: that is
+    /multiplai-dev:review's job, on the PR."""
 
     @pytest.mark.asyncio
-    async def test_refactor_all_runs_before_final_review(self, tdd_setup):
+    async def test_refactor_all_runs_before_the_entry_point_check(self, tdd_setup):
         config, args = tdd_setup
+        config.gates.e2e_test_entry_point_check = True
         calls: list[str] = []
 
         async def _refactor_all(*_a, **_kw):
             calls.append("refactor_all")
             return True
 
-        async def _final_review(*_a, **_kw):
-            calls.append("final_review")
+        def _entry_point(*_a, **_kw):
+            calls.append("e2e_check")
             return GateResult(passed=True, reason="ok")
 
         ok = AgentResult(success=True, output="done")
@@ -3058,11 +2887,11 @@ class TestRefactorAllOrdering:
              patch("build_pipeline.tdd_engine._adjudicate_review_findings", new_callable=AsyncMock,
                    side_effect=lambda review, *a, **k: review), \
              patch("build_pipeline.tdd_engine._run_refactor_all", side_effect=_refactor_all), \
-             patch("build_pipeline.tdd_engine._run_final_review", side_effect=_final_review):
+             patch("build_pipeline.tdd_engine._verify_entry_point", side_effect=_entry_point):
             result = await run_tdd_engine(config, args)
 
         assert result == EXIT_SUCCESS
-        assert calls == ["refactor_all", "final_review"]
+        assert calls == ["refactor_all", "e2e_check"]
 
     @pytest.mark.asyncio
     async def test_budget_stop_in_refactor_all_fails_the_build(self, tdd_setup):
@@ -3083,11 +2912,11 @@ class TestRefactorAllOrdering:
              patch("build_pipeline.tdd_engine._adjudicate_review_findings", new_callable=AsyncMock,
                    side_effect=lambda review, *a, **k: review), \
              patch("build_pipeline.tdd_engine._run_refactor_all", side_effect=_refactor_all), \
-             patch("build_pipeline.tdd_engine._run_final_review", new_callable=AsyncMock) as final:
+             patch("build_pipeline.tdd_engine._verify_entry_point") as entry_point:
             result = await run_tdd_engine(config, args)
 
         assert result == EXIT_BUILD_FAILURE
-        final.assert_not_awaited()
+        entry_point.assert_not_called()
 
 
 class TestCheckpointLifecycleOwnership:
@@ -3117,8 +2946,6 @@ class TestCheckpointLifecycleOwnership:
             patch("build_pipeline.tdd_engine._adjudicate_review_findings", new_callable=AsyncMock,
                   side_effect=lambda review, *a, **k: review),
             patch("build_pipeline.tdd_engine._run_refactor_all", new_callable=AsyncMock, return_value=True),
-            patch("build_pipeline.tdd_engine._run_final_review", new_callable=AsyncMock,
-                  return_value=GateResult(passed=True, reason="ok")),
         ]
 
     async def _run(self, config, args, **kwargs):
@@ -3167,9 +2994,7 @@ class TestCheckpointLifecycleOwnership:
              patch("build_pipeline.tdd_engine.run_test_writer",
                    new_callable=AsyncMock) as writer, \
              patch("build_pipeline.tdd_engine._run_refactor_all",
-                   new_callable=AsyncMock, return_value=True), \
-             patch("build_pipeline.tdd_engine._run_final_review",
-                   new_callable=AsyncMock, return_value=GateResult(passed=True, reason="ok")):
+                   new_callable=AsyncMock, return_value=True):
             assert await run_tdd_engine(config, args, standalone=False) == EXIT_SUCCESS
 
         writer.assert_not_awaited()

@@ -68,7 +68,7 @@ pure function over the table at `board.py:91 _PHASE_COLUMNS` (exhaustive over
 inside In Development (`board.py:120-127`). In particular
 **`BlockStatus.REVIEWING` is not In Review**: that review is in-process, against
 the working tree, with no pushed branch for anyone to fetch
-(`tdd_engine.py:1512 _run_quality_review`, `tdd_engine.py:2011 _run_final_review`).
+(`tdd_engine.py:1511 _run_quality_review`).
 The parameter exists because block state is the natural refinement point for a
 future scheduler, and because "it does not currently move the card" needs to be
 explicit rather than assumed.
@@ -96,7 +96,7 @@ branch and diffing it locally. The missing pieces:
 - **A reviewer agent** that reads the staging PR's diff against its base,
   reads the change's `specs/` (proposal, requirements, design, `codebase-analysis.md`,
   `unknowns.md`, `respec.md`) and reviews the diff against them — a real out-of-process review,
-  unlike `_run_final_review`, which sees only the working tree it just produced.
+  unlike the per-block `_run_quality_review`, which sees only the working tree it just produced.
 - **Staging-merge automation** to satisfy the column's stated exit condition
   ("merged to staging"). This is the first place the pipeline would ever merge
   anything, and today `git_ops` merges nothing at all: it never merges,
