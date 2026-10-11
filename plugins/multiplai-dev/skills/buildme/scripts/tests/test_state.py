@@ -377,6 +377,31 @@ class TestRespecPhaseAndNotes:
         # Fields added after the checkpoint was written take their defaults.
         assert all(b.refactor_commit is None for b in s.tdd.blocks)
 
+    def test_pre_mutation_fixture_has_no_mutation_field(self):
+        """Guard the guard: a fixture regenerated with current code would
+        stop testing that pre-MUTATION checkpoints load."""
+        raw = (FIXTURES / "build-state-pre-mutation.json").read_text()
+        assert "mutation" not in raw
+
+    def test_pre_mutation_checkpoint_loads_with_mutation_not_done(self):
+        """Every block done and the whole-change refactor done, written before
+        the MUTATION step existed: the new flag defaults to False, so a resume
+        runs the step."""
+        s = BuildState.load(FIXTURES / "build-state-pre-mutation.json")
+
+        assert s.phase == BuildPhase.TDD_BUILD
+        assert s.tdd.refactor_all_done is True
+        assert s.tdd.mutation_done is False
+        assert [b.status for b in s.tdd.blocks] == [BlockStatus.DONE, BlockStatus.DONE]
+        assert s.tdd.current_block == len(s.tdd.blocks)
+
+    def test_mutation_done_survives_checkpoint_and_reload(self, tmp_path):
+        s = BuildState(change_name="c", mode="scratch", tier="advanced")
+        s.tdd = TDDState(mutation_done=True)
+        path = tmp_path / ".build-state.json"
+        s.checkpoint(path)
+        assert BuildState.load(path).tdd.mutation_done is True
+
     def test_refactor_all_done_survives_checkpoint_and_reload(self, tmp_path):
         s = BuildState.load(FIXTURES / "build-state-pre-refactor-all.json")
         out = tmp_path / "state.json"

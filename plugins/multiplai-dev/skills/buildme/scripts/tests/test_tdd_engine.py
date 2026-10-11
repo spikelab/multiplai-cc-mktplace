@@ -3478,3 +3478,67 @@ class TestReportContractSlots:
         from build_pipeline.prompts.implementation import IMPLEMENTER_PROMPT_CLEAN
         assert "contradicts" in IMPLEMENTER_PROMPT_CLEAN
         assert "implementation-notes.md" in IMPLEMENTER_PROMPT_CLEAN
+
+
+class TestMutationStepPlacement:
+    """The MUTATION sub-step runs right after the whole-change refactor, and a
+    failed mutation step stops the build there."""
+
+    @pytest.mark.asyncio
+    async def test_mutation_runs_right_after_refactor_all(self, tdd_setup):
+        config, args = tdd_setup
+        calls: list[str] = []
+
+        async def _refactor_all(*_a, **_kw):
+            calls.append("refactor_all")
+            return True
+
+        async def _mutation(*_a, **_kw):
+            calls.append("mutation")
+            return False
+
+        ok = AgentResult(success=True, output="done")
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
+             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT), \
+             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
+                   return_value=QualityAudit(passed=True)), \
+             patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                   return_value=ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])), \
+             patch("build_pipeline.tdd_engine._adjudicate_review_findings", new_callable=AsyncMock,
+                   side_effect=lambda review, *a, **k: review), \
+             patch("build_pipeline.tdd_engine._run_refactor_all", side_effect=_refactor_all), \
+             patch("build_pipeline.tdd_engine._run_mutation", side_effect=_mutation), \
+             patch("build_pipeline.tdd_engine._verify_entry_point") as e2e:
+            result = await run_tdd_engine(config, args)
+
+        assert result == EXIT_BUILD_FAILURE
+        assert calls == ["refactor_all", "mutation"]
+        e2e.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_pre_mutation_checkpoint_resumes_into_the_mutation_step(self, tdd_setup):
+        """A checkpoint written before the MUTATION step existed — every block
+        done, refactor_all_done true, no mutation_done key — resumes straight
+        into the mutation step: no agent runs, the refactor pass is not
+        repeated."""
+        config, args = tdd_setup
+        fixture = Path(__file__).parent / "fixtures" / "build-state-pre-mutation.json"
+        config.state_file_path().write_text(fixture.read_text())
+        seen: list[bool] = []
+
+        async def _mutation(_config, state, _progress):
+            seen.append(state.tdd.mutation_done)
+            return False
+
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
+             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock) as tw, \
+             patch("build_pipeline.tdd_engine.run_refactor_all", new_callable=AsyncMock) as ra, \
+             patch("build_pipeline.tdd_engine._run_mutation", side_effect=_mutation):
+            result = await run_tdd_engine(config, args)
+
+        assert result == EXIT_BUILD_FAILURE
+        assert seen == [False]
+        tw.assert_not_awaited()
+        ra.assert_not_awaited()
