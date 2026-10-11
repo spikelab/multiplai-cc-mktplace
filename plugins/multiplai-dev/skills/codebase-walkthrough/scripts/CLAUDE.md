@@ -25,7 +25,7 @@ cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && \
 | `symbols.py` | Python `ast` over the target: functions, classes, urls, celery tasks, models, outbound HTTP paths, settings, env vars, cache keys. |
 | `references.py` | `rg` picks candidate files (intersected with `git ls-files`); `ast`, `ast-grep` or whole-identifier SQL matching confirms each hit, reading the file at HEAD. |
 | `lsp.py` | `pyright-langserver` references inside the target's own repo, one request at a time (pyright cancels an in-flight one), under one time limit. |
-| `gates.py` | Every gate. Must never import or call `sdk`. |
+| `gates.py` | Every gate. Must never import or call `sdk`. `citation_gate` checks `split_path` itself, then calls `multiplai_core.citations.check_quote`; `file_at_commit`/`lines_at_commit` wrap core `file_at`/`lines_at`, whose cache is `gates.file_at.cache_clear()`. |
 | `partition.py` | Splits the target into units of at most `--unit-lines`; a directory stays whole when it fits. |
 | `docs.py`, `fetcher.py`, `netguard.py`, `untrusted.py` | `llms.txt`, page choice, fetch with SSRF and host checks on every redirect, fencing; local docs; the API collection (names, methods, URLs, header names; never `.env*` or `secret` fields). `fetcher.py` is a trimmed copy of deep-research's without trafilatura. |
 | `stages/` | `explore`, `docs`, `trace`, `write`. Each gates its agents' answers and does one re-ask for what failed. |

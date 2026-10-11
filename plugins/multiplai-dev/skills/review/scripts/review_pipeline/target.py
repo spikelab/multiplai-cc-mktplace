@@ -24,12 +24,12 @@ import tarfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from multiplai_core.citations import GIT_ARGV, git_env
+
 from .models import GateResult, Need, TargetInfo
 
 log = logging.getLogger(__name__)
 
-# User or repo config must not change what we parse.
-_GIT = ["git", "-c", "color.ui=never", "-c", "core.quotepath=off"]
 _DIFF_FLAGS = ["--no-color", "--no-ext-diff", "--no-textconv"]
 
 
@@ -52,18 +52,11 @@ class TargetError(Exception):
     """The target could not be resolved. The message says why."""
 
 
-def _env() -> dict[str, str]:
-    env = dict(os.environ)
-    env.pop("GIT_EXTERNAL_DIFF", None)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    return env
-
-
 def git(repo: str | Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     """Run one git command against *repo*; stdout/stderr as text."""
     proc = subprocess.run(
-        [*_GIT, "-C", str(repo), *args],
-        capture_output=True, text=True, stdin=subprocess.DEVNULL, env=_env(),
+        [*GIT_ARGV, "-C", str(repo), *args],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL, env=git_env(),
         shell=False, check=False,
     )
     if check and proc.returncode != 0:
@@ -331,8 +324,8 @@ def _check_attrs(repo: Path, head: str, paths: list[str]) -> dict[str, str]:
     if not paths:
         return {}
     proc = subprocess.run(
-        [*_GIT, "-C", str(repo), "check-attr", "-z", "--stdin", "--source", head, *GENERATED_ATTRS],
-        input="\0".join(paths) + "\0", capture_output=True, text=True, env=_env(), shell=False, check=False,
+        [*GIT_ARGV, "-C", str(repo), "check-attr", "-z", "--stdin", "--source", head, *GENERATED_ATTRS],
+        input="\0".join(paths) + "\0", capture_output=True, text=True, env=git_env(), shell=False, check=False,
     )
     if proc.returncode != 0:
         log.warning("git check-attr --source failed; not skipping generated files: %s", proc.stderr.strip()[:300])
@@ -347,9 +340,9 @@ def _check_attrs(repo: Path, head: str, paths: list[str]) -> dict[str, str]:
 
 
 def _chars_at(repo: Path, head: str, path: str) -> int:
-    """Characters in *path* at *head*, decoded like `gates._show` (bytes that are not UTF-8 count as one each)."""
-    proc = subprocess.run([*_GIT, "-C", str(repo), "show", f"{head}:{path}"], capture_output=True,
-                          stdin=subprocess.DEVNULL, env=_env(), shell=False, check=False)
+    """Characters in *path* at *head*, decoded like core `file_at` (bytes that are not UTF-8 count as one each)."""
+    proc = subprocess.run([*GIT_ARGV, "-C", str(repo), "show", f"{head}:{path}"], capture_output=True,
+                          stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False)
     return len(proc.stdout.decode("utf-8", errors="replace"))
 
 
@@ -468,8 +461,8 @@ def dir_name(src: Path) -> str:
 
 
 def _import_git(dest: Path, src: Path, *args: str) -> subprocess.CompletedProcess:
-    proc = subprocess.run([*_GIT, "-C", str(dest), *args], capture_output=True, text=True,
-                          stdin=subprocess.DEVNULL, env=dict(_env(), **_IMPORT_ENV), shell=False, check=False)
+    proc = subprocess.run([*GIT_ARGV, "-C", str(dest), *args], capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, env=dict(git_env(), **_IMPORT_ENV), shell=False, check=False)
     ok = proc.returncode == 0 or (args[0] == "diff" and proc.returncode == 1)  # diff --quiet: 1 = changed
     if not ok:
         raise TargetError(f"git {args[0]} in the copy of {src} failed: {proc.stderr.strip()}")
@@ -561,8 +554,8 @@ def snapshot_head(target: TargetInfo, dest: Path) -> Path:
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
     proc = subprocess.run(
-        [*_GIT, "-C", target.repo_path, "archive", "--format=tar", target.head_sha],
-        capture_output=True, stdin=subprocess.DEVNULL, env=_env(), shell=False, check=False,
+        [*GIT_ARGV, "-C", target.repo_path, "archive", "--format=tar", target.head_sha],
+        capture_output=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False,
     )
     if proc.returncode != 0:
         raise TargetError(f"git archive {target.head_sha[:12]} failed: {proc.stderr.decode(errors='replace').strip()}")

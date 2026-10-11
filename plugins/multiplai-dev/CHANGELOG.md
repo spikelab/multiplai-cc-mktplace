@@ -17,6 +17,21 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.34.4] - 2026-10-11
+
+### Changed
+- review and codebase-walkthrough check a citation with multiplai-core
+  0.18.0's `check_quote` instead of each carrying its own copy of the
+  `git show` reader and the quote match. What a gate accepts or rejects is
+  unchanged: review still rejects with "path not at head" and
+  `action="reject"`, and walkthrough still checks that a path names a known
+  repo before anything else. One difference: a line range that is not valid
+  (start below 1, or end before start) now reads as no lines, so a quote
+  cited there fails; both pipelines' models already refuse such ranges.
+- Both pipelines' `target.py` take `GIT_ARGV` and `git_env` from
+  multiplai-core in place of their own identical `_GIT` and `_env`.
+- `uv.lock` takes multiplai-core v0.18.0.
+
 ## [0.34.3] - 2026-10-11
 
 ### Changed
