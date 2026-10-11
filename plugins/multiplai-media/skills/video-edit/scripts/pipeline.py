@@ -215,6 +215,32 @@ def cmd_snap(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mark(text: str) -> tuple[float, float, float]:
+    try:
+        t, x, y = (float(v) for v in text.split(","))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--mark wants T,X,Y (seconds, then 0..1), got {text!r}") from None
+    if t < 0 or not (0 <= x <= 1 and 0 <= y <= 1):
+        raise argparse.ArgumentTypeError(f"--mark {text!r}: T must be >= 0 and X, Y within 0..1")
+    return t, x, y
+
+
+def cmd_cursor(args: argparse.Namespace) -> int:
+    """Write the clicks found in a screen recording, for segment `follow` targets."""
+    import json
+    from stages import cursor
+    proxy = prep_stage.cache_dir_for(args.source) / "proxy_720p.mp4"
+    if not proxy.exists():
+        raise SystemExit(f"{proxy} not found — run `pipeline.py prep {args.source}` first.")
+    found = cursor.find(proxy, args.mark)
+    out = Path(args.out).resolve() if args.out else proxy.parent / "clicks.json"
+    out.write_text(json.dumps(found, indent=1))
+    sure = sum(c["sure"] for c in found["clicks"])
+    print(f"CLICKS: {out} ({len(found['clicks'])} clicks, {sure} matched a pointer picture; "
+          f"{found['pictures']} pictures)")
+    return 0
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Spec-check a rendered MP4 (and optionally its EDL's text placement)."""
     from stages import platform
@@ -395,6 +421,13 @@ def main() -> int:
     sn.add_argument("start", type=float)
     sn.add_argument("end", type=float)
     sn.set_defaults(func=cmd_snap)
+
+    cu = sub.add_parser("cursor", help="find where the pointer clicks in a screen recording (for follow)")
+    cu.add_argument("source", help="the source recording prep ran on")
+    cu.add_argument("--mark", type=_mark, action="append", default=[], metavar="T,X,Y",
+                    help="the pointer at T seconds is at X,Y (0..1), e.g. from a review-page comment; repeat")
+    cu.add_argument("--out", default=None, help="output JSON (default: clicks.json in the prep cache)")
+    cu.set_defaults(func=cmd_cursor)
 
     ck = sub.add_parser("check", help="spec-check a rendered MP4 for a platform preset")
     ck.add_argument("mp4", help="rendered video")

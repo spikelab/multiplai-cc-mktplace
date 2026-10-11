@@ -5,7 +5,7 @@ import shlex
 import subprocess
 import tempfile
 from pathlib import Path
-from stages import brand as brand_mod, layouts
+from stages import brand as brand_mod, follow, layouts
 from stages.edl import EDL, Logo, Overlay
 
 
@@ -81,7 +81,21 @@ def _zoom_filter(zoom, W: int, H: int) -> str:
     return f"crop={crop_w}:{crop_h}:{x}:{y}"
 
 
-def _segment_video(edl: EDL, seg, words: list[dict] | None, bg: str) -> str:
+def _follow_filters(seg, fps: int, source_size: tuple[int, int] | None) -> list[str]:
+    """`fps` then the camera's `zoompan`, at the source size so the framing
+    stage that follows sees the frame it always sees. Lead and hold are in
+    output seconds; this runs before the speed change, so they are scaled to
+    source seconds here."""
+    if source_size is None:
+        raise ValueError("follow needs the source size; probe it before building the graph")
+    f = seg.follow
+    targets = [(k.t - seg.src_start, k.x, k.y) for k in f.targets]
+    cam = follow.keys(targets, f.scale, f.lead * seg.speed, f.hold * seg.speed, seg.src_duration)
+    return [f"fps={fps}", follow.zoompan_filter(cam, fps, *source_size)]
+
+
+def _segment_video(edl: EDL, seg, words: list[dict] | None, bg: str,
+                   source_size: tuple[int, int] | None = None) -> str:
     """The segment's video filtergraph, from [0:v] to [v].
 
     A framing that is a single chain stays one linear chain (so a screencast
@@ -92,6 +106,8 @@ def _segment_video(edl: EDL, seg, words: list[dict] | None, bg: str) -> str:
     pre = [f"trim=duration={seg.src_duration}", "setpts=PTS-STARTPTS"]
     if seg.zoom:
         pre.append(_zoom_filter(seg.zoom, W, H))
+    if seg.follow:
+        pre += _follow_filters(seg, fps, source_size)
     post = []
     if seg.speed != 1.0:
         post.append(f"setpts=PTS/{seg.speed}")
@@ -155,14 +171,15 @@ def _audio_gaps(edl: EDL) -> list[dict]:
 
 
 def _cut_segments(edl: EDL, work: Path, words: list[dict] | None = None,
-                  bg: str = layouts.DEFAULT_BG) -> list[Path]:
+                  bg: str = layouts.DEFAULT_BG,
+                  source_size: tuple[int, int] | None = None) -> list[Path]:
     out = []
     gaps = _audio_gaps(edl)
     for i, seg in enumerate(edl.segments):
         p = work / f"seg{i:02d}.mp4"
         mute = seg.mute or seg.speed > 4.0
         out_dur = seg.duration
-        video = _segment_video(edl, seg, words, bg)
+        video = _segment_video(edl, seg, words, bg, source_size)
 
         if mute:
             filter_complex = (
@@ -327,7 +344,7 @@ def _xfade_duration_for(edl: EDL, segment_index: int) -> float:
 
 def _needs_source_size(edl: EDL) -> bool:
     return (bool(edl.layout) or edl.output.fit != "pad" or edl.output.height > edl.output.width
-            or any(s.fit for s in edl.segments))
+            or any(s.fit or s.follow for s in edl.segments))
 
 
 def probe_size(path: str) -> tuple[int, int]:
@@ -470,7 +487,8 @@ def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
     work.mkdir(parents=True, exist_ok=True)
 
     subs = _burn_subtitles(edl, words, brand, work)
-    clips = _cut_segments(edl, work, words, bg=brand.background if edl.brand else layouts.DEFAULT_BG)
+    clips = _cut_segments(edl, work, words, bg=brand.background if edl.brand else layouts.DEFAULT_BG,
+                          source_size=source_size)
     title = _render_title(edl, work)
     filter_complex, cmd_inputs, vlabel, alabel = build_filter_complex(edl, clips, title)
     if edl.overlays:

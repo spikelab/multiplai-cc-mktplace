@@ -2,8 +2,8 @@
 #
 # These are CLI tools, not imports: prep.py shells out to the `scenedetect`
 # binary (shutil.which) alongside ffmpeg's silencedetect/blackdetect filters.
-# No module here imports scenedetect, cv2 or numpy — which is why the skill
-# previously had no declared dependencies at all and instead grew a 229MB
+# Only stages/cursor.py imports cv2 (and numpy, which comes with it); the
+# skill once had no declared dependencies at all and instead grew a 229MB
 # bootstrap .venv nobody tracked. Declaring them here puts `scenedetect` on the
 # shared environment's PATH and retires bootstrap.sh.
 #
