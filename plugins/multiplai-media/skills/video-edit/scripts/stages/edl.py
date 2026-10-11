@@ -182,6 +182,18 @@ class Headline:
     end: float = 3.0
 
 
+SFX_MIN_GAP_S = 0.5            # at most one sound effect per half second
+SFX_BUSY_EVERY_S = 3.0         # warn when sounds come more often than this on average
+
+
+@dataclass
+class Sfx:
+    """A short sound effect (stages/sfx.py) played from output time `at`."""
+    at: float                   # output seconds
+    sound: str                  # a preset name (click, pop, tick, whoosh, chime) or an audio file
+    volume_db: float = -14.0    # gain on the file, which peaks near 0 dBFS
+
+
 @dataclass
 class EDL:
     source: str
@@ -197,6 +209,7 @@ class EDL:
     headline: Optional[Headline] = None
     brand: Optional[str] = None         # path to a brand.json (stages/brand.py)
     overlays: list[Overlay] = field(default_factory=list)
+    sfx: list[Sfx] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: str | Path) -> "EDL":
@@ -243,6 +256,7 @@ class EDL:
             headline=Headline(**d["headline"]) if d.get("headline") else None,
             brand=d.get("brand"),
             overlays=[mk_overlay(dict(o)) for o in d.get("overlays", [])],
+            sfx=[Sfx(**s) for s in d.get("sfx", [])],
         )
 
     def xfade_before(self, segment_index: int) -> float:
@@ -281,6 +295,7 @@ class EDL:
         warnings: list[str] = []
         warnings += self._validate_framing(source_size, words)
         self._validate_overlays()
+        warnings += self._validate_sfx()
         warnings += [f"overlay {i} ({Path(o.html).name}) names no style; ask the user which style to follow"
                      for i, o in enumerate(self.overlays) if not o.style]
 
@@ -352,6 +367,34 @@ class EDL:
                     raise ValueError(f"overlays {i} and {j} cover the same part of the frame at the same "
                                      f"time ({max(a.start, b.start):.2f}–{min(a.end, b.end):.2f}s); "
                                      "move one, shorten one, or give them separate regions.")
+
+    def _validate_sfx(self) -> list[str]:
+        """Each sound starts inside the video, names a preset or a file that
+        exists, and is at least SFX_MIN_GAP_S after the one before. Warns
+        when sounds come more often than once every SFX_BUSY_EVERY_S on
+        average: a first version with sounds everywhere is the usual mistake."""
+        if not self.sfx:
+            return []
+        from stages import sfx as sfx_mod   # sfx imports this module
+        total = self.output_duration()
+        for i, s in enumerate(self.sfx):
+            if not 0 <= s.at < total:
+                raise ValueError(f"sfx {i} ({s.sound}) at {s.at}s must start within the video "
+                                 f"(0–{total:.2f}s).")
+            try:
+                sfx_mod.resolve(s.sound)
+            except (ValueError, FileNotFoundError) as e:
+                raise ValueError(f"sfx {i}: {e}") from None
+        times = sorted(s.at for s in self.sfx)
+        for a, b in zip(times, times[1:]):
+            if b - a < SFX_MIN_GAP_S:
+                raise ValueError(f"sound effects at {a}s and {b}s are {b - a:.2f}s apart; keep them at "
+                                 f"least {SFX_MIN_GAP_S}s apart (drop one or move it).")
+        if total > 0 and len(self.sfx) > total / SFX_BUSY_EVERY_S:
+            return [f"{len(self.sfx)} sound effects in {total:.0f}s is more than one every "
+                    f"{SFX_BUSY_EVERY_S:.0f}s on average; that tends to sound busy. Keep the "
+                    "ones on clicks and entrances that matter and drop the rest."]
+        return []
 
     def _validate_focus_keys(self, i: int, s: Segment) -> None:
         keys = s.focus if isinstance(s.focus, list) else []

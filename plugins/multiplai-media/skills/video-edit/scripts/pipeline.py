@@ -6,6 +6,7 @@ Subcommands (see --help for all):
   correct <cache> <fixes.json>  Fix misheard words before they become captions.
   proof <mp4> --edl E --out P   One PNG of the reel, moment by moment, to check before reporting.
   lint-overlay <page.html>      Check an overlay page for what breaks a seeked render.
+  sfx-suggest <edl.json>        A click on each follow target and a pop on each overlay, as an `sfx` list.
   shots <cache> --from --to     The shots in a range, 3 frames each, for framing a broadcast feed.
   make <source> --prompt TEXT   Natural-language → EDL → render (not yet implemented).
 """
@@ -70,6 +71,19 @@ def cmd_lint_overlay(args: argparse.Namespace) -> int:
     if not findings:
         print(f"✓ {page.name}: no problems found")
     return 1 if overlay_lint.errors(findings) else 0
+
+
+def cmd_sfx_suggest(args: argparse.Namespace) -> int:
+    """Print an `sfx` list for an EDL: a sound at each follow target and at
+    each overlay's start, in output time. Nothing is written; the list goes
+    to stdout as JSON, and what was skipped or dropped goes to stderr."""
+    import json
+    from stages import sfx
+    kept, notes = sfx.suggest(EDL.load(args.edl), clicks=args.clicks, overlays=args.overlays)
+    print(json.dumps(kept, indent=1))
+    for n in notes:
+        print(f"⚠ {n}", file=sys.stderr)
+    return 0
 
 
 def cmd_prep(args: argparse.Namespace) -> int:
@@ -372,6 +386,12 @@ def main() -> int:
                     help="the overlay's EDL mode (default keyed, as in the EDL)")
     lo.add_argument("--key-color", default="#00FF00", help="keyed mode: the key colour (default #00FF00)")
     lo.set_defaults(func=cmd_lint_overlay)
+
+    sx = sub.add_parser("sfx-suggest", help="print an sfx list: a sound on each follow target and each overlay start")
+    sx.add_argument("edl", help="path to EDL JSON")
+    sx.add_argument("--clicks", default="click", help="sound for follow targets (default click)")
+    sx.add_argument("--overlays", default="pop", help="sound for overlay starts (default pop)")
+    sx.set_defaults(func=cmd_sfx_suggest)
 
     pp = sub.add_parser("prep", help="detect cuts + transcribe + write context bundle")
     pp.add_argument("source", help="path to screen recording")
