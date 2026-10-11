@@ -175,7 +175,7 @@ def _find(page: Any, text: str) -> tuple[Box | None, str | None]:
 
 def capture(url: str, out_dir: Path, highlight: str | None = None,
             width: int = DEFAULT_WIDTH, height: int = DEFAULT_HEIGHT, full_page: bool = False,
-            launch: Callable[[], Any] = _launch, now: Callable[[], str] = _now) -> Shot:
+            launch: Callable[[], Any] | None = None, now: Callable[[], str] = _now) -> Shot:
     """Screenshot `url` and, with `highlight`, record where that text is.
 
     Raises CaptureError with code 2 when the page answers with an HTTP error,
@@ -184,7 +184,7 @@ def capture(url: str, out_dir: Path, highlight: str | None = None,
     written, and the Shot carries a warning; the CLI exits 3.
     """
     warnings: list[str] = []
-    browser = launch()
+    browser = (launch or _launch)()
     try:
         page = browser.new_page(width, height)
         try:
