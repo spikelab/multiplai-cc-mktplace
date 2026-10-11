@@ -5,6 +5,7 @@ Subcommands (see --help for all):
   render <edl.json>             Deterministic render (walking skeleton).
   correct <cache> <fixes.json>  Fix misheard words before they become captions.
   proof <mp4> --edl E --out P   One PNG of the reel, moment by moment, to check before reporting.
+  lint-overlay <page.html>      Check an overlay page for what breaks a seeked render.
   shots <cache> --from --to     The shots in a range, 3 frames each, for framing a broadcast feed.
   make <source> --prompt TEXT   Natural-language → EDL → render (not yet implemented).
 """
@@ -56,6 +57,19 @@ def cmd_render(args: argparse.Namespace) -> int:
     part.replace(out)
     print(f"✓ wrote {out} ({out.stat().st_size/1e6:.1f} MB)")
     return 0
+
+
+def cmd_lint_overlay(args: argparse.Namespace) -> int:
+    from stages import overlay_lint
+    page = Path(args.page)
+    findings = overlay_lint.lint(page.read_text(encoding="utf-8"), mode=args.mode,
+                                 key_color=args.key_color,
+                                 key_reach=composite.KEYED_OUT_BELOW)
+    for f in findings:
+        print(f"{page.name}: {f}")
+    if not findings:
+        print(f"✓ {page.name}: no problems found")
+    return 1 if overlay_lint.errors(findings) else 0
 
 
 def cmd_prep(args: argparse.Namespace) -> int:
@@ -201,6 +215,32 @@ def cmd_snap(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mark(text: str) -> tuple[float, float, float]:
+    try:
+        t, x, y = (float(v) for v in text.split(","))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--mark wants T,X,Y (seconds, then 0..1), got {text!r}") from None
+    if t < 0 or not (0 <= x <= 1 and 0 <= y <= 1):
+        raise argparse.ArgumentTypeError(f"--mark {text!r}: T must be >= 0 and X, Y within 0..1")
+    return t, x, y
+
+
+def cmd_cursor(args: argparse.Namespace) -> int:
+    """Write the clicks found in a screen recording, for segment `follow` targets."""
+    import json
+    from stages import cursor
+    proxy = prep_stage.cache_dir_for(args.source) / "proxy_720p.mp4"
+    if not proxy.exists():
+        raise SystemExit(f"{proxy} not found — run `pipeline.py prep {args.source}` first.")
+    found = cursor.find(proxy, args.mark)
+    out = Path(args.out).resolve() if args.out else proxy.parent / "clicks.json"
+    out.write_text(json.dumps(found, indent=1))
+    sure = sum(c["sure"] for c in found["clicks"])
+    print(f"CLICKS: {out} ({len(found['clicks'])} clicks, {sure} matched a pointer picture; "
+          f"{found['pictures']} pictures)")
+    return 0
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Spec-check a rendered MP4 (and optionally its EDL's text placement)."""
     from stages import platform
@@ -326,6 +366,13 @@ def main() -> int:
     r.add_argument("--music-volume-db", type=float, default=None, help="bed volume in dB (default -18)")
     r.set_defaults(func=cmd_render)
 
+    lo = sub.add_parser("lint-overlay", help="check an overlay page before rendering it (render runs this too)")
+    lo.add_argument("page", help="the overlay's HTML file")
+    lo.add_argument("--mode", default="keyed", choices=["alpha", "panel", "keyed"],
+                    help="the overlay's EDL mode (default keyed, as in the EDL)")
+    lo.add_argument("--key-color", default="#00FF00", help="keyed mode: the key colour (default #00FF00)")
+    lo.set_defaults(func=cmd_lint_overlay)
+
     pp = sub.add_parser("prep", help="detect cuts + transcribe + write context bundle")
     pp.add_argument("source", help="path to screen recording")
     pp.add_argument("--prompt-hint", default=None,
@@ -374,6 +421,13 @@ def main() -> int:
     sn.add_argument("start", type=float)
     sn.add_argument("end", type=float)
     sn.set_defaults(func=cmd_snap)
+
+    cu = sub.add_parser("cursor", help="find where the pointer clicks in a screen recording (for follow)")
+    cu.add_argument("source", help="the source recording prep ran on")
+    cu.add_argument("--mark", type=_mark, action="append", default=[], metavar="T,X,Y",
+                    help="the pointer at T seconds is at X,Y (0..1), e.g. from a review-page comment; repeat")
+    cu.add_argument("--out", default=None, help="output JSON (default: clicks.json in the prep cache)")
+    cu.set_defaults(func=cmd_cursor)
 
     ck = sub.add_parser("check", help="spec-check a rendered MP4 for a platform preset")
     ck.add_argument("mp4", help="rendered video")

@@ -125,6 +125,9 @@ candidates**. For each:
 Rules for a good clip:
 
 - Target 20–60 s. Reels over 90 s get a warning from `check`; over 180 s fail.
+- **The first 3–5 s carry one hook**: a striking number, a pain the viewer
+  has, or a question. Never open on a description of the company or the
+  guest. (HyperFrames `skills/product-launch-video/references/story-design.md:67`)
 - The first spoken line must work without context, or the headline must
   supply the context ("The one habit that doubled our sales").
 - Skip filler, false starts and the first take of a retake.
@@ -242,8 +245,22 @@ Captions are built from the (corrected) transcript words, timed to the
 output with the cuts and speeds applied. A line holds at most `max_chars`
 (22) characters; `words_per_line` (5) is a soft cap. Lines break after a
 comma, semicolon or colon where they can, and a single word is never left
-alone on a line unless it ends a sentence or a pause follows it. Check the
-timing with:
+alone on a line unless it ends a sentence or a pause follows it. A line
+spoken in under 0.5 s joins its neighbour in the same sentence when the two
+fit. A line appears 0.08 s before its first word and stays up to 0.6 s
+after its last, so it never flashes. (HyperFrames
+`skills/embedded-captions/references/caption-grouping.md:27-46`)
+
+- **Keep the caption band 600–700 px above the bottom** of a 1080×1920 reel,
+  clear of the platform's buttons and text. The default `position_y` (0.68)
+  puts the line's centre 614 px from the bottom; move it only between 0.635
+  and 0.6875 unless a face is in the way. (HyperFrames
+  `skills/embedded-captions/references/rail.md:19`)
+- `highlight` colours the spoken word. A graphic that also pops the spoken
+  word (an overlay page) scales it at most 1.1×: more reads as a jump.
+  (`rail.md:50`)
+
+Check the timing with:
 
 ```bash
 P timeline <outdir>/edl/clip-01.edl.json

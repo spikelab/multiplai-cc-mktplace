@@ -40,6 +40,23 @@ class FocusKey:
 
 
 @dataclass
+class FollowTarget:
+    """A point the camera visits: at source time t, centred on (x, y)."""
+    t: float                    # source seconds, inside the segment
+    x: float = 0.5              # normalized [0..1] in the source frame
+    y: float = 0.5
+
+
+@dataclass
+class Follow:
+    """Push in on each target and pan between them (see stages/follow.py)."""
+    targets: list[FollowTarget] = field(default_factory=list)
+    scale: float = 1.4          # zoom while on a target
+    lead: float = 0.6           # output seconds the move takes, ending on the target's time
+    hold: float = 1.2           # output seconds the camera stays after it
+
+
+@dataclass
 class Segment:
     src_start: float
     src_end: float
@@ -51,6 +68,7 @@ class Segment:
     focus: Optional[Union[Focus, list[FocusKey]]] = None
     frame: Optional[str] = None     # "stack" | a panel name ("A", "B") | "speaker"
     fit: Optional[str] = None       # "pad" | "blur" | "crop": overrides output.fit for this segment
+    follow: Optional[Follow] = None  # push in on clicks; see stages/follow.py
 
     @property
     def src_duration(self) -> float:
@@ -131,16 +149,19 @@ class Region:
     h: int
 
 
-OVERLAY_MODES = ("panel", "keyed")
+OVERLAY_MODES = ("alpha", "panel", "keyed")
 
 
 @dataclass
 class Overlay:
     """A motion graphic (an HTML page, stages/overlay.py) shown from start to end.
 
-    `panel` covers its region with the page as rendered; `keyed` removes the
-    page's `key_color` background first (colorkey + despill), so the video
-    shows around the graphic. Without a region it covers the whole frame.
+    `alpha` lays the page over the video with its real transparency; `panel`
+    covers its region with the page as rendered; `keyed` removes the page's
+    `key_color` background first (colorkey + despill), so the video shows
+    around the graphic. An overlay without a mode is `keyed`, which is what
+    pages written before `alpha` existed draw for. Without a region it covers
+    the whole frame.
     """
     html: str
     start: float                # output time
@@ -187,7 +208,11 @@ class EDL:
         def mk_segment(s: dict) -> Segment:
             z = s.pop("zoom", None)
             f = s.pop("focus", None)
+            fo = s.pop("follow", None)
             seg = Segment(**s)
+            if fo is not None:
+                fo = dict(fo)
+                seg.follow = Follow(targets=[FollowTarget(**k) for k in fo.pop("targets", [])], **fo)
             if z:
                 seg.zoom = Zoom(**z)
             if isinstance(f, list):
@@ -346,6 +371,33 @@ class EDL:
         if any(b <= a for a, b in zip(times, times[1:])):
             raise ValueError(f"segment {i}: focus key times must go up: {times}.")
 
+    def _validate_follow(self, i: int, s: Segment) -> None:
+        f = s.follow
+        assert f is not None
+        if not f.targets:
+            raise ValueError(f"segment {i} has follow with no targets; give at least one {{t, x, y}}.")
+        if s.zoom:
+            raise ValueError(f"segment {i} has both zoom and follow; follow does its own zooming, "
+                             "so drop the zoom.")
+        if s.frame is not None or (s.fit or self.output.fit) == "crop":
+            raise ValueError(f"segment {i}: follow zooms the whole source frame, so it needs fit "
+                             "\"pad\" or \"blur\" and no frame; a crop or a panel would cut "
+                             "the clicked point out of the picture.")
+        if not 1.0 < f.scale <= 3.0:
+            raise ValueError(f"segment {i}: follow scale {f.scale} must be above 1 and at most 3.")
+        if f.lead <= 0 or f.hold < 0:
+            raise ValueError(f"segment {i}: follow lead must be above 0 and hold at least 0.")
+        for k in f.targets:
+            if not s.src_start <= k.t <= s.src_end:
+                raise ValueError(f"segment {i}: follow target at t={k.t} is outside the segment "
+                                 f"({s.src_start}–{s.src_end}).")
+            if not (0 <= k.x <= 1 and 0 <= k.y <= 1):
+                raise ValueError(f"segment {i}: follow target at t={k.t} has x={k.x}, y={k.y}; "
+                                 "both must be 0–1.")
+        times = [k.t for k in f.targets]
+        if times != sorted(times):
+            raise ValueError(f"segment {i}: follow target times must go up: {times}.")
+
     def _validate_framing(self, source_size: Optional[tuple[int, int]],
                           words: Optional[list[dict]]) -> list[str]:
         warnings: list[str] = []
@@ -362,6 +414,8 @@ class EDL:
         for i, s in enumerate(self.segments):
             if isinstance(s.focus, list):
                 self._validate_focus_keys(i, s)
+            if s.follow is not None:
+                self._validate_follow(i, s)
         for t in self.transitions:
             if t.duration < 0:
                 raise ValueError(f"transition after {t.after} has a negative duration ({t.duration}).")

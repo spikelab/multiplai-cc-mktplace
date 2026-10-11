@@ -2,8 +2,8 @@
 #
 # These are CLI tools, not imports: prep.py shells out to the `scenedetect`
 # binary (shutil.which) alongside ffmpeg's silencedetect/blackdetect filters.
-# No module here imports scenedetect, cv2 or numpy — which is why the skill
-# previously had no declared dependencies at all and instead grew a 229MB
+# Only stages/cursor.py imports cv2 (and numpy, which comes with it); the
+# skill once had no declared dependencies at all and instead grew a 229MB
 # bootstrap .venv nobody tracked. Declaring them here puts `scenedetect` on the
 # shared environment's PATH and retires bootstrap.sh.
 #
@@ -18,6 +18,11 @@ dependencies = [
     "opencv-python-headless>=4.9",
     "tqdm>=4.66",
     "click>=8.1",
+    # Overlays render in headless Chromium driven by Playwright. Keep this pin
+    # equal to PLAYWRIGHT_VERSION in the multiplai-container Dockerfile: each
+    # Playwright release expects one Chromium build, and the image ships the
+    # build that version expects under PLAYWRIGHT_BROWSERS_PATH.
+    "playwright==1.63.0",
 ]
 
 [tool.uv]

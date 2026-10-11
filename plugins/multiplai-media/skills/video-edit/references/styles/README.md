@@ -27,7 +27,7 @@ palette:
   text: "#FFFFFF"
   muted: "#9AA7BD"
   accent: "#3DDC97"              # one accent; a second only if the style says so
-  key: "#00FF00"                 # keyed overlays: the page background, removed at render
+  key: "#00FF00"                 # keyed overlays only: the page background, removed at render
 fonts:
   display: "Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif"
   body:    "Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif"
@@ -60,23 +60,39 @@ replace the palette and fonts above; the shape, motion and layout rules stay.
 
 ## Page rules (every style)
 
-The renderer (`stages/overlay.py`) screenshots the page at every frame time
-after seeking its animations, so a page must:
+The renderer (`stages/overlay.py`) seeks the page to every frame's time and
+captures it, so a page must:
 
-- animate only with **CSS animations or the Web Animations API** — no timers,
-  no `requestAnimationFrame`, no video, no canvas loops: those cannot be
-  seeked and will look frozen or jump;
+- animate with CSS animations, the Web Animations API, GSAP or lottie-web,
+  or a `requestAnimationFrame` loop that reads the time it is given: the
+  page's clock (`Date`, `performance.now`, `requestAnimationFrame`) is the
+  overlay's time, starting at 0. No CSS `transition` (it ignores seeking),
+  no `infinite` iteration count, no video;
+- give the same frame for the same time: no `Math.random`,
+  `crypto.getRandomValues`, `Date.now` or `new Date()` (it would read
+  January 1970);
 - use `animation-fill-mode: forwards` (or `both`) so elements stay put after
   they arrive;
+- animate `transform` and `opacity`, not `width`, `height`, `left`, `top`,
+  `font-size` or `letter-spacing`, which stutter;
 - be sized to the overlay's region exactly (`html, body { width: Wpx;
   height: Hpx; overflow: hidden; margin: 0 }`);
-- be one self-contained file: inline CSS, inline SVG, images as `data:` URIs.
-  Nothing loads from the network;
-- for `mode: "keyed"`, fill the background with the style's `key` colour and
-  keep that colour (and anything close to it) out of the graphic itself;
+- be one self-contained file: inline CSS, inline SVG, images and fonts as
+  `data:` URIs, and GSAP or lottie-web inlined in a `<script
+  data-library="…">`. Nothing loads from the network;
+- name a font the page embeds with `@font-face`, or one installed where it
+  renders, before any generic family. The style files name their preferred
+  font first and widely installed fallbacks after it;
+- for `mode: "alpha"` (over the video), leave the background to the
+  renderer, which makes it transparent;
 - for `mode: "panel"`, fill the background with `palette.background`: the
-  whole region is shown.
+  whole region is shown;
+- for `mode: "keyed"`, fill the background with the style's `key` colour and
+  keep that colour (and anything close to it) out of the graphic itself.
 
-Render time is about 5 s per second of overlay at 30 fps (measured on a
-1080-wide lower third and a 900×560 panel), so keep each overlay to the
-seconds it is needed.
+`pipeline.py lint-overlay <page>` checks these rules; `render` runs the same
+checks and refuses a page with an error.
+
+Render time is about 1.3 s per second of overlay at 1080×1920 and 30 fps on
+one page, 0.75 s with four pages at once (measured on 10 cores), so keep each
+overlay to the seconds it is needed.
