@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import hashlib
 
@@ -2063,15 +2064,34 @@ def _write_mutation_report(config: BuildConfig, text: str) -> str | None:
                                "mutation report")
 
 
+class _RoundOutcome(NamedTuple):
+    """What the survivor round did. `discard_failed` means the round's edits
+    are still in the tree — the caller must fail the step and commit nothing,
+    or the next whole-tree commit would sweep them onto the build branch."""
+    note: str
+    source_edited: bool = False
+    sha: str | None = None
+    discard_failed: bool = False
+
+
 async def _run_mutation_round(
     config: BuildConfig, first: MutationResult, rewind_to: str,
-) -> tuple[str, bool, str | None]:
-    """The one survivor round. Returns (what happened, source_edited, round sha).
+) -> _RoundOutcome:
+    """The one survivor round.
 
-    `source_edited` True means the agent changed a non-test file — the round
-    is discarded and the caller fails the step. A red suite or a failed agent
-    discards the round and keeps the first-run result (sha None).
+    `source_edited` means the agent changed a non-test file — the round is
+    discarded and the caller fails the step. A red suite or a failed agent
+    discards the round and keeps the first-run result (sha None). Any discard
+    that git refuses sets `discard_failed`.
     """
+    def _discard(note_ok: str, note_failed: str, *, source_edited: bool = False) -> _RoundOutcome:
+        if git_ops.discard_to(config.project_dir, rewind_to, "mutation survivor round"):
+            return _RoundOutcome(note_ok, source_edited=source_edited)
+        return _RoundOutcome(
+            note_failed + f" The round's edits could NOT be discarded back to "
+            f"{rewind_to[:8]}, so nothing was committed — inspect the tree.",
+            source_edited=source_edited, discard_failed=True)
+
     before = _snapshot_source_files(config)
     result = await run_mutation_test_writer(
         survivors=_format_survivors(config, first),
@@ -2082,10 +2102,10 @@ async def _run_mutation_round(
     )
     if not result.success:
         reason = "timeout" if result.timed_out else (result.error or "agent failed")
-        discarded = git_ops.discard_to(config.project_dir, rewind_to, "mutation survivor round")
-        return (f"The test writer failed ({reason}); its edits were "
-                f"{'discarded' if discarded else 'NOT discarded'} and the first-run "
-                "score stands.", False, None)
+        return _discard(
+            f"The test writer failed ({reason}); its edits were discarded and the "
+            "first-run score stands.",
+            f"The test writer failed ({reason}); its edits were NOT discarded.")
 
     after = _snapshot_source_files(config)
     if before is None or after is None:
@@ -2096,27 +2116,28 @@ async def _run_mutation_round(
     if changed is None or changed:
         detail = ("the source snapshot could not be taken" if changed is None
                   else "non-test files changed: " + ", ".join(changed[:20]))
-        git_ops.discard_to(config.project_dir, rewind_to, "mutation survivor round")
-        return (f"The test writer's round was discarded: {detail}.", True, None)
+        return _discard(f"The test writer's round was discarded: {detail}.",
+                        f"The test writer's round must be discarded: {detail}.",
+                        source_edited=True)
 
     gate = integration_gate(config.test_command, config.project_dir)
     if not gate.passed:
-        discarded = git_ops.discard_to(config.project_dir, rewind_to, "mutation survivor round")
-        return (f"The new tests left the suite red ({gate.reason[:300]}); the round was "
-                f"{'discarded' if discarded else 'NOT discarded'} and the first-run "
-                "score stands.", False, None)
+        return _discard(
+            f"The new tests left the suite red ({gate.reason[:300]}); the round was "
+            "discarded and the first-run score stands.",
+            f"The new tests left the suite red ({gate.reason[:300]}); the round was "
+            "NOT discarded.")
 
     sha = git_ops.commit_tree(config.project_dir, "test(mutation): kill surviving mutants",
                               "mutation survivor round")
     if sha is None:
         if git_ops.tree_is_clean(config.project_dir):
-            return ("The test writer changed no files; the first-run score stands.",
-                    False, None)
-        git_ops.discard_to(config.project_dir, rewind_to, "mutation survivor round")
-        return ("The round's tests could not be committed and were discarded; "
-                "the first-run score stands.", False, None)
-    return (f"The test writer added or edited tests, committed as {sha[:8]} "
-            "(`test(mutation): kill surviving mutants`).", False, sha)
+            return _RoundOutcome("The test writer changed no files; the first-run score stands.")
+        return _discard("The round's tests could not be committed and were discarded; "
+                        "the first-run score stands.",
+                        "The round's tests could not be committed.")
+    return _RoundOutcome(f"The test writer added or edited tests, committed as {sha[:8]} "
+                         "(`test(mutation): kill surviving mutants`).", sha=sha)
 
 
 async def _run_mutation(
@@ -2191,20 +2212,34 @@ async def _run_mutation(
             return False
         progress.log_agent("MutationTestWriter", "survivors",
                            f"{len(first.survivors)} surviving mutant(s)")
-        round_note, source_edited, round_sha = await _run_mutation_round(
-            config, first, rewind_to)
-        if source_edited:
+        outcome = await _run_mutation_round(config, first, rewind_to)
+        round_note = outcome.note
+        if outcome.discard_failed:
+            # No report: writing it means a whole-tree commit, which would put
+            # the round's red tests or source edits onto the build branch.
+            return _fail(round_note)
+        if outcome.source_edited:
             _write_mutation_report(config, render_report(
                 first=first, final=first, round_note=round_note,
                 min_score=config.mutation.min_score, passed=False))
             return _fail(round_note)
-        if round_sha:
+        if outcome.sha:
             second = run_mutation(config, baseline, paths)
+            if second.discard_failed:
+                return _fail(f"the second cosmic-ray run left the tree changed and "
+                             f"it could not be discarded: {second.error}")
             if second.ok:
                 final = second
             else:
                 round_note += (f" The second cosmic-ray run failed ({second.error}); "
                                "the first-run score stands.")
+
+    # Every path above leaves the tree committed or discarded. If it is not,
+    # the report's whole-tree commit would carry whatever is there onto the
+    # build branch, so stop instead.
+    if not git_ops.tree_is_clean(config.project_dir):
+        return _fail("the tree has uncommitted changes after mutation testing — "
+                     "refusing to commit the report on top of them")
 
     min_score = config.mutation.min_score
     passed = final.score is None or final.score >= min_score

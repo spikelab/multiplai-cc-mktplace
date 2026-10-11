@@ -224,13 +224,35 @@ class TestCosmicRayConfig:
 # --- applicability ---------------------------------------------------------
 
 class TestApplies:
-    def test_python_and_enabled(self):
-        config = BuildConfig(stack="pyproject", test_command="pytest")
+    def test_python_and_enabled(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        config = BuildConfig(project_dir=tmp_path, stack="pyproject", test_command="pytest")
         assert mutation.mutation_applies(config) == (True, "")
 
-    def test_non_python_stack_does_not_apply(self):
-        ok, why = mutation.mutation_applies(BuildConfig(stack="package", test_command="npm test"))
+    @pytest.mark.parametrize("marker, stack", [
+        # pytest.ini is checked before pyproject.toml, so a project with both
+        # records stack "pytest".
+        ("pytest.ini", "pytest"),
+        ("setup.py", "setup"),
+        ("setup.cfg", ""),
+        ("tox.ini", ""),
+        ("requirements.txt", ""),
+        # tdd.test_command set, so discovery never ran and stack stayed "".
+        ("pyproject.toml", ""),
+        # memory_files.stacks names the stack freely.
+        ("pyproject.toml", "python"),
+    ])
+    def test_every_python_project_layout_applies(self, tmp_path, marker, stack):
+        (tmp_path / marker).write_text("")
+        config = BuildConfig(project_dir=tmp_path, stack=stack, test_command="pytest")
+        assert mutation.mutation_applies(config) == (True, "")
+
+    def test_non_python_stack_does_not_apply(self, tmp_path):
+        (tmp_path / "package.json").write_text("{}")
+        ok, why = mutation.mutation_applies(
+            BuildConfig(project_dir=tmp_path, stack="package", test_command="npm test"))
         assert ok is False and "Python" in why
+        assert "pyproject.toml" in why
 
     def test_disabled_does_not_apply(self):
         config = BuildConfig(stack="pyproject", test_command="pytest")
@@ -311,6 +333,32 @@ class TestRunMutation:
             r = mutation.run_mutation(config, baseline, ["src/calc.py"])
         assert r.ok is False and "baseline" in r.error and r.score is None
 
+    def test_a_dirty_tree_that_cannot_be_discarded_is_flagged(self, project):
+        config, _, _ = _setup(project)
+        _, baseline = project
+
+        def _leave_mutant(cwd):
+            (Path(cwd) / "src" / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+
+        _, tool = self._stub_tool(on_exec=_leave_mutant)
+        with patch("build_pipeline.mutation._run_tool", side_effect=tool), \
+             patch("build_pipeline.mutation.git_ops.discard_to", return_value=False):
+            r = mutation.run_mutation(config, baseline, ["src/calc.py"])
+        assert r.ok is False and r.discard_failed is True
+        assert "could NOT be discarded" in r.error
+
+
+class TestRunTool:
+    def test_missing_uvx_names_uv_and_both_ways_out(self, tmp_path):
+        with patch.dict(os.environ, {"PATH": str(tmp_path)}):
+            with pytest.raises(mutation._ToolError) as exc:
+                mutation._run_tool([*mutation._UVX, "cosmic-ray", "init", "a", "b"],
+                                   tmp_path, 10)
+        msg = str(exc.value)
+        assert msg.startswith("could not start uvx")
+        assert "install uv" in msg
+        assert "mutation.enabled: false" in msg
+
 
 DUMP_PENDING = "\n".join([
     _dump_line("a1", "src/calc.py", 2, "core/ReplaceBinaryOperator_Add_Sub", "skipped",
@@ -325,6 +373,10 @@ DUMP_PENDING = "\n".join([
 class TestRunMutationStep:
     @pytest.mark.asyncio
     async def test_non_python_stack_skips_without_running_the_tool(self, project):
+        repo = project[0]
+        (repo / "pyproject.toml").unlink()
+        (repo / "package.json").write_text("{}")
+        _commit_all(repo, "chore: a node project")
         config, state, progress = _setup(project, stack="package")
         with patch("build_pipeline.tdd_engine.run_mutation") as run:
             assert await _run_mutation(config, state, progress) is True
@@ -433,6 +485,99 @@ class TestRunMutationStep:
                             "test(mutation): kill surviving mutants"]
         report = (config.change_dir / "mutation.md").read_text()
         assert "0.70" in report and "1.00" in report
+
+    # --- a discard that fails must fail the step, and commit nothing ------
+
+    def _no_discard(self):
+        return patch("build_pipeline.tdd_engine.git_ops.discard_to", return_value=False)
+
+    def _assert_nothing_committed_after(self, repo, head_before):
+        # The pre-mutation checkpoint is a no-op on the committed fixture, so
+        # HEAD must not have moved, and no report commit swept the tree in.
+        assert _git(repo, "rev-parse", "HEAD") == head_before
+        assert "test(mutation)" not in _git(repo, "log", "--format=%s")
+
+    @pytest.mark.asyncio
+    async def test_failed_agent_whose_edits_cannot_be_discarded_fails_the_step(self, project):
+        config, state, progress = _setup(project, min_score=0.5)
+        repo = project[0]
+        head = _git(repo, "rev-parse", "HEAD")
+
+        async def _agent(**_kw):
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 2\n")
+            return AgentResult(success=False, error="crashed")
+
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(9, 1)), \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent), \
+             self._no_discard():
+            assert await _run_mutation(config, state, progress) is False
+        assert state.tdd.mutation_done is False
+        self._assert_nothing_committed_after(repo, head)
+        assert "NOT discarded" in (repo / "build-progress.md").read_text()
+
+    @pytest.mark.asyncio
+    async def test_red_round_that_cannot_be_discarded_fails_the_step(self, project):
+        config, state, progress = _setup(project, min_score=0.5)
+        repo = project[0]
+        head = _git(repo, "rev-parse", "HEAD")
+
+        async def _agent(**_kw):
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 2\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        red = MagicMock(passed=False, reason="1 failed")
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(9, 1)), \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent), \
+             patch("build_pipeline.tdd_engine.integration_gate", return_value=red), \
+             self._no_discard():
+            assert await _run_mutation(config, state, progress) is False
+        assert state.tdd.mutation_done is False
+        self._assert_nothing_committed_after(repo, head)
+
+    @pytest.mark.asyncio
+    async def test_source_edit_that_cannot_be_discarded_fails_without_committing(self, project):
+        config, state, progress = _setup(project)
+        repo = project[0]
+        head = _git(repo, "rev-parse", "HEAD")
+
+        async def _agent(**_kw):
+            (repo / "src" / "calc.py").write_text("def add(a, b):\n    return 0\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(9, 1)), \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent), \
+             self._no_discard():
+            assert await _run_mutation(config, state, progress) is False
+        assert state.tdd.mutation_done is False
+        self._assert_nothing_committed_after(repo, head)
+
+    @pytest.mark.asyncio
+    async def test_second_run_that_left_a_mutant_fails_even_above_min_score(self, project):
+        config, state, progress = _setup(project, min_score=0.5)
+        repo = project[0]
+
+        async def _agent(**_kw):
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        stuck = MutationResult(ok=False, discard_failed=True, mutant_left_on_disk=True,
+                               error="a mutated file was left in the tree and could NOT "
+                                     "be discarded")
+
+        def _second():
+            (repo / "src" / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+            return stuck
+
+        runs = iter([lambda: _result(9, 1), _second])
+        with patch("build_pipeline.tdd_engine.run_mutation",
+                   side_effect=lambda *a, **k: next(runs)()), \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is False
+        assert state.tdd.mutation_done is False
+        # The round's tests were committed; the mutant and the report were not.
+        assert _git(repo, "log", "-1", "--format=%s") == "test(mutation): kill surviving mutants"
+        assert "return a - b" in (repo / "src" / "calc.py").read_text()
+        assert _git(repo, "status", "--porcelain").strip() != ""
 
     @pytest.mark.asyncio
     async def test_tool_error_fails_the_step(self, project):

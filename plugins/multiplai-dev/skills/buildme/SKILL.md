@@ -187,8 +187,10 @@ push/PR commands from `build-progress.md`).
 
 ## Mutation testing
 
-Python projects only (test-command discovery found a `pyproject.toml`, so
-`stack` is `pyproject`). Right after the whole-change refactor, buildme runs
+Python projects only: one of `pyproject.toml`, `setup.py`, `setup.cfg`,
+`pytest.ini`, `tox.ini` or `requirements.txt` sits at the project root. A
+Python project whose manifest lives in a subdirectory is not detected and
+skips the step. Right after the whole-change refactor, buildme runs
 [cosmic-ray](https://pypi.org/project/cosmic-ray/) 8.7.0 over the **non-test
 `.py` lines the build added or modified** since its first block, using the
 project's own test command. cosmic-ray runs as a pinned tool
@@ -216,8 +218,11 @@ round:
 
 What fails a build (`EXIT_BUILD_FAILURE`, step not marked done, so a resume
 runs it again): a final score below `min_score`, a survivor round that edited
-a non-test file, or cosmic-ray failing to produce a score (not installed, red
-baseline, crash, timeout). A bad config value keeps its default and logs a
+a non-test file, cosmic-ray failing to produce a score (`uv` not installed,
+red baseline, crash, timeout), or a discard git refused — a survivor round or a
+mutated file that could not be thrown away. In that last case buildme commits
+nothing more, `mutation.md` included, and the tree is left as it is for you to
+inspect. A bad config value keeps its default and logs a
 warning. When no mutant lands on a changed line, there is no score and the step
 passes. A non-Python project, `enabled: false` or a build that changed no
 Python source logs one `SKIP phase=MUTATION` line and moves on.
@@ -229,7 +234,7 @@ operator). It is committed onto the build branch.
 
 cosmic-ray edits source files in place while it runs. buildme commits the tree
 first and, if a mutated file is still there afterwards, discards back to that
-commit.
+commit; if that discard fails, the build stops.
 
 ## Tuning model and effort (multiplai.conf)
 

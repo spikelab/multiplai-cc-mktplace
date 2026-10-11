@@ -486,6 +486,9 @@ class MutationResult(BaseModel):
     # cosmic-ray did not restore, or files the test command wrote — and
     # buildme discarded back to the committed sha.
     mutant_left_on_disk: bool = False
+    # True when that discard failed: the tree still holds what the run left
+    # behind, so nothing may be committed on top of it.
+    discard_failed: bool = False
     elapsed_seconds: float = 0.0
 
 

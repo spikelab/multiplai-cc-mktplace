@@ -71,17 +71,32 @@ with use_db(session, WorkDB.Mode.open) as db:
 """
 
 
+# What makes a project "Python" for this step: a Python manifest or test
+# config at the project root. Not `config.stack`, which cannot answer the
+# question — test-command discovery records the FIRST marker it finds, so a
+# project with both `pytest.ini` and `pyproject.toml` is stack "pytest" and a
+# `setup.py` project is "setup"; a `tdd.test_command` in specs/config.yaml
+# skips discovery and leaves stack ""; and `memory_files.stacks` names it
+# freely ("python", "django", ...).
+PYTHON_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg", "pytest.ini",
+                  "tox.ini", "requirements.txt")
+
+
 def mutation_applies(config) -> tuple[bool, str]:
     """Whether the MUTATION step runs for this build, and why not when it doesn't.
 
-    Python projects only (`stack == "pyproject"`, the value test-command
-    discovery records for a `pyproject.toml`), and only with `mutation.enabled`.
+    Python projects only — one of `PYTHON_MARKERS` at the project root — and
+    only with `mutation.enabled`. A Python project whose manifest lives below
+    the root (a monorepo subdirectory) is not detected and skips with a SKIP
+    line naming the markers.
     """
     if not config.mutation.enabled:
         return False, "mutation.enabled is false in specs/config.yaml"
-    if config.stack != "pyproject":
-        return False, (f"stack is {config.stack!r}, not 'pyproject' — "
-                       "mutation testing covers Python projects only")
+    project_dir = Path(config.project_dir)
+    if not any((project_dir / m).is_file() for m in PYTHON_MARKERS):
+        return False, ("no Python project file at the project root ("
+                       + ", ".join(PYTHON_MARKERS)
+                       + ") — mutation testing covers Python projects only")
     if not config.test_command:
         return False, "no test command configured"
     return True, ""
@@ -238,7 +253,11 @@ def _run_tool(argv: list[str], cwd: Path, timeout: float) -> str:
             text=True, start_new_session=True,
         )
     except OSError as e:
-        raise _ToolError(f"could not start {argv[len(_UVX)]}: {e}") from e
+        raise _ToolError(
+            f"could not start {argv[0]} ({e}). cosmic-ray runs through uv's "
+            "`uvx`: install uv (https://docs.astral.sh/uv/), or turn mutation "
+            "testing off with `mutation.enabled: false` in specs/config.yaml"
+        ) from e
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -341,6 +360,7 @@ def run_mutation(config, baseline_sha: str, paths: list[str]) -> MutationResult:
                         "discarded back to %s", restore_to[:8])
         else:
             result.ok = False
+            result.discard_failed = True
             result.error = ((result.error + "; ") if result.error else "") + (
                 "a mutated file was left in the tree and could NOT be discarded "
                 f"back to {restore_to[:8]} — inspect the tree before shipping")
