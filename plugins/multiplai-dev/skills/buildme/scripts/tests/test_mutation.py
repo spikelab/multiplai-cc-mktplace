@@ -333,6 +333,46 @@ class TestRunMutation:
             r = mutation.run_mutation(config, baseline, ["src/calc.py"])
         assert r.ok is False and "baseline" in r.error and r.score is None
 
+    def test_baseline_is_not_held_to_the_per_mutant_timeout(self, project):
+        """A green suite slower than `mutation.timeout` must not read as a red
+        baseline: the baseline runs under its own generous limit, and each
+        mutant then gets at least `_BASELINE_FACTOR` times the measured run."""
+        import tomllib
+        config, _, _ = _setup(project)
+        repo, baseline = project
+        clock = [1000.0]
+        seen: dict[str, float] = {}
+        _, stub = self._stub_tool()
+
+        def _tool(argv, cwd, timeout):
+            cmd = argv[len(mutation._UVX):]
+            if cmd[:2] in (["cosmic-ray", "baseline"], ["cosmic-ray", "exec"]):
+                cfg = tomllib.loads(Path(cmd[2]).read_text())
+                seen[cmd[1]] = cfg["cosmic-ray"]["timeout"]
+                seen[cmd[1] + "-outer"] = timeout
+            if cmd[:2] == ["cosmic-ray", "baseline"]:
+                clock[0] += 100.0          # a green suite that takes 100 s
+            return stub(argv, cwd, timeout)
+
+        fake_time = MagicMock()
+        fake_time.monotonic.side_effect = lambda: clock[0]
+        with patch("build_pipeline.mutation._run_tool", side_effect=_tool), \
+             patch("build_pipeline.mutation.time", fake_time):
+            r = mutation.run_mutation(config, baseline, ["src/calc.py"])
+        assert r.ok, r.error
+        assert config.mutation.timeout == 30
+        assert seen["baseline"] >= mutation._SETUP_TIMEOUT
+        assert seen["baseline-outer"] > seen["baseline"]
+        assert seen["exec"] == pytest.approx(100.0 * mutation._BASELINE_FACTOR)
+        assert r.test_timeout == pytest.approx(seen["exec"])
+        report = mutation.render_report(first=r, final=r, round_note="", min_score=0.8,
+                                        passed=True)
+        assert "Time allowed per test run under a mutant: 300 s" in report
+
+    def test_a_fast_suite_keeps_the_configured_timeout(self, project):
+        assert mutation.mutant_timeout(30.0, 0.5) == 30.0
+        assert mutation.mutant_timeout(30.0, 20.0) == 20.0 * mutation._BASELINE_FACTOR
+
     def test_a_dirty_tree_that_cannot_be_discarded_is_flagged(self, project):
         config, _, _ = _setup(project)
         _, baseline = project
@@ -485,6 +525,86 @@ class TestRunMutationStep:
                             "test(mutation): kill surviving mutants"]
         report = (config.change_dir / "mutation.md").read_text()
         assert "0.70" in report and "1.00" in report
+
+    @pytest.mark.asyncio
+    async def test_a_round_the_agent_committed_itself_is_rescored(self, project):
+        """The test writer has Bash: if it commits its own tests, buildme still
+        checks them, commits them under its own message, and runs cosmic-ray again."""
+        config, state, progress = _setup(project)
+        repo = project[0]
+
+        async def _agent(**_kw):
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-q", "-m", "agent: my own commit")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation",
+                   side_effect=[_result(7, 3), _result(10, 0)]) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is True
+        assert run.call_count == 2
+        subjects = _git(repo, "log", "--format=%s").splitlines()
+        assert subjects[:2] == ["test(mutation): record mutation score",
+                                "test(mutation): kill surviving mutants"]
+        assert "agent: my own commit" not in subjects
+        assert (repo / "tests" / "test_more.py").exists()
+        assert "1.00" in (config.change_dir / "mutation.md").read_text()
+
+    @pytest.mark.asyncio
+    async def test_a_source_edit_the_agent_committed_itself_is_caught(self, project):
+        config, state, progress = _setup(project)
+        repo = project[0]
+        head = _git(repo, "rev-parse", "HEAD")
+
+        async def _agent(**_kw):
+            (repo / "src" / "calc.py").write_text("def add(a, b):\n    return 0\n")
+            _git(repo, "commit", "-q", "-am", "agent: sneaky source edit")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(9, 1)) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is False
+        assert run.call_count == 1
+        assert state.tdd.mutation_done is False
+        assert "return a + b" in (repo / "src" / "calc.py").read_text()
+        assert "agent: sneaky source edit" not in _git(repo, "log", "--format=%s")
+        assert _git(repo, "rev-parse", "HEAD~1") == head
+
+    @pytest.mark.asyncio
+    async def test_a_round_that_moved_head_off_the_checkpoint_fails_the_step(self, project):
+        """HEAD moved somewhere that does not contain the checkpoint: nothing
+        can be unwound safely, so the step fails and commits nothing."""
+        config, state, progress = _setup(project)
+        repo = project[0]
+
+        async def _agent(**_kw):
+            _git(repo, "checkout", "-q", "--detach", "HEAD~1")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(9, 1)) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is False
+        assert run.call_count == 1
+        assert state.tdd.mutation_done is False
+        assert "test(mutation)" not in _git(repo, "log", "--all", "--format=%s")
+
+    @pytest.mark.asyncio
+    async def test_uncommitted_edits_at_entry_are_not_committed_or_mutated(self, project):
+        """Edits the whole-change refactor left uncommitted (verification failed
+        and the discard was refused, or a red suite skipped its checkpoint) are
+        unverified: the step must not commit them onto the branch or score them."""
+        config, state, progress = _setup(project)
+        repo = project[0]
+        head = _git(repo, "rev-parse", "HEAD")
+        (repo / "src" / "calc.py").write_text("def add(a, b):\n    return a - b  # unverified\n")
+        with patch("build_pipeline.tdd_engine.run_mutation") as run:
+            assert await _run_mutation(config, state, progress) is False
+        run.assert_not_called()
+        assert state.tdd.mutation_done is False
+        assert _git(repo, "rev-parse", "HEAD") == head
+        assert "unverified" in (repo / "src" / "calc.py").read_text()
+        assert "uncommitted" in (repo / "build-progress.md").read_text()
 
     # --- a discard that fails must fail the step, and commit nothing ------
 

@@ -205,7 +205,9 @@ round:
 - a changed non-test file discards the round and **fails the build**;
 - a red suite discards the round, and the first score stands;
 - a green round is committed as `test(mutation): kill surviving mutants` and
-  cosmic-ray runs again for the final score.
+  cosmic-ray runs again for the final score. If the agent committed its own
+  tests, buildme moves the branch back to where the round started, keeping the
+  files, and checks and commits them the same way.
 
 `specs/config.yaml` keys (all optional):
 
@@ -213,13 +215,14 @@ round:
 |---|---|---|
 | `mutation.enabled` | `true` | Turn the step off for this project. |
 | `mutation.min_score` | `0.8` | Minimum killed / (killed + survived). Timed-out test runs count as killed. **The default is a starting point:** nobody has measured mutation scores on buildme output yet, so it will be adjusted from measured runs. |
-| `mutation.timeout` | `30` | Seconds allowed per test-suite run under one mutant. |
+| `mutation.timeout` | `30` | Seconds allowed per test-suite run under one mutant. When the unmutated suite takes longer than a third of this, each mutant gets three times its measured run instead. The unmutated (baseline) run itself is allowed 15 minutes. |
 | `mutation.max_mutants` | `300` | Cap on mutants run. Above it, a deterministic sample runs, and `mutation.md` says so. |
 
 What fails a build (`EXIT_BUILD_FAILURE`, step not marked done, so a resume
 runs it again): a final score below `min_score`, a survivor round that edited
 a non-test file, cosmic-ray failing to produce a score (`uv` not installed,
-red baseline, crash, timeout), or a discard git refused — a survivor round or a
+red baseline, crash, timeout), uncommitted changes in the tree when the step
+starts, or a discard git refused — a survivor round or a
 mutated file that could not be thrown away. In that last case buildme commits
 nothing more, `mutation.md` included, and the tree is left as it is for you to
 inspect. A bad config value keeps its default and logs a
@@ -232,9 +235,16 @@ before and after the survivor round, the threshold and verdict, the files
 mutated, what the survivor round did, and every surviving mutant (file, line,
 operator). It is committed onto the build branch.
 
-cosmic-ray edits source files in place while it runs. buildme commits the tree
-first and, if a mutated file is still there afterwards, discards back to that
-commit; if that discard fails, the build stops.
+cosmic-ray edits source files in place while it runs, so the tree must be
+committed when the step starts. Every verified path leaves it committed, so
+uncommitted changes at that point are edits nothing checked: a whole-change
+refactor whose verification failed and could not be undone, one skipped on a
+red suite or a failed checkpoint, a refactor agent that stopped mid-edit, or a
+survivor round that could not be discarded. buildme then fails the step
+without committing or resetting anything; review the changes, commit or
+discard them, and resume. If a mutated file is still in the tree after a run,
+buildme discards back to the starting commit; if that discard fails, the build
+stops.
 
 ## Tuning model and effort (multiplai.conf)
 

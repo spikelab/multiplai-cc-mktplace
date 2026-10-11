@@ -166,6 +166,9 @@ it is now, and the diff cosmic-ray applied.
 5. When a mutant cannot be told apart from the real code by any observable
    behavior (an equivalent mutant), leave it and say so in your report rather
    than writing a test that inspects the implementation.
+6. **Do not commit**, and do not run any other git command that changes the
+   repository (reset, checkout, stash, branch). buildme checks your files and
+   commits them itself.
 
 ## Test Command
 {test_command}

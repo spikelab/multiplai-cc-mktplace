@@ -489,6 +489,9 @@ class MutationResult(BaseModel):
     # True when that discard failed: the tree still holds what the run left
     # behind, so nothing may be committed on top of it.
     discard_failed: bool = False
+    # Seconds each mutant's test run was allowed: `mutation.timeout`, raised
+    # to a multiple of the measured unmutated run when the suite is slower.
+    test_timeout: float = 0.0
     elapsed_seconds: float = 0.0
 
 

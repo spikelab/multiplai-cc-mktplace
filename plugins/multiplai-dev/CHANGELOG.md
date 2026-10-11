@@ -33,8 +33,13 @@ time, not derived from a tag.
   measured), when the survivor round edits a non-test file, when cosmic-ray
   cannot produce a score, or when a change the step has to throw away cannot
   be thrown away (the build then stops without committing anything more).
-  Set `mutation: {enabled: false}` in `specs/config.yaml` to turn the step
-  off; `timeout` and `max_mutants` tune its cost.
+  It also fails when the tree holds uncommitted changes as the step starts:
+  those are edits nothing verified (a whole-change refactor that failed and
+  could not be undone, for one), and the step neither commits them nor
+  mutation-tests them. Set `mutation: {enabled: false}` in
+  `specs/config.yaml` to turn the step off; `timeout` and `max_mutants` tune
+  its cost. A test suite slower than `timeout` still works: each mutant gets
+  three times the unmutated suite's measured run when that is longer.
 
 ## [0.33.1] - 2026-10-11
 

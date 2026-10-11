@@ -2093,6 +2093,7 @@ async def _run_mutation_round(
             source_edited=source_edited, discard_failed=True)
 
     before = _snapshot_source_files(config)
+    branch = git_ops.current_branch(config.project_dir)
     result = await run_mutation_test_writer(
         survivors=_format_survivors(config, first),
         test_command=config.test_command,
@@ -2100,6 +2101,22 @@ async def _run_mutation_round(
         effort=config.agent_effort,
         cwd=str(config.project_dir),
     )
+
+    # The agent holds Bash, so it may have committed its own work. Its commits
+    # go back into the tree so every check below sees what it changed, and
+    # buildme commits (or discards) the round itself. A HEAD that cannot be
+    # brought back to the checkpoint leaves nothing safe to commit or reset.
+    head = git_ops.rev_parse_head(config.project_dir)
+    if head != rewind_to:
+        same_branch = git_ops.current_branch(config.project_dir) == branch
+        if not (same_branch and git_ops.unwind_commits_to(
+                config.project_dir, rewind_to, "mutation survivor round")):
+            where = (f"to {head[:8]}" if head else "somewhere git could not read")
+            return _RoundOutcome(
+                f"The test writer moved HEAD from {rewind_to[:8]} {where}"
+                f"{'' if same_branch else ' on another branch'}, and it could not be "
+                "brought back, so nothing was committed — inspect the tree.",
+                discard_failed=True)
     if not result.success:
         reason = "timeout" if result.timed_out else (result.error or "agent failed")
         return _discard(
@@ -2176,15 +2193,24 @@ async def _run_mutation(
         return _skip("no pre-build baseline commit recorded, so the changed lines are unknown")
 
     # A committed tree is the restore point for cosmic-ray's in-place edits
-    # and for a discarded survivor round. Uncommitted work that cannot be
-    # committed is never put under a tool that rewrites files.
-    rewind_to = git_ops.commit_tree(config.project_dir,
-                                    "chore: checkpoint before mutation testing",
-                                    "pre-mutation checkpoint")
-    if rewind_to is None and git_ops.tree_is_clean(config.project_dir):
-        rewind_to = git_ops.rev_parse_head(config.project_dir)
+    # and for a discarded survivor round. Every verified path into this step
+    # leaves the tree committed: the whole-change refactor checkpoints the
+    # review fixes and commits or discards its own pass. So uncommitted edits
+    # here are ones nothing verified — a refactor whose verification failed
+    # and whose discard git refused, a refactor skipped on a red suite or a
+    # failed checkpoint, a refactor agent that died mid-edit, or a previous
+    # mutation round that could not be discarded. Committing them would put
+    # them on the build branch and score mutants against them; resetting
+    # would destroy work nobody has looked at. So stop and leave them.
+    if not git_ops.tree_is_clean(config.project_dir):
+        return _fail(
+            "the tree has uncommitted changes that buildme did not verify (see the "
+            "REFACTOR_ALL entry above, or a previous MUTATION failure) — refusing to "
+            "commit them or mutation-test them. Review them, commit or discard them, "
+            "then resume the build")
+    rewind_to = git_ops.rev_parse_head(config.project_dir)
     if rewind_to is None:
-        return _fail("could not commit the pending tree before mutation testing")
+        return _fail("could not read HEAD to restore to before mutation testing")
 
     paths = changed_source_files(config.project_dir, baseline)
     if paths is None:

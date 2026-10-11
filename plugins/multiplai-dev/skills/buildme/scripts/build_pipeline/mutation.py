@@ -54,6 +54,13 @@ _UVX = ["uvx", "--from", COSMIC_RAY_SPEC]
 _SETUP_TIMEOUT = 900
 _EXEC_SLACK = 300
 
+# cosmic-ray's `timeout` applies to `baseline` too, and a baseline that times
+# out reads as a red suite. So the baseline runs under the setup ceiling, and
+# each mutant then gets `mutation.timeout` or this many times the measured
+# baseline run, whichever is longer: a green suite slower than the configured
+# timeout would otherwise time out under every mutant and score as "killed".
+_BASELINE_FACTOR = 3.0
+
 # Sampling marker written into the session for mutants the `max_mutants` cap
 # dropped, so `cosmic-ray dump` tells them apart from git-filtered ones.
 _SAMPLED_OUT = "Sampled out by buildme (mutation.max_mutants)"
@@ -237,6 +244,12 @@ def cosmic_ray_config(paths: list[str], test_command: str, timeout: float,
     ])
 
 
+def mutant_timeout(configured: float, baseline_seconds: float) -> float:
+    """Seconds allowed per test-suite run under one mutant: `mutation.timeout`,
+    raised to `_BASELINE_FACTOR` times the unmutated suite's measured run."""
+    return max(float(configured), _BASELINE_FACTOR * baseline_seconds)
+
+
 class _ToolError(Exception):
     pass
 
@@ -310,12 +323,16 @@ def run_mutation(config, baseline_sha: str, paths: list[str]) -> MutationResult:
 
     settings = config.mutation
     result = base
+    test_timeout = float(settings.timeout)
     with tempfile.TemporaryDirectory(prefix="buildme-mutation-") as tmp:
         tmp_dir = Path(tmp)
         cfg = tmp_dir / "cosmic-ray.toml"
         session = tmp_dir / "session.sqlite"
         cfg.write_text(cosmic_ray_config(paths, config.test_command,
                                          settings.timeout, baseline_sha))
+        baseline_cfg = tmp_dir / "baseline.toml"
+        baseline_cfg.write_text(cosmic_ray_config(paths, config.test_command,
+                                                  _SETUP_TIMEOUT, baseline_sha))
         try:
             _run_tool([*_UVX, "cosmic-ray", "init", str(cfg), str(session)],
                       project_dir, _SETUP_TIMEOUT)
@@ -335,13 +352,21 @@ def run_mutation(config, baseline_sha: str, paths: list[str]) -> MutationResult:
             if to_run:
                 # Baseline: the unmutated suite must pass under cosmic-ray's
                 # own runner, or every mutant would read as "killed".
-                _run_tool([*_UVX, "cosmic-ray", "baseline", str(cfg)],
-                          project_dir, _SETUP_TIMEOUT + settings.timeout)
+                # Its own config: the per-mutant timeout must not apply to
+                # the unmutated run it is derived from.
+                baseline_started = time.monotonic()
+                _run_tool([*_UVX, "cosmic-ray", "baseline", str(baseline_cfg)],
+                          project_dir, _SETUP_TIMEOUT + _EXEC_SLACK)
+                test_timeout = mutant_timeout(
+                    settings.timeout, time.monotonic() - baseline_started)
+                cfg.write_text(cosmic_ray_config(paths, config.test_command,
+                                                 test_timeout, baseline_sha))
                 _run_tool([*_UVX, "cosmic-ray", "exec", str(cfg), str(session)],
-                          project_dir, settings.timeout * (to_run + 1) + _EXEC_SLACK)
+                          project_dir, test_timeout * (to_run + 1) + _EXEC_SLACK)
             dump = _run_tool([*_UVX, "cosmic-ray", "dump", str(session)],
                              project_dir, _SETUP_TIMEOUT)
             result = parse_dump(dump)
+            result.test_timeout = test_timeout
             result.tool_version = COSMIC_RAY_VERSION
             result.files = list(paths)
             result.candidates = len(pending)
@@ -394,6 +419,11 @@ def render_report(
         f"- Timed-out test runs (counted as killed): {final.timeouts}",
         f"- Mutants that could not be judged (left out of the score): {final.errors}",
     ]
+    if final.test_timeout:
+        lines.append(
+            f"- Time allowed per test run under a mutant: {final.test_timeout:.0f} s "
+            f"(`mutation.timeout`, or {_BASELINE_FACTOR:g}× the unmutated suite's "
+            "run when that is longer)")
     if final.sampled_out:
         lines.append(
             f"- Sampled: {final.candidates - final.sampled_out} of {final.candidates} "
