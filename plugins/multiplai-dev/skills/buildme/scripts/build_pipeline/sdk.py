@@ -11,7 +11,8 @@ The SDK machinery (isolation flags, hard timeout, stderr capture, big-prompt
 tempfile fallback, unknown-message skip) lives in multiplai_core.agent_runner —
 this module keeps only what is buildme-specific: the repo trust gate, the
 AgentResult mapping (including degrade-to-partial-output on failure), the
-concurrency semaphore, structured-output validation, and the LLMCallError
+concurrency semaphore, the structured-output retry loop (answers are parsed by
+multiplai_core.structured.parse_answer), and the LLMCallError
 taxonomy.
 """
 
@@ -33,7 +34,8 @@ from multiplai_core.agent_runner import (
     run_agent,
 )
 from multiplai_core.aio import hard_timeout, swallow_task_result as _swallow_task_result  # noqa: F401
-from multiplai_core.text import extract_json  # noqa: F401
+from multiplai_core.structured import parse_answer
+from multiplai_core.text import extract_json  # noqa: F401 — re-exported for llm_steps.spec_steps
 
 from . import budget
 from .models import AgentResult
@@ -289,8 +291,7 @@ async def llm_call_structured(
                              system_prompt=system_prompt, call_timeout=call_timeout,
                              budget_label=budget_label)
         try:
-            payload = extract_json(raw)
-            return schema.model_validate(payload)
+            return parse_answer(raw, schema)
         except (ValidationError, ValueError, json.JSONDecodeError) as e:
             last_error = e
             log.warning("Structured output validation failed (attempt %d/%d): %s", attempt + 1, max_retries + 1, e)
@@ -341,8 +342,7 @@ async def agent_call_structured(
         try:
             if not result.success:
                 raise ValueError(f"Agent call failed: {result.error or 'no error reported'}")
-            payload = extract_json(result.output)
-            return schema.model_validate(payload)
+            return parse_answer(result.output, schema)
         except (ValidationError, ValueError, json.JSONDecodeError) as e:
             last_error = e
             log.warning("Structured agent output validation failed (attempt %d/%d): %s",

@@ -17,6 +17,10 @@ Design notes:
   the explicit `check()` call, at loop boundaries, can stop one.
 - No budget configured → the tracker still accounts (so the run reports what
   it spent) but never stops anything.
+- This is not `multiplai_core.budget.SpendLedger`, which review and the
+  walkthrough use: buildme's `by_label` counts tokens, not USD, its diagnosis
+  ranks phases by tokens, and its saved state carries `total_tokens`. Moving
+  onto the shared ledger would change those, and four tests assert them.
 """
 
 from __future__ import annotations
