@@ -362,14 +362,6 @@ class TestQualityAudit(BaseModel):
         )
 
 
-class FinalReviewVerdict(BaseModel):
-    """Structured verdict for the final comprehensive review — replaces the
-    old string-match on 'PASSED' in free text."""
-    passed: bool
-    summary: str = ""
-    issues: list[str] = Field(default_factory=list)
-
-
 # --- Gates ---
 
 # --- Plan review (the PLAN_REVIEW phase) ---
@@ -497,7 +489,7 @@ class BlockInfo(BaseModel):
     impl_commit: str | None = None
     # Set only when the block's refactor pass survived verification (suite
     # re-run + test-integrity gate). A discarded refactor leaves this None,
-    # which is how the trajectory can tell "no refactor landed" from "one did".
+    # which is how a reader can tell "no refactor landed" from "one did".
     refactor_commit: str | None = None
     review_scores: ReviewResult | None = None
     review_iterations: int = 0
