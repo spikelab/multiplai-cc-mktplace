@@ -17,6 +17,19 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.34.2] - 2026-10-11
+
+### Changed
+- codebase-walkthrough takes its checkpoint writer, `progress.log` writer,
+  spend ledger, `walkthrough.yaml` helpers and answer parsing from
+  multiplai-core 0.17.0 (`checkpoint`, `progress`, `budget.SpendLedger`,
+  `stage_config`, `structured`) instead of carrying copies of review's. The
+  `progress.log` lines, the $50 default ceiling, the one-reformat re-ask and
+  the config precedence are unchanged. The ledger saved in
+  `walkthrough-state.json` now also records spend per stage (`by_stage`),
+  calls that returned no usage (`no_usage_calls`) and `max_tokens` (null), as
+  review's does; a ledger saved before this loads as before.
+
 ## [0.34.1] - 2026-10-11
 
 ### Changed
