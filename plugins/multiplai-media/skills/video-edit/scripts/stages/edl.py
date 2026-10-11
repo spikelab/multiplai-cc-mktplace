@@ -131,16 +131,19 @@ class Region:
     h: int
 
 
-OVERLAY_MODES = ("panel", "keyed")
+OVERLAY_MODES = ("alpha", "panel", "keyed")
 
 
 @dataclass
 class Overlay:
     """A motion graphic (an HTML page, stages/overlay.py) shown from start to end.
 
-    `panel` covers its region with the page as rendered; `keyed` removes the
-    page's `key_color` background first (colorkey + despill), so the video
-    shows around the graphic. Without a region it covers the whole frame.
+    `alpha` lays the page over the video with its real transparency; `panel`
+    covers its region with the page as rendered; `keyed` removes the page's
+    `key_color` background first (colorkey + despill), so the video shows
+    around the graphic. An overlay without a mode is `keyed`, which is what
+    pages written before `alpha` existed draw for. Without a region it covers
+    the whole frame.
     """
     html: str
     start: float                # output time

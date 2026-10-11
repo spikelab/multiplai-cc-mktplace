@@ -433,7 +433,7 @@ def _render_overlays(edl: EDL) -> list[Path]:
     for o in edl.overlays:
         r = o.rect(edl.output.width, edl.output.height)
         movs.append(overlay_mod.render_overlay(Path(o.html), r.w, r.h, edl.output.fps,
-                                               o.end - o.start, cache))
+                                               o.end - o.start, cache, mode=o.mode))
     return movs
 
 
