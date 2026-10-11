@@ -32,7 +32,10 @@ authoring**. Part of the [`multiplai`](../../README.md) marketplace.
 ## Composition
 
 - `buildme` composes with `deep-research` (multiplai-research) for its research
-  phase — use `--skip-research` if that plugin isn't installed.
+  phase — use `--skip-research` if that plugin isn't installed. It takes a
+  ticket (`DB-2267`, `#12`, a Plane or GitHub issue URL), a file, or a prompt;
+  `/buildme setup` picks the ticket system once per repo. Plane tickets go
+  through `plane` (multiplai-pm), GitHub issues through `gh`.
 - `plan` output is designed to be fed to `buildme` or a fresh session unchanged.
 - `analyze-context-router` and `propose-skill` operate on `multiplai-context` —
   install it first.
@@ -44,7 +47,7 @@ Runs on vanilla Claude Code, any OS, with these exceptions:
 - `devops-gcp` — the knowledge pack works anywhere; real operations need your
   `gcloud` auth.
 - `e2e-test` — frontend mode needs `agent-browser` (npm); backend mode is plain HTTP.
-- `buildme` — needs `uv` + network.
+- `buildme` — needs `uv` + network; `gh` for GitHub-issue intake.
 - `review` — needs `uv` + network; `gh` for `--pr` and `post`.
 
 Full details: [compatibility matrix](../../README.md#compatibility-matrix) and
