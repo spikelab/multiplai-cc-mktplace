@@ -634,3 +634,65 @@ class TestBootstrapConfigCommitted:
                 config, _args(repo, "csv", plan_file=str(plan), interview_summary="S"))
         assert rc == 0
         assert (config.change_dir / "plan.md").read_text() == plan.read_text()
+
+
+# --- input file paths -----------------------------------------------------------
+
+class TestInputPaths:
+    """SKILL.md runs the pipeline under `uv run --directory <scripts>`, so the
+    process cwd is never the caller's. Relative input paths are read from
+    --project-dir, and a named file that does not exist is a usage error."""
+
+    def _parse(self, *argv):
+        from build_pipeline.__main__ import build_parser
+        return build_parser().parse_args(["build", "--change", "csv", *argv])
+
+    def test_relative_paths_resolve_against_project_dir(self, tmp_path, monkeypatch):
+        from build_pipeline.intake import resolve_input_paths
+
+        project = tmp_path / "proj"
+        (project / "notes").mkdir(parents=True)
+        for name in ("ticket.md", "research.md", "plan.md", "replies.md", "ctx.md"):
+            (project / "notes" / name).write_text("x\n")
+        elsewhere = tmp_path / "scripts"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        args = self._parse(
+            "--project-dir", str(project),
+            "--ticket-file", "notes/ticket.md", "--research-path", "notes/research.md",
+            "--plan-file", "notes/plan.md", "--interview-replies", "notes/replies.md",
+            "--context-files", "notes/ctx.md",
+        )
+        assert resolve_input_paths(args) is None
+        for value in (args.ticket_file, args.research_path, args.plan_file,
+                      args.interview_replies, args.context_files[0]):
+            assert Path(value).is_absolute()
+            assert Path(value).is_file()
+
+    def test_absolute_paths_are_kept(self, tmp_path):
+        from build_pipeline.intake import resolve_input_paths
+
+        ticket = tmp_path / "t.md"
+        ticket.write_text("x\n")
+        args = self._parse("--project-dir", str(tmp_path / "proj"),
+                           "--ticket-file", str(ticket))
+        assert resolve_input_paths(args) is None
+        assert args.ticket_file == str(ticket)
+
+    @pytest.mark.parametrize("flag", ["--ticket-file", "--research-path", "--plan-file",
+                                      "--interview-replies"])
+    def test_a_missing_input_file_exits_2_before_the_build_starts(
+        self, tmp_path, capsys, flag,
+    ):
+        from build_pipeline.__main__ import main
+
+        project = tmp_path / "proj"
+        project.mkdir()
+        with patch("build_pipeline.orchestrator.run_orchestrator") as run:
+            rc = main(["build", "--change", "csv", "--project-dir", str(project),
+                       flag, "missing.md"])
+        assert rc == 2
+        run.assert_not_called()
+        err = capsys.readouterr().err
+        assert flag in err and "missing.md" in err

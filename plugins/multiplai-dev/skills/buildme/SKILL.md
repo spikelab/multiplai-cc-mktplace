@@ -399,6 +399,13 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
 **Important:** Add `--no-worktree` if this session is already running inside a
 git worktree (see [Git lifecycle](#git-lifecycle)).
 
+**Important:** Pass every file path (`--ticket-file`, `--research-path`,
+`--plan-file`, `--interview-replies`, `--context-files`) as an absolute path, or
+relative to `{project_dir}`. The pipeline runs from its own scripts directory
+(`uv run --directory`), so a path relative to your cwd is not found. A
+`--ticket-file`, `--research-path`, `--plan-file` or `--interview-replies` that
+does not exist stops the run with exit `2` before anything is built.
+
 The pipeline handles: worktree/branch setup, bootstrap, codebase analysis, spec
 generation (via change_manager) including the unknowns/explainer pass, the
 design audit — which critiques the specs for consistency *and* plan quality

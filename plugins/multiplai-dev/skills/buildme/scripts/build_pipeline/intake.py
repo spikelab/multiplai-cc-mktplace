@@ -52,6 +52,49 @@ class ConfigNotCommittedError(RuntimeError):
     from HEAD without it."""
 
 
+# --- Input file paths ---------------------------------------------------------
+
+#: The `build` flags that name one input file the pipeline reads.
+INPUT_FILE_FLAGS = (
+    ("ticket_file", "--ticket-file"),
+    ("research_path", "--research-path"),
+    ("plan_file", "--plan-file"),
+    ("interview_replies", "--interview-replies"),
+)
+
+
+def resolve_input_paths(args) -> str | None:
+    """Make every input file path in *args* absolute, in place.
+
+    SKILL.md runs the pipeline under ``uv run --directory <scripts>``, so the
+    process cwd is the scripts directory, never the caller's. A relative path
+    is read from ``--project-dir`` instead. Each single-file flag must name a
+    file that exists: the error message is returned (the caller exits 2), so
+    a mistyped path never turns into a build without its ticket or research.
+    ``--context-files`` keeps its warn-and-skip behaviour for a missing file
+    and is only made absolute.
+    """
+    base = Path(getattr(args, "project_dir", ".") or ".").expanduser().resolve()
+
+    def absolute(raw: str) -> Path:
+        path = Path(raw).expanduser()
+        return path if path.is_absolute() else base / path
+
+    for attr, flag in INPUT_FILE_FLAGS:
+        raw = getattr(args, attr, "") or ""
+        if not raw:
+            continue
+        path = absolute(raw)
+        if not path.is_file():
+            return (f"{flag} {raw}: no such file ({path}). Pass an absolute path, "
+                    f"or one relative to --project-dir {base}.")
+        setattr(args, attr, str(path))
+    contexts = getattr(args, "context_files", None)
+    if contexts:
+        args.context_files = [str(absolute(raw)) for raw in contexts]
+    return None
+
+
 # --- Bootstrap helpers --------------------------------------------------------
 
 def config_commit_state(project_dir: Path) -> str:

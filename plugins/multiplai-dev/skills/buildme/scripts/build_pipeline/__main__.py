@@ -204,6 +204,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
 
+    # Input files: relative paths are read from --project-dir (the process
+    # cwd is the scripts dir under `uv run --directory`), and a named file
+    # that does not exist is a usage error, not a warning.
+    if args.command == "build":
+        from .intake import resolve_input_paths
+        error = resolve_input_paths(args)
+        if error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 2
+
     # Propagate the repo-trust opt-in to the agent layer (sdk._repo_is_trusted).
     if getattr(args, "trust_repo", False):
         os.environ["BUILDME_TRUST_REPO"] = "1"
