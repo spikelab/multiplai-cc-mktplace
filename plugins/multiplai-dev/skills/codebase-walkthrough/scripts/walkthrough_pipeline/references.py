@@ -34,9 +34,11 @@ import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
 
+from multiplai_core.citations import GIT_ARGV, git_env
+
 from .models import Reference, RepoInfo, SymbolEntry, TargetInfo
 from .symbols import _dotted, static_string
-from .target import _GIT, _env, git, is_secret_path, require_rg
+from .target import git, is_secret_path, require_rg
 
 log = logging.getLogger(__name__)
 
@@ -53,8 +55,8 @@ GENERIC_SEGMENTS = {"api", "v1", "v2", "admin", "list", "create", "update", "del
 
 
 def show(repo: RepoInfo, path: str) -> str | None:
-    proc = subprocess.run([*_GIT, "-C", repo.path, "show", f"{repo.head_sha}:{path}"],
-                          capture_output=True, stdin=subprocess.DEVNULL, env=_env(), shell=False, check=False)
+    proc = subprocess.run([*GIT_ARGV, "-C", repo.path, "show", f"{repo.head_sha}:{path}"],
+                          capture_output=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False)
     if proc.returncode != 0:
         return None
     return proc.stdout.decode("utf-8", errors="replace")

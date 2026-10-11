@@ -12,19 +12,17 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 import re
 import shutil
 import subprocess
 import tarfile
 from pathlib import Path, PurePosixPath
 
+from multiplai_core.citations import GIT_ARGV, git_env
+
 from .models import GateResult, RepoInfo, TargetInfo
 
 log = logging.getLogger(__name__)
-
-# User or repo config must not change what we parse.
-_GIT = ["git", "-c", "color.ui=never", "-c", "core.quotepath=off"]
 
 LOCKFILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "uv.lock",
              "Pipfile.lock", "Cargo.lock", "composer.lock", "Gemfile.lock", "go.sum"}
@@ -63,20 +61,13 @@ def require_rg() -> None:
         raise MissingToolError(RG_MISSING)
 
 
-def _env() -> dict[str, str]:
-    env = dict(os.environ)
-    env.pop("GIT_EXTERNAL_DIFF", None)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    return env
-
-
 def git(repo: str | Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     """Run one git command against *repo*; stdout/stderr as text."""
     if args and args[0] not in ("rev-parse", "show", "archive", "ls-files"):
         raise TargetError(f"git {args[0]} is not allowed here")
     proc = subprocess.run(
-        [*_GIT, "-C", str(repo), *args],
-        capture_output=True, text=True, stdin=subprocess.DEVNULL, env=_env(), shell=False, check=False,
+        [*GIT_ARGV, "-C", str(repo), *args],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False,
     )
     if check and proc.returncode != 0:
         raise TargetError(f"git {' '.join(args)} failed in {repo}: {proc.stderr.strip()}")
@@ -157,8 +148,8 @@ def snapshot_repo(repo: RepoInfo, dest: Path) -> Path:
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
     proc = subprocess.run(
-        [*_GIT, "-C", repo.path, "archive", "--format=tar", repo.head_sha],
-        capture_output=True, stdin=subprocess.DEVNULL, env=_env(), shell=False, check=False,
+        [*GIT_ARGV, "-C", repo.path, "archive", "--format=tar", repo.head_sha],
+        capture_output=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False,
     )
     if proc.returncode != 0:
         raise TargetError(f"git archive {repo.head_sha[:12]} failed in {repo.path}: "
