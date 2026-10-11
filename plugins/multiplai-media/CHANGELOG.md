@@ -21,6 +21,48 @@ a tag.
 
 Nothing yet.
 
+## [0.8.0] - 2026-10-11
+
+### Added
+
+- **Overlays with real transparency.** A new overlay `mode: "alpha"` keeps
+  the graphic's own transparency, so soft shadows, glows and
+  semi-transparent fills show over the video with no green key. It is the
+  mode to use for graphics over video; an overlay without a `mode` is still
+  `keyed` and renders as before.
+- **GSAP, Lottie and `requestAnimationFrame` in overlay pages.** The page's
+  clock follows the overlay's time, so GSAP timelines, lottie-web animations
+  and `requestAnimationFrame` loops render frame-exact alongside CSS and Web
+  Animations. Libraries must be inlined in a `<script data-library="…">`.
+- **`pipeline.py lint-overlay <page>`** checks an overlay page for what
+  breaks a frame-by-frame render: randomness, the wall clock, CSS
+  transitions, infinite loops, fonts that are not available, and network
+  URLs. `render` runs the same checks and refuses a page with an error
+  before cutting anything. It warns about stuttering properties, a missing
+  first-choice font and colours a key would remove.
+- **Motion rules** in the motion guide (timing, easing, stagger, transforms
+  only, the zoom-through text swap), a 3–5 s hook rule for reels and demos,
+  the reel caption band, and revealing a demo overlay when the narration
+  names it.
+
+### Changed
+
+- **Overlays render in a headless Chromium the skill launches itself**,
+  through Playwright, instead of `agent-browser` or the host browser bridge.
+  No host browser and no `host-browser-enabled` flag are needed. Where the
+  browser is missing, `render` names the `playwright install
+  chromium-headless-shell` command. Run `render` through `uv run --project`
+  as the skill shows, so Playwright is importable.
+- **Overlays render about 4–7× faster**: a 1080×1920, 30 fps card took
+  0.044 s per frame on one page and 0.025 s with four pages rendering at
+  once, against 0.17 s before. Frames go straight to ffmpeg instead of PNG
+  files on disk.
+- **Captions appear 0.08 s before the first word and stay up to 0.6 s after
+  the last**, leaving 0.05 s before the next line. A line spoken in under
+  0.5 s joins its neighbour in the same sentence when the two fit in
+  `max_chars`.
+- Overlay colours are encoded in BT.709, the range the video uses.
+
 ## [0.7.0] - 2026-10-09
 
 ### Added
