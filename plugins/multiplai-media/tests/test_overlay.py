@@ -326,7 +326,7 @@ def test_estimate_is_printed_before_rendering(world, tmp_path) -> None:
     lines: list[str] = []
     _render(world, tmp_path, duration=2.0, workers=2, log=lines.append)
     assert lines[0] == (f"→ overlay: 60 frames at 640x360, 2 page(s), "
-                        f"about {60 * overlay.SEC_PER_FRAME / 2:.0f}s")
+                        f"about {60 * overlay.SEC_PER_FRAME / 2 ** 0.5:.0f}s")
     assert world.captures == 60
 
 

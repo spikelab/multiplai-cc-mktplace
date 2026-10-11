@@ -51,7 +51,11 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-SEC_PER_FRAME = 0.32          # estimate printed before a render; measured 0.17 s at 1080x1920
+# The estimate printed before a render. Measured for a 1080x1920 alpha stat
+# card on 10 cores: 0.044 s/frame with one page, 0.025 s with four. Pages do
+# not scale linearly (they share ffmpeg and the CPU), so the estimate divides
+# by the square root of the page count.
+SEC_PER_FRAME = 0.05
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 SEEK_SHIM = (SCRIPTS_DIR / "static" / "seek-shim.js").read_text(encoding="utf-8")
 TRANSPARENT_CSS = ("html,body{background:transparent!important;"
@@ -292,7 +296,7 @@ def render_to(html: str, width: int, height: int, fps: int, duration: float, mod
     n = frame_count(duration, fps)
     workers = max(1, min(workers or default_workers(), n))
     log(f"→ overlay: {n} frames at {width}x{height}, {workers} page(s), "
-        f"about {n * SEC_PER_FRAME / workers:.0f}s")
+        f"about {n * SEC_PER_FRAME / math.sqrt(workers):.0f}s")
     partial = out.with_name(f"{out.stem}.partial{out.suffix}")
     partial.unlink(missing_ok=True)
     out.parent.mkdir(parents=True, exist_ok=True)

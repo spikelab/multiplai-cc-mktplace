@@ -121,7 +121,7 @@
       });
     }
     tracked.forEach(function (a) {
-      try { a.currentTime = ms; a.pause(); } catch (e) {}
+      try { a.pause(); a.currentTime = ms; } catch (e) {}
     });
     for (var i = 0; i < posed.length; i++) {
       var p = posed[i];
