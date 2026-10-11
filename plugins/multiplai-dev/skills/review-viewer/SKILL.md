@@ -459,7 +459,14 @@ Each line is one JSON row: `{"id", "target", "kind", "finding_id", "anchor", "te
     `gh api repos/<owner>/<repo>/pulls/<n>/comments -f commit_id=<head_sha>
     -f path=<file> -F line=<line_start> -f side=RIGHT -F body=@/abs/path/text.md`.
     GitHub refuses a line outside the PR's diff at that commit; reply with its
-    error rather than posting somewhere else.
+    error rather than posting somewhere else. End the comment, after `text`
+    and on its own last line, with the finding's marker, the same one review's
+    `post` writes:
+    `<!-- multiplai-review:finding id=<finding_id> round=<round> v=1 -->`,
+    where `<round>` is `target.head_sha` from
+    `findings.json` cut to 12 characters (plus the `-N` suffix when
+    `rounds/` already holds an earlier round of that head; see "Marker" in
+    the review skill's SKILL.md), so `buildme-findings` sees the finding.
   - `to: "slack"`: `where` is the recipient as typed (a person, @handle or
     #channel). Resolve it and send `text` with the `multiplai-messaging:slack`
     skill. If it matches no one, or more than one, reply asking which, and
