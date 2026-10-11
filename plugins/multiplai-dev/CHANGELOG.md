@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.33.2] - 2026-10-11
+## [0.34.1] - 2026-10-11
 
 ### Changed
 - review takes its checkpoint writer, `progress.log` writer, spend ledger,
@@ -28,6 +28,19 @@ time, not derived from a tag.
   target, the same one-reformat re-ask, and the same config precedence. The
   saved ledger in `review-state.json` gains a `max_tokens` key (always null
   for review); a ledger saved before this loads as before.
+
+## [0.34.0] - 2026-10-11
+
+### Removed
+- buildme: the final review is gone. buildme no longer runs a whole-change
+  model review after the last block, so a build no longer fails at the end on
+  a FAILED or errored final verdict, and no `FINAL_REVIEW` line appears in
+  its log. Each block is still reviewed and fixed as before. For a review of
+  the whole change, run `/multiplai-dev:review` on the PR buildme opens.
+- buildme: `--lenient-review` now covers one case only, a block whose code
+  review stays below threshold after all fix rounds.
+
+A checkpoint written by an older buildme still loads and resumes where it was.
 
 ## [0.33.1] - 2026-10-11
 

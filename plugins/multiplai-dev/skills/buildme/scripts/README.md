@@ -66,7 +66,6 @@ gate, not a prompt instruction, and each one can fail a block:
 | **Agent STATUS** | after test-writer and implementer | Agents close their report with `STATUS:`. `NEEDS_CONTEXT`/`BLOCKED` fails the block with the agent's stated reason logged — the pipeline never proceeds on an admitted non-result. |
 | **Integration circuit breaker** | after implementer | Up to 3 fix attempts. Attempts 1–2 use the normal fix prompt; attempt 3 switches to a question-the-architecture prompt and escalates to `config.review_model`. Exhausted → block fails with a diagnosis in `build-progress.md`. |
 | **Two-verdict review** | per block | Passing requires BOTH a clean spec-compliance verdict (nothing Missing/Misunderstood) AND the weighted score threshold (≥ 3.5, no dimension at 1). Review exhaustion fails the block — `--lenient-review` restores the old accept-and-continue behavior for unattended overnight runs. |
-| **Final review** | end of build | Structured verdict over the full-build diff. A FAILED verdict fails the build, and so does an unverifiable review (an exception yields `passed=False` with the error surfaced) — never a silent pass. Not marked done on failure, so a resume re-runs it. `--lenient-review` continues past both. |
 
 Design docs carry a REQUIRED `## Global Constraints` section and task blocks carry
 `Interfaces:` (`Produces:`/`Consumes:` signatures); both are injected verbatim into

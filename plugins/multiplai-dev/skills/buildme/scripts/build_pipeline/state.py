@@ -81,7 +81,6 @@ class TDDState(BaseModel):
     # otherwise re-run it (and pay for it) every time. Old checkpoints default
     # to False, which re-runs a pass that is idempotent by construction.
     refactor_all_done: bool = False
-    final_review_done: bool = False
     e2e_done: bool = False
 
 

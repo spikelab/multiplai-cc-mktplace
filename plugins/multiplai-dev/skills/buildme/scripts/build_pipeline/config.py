@@ -405,8 +405,8 @@ class BuildConfig:
     spec_only: bool = False
     skip_research: bool = False
     # Restores the pre-0.4 accept-and-continue behavior for overnight runs:
-    # review exhaustion and final-review failures/errors log-and-continue
-    # instead of failing the build.
+    # a block that exhausts its review iterations without passing logs and
+    # continues instead of failing the build.
     lenient_review: bool = False
     # --skip-explainers: skip the B1 unknowns/edge-case explainer pass.
     # unknowns.md is still written (recording the skip) so the artifact DAG
