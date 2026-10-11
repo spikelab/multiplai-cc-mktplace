@@ -365,17 +365,39 @@ class TestRespecPhaseAndNotes:
 
     def test_pre_refactor_all_checkpoint_resumes_at_the_refactor_pass(self):
         """A checkpoint written before the whole-change refactor existed: every
-        block is done, the final review has not run, and the new flag defaults
-        to False — so the resume runs the pass rather than skipping it."""
+        block is done and the new flag defaults to False — so the resume runs
+        the pass rather than skipping it."""
         s = BuildState.load(FIXTURES / "build-state-pre-refactor-all.json")
 
         assert s.phase == BuildPhase.TDD_BUILD
         assert s.tdd.refactor_all_done is False
-        assert s.tdd.final_review_done is False
         assert [b.status for b in s.tdd.blocks] == [BlockStatus.DONE, BlockStatus.DONE]
         assert s.tdd.current_block == len(s.tdd.blocks)
         # Fields added after the checkpoint was written take their defaults.
         assert all(b.refactor_commit is None for b in s.tdd.blocks)
+
+    @pytest.mark.parametrize("name, phase, current_block", [
+        ("build-state-pre-prototype-tdd.json", BuildPhase.REVIEW, 1),
+        ("build-state-pre-refactor-all.json", BuildPhase.TDD_BUILD, 2),
+        ("build-state-pre-docs-update.json", BuildPhase.TDD_BUILD, 2),
+    ])
+    def test_checkpoint_with_final_review_done_still_loads_and_resumes(
+        self, tmp_path, name, phase, current_block,
+    ):
+        """buildme no longer runs a final review, and TDDState lost its
+        final_review_done flag. Checkpoints written before that still carry
+        the key: they must load with it dropped and resume where they were."""
+        raw = (FIXTURES / name).read_text()
+        assert '"final_review_done"' in raw, f"{name} no longer holds the old key"
+
+        s = BuildState.load(FIXTURES / name)
+
+        assert s.phase == phase
+        assert s.tdd.current_block == current_block
+        assert not hasattr(s.tdd, "final_review_done")
+        # The next checkpoint drops the key for good.
+        s.checkpoint(tmp_path / "state.json")
+        assert "final_review_done" not in (tmp_path / "state.json").read_text()
 
     def test_refactor_all_done_survives_checkpoint_and_reload(self, tmp_path):
         s = BuildState.load(FIXTURES / "build-state-pre-refactor-all.json")

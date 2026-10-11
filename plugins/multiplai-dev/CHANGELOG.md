@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.33.4] - 2026-10-11
+## [0.34.3] - 2026-10-11
 
 ### Changed
 - buildme's `llm_call_structured` and `agent_call_structured` parse an answer
@@ -30,6 +30,19 @@ time, not derived from a tag.
 - buildme keeps its own spend ledger (`budget.py`). It counts spend per phase
   in tokens, not USD, so it does not move onto multiplai-core's
   `SpendLedger`.
+
+## [0.34.0] - 2026-10-11
+
+### Removed
+- buildme: the final review is gone. buildme no longer runs a whole-change
+  model review after the last block, so a build no longer fails at the end on
+  a FAILED or errored final verdict, and no `FINAL_REVIEW` line appears in
+  its log. Each block is still reviewed and fixed as before. For a review of
+  the whole change, run `/multiplai-dev:review` on the PR buildme opens.
+- buildme: `--lenient-review` now covers one case only, a block whose code
+  review stays below threshold after all fix rounds.
+
+A checkpoint written by an older buildme still loads and resumes where it was.
 
 ## [0.33.1] - 2026-10-11
 

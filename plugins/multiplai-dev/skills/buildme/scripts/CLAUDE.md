@@ -7,7 +7,7 @@
 | `__main__.py` | CLI entry point with subcommands | No |
 | `orchestrator.py` | Phase sequencing state machine | Delegates |
 | `spec_generator.py` | Artifact pipeline (proposal → tasks → rubric) | Via llm_steps |
-| `tdd_engine.py` | Block-by-block TDD with agent spawning. Each block runs test → implement → **refactor** on every tier; the refactor is verified (suite re-run + `unchanged_tests_gate`) and its diff discarded on failure. `_run_refactor_all` is the one conservative whole-change pass, between the block loop and `_run_final_review`, guarded by `TDDState.refactor_all_done`. | Via llm_steps |
+| `tdd_engine.py` | Block-by-block TDD with agent spawning. Each block runs test → implement → **refactor** on every tier; the refactor is verified (suite re-run + `unchanged_tests_gate`) and its diff discarded on failure. `_run_refactor_all` is the one conservative whole-change pass, between the block loop and the entry-point check, guarded by `TDDState.refactor_all_done`. buildme runs no whole-change review: that is `/multiplai-dev:review`, on the PR. | Via llm_steps |
 | `change_manager.py` | Manages specs/ directory (DAG, status, templates, archiving) | No |
 | `config.py` | BuildConfig, tier detection, test command discovery, reference-doc resolution (`stack_reference_docs`/`reference_docs_text`: built-in stack map + `reference_docs:` overrides from `specs/config.yaml` + django/fastapi/react manifest detection; `summarize_reference_doc` reduces an over-limit doc on section boundaries and always emits the full section index). Also the per-step tuning knobs: `conf_model`/`conf_int` join `conf_effort` as the multiplai.conf readers that can say "the conf said nothing" (`pick_model` cannot — it always returns a concrete ID), feeding `spec_model`/`agent_model`/`plan_review_model`, `plan_review_effort` and the two `plan_split_*_trigger` integers; `specs/config.yaml` overrides a conf-supplied `review_model`, which is what `_review_model_from_conf` exists to record. `convention_files()` resolves the project's own `CLAUDE.md` chain for the reviewer. | No |
 | `state.py` | BuildState with checkpoint/resume | No |
@@ -44,7 +44,7 @@ Templates are Python f-strings with `{placeholders}`. Each template is a constan
 | `spec_generation.py` | PROPOSAL_PROMPT, SPEC_PROMPT, DESIGN_PROMPT, TASKS_PROMPT |
 | `test_writing.py` | TEST_WRITER_PROMPT |
 | `implementation.py` | IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM, REFACTOR_PROMPT, REFACTOR_ALL_PROMPT |
-| `review.py` | CODE_REVIEW_PROMPT, FINDING_ADJUDICATION_PROMPT, FINAL_REVIEW_PROMPT |
+| `review.py` | CODE_REVIEW_PROMPT, FINDING_ADJUDICATION_PROMPT |
 | `design_audit.py` | DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT |
 | `prototype.py` | PROTOTYPE_PROMPT |
 | `explainer.py` | EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT |

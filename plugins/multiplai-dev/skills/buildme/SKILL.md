@@ -46,7 +46,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--auto` | Skip review checkpoint (overnight/autonomous runs) |
 | `--spec-only` | Stop after spec generation, the design audit, the plan review and the prototype — everything up to the review checkpoint, no TDD build |
 | `--skip-research` | Skip the research phase |
-| `--lenient-review` | Accept-and-continue when a block exhausts its review iterations, or when the final review fails or errors, instead of failing the build. Unattended overnight runs only — the default is to fail, so low-scoring work is never silently marked done. |
+| `--lenient-review` | Accept-and-continue when a block exhausts its review iterations without passing, instead of failing the build. Unattended overnight runs only — the default is to fail, so low-scoring work is never silently marked done. |
 | `--skip-explainers` | Skip the unknowns/edge-case explainer pass for dependencies new to this project. `unknowns.md` is still written, recording the skip. Default: **on** — the explainers are the anti-slop mechanism, so skipping is a deliberate choice, not a default. |
 | `--prototype` | Force the prototype stage on, whatever the change type. |
 | `--no-prototype` | Skip the prototype stage (the skip and its reason are logged). |
@@ -154,12 +154,15 @@ never break one. There is no "the test needed changing" escape hatch inside a
 refactor window — that hatch belongs to the implementer.
 
 After the last block, one **whole-change** pass runs over the cumulative diff,
-before the final review. Its charter is deliberately narrow: remove cross-block
+before the entry-point check. Its charter is deliberately narrow: remove cross-block
 duplication, dead code and needless indirection, and make naming consistent —
 module boundaries and public signatures stay as designed. It carries the same
 harness (suite green + tests unchanged, or the whole pass is reverted), is
 budget-checked like a block boundary, and is recorded in the checkpoint so a
 resume does not pay for it twice.
+
+buildme reviews each block, not the whole change. The whole-change review is
+`/multiplai-dev:review`, run on the PR.
 
 ### 🚨 MUST: pass `--no-worktree` when you are already inside a worktree
 
@@ -192,7 +195,7 @@ Model and effort are two axes of one decision; both are set from
 |---|---|
 | `[buildme]` | `MODEL=` and `EFFORT=` for the whole pipeline |
 | `[buildme.spec]` | `EFFORT=` for spec generation, audits, rubric |
-| `[buildme.review]` | `EFFORT=` for code review, test-quality audit, final review |
+| `[buildme.review]` | `EFFORT=` for code review, test-quality audit |
 | `[buildme.agent]` | `EFFORT=` for the TDD agents (test writer, implementer, per-block refactorer, the whole-change refactor pass, fix) |
 
 ```ini
