@@ -36,10 +36,9 @@ def _add_lenient_review_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--lenient-review",
         action="store_true",
-        help="Accept-and-continue when quality reviews stay below threshold "
-             "after all fix iterations, or when the final review fails or "
-             "errors (pre-0.4 behavior, for overnight runs). Default: fail "
-             "the build.",
+        help="Accept-and-continue when a block's code review stays below "
+             "threshold after all fix iterations (pre-0.4 behavior, for "
+             "overnight runs). Default: fail the build.",
     )
 
 

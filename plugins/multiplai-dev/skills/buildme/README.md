@@ -234,9 +234,11 @@ as a warning and written to `build-progress.md`; with
 `respec: {halt_on_contradiction: true}` (default **false**) it stops the build
 with a diagnosis instead of steering around the contradiction.
 
-### Phase 8: Final Review
+### Phase 8: Entry-point check
 
-Full code review across the entire change, plus entry-point verification (can the app actually run?).
+Entry-point verification: can the app actually run? buildme reviews each block,
+not the whole change. The whole-change review is `/multiplai-dev:review`, run
+on the PR.
 
 ### Phase 9: Documentation
 
