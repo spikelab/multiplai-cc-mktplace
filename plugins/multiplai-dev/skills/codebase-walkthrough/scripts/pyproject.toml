@@ -12,6 +12,7 @@ dependencies = [
     "python-dotenv>=1",
     "httpx>=0.27",
     "markdown>=3.5",
+    "code-facts",
 ]
 
 [project.optional-dependencies]
@@ -44,3 +45,6 @@ asyncio_mode = "auto"
 # uv.lock.
 [tool.uv.sources]
 multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }
+# The shared explore step. A path source, not `workspace = true`: the installed
+# plugin is plugins/multiplai-dev/ alone, and lib/ sits inside that copy.
+code-facts = { path = "../../../lib/code_facts" }
