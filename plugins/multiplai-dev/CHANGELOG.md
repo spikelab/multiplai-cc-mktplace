@@ -17,6 +17,19 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-10-11
+
+### Changed
+- buildme, review and codebase-walkthrough no longer carry their own copy of
+  the tool list their deny-lists were computed from. Each call now passes
+  only its allow-list, and multiplai-core's `run_agent` denies every other
+  tool (`multiplai_core.deny_list` over core's `TOOL_UNIVERSE`), including
+  the `Read` it opens for an oversized prompt. The tools each agent can use
+  are unchanged: the three copies held the same 53 names as core's list. A
+  tool Claude Code adds later now needs one edit, in multiplai-core.
+- review and codebase-walkthrough import `KNOWN_EFFORTS` from multiplai-core
+  instead of defining the same five effort names locally.
+
 ## [0.33.0] - 2026-10-11
 
 ### Changed

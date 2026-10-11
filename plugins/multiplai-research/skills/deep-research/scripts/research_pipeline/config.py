@@ -199,7 +199,7 @@ _EFFORT_DEFAULTS: tuple[tuple[str, str | None], ...] = (
 # text — `search` parses model output built from search results,
 # `triage_relevance` scores third-party titles and snippets, `extract` and the
 # fetch it feeds handle raw page content. What bounds that risk is not the
-# thinking budget but the fail-closed deny-list in `sdk._deny_list` (every tool
+# thinking budget but run_agent's fail-closed default deny-list (every tool
 # outside the call's allow-list is explicitly denied under bypassPermissions)
 # plus the `defang_untrusted` fencing at the call sites. Re-enable per node
 # with `[deep-research.<node>] THINKING=on` if a future prompt change makes a
