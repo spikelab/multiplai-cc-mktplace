@@ -41,91 +41,16 @@ log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 
-# Every tool an SDK call could otherwise reach. Copied rather than imported
-# from multiplai-core: this is the belt-and-braces layer, and it has to hold on
-# an installed plugin that resolved a core release predating core's own
-# fail-closed default. In the core version this repo currently resolves the
-# list lives in `model_client._DISALLOWED_TOOLS`; core's `agent_runner`
-# additionally exports it as `TOOL_UNIVERSE` and pairs it with the SDK's
-# `tools` option, which is the real fix — see core's CHANGELOG. Once this repo
-# re-locks onto that core, the deny-list here is the *second* layer under a
-# base set that no longer depends on a list being complete.
-#
-# Why it exists: run_agent runs under permission_mode="bypassPermissions",
-# where `allowed_tools` is an allow-list only — it adds tools, it never removes
-# any. Every prompt this module sends carries fetched web-page text, i.e. text
-# an attacker can author. Without an explicit deny-list, an instruction injected
-# into a page reaches a Bash/Read/Write/WebFetch that is not merely available
-# but pre-approved.
-#
-# Best-effort, not exhaustive — a name missing here is a tool left open, which
-# is why it is not the only layer. Re-derive on a CLI bump, from the CLI's own
-# generated schema list:
-#
-#   grep -oE '^export (type|interface) [A-Za-z]+Input' \
-#     "$(dirname "$(readlink -f "$(command -v claude)")")/../sdk-tools.d.ts" \
-#     | sed 's/.* //;s/Input$//' | sort -u
-#
-_TOOL_UNIVERSE = [
-    # mutation / execution
-    "Bash", "BashOutput", "KillShell", "Edit", "Write", "NotebookEdit",
-    "MultiEdit", "REPL", "Task", "Agent", "AskUserQuestion", "SlashCommand",
-    "ExitPlanMode", "EnterPlanMode", "TodoWrite",
-    # read / network / meta — closes the prompt-injection exfiltration chain
-    "Read", "NotebookRead", "Grep", "Glob", "LS", "WebFetch", "WebSearch",
-    "ToolSearch", "Skill",
-    # egress: each can carry text off the machine. Artifact publishes a page,
-    # SendMessage hands it to another agent — exfiltration channels every bit
-    # as much as WebFetch, and this pipeline's whole input is attacker-authored.
-    "Artifact", "SendMessage", "PushNotification", "RemoteTrigger",
-    "SendFeedback",
-    # background / scheduled execution — a denied Bash is worth little if the
-    # run can queue work that gets one later
-    "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskStop",
-    "TaskOutput", "Workflow", "ScheduleWakeup", "Monitor",
-    "CronCreate", "CronDelete", "CronList",
-    # MCP: separately contained by core's strict-mcp-config + setting_sources=[],
-    # listed so this layer does not depend on that one
-    "Mcp", "ListMcpResources", "ReadMcpResource", "ReadMcpResourceDir",
-    "RefreshMcpTools",
-    # remaining harness surface
-    "EnterWorktree", "ExitWorktree", "ReportFindings", "ProposeSkills",
-    "Projects", "ClaudeDesign", "ShowOnboardingRolePicker",
-]
-
-
-def _deny_list(prompt: str, allowed_tools: list[str] | None) -> list[str]:
-    """Deny everything the caller did not explicitly open.
-
-    The pipeline opens exactly one tool at a time — `WebFetch` for the agent
-    fetcher, `WebSearch` for the agent search provider — so the complement is
-    the whole universe minus that one.
-
-    `Read` is left available on an oversized prompt: run_agent then writes the
-    prompt to a temp file and directs the agent to Read it, so denying Read
-    would break every synthesis call over the E2BIG threshold. Same carve-out
-    as buildme's `_deny_list`.
-
-    The carve-out opens *read* on a prompt built from attacker-authored page
-    text, so it is worth being precise about what it does and does not cost.
-    It grants the ability to read local files; it does not grant a way to send
-    what was read anywhere, because every egress tool (Bash, Write, WebFetch,
-    Artifact, SendMessage, …) stays denied in both branches — the exfiltration
-    half of the chain is what the deny-list is really holding, and the
-    carve-out does not touch it. `test_sdk.py` pins that invariant so a future
-    edit to this function cannot widen it by accident.
-    """
-    opened = set(allowed_tools or ())
-    denied = [t for t in _TOOL_UNIVERSE if t not in opened]
-    if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-        denied = [t for t in denied if t != "Read"]
-        log.warning(
-            "prompt is %d bytes (> %d): Read left open for the tempfile "
-            "fallback; all egress tools remain denied",
-            len(prompt.encode("utf-8")),
-            MAX_PROMPT_BYTES,
-        )
-    return denied
+# Tool denial lives in multiplai-core. run_agent runs under
+# permission_mode="bypassPermissions", where `allowed_tools` only adds tools and
+# never removes any, and every prompt this module sends carries fetched
+# web-page text an attacker can author. So `llm_call` passes no
+# `disallowed_tools`: run_agent then denies the complement of the tools it
+# opens (`multiplai_core.deny_list` over core's `TOOL_UNIVERSE`), under its
+# `tools=` base set. The pipeline opens at most one tool per call — `WebFetch`
+# for the agent fetcher, `WebSearch` for the agent search provider. On an
+# oversized prompt run_agent opens `Read` for its tempfile fallback; every
+# egress tool (Bash, Write, WebFetch, Artifact, SendMessage, ...) stays denied.
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +268,7 @@ async def llm_call(
     Returns the assistant's text response. No tools are allowed by default —
     the pipeline provides all context as prompt text and parses structured
     output from the response. Whatever is not in `allowed_tools` is explicitly
-    *denied* (`_deny_list`), because these prompts carry attacker-authorable
+    *denied* (run_agent's default deny-list), because these prompts carry attacker-authorable
     web-page text and an allow-list alone removes nothing under
     bypassPermissions.
 
@@ -393,7 +318,6 @@ async def llm_call(
                 prompt,
                 system_prompt=system_prompt,
                 allowed_tools=allowed_tools,
-                disallowed_tools=_deny_list(prompt, allowed_tools),
                 max_turns=max_turns,
                 max_attempts=max_attempts,
                 model=model,

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import yaml
 
+from multiplai_core import KNOWN_EFFORTS
 from multiplai_core.env import load_multiplai_conf
 
 from .budget import DEFAULT_MAX_USD
@@ -25,7 +26,6 @@ from .budget import DEFAULT_MAX_USD
 log = logging.getLogger(__name__)
 
 DEFAULT_CONCURRENCY = 4
-KNOWN_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 STAGE_MODELS = ("explore_model", "docs_model", "trace_model", "write_model")
 
 

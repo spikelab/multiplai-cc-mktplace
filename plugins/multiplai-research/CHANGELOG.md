@@ -20,6 +20,20 @@ dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.7.3] - 2026-10-11
+
+### Changed
+
+- **deep-research no longer carries its own copy of the tool list its
+  deny-list was computed from.** `llm_call` now passes only its allow-list,
+  and multiplai-core's `run_agent` denies every other tool
+  (`multiplai_core.deny_list` over core's `TOOL_UNIVERSE`). The tools each
+  call can use are unchanged: the copy held the same 53 names as core's list,
+  and the fetcher and search agents still open exactly `WebFetch` and
+  `WebSearch`. On an oversized prompt core opens `Read` for its tempfile
+  fallback, as before, but the pipeline's own "Read left open" warning is
+  gone with the copy.
+
 ## [0.7.2] - 2026-08-23
 
 ### Changed

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
+from multiplai_core import deny_list
 from multiplai_core.agent_runner import AgentRunError
 from review_pipeline import budget, sdk
 from review_pipeline.models import VerifierAnswer
@@ -47,7 +48,7 @@ async def test_untrusted_repo_is_refused_before_any_call(fake_run):
     assert calls == []
 
 
-async def test_read_only_tools_and_their_complement(trusted, fake_run):
+async def test_the_allow_list_reaches_run_agent_and_core_builds_the_deny_list(trusted, fake_run):
     calls, replies = fake_run
     replies.append(_result('{"value": 3}'))
     out = await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.FINDER_TOOLS, cwd="/repo",
@@ -55,9 +56,7 @@ async def test_read_only_tools_and_their_complement(trusted, fake_run):
     assert out.value == 3
     call = calls[0]
     assert call["allowed_tools"] == ["Read", "Grep", "Glob", "WebFetch", "WebSearch"]
-    for tool in ("Bash", "Edit", "Write", "Agent", "Skill"):
-        assert tool in call["disallowed_tools"]
-    assert not {"Read", "Grep", "Glob", "WebFetch", "WebSearch"} & set(call["disallowed_tools"])
+    assert "disallowed_tools" not in call
     assert (call["cwd"], call["component"], call["label"], call["model"], call["effort"]) == \
         ("/repo", "review", "find:diff-bugs", "m", "high")
 
@@ -67,8 +66,19 @@ def test_finders_and_verifiers_read_and_browse_the_merger_only_reads():
     assert sdk.MERGER_TOOLS == ["Read", "Grep", "Glob"]
     for tools in (sdk.FINDER_TOOLS, sdk.VERIFIER_TOOLS, sdk.MERGER_TOOLS):
         assert not {"Bash", "Edit", "Write", "Agent"} & set(tools)
-        assert "WebFetch" in sdk.deny_list("p", sdk.MERGER_TOOLS)
-        assert "WebFetch" not in sdk.deny_list("p", sdk.FINDER_TOOLS)
+
+
+def test_core_denies_what_each_stage_does_not_allow():
+    """run_agent's default deny-list is core's `deny_list(allowed)`; call the
+    real one with each stage's allow-list."""
+    for tools in (sdk.FINDER_TOOLS, sdk.VERIFIER_TOOLS, sdk.MERGER_TOOLS):
+        denied = deny_list(tools)
+        for tool in ("Bash", "Edit", "Write", "Agent", "Skill"):
+            assert tool in denied, tool
+        assert not set(tools) & set(denied)
+    assert {"WebFetch", "WebSearch"} <= set(deny_list(sdk.MERGER_TOOLS))
+    assert not {"WebFetch", "WebSearch"} & set(deny_list(sdk.FINDER_TOOLS))
+    assert not {"WebFetch", "WebSearch"} & set(deny_list(sdk.VERIFIER_TOOLS))
 
 
 async def test_an_unparsable_answer_is_reformatted_without_tools_not_rerun(trusted, fake_run):
@@ -83,7 +93,8 @@ async def test_an_unparsable_answer_is_reformatted_without_tools_not_rerun(trust
     assert '<answer>\n{"value": "not a number"}\n</answer>' in reformat["prompt"]
     assert "rejected" in reformat["prompt"] and '"value"' in reformat["prompt"]
     assert reformat["allowed_tools"] == [] and reformat["max_turns"] == sdk.REFORMAT_MAX_TURNS
-    assert {"Read", "Grep", "Glob", "Bash"} <= set(reformat["disallowed_tools"])
+    assert "disallowed_tools" not in reformat
+    assert {"Read", "Grep", "Glob", "Bash"} <= set(deny_list(reformat["allowed_tools"]))
     assert reformat["label"] == "verify:reformat"
 
 

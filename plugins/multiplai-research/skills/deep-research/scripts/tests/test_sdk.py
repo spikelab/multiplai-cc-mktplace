@@ -8,9 +8,9 @@ import logging
 import pytest
 from pydantic import BaseModel
 
+from multiplai_core import deny_list
 from research_pipeline import sdk as sdk_module
 from research_pipeline.sdk import (
-    MAX_PROMPT_BYTES,
     LLMCallTimeoutError,
     LLMCallUsage,
     _record_usage,
@@ -404,60 +404,62 @@ class TestMaxAttempts:
 class TestToolDenyList:
     """Every prompt here carries fetched web text, so an allow-list alone is
     not a boundary — under bypassPermissions only disallowed_tools removes a
-    tool. These assert the deny-list actually reaches run_agent."""
+    tool. llm_call passes only the allow-list; run_agent then denies the
+    complement with core's `deny_list`. These pin both halves."""
 
     def _patch_run_agent(self, monkeypatch: pytest.MonkeyPatch, text: str = "[]") -> dict:
         return TestMaxAttempts()._patch_run_agent(monkeypatch, text=text)
 
     @pytest.mark.asyncio
-    async def test_text_only_call_denies_the_whole_universe(
+    async def test_text_only_call_leaves_the_deny_list_to_core(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         captured = self._patch_run_agent(monkeypatch)
         await llm_call("p")
-        assert captured["disallowed_tools"] == sdk_module._TOOL_UNIVERSE
+        assert not captured["allowed_tools"]
+        assert "disallowed_tools" not in captured
 
-    def test_universe_names_the_capabilities_that_carry_the_risk(self) -> None:
-        """Pin names, not the list against itself.
-
-        `disallowed_tools == _TOOL_UNIVERSE` passes no matter what the universe
-        forgot — which is how Artifact, SendMessage, REPL and the Task/Cron
-        family sat outside it while every deny-list test stayed green.
-        """
+    def test_core_denies_everything_to_a_text_only_call(self) -> None:
+        denied = deny_list(None)
         for tool in (
             "Bash", "REPL",                             # execution
-            "WebFetch", "Artifact", "SendMessage",      # egress
+            "WebFetch", "WebSearch", "Artifact", "SendMessage",  # egress
             "TaskCreate", "CronCreate", "Workflow",     # deferred execution
             "Read", "Write", "Edit",                    # local files
             "ToolSearch", "Skill",                      # loading tools back in
         ):
-            assert tool in sdk_module._TOOL_UNIVERSE, tool
+            assert tool in denied, tool
+
+    def test_core_denies_all_but_the_one_web_tool_each_agent_opens(self) -> None:
+        for opened, closed in (("WebFetch", "WebSearch"), ("WebSearch", "WebFetch")):
+            denied = deny_list([opened])
+            assert opened not in denied
+            for tool in ("Bash", "Edit", "Write", "Read", closed):
+                assert tool in denied, tool
 
     @pytest.mark.asyncio
-    async def test_allow_list_denies_the_complement(
+    async def test_allow_list_reaches_run_agent_without_a_deny_list(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         captured = self._patch_run_agent(monkeypatch)
         await llm_call("p", allowed_tools=["WebFetch"])
-        denied = captured["disallowed_tools"]
-        assert "WebFetch" not in denied
-        for tool in ("Bash", "Read", "Write", "WebSearch"):
-            assert tool in denied
+        assert captured["allowed_tools"] == ["WebFetch"]
+        assert "disallowed_tools" not in captured
 
     @pytest.mark.asyncio
-    async def test_structured_call_carries_the_deny_list(
+    async def test_structured_call_leaves_the_deny_list_to_core(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """llm_call_structured routes through llm_call — pin it, so a future
-        refactor that gives it its own run_agent call cannot lose the list."""
-        self._patch_run_agent(monkeypatch, text='{"content_markdown": "c"}')
+        refactor that gives it its own run_agent call cannot open tools."""
         captured = self._patch_run_agent(monkeypatch, text='{"value": 1}')
 
         class _Schema(BaseModel):
             value: int
 
         await llm_call_structured("p", _Schema)
-        assert "Bash" in captured["disallowed_tools"]
+        assert not captured["allowed_tools"]
+        assert "disallowed_tools" not in captured
 
     @pytest.mark.asyncio
     async def test_fetcher_opens_only_webfetch(
@@ -468,9 +470,7 @@ class TestToolDenyList:
         captured = self._patch_run_agent(monkeypatch, text='{"content_markdown": "c"}')
         await ClaudeAgentFetcher().fetch_url("https://a.example")
         assert captured["allowed_tools"] == ["WebFetch"]
-        assert "Bash" in captured["disallowed_tools"]
-        assert "WebFetch" not in captured["disallowed_tools"]
-
+        assert "disallowed_tools" not in captured
 
     @pytest.mark.asyncio
     async def test_search_provider_opens_only_websearch(
@@ -481,51 +481,24 @@ class TestToolDenyList:
         captured = self._patch_run_agent(monkeypatch, text="[]")
         await ClaudeAgentSearchProvider().search("q")
         assert captured["allowed_tools"] == ["WebSearch"]
-        assert "Bash" in captured["disallowed_tools"]
-        assert "WebSearch" not in captured["disallowed_tools"]
-
-    @pytest.mark.asyncio
-    async def test_oversized_prompt_keeps_read_available(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """run_agent's E2BIG fallback writes the prompt to a file and tells the
-        agent to Read it — denying Read would break every large synthesis."""
-        captured = self._patch_run_agent(monkeypatch)
-        await llm_call("x" * (MAX_PROMPT_BYTES + 1))
-        assert "Read" not in captured["disallowed_tools"]
-        assert "Bash" in captured["disallowed_tools"]
+        assert "disallowed_tools" not in captured
 
 
 class TestOversizedPromptCarveOut:
-    """`_deny_list` re-opens Read above the E2BIG threshold, because run_agent
-    then hands the prompt over as a temp file. That is a real widening on the
-    one code path whose input is entirely attacker-authored, so what it costs
-    is pinned here rather than left to the comment."""
-
-    # Comfortably over MAX_PROMPT_BYTES without depending on its exact value.
-    _BIG = "x" * (sdk_module.MAX_PROMPT_BYTES + 1024)
-
-    def test_read_is_denied_on_an_ordinary_prompt(self) -> None:
-        assert "Read" in sdk_module._deny_list("short prompt", None)
-
-    def test_threshold_is_measured_in_bytes_not_characters(self) -> None:
-        """A prompt of multi-byte characters can be under the character count
-        and over the byte limit — run_agent's own check is on bytes, so this
-        one must be too or the two disagree about which mode is in force."""
-        just_under = "€" * ((sdk_module.MAX_PROMPT_BYTES // 3) - 16)
-        assert len(just_under) < sdk_module.MAX_PROMPT_BYTES
-        assert "Read" in sdk_module._deny_list(just_under, None)
+    """On an oversized prompt run_agent adds `Read` to the tools it opens (it
+    hands the prompt over as a temp file) and denies the complement of that.
+    That is a real widening on the one code path whose input is entirely
+    attacker-authored, so what it costs is pinned here against core's
+    `deny_list`, the function run_agent uses."""
 
     def test_the_carve_out_opens_read_and_nothing_else(self) -> None:
-        ordinary = set(sdk_module._deny_list("short prompt", None))
-        oversized = set(sdk_module._deny_list(self._BIG, None))
-        assert ordinary - oversized == {"Read"}
+        assert set(deny_list(None)) - set(deny_list(["Read"])) == {"Read"}
 
     def test_every_egress_tool_stays_denied_in_the_carve_out(self) -> None:
         """The half that matters. Read alone is disclosure to a subprocess that
         has no way to speak; it becomes exfiltration only if something can also
         carry the bytes out. Nothing that can may be opened here."""
-        denied = set(sdk_module._deny_list(self._BIG, None))
+        denied = set(deny_list(["Read"]))
         for tool in (
             "Bash", "BashOutput", "REPL", "Task", "Agent",       # execution
             "Write", "Edit", "MultiEdit", "NotebookEdit",        # local writes
@@ -536,38 +509,6 @@ class TestOversizedPromptCarveOut:
             "ToolSearch", "Skill", "SlashCommand",               # loading tools back in
         ):
             assert tool in denied, tool
-
-    def test_the_carve_out_is_logged(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """A silent widening is one nobody audits."""
-        with caplog.at_level(logging.WARNING, logger="research_pipeline.sdk"):
-            sdk_module._deny_list(self._BIG, None)
-        assert any("Read left open" in r.getMessage() for r in caplog.records)
-
-
-class TestToolUniverseDrift:
-    """`_TOOL_UNIVERSE` is deliberately a copy of core's, not an import — it has
-    to hold on an installed plugin that resolved a core release predating core's
-    fail-closed default (see the comment on the constant). A copy drifts, and a
-    tool missing from it is a tool left open, so pin the two together: when core
-    learns about a new tool, this list must learn about it in the same bump."""
-
-    def test_covers_everything_core_knows_about(self) -> None:
-        core = __import__(
-            "multiplai_core.agent_runner", fromlist=["TOOL_UNIVERSE"]
-        ).TOOL_UNIVERSE
-        missing = sorted(set(core) - set(sdk_module._TOOL_UNIVERSE))
-        assert not missing, (
-            f"multiplai-core knows about tools this deny-list does not: {missing}. "
-            "Add them to _TOOL_UNIVERSE — each one is a tool left pre-approved "
-            "under bypassPermissions."
-        )
-
-    def test_has_no_duplicates(self) -> None:
-        dupes = {t for t in sdk_module._TOOL_UNIVERSE
-                 if sdk_module._TOOL_UNIVERSE.count(t) > 1}
-        assert not dupes, dupes
 
 
 @pytest.fixture(autouse=True)

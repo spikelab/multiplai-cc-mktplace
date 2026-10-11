@@ -20,6 +20,7 @@ from pathlib import Path
 
 import yaml
 
+from multiplai_core import KNOWN_EFFORTS
 from multiplai_core.env import load_multiplai_conf
 
 from .budget import DEFAULT_MAX_USD
@@ -28,7 +29,6 @@ log = logging.getLogger(__name__)
 
 DIMENSIONS: tuple[str, ...] = ("diff-bugs", "callers", "history", "conventions", "tests")
 DEFAULT_CONCURRENCY = 4
-KNOWN_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 
 
 @dataclass
