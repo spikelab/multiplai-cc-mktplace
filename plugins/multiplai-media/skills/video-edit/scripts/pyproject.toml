@@ -18,6 +18,11 @@ dependencies = [
     "opencv-python-headless>=4.9",
     "tqdm>=4.66",
     "click>=8.1",
+    # Overlays render in headless Chromium driven by Playwright. Keep this pin
+    # equal to PLAYWRIGHT_VERSION in the multiplai-container Dockerfile: each
+    # Playwright release expects one Chromium build, and the image ships the
+    # build that version expects under PLAYWRIGHT_BROWSERS_PATH.
+    "playwright==1.63.0",
 ]
 
 [tool.uv]
