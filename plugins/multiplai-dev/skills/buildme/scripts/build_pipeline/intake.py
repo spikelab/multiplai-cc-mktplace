@@ -54,25 +54,25 @@ class ConfigNotCommittedError(RuntimeError):
 
 # --- Input file paths ---------------------------------------------------------
 
-#: The `build` flags that name one input file the pipeline reads.
+#: The `build` flags that name one input file the pipeline reads: the
+#: attribute, the flag, the phase that reads it, and the copy that phase saves
+#: in the change dir. Once the phase is behind the checkpoint, or its copy
+#: exists, the build no longer needs the original.
 INPUT_FILE_FLAGS = (
-    ("ticket_file", "--ticket-file"),
-    ("research_path", "--research-path"),
-    ("plan_file", "--plan-file"),
-    ("interview_replies", "--interview-replies"),
+    ("ticket_file", "--ticket-file", BuildPhase.BOOTSTRAP, "ticket.md"),
+    ("research_path", "--research-path", BuildPhase.RESEARCH, "research.md"),
+    ("plan_file", "--plan-file", BuildPhase.BOOTSTRAP, "plan.md"),
+    ("interview_replies", "--interview-replies", BuildPhase.INTERVIEW_DONE, "interview.md"),
 )
 
 
-def resolve_input_paths(args) -> str | None:
+def resolve_input_paths(args) -> None:
     """Make every input file path in *args* absolute, in place.
 
     SKILL.md runs the pipeline under ``uv run --directory <scripts>``, so the
     process cwd is the scripts directory, never the caller's. A relative path
-    is read from ``--project-dir`` instead. Each single-file flag must name a
-    file that exists: the error message is returned (the caller exits 2), so
-    a mistyped path never turns into a build without its ticket or research.
-    ``--context-files`` keeps its warn-and-skip behaviour for a missing file
-    and is only made absolute.
+    is read from ``--project-dir`` instead. Whether a named file must exist is
+    decided by ``check_input_files``, once the checkpoint is known.
     """
     base = Path(getattr(args, "project_dir", ".") or ".").expanduser().resolve()
 
@@ -80,19 +80,62 @@ def resolve_input_paths(args) -> str | None:
         path = Path(raw).expanduser()
         return path if path.is_absolute() else base / path
 
-    for attr, flag in INPUT_FILE_FLAGS:
+    for attr, _flag, _phase, _copy in INPUT_FILE_FLAGS:
         raw = getattr(args, attr, "") or ""
-        if not raw:
-            continue
-        path = absolute(raw)
-        if not path.is_file():
-            return (f"{flag} {raw}: no such file ({path}). Pass an absolute path, "
-                    f"or one relative to --project-dir {base}.")
-        setattr(args, attr, str(path))
+        if raw:
+            setattr(args, attr, str(absolute(raw)))
     contexts = getattr(args, "context_files", None)
     if contexts:
         args.context_files = [str(absolute(raw)) for raw in contexts]
+
+
+def check_input_files(args, state, change_dirs) -> str | None:
+    """The error for a named input file the build still needs and cannot read.
+
+    A missing file is an error only while the phase that reads it is still
+    ahead of the checkpoint and its copy is not in the change dir: a mistyped
+    path never turns into a build without its ticket or research (the caller
+    exits 2). A resume does not need the original once it has been copied —
+    the wrapper's ticket file is a scratch file that may be gone days later —
+    so the flag is dropped and the copy is used. ``--context-files`` keeps its
+    warn-and-skip behaviour for a missing file.
+    """
+    base = getattr(args, "project_dir", ".") or "."
+    for attr, flag, phase, copy in INPUT_FILE_FLAGS:
+        raw = getattr(args, attr, "") or ""
+        if not raw or Path(raw).is_file():
+            continue
+        copies = [Path(d) / copy for d in change_dirs if (Path(d) / copy).is_file()]
+        if state.is_phase_complete(phase) or copies:
+            log.info("%s %s is gone; the build already has what it read (%s)",
+                     flag, raw, copies[0] if copies else f"phase {phase.value} done")
+            setattr(args, attr, "")
+            continue
+        return (f"{flag} {raw}: no such file. Pass an absolute path, "
+                f"or one relative to --project-dir {base}.")
     return None
+
+
+def carry_over_inputs(previous: Path, change_dir: Path) -> list[Path]:
+    """Copy the saved inputs of *previous* into a new *change_dir*.
+
+    A FAILED build re-runs bootstrap, which sets up a new worktree, so the
+    change dir moves. ``check_input_files`` accepted a gone input file because
+    its copy was in the old change dir; that copy has to come along, or the
+    retry builds without the ticket, plan, research or interview it had.
+    A copy the new dir already holds is kept.
+    """
+    previous, change_dir = Path(previous), Path(change_dir)
+    if previous.resolve() == change_dir.resolve() or not previous.is_dir():
+        return []
+    carried = []
+    for _attr, _flag, _phase, copy in INPUT_FILE_FLAGS:
+        src, dest = previous / copy, change_dir / copy
+        if src.is_file() and not dest.exists():
+            dest.write_text(src.read_text())
+            carried.append(dest)
+            log.info("Carried %s over from %s", copy, previous)
+    return carried
 
 
 # --- Bootstrap helpers --------------------------------------------------------
@@ -379,15 +422,26 @@ async def _ticket_interview(config, state, args, state_path, progress, contexts,
     questions_path = change_dir / "interview-questions.md"
     replies = _read_replies(getattr(args, "interview_replies", "") or "")
 
-    def finish(text: str, note: str) -> None:
-        write_interview(change_dir, text)
-        state.interview_summary = text
+    def finish(text: str | None, note: str) -> None:
+        if text is not None:
+            write_interview(change_dir, text)
+            state.interview_summary = text
         state.interview_waiting = False
         state.advance_to(BuildPhase.INTERVIEW_DONE, state_path)
         log.info("DONE phase=INTERVIEW mode=ticket")
         _progress_note(progress, "INTERVIEW", note)
         print("PHASE:INTERVIEW:COMPLETE", flush=True)
         board.record(config, state, BuildPhase.INTERVIEW_DONE, progress=progress)
+
+    interview_path = change_dir / "interview.md"
+    if (not replies and not state.interview_waiting and state.interview_summary
+            and interview_path.is_file()):
+        # A retry of a build that already finished its interview (a FAILED
+        # checkpoint re-runs every phase): reuse it. Asking again would print
+        # INTERVIEW:WAITING and the wrapper would post the questions twice.
+        log.info("phase=INTERVIEW mode=ticket — reusing %s", interview_path)
+        finish(None, f"Interview already saved in {interview_path}; reused")
+        return None
 
     if replies and questions_path.is_file():
         questions = read_questions(questions_path)

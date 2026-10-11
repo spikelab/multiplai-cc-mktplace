@@ -60,7 +60,8 @@ time, not derived from a tag.
   `--plan-file`, `--interview-replies` and `--context-files` are read from
   `--project-dir`. A ticket, research, plan or replies file that does not
   exist now stops the build with exit `2`, instead of a warning and a build
-  without it.
+  without it — unless the build already saved it in the change directory, so
+  resuming after the wrapper's scratch file is gone still works.
 
 ### Fixed
 - buildme: `build --research-path` works. The flag was documented but rejected,

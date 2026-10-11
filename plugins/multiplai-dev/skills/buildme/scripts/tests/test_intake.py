@@ -302,6 +302,88 @@ class TestTicketMode:
         assert not (config.change_dir / "interview-questions.md").exists()
         assert "## Ticket" in (config.change_dir / "interview.md").read_text()
 
+    @pytest.mark.asyncio
+    async def test_resume_with_replies_after_the_scratch_ticket_and_plan_are_gone(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """The wrapper's --ticket-file and --plan-file are scratch files (often
+        under /tmp). Bootstrap copied them into the change dir, so the resume,
+        days later, must not need them any more."""
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        ticket = self._ticket(tmp_path)
+        plan = tmp_path / "plan-in.md"
+        plan.write_text("# Plan\n\nDo the CSV export.\n")
+        call = FakeCall(QUESTIONS, ANSWERS)
+        common = dict(ticket_file=str(ticket), plan_file=str(plan), ticket_ref="#12",
+                      ticket_url="https://github.com/o/r/issues/12")
+
+        config = _config(repo, "csv", interview_mode="ticket")
+        with patch("build_pipeline.llm_steps.interview_steps.agent_call_structured", call):
+            rc = await run_orchestrator(config, _args(repo, "csv", **common))
+        assert rc == WAITING_EXIT
+        capsys.readouterr()
+        ticket.unlink()
+        plan.unlink()
+
+        replies = tmp_path / "replies.md"
+        replies.write_text("alice: admins only.\n")
+        config = _config(repo, "csv", interview_mode="ticket")
+        mocks = _spec_stage_mocks()
+        with mocks[0], mocks[1], mocks[2]:
+            rc = await run_orchestrator(
+                config, _args(repo, "csv", interview_replies=str(replies), **common))
+        captured = capsys.readouterr()
+        assert rc == 0, captured.err
+        assert "PHASE:INTERVIEW:COMPLETE" in captured.out
+        assert "CSV export" in (config.change_dir / "ticket.md").read_text()
+        assert "Do the CSV export." in (config.change_dir / "plan.md").read_text()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_build_retried_does_not_ask_on_the_ticket_again(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """After the replies run finished the interview, a later failure sets the
+        state to FAILED and every phase re-runs. The retry must reuse the saved
+        interview, not print INTERVIEW:WAITING (the wrapper would post the
+        same questions a second time) or call the questioner again."""
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        ticket = self._ticket(tmp_path)
+        call = FakeCall(QUESTIONS, ANSWERS)
+        common = dict(ticket_file=str(ticket), ticket_ref="#12",
+                      ticket_url="https://github.com/o/r/issues/12")
+
+        config = _config(repo, "csv", interview_mode="ticket")
+        with patch("build_pipeline.llm_steps.interview_steps.agent_call_structured", call):
+            assert await run_orchestrator(config, _args(repo, "csv", **common)) == 3
+        replies = tmp_path / "replies.md"
+        replies.write_text("alice: admins only, all columns.\n")
+        config = _config(repo, "csv", interview_mode="ticket")
+        with patch("build_pipeline.spec_generator.run_spec_generator",
+                   AsyncMock(return_value=1)):
+            rc = await run_orchestrator(
+                config, _args(repo, "csv", interview_replies=str(replies), **common))
+        assert rc == 1
+        assert BuildState.load(config.state_file_path()).phase == BuildPhase.FAILED
+        capsys.readouterr()
+
+        # The retry: the same command, without --interview-replies, after the
+        # wrapper's scratch ticket file was cleaned up.
+        ticket.unlink()
+        config = _config(repo, "csv", interview_mode="ticket")
+        mocks = _spec_stage_mocks()
+        with mocks[0], mocks[1], mocks[2], \
+                patch("build_pipeline.llm_steps.interview_steps.agent_call_structured", call):
+            rc = await run_orchestrator(config, _args(repo, "csv", **common))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "INTERVIEW:WAITING" not in out
+        assert "PHASE:INTERVIEW:COMPLETE" in out
+        assert len(call.prompts) == 1
+        assert "admins only, all columns." in (config.change_dir / "interview.md").read_text()
+        assert "CSV export" in (config.change_dir / "ticket.md").read_text()
+
     def test_ticket_mode_without_a_ticket_falls_back(self, tmp_path):
         from build_pipeline.intake import effective_interview_mode
 
@@ -683,19 +765,32 @@ class TestInputPaths:
     @pytest.mark.parametrize("flag", ["--ticket-file", "--research-path", "--plan-file",
                                       "--interview-replies"])
     def test_a_missing_input_file_exits_2_before_the_build_starts(
-        self, tmp_path, capsys, flag,
+        self, tmp_path, capsys, monkeypatch, flag,
     ):
         from build_pipeline.__main__ import main
 
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         project = tmp_path / "proj"
         project.mkdir()
-        with patch("build_pipeline.orchestrator.run_orchestrator") as run:
-            rc = main(["build", "--change", "csv", "--project-dir", str(project),
-                       flag, "missing.md"])
+        rc = main(["build", "--change", "csv", "--project-dir", str(project),
+                   "--no-worktree", flag, "missing.md"])
         assert rc == 2
-        run.assert_not_called()
+        assert not (project / "specs").exists()
         err = capsys.readouterr().err
         assert flag in err and "missing.md" in err
+
+    def test_a_missing_ticket_or_plan_file_is_left_to_the_build_to_judge(self, tmp_path):
+        """Both are read once, at bootstrap, which copies them into the change
+        dir. Whether a missing one matters depends on the checkpoint, which
+        only the orchestrator can find (it may sit in the build's worktree)."""
+        from build_pipeline.intake import resolve_input_paths
+
+        project = tmp_path / "proj"
+        args = self._parse("--project-dir", str(project),
+                           "--ticket-file", "gone/ticket.md", "--plan-file", "gone/plan.md")
+        assert resolve_input_paths(args) is None
+        assert args.ticket_file == str(project / "gone" / "ticket.md")
+        assert args.plan_file == str(project / "gone" / "plan.md")
 
 
 # --- exit codes ------------------------------------------------------------------

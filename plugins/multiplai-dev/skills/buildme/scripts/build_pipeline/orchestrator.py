@@ -56,6 +56,18 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
     cm = ChangeManager(config.specs_dir)
 
+    # A named input file that is gone stops the build (exit 2) only while the
+    # phase that reads it is still ahead; a resume uses the change dir's copy.
+    if args is not None:
+        from .intake import check_input_files
+        change_dirs = [config.change_dir] if config.change_name else []
+        if state_path.exists():
+            change_dirs.append(state_path.parent)
+        error = check_input_files(args, state, change_dirs)
+        if error:
+            print(f"ERROR: {error}", file=sys.stderr, flush=True)
+            return 2
+
     # Set the moment the build's outcome is decided as success (spec-only done,
     # or publish resolved). From then on the checkpoint is deliberately gone,
     # so a late exception (progress cleanup, stdout) must NOT be recorded as
@@ -802,6 +814,7 @@ async def _run_bootstrap(
 
     from . import intake
 
+    previous_change_dir = config.change_dir if config.change_name else None
     if config.git.worktree:
         # The worktree branches from HEAD, so an uncommitted config.yaml would
         # silently not exist inside it — refuse instead of building without it.
@@ -831,6 +844,8 @@ async def _run_bootstrap(
     # Create change if name is set
     if config.change_name:
         cm.create_change(config.change_name)
+        if previous_change_dir is not None:
+            intake.carry_over_inputs(previous_change_dir, config.change_dir)
         _save_intake(config, state, args)
 
     # Write config.yaml if it doesn't exist

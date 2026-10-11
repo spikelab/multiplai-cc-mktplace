@@ -205,14 +205,12 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     # Input files: relative paths are read from --project-dir (the process
-    # cwd is the scripts dir under `uv run --directory`), and a named file
-    # that does not exist is a usage error, not a warning.
+    # cwd is the scripts dir under `uv run --directory`). Whether a named file
+    # that does not exist is a usage error depends on the checkpoint, so the
+    # orchestrator decides that (intake.check_input_files).
     if args.command == "build":
         from .intake import resolve_input_paths
-        error = resolve_input_paths(args)
-        if error:
-            print(f"ERROR: {error}", file=sys.stderr)
-            return 2
+        resolve_input_paths(args)
 
     # Propagate the repo-trust opt-in to the agent layer (sdk._repo_is_trusted).
     if getattr(args, "trust_repo", False):

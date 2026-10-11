@@ -404,7 +404,10 @@ git worktree (see [Git lifecycle](#git-lifecycle)).
 relative to `{project_dir}`. The pipeline runs from its own scripts directory
 (`uv run --directory`), so a path relative to your cwd is not found. A
 `--ticket-file`, `--research-path`, `--plan-file` or `--interview-replies` that
-does not exist stops the run with exit `2` before anything is built.
+does not exist stops the run with exit `2` before anything is built. On a
+resume, a file the build has already saved into the change directory
+(`ticket.md`, `plan.md`, `research.md`, `interview.md`) is no longer needed:
+re-running the same command works after a scratch file under `/tmp` is gone.
 
 The pipeline handles: worktree/branch setup, bootstrap, codebase analysis, spec
 generation (via change_manager) including the unknowns/explainer pass, the
