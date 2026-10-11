@@ -504,8 +504,8 @@ Parse pipeline stdout for progress lines:
 - `RESULT:SUCCESS` — build complete
 - `ERROR:<message>` — failure
 
-**Exit codes.** `0` done, `1` failure, `2` usage error, and `3` — **waiting on a
-human or on you**. Each `3` prints one marker. Handle it, then re-run the
+**Exit codes.** `0` done, `1` failure, `2` usage error, `4` an agent timed out
+(a failure: report it like `1`), and `3` — **waiting on a human or on you**. Each `3` prints one marker. Handle it, then re-run the
 **same** `build --change <name>` command (plus the flag named below) to resume:
 
 | Marker | What happened | What you do |

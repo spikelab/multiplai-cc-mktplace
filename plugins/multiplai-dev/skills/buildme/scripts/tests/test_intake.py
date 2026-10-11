@@ -696,3 +696,19 @@ class TestInputPaths:
         run.assert_not_called()
         err = capsys.readouterr().err
         assert flag in err and "missing.md" in err
+
+
+# --- exit codes ------------------------------------------------------------------
+
+class TestExitCodes:
+    def test_waiting_has_a_code_no_other_path_uses(self):
+        """A wrapper reads 3 as 'waiting, re-run to resume'. An agent timeout
+        reaching `build` through the TDD phase must not look like that."""
+        from build_pipeline.tdd_engine import (
+            EXIT_AGENT_TIMEOUT, EXIT_BUILD_FAILURE, EXIT_SUCCESS,
+        )
+
+        assert WAITING_EXIT == 3
+        assert EXIT_AGENT_TIMEOUT == 4
+        assert len({EXIT_SUCCESS, EXIT_BUILD_FAILURE, 2, WAITING_EXIT,
+                    EXIT_AGENT_TIMEOUT}) == 5

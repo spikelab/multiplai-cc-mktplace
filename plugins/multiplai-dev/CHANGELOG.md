@@ -35,7 +35,7 @@ time, not derived from a tag.
   `self` interviews itself with no human: one call asks, a separate call
   answers from the repo and the ticket, and anything it could not ground is
   listed as an assumption. `ticket` asks its questions on the ticket and waits
-  for replies. `user` is the interview you had before. `--auto` turns `user`
+  for replies; when it has no questions, it goes on without waiting. `user` is the interview you had before. `--auto` turns `user`
   into `self`. Every mode saves `interview.md`, committed on the build branch.
 - buildme decides whether research is needed instead of asking you up front,
   and saves the reason in `research.md` either way.
@@ -50,8 +50,17 @@ time, not derived from a tag.
 - buildme: the plan-split triggers are now more than 10 blocks or more than 5
   top-level packages (were 8 and 3). `multiplai.conf` overrides still apply.
 - buildme: with a worktree build, an uncommitted `specs/config.yaml` now stops
-  the build with a clear error instead of building without it.
+  the build with a clear error instead of building without it. A failed build
+  retried in its own worktree is not stopped by this check.
 - buildme depends on `ruamel.yaml` (for `setup`).
+- buildme: an agent timeout during the build now exits `4` (it was `3`, which
+  now means "waiting"). A wrapper that treated `3` as a timeout should check
+  for `4`.
+- buildme: relative paths given to `--ticket-file`, `--research-path`,
+  `--plan-file`, `--interview-replies` and `--context-files` are read from
+  `--project-dir`. A ticket, research, plan or replies file that does not
+  exist now stops the build with exit `2`, instead of a warning and a build
+  without it.
 
 ### Fixed
 - buildme: `build --research-path` works. The flag was documented but rejected,

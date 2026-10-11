@@ -694,7 +694,9 @@ CLI flags win over `config.yaml` in every case.
 |------|---------|
 | 0 | Success |
 | 1 | Build failure |
-| 3 | Agent timeout |
+| 2 | Usage error (e.g. an input file that does not exist) |
+| 3 | Waiting on a human or the wrapper — see SKILL.md Step 4 |
+| 4 | Agent timeout |
 
 ### Progress Monitoring
 

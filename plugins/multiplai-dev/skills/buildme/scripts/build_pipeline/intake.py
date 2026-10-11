@@ -33,8 +33,8 @@ from .models import BuildPhase
 
 log = logging.getLogger(__name__)
 
-#: "Waiting on a human or the wrapper" — distinct from 0 (done), 1 (failure)
-#: and 2 (usage).
+#: "Waiting on a human or the wrapper" — distinct from 0 (done), 1 (failure),
+#: 2 (usage) and 4 (agent timeout, ``tdd_engine.EXIT_AGENT_TIMEOUT``).
 WAITING_EXIT = 3
 
 MARKER_INTERVIEW_WAITING = "INTERVIEW:WAITING"
