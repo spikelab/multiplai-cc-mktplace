@@ -6,10 +6,18 @@ screen, a new caption at every sentence end and every pause, never one
 caption across a silence longer than 0.3 s. Inside those limits a line breaks
 where the speech does: after a comma, semicolon or colon rather than in the
 middle of a phrase, and never leaving one word alone on a line unless that
-word ends a sentence or a pause follows it. Only punctuation and timing
-decide this, so it works for any language. whisper's word timings sometimes start a word
-before the previous one ended; a forward-only pass makes every event start
-no earlier than the one before it ends, so two captions never overlap.
+word ends a sentence or a pause follows it. A line spoken in under 0.5 s
+joins a neighbour from the same sentence when the two fit in max_chars, so
+no caption flashes by. Only punctuation and timing decide this, so it works
+for any language.
+
+A line appears 0.08 s before its first word and stays up to 0.6 s after its
+last, leaving 0.05 s before the next line appears. whisper's word timings
+sometimes start a word before the previous one ended; a forward-only pass
+makes every event start no earlier than the one before it ends, so two
+captions never overlap. (Grouping and timing rules from HyperFrames,
+heygen-com/hyperframes @ bb9e507, Apache-2.0:
+skills/embedded-captions/references/caption-grouping.md:27-46.)
 
 The words passed in are already in output time (stages/timeline.map_words).
 """
@@ -24,6 +32,10 @@ from stages.edl import Captions, Headline
 
 MAX_GAP_S = 0.3
 MIN_EVENT_S = 0.05
+MIN_LINE_S = 0.5       # a line spoken faster than this joins a neighbour
+LEAD_S = 0.08          # a line appears this long before its first word …
+HOLD_S = 0.6           # … and stays up to this long after its last word,
+CLEAR_S = 0.05         # but leaves this long before the next line appears
 SENTENCE_END = (".", "?", "!", "…")
 
 
@@ -132,14 +144,60 @@ def _no_lone_words(lines: list[list[dict]], max_chars: int) -> list[list[dict]]:
     return lines
 
 
+def _join_short_lines(lines: list[list[dict]], max_chars: int) -> list[list[dict]]:
+    """Join a line of one word, or one spoken in under MIN_LINE_S, to the line
+    before or after it in the same run, when the two fit in max_chars. When
+    the line before ends a clause, the short line belongs with the next one,
+    so that side is tried first."""
+    lines = [list(x) for x in lines]
+    i = 0
+    while i < len(lines):
+        g = lines[i]
+        if len(lines) > 1 and (len(g) < 2 or g[-1]["end"] - g[0]["start"] < MIN_LINE_S):
+            sides = []
+            if i > 0:
+                sides.append(("prev", lines[i - 1] + g))
+            if i + 1 < len(lines):
+                sides.append(("next", g + lines[i + 1]))
+            if i > 0 and lines[i - 1][-1]["text"].endswith(CLAUSE_END):
+                sides.reverse()
+            joined = False
+            for side, line in sides:
+                if _chars(line) <= max_chars:
+                    if side == "prev":
+                        lines[i - 1:i + 1] = [line]
+                        i -= 1
+                    else:
+                        lines[i:i + 2] = [line]
+                    joined = True
+                    break
+            if joined:
+                continue        # the joined line may still be short
+        i += 1
+    return lines
+
+
 def group_words(words: list[dict], words_per_line: int = 5, max_chars: int = 22,
                 max_gap: float = MAX_GAP_S) -> list[list[dict]]:
     """Caption lines. A sentence end or a pause longer than max_gap always
     ends a line; max_chars is a hard limit; words_per_line is a soft cap."""
     groups: list[list[dict]] = []
     for run in _runs(words, max_gap):
-        groups.extend(_split_run(run, words_per_line, max_chars))
+        groups.extend(_join_short_lines(_split_run(run, words_per_line, max_chars), max_chars))
     return groups
+
+
+def line_times(groups: list[list[dict]]) -> list[tuple[float, float]]:
+    """(appears, leaves) for each line: LEAD_S before its first word, until
+    HOLD_S after its last or CLEAR_S before the next line appears."""
+    ins = [max(0.0, g[0]["start"] - LEAD_S) for g in groups]
+    times = []
+    for k, g in enumerate(groups):
+        out = g[-1]["end"] + HOLD_S
+        if k + 1 < len(groups):
+            out = min(out, ins[k + 1] - CLEAR_S)
+        times.append((ins[k], out))
+    return times
 
 
 def _esc(text: str) -> str:
@@ -148,22 +206,24 @@ def _esc(text: str) -> str:
 
 def caption_events(groups: list[list[dict]], highlight: bool, accent: str,
                    primary: str) -> list[tuple[float, float, str]]:
-    """(start, end, ASS text) events. With highlight, one event per word: the
-    group's text with that word in the accent colour, shown until the next
-    word starts. Without, one event per group."""
+    """(start, end, ASS text) events, timed by line_times. With highlight,
+    one event per word: the group's text with that word in the accent colour,
+    from the word's start (the line's, for its first word) until the next
+    word starts (the line's end, for its last). Without, one event per group."""
     events = []
     hi, base = ass_colour(accent), ass_colour(primary)
-    for g in groups:
+    for g, (line_in, line_out) in zip(groups, line_times(groups)):
         if not highlight:
-            events.append((g[0]["start"], g[-1]["end"], " ".join(_esc(w["text"]) for w in g)))
+            events.append((line_in, line_out, " ".join(_esc(w["text"]) for w in g)))
             continue
         for i, w in enumerate(g):
-            end = g[i + 1]["start"] if i + 1 < len(g) else w["end"]
+            start = line_in if i == 0 else w["start"]
+            end = g[i + 1]["start"] if i + 1 < len(g) else line_out
             parts = []
             for j, x in enumerate(g):
                 t = _esc(x["text"])
                 parts.append(f"{{\\1c{hi}}}{t}{{\\1c{base}}}" if j == i else t)
-            events.append((w["start"], end, " ".join(parts)))
+            events.append((start, end, " ".join(parts)))
     return events
 
 

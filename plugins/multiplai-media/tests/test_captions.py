@@ -62,7 +62,57 @@ def test_highlight_colours_the_active_word_with_the_accent() -> None:
 
 def test_no_highlight_is_one_event_per_group() -> None:
     groups = [[w("ciao", 0.0, 0.3), w("mondo", 0.35, 0.7)]]
-    assert cap.caption_events(groups, False, "#FF0000", "#FFFFFF") == [(0.0, 0.7, "ciao mondo")]
+    # held 0.6 s past the last word; it cannot appear before 0
+    assert cap.caption_events(groups, False, "#FF0000", "#FFFFFF") == [(0.0, pytest.approx(1.3), "ciao mondo")]
+
+
+def test_a_line_appears_just_before_its_first_word() -> None:
+    groups = [[w("ciao", 2.0, 2.3), w("mondo", 2.35, 2.7)]]
+    assert cap.line_times(groups) == [(pytest.approx(1.92), pytest.approx(3.3))]
+
+
+def test_a_line_holds_after_its_last_word_until_just_before_the_next() -> None:
+    groups = [[w("uno", 1.0, 1.3), w("due", 1.3, 1.7)],          # next line appears at 2.12
+              [w("tre", 2.2, 2.5), w("quattro", 2.5, 2.9)],      # next appears at 5.92: full hold
+              [w("cinque", 6.0, 6.3), w("sei", 6.3, 6.6)]]
+    times = cap.line_times(groups)
+    assert times[0] == (pytest.approx(0.92), pytest.approx(2.07))   # 2.12 - 0.05, before 1.7 + 0.6
+    assert times[1] == (pytest.approx(2.12), pytest.approx(3.5))    # 2.9 + 0.6
+    assert times[2] == (pytest.approx(5.92), pytest.approx(7.2))
+
+
+def test_highlight_moves_only_the_first_appearance_and_holds_the_last_word() -> None:
+    groups = [[w("ciao", 1.0, 1.3), w("bel", 1.35, 1.6), w("mondo", 1.65, 2.0)]]
+    events = cap.caption_events(groups, True, "#FF0000", "#FFFFFF")
+    assert [(round(s, 3), round(e, 3)) for s, e, _ in events] == [(0.92, 1.35), (1.35, 1.65), (1.65, 2.6)]
+
+
+def test_a_line_spoken_in_under_half_a_second_joins_its_neighbour() -> None:
+    # "ok so" is spoken in 0.3 s: it joins the next line of the same sentence
+    words = [w("ok", 0.0, 0.1), w("so,", 0.1, 0.3), w("it", 0.35, 0.6), w("is", 0.6, 0.8),
+             w("done.", 0.8, 1.4)]
+    groups = cap.group_words(words, words_per_line=2)
+    assert [" ".join(x["text"] for x in g) for g in groups] == ["ok so, it is done."]
+
+
+def test_a_short_line_does_not_join_across_a_sentence_or_a_pause() -> None:
+    words = [w("Fine.", 0.0, 0.3), w("Then", 0.35, 0.6), w("we", 0.6, 0.8), w("go", 0.8, 1.3),
+             w("now", 2.0, 2.2), w("ok.", 2.2, 2.4)]
+    texts = [" ".join(x["text"] for x in g) for g in cap.group_words(words)]
+    assert texts == ["Fine.", "Then we go", "now ok."]
+
+
+def test_a_short_line_stays_when_joining_would_break_max_chars() -> None:
+    words = [w("abcdefghij", 0.0, 0.2), w("klmnop", 0.2, 0.4), w("qrstuvwxyz", 0.45, 1.2),
+             w("abcdefghijk.", 1.2, 2.0)]
+    groups = cap.group_words(words, words_per_line=2, max_chars=22)
+    assert [" ".join(x["text"] for x in g) for g in groups][0] == "abcdefghij klmnop"   # 0.4 s, but 28 chars joined
+    assert all(len(" ".join(x["text"] for x in g)) <= 22 for g in groups)
+
+
+def test_a_one_word_line_joins_a_neighbour_that_fits() -> None:
+    lines = [[w("one", 0.0, 0.6)], [w("two", 0.6, 1.0), w("three", 1.0, 1.6)]]
+    assert [len(g) for g in cap._join_short_lines(lines, 22)] == [3]
 
 
 def test_words_in_cuts_are_dropped_before_captioning() -> None:
