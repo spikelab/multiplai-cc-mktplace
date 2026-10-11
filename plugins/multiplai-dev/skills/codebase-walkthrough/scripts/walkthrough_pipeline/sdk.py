@@ -1,7 +1,7 @@
 """The one way this pipeline calls a model: `agent_call_structured`.
 
 Copied from review_pipeline's `sdk.py` (itself a copy of buildme's pattern): a repo trust gate,
-an explicit allow-list with its complement as the deny-list, a validated
+an explicit allow-list (run_agent denies its complement), a validated
 pydantic answer, and exactly one re-ask when the answer does not parse.
 
 The re-ask for an answer that came back but does not parse is a reformat: a
@@ -24,7 +24,7 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from multiplai_core.agent_runner import MAX_PROMPT_BYTES, AgentRunError, AgentRunTimeout, run_agent
+from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, run_agent
 from multiplai_core.text import extract_json
 
 from . import budget
@@ -42,25 +42,10 @@ READ_ONLY_TOOLS = ["Read", "Grep", "Glob"]
 EXPLORE_TOOLS = DOCS_TOOLS = TRACE_TOOLS = READ_ONLY_TOOLS
 WRITE_TOOLS: list[str] = []
 
-# The deny-list is the complement of each call's allow-list within this
-# universe. Under bypassPermissions an allow-list alone removes nothing, so
-# every tool not explicitly allowed is also denied. Best-effort enumeration,
-# copied from buildme's `_TOOL_UNIVERSE` (2026-08-06); core's `tools=` base set
-# is the first layer, this is the second.
-_TOOL_UNIVERSE = [
-    "Bash", "BashOutput", "KillShell", "Edit", "Write", "NotebookEdit",
-    "MultiEdit", "REPL", "Task", "Agent", "AskUserQuestion", "SlashCommand",
-    "ExitPlanMode", "EnterPlanMode", "TodoWrite",
-    "Read", "NotebookRead", "Grep", "Glob", "LS", "WebFetch", "WebSearch",
-    "ToolSearch", "Skill",
-    "Artifact", "SendMessage", "PushNotification", "RemoteTrigger", "SendFeedback",
-    "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskStop",
-    "TaskOutput", "Workflow", "ScheduleWakeup", "Monitor",
-    "CronCreate", "CronDelete", "CronList",
-    "Mcp", "ListMcpResources", "ReadMcpResource", "ReadMcpResourceDir", "RefreshMcpTools",
-    "EnterWorktree", "ExitWorktree", "ReportFindings", "ProposeSkills",
-    "Projects", "ClaudeDesign", "ShowOnboardingRolePicker",
-]
+# Only allow-lists live here. `_run` passes no `disallowed_tools`, so
+# run_agent denies the complement of the tools it opens (`multiplai_core.
+# deny_list` over core's `TOOL_UNIVERSE`), including the Read it adds for an
+# oversized prompt. Under bypassPermissions an allow-list alone removes nothing.
 
 
 class AgentCallError(Exception):
@@ -89,15 +74,6 @@ def require_trusted_repo() -> None:
         )
 
 
-def deny_list(prompt: str, allowed_tools: list[str]) -> list[str]:
-    allowed = set(allowed_tools)
-    denied = [t for t in _TOOL_UNIVERSE if t not in allowed]
-    if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-        # run_agent's oversized-prompt fallback tells the agent to Read a file.
-        denied = [t for t in denied if t != "Read"]
-    return denied
-
-
 async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effort: str | None,
                max_turns: int, cwd: str | None, call_timeout: float, budget_label: str,
                run_label: str = "") -> str:
@@ -107,7 +83,6 @@ async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effo
         result = await run_agent(
             prompt,
             allowed_tools=list(allowed_tools),
-            disallowed_tools=deny_list(prompt, allowed_tools),
             max_turns=max_turns,
             model=model,
             effort=effort,

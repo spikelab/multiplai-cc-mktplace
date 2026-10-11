@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
+from multiplai_core import deny_list
 from multiplai_core.agent_runner import AgentRunError
 from walkthrough_pipeline import budget, sdk
 
@@ -46,7 +47,7 @@ async def test_untrusted_repo_is_refused_before_any_call(fake_run):
     assert calls == []
 
 
-async def test_read_only_tools_and_their_complement(trusted, fake_run):
+async def test_the_allow_list_reaches_run_agent_and_core_builds_the_deny_list(trusted, fake_run):
     calls, replies = fake_run
     replies.append(_result('{"value": 3}'))
     out = await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.EXPLORE_TOOLS, cwd="/repo",
@@ -54,9 +55,7 @@ async def test_read_only_tools_and_their_complement(trusted, fake_run):
     assert out.value == 3
     call = calls[0]
     assert call["allowed_tools"] == ["Read", "Grep", "Glob"]
-    for tool in ("Bash", "Edit", "Write", "WebFetch", "WebSearch"):
-        assert tool in call["disallowed_tools"]
-    assert not {"Read", "Grep", "Glob"} & set(call["disallowed_tools"])
+    assert "disallowed_tools" not in call
     assert (call["cwd"], call["component"], call["label"], call["model"], call["effort"]) == \
         ("/repo", "walkthrough", "find:diff-bugs", "m", "high")
 
@@ -64,6 +63,16 @@ async def test_read_only_tools_and_their_complement(trusted, fake_run):
 def test_every_stage_gets_only_read_grep_glob():
     for tools in (sdk.EXPLORE_TOOLS, sdk.TRACE_TOOLS, sdk.DOCS_TOOLS):
         assert tools == ["Read", "Grep", "Glob"]
+
+
+def test_core_denies_what_each_stage_does_not_allow():
+    """run_agent's default deny-list is core's `deny_list(allowed)`; call the
+    real one with each stage's allow-list. No stage opens the web."""
+    for tools in (sdk.EXPLORE_TOOLS, sdk.TRACE_TOOLS, sdk.DOCS_TOOLS, sdk.WRITE_TOOLS):
+        denied = deny_list(tools)
+        for tool in ("Bash", "Edit", "Write", "WebFetch", "WebSearch"):
+            assert tool in denied, tool
+        assert not set(tools) & set(denied)
 
 
 async def test_an_unparsable_answer_is_reformatted_without_tools_not_rerun(trusted, fake_run):
@@ -78,7 +87,8 @@ async def test_an_unparsable_answer_is_reformatted_without_tools_not_rerun(trust
     assert '<answer>\n{"value": "not a number"}\n</answer>' in reformat["prompt"]
     assert "rejected" in reformat["prompt"] and '"value"' in reformat["prompt"]
     assert reformat["allowed_tools"] == [] and reformat["max_turns"] == sdk.REFORMAT_MAX_TURNS
-    assert {"Read", "Grep", "Glob", "Bash"} <= set(reformat["disallowed_tools"])
+    assert "disallowed_tools" not in reformat
+    assert {"Read", "Grep", "Glob", "Bash"} <= set(deny_list(reformat["allowed_tools"]))
     assert reformat["label"] == "verify:reformat"
 
 
@@ -136,4 +146,5 @@ async def test_write_agents_get_no_tools(trusted, fake_run):
     replies.append(_result('{"value": 2}'))
     await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.WRITE_TOOLS)
     assert calls[0]["allowed_tools"] == []
-    assert {"Read", "Grep", "Glob", "Bash", "WebFetch", "WebSearch"} <= set(calls[0]["disallowed_tools"])
+    assert "disallowed_tools" not in calls[0]
+    assert {"Read", "Grep", "Glob", "Bash", "WebFetch", "WebSearch"} <= set(deny_list(calls[0]["allowed_tools"]))

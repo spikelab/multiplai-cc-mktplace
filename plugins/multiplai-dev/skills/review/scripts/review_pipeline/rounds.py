@@ -63,6 +63,17 @@ def _round_dir(target_dir: Path, head: str, generated_at: str) -> Path:
         n += 1
 
 
+def round_name(target_dir: Path, findings_file: dict) -> str:
+    """The `rounds/` directory name the round in *findings_file* has, or will get when a later run keeps it.
+
+    Read-only: the name `keep_round` picks for the same `head_sha` and
+    `generated_at`, so `post` can mark findings with their round before the
+    round is kept.
+    """
+    head = str((findings_file.get("target") or {}).get("head_sha") or "")
+    return _round_dir(target_dir, head, str(findings_file.get("generated_at") or "")).name
+
+
 def keep_round(target_dir: Path, slug: str, new_head_sha: str) -> Path | None:
     """Copy the last round's outputs to `rounds/<sha12>/` before a new run writes over them.
 

@@ -1,4 +1,4 @@
-"""Tests for the SDK adapter — tool deny-lists, the repo trust gate, and
+"""Tests for the SDK adapter — tool allow-lists and core's deny-list, the repo trust gate, and
 failure-path budget accounting."""
 
 from dataclasses import dataclass
@@ -10,8 +10,6 @@ from unittest.mock import AsyncMock, patch
 
 from build_pipeline import budget as budget_mod
 from build_pipeline.sdk import (
-    _TOOL_UNIVERSE,
-    _deny_list,
     RepoTrustError,
     agent_call,
     agent_call_structured,
@@ -20,8 +18,8 @@ from build_pipeline.sdk import (
     LLMCallError,
     LLMCallTimeoutError,
 )
+from multiplai_core import deny_list
 from multiplai_core.agent_runner import (
-    MAX_PROMPT_BYTES,
     AgentRunError,
     AgentRunTimeout,
 )
@@ -36,65 +34,53 @@ def _mock_run_agent():
 
 
 class TestDenyList:
-    """Every call must actively deny the tools it does not allow: run_agent's
-    allow-list is advisory under bypassPermissions, so only disallowed_tools
-    actually removes a tool."""
+    """buildme passes only allow-lists; run_agent builds the deny-list from
+    them with core's `deny_list`. These call the real core function with
+    buildme's own allow-lists, so a core change that opened a dangerous tool
+    to one of them fails here."""
 
-    def test_no_tools_denies_everything(self):
-        assert _deny_list("short prompt", None) == _TOOL_UNIVERSE
+    def test_read_only_agents_are_denied_execution_writes_and_egress(self):
+        from build_pipeline.llm_steps.review_steps import REVIEWER_TOOLS
 
-    def test_universe_names_the_capabilities_that_carry_the_risk(self):
-        """Pin names, not the list against itself.
+        denied = deny_list(REVIEWER_TOOLS)
+        for tool in ("Bash", "Edit", "Write", "WebFetch", "WebSearch"):
+            assert tool in denied, tool
+        for tool in REVIEWER_TOOLS:
+            assert tool not in denied, tool
 
-        `_deny_list(...) == _TOOL_UNIVERSE` passes no matter what the universe
-        forgot — which is how Artifact, SendMessage, REPL and the Task/Cron
-        family sat outside it while every deny-list test stayed green.
-        """
-        for tool in (
-            "Bash", "REPL",                             # execution
-            "WebFetch", "Artifact", "SendMessage",      # egress
-            "TaskCreate", "CronCreate", "Workflow",     # deferred execution
-            "Read", "Write", "Edit",                    # local files
-            "ToolSearch", "Skill",                      # loading tools back in
-        ):
-            assert tool in _TOOL_UNIVERSE, tool
+    def test_text_only_call_is_denied_everything(self):
+        denied = deny_list(None)
+        for tool in ("Bash", "Edit", "Write", "WebFetch", "WebSearch", "Read"):
+            assert tool in denied, tool
 
-    def test_bash_is_denied(self):
-        assert "Bash" in _deny_list("short prompt", None)
-
-    def test_allowlist_gets_the_complement(self):
+    def test_explainer_keeps_the_web_and_loses_bash_and_writes(self):
         """The explainer's allow-list must still deny Bash/Write/Edit — a
         web-ingesting agent is one prompt injection away from using them."""
-        denied = _deny_list("p", ["WebSearch", "WebFetch", "Read", "Glob", "Grep"])
+        denied = deny_list(["WebSearch", "WebFetch", "Read", "Glob", "Grep"])
         for tool in ("Bash", "Write", "Edit", "NotebookEdit", "Task"):
-            assert tool in denied
-        for tool in ("WebSearch", "WebFetch", "Read", "Glob", "Grep"):
-            assert tool not in denied
+            assert tool in denied, tool
+        for tool in ("WebSearch", "WebFetch"):
+            assert tool not in denied, tool
 
     def test_prototype_allowlist_keeps_write_denies_bash(self):
         """Bash writes would bypass the files_changed-based write-boundary
         check (only Write/Edit ToolUseBlocks are collected)."""
-        denied = _deny_list("p", ["Read", "Write", "Glob", "Grep"])
+        from build_pipeline.llm_steps.prototype_steps import PROTOTYPE_TOOLS
+
+        denied = deny_list(PROTOTYPE_TOOLS)
         assert "Bash" in denied
         assert "Write" not in denied
-
-    def test_oversized_prompt_keeps_read_available(self):
-        """run_agent spills an oversized prompt to a temp file and directs the
-        agent to Read it — denying Read would break that fallback."""
-        big = "x" * (MAX_PROMPT_BYTES + 1)
-        denied = _deny_list(big, None)
-        assert "Read" not in denied
-        assert "Bash" in denied
 
 
 class TestLlmCallToolPolicy:
     @pytest.mark.asyncio
-    async def test_no_tools_requested_passes_deny_list(self):
+    async def test_no_tools_requested_leaves_the_deny_list_to_core(self):
+        """No allow-list and no deny-list: run_agent then denies every tool."""
         with patch("build_pipeline.sdk.run_agent", _mock_run_agent()) as run:
             await llm_call("hello")
 
-        denied = run.call_args.kwargs["disallowed_tools"]
-        assert "Bash" in denied
+        assert run.call_args.kwargs["allowed_tools"] is None
+        assert "disallowed_tools" not in run.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_text_only_needs_no_trust(self, monkeypatch):
@@ -105,18 +91,15 @@ class TestLlmCallToolPolicy:
             assert await llm_call("hello") == "answer"
 
     @pytest.mark.asyncio
-    async def test_explicit_tools_get_complement_deny_list(self, monkeypatch):
-        """Callers that genuinely want tools keep them — but everything else
-        is actively denied, Bash first."""
+    async def test_explicit_tools_reach_run_agent_without_a_deny_list(self, monkeypatch):
+        """Callers that genuinely want tools keep them; run_agent denies the
+        complement (see TestDenyList)."""
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
         with patch("build_pipeline.sdk.run_agent", _mock_run_agent()) as run:
             await llm_call("hello", allowed_tools=["Read", "Grep"])
 
         assert run.call_args.kwargs["allowed_tools"] == ["Read", "Grep"]
-        denied = run.call_args.kwargs["disallowed_tools"]
-        assert "Bash" in denied
-        assert "Write" in denied
-        assert "Read" not in denied
+        assert "disallowed_tools" not in run.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_tool_bearing_call_requires_trust(self, monkeypatch):
@@ -191,7 +174,7 @@ class TestFailedCallBudgetAccounting:
 
 class TestAgentCallToolPolicy:
     @pytest.mark.asyncio
-    async def test_deny_list_reaches_run_agent(self, monkeypatch):
+    async def test_allow_list_reaches_run_agent_without_a_deny_list(self, monkeypatch):
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
         with patch("build_pipeline.sdk.run_agent", _mock_run_agent()) as run:
             result = await agent_call(
@@ -199,9 +182,8 @@ class TestAgentCallToolPolicy:
             )
 
         assert result.success
-        denied = run.call_args.kwargs["disallowed_tools"]
-        assert "Bash" in denied
-        assert "Write" not in denied
+        assert run.call_args.kwargs["allowed_tools"] == ["Read", "Write", "Glob", "Grep"]
+        assert "disallowed_tools" not in run.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_untrusted_repo_refused(self, monkeypatch):
@@ -214,7 +196,8 @@ class TestAgentCallToolPolicy:
 
 class TestExplainerPath:
     """run_explainer spawns a web-ingesting, tool-bearing agent — it must
-    inherit both the complement deny-list and the trust gate via llm_call."""
+    reach run_agent with its allow-list only (so core denies the complement)
+    and inherit the trust gate via llm_call."""
 
     def _dep_and_config(self):
         class Dep:
@@ -229,7 +212,7 @@ class TestExplainerPath:
         return Dep(), Config()
 
     @pytest.mark.asyncio
-    async def test_deny_list_includes_bash_and_write(self, monkeypatch):
+    async def test_allow_list_reaches_run_agent_without_a_deny_list(self, monkeypatch):
         from build_pipeline.llm_steps.spec_steps import run_explainer
 
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
@@ -237,10 +220,10 @@ class TestExplainerPath:
         with patch("build_pipeline.sdk.run_agent", _mock_run_agent()) as run:
             await run_explainer(dep, config, usage_context="parses TOML configs")
 
-        assert "WebSearch" in run.call_args.kwargs["allowed_tools"]
-        denied = run.call_args.kwargs["disallowed_tools"]
-        for tool in ("Bash", "Write", "Edit"):
-            assert tool in denied
+        allowed = run.call_args.kwargs["allowed_tools"]
+        assert "WebSearch" in allowed
+        assert not {"Bash", "Write", "Edit"} & set(allowed)
+        assert "disallowed_tools" not in run.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_respects_trust_gate(self, monkeypatch):
@@ -332,10 +315,7 @@ class TestAgentCallStructured:
 
         assert answer.value == 1
         assert run.call_args.kwargs["allowed_tools"] == ["Read", "Grep"]
-        denied = run.call_args.kwargs["disallowed_tools"]
-        assert "Bash" in denied
-        assert "Write" in denied
-        assert "Read" not in denied
+        assert "disallowed_tools" not in run.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_one_retry_then_success(self):

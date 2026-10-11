@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -119,3 +121,64 @@ def canned_state(target_info) -> ReviewState:
         original_severity={medium.id: "MEDIUM"},
         budget={"cost_usd": 1.25, "calls": 9},
     )
+
+
+# --- post: a PR review and a fake `gh` ---------------------------------------------
+
+
+@pytest.fixture
+def pr_review(canned_state, tmp_path):
+    from review_pipeline.export import write_findings_file
+    from review_pipeline.state import save_state
+
+    canned_state.target.pr, canned_state.target.kind = 812, "pr"
+    target_dir = tmp_path / canned_state.target.slug
+    target_dir.mkdir(exist_ok=True)
+    save_state(canned_state, target_dir)
+    write_findings_file(canned_state, target_dir)
+    return canned_state, target_dir
+
+
+class FakeGh(list):
+    """The `gh` calls `post` makes, as `(argv, stdin)`. Any other command (git) runs for real.
+
+    `respond(fragment, ...)` sets the result of every gh call whose argv joined
+    by spaces contains *fragment*; the two GETs answer `[]` until told otherwise.
+    """
+
+    def __init__(self, real_run):
+        super().__init__()
+        self._real_run = real_run
+        self._responses: list[tuple[str, int, str, str]] = []
+
+    def respond(self, fragment: str, stdout: str = "", returncode: int = 0, stderr: str = "") -> None:
+        self._responses.insert(0, (fragment, returncode, stdout, stderr))
+
+    def __call__(self, argv, **kwargs):
+        if argv[0] != "/usr/bin/gh":
+            return self._real_run(argv, **kwargs)
+        self.append((argv, kwargs.get("input")))
+        joined = " ".join(argv)
+        for fragment, code, out, err in self._responses:
+            if fragment in joined:
+                return subprocess.CompletedProcess(argv, code, out, err)
+        return subprocess.CompletedProcess(argv, 0, "[]" if "--paginate" in argv else "{}", "")
+
+    def posts(self) -> list[tuple[list[str], dict]]:
+        """The POST calls, with their JSON payload parsed."""
+        return [(argv, json.loads(stdin)) for argv, stdin in self if "POST" in argv]
+
+    def posted_text(self) -> str:
+        """Every body in the one POST: the review body, then each comment's."""
+        (_, payload), = self.posts()
+        return "\n".join([payload["body"], *(c["body"] for c in payload["comments"])])
+
+
+@pytest.fixture
+def fake_gh(monkeypatch):
+    from review_pipeline import post as post_mod
+
+    fake = FakeGh(subprocess.run)
+    monkeypatch.setattr(post_mod.shutil, "which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(post_mod.subprocess, "run", fake)
+    return fake

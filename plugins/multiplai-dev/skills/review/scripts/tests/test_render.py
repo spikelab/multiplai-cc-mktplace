@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-
-import pytest
 
 from conftest import CLAIM_HIGH, CLAIM_MEDIUM, CLAIM_REFUTED, CLAIM_REJECTED, EXPECTED_HIGH
 from review_pipeline import post as post_mod
@@ -136,29 +133,6 @@ def test_rollups_come_from_findings_json(canned_state, tmp_path):
 # --- post ------------------------------------------------------------------------
 
 
-@pytest.fixture
-def pr_review(canned_state, tmp_path):
-    canned_state.target.pr, canned_state.target.kind = 812, "pr"
-    target_dir = tmp_path / canned_state.target.slug
-    target_dir.mkdir(exist_ok=True)
-    save_state(canned_state, target_dir)
-    write_findings_file(canned_state, target_dir)
-    return canned_state, target_dir
-
-
-@pytest.fixture
-def fake_gh(monkeypatch):
-    calls = []
-
-    def run(argv, **kwargs):
-        calls.append((argv, kwargs.get("input")))
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    monkeypatch.setattr(post_mod.shutil, "which", lambda name: "/usr/bin/gh")
-    monkeypatch.setattr(post_mod.subprocess, "run", run)
-    return calls
-
-
 def test_post_with_decisions_selects_exactly_the_accepted(pr_review, fake_gh, capsys):
     state, target_dir = pr_review
     high = state.findings[0]
@@ -170,13 +144,12 @@ def test_post_with_decisions_selects_exactly_the_accepted(pr_review, fake_gh, ca
         medium.id: {"decision": "reject", "note": "", "ts": "2026-09-25T10:01:00Z"},
     }))
     assert main(["post", str(target_dir), "--decisions", str(decisions)]) == 0
-    (argv, body), = fake_gh
-    assert argv[1:4] == ["pr", "comment", "812"]
-    assert body.count("\n1. ") == 1 and "\n2. " not in body
-    assert CLAIM_HIGH in body and CLAIM_MEDIUM not in body
-    assert f"Expected behaviour: {EXPECTED_HIGH}" in body and "Suggested fix" not in body
-    head = state.target.head_sha
-    assert f"https://github.com/example/booking-engine/blob/{head}/rateplan_service.py#L1-L2" in body
+    (argv, payload), = fake_gh.posts()
+    assert argv[1:5] == ["api", "-X", "POST", "repos/{owner}/{repo}/pulls/812/reviews"]
+    text = fake_gh.posted_text()
+    assert len(payload["comments"]) == 1 and "\n1. " not in payload["body"]
+    assert CLAIM_HIGH in text and CLAIM_MEDIUM not in text
+    assert f"Expected behaviour: {EXPECTED_HIGH}" in text and "Suggested fix" not in text
     assert "posted 1 accepted findings to PR #812" in capsys.readouterr().out
 
 
@@ -186,8 +159,8 @@ def test_post_without_decisions_takes_high_and_medium(pr_review, fake_gh):
     save_state(state, target_dir)
     write_findings_file(state, target_dir)
     assert main(["post", str(target_dir)]) == 0
-    body = fake_gh[0][1]
-    assert CLAIM_HIGH in body and CLAIM_MEDIUM in body and CLAIM_REFUTED not in body
+    text = fake_gh.posted_text()
+    assert CLAIM_HIGH in text and CLAIM_MEDIUM in text and CLAIM_REFUTED not in text
 
 
 def test_post_missing_decisions_file_exits_2(pr_review, fake_gh, capsys):
@@ -292,4 +265,5 @@ def test_post_without_decisions_takes_what_the_review_lists(canned_state):
     state = _rated(canned_state, "critical", **{CLAIM_HIGH[:20]: ("code", "hygiene")})
     data = to_findings_file(state)
     assert post_mod.select(data["findings"], None, data["mode"]) == []
-    assert [f["claim"] for f in post_mod.select(data["findings"], None, "full")] == [CLAIM_HIGH]
+    # The LOW finding has no topic, so it is in Code, which posts every severity.
+    assert [f["claim"] for f in post_mod.select(data["findings"], None, "full")] == [CLAIM_HIGH, CLAIM_MEDIUM]

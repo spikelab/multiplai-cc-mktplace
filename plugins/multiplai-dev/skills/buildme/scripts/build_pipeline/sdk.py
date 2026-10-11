@@ -91,75 +91,12 @@ def _repo_is_trusted() -> bool:
     return os.environ.get("BUILDME_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
 
 
-# The tool universe a call's deny-list is computed from. run_agent's
-# allow-list is advisory under bypassPermissions; only disallowed_tools
-# actually removes a tool — so every call denies the complement of what it
-# explicitly allows (a text-only call denies all of it).
-#
-# Copied rather than imported from multiplai-core, for the same reason
-# deep-research copies it: this is the belt-and-braces layer, and it has to hold
-# on an installed plugin that resolved a core release predating core's own
-# fail-closed default. Current core (`agent_runner.TOOL_UNIVERSE`) pairs its
-# copy with the SDK's `tools` option — the CLI's `--tools`, which sets the
-# *base set* of tools that exist at all rather than adding to the built-in set.
-# `tools=[]` is "no tools" with no list to keep current, and that is the real
-# guarantee; this list is the second layer under it.
-#
-# Best-effort enumeration, not a safety floor. Adding a name tightens the
-# second layer; a name missing from it is a tool the base set still has to
-# close. Derived 2026-08-06 from the CLI's own generated schema list
-# (`@anthropic-ai/claude-code/sdk-tools.d.ts`) plus the harness-only names that
-# file does not carry (Skill, ToolSearch, SlashCommand, BashOutput, KillShell,
-# Task). Re-derive it on a CLI bump:
-#
-#   grep -oE '^export (type|interface) [A-Za-z]+Input' \
-#     "$(dirname "$(readlink -f "$(command -v claude)")")/../sdk-tools.d.ts" \
-#     | sed 's/.* //;s/Input$//' | sort -u
-#
-# (That file names schemas, not tools, so FileRead/FileEdit/FileWrite appear
-# there as the schemas behind Read/Edit/Write.)
-_TOOL_UNIVERSE = [
-    # mutation / execution
-    "Bash", "BashOutput", "KillShell", "Edit", "Write", "NotebookEdit",
-    "MultiEdit", "REPL", "Task", "Agent", "AskUserQuestion", "SlashCommand",
-    "ExitPlanMode", "EnterPlanMode", "TodoWrite",
-    # read / network / meta
-    "Read", "NotebookRead", "Grep", "Glob", "LS", "WebFetch", "WebSearch",
-    "ToolSearch", "Skill",
-    # egress: each can carry text off the machine. buildme's prompts are
-    # assembled from the target repo's own specs/, so they are as
-    # attacker-authored as a fetched page the moment the repo is not the
-    # user's own — which is exactly what the trust gate above is about.
-    "Artifact", "SendMessage", "PushNotification", "RemoteTrigger",
-    "SendFeedback",
-    # background / scheduled execution — a denied Bash is worth little if the
-    # run can queue work that gets one later
-    "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskStop",
-    "TaskOutput", "Workflow", "ScheduleWakeup", "Monitor",
-    "CronCreate", "CronDelete", "CronList",
-    # MCP: separately contained by core's strict-mcp-config + setting_sources=[],
-    # listed so this layer does not depend on that one
-    "Mcp", "ListMcpResources", "ReadMcpResource", "ReadMcpResourceDir",
-    "RefreshMcpTools",
-    # remaining harness surface
-    "EnterWorktree", "ExitWorktree", "ReportFindings", "ProposeSkills",
-    "Projects", "ClaudeDesign", "ShowOnboardingRolePicker",
-]
-
-
-def _deny_list(prompt: str, allowed_tools: list[str] | None) -> list[str]:
-    """Every known tool the caller did not explicitly allow.
-
-    Without this, an allowlisted agent (e.g. the web-ingesting explainer with
-    Read/WebFetch allowed) can still reach Bash/Write under bypassPermissions —
-    the allow-list alone removes nothing. Read is kept available when
-    run_agent's oversized-prompt fallback will need it (it writes the prompt
-    to a temp file and directs the agent to Read it)."""
-    allowed = set(allowed_tools or ())
-    denied = [t for t in _TOOL_UNIVERSE if t not in allowed]
-    if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-        denied = [t for t in denied if t != "Read"]
-    return denied
+# Tool denial lives in multiplai-core. run_agent's allow-list is advisory
+# under bypassPermissions; only `disallowed_tools` removes a tool. When the
+# caller passes no `disallowed_tools`, run_agent denies the complement of the
+# tools it actually opens (`multiplai_core.deny_list`) — including the Read it
+# adds for an oversized prompt — over core's `TOOL_UNIVERSE`, under its `tools=`
+# base set. So this module passes only allow-lists and never a deny-list.
 
 
 def _require_trusted_repo() -> None:
@@ -226,7 +163,6 @@ async def llm_call(
                 prompt,
                 system_prompt=system_prompt,
                 allowed_tools=allowed_tools,
-                disallowed_tools=_deny_list(prompt, allowed_tools),
                 max_turns=max_turns,
                 model=model,
                 effort=effort,
@@ -286,7 +222,6 @@ async def agent_call(
             result = await run_agent(
                 prompt,
                 allowed_tools=allowed_tools,
-                disallowed_tools=_deny_list(prompt, allowed_tools),
                 max_turns=max_turns,
                 model=model,
                 effort=effort,
@@ -387,7 +322,7 @@ async def agent_call_structured(
 
     Same caller contract as `llm_call_structured` — returns the validated model
     or raises `LLMCallError` — but the answer comes from a tool-using agent, so
-    `allowed_tools` (and its complement deny-list, applied inside `agent_call`)
+    `allowed_tools` (and its complement deny-list, which run_agent builds)
     and the repo trust gate both apply.
 
     `agent_call` degrades to `AgentResult(success=False)` instead of raising, so
