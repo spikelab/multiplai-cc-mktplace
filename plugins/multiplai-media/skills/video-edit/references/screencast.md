@@ -30,6 +30,44 @@ frames, and typing/cursor-only stretches where nothing watchable happens.
 - **Never end the video zoomed** — render errors on a zoomed final segment. If a close-up ending is genuinely intended, set `"hold": true` inside that zoom.
 - Keep most of the runtime full-frame; render warns when >50% is zoomed.
 
+## Follow the clicks
+
+A segment's `follow` pushes the camera in on each click and pans between
+them, so the viewer sees what was clicked without a hand-placed zoom per
+moment. (Pattern: HyperFrames registry block `cursor-zoom-follow`.)
+
+1. **Find the clicks** after `prep`:
+   `uv run --project <scripts> python3 <scripts>/pipeline.py cursor <source.mov>`.
+   It writes `clicks.json` in the prep cache: `{t, x, y, sure}` per click,
+   `t` in source seconds, `x`, `y` 0..1 in the source frame.
+2. **Use only `sure` clicks.** A click is `sure` when a picture of the
+   pointer was found at it. On the one recording measured, 6 of 8 sampled
+   `sure` clicks were real clicks and 1 of 8 of the others was: the others
+   come from page changes, spinners and progress bars.
+3. **Few `sure` clicks?** The hand pointer (over buttons and links) is
+   seldom learned from the recording, because it rarely moves alone. Ask
+   the user to mark it: copy prep's `proxy_720p.mp4` (same timeline and
+   shape as the source, and it plays in any browser) into an empty folder,
+   open the review page on that folder, and ask them to click the hand
+   pointer in one or two paused frames with the comment "pointer". Pass
+   each comment's `t`, `x`, `y` back:
+   `pipeline.py cursor <source.mov> --mark T,X,Y --mark …`.
+4. **Write the targets** into the segments that should follow:
+   `"follow": {"targets": [{"t": 111.2, "x": 0.47, "y": 0.75}, …]}`.
+   Options: `scale` (zoom on a target, default 1.4), `lead` (output seconds
+   the move takes, ending on the click, default 0.6), `hold` (output seconds
+   it stays after, default 1.2). Targets with a gap over 2 s between them
+   send the camera back to the whole frame; a target inside the previous
+   hold is skipped.
+5. **Review the render.** A target in the wrong place pushes in on the
+   wrong part of the screen. When the user's review comment says so, its
+   `x`, `y` are the right target: replace the wrong one.
+
+Rules: `follow` needs fit `pad` or `blur` and no `frame` (render refuses a
+crop or a panel, which would cut the clicked point out); a segment takes
+`zoom` or `follow`, not both. The Zoom rules above still apply: keep the
+follow segments to the parts of the demo where clicks matter.
+
 ## Overlays on a demo
 
 - **Reveal each overlay when the narration names its subject**, not before:

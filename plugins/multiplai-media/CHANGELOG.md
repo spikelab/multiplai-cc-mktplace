@@ -25,6 +25,13 @@ Nothing yet.
 
 ### Added
 
+- **The camera follows the clicks in a screen demo.** `pipeline.py cursor
+  <recording>` finds where the pointer clicks, from the picture alone, and
+  marks the clicks it is sure of. A segment's new `follow` option pushes in
+  on each of those clicks and pans between them, going back to the whole
+  frame between clicks that are far apart. When the hand pointer is not
+  recognised, the user marks it once on the review page
+  (`--mark T,X,Y`). Detected clicks are not always right; review the render.
 - **Overlays with real transparency.** A new overlay `mode: "alpha"` keeps
   the graphic's own transparency, so soft shadows, glows and
   semi-transparent fills show over the video with no green key. It is the

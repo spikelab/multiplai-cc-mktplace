@@ -242,9 +242,10 @@ $WORKSPACE/.video-edit-cache/<source-hash>/   (or ~/.cache/video-edit/ if no $WO
 See `examples/demo-narrated.edl.json`. Top-level keys:
 - `source` — path to the source recording
 - `title` — `{line1, line2, duration}` (omit to skip)
-- `segments` — `[{src_start, src_end, speed?, zoom?, mute?, fit?, focus?}]`
+- `segments` — `[{src_start, src_end, speed?, zoom?, follow?, mute?, fit?, focus?}]`
   - `speed` — `>1` faster, `<1` slower; default 1.0; auto-mutes audio if >4
   - `zoom` — `{scale, x, y, hold?}` where x,y are normalized 0..1 crop position; `hold: true` permits a zoom on the final segment (otherwise render errors)
+  - `follow` — `{targets: [{t, x, y}], scale?, lead?, hold?}`: push in on each target (a click, from `pipeline.py cursor`) and pan between them; not with `zoom`, a `frame` or fit `crop` (`references/screencast.md` → Follow the clicks)
 - `transitions` — `[{after, kind, duration}]` (currently only `fade`). Undeclared joins crossfade 0.5 s, except a segment that starts where the previous one ended in the source: that join is a hard cut with unbroken audio. `duration: 0` asks for a hard cut anywhere.
 - `logo` — `{path, position: br|bl|tr|tl, scale, start_at}`
 - `music` — `{file}` OR `{prompt}` (prompt is documented but generation is not available in CPU-only Linux containers — pass `file` or `url`)
@@ -269,7 +270,7 @@ Keys for reels (see `references/reels.md`):
 - **Face tracking.** Reels frame speakers from declared panels, from speaker labels in the transcript, or from focus keys the session places after looking at frames — never by detecting faces.
 - **Hosted review.** The review page is served from this machine to the user's browser; sharing it with someone elsewhere means putting the renders somewhere they can reach.
 - **Posting.** It renders files; uploading or scheduling to Instagram, Facebook or TikTok is up to the user.
-- **Cursor zoom-on-click.** Would require a macOS sidecar logger at record time. Out of scope.
+- **Trusting detected clicks unreviewed.** `pipeline.py cursor` finds clicks from the picture alone (no logger at record time); only its `sure` clicks are fit for `follow`, and the user reviews where the camera went.
 - **AI music generation in this container.** ACE-Step pyproject hard-pins CUDA/MPS wheels — won't install on CPU-only aarch64 Linux. Use `--music-file` or `--music-url`. See `stages/music.py` `GENERATION_NOTE` for Mac/GPU install path if the user wants it there.
 
 ## Tools (all permissive licenses, all local)
@@ -282,4 +283,5 @@ Keys for reels (see `references/reels.md`):
 | Captions | libass (ffmpeg `subtitles` filter) | ISC |
 | Music fetching, reference videos (URL path) | yt-dlp | Unlicense |
 | Motion graphics frames | Playwright + headless Chromium | Apache-2.0 / BSD-3 |
+| Pointer and click detection | OpenCV (opencv-python-headless) | Apache-2.0 / MIT |
 | Music generation (optional, Mac/GPU only) | ACE-Step / ACE-Step-1.5 | Apache-2.0 / MIT |
