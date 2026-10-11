@@ -65,10 +65,10 @@ html,body{margin:0;width:900px;height:560px;overflow:hidden;background:#0B1220;
 .n{font-size:150px;font-weight:800;margin-top:24px;
   opacity:0;animation:up .5s cubic-bezier(.2,.8,.2,1) .22s forwards}
 .bar{position:absolute;left:56px;right:56px;bottom:64px;height:16px;border-radius:8px;background:#111A2E}
-.bar i{display:block;height:100%;width:0;border-radius:8px;background:#3DDC97;
-  animation:fill 1.6s cubic-bezier(.2,.8,.2,1) .5s forwards}
+.bar i{display:block;height:100%;width:72%;border-radius:8px;background:#3DDC97;
+  transform:scaleX(0);transform-origin:left;animation:fill 1.6s cubic-bezier(.2,.8,.2,1) .5s forwards}
 @keyframes up{from{opacity:0;transform:translateY(32px)}to{opacity:1;transform:none}}
-@keyframes fill{to{width:72%}}
+@keyframes fill{to{transform:scaleX(1)}}
 </style></head><body><div class="card"><div class="k">Label</div><div class="n">72%</div>
 <div class="bar"><i></i></div></div></body></html>
 ```

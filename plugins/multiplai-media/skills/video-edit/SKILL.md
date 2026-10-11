@@ -133,7 +133,7 @@ Write the EDL to a sensible location (e.g. `~/.cache/video-edit/<key>/edl.json`)
 ### 4. Render
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py render <edl.json> \
+uv run --project "${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts" python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py render <edl.json> \
   --out <output.mp4> \
   --music-file <path>          # or --music-url <url>
   --music-volume-db -22         # optional, default -18
@@ -261,7 +261,7 @@ Keys for reels (see `references/reels.md`):
 - `headline` — `{text, start, end}` in output time, shown at the top
 - `brand` — path to a brand file (fonts, colours, logo)
 - `transcript` — a `transcript.json` other than the prep cache's
-- `overlays` — `[{html, style, start, end, mode: panel|keyed, region: {x, y, w, h}, key_color}]` — HTML/CSS motion graphics in output time (`references/motion.md`)
+- `overlays` — `[{html, style, start, end, mode: alpha|panel|keyed, region: {x, y, w, h}, key_color}]` — HTML motion graphics in output time, rendered in headless Chromium; `alpha` keeps real transparency and is the mode for graphics over video; an overlay without `mode` is `keyed` (`references/motion.md`)
 
 ## What it does NOT do
 
@@ -281,5 +281,5 @@ Keys for reels (see `references/reels.md`):
 | Transcription (macOS host, multilingual) | mlx_whisper + whisper-large-v3 / whisper-medium | MIT |
 | Captions | libass (ffmpeg `subtitles` filter) | ISC |
 | Music fetching, reference videos (URL path) | yt-dlp | Unlicense |
-| Motion graphics frames | agent-browser (headless Chromium) | Apache-2.0 |
+| Motion graphics frames | Playwright + headless Chromium | Apache-2.0 / BSD-3 |
 | Music generation (optional, Mac/GPU only) | ACE-Step / ACE-Step-1.5 | Apache-2.0 / MIT |

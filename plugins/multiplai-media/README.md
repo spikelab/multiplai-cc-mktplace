@@ -34,7 +34,9 @@ the [`multiplai`](../../README.md) marketplace.
 - `transcribe` — mlx-whisper needs Apple-Silicon macOS; from the kit container,
   the SSH bridge. On plain Linux use whisper.cpp / faster-whisper instead.
 - `video-edit` — needs ffmpeg + mlx-whisper on a Mac; from the kit container,
-  the SSH bridge.
+  the SSH bridge. Motion-graphics overlays render in a headless Chromium that
+  the skill launches through Playwright; where that browser is missing,
+  `render` names the `playwright install chromium-headless-shell` command.
 - `host-browser` — needs the multiplai-kit container→host SSH bridge **and an
   explicit opt-in on the host**: in container releases after v0.9.6 the gateway
   refuses `agent-browser` unless

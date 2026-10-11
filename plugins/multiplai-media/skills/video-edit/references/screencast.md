@@ -14,6 +14,9 @@ Prep writes a **dead-span table** into `context.md`: black gaps, frozen
 frames, and typing/cursor-only stretches where nothing watchable happens.
 
 - **Honor the dead-span table first.** Segments must not contain a `black` span at any speed, and must not cross a `static`/`low` span at an ordinary fast-forward speed (4-8x) — at 6x a 30s wait is still 5s of a video where nothing moves. Place segment boundaries so dead spans fall in the cuts; when continuity genuinely needs one (text appearing in a field), cross it at `speed >= 20`. After drafting segments, re-check each one against the table. Nuance: dead means don't *linger*, not don't *show* — a motionless-but-readable frame (a results list) can still carry a few-second speed-1 zoom money shot.
+- **The first 3–5 s carry one hook**: the result the viewer wants, a pain
+  they know, or a question. Never open on a description of the company or
+  a feature list. (HyperFrames `skills/product-launch-video/references/story-design.md:67`)
 - Map each user beat to a segment with `src_start`/`src_end` from the transcript anchors.
 - Use `speed > 1` for "fast-forward" sections (anything >4 auto-mutes audio; that's where the music bed carries).
 - Use `speed = 1.0` and a `zoom: {scale, x, y}` for "money shot" moments.
@@ -26,6 +29,20 @@ frames, and typing/cursor-only stretches where nothing watchable happens.
 - Zooms are short money shots (≤12 s). After every zoomed segment, return to a full-frame segment so the viewer regains context.
 - **Never end the video zoomed** — render errors on a zoomed final segment. If a close-up ending is genuinely intended, set `"hold": true` inside that zoom.
 - Keep most of the runtime full-frame; render warns when >50% is zoomed.
+
+## Overlays on a demo
+
+- **Reveal each overlay when the narration names its subject**, not before:
+  start a stat card on the word that introduces the number, and a label when
+  the voice reaches the thing it labels. Find the time with
+  `pipeline.py timeline <edl>`. A graphic shown before it is mentioned competes with
+  the voice. (HyperFrames `skills/faceless-explainer/references/motion-language.md:106`)
+- **Swap the text on one overlay with a zoom-through**: the outgoing text
+  scales 1 → 1.2 over 0.2 s, easing in, then a hard swap, then the incoming
+  text scales 0.75 → 1 over 0.5 s, easing out. This is a move inside the
+  overlay page (`motion.md`, Motion rules), not a cut between segments: a
+  segment join is a hard cut or a crossfade. (HyperFrames
+  `skills/pr-to-video/references/cut-catalog.md:38-71`)
 
 ## Choose music that fits
 
