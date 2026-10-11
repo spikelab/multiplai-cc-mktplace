@@ -3,6 +3,9 @@
 Copies the pattern of buildme's `sdk.py`, not the module: a repo trust gate,
 an explicit allow-list (run_agent denies its complement), a validated
 pydantic answer, and exactly one re-ask when the answer does not parse.
+Parsing the answer (`parse_answer`) and the reformat prompt
+(`reformat_prompt`) are `multiplai_core.structured`; the call loop and its
+retry policy stay here.
 
 The re-ask for an answer that came back but does not parse is a reformat: a
 no-tools, one-turn call that turns the text already paid for into the schema.
@@ -29,7 +32,7 @@ from typing import Iterator, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, run_agent
-from multiplai_core.text import extract_json
+from multiplai_core.structured import parse_answer, reformat_prompt
 
 from . import budget
 
@@ -40,7 +43,6 @@ T = TypeVar("T", bound=BaseModel)
 DEFAULT_CALL_TIMEOUT_S = 1200.0
 DEFAULT_MAX_TURNS = 60
 REFORMAT_MAX_TURNS = 1
-REFORMAT_MAX_ANSWER_CHARS = 60_000
 
 READ_ONLY_TOOLS = ["Read", "Grep", "Glob"]
 WEB_TOOLS = ["WebFetch", "WebSearch"]
@@ -143,39 +145,6 @@ async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effo
     budget.record(result.usage, label=budget_label)
     _note(result)
     return result.text
-
-
-def parse_answer(text: str, schema: type[T]) -> T:
-    """*text* as *schema*. Raises ValueError or ValidationError.
-
-    An answer that names none of the schema's fields holds no JSON answer at
-    all (a markdown report, say). `extract_json` would still parse the first
-    brace in its prose, and the error would describe that fragment, so this
-    case gets its own message.
-    """
-    try:
-        return schema.model_validate(extract_json(text))
-    except (ValidationError, ValueError) as e:
-        if not any(f'"{name}"' in text for name in schema.model_fields):
-            start = " ".join(text.split())[:120]
-            raise ValueError(f"the answer contains no JSON object with the field(s) "
-                             f"{', '.join(schema.model_fields)}; it starts: {start!r}") from e
-        raise
-
-
-def reformat_prompt(text: str, schema: type[BaseModel], error: Exception) -> str:
-    if len(text) > REFORMAT_MAX_ANSWER_CHARS:
-        text = text[:REFORMAT_MAX_ANSWER_CHARS] + "\n[... answer cut ...]"
-    return (
-        "Another agent was asked for ONE JSON object matching the schema below. A program rejected "
-        f"its answer: {str(error)[:2000]}\n\n"
-        "Rewrite that answer as ONE JSON object matching the schema. Use only what the answer says: "
-        "copy every quote, path and line number exactly, and add nothing it does not state. Leave out "
-        "any item the answer cannot fill in; when it holds no item for a list, leave the list empty.\n\n"
-        f"Schema:\n{json.dumps(schema.model_json_schema(), indent=1)}\n\n"
-        f"<answer>\n{text}\n</answer>\n\n"
-        "Answer with ONE JSON object and nothing after it."
-    )
 
 
 async def agent_call_structured(

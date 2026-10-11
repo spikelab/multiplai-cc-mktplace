@@ -33,7 +33,7 @@ cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && \
 | `render.py` | Expands `[[cN]]` / `[[snippet:cN]]` into `path:line` links and snippets from the commit; draws Mermaid from verified data; writes the Markdown, the HTML and the coverage table. |
 | `check.py` | Re-checks a finished walkthrough's links and snippets against the commits in its header. |
 | `orchestrator.py` | Runs the code stages and agent stages in `STAGES` order, saving state after each; `resume`. |
-| `sdk.py`, `budget.py`, `state.py`, `progress.py`, `config.py` | Copied from review_pipeline: trust gate and tool allow-list, budget breaker, atomic checkpoint, `progress.log`, `walkthrough.yaml` > `multiplai.conf` > session model. |
+| `sdk.py`, `budget.py`, `state.py`, `progress.py`, `config.py` | The same shape as review_pipeline's, on multiplai-core's primitives: trust gate, tool allow-list and the one-reformat call loop (answer parsing from `multiplai_core.structured`); `WalkthroughBudget`, a `multiplai_core.budget.SpendLedger` with a $50 default; atomic checkpoint (`multiplai_core.checkpoint`); `progress.log` (`multiplai_core.progress.ProgressWriter` plus the walkthrough's `STARTED` line); `walkthrough.yaml` > `multiplai.conf` > session model, read with `multiplai_core.stage_config`. |
 
 ## The gates
 

@@ -53,14 +53,13 @@ from .models import (
     BlockInfo,
     BlockStatus,
     BuildPhase,
-    FinalReviewVerdict,
     FindingAdjudication,
     GateResult,
     ReviewResult,
     TestQualityAudit,
 )
 from .progress import ProgressWriter
-from .prompts.review import FINAL_REVIEW_PROMPT, FINDING_ADJUDICATION_PROMPT
+from .prompts.review import FINDING_ADJUDICATION_PROMPT
 from .prompts.test_writing import TEST_QUALITY_PROMPT
 from .sdk import llm_call_structured
 from .state import BuildState, TDDState
@@ -1585,7 +1584,8 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
 async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) -> int:
     """Main entry point for the TDD engine.
 
-    Orchestrates: parse blocks → baseline gate → per-block TDD → final review.
+    Orchestrates: parse blocks → baseline gate → per-block TDD → whole-change
+    refactor → entry-point check.
 
     *standalone* says who owns the build's lifecycle. True (the
     `python -m build_pipeline tdd` entry point) means the engine IS the build:
@@ -1709,39 +1709,12 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
 
         state.advance_block(state_path)
 
-    # --- Whole-change refactor (one conservative pass, before final review) ---
+    # --- Whole-change refactor (one conservative pass, after every block) ---
     # Runs here and not per block on purpose: cross-block duplication is only
-    # visible once every block exists, and the final review should grade the
-    # code that ships, not a version the refactor is about to change.
+    # visible once every block exists. Whole-change review is not buildme's
+    # job: /multiplai-dev:review runs on the PR.
     if not await _run_refactor_all(config, state, progress):
         return EXIT_BUILD_FAILURE
-
-    # --- Final comprehensive review ---
-    if not state.tdd.final_review_done:
-        log.info("START phase=FINAL_REVIEW")
-        progress.log_phase("FINAL_REVIEW", "Running comprehensive review")
-        final_review = await _run_final_review(config, state)
-
-        if final_review is not None and not final_review.passed:
-            # Fail closed on both an unverifiable review (error) and a genuine
-            # FAILED verdict — a build the reviewer would not trust is not
-            # done. Not marked done — a resume re-runs the review.
-            label = ("ERROR" if final_review.action == "final_review_error"
-                     else "FAILED")
-            log.error("FAIL phase=FINAL_REVIEW result=%s reason=%s",
-                      label.lower(), final_review.reason[:200])
-            progress.log_phase("FINAL_REVIEW", f"{label}: {final_review.reason}")
-            if not config.lenient_review:
-                return EXIT_BUILD_FAILURE
-            log.warning("--lenient-review: continuing despite final-review %s",
-                        label.lower())
-            state.tdd.final_review_done = True
-            state.checkpoint(state_path)
-        else:
-            state.tdd.final_review_done = True
-            state.checkpoint(state_path)
-            log.info("DONE phase=FINAL_REVIEW result=passed")
-            progress.log_phase("FINAL_REVIEW", "PASSED")
 
     # --- Entry point verification ---
     if config.gates.e2e_test_entry_point_check and not state.tdd.e2e_done:
@@ -1778,8 +1751,8 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
 
 
 def capture_build_diff(config: BuildConfig, state: BuildState) -> str:
-    """Whole-build diff for the final review: first block's pre-build baseline
-    → working tree, capped like the per-block review diff. Returns "" on git
+    """Whole-build diff: first block's pre-build baseline → working tree,
+    capped like the per-block review diff. Returns "" on git
     failure — never raises."""
     baseline = None
     if state.tdd and state.tdd.blocks:
@@ -1866,7 +1839,7 @@ async def _run_refactor_all(
     # False), or a review fix that broke the suite after the last
     # integration run. Committing them would bake the breakage into the
     # exact commit a failed verification later restores, and nothing
-    # downstream re-runs the suite (the final review is LLM-graded). Whose
+    # downstream re-runs the suite. Whose
     # edits are dirty is unknowable from here, and unknown is never safe to
     # destroy — so: no reset, no checkpoint, no refactor pass.
     pre_gate = integration_gate(config.test_command, config.project_dir)
@@ -1957,7 +1930,7 @@ async def _run_refactor_all(
         else:
             # The refactor's edits failed verification AND could not be
             # discarded — they stay in the tree, and nothing downstream
-            # re-runs the suite (the final review is LLM-graded). Say so
+            # re-runs the suite. Say so
             # loudly rather than let the build reach COMPLETE looking clean.
             log.error("DONE phase=REFACTOR_ALL result=unverified-and-not-discarded "
                       "reason=%s — UNVERIFIED refactor edits remain in the tree "
@@ -1976,80 +1949,6 @@ async def _run_refactor_all(
     state.tdd.refactor_all_done = True
     state.checkpoint(config.state_file_path())
     return True
-
-
-def _build_trajectory_text(state: BuildState) -> str:
-    """Per-block history for the final review's trajectory judgment.
-
-    The cumulative diff alone shows the destination, not the path. Whether a
-    block needed three review iterations, or declared a test change, or ran a
-    panel that disagreed with itself, is the signal that separates "arrived
-    somewhere fine" from "drifted there" — and it is only visible here.
-    """
-    if not state.tdd or not state.tdd.blocks:
-        return "(no per-block trajectory recorded)"
-    lines: list[str] = []
-    for b in state.tdd.blocks:
-        parts = [f"- Block {b.number} ({b.name}): {b.status.value}"]
-        if b.review_iterations:
-            parts.append(f"{b.review_iterations} review iteration(s)")
-        if b.review_scores is not None:
-            parts.append(f"final weighted score {b.review_scores.weighted_average:.1f}")
-            if b.review_scores.rejected_findings:
-                parts.append(
-                    f"{len(b.review_scores.rejected_findings)} finding(s) rejected by the orchestrator"
-                )
-        if b.test_change_claims:
-            parts.append(
-                "TEST FILES CHANGED after RED, declared reason(s): "
-                + "; ".join(b.test_change_claims)
-            )
-        lines.append(" — ".join(parts))
-    return "\n".join(lines)
-
-
-async def _run_final_review(config: BuildConfig, state: BuildState) -> GateResult | None:
-    """Final comprehensive review over the full build diff.
-
-    Structured verdict (FinalReviewVerdict via llm_call_structured) — no
-    string-matching on free text. Fails closed: an exception yields
-    passed=False with action="final_review_error", surfaced to the caller —
-    never a fabricated pass.
-    """
-    rubric = ""
-    if config.rubric_path.exists():
-        rubric = config.rubric_path.read_text()
-    if not rubric:
-        return GateResult(passed=True, reason="No rubric — skipping final review")
-
-    diff = capture_build_diff(config, state)
-    if not diff:
-        log.warning("No full-build diff captured — final review sees rubric only")
-    prompt = FINAL_REVIEW_PROMPT.format(
-        diff=diff or "(no diff captured)",
-        rubric=rubric,
-        trajectory=_build_trajectory_text(state),
-    )
-    model = getattr(config, "review_model", None) or config.model
-    try:
-        verdict = await llm_call_structured(prompt, FinalReviewVerdict, model=model,
-                                            effort=config.review_effort, max_retries=1,
-                                            budget_label="final_review")
-    except Exception as e:
-        log.error("Final review errored (failing closed): %s", e)
-        return GateResult(
-            passed=False,
-            reason=f"Final review errored: {e}",
-            action="final_review_error",
-        )
-    reason = verdict.summary
-    if verdict.issues:
-        reason += " Issues: " + "; ".join(verdict.issues)
-    return GateResult(
-        passed=verdict.passed,
-        reason=reason[:500],
-        metadata={"issues": verdict.issues},
-    )
 
 
 def _detect_entry_point(config: BuildConfig) -> tuple[str, list[str], dict | None] | None:

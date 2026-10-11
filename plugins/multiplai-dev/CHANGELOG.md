@@ -17,6 +17,58 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.34.3] - 2026-10-11
+
+### Changed
+- buildme's `llm_call_structured` and `agent_call_structured` parse an answer
+  with multiplai-core 0.17.0's `parse_answer`. The retry policy is unchanged:
+  a bad answer still re-runs the whole call, up to `max_retries` times. One
+  visible difference: when an answer holds no JSON at all (a markdown
+  report, say), the error, and so the retry prompt, now says so ("the answer
+  contains no JSON object with the field(s) …") instead of quoting a parse
+  error about the first brace in the prose.
+- buildme keeps its own spend ledger (`budget.py`). It counts spend per phase
+  in tokens, not USD, so it does not move onto multiplai-core's
+  `SpendLedger`.
+
+## [0.34.2] - 2026-10-11
+
+### Changed
+- codebase-walkthrough takes its checkpoint writer, `progress.log` writer,
+  spend ledger, `walkthrough.yaml` helpers and answer parsing from
+  multiplai-core 0.17.0 (`checkpoint`, `progress`, `budget.SpendLedger`,
+  `stage_config`, `structured`) instead of carrying copies of review's. The
+  `progress.log` lines, the $50 default ceiling, the one-reformat re-ask and
+  the config precedence are unchanged. The ledger saved in
+  `walkthrough-state.json` now also records spend per stage (`by_stage`),
+  calls that returned no usage (`no_usage_calls`) and `max_tokens` (null), as
+  review's does; a ledger saved before this loads as before.
+
+## [0.34.1] - 2026-10-11
+
+### Changed
+- review takes its checkpoint writer, `progress.log` writer, spend ledger,
+  `review.yaml` helpers and answer parsing from multiplai-core 0.17.0
+  (`checkpoint`, `progress`, `budget.SpendLedger`, `stage_config`,
+  `structured`) instead of carrying its own copies. What a review does is
+  unchanged: the same `progress.log` lines, the same $50 default ceiling per
+  target, the same one-reformat re-ask, and the same config precedence. The
+  saved ledger in `review-state.json` gains a `max_tokens` key (always null
+  for review); a ledger saved before this loads as before.
+
+## [0.34.0] - 2026-10-11
+
+### Removed
+- buildme: the final review is gone. buildme no longer runs a whole-change
+  model review after the last block, so a build no longer fails at the end on
+  a FAILED or errored final verdict, and no `FINAL_REVIEW` line appears in
+  its log. Each block is still reviewed and fixed as before. For a review of
+  the whole change, run `/multiplai-dev:review` on the PR buildme opens.
+- buildme: `--lenient-review` now covers one case only, a block whose code
+  review stays below threshold after all fix rounds.
+
+A checkpoint written by an older buildme still loads and resumes where it was.
+
 ## [0.33.1] - 2026-10-11
 
 ### Changed

@@ -7,7 +7,7 @@
 | `__main__.py` | CLI entry point with subcommands | No |
 | `orchestrator.py` | Phase sequencing state machine | Delegates |
 | `spec_generator.py` | Artifact pipeline (proposal → tasks → rubric) | Via llm_steps |
-| `tdd_engine.py` | Block-by-block TDD with agent spawning. Each block runs test → implement → **refactor** on every tier; the refactor is verified (suite re-run + `unchanged_tests_gate`) and its diff discarded on failure. `_run_refactor_all` is the one conservative whole-change pass, between the block loop and `_run_final_review`, guarded by `TDDState.refactor_all_done`. | Via llm_steps |
+| `tdd_engine.py` | Block-by-block TDD with agent spawning. Each block runs test → implement → **refactor** on every tier; the refactor is verified (suite re-run + `unchanged_tests_gate`) and its diff discarded on failure. `_run_refactor_all` is the one conservative whole-change pass, between the block loop and the entry-point check, guarded by `TDDState.refactor_all_done`. buildme runs no whole-change review: that is `/multiplai-dev:review`, on the PR. | Via llm_steps |
 | `change_manager.py` | Manages specs/ directory (DAG, status, templates, archiving) | No |
 | `config.py` | BuildConfig, tier detection, test command discovery, reference-doc resolution (`stack_reference_docs`/`reference_docs_text`: built-in stack map + `reference_docs:` overrides from `specs/config.yaml` + django/fastapi/react manifest detection; `summarize_reference_doc` reduces an over-limit doc on section boundaries and always emits the full section index). Also the per-step tuning knobs: `conf_model`/`conf_int` join `conf_effort` as the multiplai.conf readers that can say "the conf said nothing" (`pick_model` cannot — it always returns a concrete ID), feeding `spec_model`/`agent_model`/`plan_review_model`, `plan_review_effort` and the two `plan_split_*_trigger` integers; `specs/config.yaml` overrides a conf-supplied `review_model`, which is what `_review_model_from_conf` exists to record. `convention_files()` resolves the project's own `CLAUDE.md` chain for the reviewer. | No |
 | `state.py` | BuildState with checkpoint/resume | No |
@@ -17,7 +17,7 @@
 | `dependencies.py` | Pure detection of dependencies **new to this project**: parses the proposal's `## Impact` and design's `## Decisions`, subtracts every manifest (`pyproject.toml`, `package.json`, `Package.swift`, `Cargo.toml`, `go.mod`, `requirements.txt`) and every existing import. Feeds the B1 explainer gate. No LLM, no network. | No |
 | `git_ops.py` | Every `git`/`gh` invocation: worktree+branch setup, explicit-path commits, the TDD loop's whole-tree `commit_tree`/`tree_is_clean`/`discard_to`, push, `gh pr create`. `shell=False`, fixed argv, never merges/force-pushes/deletes; the one destructive call (`discard_to`) refuses unless the target sha is still an ancestor of HEAD. `BOOKKEEPING_EXCLUDES` is the single list of buildme's own files, honored by every commit path and by the discard's `clean`. | No |
 | `board.py` | Board seam: pure `column_for(phase, block_status)` → `BoardColumn`, `.board.json` card writer, `BOARD:<slug>:<Column>` stdout line. Drives Shaping → Planning → In Development → In Review only; its docstring names the columns it never sets. The `BoardCard`/`BoardEvent` pydantic models live here deliberately (they are the card file's private schema, not shared pipeline data). | No |
-| `sdk.py` | `llm_call()` / `llm_call_structured()` (toolless) + `agent_call()` / `agent_call_structured()` (tool-holding) adapters over `multiplai_core.run_agent()`. `agent_call_structured` is the reviewer's entry point: it runs the agent loop, then parses the final message into a pydantic model with one re-ask on a parse failure. Every `agent_call` path goes through `_require_trusted_repo()`, so a tool-holding review needs `--trust-repo` / `BUILDME_TRUST_REPO=1`. | Yes (SDK) |
+| `sdk.py` | `llm_call()` / `llm_call_structured()` (toolless) + `agent_call()` / `agent_call_structured()` (tool-holding) adapters over `multiplai_core.run_agent()`. `agent_call_structured` is the reviewer's entry point: it runs the agent loop, then parses the final message into a pydantic model (`multiplai_core.structured.parse_answer`, as `llm_call_structured` does) with one re-run on a parse failure. Every `agent_call` path goes through `_require_trusted_repo()`, so a tool-holding review needs `--trust-repo` / `BUILDME_TRUST_REPO=1`. | Yes (SDK) |
 | `rubric.py` | Rubric generation and change type detection | Via sdk |
 | _(logging)_ | Uses shared `log_utils.setup_logging()` from hooks/ | No |
 | `env.py` | .env loading, multiplai.conf parsing, model resolution | No |
@@ -44,7 +44,7 @@ Templates are Python f-strings with `{placeholders}`. Each template is a constan
 | `spec_generation.py` | PROPOSAL_PROMPT, SPEC_PROMPT, DESIGN_PROMPT, TASKS_PROMPT |
 | `test_writing.py` | TEST_WRITER_PROMPT |
 | `implementation.py` | IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM, REFACTOR_PROMPT, REFACTOR_ALL_PROMPT |
-| `review.py` | CODE_REVIEW_PROMPT, FINDING_ADJUDICATION_PROMPT, FINAL_REVIEW_PROMPT |
+| `review.py` | CODE_REVIEW_PROMPT, FINDING_ADJUDICATION_PROMPT |
 | `design_audit.py` | DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT |
 | `prototype.py` | PROTOTYPE_PROMPT |
 | `explainer.py` | EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT |
