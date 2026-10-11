@@ -16,10 +16,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
-from multiplai_core import KNOWN_EFFORTS
 from multiplai_core.env import load_multiplai_conf
+from multiplai_core.stage_config import check_effort, coerce_int, conf_value, read_yaml_mapping
 
 from .budget import DEFAULT_MAX_USD
 
@@ -41,14 +39,6 @@ class WalkConfig:
     max_cost_usd: float | None = DEFAULT_MAX_USD
 
 
-def _conf_value(conf: dict, key: str) -> str | None:
-    for k in (key, key.upper()):
-        value = conf.get(k)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
-
-
 def load_config(run_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MAX_USD) -> WalkConfig:
     cfg = WalkConfig(max_cost_usd=max_cost_usd)
     try:
@@ -57,30 +47,18 @@ def load_config(run_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MA
         log.warning("Could not read multiplai.conf (%s); using defaults", e)
         conf = {}
     for key in STAGE_MODELS:
-        setattr(cfg, key, _conf_value(conf, f"walkthrough_{key}"))
-    cfg.effort = _conf_value(conf, "walkthrough_effort")
+        setattr(cfg, key, conf_value(conf, f"walkthrough_{key}"))
+    cfg.effort = conf_value(conf, "walkthrough_effort")
 
     yaml_path = (run_dir / "walkthrough.yaml") if run_dir else None
-    if yaml_path and yaml_path.is_file():
-        try:
-            data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
-        except yaml.YAMLError as e:
-            log.warning("Ignoring unparseable %s: %s", yaml_path, e)
-            data = {}
-        if not isinstance(data, dict):
-            log.warning("Ignoring %s: expected a mapping", yaml_path)
-            data = {}
-        for key in (*STAGE_MODELS, "effort"):
-            if data.get(key):
-                setattr(cfg, key, str(data[key]))
-        for key in ("concurrency", "max_turns"):
-            if data.get(key) is not None:
-                try:
-                    setattr(cfg, key, max(1, int(data[key])))
-                except (TypeError, ValueError):
-                    log.warning("Ignoring %s=%r in %s (want an integer)", key, data[key], yaml_path)
+    data = read_yaml_mapping(yaml_path)
+    for key in (*STAGE_MODELS, "effort"):
+        if data.get(key):
+            setattr(cfg, key, str(data[key]))
+    for key in ("concurrency", "max_turns"):
+        value = coerce_int(data, key, yaml_path)
+        if value is not None:
+            setattr(cfg, key, value)
 
-    if cfg.effort and cfg.effort.lower() not in KNOWN_EFFORTS:
-        log.warning("Ignoring unknown effort %r (expected one of %s)", cfg.effort, ", ".join(sorted(KNOWN_EFFORTS)))
-        cfg.effort = None
+    cfg.effort = check_effort(cfg.effort)
     return cfg
