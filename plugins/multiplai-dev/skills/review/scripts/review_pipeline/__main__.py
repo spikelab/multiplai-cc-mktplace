@@ -6,7 +6,7 @@
   batch   — a YAML list of targets, then rollups
   rollup  — regenerate HIGH/MEDIUM/LOW-only.md and runs.jsonl from existing findings.json files
   resume  — continue a review from its review-state.json
-  post    — one PR comment with the HIGH and MEDIUM findings
+  post    — post the accepted findings as one PR review, one inline comment each
   assess-only — run the repeats and assess stages on saved reviews and compare
             their labels with the decisions already recorded (writes a report;
             changes no review)
@@ -136,7 +136,8 @@ def build_parser() -> argparse.ArgumentParser:
     _trust_flag(rs)
     _budget_flag(rs)
 
-    po = sub.add_parser("post", parents=[common], help="Post the HIGH and MEDIUM findings as one PR comment")
+    po = sub.add_parser("post", parents=[common],
+                        help="Post the accepted findings as one PR review, one inline comment each")
     po.add_argument("target_dir", help="The review's directory, <out>/<slug>")
     po.add_argument("--decisions", help="The viewer's decisions.json; only accepted findings are posted")
 
