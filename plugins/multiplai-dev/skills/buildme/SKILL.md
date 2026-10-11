@@ -58,7 +58,9 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: true}`,
 `prototype: {enabled: auto|true|false}`, `respec: {halt_on_contradiction: false}`,
-`git: {worktree: true, push: true, pr: draft|ready|none}`.
+`git: {worktree: true, push: true, pr: draft|ready|none}`,
+`mutation: {enabled: true, min_score: 0.8, timeout: 30, max_mutants: 300}`
+(see [Mutation testing](#mutation-testing)).
 
 ### Reference docs — the standards the specs are written against
 
@@ -182,6 +184,52 @@ Parse and relay, from stdout: `WORKTREE:<path>`, `BRANCH:<name>`, `PUSHED:<branc
 `PR:<url>`. Always report the worktree path and that it was left in place
 deliberately, plus the PR URL (or, on `PUBLISH_DIAGNOSIS:<reason>`, the manual
 push/PR commands from `build-progress.md`).
+
+## Mutation testing
+
+Python projects only (test-command discovery found a `pyproject.toml`, so
+`stack` is `pyproject`). Right after the whole-change refactor, buildme runs
+[cosmic-ray](https://pypi.org/project/cosmic-ray/) 8.7.0 over the **non-test
+`.py` lines the build added or modified** since its first block, using the
+project's own test command. cosmic-ray runs as a pinned tool
+(`uvx --from cosmic-ray==8.7.0`), so `uv` must be installed; it is not added
+to the project or to buildme's dependencies. The first run downloads it.
+
+If any mutant survives, one fresh test-writer agent gets the survivors (file,
+line, operator, the line as it is now, and the mutation's diff) and may add or
+edit **tests only**. The implementer is not called. buildme then checks the
+round:
+
+- a changed non-test file discards the round and **fails the build**;
+- a red suite discards the round, and the first score stands;
+- a green round is committed as `test(mutation): kill surviving mutants` and
+  cosmic-ray runs again for the final score.
+
+`specs/config.yaml` keys (all optional):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `mutation.enabled` | `true` | Turn the step off for this project. |
+| `mutation.min_score` | `0.8` | Minimum killed / (killed + survived). Timed-out test runs count as killed. **The default is a starting point:** nobody has measured mutation scores on buildme output yet, so it will be adjusted from measured runs. |
+| `mutation.timeout` | `30` | Seconds allowed per test-suite run under one mutant. |
+| `mutation.max_mutants` | `300` | Cap on mutants run. Above it, a deterministic sample runs, and `mutation.md` says so. |
+
+What fails a build (`EXIT_BUILD_FAILURE`, step not marked done, so a resume
+runs it again): a final score below `min_score`, a survivor round that edited
+a non-test file, or cosmic-ray failing to produce a score (not installed, red
+baseline, crash, timeout). A bad config value keeps its default and logs a
+warning. When no mutant lands on a changed line, there is no score and the step
+passes. A non-Python project, `enabled: false` or a build that changed no
+Python source logs one `SKIP phase=MUTATION` line and moves on.
+
+Every run that scores writes `specs/changes/<name>/mutation.md`: the score
+before and after the survivor round, the threshold and verdict, the files
+mutated, what the survivor round did, and every surviving mutant (file, line,
+operator). It is committed onto the build branch.
+
+cosmic-ray edits source files in place while it runs. buildme commits the tree
+first and, if a mutated file is still there afterwards, discards back to that
+commit.
 
 ## Tuning model and effort (multiplai.conf)
 
@@ -375,12 +423,17 @@ Parse pipeline stdout for progress lines:
   the documentation phase updated nothing (a warning, never a failure)
 - `PUBLISH_DIAGNOSIS:<reason>` — push/PR could not finish; manual commands are in
   `build-progress.md` (the build still succeeded)
+- Mutation testing is a sub-step of `TDD_BUILD`, so it has no `PHASE:` line.
+  It shows in `build-progress.md` as a `MUTATION` entry (`SKIPPED — …`,
+  `PASSED — score …` or `FAILED: …`); a failure ends with `ERROR:` like any
+  failed build
 - `RESULT:SUCCESS` — build complete
 - `ERROR:<message>` — failure
 
 Also point the user at the build's companion artifacts inside the change
 directory: `unknowns.md`, `prototype/`, `implementation-notes.md` (what each
-agent found surprising), and `respec.md` (a *proposed* spec delta — it is never
+agent found surprising), `mutation.md` (Python builds: the mutation score and
+surviving mutants), and `respec.md` (a *proposed* spec delta — it is never
 applied automatically).
 
 Report the progress file path for monitoring:
