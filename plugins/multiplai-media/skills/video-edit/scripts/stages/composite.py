@@ -480,9 +480,10 @@ def sfx_graph(edl: EDL, first_input: int, alabel: str) -> tuple[str, list[str], 
 
     Input `first_input + i` is edl.sfx[i]'s file. This runs after the music
     is mixed and ducked, so the sounds never duck it. amix keeps the levels
-    as given (normalize=0), and alimiter keeps stacked sounds from clipping;
-    its auto level is off, because it would raise the whole mix back to full
-    scale. Returns (graph, the -i arguments, new label).
+    as given (normalize=0), and alimiter keeps stacked sounds from clipping.
+    Its auto level is off: on, it scales the output by 1/limit, which puts
+    the limited peaks back at full scale. Returns (graph, the -i arguments,
+    new label).
     """
     from stages import sfx as sfx_mod
     inputs: list[str] = []
