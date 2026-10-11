@@ -390,6 +390,63 @@ _STEP_FALLBACKS: tuple[tuple[str, str], ...] = (
 
 
 @dataclass
+class MutationSettings:
+    """`mutation:` in specs/config.yaml — the TDD engine's MUTATION sub-step.
+
+    `min_score` defaults to 0.8 with no measurement behind it: nobody has run
+    mutation testing on buildme output yet, so the default is a starting point
+    to be adjusted from real runs.
+    """
+    enabled: bool = True
+    min_score: float = 0.8
+    timeout: float = 30.0      # seconds per test-suite run under a mutant
+    max_mutants: int = 300     # above it, a deterministic sample runs
+
+
+def _load_mutation_settings(raw) -> MutationSettings:
+    """Validate `mutation:`; a bad value keeps its default and logs a warning,
+    like `_normalize_prototype_toggle` — never a crash, never a silent change."""
+    settings = MutationSettings()
+    if raw is None:
+        return settings
+    if not isinstance(raw, dict):
+        log.warning("mutation: in config.yaml is not a mapping — using defaults")
+        return settings
+    enabled = raw.get("enabled", True)
+    if isinstance(enabled, bool):
+        settings.enabled = enabled
+    elif str(enabled).strip().lower() in ("yes", "on", "1", "true"):
+        settings.enabled = True
+    elif str(enabled).strip().lower() in ("no", "off", "0", "false"):
+        settings.enabled = False
+    else:
+        log.warning("Unrecognized mutation.enabled value %r — using true", enabled)
+
+    def _number(key, default, *, cast, ok, rule):
+        value = raw.get(key, default)
+        if isinstance(value, bool):
+            log.warning("Invalid mutation.%s=%r (%s) — using %r", key, value, rule, default)
+            return default
+        try:
+            number = cast(value)
+        except (TypeError, ValueError):
+            log.warning("Invalid mutation.%s=%r (%s) — using %r", key, value, rule, default)
+            return default
+        if not ok(number) or (cast is int and number != value):
+            log.warning("Invalid mutation.%s=%r (%s) — using %r", key, value, rule, default)
+            return default
+        return number
+
+    settings.min_score = _number("min_score", settings.min_score, cast=float,
+                                 ok=lambda v: 0.0 <= v <= 1.0, rule="a number from 0 to 1")
+    settings.timeout = _number("timeout", settings.timeout, cast=float,
+                               ok=lambda v: v > 0, rule="seconds, above 0")
+    settings.max_mutants = _number("max_mutants", settings.max_mutants, cast=int,
+                                   ok=lambda v: v > 0, rule="a whole number above 0")
+    return settings
+
+
+@dataclass
 class BuildConfig:
     """Complete configuration for a build pipeline run."""
 
@@ -438,6 +495,9 @@ class BuildConfig:
 
     # Git lifecycle toggles
     git: GitToggles = field(default_factory=GitToggles)
+
+    # MUTATION sub-step settings (`mutation:` in specs/config.yaml)
+    mutation: MutationSettings = field(default_factory=MutationSettings)
 
     # Runtime marker, not user-configurable: set to the branch name once the
     # pipeline has created its own worktree+branch (or re-bound to one on
@@ -695,6 +755,7 @@ class BuildConfig:
             prototype=_normalize_prototype_toggle(prototype.get("enabled", "auto")),
             respec_halt_on_contradiction=respec.get("halt_on_contradiction", False),
         )
+        self.mutation = _load_mutation_settings(data.get("mutation"))
 
         # Git lifecycle: git: {worktree: true, push: true, pr: draft|ready|none}
         git_cfg = data.get("git", {}) or {}
