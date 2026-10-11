@@ -167,7 +167,7 @@ class TestRunPlanReview:
 
         assert call.await_args.kwargs["model"] == "review-model"
         assert call.await_args.kwargs["effort"] == "review-effort"
-        assert "above 8" in call.await_args.args[0]
+        assert "above 10" in call.await_args.args[0]
 
     @pytest.mark.asyncio
     async def test_reads_the_use_case_artifact_when_it_exists(self, tmp_path):
@@ -389,8 +389,8 @@ class TestSplitContextSeam:
         del config.plan_split_package_trigger
         context = _split_context(config, _tasks_dir(tmp_path, SPLITTABLE_TASKS))
 
-        assert "Size trigger (>8): not fired" in context
-        assert "Package trigger (>3): not fired" in context
+        assert "Size trigger (>10): not fired" in context
+        assert "Package trigger (>5): not fired" in context
 
     def test_the_placeholder_trigger_is_never_presented_as_a_verdict(
         self, tmp_path,

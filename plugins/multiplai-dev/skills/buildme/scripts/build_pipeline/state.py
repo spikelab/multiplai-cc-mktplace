@@ -108,8 +108,9 @@ class BuildState(BaseModel):
     ticket_url: str | None = None
     plan_file: str | None = None
     # `interview: ticket` asked its questions on the ticket and is waiting for
-    # replies; the phase pointer stays before INTERVIEW_DONE so a resume
-    # re-enters the interview. Default False for old checkpoints.
+    # replies. The pointer sits at INTERVIEW_DONE, which is_phase_complete
+    # does not count as complete, so a resume re-enters the interview.
+    # Default False for old checkpoints.
     interview_waiting: bool = False
     # The plan should be split and the build stopped after plan review; a
     # re-run stops the same way until --accept-size. Default False.
