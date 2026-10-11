@@ -805,7 +805,12 @@ async def _run_bootstrap(
     if config.git.worktree:
         # The worktree branches from HEAD, so an uncommitted config.yaml would
         # silently not exist inside it — refuse instead of building without it.
-        if intake.config_yaml_uncommitted(config.project_dir):
+        # Only the caller's source repo is checked: a FAILED build retried
+        # after _rebind_to_existing_worktree runs bootstrap inside its own
+        # worktree, where the uncommitted config.yaml is the stub bootstrap
+        # wrote itself and the user has nothing to commit.
+        if (not _inside_own_worktree(config, state)
+                and intake.config_yaml_uncommitted(config.project_dir)):
             raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_COMMITTED)
         _setup_worktree(config, state)
         state_path = config.state_file_path()
@@ -900,6 +905,17 @@ def _run_size_gate(
                    f"Plan should be split; proposal in {path}. Re-run with --accept-size to build it as one PR.")
     print(f"{MARKER_SPLIT_REQUIRED}:{path}", flush=True)
     return WAITING_EXIT
+
+
+def _inside_own_worktree(config: BuildConfig, state: BuildState) -> bool:
+    """True when the config is already bound inside this build's worktree."""
+    if not state.worktree_path:
+        return False
+    try:
+        config.project_dir.resolve().relative_to(Path(state.worktree_path).resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def _setup_worktree(config: BuildConfig, state: BuildState) -> None:

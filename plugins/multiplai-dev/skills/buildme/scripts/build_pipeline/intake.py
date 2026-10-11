@@ -336,23 +336,27 @@ async def _ticket_interview(config, state, args, state_path, progress, contexts,
     questions_path = change_dir / "interview-questions.md"
     replies = _read_replies(getattr(args, "interview_replies", "") or "")
 
-    if replies and questions_path.is_file():
-        questions = read_questions(questions_path)
-        text = render_interview(
-            change_dir, summary=summary, contexts=contexts, questions=questions,
-            replies=replies, replies_source=state.ticket_url or state.ticket_ref or "ticket replies",
-        )
+    def finish(text: str, note: str) -> None:
         write_interview(change_dir, text)
         state.interview_summary = text
         state.interview_waiting = False
         state.advance_to(BuildPhase.INTERVIEW_DONE, state_path)
         log.info("DONE phase=INTERVIEW mode=ticket")
-        _progress_note(progress, "INTERVIEW", "Ticket replies received; interview saved")
+        _progress_note(progress, "INTERVIEW", note)
         print("PHASE:INTERVIEW:COMPLETE", flush=True)
         board.record(config, state, BuildPhase.INTERVIEW_DONE, progress=progress)
+
+    if replies and questions_path.is_file():
+        questions = read_questions(questions_path)
+        finish(render_interview(
+            change_dir, summary=summary, contexts=contexts, questions=questions,
+            replies=replies, replies_source=state.ticket_url or state.ticket_ref or "ticket replies",
+        ), "Ticket replies received; interview saved")
         return None
 
-    if not questions_path.is_file():
+    if questions_path.is_file():
+        questions = read_questions(questions_path)
+    else:
         from .llm_steps.interview_steps import ask_questions
         inputs = interview_inputs(change_dir, summary, contexts)
         try:
@@ -362,6 +366,18 @@ async def _ticket_interview(config, state, args, state_path, progress, contexts,
             _progress_note(progress, "INTERVIEW", f"Questioner failed: {e}")
             print(f"ERROR: interview questioner failed: {e}", flush=True)
             return 1
+
+    if not questions:
+        # Nothing to ask, so nothing to wait for — same as self mode with an
+        # empty list. A questions file with no questions (written by an
+        # earlier run) is removed so it is not committed as a blank ask.
+        questions_path.unlink(missing_ok=True)
+        log.info("phase=INTERVIEW mode=ticket questions=0 — continuing without waiting")
+        finish(render_interview(change_dir, summary=summary, contexts=contexts),
+               "The questioner had no questions for the ticket; interview saved")
+        return None
+
+    if not questions_path.is_file():
         write_questions(questions_path, questions, state.ticket_ref or "")
 
     state.interview_waiting = True

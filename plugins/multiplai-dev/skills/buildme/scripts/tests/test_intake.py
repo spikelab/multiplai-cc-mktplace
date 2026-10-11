@@ -280,6 +280,28 @@ class TestTicketMode:
         assert "admins only, all columns." in interview
         assert "<untrusted-content" in interview
 
+    @pytest.mark.asyncio
+    async def test_no_questions_continues_without_waiting(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        ticket = self._ticket(tmp_path)
+        call = FakeCall([], [])
+        config = _config(repo, "csv", interview_mode="ticket")
+        mocks = _spec_stage_mocks()
+        with mocks[0], mocks[1], mocks[2], \
+                patch("build_pipeline.llm_steps.interview_steps.agent_call_structured", call):
+            rc = await run_orchestrator(config, _args(
+                repo, "csv", ticket_file=str(ticket), ticket_ref="#12",
+                ticket_url="https://github.com/o/r/issues/12"))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "INTERVIEW:WAITING" not in out
+        assert "PHASE:INTERVIEW:COMPLETE" in out
+        assert not (config.change_dir / "interview-questions.md").exists()
+        assert "## Ticket" in (config.change_dir / "interview.md").read_text()
+
     def test_ticket_mode_without_a_ticket_falls_back(self, tmp_path):
         from build_pipeline.intake import effective_interview_mode
 
@@ -555,6 +577,37 @@ class TestBootstrapConfigCommitted:
         assert ("ERROR: specs/config.yaml is not committed; the build's worktree "
                 "would not see it. Commit it first.") in err
         assert not (tmp_path / "ws" / ".worktrees").exists()
+
+    @pytest.mark.asyncio
+    async def test_failed_build_retry_in_its_worktree_is_not_refused(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """A FAILED build re-binds to its own worktree and re-runs bootstrap.
+        The stub config.yaml bootstrap wrote there is untracked; the retry must
+        not refuse over it (the user cannot commit it from their repo)."""
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        config = _config(repo, "csv")
+        failing = patch("build_pipeline.spec_generator.run_spec_generator",
+                        AsyncMock(return_value=1))
+        with failing:
+            rc = await run_orchestrator(config, _args(repo, "csv", interview_summary="S"))
+        assert rc == 1
+        state = BuildState.load(config.state_file_path())
+        assert state.phase == BuildPhase.FAILED
+        worktree = Path(state.worktree_path)
+        assert config_commit_state(config.project_dir) == "uncommitted", \
+            "precondition: the stub config.yaml in the worktree is not committed"
+        capsys.readouterr()
+
+        config = _config(repo, "csv")
+        mocks = _spec_stage_mocks()
+        with mocks[0], mocks[1], mocks[2]:
+            rc = await run_orchestrator(config, _args(repo, "csv", interview_summary="S"))
+        err = capsys.readouterr().err
+        assert "not committed" not in err
+        assert rc == 0
+        assert worktree.is_dir()
 
     @pytest.mark.asyncio
     async def test_no_worktree_does_not_check(self, tmp_path, monkeypatch):
