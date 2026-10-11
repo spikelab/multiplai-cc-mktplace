@@ -342,7 +342,9 @@ directory, committed on the build branch.
   itself, with no human: one call writes the questions an interviewer would ask,
   a second, separate call answers each from the repo, the ticket and the
   context. An answer nothing grounds is recorded under **Assumptions**, not
-  Answers. `--auto` turns `user` into `self`.
+  Answers. `--auto` turns `user` into `self`. Both calls read the repo, so they
+  need `--trust-repo`; if they fail, the build goes on without the Q&A and the
+  progress file says why.
 - **`interview: ticket`** — skip the interviewer skill. The first run writes the
   questions and exits `3` with `INTERVIEW:WAITING:<path>` (see
   [Step 4](#step-4-report-results)). Without a ticket (a prompt or a file), it

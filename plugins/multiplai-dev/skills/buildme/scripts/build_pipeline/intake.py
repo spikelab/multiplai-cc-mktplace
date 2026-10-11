@@ -281,10 +281,13 @@ async def run_interview_phase(config, state, args, state_path: Path, progress) -
         try:
             questions, answers = await run_self_interview(config, inputs)
         except Exception as e:
-            log.error("FAILED phase=INTERVIEW reason=%s", e)
-            _progress_note(progress, "INTERVIEW", f"Self-interview failed: {e}")
-            print(f"ERROR: self-interview failed: {e}", flush=True)
-            return 1
+            # Best-effort, like codebase analysis: the spec is still written
+            # from the ticket, context and summary — only the Q&A is missing.
+            log.warning("FAILED phase=INTERVIEW reason=%s — continuing without the "
+                        "self-interview", e)
+            _progress_note(progress, "INTERVIEW",
+                           f"Self-interview failed (non-fatal, needs --trust-repo): {e}")
+            questions, answers = [], []
         text = render_interview(change_dir, summary=summary, contexts=contexts,
                                 questions=questions, answers=answers)
         write_interview(change_dir, text)

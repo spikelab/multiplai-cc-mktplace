@@ -197,6 +197,22 @@ class TestSelfModeSections:
         assert "All visible ones." not in answers_part
 
     @pytest.mark.asyncio
+    async def test_a_failed_self_interview_is_not_fatal(self, tmp_path, monkeypatch):
+        from build_pipeline.sdk import LLMCallError
+
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        config = _config(repo, "csv", interview_mode="self")
+        failing = AsyncMock(side_effect=LLMCallError("untrusted repo"))
+        mocks = _spec_stage_mocks()
+        with mocks[0], mocks[1], mocks[2], \
+                patch("build_pipeline.llm_steps.interview_steps.agent_call_structured", failing):
+            rc = await run_orchestrator(config, _args(repo, "csv", interview_summary="S"))
+        assert rc == 0
+        interview = (config.change_dir / "interview.md").read_text()
+        assert "## Interview" in interview and "## Questions" not in interview
+
+    @pytest.mark.asyncio
     async def test_the_answerer_is_a_fresh_call_that_sees_the_questions(self, tmp_path):
         config = _config(tmp_path, "csv")
         call = FakeCall(QUESTIONS, ANSWERS)
