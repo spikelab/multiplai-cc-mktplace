@@ -17,6 +17,18 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.34.1] - 2026-10-11
+
+### Changed
+- review takes its checkpoint writer, `progress.log` writer, spend ledger,
+  `review.yaml` helpers and answer parsing from multiplai-core 0.17.0
+  (`checkpoint`, `progress`, `budget.SpendLedger`, `stage_config`,
+  `structured`) instead of carrying its own copies. What a review does is
+  unchanged: the same `progress.log` lines, the same $50 default ceiling per
+  target, the same one-reformat re-ask, and the same config precedence. The
+  saved ledger in `review-state.json` gains a `max_tokens` key (always null
+  for review); a ledger saved before this loads as before.
+
 ## [0.34.0] - 2026-10-11
 
 ### Removed

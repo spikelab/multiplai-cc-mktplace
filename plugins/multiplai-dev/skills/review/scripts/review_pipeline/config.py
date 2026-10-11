@@ -18,10 +18,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
-
-from multiplai_core import KNOWN_EFFORTS
 from multiplai_core.env import load_multiplai_conf
+from multiplai_core.stage_config import check_effort, coerce_int, conf_value, read_yaml_mapping
 
 from .budget import DEFAULT_MAX_USD
 
@@ -43,14 +41,6 @@ class ReviewConfig:
     dimensions: tuple[str, ...] = field(default=DIMENSIONS)
 
 
-def _conf_value(conf: dict, key: str) -> str | None:
-    for k in (key, key.upper()):
-        value = conf.get(k)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
-
-
 def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MAX_USD) -> ReviewConfig:
     cfg = ReviewConfig(max_cost_usd=max_cost_usd)
     try:
@@ -58,36 +48,24 @@ def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MA
     except Exception as e:  # a broken conf file degrades to defaults
         log.warning("Could not read multiplai.conf (%s); using defaults", e)
         conf = {}
-    cfg.finder_model = _conf_value(conf, "review_finder_model")
-    cfg.verifier_model = _conf_value(conf, "review_verifier_model")
+    cfg.finder_model = conf_value(conf, "review_finder_model")
+    cfg.verifier_model = conf_value(conf, "review_verifier_model")
     cfg.merger_model = cfg.verifier_model
-    cfg.effort = _conf_value(conf, "review_effort")
+    cfg.effort = conf_value(conf, "review_effort")
 
     yaml_path = (out_dir / "review.yaml") if out_dir else None
-    if yaml_path and yaml_path.is_file():
-        try:
-            data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
-        except yaml.YAMLError as e:
-            log.warning("Ignoring unparseable %s: %s", yaml_path, e)
-            data = {}
-        if not isinstance(data, dict):
-            log.warning("Ignoring %s: expected a mapping", yaml_path)
-            data = {}
-        for key in ("finder_model", "verifier_model", "merger_model", "effort"):
-            if data.get(key):
-                setattr(cfg, key, str(data[key]))
-        if data.get("verifier_model") and not data.get("merger_model"):
-            cfg.merger_model = str(data["verifier_model"])
-        for key in ("concurrency", "max_turns"):
-            if data.get(key) is not None:
-                try:
-                    setattr(cfg, key, max(1, int(data[key])))
-                except (TypeError, ValueError):
-                    log.warning("Ignoring %s=%r in %s (want an integer)", key, data[key], yaml_path)
+    data = read_yaml_mapping(yaml_path)
+    for key in ("finder_model", "verifier_model", "merger_model", "effort"):
+        if data.get(key):
+            setattr(cfg, key, str(data[key]))
+    if data.get("verifier_model") and not data.get("merger_model"):
+        cfg.merger_model = str(data["verifier_model"])
+    for key in ("concurrency", "max_turns"):
+        value = coerce_int(data, key, yaml_path)
+        if value is not None:
+            setattr(cfg, key, value)
 
-    if cfg.effort and cfg.effort.lower() not in KNOWN_EFFORTS:
-        log.warning("Ignoring unknown effort %r (expected one of %s)", cfg.effort, ", ".join(sorted(KNOWN_EFFORTS)))
-        cfg.effort = None
+    cfg.effort = check_effort(cfg.effort)
     return cfg
 
 
