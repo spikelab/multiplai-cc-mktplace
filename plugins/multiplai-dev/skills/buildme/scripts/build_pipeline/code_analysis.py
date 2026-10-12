@@ -4,7 +4,10 @@ Two users:
 
 - The codebase analysis phase (`llm_steps/spec_steps.run_codebase_analysis`).
   It explains the project's source files at HEAD, one `code_facts` agent per
-  slice, keeps a fact only when one of its citations is found at that commit
+  slice, plus one slice of its manifest and configuration files for the
+  dependencies it declares. Each source slice is also pointed at the tests
+  that import its modules, read only for how tests are written. It keeps a
+  fact only when one of its citations is found at that commit
   (`multiplai_core.check_quote`), renders the facts to `codebase-analysis.md`
   with `path:line` links, and writes them to `facts.json` beside it, in the
   format review's explain stage writes (`review/schema/facts.v1.schema.json`).
@@ -32,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from code_facts import (CallFn, Citation, ExploreOutput, Fact, Gated, Resolve, Scope, Span, citation_keeper,
+from code_facts import (CallFn, Citation, ExploreOutput, Fact, Gated, Resolve, Scope, Span, Unit, citation_keeper,
                         explore_unit, gate_answers, partition, run_tasks, unit_key)
 from multiplai_core.citations import check_quote, file_at
 
@@ -62,6 +65,35 @@ SKIP_DIRS = frozenset({
     "staticfiles", "migrations",
 })
 GENERATED_SUFFIXES = (".min.js", ".min.css", ".map", "_pb2.py", "_pb2_grpc.py", ".pb.go", ".generated.ts")
+
+# Files that declare a project's dependencies, by name. A manifest that is
+# itself code (setup.py, Package.swift, mix.exs) is analysed as source.
+MANIFEST_NAMES = frozenset({
+    "pyproject.toml", "setup.cfg", "Pipfile", "package.json", "Cargo.toml", "go.mod", "Gemfile",
+    "composer.json", "pom.xml", "build.gradle", "build.gradle.kts", "Dockerfile",
+    "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml",
+})
+_REQUIREMENTS = re.compile(r"requirements[\w.-]*\.txt")
+CONFIG_SUFFIXES = frozenset({".toml", ".yaml", ".yml", ".ini", ".cfg"})
+# Lock files with a config suffix: generated, and long.
+LOCK_NAMES = frozenset({"pnpm-lock.yaml"})
+# A config file longer than this is data (fixtures, an API description), not configuration.
+MAX_CONFIG_LINES = 1000
+# The unit id of the manifest and configuration slice; its facts render under Dependencies.
+DEPENDENCY_UNIT_ID = "deps"
+DEPENDENCY_NOTE = """
+These are the project's manifest and configuration files. In `facts` and `files`, say which
+dependencies they declare (with the versions they pin), what configuration they set and where
+the code loads it, and which external services the project is set up to talk to.
+"""
+# Test files a slice is pointed at for test style.
+MAX_TEST_EXAMPLES = 2
+TEST_STYLE_INTRO = "Test files, read only to learn how this project's tests are written:"
+TEST_STYLE_NOTE = """
+{intro} their layout, fixtures, naming and assertion style. State that in `conventions`, with
+citations into them. They are not among the files to explain: cite them in `conventions` only.
+{files}
+"""
 
 PATH_RULE = ("- `path` is the path exactly as listed above, relative to your working directory "
              "(the project root).")
@@ -110,21 +142,34 @@ def is_test_file(path: str) -> bool:
     return "tests" in p.parts[:-1] or p.name.startswith("test_") or p.name == "tests.py"
 
 
-def source_files(project_dir: Path, git: ProjectGit) -> dict[str, str]:
-    """{path: text} of the project's source files at its HEAD commit.
-
-    Source means a suffix in the orchestrator's source list; test files,
-    vendored, generated and tool directories, binary files and files over
-    MAX_FILE_BYTES are left out.
-    """
+def _is_source(path: str) -> bool:
     from .orchestrator import _SOURCE_SUFFIXES
 
+    return PurePosixPath(path).suffix in _SOURCE_SUFFIXES
+
+
+def is_manifest(path: str) -> bool:
+    name = PurePosixPath(path).name
+    return name in MANIFEST_NAMES or _REQUIREMENTS.fullmatch(name) is not None
+
+
+def is_config_file(path: str) -> bool:
+    """A manifest, or a file with a config suffix that is not a lock file or a test fixture."""
+    p = PurePosixPath(path)
+    if p.name in LOCK_NAMES or is_test_file(path) or _is_source(path):
+        return False
+    return is_manifest(path) or p.suffix in CONFIG_SUFFIXES
+
+
+def _files_at_head(project_dir: Path, git: ProjectGit, want) -> dict[str, str]:
+    """{path: text} of the files at HEAD that *want* accepts, leaving out vendored,
+    generated and tool directories, binary files and files over MAX_FILE_BYTES."""
     out: dict[str, str] = {}
     for path in git_ops.files_at(project_dir, git.sha) or []:
         p = PurePosixPath(path)
         if any(part in SKIP_DIRS or part.startswith(".") for part in p.parts[:-1]):
             continue
-        if p.suffix not in _SOURCE_SUFFIXES or p.name.endswith(GENERATED_SUFFIXES) or is_test_file(path):
+        if p.name.endswith(GENERATED_SUFFIXES) or not want(path):
             continue
         text = git.text(path)
         if text is None or "\0" in text or len(text.encode("utf-8", errors="replace")) >= MAX_FILE_BYTES:
@@ -133,18 +178,37 @@ def source_files(project_dir: Path, git: ProjectGit) -> dict[str, str]:
     return out
 
 
+def source_files(project_dir: Path, git: ProjectGit) -> dict[str, str]:
+    """{path: text} of the project's source files at its HEAD commit.
+
+    Source means a suffix in the orchestrator's source list; test files,
+    vendored, generated and tool directories, binary files and files over
+    MAX_FILE_BYTES are left out.
+    """
+    return _files_at_head(project_dir, git, lambda p: _is_source(p) and not is_test_file(p))
+
+
+def project_tests(project_dir: Path, git: ProjectGit) -> dict[str, str]:
+    """{path: text} of the project's test files at HEAD, by `source_files`' other rules."""
+    return _files_at_head(project_dir, git, lambda p: _is_source(p) and is_test_file(p))
+
+
+def config_files(project_dir: Path, git: ProjectGit) -> dict[str, str]:
+    """{path: text} of the project's manifests and config files at HEAD, by `source_files`'
+    other rules, without lock files and files over MAX_CONFIG_LINES lines."""
+    return {p: t for p, t in _files_at_head(project_dir, git, is_config_file).items()
+            if line_count(t) <= MAX_CONFIG_LINES}
+
+
 def working_tree_source_files(project_dir: Path) -> list[str]:
     """The project's source files on disk, by the same rules as `source_files`
     (no test, vendored, generated or tool files), for a project with no commit."""
-    from .orchestrator import _SOURCE_SUFFIXES
-
     out: list[str] = []
     for root, dirs, files in os.walk(project_dir):
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
         for name in sorted(files):
             path = (Path(root) / name).relative_to(project_dir).as_posix()
-            if Path(name).suffix in _SOURCE_SUFFIXES and not name.endswith(GENERATED_SUFFIXES) \
-                    and not is_test_file(path):
+            if _is_source(path) and not name.endswith(GENERATED_SUFFIXES) and not is_test_file(path):
                 out.append(path)
     return out
 
@@ -194,6 +258,11 @@ def _module_word(path: str) -> str:
     return p.parent.name if p.stem in ("__init__", "index", "mod") and p.parent.name else p.stem
 
 
+def import_words(text: str) -> set[str]:
+    """The words on *text*'s import lines."""
+    return set(re.findall(r"[\w-]+", " ".join(_IMPORT_LINE.findall(text))))
+
+
 def inbound_imports(texts: dict[str, str]) -> dict[str, int]:
     """For each file, how many other files have an import line naming its module.
 
@@ -202,7 +271,7 @@ def inbound_imports(texts: dict[str, str]) -> dict[str, int]:
     words of each other file's import lines. One pass over the words, so a
     large repo costs no more than reading its import lines.
     """
-    words = {p: set(re.findall(r"[\w-]+", " ".join(_IMPORT_LINE.findall(t)))) for p, t in texts.items()}
+    words = {p: import_words(t) for p, t in texts.items()}
     files_naming: Counter[str] = Counter()
     for ws in words.values():
         files_naming.update(ws)
@@ -251,6 +320,49 @@ def rank_files(texts: dict[str, str], named: set[str]) -> list[str]:
     return sorted(texts, key=lambda p: (p not in named, -inbound[p], p))
 
 
+def dependency_slice(lines: dict[str, int]) -> tuple[list[str], list[str]]:
+    """(the manifest and config files one slice reads, the ones left out).
+
+    Manifests first, then the files nearest the project root, then by path,
+    while they fit in UNIT_LINES lines; the first file always goes in.
+    """
+    ranked = sorted(lines, key=lambda p: (not is_manifest(p), len(PurePosixPath(p).parts), p))
+    kept: list[str] = []
+    size = 0
+    for i, p in enumerate(ranked):
+        if kept and size + lines[p] > UNIT_LINES:
+            return kept, ranked[i:]
+        kept.append(p)
+        size += lines[p]
+    return kept, []
+
+
+def tests_for_units(units: list[Unit], tests: dict[str, str]) -> dict[str, list[str]]:
+    """{unit id: the test files it is pointed at for test style}.
+
+    Each unit gets up to MAX_TEST_EXAMPLES test files whose import lines name
+    its modules, those naming the most first. When no test names a module of
+    any unit, the first unit gets the first ones by path, so test style is
+    still read once.
+    """
+    words = {p: import_words(t) for p, t in tests.items()}
+    out: dict[str, list[str]] = {}
+    for u in units:
+        modules = {_module_word(p) for p in u.files}
+        scored = sorted((-len(modules & w), p) for p, w in words.items() if modules & w)
+        if scored:
+            out[u.id] = [p for _, p in scored[:MAX_TEST_EXAMPLES]]
+    if not out and units and tests:
+        out[units[0].id] = sorted(tests)[:MAX_TEST_EXAMPLES]
+    return out
+
+
+def _test_note(paths: list[str]) -> str:
+    if not paths:
+        return ""
+    return TEST_STYLE_NOTE.format(intro=TEST_STYLE_INTRO, files="\n".join(f"- {p}" for p in paths))
+
+
 # --- the analysis ---------------------------------------------------------------------
 
 
@@ -260,6 +372,8 @@ class Analysis:
     git: ProjectGit
     scope: Scope
     not_analysed: list[str] = field(default_factory=list)
+    # Manifest and config files the dependency slice did not read.
+    config_not_analysed: list[str] = field(default_factory=list)
     failed: list[tuple[list[str], str]] = field(default_factory=list)   # (unit files, error)
     uncovered: list[str] = field(default_factory=list)
 
@@ -282,14 +396,30 @@ async def analyse(project_dir: Path, *, call: CallFn, max_units: int, name: str,
         return None
     texts = source_files(project_dir, git)
     lines = {p: line_count(t) for p, t in texts.items()}
+    config_lines = {p: line_count(t) for p, t in config_files(project_dir, git).items()}
+    # The dependency slice is one of the max_units; with only one, the source gets it.
+    if max_units > 1:
+        deps, config_not_analysed = dependency_slice(config_lines)
+    else:
+        deps, config_not_analysed = [], sorted(config_lines)
     ranked = rank_files(texts, _named_in(spec_text(change_dir), list(texts)))
-    scope, not_analysed = limit_scope(lines, ranked, max_units)
+    scope, not_analysed = limit_scope(lines, ranked, max_units - 1 if deps else max_units)
     units = partition(scope, UNIT_LINES)
+    examples = tests_for_units(units, project_tests(project_dir, git))
     label = name or project_dir.name
 
     answers: dict[str, dict] = {}
     tasks = [(unit_key(u), explore_unit(label, u.spans, ExploreOutput, "standard", conventions=True,
-                                        path_rule=PATH_RULE)) for u in units]
+                                        path_rule=PATH_RULE, notes=_test_note(examples.get(u.id, []))))
+             for u in units]
+    if deps:
+        deps_spans = [Span.whole(p, config_lines[p]) for p in deps]
+        units.append(Unit(id=DEPENDENCY_UNIT_ID, files=deps, lines=sum(config_lines[p] for p in deps),
+                          spans=deps_spans))
+        tasks.append((unit_key(units[-1]), explore_unit(label, deps_spans, ExploreOutput, "standard",
+                                                        conventions=True, path_rule=PATH_RULE,
+                                                        notes=DEPENDENCY_NOTE)))
+        scope = Scope(spans=scope.spans + deps_spans)
     await run_tasks(
         tasks, call, answers, concurrency=CONCURRENCY,
         call_kwargs=dict(allowed_tools=ANALYSIS_TOOLS, max_turns=MAX_TURNS, cwd=str(project_dir)),
@@ -299,8 +429,8 @@ async def analyse(project_dir: Path, *, call: CallFn, max_units: int, name: str,
     gated = gate_answers(answers, keep, conventions=True)
     by_key = {unit_key(u): u for u in units}
     failed = [(by_key[k].files, a["error"]) for k, a in answers.items() if "error" in a and k in by_key]
-    return Analysis(gated=gated, git=git, scope=scope, not_analysed=not_analysed, failed=failed,
-                    uncovered=uncovered(scope, gated.facts))
+    return Analysis(gated=gated, git=git, scope=scope, not_analysed=not_analysed,
+                    config_not_analysed=config_not_analysed, failed=failed, uncovered=uncovered(scope, gated.facts))
 
 
 # --- codebase-analysis.md -------------------------------------------------------------
@@ -323,18 +453,22 @@ def _bullet(claim: str, citations: list[Citation], project_dir: Path, md_dir: Pa
 def render_markdown(a: Analysis, project_dir: Path, md_dir: Path) -> str:
     """The analysis as Markdown: Architecture, Patterns, Dependencies, Conventions, then what was left out.
 
-    Architecture holds each file's purpose and the facts about what the code
-    does; Patterns the gotchas and the domain terms; Dependencies the
-    interfaces other code calls; Conventions the rules new code must follow.
-    Each claim is followed by its `path:line` links, relative to *md_dir*.
+    Architecture holds each source file's purpose and the facts about what
+    the code does; Patterns the gotchas and the domain terms; Dependencies
+    what the manifest and config files declare (dependencies, configuration,
+    external services), then the interfaces other code calls; Conventions the
+    rules new code must follow, test style included. Each claim is followed by
+    its `path:line` links, relative to *md_dir*.
     """
     g = a.gated
+    deps_source = unit_key(Unit(id=DEPENDENCY_UNIT_ID, files=[], lines=0)) + "/"
     by_bucket: dict[str, list[Fact]] = {}
     for f in g.facts:
         by_bucket.setdefault(f.source.rsplit("/", 1)[-1], []).append(f)
     sections: dict[str, list[str]] = {h: [] for h in HEADINGS}
     for f in by_bucket.get("file", []) + by_bucket.get("fact", []):
-        sections["Architecture"].append(_bullet(f.claim, f.citations, project_dir, md_dir))
+        heading = "Dependencies" if f.source.startswith(deps_source) else "Architecture"
+        sections[heading].append(_bullet(f.claim, f.citations, project_dir, md_dir))
     for f in by_bucket.get("gotcha", []):
         sections["Patterns"].append(_bullet(f.claim, f.citations, project_dir, md_dir))
     for t in g.terms:
@@ -349,11 +483,16 @@ def render_markdown(a: Analysis, project_dir: Path, md_dir: Path) -> str:
     for h in HEADINGS:
         out += ["", f"## {h}", ""]
         out += sections[h] or ["(no checked facts)"]
-    if a.not_analysed or a.failed or a.uncovered:
+    if a.not_analysed or a.config_not_analysed or a.failed or a.uncovered:
         out += ["", "## Not analysed", ""]
         if a.not_analysed:
             out.append(f"Left out by `codebase_analysis_max_units` ({len(a.not_analysed)} file(s)):")
             out += [f"- `{p}`" for p in a.not_analysed]
+        if a.config_not_analysed:
+            out.append(f"Manifest and config files not read ({len(a.config_not_analysed)} file(s); the "
+                       f"dependency slice reads up to {UNIT_LINES} lines of them, and none when "
+                       f"`codebase_analysis_max_units` is 1):")
+            out += [f"- `{p}`" for p in a.config_not_analysed]
         for files, error in a.failed:
             out.append(f"- (analysis failed: {', '.join(f'`{p}`' for p in files)}: {error})")
         if a.uncovered:

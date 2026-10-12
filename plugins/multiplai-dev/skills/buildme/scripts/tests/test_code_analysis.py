@@ -175,7 +175,10 @@ class TestRunCodebaseAnalysis:
         assert "`conventions`" in prompt
         assert kwargs["allowed_tools"] == ["Read", "Glob", "Grep"]
         assert kwargs["cwd"] == str(project)
-        assert "tests/test_calc.py" not in prompt and "vendor/lib.py" not in prompt
+        assert "vendor/lib.py" not in prompt
+        # The test file is only pointed at for test style, never listed as a file to explain.
+        listing = prompt.split("Files in your part of the module:", 1)[1].split("\n\n", 1)[0]
+        assert "tests/test_calc.py" not in listing
 
     @pytest.mark.asyncio
     async def test_the_size_limit_keeps_named_files_first_and_lists_the_rest(self, project, monkeypatch):
@@ -383,3 +386,167 @@ class TestInboundImports:
         })
         assert counts == {"src/calc.py": 2, "src/cli.py": 0, "b.py": 0, "pkg/__init__.py": 1,
                           "web/my-mod.js": 1, "web/app.js": 0}
+
+
+def _section(md: str, heading: str) -> str:
+    for s in re.split(r"^## ", md, flags=re.M)[1:]:
+        if s.split("\n", 1)[0] == heading:
+            return s
+    raise AssertionError(f"no ## {heading} in the report")
+
+
+class TestTestStyle:
+    """The conventions agent reads some of the project's tests for test style,
+    without the tests joining the files it explains."""
+
+    @staticmethod
+    def _call(seen: list):
+        async def call(prompt, schema, **kwargs):
+            seen.append(prompt)
+            out = _answer_for(prompt)
+            if "- tests/test_calc.py" in prompt:
+                out.conventions.append(ExploreOutput.model_validate({"conventions": [{
+                    "claim": "Tests are plain functions named test_<behaviour> that assert directly.",
+                    "citations": [_cite("tests/test_calc.py", 3, "def test_add():"),
+                                  _cite("tests/test_calc.py", 4, "assert add(1, 2) == 3")]}]}).conventions[0])
+            return out
+        return call
+
+    @pytest.mark.asyncio
+    async def test_a_test_importing_the_slices_module_is_given_for_conventions_only(self, project):
+        seen: list = []
+        md = await run_codebase_analysis(project, _config(project), call=self._call(seen))
+        prompt = seen[0]
+        note = prompt.split(code_analysis.TEST_STYLE_INTRO, 1)[1]
+        assert "- tests/test_calc.py" in note.split("Return ONE JSON object", 1)[0]
+        assert "Tests are plain functions named test_<behaviour>" in _section(md, "Conventions")
+        assert "tests/test_calc.py:3" in _section(md, "Conventions")
+        # Still not analysed as a file: no purpose, not reported as uncovered.
+        facts = json.loads((_config(project).change_dir / "facts.json").read_text())
+        assert "tests/test_calc.py" not in {f["path"] for f in facts["files"]}
+        assert "tests/test_calc.py" not in facts["uncovered"]
+
+    @pytest.mark.asyncio
+    async def test_each_slice_gets_the_tests_that_import_its_own_modules(self, project, monkeypatch):
+        monkeypatch.setattr(code_analysis, "UNIT_LINES", 9)   # one file per slice
+        seen: list = []
+        await run_codebase_analysis(project, _config(project), call=self._call(seen))
+        calc = next(p for p in seen if "- src/calc.py (" in p)
+        cli = next(p for p in seen if "- src/cli.py (" in p)
+        assert code_analysis.TEST_STYLE_INTRO in calc and "- tests/test_calc.py" in calc
+        assert code_analysis.TEST_STYLE_INTRO not in cli
+
+    @pytest.mark.asyncio
+    async def test_when_no_test_imports_an_analysed_module_the_first_slice_still_gets_some(self, tmp_path):
+        project = _repo(tmp_path / "p", {"src/calc.py": CALC,
+                                         "tests/test_a.py": "def test_a():\n    assert True\n",
+                                         "tests/test_b.py": "def test_b():\n    assert True\n",
+                                         "tests/test_c.py": "def test_c():\n    assert True\n"})
+        seen: list = []
+        await run_codebase_analysis(project, _config(project), call=self._call(seen))
+        note = seen[0].split(code_analysis.TEST_STYLE_INTRO, 1)[1]
+        assert "- tests/test_a.py" in note and "- tests/test_b.py" in note and "tests/test_c.py" not in note
+
+    @pytest.mark.asyncio
+    async def test_a_project_without_tests_gets_no_test_note(self, tmp_path):
+        project = _repo(tmp_path / "p", {"src/calc.py": CALC})
+        seen: list = []
+        await run_codebase_analysis(project, _config(project), call=self._call(seen))
+        assert code_analysis.TEST_STYLE_INTRO not in seen[0]
+
+
+PYPROJECT = """\
+[project]
+name = "calc"
+dependencies = ["requests>=2.31"]
+"""
+
+SETTINGS = """\
+api:
+  base_url: https://api.example.com
+"""
+
+
+class TestDependencySlice:
+    """Manifests and config files are read in a slice of their own, whose facts
+    go under Dependencies (the declared dependencies, configuration and
+    external services), as the old Dependencies agent's did."""
+
+    @pytest.fixture
+    def configured(self, tmp_path):
+        return _repo(tmp_path / "c", {
+            "src/calc.py": CALC, "src/cli.py": CLI, "pyproject.toml": PYPROJECT,
+            "config/settings.yaml": SETTINGS, "pnpm-lock.yaml": "lockfileVersion: 6\n",
+            "tests/fixtures.yaml": "a: 1\n", "node_modules/m/package.json": "{}\n",
+        })
+
+    @staticmethod
+    def _call(seen: list):
+        async def call(prompt, schema, **kwargs):
+            seen.append(prompt)
+            if "- pyproject.toml (" not in prompt:
+                return _answer_for(prompt)
+            return ExploreOutput.model_validate({
+                "facts": [{"claim": "The project depends on requests 2.31 or later.",
+                           "citations": [_cite("pyproject.toml", 3, 'dependencies = ["requests>=2.31"]')]},
+                          {"claim": "The API base URL is set in config/settings.yaml.",
+                           "citations": [_cite("config/settings.yaml", 2, "base_url: https://api.example.com")]}],
+                "files": [{"path": "pyproject.toml", "purpose": "Declares the package and its dependencies.",
+                           "citation": _cite("pyproject.toml", 2, 'name = "calc"')}],
+            })
+        return call
+
+    def test_the_scope_holds_manifests_and_config_but_no_lock_test_or_vendored_file(self, configured):
+        git = code_analysis.project_git(configured)
+        assert sorted(code_analysis.config_files(configured, git)) == ["config/settings.yaml", "pyproject.toml"]
+        assert sorted(code_analysis.source_files(configured, git)) == ["src/calc.py", "src/cli.py"]
+
+    @pytest.mark.asyncio
+    async def test_the_slice_is_asked_for_dependencies_and_its_facts_go_under_dependencies(self, configured):
+        seen: list = []
+        md = await run_codebase_analysis(configured, _config(configured), call=self._call(seen))
+        deps_prompts = [p for p in seen if "- pyproject.toml (" in p]
+        assert len(deps_prompts) == 1 and len(seen) == 2
+        assert code_analysis.DEPENDENCY_NOTE.strip() in deps_prompts[0]
+        assert "- config/settings.yaml (" in deps_prompts[0] and "- src/calc.py (" not in deps_prompts[0]
+        dependencies = _section(md, "Dependencies")
+        assert "depends on requests 2.31 or later" in dependencies and "pyproject.toml:3" in dependencies
+        assert "API base URL is set" in dependencies
+        assert "pyproject.toml: Declares the package" in dependencies
+        architecture = _section(md, "Architecture")
+        assert "requests" not in architecture and "add returns the sum" in architecture
+        # The interfaces other code calls stay under Dependencies, after the declared ones.
+        assert dependencies.index("requests") < dependencies.index("add(a, b) is the module's entry point")
+
+    @pytest.mark.asyncio
+    async def test_the_slice_counts_towards_the_size_limit(self, configured, monkeypatch):
+        monkeypatch.setattr(code_analysis, "UNIT_LINES", 9)   # one source file per slice
+        seen: list = []
+        md = await run_codebase_analysis(configured, _config(configured, codebase_analysis_max_units=2),
+                                         call=self._call(seen))
+        assert len(seen) == 2 and sum("- pyproject.toml (" in p for p in seen) == 1
+        assert "- `src/cli.py`" in _section(md, "Not analysed")
+
+    @pytest.mark.asyncio
+    async def test_with_one_unit_the_source_wins_and_the_config_files_are_listed(self, configured):
+        seen: list = []
+        md = await run_codebase_analysis(configured, _config(configured, codebase_analysis_max_units=1),
+                                         call=self._call(seen))
+        assert len(seen) == 1 and "- pyproject.toml (" not in seen[0]
+        not_analysed = _section(md, "Not analysed")
+        assert "- `pyproject.toml`" in not_analysed and "- `config/settings.yaml`" in not_analysed
+
+    @pytest.mark.asyncio
+    async def test_manifests_come_first_and_the_files_over_one_slice_are_listed(self, configured, monkeypatch):
+        monkeypatch.setattr(code_analysis, "UNIT_LINES", 3)   # pyproject.toml alone fills the slice
+        seen: list = []
+        md = await run_codebase_analysis(configured, _config(configured, codebase_analysis_max_units=12),
+                                         call=self._call(seen))
+        deps_prompt = next(p for p in seen if "- pyproject.toml (" in p)
+        assert "config/settings.yaml" not in deps_prompt
+        assert "- `config/settings.yaml`" in _section(md, "Not analysed")
+
+    def test_a_config_file_over_the_line_limit_is_data_not_config(self, configured, monkeypatch):
+        monkeypatch.setattr(code_analysis, "MAX_CONFIG_LINES", 2)
+        git = code_analysis.project_git(configured)
+        assert sorted(code_analysis.config_files(configured, git)) == ["config/settings.yaml"]

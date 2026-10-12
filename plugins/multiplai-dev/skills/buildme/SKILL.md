@@ -87,7 +87,7 @@ keeps the default.
 | `mutation.enabled` / `mutation.min_score` | bool / float | `true` / `0.8` | the mutation-testing step; `timeout` and `max_mutants` too (see [Mutation testing](#mutation-testing)) |
 | `models.<key>` | a step, a stage (`spec`, `agent`, `review`) or `default`, set to a model spec | `{}` | every model call; see [Tuning model and effort](#tuning-model-and-effort-multiplaiconf) |
 | `tier` | `advanced` \| `standard` | unset | the tier, only when `models.default` is not a Claude model |
-| `codebase_analysis_max_units` | int | `12` | the codebase analysis: the most explore agents it runs, one per slice of the source files. Over the limit, it keeps the files the change's documents name, then the most imported, and lists the rest under "Not analysed" in `codebase-analysis.md` |
+| `codebase_analysis_max_units` | int | `12` | the codebase analysis: the most explore agents it runs, one per slice of the source files plus one for the manifest and config files (none when the limit is 1). Over the limit, it keeps the files the change's documents name, then the most imported, and lists the rest under "Not analysed" in `codebase-analysis.md` |
 | `block_facts` | bool | `false` | the TDD engine: the test writer and implementer of each block also get the facts from `facts.json` about the files the block's tasks name, each re-checked at the current HEAD (a fact whose quoted lines changed is dropped, and counted). Off until real builds show it helps |
 | `regenerate_walkthroughs` | bool | `false` | after the build: re-run each walkthrough the build made stale under `docs/walkthroughs/` (see [Step 4](#step-4-report-results)) and commit it to the build branch. Only with `--trust-repo`, and only for a walkthrough that read the project's repo alone |
 | `walkthrough_max_usd` | number | `10` | the spend limit of each walkthrough `regenerate_walkthroughs` re-runs; a run that reaches it leaves the old file in place |
@@ -622,11 +622,17 @@ Work through them **in this order**, and do not skip the first one:
    contents to the user, not just the path.
 2. `REVIEW:CODEBASE_ANALYSIS:<path>` — what the design was written against:
    the existing architecture, patterns, interfaces and conventions, as cited
-   facts. One explore agent per slice of the project's source files at HEAD
-   (at most `codebase_analysis_max_units`) returns claims with `path:line`
+   facts. One explore agent per slice of the project's source files at HEAD,
+   plus one for its manifest and config files (at most
+   `codebase_analysis_max_units` in all), returns claims with `path:line`
    citations; a claim is kept only when a citation is found at that commit,
-   and each one in the file links to its lines. Files left out by the limit,
-   and slices whose agent failed, are listed under "Not analysed". The same
+   and each one in the file links to its lines. Dependencies holds what the
+   manifest and config files declare (dependencies, configuration, external
+   services), then the interfaces other code calls. Conventions includes test
+   style: each source slice's agent also reads up to two tests that import
+   its modules (the first slice reads the first two when none does), for
+   that alone; tests are not otherwise analysed. Files left out by the
+   limit, and slices whose agent failed, are listed under "Not analysed". The same
    facts are in `facts.json` beside it. Read it before `design.md`, because
    "why does it extend that module rather than add a new one" is answered
    here, not there. Absent for a greenfield project (nothing to analyze) —

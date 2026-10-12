@@ -23,12 +23,17 @@ time, not derived from a tag.
 - buildme's codebase analysis (`codebase-analysis.md`) is now made of cited
   facts. It runs the shared `code_facts` step that codebase-walkthrough and
   review's `explain` stage use: one agent per slice of the project's source
-  files at HEAD (test, vendored and generated files left out) returns claims
-  with `path:line` citations, and a claim is kept only when one of its
-  citations is found at that commit. The report keeps its Architecture,
-  Patterns and Dependencies headings, adds Conventions (naming, error
-  handling, test style new code must follow), links every claim to its lines,
-  and says how many claims were dropped. The facts are also written to
+  files at HEAD (test, vendored and generated files left out), plus one for
+  its manifest and config files (`pyproject.toml`, `package.json`, `*.yaml`
+  and the like, lock files left out), returns claims with `path:line`
+  citations, and a claim is kept only when one of its citations is found at
+  that commit. The report keeps its Architecture, Patterns and Dependencies
+  headings: Dependencies holds what the manifests and config files declare
+  (dependencies, configuration, external services), then the interfaces
+  other code calls. It adds Conventions (naming, error handling, and test
+  style, which each source slice's agent reads from up to two tests that
+  import its modules; tests are not otherwise analysed), links every claim
+  to its lines, and says how many claims were dropped. The facts are also written to
   `facts.json` beside it, in the format review writes. The analysis now reads
   every source file instead of three agents of five turns each, so it costs
   more on a large repo; `codebase_analysis_max_units` (default 12) caps the
