@@ -454,11 +454,18 @@ STEP_STAGES: dict[str, str] = {
 MODEL_KEYS: frozenset[str] = frozenset(STEP_STAGES) | frozenset(MODEL_STAGES) | {"default"}
 
 # The existing per-stage field each step reads at the third link of
-# `BuildConfig.model_for`'s chain: its stage's field, or its own.
+# `BuildConfig.model_for`'s chain: its stage's field, or its own. Adjudication
+# names `model`, which skips the link: the main model, holding the whole build's
+# context, judges the reviewers' findings (scripts/CLAUDE.md, "Adjudication is
+# a correctness requirement"), so the stronger-reviewer `review_model` must not
+# move it. `models.adjudication` or `models.review` still can.
 _STAGE_MODEL_FIELDS: dict[str, str] = {
     "spec": "spec_model", "agent": "agent_model", "review": "review_model",
 }
-_STEP_MODEL_FIELDS: dict[str, str] = {"plan_review": "plan_review_model"}
+_STEP_MODEL_FIELDS: dict[str, str] = {
+    "plan_review": "plan_review_model",
+    "adjudication": "model",
+}
 
 
 def _is_model_spec(value) -> bool:
@@ -788,7 +795,8 @@ class BuildConfig:
         1. ``models.<step>`` in specs/config.yaml
         2. ``models.<stage>`` (the step's stage in ``STEP_STAGES``)
         3. the existing per-stage field (``spec_model`` / ``agent_model`` /
-           ``review_model``; ``plan_review_model`` for ``plan_review``)
+           ``review_model``; ``plan_review_model`` for ``plan_review``;
+           none for ``adjudication``, see ``_STEP_MODEL_FIELDS``)
         4. ``models.default``
         5. ``model``
 
