@@ -532,6 +532,10 @@ class BlockInfo(BaseModel):
     # out (vs an ordinary build/test failure) — lets the orchestrator return
     # EXIT_AGENT_TIMEOUT only for real timeouts.
     timed_out: bool = False
+    # True when the block stopped for something a re-run may get past (an
+    # agent call that timed out or errored, the budget ceiling), not because
+    # its own work failed a gate. Both flags are cleared when a block starts.
+    resumable: bool = False
     # HEAD of the project repo when the block started — the diff baseline for
     # the evidence-based quality review (git diff <baseline> = everything the
     # block changed). None when the project isn't a git repo.
