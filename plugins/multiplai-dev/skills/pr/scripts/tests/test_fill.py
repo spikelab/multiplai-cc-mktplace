@@ -6,9 +6,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from conftest import make_change, make_repo
+from conftest import git, make_bare_origin, make_change, make_repo
 
-from pr_pipeline import commands, fill
+from pr_pipeline import commands, fill, github
 from pr_pipeline.template import STANDARD_TEMPLATE, load, parse
 
 
@@ -87,6 +87,19 @@ def test_size_comes_from_the_git_range(tmp_path):
     r = _render(repo, make_change(repo))
     assert (r.sources.size.files, r.sources.size.added, r.sources.size.removed) == (2, 3, 1)
     assert "2 files changed, +3 -1 lines" in r.body
+
+
+def test_size_uses_origin_head_when_the_pr_branch_is_only_remote_tracking(tmp_path):
+    # `edit` run from a checkout where the PR branch exists only as `origin/<head>`: the size and
+    # the file list must describe that branch, not whatever is checked out.
+    repo = make_repo(tmp_path / "proj")
+    make_bare_origin(repo, tmp_path / "origin.git")
+    git(repo, "push", "-q", "origin", "feat/x")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "branch", "-q", "-D", "feat/x")
+    r = _render(repo, make_change(repo))
+    assert (r.sources.size.files, r.sources.size.added, r.sources.size.removed) == (2, 3, 1)
+    assert sorted(github.changed_files(repo, "main", "feat/x")) == ["A\tb.txt", "M\ta.txt"]
 
 
 def test_ticket_url_from_the_flag_or_from_ticket_md(tmp_path):

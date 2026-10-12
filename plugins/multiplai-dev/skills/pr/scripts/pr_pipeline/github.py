@@ -101,9 +101,14 @@ def git_default_branch(repo: Path) -> str | None:
 
 def diff_refs(repo: Path, base: str, head: str) -> tuple[str, str]:
     """The refs to diff: `origin/<base>` when it exists (what GitHub compares against), and *head*
-    when it exists locally, else `HEAD`."""
+    when it exists locally, else `origin/<head>` when only the remote-tracking ref exists, else `HEAD`."""
     base_ref = f"origin/{base}" if _ref_exists(repo, f"origin/{base}") else base
-    head_ref = head if head and _ref_exists(repo, head) else "HEAD"
+    if head and _ref_exists(repo, head):
+        head_ref = head
+    elif head and _ref_exists(repo, f"origin/{head}"):
+        head_ref = f"origin/{head}"
+    else:
+        head_ref = "HEAD"
     return base_ref, head_ref
 
 
