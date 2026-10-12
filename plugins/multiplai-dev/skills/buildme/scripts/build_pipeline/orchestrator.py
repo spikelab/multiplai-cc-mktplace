@@ -18,7 +18,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import board, git_ops
+from . import board, git_ops, walkthroughs
 from .change_manager import ChangeManager
 from .config import BuildConfig
 from .models import BoardColumn, BuildPhase
@@ -1081,10 +1081,12 @@ def _spec_paths(config: BuildConfig) -> list[str]:
 # returns that path, or None for no section. It runs after the last block and
 # the docs/respec phases, right before publish hands the change to the pr
 # skill, and each path it returns is passed as `--section`. A contributor that
-# raises is logged and skipped; publish goes on. The list starts empty; its
-# first intended user is the walkthrough session's H5 (stale walkthroughs,
-# `plan-shared-code-understanding-2026-10-07.md`).
-PRE_PUBLISH_CONTRIBUTORS: list[Callable[[BuildConfig, BuildState, Path], Path | None]] = []
+# raises is logged and skipped; publish goes on. `walkthroughs.pr_section`
+# reports the walkthroughs under docs/walkthroughs/ whose cited lines the build
+# moved (and regenerates them when `regenerate_walkthroughs` is on).
+PRE_PUBLISH_CONTRIBUTORS: list[Callable[[BuildConfig, BuildState, Path], Path | None]] = [
+    walkthroughs.pr_section,
+]
 
 
 def _pr_sections_dir(docs_dir: Path) -> Path:
