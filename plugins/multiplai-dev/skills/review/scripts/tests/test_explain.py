@@ -235,6 +235,26 @@ async def test_a_failed_unit_is_an_error_line_not_a_failed_review(change_target,
     assert (change_ctx.target_dir / "facts.json").is_file()
 
 
+async def test_base_files_that_cannot_be_extracted_are_an_error_line_not_a_failed_review(
+        change_target, change_ctx, monkeypatch):
+    # git archive of a commit the repo does not have fails, as it would for a base pruned before a resume
+    real = target.snapshot_base
+    monkeypatch.setattr(target, "snapshot_base", lambda t, dest, paths: real(
+        t.model_copy(update={"base_sha": "0" * 40}), dest, paths))
+    canned = Canned([_reask_answer()])
+    monkeypatch.setattr(sdk, "agent_call_structured", canned)
+    state = await run_explain(ReviewState(target=change_target), change_ctx)
+
+    # the head side is still explained; the base side is left out of the prompt and named in an error line
+    assert len(canned.calls) == 1
+    assert "read it at" not in canned.calls[0]["prompt"] and "gone.py" not in canned.calls[0]["prompt"]
+    assert "- app.py, lines 78-124\n" in canned.calls[0]["prompt"]
+    assert len(state.errors) == 1 and state.errors[0].startswith("explain base: git archive 000000000000 failed")
+    assert state.stage == "explain" and state.facts.facts
+    assert (change_ctx.target_dir / "facts.json").is_file()
+    assert not (change_ctx.snapshot.parent / BASE_DIR).exists()
+
+
 async def test_explain_off_makes_no_call_and_writes_nothing(change_target, change_ctx, monkeypatch):
     canned = Canned([])
     monkeypatch.setattr(sdk, "agent_call_structured", canned)

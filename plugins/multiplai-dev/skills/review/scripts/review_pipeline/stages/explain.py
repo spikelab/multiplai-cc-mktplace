@@ -10,7 +10,9 @@ with no fact gets one re-ask naming it. The result goes to `state.facts` and to
 
 The agents read the head snapshot, like every other stage. Lines a change
 removed are read from copies of those files at base, extracted beside the
-snapshot (`target.snapshot_base`) and deleted when the stage ends.
+snapshot (`target.snapshot_base`) and deleted when the stage ends. When they
+cannot be extracted, the stage explains the head side only and adds an
+`explain base: ...` line to `state.errors`, as it does for a failed unit.
 
 Calls go through review's `sdk.agent_call_structured`, so they count towards
 the review's spend limit, and its retry policy (one reformat re-ask) is the
@@ -107,9 +109,17 @@ async def run_explain(state: ReviewState, ctx: RunContext) -> ReviewState:
         return state
     t, cfg = state.target, ctx.config
     scope = scope_for(t, ctx.diff, ctx.snapshot)
-    units = partition(scope, UNIT_LINES)
     base = base_dir(ctx)
     base_paths = sorted({s.path for s in scope.spans if s.side == "base"})
+    base_error = ""
+    if base_paths:
+        try:
+            target_mod.snapshot_base(t, base, base_paths)
+        except target_mod.TargetError as e:
+            # The head side is still explained; the lines the change removed are left out, and said so.
+            base_error = f"explain base: {e}; the lines the change removed were not explained"
+            scope = Scope(spans=[s for s in scope.spans if s.side != "base"])
+    units = partition(scope, UNIT_LINES)
     name = t.label or t.slug
 
     def prompt_for(unit, missing: list[str] | None = None) -> str:
@@ -125,8 +135,6 @@ async def run_explain(state: ReviewState, ctx: RunContext) -> ReviewState:
     )
     keep = keeper(t, ctx)
     try:
-        if base_paths:
-            target_mod.snapshot_base(t, base, base_paths)
         tasks = [(unit_key(u), prompt_for(u)) for u in units]
         await run_tasks(tasks, _call, state.explain_answers, concurrency=cfg.concurrency, **ask)
         explained = _explained(state.explain_answers, keep, scope)
@@ -145,6 +153,8 @@ async def run_explain(state: ReviewState, ctx: RunContext) -> ReviewState:
     # From the stored answers, not this run's calls, so a resumed stage reports every failed unit once.
     failed = [(k, a["error"]) for k, a in state.explain_answers.items() if "error" in a]
     state.errors = [e for e in state.errors if not e.startswith("explain ")]
+    if base_error:
+        state.errors.append(base_error)
     state.errors.extend(f"explain {k}: {err}" for k, err in failed)
     ctx.counts = {"units": len(units), "facts": len(explained.facts), "dropped": len(explained.dropped),
                   "uncovered_files": len(explained.uncovered), "failed_units": len(failed)}
