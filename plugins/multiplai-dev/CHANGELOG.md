@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.37.0] - 2026-10-12
+## [0.38.0] - 2026-10-12
 
 ### Added
 - buildme: `/buildme setup` writes or merges `specs/config.yaml` for the repo:
@@ -72,6 +72,16 @@ time, not derived from a tag.
 - buildme: the first spec-stage commit now commits the new change directory.
   With git 2.43 it committed nothing, and the specs only reached the branch with
   the first build block.
+
+## [0.37.0] - 2026-10-12
+
+### Removed
+- `codebase-walkthrough` no longer writes the step-through HTML page
+  (`<name>-walkthrough.html`). In human mode it writes the Markdown
+  walkthrough and `<name>-walkthrough.json`, and step 2 opens that file in
+  the review-viewer, which is now the only page. Agent mode is unchanged.
+- The `markdown` package is no longer a dependency of the walkthrough
+  pipeline; only the HTML page used it.
 
 ## [0.36.0] - 2026-10-12
 

@@ -32,14 +32,12 @@ def done_run(ws, tmp_path, monkeypatch, fake_fetch):
     return tmp_path / "out" / "bookings-walkthrough.md", run_dir, agents
 
 
-def test_run_writes_markdown_and_html_with_the_same_headings(done_run):
+def test_run_writes_markdown_and_json_but_no_html(done_run):
     md_path, _, _ = done_run
     md = md_path.read_text()
-    html = md_path.with_suffix(".html").read_text()
-    assert "<svg" not in html
+    assert not md_path.with_suffix(".html").exists()
+    assert md_path.with_suffix(".json").exists()
     md_heads = markdown_headings(md)
-    html_heads = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<h2>(.*?)</h2>", html)]
-    assert md_heads == html_heads
     for title in ("Overview", "Glossary", "End-to-end scenarios", "Module tour", "Who calls it and what it calls",
                   "Data stores and config", "Vendor docs", "Gotchas and questions for the owner", "Coverage"):
         assert title in md_heads
