@@ -12,6 +12,8 @@ import json
 import logging
 from pathlib import Path
 
+from code_facts import CallFn
+
 from ..prompts.spec_generation import (
     PROPOSAL_PROMPT,
     SPEC_PROMPT,
@@ -362,7 +364,7 @@ async def _codebase_analysis_call(prompt: str, schema, *, config, budget_label: 
     )
 
 
-async def run_codebase_analysis(project_dir: Path, config, *, call=None) -> str:
+async def run_codebase_analysis(project_dir: Path, config, *, call: CallFn | None = None) -> str:
     """Explain the existing codebase as checked, cited facts (`code_facts`).
 
     Wired as BuildPhase.CODEBASE_ANALYSIS (orchestrator, between RESEARCH and

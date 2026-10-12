@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -160,14 +161,18 @@ def inbound_imports(texts: dict[str, str]) -> dict[str, int]:
     """For each file, how many other files have an import line naming its module.
 
     A text heuristic, not a resolver: a module is named by its file stem (its
-    directory for `__init__`/`index`/`mod`), matched as a word in each other
-    file's import lines.
+    directory for `__init__`/`index`/`mod`), matched as a whole word among the
+    words of each other file's import lines. One pass over the words, so a
+    large repo costs no more than reading its import lines.
     """
-    imports = {p: " ".join(_IMPORT_LINE.findall(t)) for p, t in texts.items()}
+    words = {p: set(re.findall(r"[\w-]+", " ".join(_IMPORT_LINE.findall(t)))) for p, t in texts.items()}
+    files_naming: Counter[str] = Counter()
+    for ws in words.values():
+        files_naming.update(ws)
     counts: dict[str, int] = {}
     for path in texts:
-        word = re.compile(rf"\b{re.escape(_module_word(path))}\b")
-        counts[path] = sum(1 for other, lines in imports.items() if other != path and word.search(lines))
+        word = _module_word(path)
+        counts[path] = files_naming[word] - (1 if word in words[path] else 0)
     return counts
 
 

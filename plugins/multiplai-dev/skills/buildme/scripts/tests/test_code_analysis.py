@@ -334,3 +334,17 @@ class TestBlockFacts:
     def test_no_facts_json_means_no_section(self, project):
         config = _config(project, block_facts=True)
         assert code_analysis.BLOCK_FACTS_HEADING not in assemble_context(self._block(), config, "test_writer")
+
+
+class TestInboundImports:
+    def test_counts_other_files_whose_import_lines_name_the_module(self):
+        counts = code_analysis.inbound_imports({
+            "src/calc.py": "x = 1\n",
+            "src/cli.py": "from calc import add\n",
+            "b.py": "import pkg.calc\n# calc is mentioned here, outside an import line\n",
+            "pkg/__init__.py": "",
+            "web/my-mod.js": "module.exports = 1\n",
+            "web/app.js": "const m = require('./my-mod')\n",
+        })
+        assert counts == {"src/calc.py": 2, "src/cli.py": 0, "b.py": 0, "pkg/__init__.py": 1,
+                          "web/my-mod.js": 1, "web/app.js": 0}
