@@ -43,8 +43,8 @@ gates never ask a model.
   a model.** Agents read snapshots of those commits with `Read`, `Grep` and
   `Glob` only; the writers get no tools. No agent gets a shell, file edits, or
   web access. This is why it needs `--trust-repo`.
-- **Reads git repositories** with `git rev-parse`, `git show`, `git archive`
-  and `git ls-files` only. It never checks out, fetches, commits or writes to
+- **Reads git repositories** with `git rev-parse`, `git show`, `git archive`,
+  `git ls-files` and `git ls-tree` only. It never checks out, fetches, commits or writes to
   them. It runs `rg` in each repository's working tree to pick which files to
   parse; what it parses is the commit.
 - **Never reads credentials.** `.env*` files are left out of every search and
@@ -58,6 +58,10 @@ gates never ask a model.
 - **Runs local programs**: `git`, `rg`, `ast-grep`, `pyright-langserver`.
 - **Writes files** to the run directory, the output directory and the log
   files.
+- **Opens the walkthrough in the review-viewer** (human mode, step 2). That
+  is the multiplai-dev `review-viewer` skill: a local web server on a port in
+  8765–8784 that reads the module's repository with git and calls no model.
+  Its `SKILL.md` says what it does on the machine.
 
 ## Prerequisites
 
@@ -81,7 +85,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 |-----|---------|---------|
 | target | Directory of the module, inside a git repository | required |
 | `--depth` | `overview` (skips test files), `standard`, `deep` | `standard` |
-| `--mode` | `human` (Markdown + HTML) or `agent` (compact Markdown for coding agents; no references, docs or scenarios) | `human` |
+| `--mode` | `human` (Markdown, HTML and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or scenarios) | `human` |
 | `--name` | Base file name | the module directory, lower-cased |
 | `--output` | Directory for the walkthrough files | `INBOX/` if it exists, else the current directory |
 | `--search-root` / `--repos` | Where to look for references | the nearest ancestor holding several repositories |
@@ -130,6 +134,34 @@ The run prints `walkthrough: <path>` for each file written. Read the
 `## Coverage` section of the Markdown file and paste its table into chat as it
 is, with the list of files that have no surviving fact. Then give the paths of
 the Markdown and HTML files.
+
+Then, in human mode, open the walkthrough in the review-viewer. Start it in
+the background (Bash tool, `run_in_background: true`):
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review-viewer/scripts \
+  python -m review_viewer --session-id "{session_id}" --agent "<your model name>" \
+  serve --tree <commit> --path <module dir> --repo /abs/path/to/module/repo
+```
+
+`<commit>` is the module repository's row in the Markdown's "Commits read"
+table (its first row), `<module dir>` the module's directory relative to that
+repository's root (empty for a whole repository: leave out `--path`), and
+`--repo` that root. From the server's output, publish the walkthrough to the
+`mailbox:` it printed:
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review-viewer/scripts \
+  python -m review_viewer walkthrough put --box <mailbox> --file /abs/path/to/name-walkthrough.json
+```
+
+Give the user the `open:` line exactly as printed. Never read `server.token`
+or `open.html`, and never rebuild the link yourself (review-viewer
+`SKILL.md`, step 2). Then arm the watch and answer what the user asks from
+the page as that skill's steps 3, 5 and 6 say, and stop the viewer as its
+step 7 says. You do not write a walkthrough there: this file is it. If `put`
+exits 2, tell the user what it printed and give the Markdown path; do not
+edit the JSON by hand.
 
 ### 3. Check (any time later)
 

@@ -359,6 +359,10 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   tier, never lower it. `walkthrough status` lists the tiers it sets; judge
   your tier from the whole change regardless. `risk` is required once the
   walkthrough is complete.
+- **A tree target** (`serve --tree`) is not a change, so a complete
+  walkthrough of it needs no `commits` or `tests` assessment and no `risk`
+  block. It must still anchor or skip every file under the tree's directory.
+  `codebase-walkthrough` writes such a walkthrough for a module.
 
   The rules: **High** if a confirmed HIGH finding is open, tier 3 cannot be
   reverted, tier 3 has a `tests` concern, or PR checks fail. Otherwise
@@ -410,7 +414,8 @@ assessment title over 32 characters, or — with `complete: true` — leaves
 a changed file uncovered, a confirmed or unverifiable finding unlinked
 (except one labelled `low-value` or `repeat`, and in a `critical` review one
 not rated `breaks-users` or `breaks-business`: the page never shows those),
-the `commits` or `tests` assessment missing, or no `risk` block.
+the `commits` or `tests` assessment missing, or no `risk` block (neither
+is needed for a tree target).
 Each message names the step; fix the file and `put` again. The page picks up
 each `put` within seconds; the server is not restarted.
 

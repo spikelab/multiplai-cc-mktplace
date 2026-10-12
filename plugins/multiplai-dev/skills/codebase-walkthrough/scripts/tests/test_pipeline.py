@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 import fixture_repo
 from fakes import FakeAgents
 from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
-from walkthrough_pipeline.render import markdown_headings
+from walkthrough_pipeline.render import markdown_headings, split_sections
 
 
 def run_args(ws, tmp_path, *extra):
@@ -101,3 +104,75 @@ def test_agent_mode_writes_compact_markdown_only(ws, tmp_path, monkeypatch, fake
                                      "Key Interfaces", "Gotchas", "Coverage"]
     assert {c["schema"] for c in agents.calls} == {"ExploreOutput", "SectionOutput"}
     assert main(["check", str(out / "bookings-walkthrough.md")]) == 0
+
+
+# --- walkthrough.json, for the review-viewer ---------------------------------------------
+
+DEV = Path(__file__).resolve().parents[3]                  # plugins/multiplai-dev/skills
+VIEWER_SCHEMA = DEV / "review-viewer" / "schema" / "walkthrough.v1.schema.json"
+# The file the review-viewer suite loads through its own validation (its test_walkthrough_module.py).
+VIEWER_FIXTURE = DEV / "review-viewer" / "scripts" / "tests" / "fixtures" / "module-walkthrough.json"
+# Set to rewrite VIEWER_FIXTURE from this run, after a deliberate change to what `run` writes.
+WRITE_FIXTURE = "WALKTHROUGH_WRITE_VIEWER_FIXTURE"
+
+
+def _git_out(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout
+
+
+def test_run_writes_a_walkthrough_json_the_viewer_schema_accepts(done_run, ws):
+    md_path, _, _ = done_run
+    wt = json.loads(md_path.with_suffix(".json").read_text())
+    jsonschema.validate(wt, json.loads(VIEWER_SCHEMA.read_text()))
+    empty_tree = subprocess.run(["git", "hash-object", "-t", "tree", "/dev/null"], capture_output=True,
+                                text=True, check=True).stdout.strip()
+    assert wt["base_sha"] == empty_tree
+    assert wt["head_sha"] == _git_out(ws["engine"], "rev-parse", "HEAD").strip()
+    assert wt["complete"] is True and "assessments" not in wt and "risk" not in wt
+    tree = set(_git_out(ws["engine"], "ls-tree", "-r", "--name-only", "HEAD", "--", "bookings").split())
+    anchored = {a["path"] for s in wt["steps"] for a in s["anchors"]}
+    assert anchored and anchored <= tree                      # only the module's own files are anchors
+    assert all(a["side"] == "head" for s in wt["steps"] for a in s["anchors"])
+    assert {k["path"] for k in wt["skipped"]} == tree - anchored
+    titles = [s["title"] for s in wt["steps"]]
+    assert "Module tour" in titles and "Coverage" not in titles and "Commits read" not in titles
+    assert "## Coverage" in wt["overview_md"] and "## Commits read" in wt["overview_md"]
+    # Citations into the other repos stay as links in the text.
+    who = next(s for s in wt["steps"] if s["title"] == "Who calls it and what it calls")
+    assert "[`front/src/api.ts:" in who["body_md"]
+    assert who["diagram"]["source"].startswith("graph LR") and "```mermaid" not in who["body_md"]
+    md = md_path.read_text()
+    for step in wt["steps"]:                                  # the text is the Markdown's, unchanged
+        if "diagram" not in step:
+            assert step["body_md"] in md, step["id"]
+
+
+def test_the_viewer_fixture_is_what_run_writes(done_run):
+    """review-viewer's suite cannot import this pipeline, so it loads a file this run wrote."""
+    md_path, _, _ = done_run
+    wt = json.loads(md_path.with_suffix(".json").read_text())
+    if os.environ.get(WRITE_FIXTURE):
+        VIEWER_FIXTURE.write_text(json.dumps(wt, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    def shape(w):     # the text holds paths relative to pytest's temporary directories
+        return {**{k: v for k, v in w.items() if k not in ("generated_at", "overview_md")},
+                "steps": [{k: v for k, v in s.items() if k != "body_md"} for s in w["steps"]]}
+
+    assert shape(json.loads(VIEWER_FIXTURE.read_text())) == shape(wt), \
+        f"run {WRITE_FIXTURE}=1 with this test to rewrite {VIEWER_FIXTURE.name}"
+
+
+def test_header_names_the_module_directory_depth_and_mode(done_run, ws):
+    md_path, _, _ = done_run
+    md = md_path.read_text()
+    where = re.search(r"^- Module directory: `([^`]+)`$", md, re.M).group(1)
+    assert (md_path.parent / where).resolve() == (ws["engine"] / "bookings").resolve()
+    assert re.search(r"^- Depth: `standard`$", md, re.M) and re.search(r"^- Mode: `human`$", md, re.M)
+
+
+def test_split_sections_ignores_headings_inside_code_blocks():
+    md = "# T\n\nintro\n\n## One\n\n````markdown\n## not a heading\n```\n````\n\n## Two\n\ntext\n"
+    intro, sections = split_sections(md)
+    assert intro.strip() == "# T\n\nintro"
+    assert [t for t, _ in sections] == ["One", "Two"]
+    assert "## not a heading" in sections[0][1]
