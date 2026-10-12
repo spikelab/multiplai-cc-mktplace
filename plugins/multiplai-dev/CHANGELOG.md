@@ -17,6 +17,57 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-10-12
+
+### Changed
+- buildme's codebase analysis (`codebase-analysis.md`) is now made of cited
+  facts. It runs the shared `code_facts` step that codebase-walkthrough and
+  review's `explain` stage use: one agent per slice of the project's source
+  files at HEAD (test, vendored and generated files left out), plus one for
+  its manifest and config files (`pyproject.toml`, `package.json`, `*.yaml`
+  and the like, lock files left out), returns claims with `path:line`
+  citations, and a claim is kept only when one of its citations is found at
+  that commit. The report keeps its Architecture, Patterns and Dependencies
+  headings: Dependencies holds what the manifests and config files declare
+  (dependencies, configuration, external services), then the interfaces
+  other code calls. It adds Conventions (naming, error handling, and test
+  style, which each source slice's agent reads from up to two tests that
+  import its modules; tests are not otherwise analysed), links every claim
+  to its lines, and says how many claims were dropped. The facts are also written to
+  `facts.json` beside it, in the format review writes. The analysis now reads
+  every source file instead of three agents of five turns each, so it costs
+  more on a large repo; `codebase_analysis_max_units` (default 12) caps the
+  agents, keeping the files the change's documents name and then the most
+  imported, and lists the rest under "Not analysed". A project with source
+  files and no git commit (a `--no-worktree` build `git init`s without
+  committing) gets a report headed "Codebase analysis: not analysed" that says
+  why and lists the source files, and the phase is logged as skipped.
+
+### Added
+- `block_facts: true` in `specs/config.yaml` (default `false`): each block's
+  test writer and implementer also get the facts about the files the block's
+  tasks name, each re-checked at the current HEAD; a fact whose quoted lines
+  an earlier block changed is dropped, and the section says how many were.
+- Before it publishes, a build re-checks every
+  `docs/walkthroughs/*-walkthrough.md` in the project at its HEAD with
+  codebase-walkthrough's model-free `check --at-head`, checks each stale one
+  again at the commit the build started from, prints the ones the build made
+  stale with the citations it broke (`WALKTHROUGH:STALE:`, `WALKTHROUGH_FAIL:`)
+  and lists them in the PR body. One that was already stale before the build
+  is listed apart (`WALKTHROUGH:ALREADY_STALE:`) and never regenerated. A repo
+  the walkthrough also reads is checked where it lives beside the main
+  checkout; when it is not there, the walkthrough is reported as not checked.
+  `regenerate_walkthroughs: true` (default `false`) re-runs each one the build
+  made stale the way its header says it was made, capped at
+  `walkthrough_max_usd` (default 10) per run, and commits it to the build
+  branch; it needs `--trust-repo`, and a walkthrough that read other
+  repositories is reported instead of re-run. The re-run keeps the repo key
+  the walkthrough's header gave the project, not the build worktree's
+  directory name (`buildme-<change>`).
+- codebase-walkthrough: `run --repo-key KEY` names the module's repository
+  `KEY` in the "Commits read" table and every citation, instead of its
+  directory's name.
+
 ## [0.43.0] - 2026-10-12
 
 ### Added

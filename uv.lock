@@ -87,6 +87,7 @@ name = "build-pipeline"
 version = "0.1.0"
 source = { editable = "plugins/multiplai-dev/skills/buildme/scripts" }
 dependencies = [
+    { name = "code-facts" },
     { name = "multiplai-core", extra = ["sdk"] },
     { name = "pydantic" },
     { name = "python-dotenv" },
@@ -96,12 +97,15 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "jsonschema" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "code-facts", editable = "plugins/multiplai-dev/lib/code_facts" },
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4" },
     { name = "multiplai-core", extras = ["sdk"], git = "https://github.com/spikelab/multiplai-core?branch=main" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'" },

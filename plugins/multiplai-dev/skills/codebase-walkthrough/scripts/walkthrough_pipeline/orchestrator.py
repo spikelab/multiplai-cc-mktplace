@@ -57,6 +57,7 @@ class RunOptions:
     output: str = "."
     search_root: str | None = None
     repos: list[str] = field(default_factory=list)
+    repo_key: str | None = None  # the module repository's key; default its directory's name
     docs: str | None = None
     docs_dirs: list[str] = field(default_factory=list)
     docs_pages: int = 30
@@ -78,7 +79,8 @@ def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
     for stale in (STATE_FILE, "progress.log", "boundary.json"):
         (run_dir / stale).unlink(missing_ok=True)
     try:
-        info, repo = target_mod.build_target(opts.target, run_dir, name=opts.name, depth=opts.depth)
+        info, repo = target_mod.build_target(opts.target, run_dir, name=opts.name, depth=opts.depth,
+                                              key=opts.repo_key)
     except target_mod.TargetError as e:
         raise WalkError(str(e)) from e
     gate = target_mod.target_gate(info)

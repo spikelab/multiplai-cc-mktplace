@@ -19,10 +19,15 @@ dependencies = [
     # and must keep the comments and key order a person wrote. Used only in
     # setup.py; every reader stays on PyYAML.
     "ruamel.yaml>=0.19",
+    # The shared "work out what this code does" step: the codebase analysis
+    # phase and the block facts (see [tool.uv.sources] below).
+    "code-facts",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio"]
+# jsonschema: a test validates the facts.json the analysis phase writes
+# against review/schema/facts.v1.schema.json.
+dev = ["pytest", "pytest-asyncio", "jsonschema>=4"]
 
 [build-system]
 requires = ["hatchling"]
@@ -42,3 +47,8 @@ packages = ["build_pipeline"]
 # the workspace root and the single uv.lock.
 [tool.uv.sources]
 multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }
+# The shared explore step. An editable path source, not `workspace = true`:
+# the installed plugin is plugins/multiplai-dev/ alone, and lib/ sits inside
+# that copy. code_facts is not a workspace member, because uv rejects a member
+# that is also reached through a path source.
+code-facts = { path = "../../../lib/code_facts", editable = true }

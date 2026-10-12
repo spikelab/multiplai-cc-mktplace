@@ -18,7 +18,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import board, git_ops
+from . import board, git_ops, walkthroughs
 from .change_manager import ChangeManager
 from .config import BuildConfig
 from .models import BoardColumn, BuildPhase
@@ -762,6 +762,13 @@ async def _run_codebase_analysis_phase(
     if state.spec_gen is None:
         state.spec_gen = SpecGenState()
     state.spec_gen.codebase_analysis_path = str(output)
+    from .code_analysis import NOT_ANALYSED_HEADING
+
+    if analysis.startswith(NOT_ANALYSED_HEADING):
+        log.info("SKIP phase=CODEBASE_ANALYSIS reason=no-git-commit dir=%s report=%s", config.project_dir, output)
+        progress.log_phase("CODEBASE_ANALYSIS", "skipped — the project has no git commit to read the code at; "
+                           f"{output} says so and lists its source files")
+        return
     log.info("Wrote codebase analysis: %s (%d chars)", output, len(analysis))
     progress.log_phase("CODEBASE_ANALYSIS", f"Codebase analysis written to {output}")
 
@@ -959,6 +966,7 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
     state.source_repo = str(repo)
     state.branch = branch
     state.worktree_path = str(dest)
+    state.base_sha = git_ops.rev_parse_head(dest)
     # Re-bind to the SAME subdirectory inside the worktree, not its root — a
     # nested project (monorepo subpackage) must keep building where it lives.
     config.rebind_project_dir(dest / offset)
@@ -1081,10 +1089,12 @@ def _spec_paths(config: BuildConfig) -> list[str]:
 # returns that path, or None for no section. It runs after the last block and
 # the docs/respec phases, right before publish hands the change to the pr
 # skill, and each path it returns is passed as `--section`. A contributor that
-# raises is logged and skipped; publish goes on. The list starts empty; its
-# first intended user is the walkthrough session's H5 (stale walkthroughs,
-# `plan-shared-code-understanding-2026-10-07.md`).
-PRE_PUBLISH_CONTRIBUTORS: list[Callable[[BuildConfig, BuildState, Path], Path | None]] = []
+# raises is logged and skipped; publish goes on. `walkthroughs.pr_section`
+# reports the walkthroughs under docs/walkthroughs/ whose cited lines the build
+# moved (and regenerates them when `regenerate_walkthroughs` is on).
+PRE_PUBLISH_CONTRIBUTORS: list[Callable[[BuildConfig, BuildState, Path], Path | None]] = [
+    walkthroughs.pr_section,
+]
 
 
 def _pr_sections_dir(docs_dir: Path) -> Path:

@@ -52,12 +52,14 @@ def _listing(spans: list[Span], base_dir: str = "") -> str:
 
 def explore_unit(name: str, spans: list[Span], schema=ExploreOutput, depth: str = "standard",
                  missing: list[str] | None = None, *, conventions: bool = False,
-                 path_rule: str = PATH_RULE, base_dir: str = "") -> str:
+                 path_rule: str = PATH_RULE, base_dir: str = "", notes: str = "") -> str:
     """The prompt for one unit. When every span is a whole file, it explains a module.
 
     *base_dir* is where the files as they were before a change can be read
     (the working directory holds only the files after it). Base-side spans
     name it; their citations still use the path as given, with `side` "base".
+    *notes* is the caller's own text, placed after the listing (what else to
+    read, what to look for in these files); "" leaves the prompt as it was.
     """
     whole = all(s.whole_file for s in spans)
     focus = ""
@@ -82,7 +84,7 @@ Line ranges in your part of the code:"""
     extra = CONVENTIONS_SECTION if conventions else ""
     return f"""{intro}
 {_listing(spans, base_dir)}
-{focus}
+{focus}{notes}
 Return ONE JSON object:
 - `facts`: what the code does and how, as short claims, each with citations. Cover {cover}: its role, its main functions or classes, how data flows through it, what it writes
   (database, cache, external API, messages), and error handling worth knowing. Several facts

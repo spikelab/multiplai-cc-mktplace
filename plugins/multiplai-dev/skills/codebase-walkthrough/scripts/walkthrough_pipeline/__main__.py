@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -71,6 +72,13 @@ def _run_flags(p: argparse.ArgumentParser) -> None:
                    help=f"Circuit breaker in USD (default {DEFAULT_MAX_USD:g}; 0 = no ceiling).")
 
 
+def _repo_key(text: str) -> str:
+    """A key is a snapshot directory's name and the first segment of every citation."""
+    if text in (".", "..") or not re.fullmatch(r"[^/\\|`\s]+", text):
+        raise argparse.ArgumentTypeError(f"{text!r} is not a directory-like name (no '/', '|', '`' or spaces)")
+    return text
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="walkthrough_pipeline",
@@ -91,6 +99,8 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--search-root", help="Directory whose repositories are searched for references "
                                           "(default: the parent of the outermost directory holding several repos)")
     rn.add_argument("--repos", nargs="+", help="Search exactly these repositories instead")
+    rn.add_argument("--repo-key", type=_repo_key, metavar="KEY",
+                    help="The module repository's name in the walkthrough (default: its directory's name)")
     rn.add_argument("--docs", help="Vendor docs base URL; its /llms.txt lists the pages that may be fetched")
     rn.add_argument("--docs-dir", action="append", default=[], help="Local vendor docs directory (repeatable)")
     rn.add_argument("--docs-pages", type=int, default=30, help="Most doc pages fetched (default 30)")
@@ -155,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
             opts = orchestrator.RunOptions(
                 target=args.target, depth=args.depth, mode=args.mode, name=args.name,
                 output=str(output), search_root=args.search_root, repos=args.repos or [],
+                repo_key=args.repo_key,
                 docs=args.docs, docs_dirs=args.docs_dir, docs_pages=args.docs_pages,
                 api_collection=args.api_collection, unit_lines=args.unit_lines,
                 scenarios=args.scenarios, lsp_timeout=args.lsp_timeout,

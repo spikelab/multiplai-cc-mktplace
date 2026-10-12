@@ -174,3 +174,28 @@ def test_split_sections_ignores_headings_inside_code_blocks():
     assert intro.strip() == "# T\n\nintro"
     assert [t for t, _ in sections] == ["One", "Two"]
     assert "## not a heading" in sections[0][1]
+
+
+def test_repo_key_names_a_worktree_by_its_project_not_its_directory(fresh_ws, tmp_path, monkeypatch, fake_fetch):
+    """buildme regenerates a walkthrough inside its build worktree, `buildme-<change>`, writing it into
+    that worktree: `--repo-key` keeps the project's own key in the "Commits read" row and every citation."""
+    worktree = fresh_ws["ws"] / "buildme-c"
+    _git_out(fresh_ws["engine"], "worktree", "add", "-q", "-b", "buildme/c", str(worktree))
+    out = worktree / "docs" / "walkthroughs"
+    monkeypatch.setattr(sdk, "agent_call_structured", FakeAgents())
+    assert main(["run", str(worktree / "bookings"), "--trust-repo", "--runs-dir", str(tmp_path / "runs"),
+                 "--output", str(out), "--lsp-timeout", "0", "--repos", str(worktree),
+                 "--repo-key", "engine"]) == 0
+    md = (out / "bookings-walkthrough.md").read_text()
+    sha = _git_out(worktree, "rev-parse", "HEAD").strip()
+    assert re.search(rf"^\| engine \| \.\./\.\. \| `{sha}` \|$", md, re.M), md
+    assert "[`engine/bookings/" in md
+    assert "buildme-c" not in md + (out / "bookings-walkthrough.json").read_text()
+    assert main(["check", str(out / "bookings-walkthrough.md")]) == 0
+
+
+@pytest.mark.parametrize("key", ["", ".", "..", "a/b", "a b", "a|b"])
+def test_repo_key_must_be_a_plain_name(key, capsys):
+    with pytest.raises(SystemExit):
+        main(["run", ".", "--repo-key", key])
+    assert "argument --repo-key" in capsys.readouterr().err

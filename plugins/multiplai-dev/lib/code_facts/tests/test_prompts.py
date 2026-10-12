@@ -39,3 +39,12 @@ def test_the_caller_says_what_form_paths_take():
     rule = "- `path` starts with the repository name."
     assert rule in citation_rules(rule)
     assert rule in explore_unit("m", [Span.whole("e/a.py", 1)], path_rule=rule)
+
+
+def test_the_callers_notes_follow_the_listing_and_are_absent_by_default():
+    spans = [Span.whole("e/a.py", 12)]
+    note = "\nAlso read tests/test_a.py for how tests are written.\n"
+    p = explore_unit("m", spans, conventions=True, notes=note)
+    listing, rest = p.split("- e/a.py (12 lines)\n", 1)
+    assert rest.index("Also read tests/test_a.py") < rest.index("Return ONE JSON object")
+    assert explore_unit("m", spans, conventions=True) == p.replace(note, "")

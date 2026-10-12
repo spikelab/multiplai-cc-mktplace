@@ -205,6 +205,11 @@ class BuildState(BaseModel):
     branch: str | None = None
     source_repo: str | None = None
     pr_url: str | None = None
+    # The commit the build's branch started from (the worktree's HEAD when it
+    # was created). The stale-walkthrough check reads it to tell a walkthrough
+    # this build made stale from one that was stale before it. None in older
+    # checkpoints and for --no-worktree builds.
+    base_sha: str | None = None
 
     # Documentation files the DOCS_UPDATE phase reported writing (empty when it
     # updated nothing). Persisted because the PR body is written later — after

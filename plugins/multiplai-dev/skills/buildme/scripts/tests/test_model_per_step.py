@@ -262,7 +262,7 @@ CALL_SITES = {
         ("config.model_for('spec_artifact')", ("spec_artifact",)),
     ("llm_steps/spec_steps.py", "run_explainer", "llm_call"):
         ("config.model_for('explainer')", ("explainer",)),
-    ("llm_steps/spec_steps.py", "run_codebase_analysis", "llm_call"):
+    ("llm_steps/spec_steps.py", "_codebase_analysis_call", "agent_call_structured"):
         ("config.model_for('codebase_analysis')", ("codebase_analysis",)),
     ("llm_steps/tdd_steps.py", "run_test_writer", "agent_call"):
         ("model", ("test_writer",)),
