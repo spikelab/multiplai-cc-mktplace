@@ -58,7 +58,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--ticket-file <file>` / `--ticket-ref <ref>` / `--ticket-url <url>` | The ticket Step 0 fetched. Saved as `ticket.md` (fenced as untrusted) in the change dir. |
 | `--plan-file <file>` | A plan written with the plan skill (`# Plan:` + `## Done means`). Saved as `plan.md`; its text goes into the spec input and `interview.md` in every interview mode, and plan authoring still runs. |
 | `--interview-replies <file>` | `interview: ticket` only — the ticket replies posted after the questions. |
-| `--accept-size` | Build a plan the size gate says should be split, as one PR. |
+| `--accept-size` | Build a plan the size gate says should be split, as one PR. The build remembers it, so a later retry or resume does not stop on size again. |
 | `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. |
 
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: true}`,

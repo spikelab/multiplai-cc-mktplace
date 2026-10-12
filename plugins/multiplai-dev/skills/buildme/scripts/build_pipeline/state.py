@@ -114,6 +114,10 @@ class BuildState(BaseModel):
     # The plan should be split and the build stopped after plan review; a
     # re-run stops the same way until --accept-size. Default False.
     split_required: bool = False
+    # --accept-size was given once for this build. A retry without the flag
+    # (a resume, or a FAILED build re-running every phase) keeps the
+    # acceptance instead of stopping again. Default False.
+    size_accepted: bool = False
 
     # Git lifecycle — set when the pipeline creates its own worktree/branch.
     # Persisted so a resume RE-BINDS to the existing worktree instead of

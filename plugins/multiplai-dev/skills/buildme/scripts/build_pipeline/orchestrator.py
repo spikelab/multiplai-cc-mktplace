@@ -888,6 +888,9 @@ def _run_size_gate(
 ) -> int | None:
     """Stop a plan that should be split, after plan review, until --accept-size.
 
+    An acceptance is saved as ``state.size_accepted``, so a retry without the
+    flag goes on instead of posting the proposal again.
+
     Re-assesses the final tasks.md with the plan review's own parse and
     thresholds (``split_assessment``). On ``should_split`` — or when an earlier
     run already stopped here — writes ``split-proposal.md``, sets
@@ -903,8 +906,9 @@ def _run_size_gate(
     if not should_split and not state.split_required:
         log.info("DONE phase=SIZE_GATE split=false")
         return None
-    if accept_size:
+    if accept_size or state.size_accepted:
         state.split_required = False
+        state.size_accepted = True
         state.checkpoint(state_path)
         log.info("DONE phase=SIZE_GATE split=%s accepted=true", should_split)
         _progress_note(progress, "SIZE_GATE", "Plan size accepted with --accept-size")

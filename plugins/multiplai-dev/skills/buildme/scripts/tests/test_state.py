@@ -463,6 +463,7 @@ class TestDocsUpdatePhaseAndImpact:
         s = BuildState.load(FIXTURES / "build-state-pre-docs-update.json")
         assert s.interview_waiting is False
         assert s.split_required is False
+        assert s.size_accepted is False
         assert s.ticket_ref is None
         assert s.ticket_url is None
         assert s.plan_file is None

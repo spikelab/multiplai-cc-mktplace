@@ -715,6 +715,25 @@ class TestSizeGate:
         assert "RESULT:SUCCESS:spec-only" in out
 
     @pytest.mark.asyncio
+    async def test_accepted_size_holds_on_a_retry_without_the_flag(self, tmp_path, capsys):
+        """A build that accepted its size and then broke before the prototype
+        phase finished must not stop again on the re-run: the wrapper would
+        post the split proposal on the ticket a second time."""
+        config = self._config(tmp_path, _two_group_tasks(12))
+        with patch("build_pipeline.orchestrator._run_prototype_phase",
+                   AsyncMock(side_effect=RuntimeError("boom"))):
+            rc = await run_orchestrator(config, _args(tmp_path, "big", mode="only",
+                                                      auto=True, accept_size=True))
+        assert rc == 1
+        assert BuildState.load(config.state_file_path()).size_accepted is True
+        capsys.readouterr()
+
+        rc = await run_orchestrator(config, _args(tmp_path, "big", mode="only", auto=True))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "SPLIT:REQUIRED" not in out
+
+    @pytest.mark.asyncio
     async def test_one_group_plan_does_not_stop(self, tmp_path, capsys):
         config = self._config(tmp_path, _one_group_tasks(12))
         self._assert_fixture(config, groups=1)

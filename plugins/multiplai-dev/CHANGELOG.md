@@ -42,7 +42,8 @@ time, not derived from a tag.
   and saves the reason in `research.md` either way.
 - buildme stops after plan review when the plan should be split into several
   PRs, and writes the proposed split to `split-proposal.md`. `--accept-size`
-  builds it as one PR anyway.
+  builds it as one PR anyway, and a later retry of that build does not stop on
+  size again.
 - buildme: new exit code `3` means "waiting" — on ticket replies
   (`INTERVIEW:WAITING`), on research (`RESEARCH:NEEDED`) or on a split decision
   (`SPLIT:REQUIRED`). Re-running the same command resumes.
