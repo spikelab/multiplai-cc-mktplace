@@ -267,7 +267,14 @@ def cmd_edit(args) -> int:
 
     done = r.assembled
     if managed:
-        merged = markers.merge(current, done.owned, done.template_keys, done.tails)
+        owned = done.owned
+        if not r.sources.ticket_url:
+            # `edit` has no --ticket-url, and ticket.md has no `url:` line: keep the link that
+            # `open --ticket-url` wrote instead of overwriting it with "not applicable".
+            ticket_keys = {r.sections[p.index].key for p in fill.plan_sections(r.sections)
+                           if p.kind == "code:ticket"}
+            owned = {k: v for k, v in owned.items() if k not in ticket_keys}
+        merged = markers.merge(current, owned, done.template_keys, done.tails)
         body, changed = merged.body, merged.changed
         _diagnose([f"section removed by a human, not restored: {k}" for k in merged.not_restored])
         _diagnose([f"section not in the PR body, not added: {k}" for k in merged.not_added])

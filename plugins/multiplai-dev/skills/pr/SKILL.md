@@ -99,7 +99,9 @@ All of it is HTML comments, which GitHub does not render.
 appends sections it has never written. Everything outside markers, including
 a human's ticks on the template's checkboxes, is left alone. A section a
 human deleted stays deleted:
-`PR_DIAGNOSIS:section removed by a human, not restored: <key>`. A description
+`PR_DIAGNOSIS:section removed by a human, not restored: <key>`. When
+`ticket.md` has no `url:` line, `edit` keeps the ticket link already in the
+description, such as one `open --ticket-url` wrote. A description
 whose markers nest, do not pair up, or repeat a key is refused (exit 2).
 
 **A PR opened by hand** (no `pr:managed` line): `edit` first checks the `gh`

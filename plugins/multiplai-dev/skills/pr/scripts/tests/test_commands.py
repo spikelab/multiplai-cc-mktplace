@@ -152,6 +152,19 @@ def test_edit_does_not_restore_a_deleted_marker_pair(tmp_path, gh_stub, capsys):
     assert markers.begin("blocks") not in gh_stub.bodies["gh pr edit"]
 
 
+def test_edit_keeps_a_ticket_link_given_only_to_open(tmp_path, gh_stub, capsys):
+    repo, change = _setup(tmp_path)  # no ticket.md, so the link exists only in the PR body
+    ticket = "https://tickets.example.com/T-42"
+    gh_stub.on(["gh", "repo", "view"], stdout="main\n").on(["gh", "pr", "create"], stdout=URL)
+    assert run(["open", "--repo", str(repo), "--change-dir", str(change), "--no-push",
+                "--ticket-url", ticket]) == 0
+    opened = gh_stub.bodies["gh pr create"]
+    assert markers.wrap("ticket", ticket) in opened
+    gh_stub.on(["gh", "pr", "view"], stdout=_pr_json(opened)).on(["gh", "pr", "edit"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 0
+    assert markers.wrap("ticket", ticket) in gh_stub.bodies["gh pr edit"]
+
+
 def test_edit_refuses_nested_markers_with_exit_2(tmp_path, gh_stub, capsys):
     repo, change = _setup(tmp_path)
     bad = f"{markers.MANAGED}\n{markers.begin('a')}\n{markers.begin('b')}\n{markers.end('b')}\n{markers.end('a')}\n"
