@@ -24,7 +24,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def common(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--repo", required=True, help="the git repository (or worktree) the PR is from")
+        p.add_argument("--repo", required=True,
+                       help="the git repository (or worktree) the PR is from, or a project directory "
+                            "inside it; the pr: settings are read from <repo>/specs/config.yaml")
         p.add_argument("--change-dir", required=True,
                        help="the change's documents: specs/changes/<name>/ or its archive")
         p.add_argument("--section", action="append", default=[], metavar="FILE",

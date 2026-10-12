@@ -46,14 +46,23 @@ It needs the GitHub CLI (`gh`), logged in with `gh auth login`, for `open` and
 
 ## The template
 
-The template is, in order: `pr.template` in `<repo>/specs/config.yaml` (a
-repo-relative path; `auto`, buildme's default, counts as unset); else the first found of `.github/`, the repo root and
+`--repo` may be the repository root or a project directory inside it (a
+monorepo subpackage, as buildme passes for one). The `pr:` settings are read
+from `<--repo>/specs/config.yaml`, where buildme and its setup keep them; the
+templates, the diff and every `gh` call use the repository root.
+
+The template is, in order: `pr.template` in that `specs/config.yaml` (a path
+relative to the repository root; `auto`, buildme's default, counts as unset); else the first found of `.github/`, the repo root and
 `docs/`, each checked for `pull_request_template.md` and then a
 `PULL_REQUEST_TEMPLATE/` directory (names matched in any case). A directory
 with one `.md` file uses it. A malformed `pr:` block (not a mapping, a
 `pr.template` that is not a string, a `pr.draft` that is not true or false,
 or a `config.yaml` that is not valid YAML) logs a warning and uses the
-defaults, as buildme does with the same file.
+defaults, as buildme does with the same file. A `pr.template` that names no
+file, or a file outside the repository, is not refused either: the template
+is found as if it were unset, and the skill prints
+`PR_DIAGNOSIS:pr.template names a file that does not exist: <path>, discovered the template instead`
+(or `points outside the repository`).
 
 The **standard template** (`templates/pull_request_template.md`, shipped with
 this skill) is used when the repo has no template, or a template directory

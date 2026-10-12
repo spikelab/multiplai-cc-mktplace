@@ -112,16 +112,32 @@ def _rel(repo: Path, path: Path) -> str:
 
 
 def discover(repo: Path, config: PrConfig | None = None) -> Discovery:
-    """The template to use for *repo*, and a diagnosis when the choice needs one."""
+    """The template to use for *repo*, and a diagnosis when the choice needs one.
+
+    A `pr.template` that points outside *repo* or at no file is warned about and the
+    template is discovered as if it were unset, as `load_config` does with a malformed
+    value: buildme's config.py accepts the same string and runs a whole build before
+    PUBLISH, so refusing here would fail that build's PR."""
     repo = repo.resolve()
     config = config or load_config(repo)
     if config.template:
         path = (repo / config.template).resolve()
+        problem = None
         if not path.is_relative_to(repo):
-            raise TemplateError(f"pr.template points outside the repository: {config.template}")
-        if not path.is_file():
-            raise TemplateError(f"pr.template names a file that does not exist: {config.template}")
-        return Discovery(path, standard=False)
+            problem = f"pr.template points outside the repository: {config.template}"
+        elif not path.is_file():
+            problem = f"pr.template names a file that does not exist: {config.template}"
+        if problem is None:
+            return Discovery(path, standard=False)
+        log.warning("%s; discovering the template", problem)
+        found = _discover_unset(repo)
+        return Discovery(found.path, found.standard, "; ".join(
+            d for d in (f"{problem}, discovered the template instead", found.diagnosis) if d))
+    return _discover_unset(repo)
+
+
+def _discover_unset(repo: Path) -> Discovery:
+    """The template GitHub's locations give *repo*, with no `pr.template`."""
     for loc in LOCATIONS:
         base = repo / loc if loc else repo
         if not base.is_dir():

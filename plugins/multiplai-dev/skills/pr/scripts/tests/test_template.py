@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from pr_pipeline.template import (
-    STANDARD_TEMPLATE, TemplateError, discover, load, load_config, parse, set_tick,
+    STANDARD_TEMPLATE, PrConfig, discover, load, load_config, parse, set_tick,
 )
 
 
@@ -101,13 +101,35 @@ def test_config_template_takes_precedence_over_discovery(tmp_path):
     assert load_config(tmp_path).draft is False
 
 
-def test_config_template_that_is_missing_or_outside_the_repo_is_refused(tmp_path):
+def test_config_template_that_is_missing_or_outside_the_repo_warns_and_discovers(tmp_path):
+    # buildme's config.py accepts any string here and runs the whole build before PUBLISH, so
+    # the skill treats an unusable value as it treats a malformed one: say so, then discover.
+    found_file = _write(tmp_path / ".github" / "pull_request_template.md")
     _write(tmp_path / "specs" / "config.yaml", "pr:\n  template: nope.md\n")
-    with pytest.raises(TemplateError, match="does not exist"):
-        discover(tmp_path)
+    found = discover(tmp_path)
+    assert found.path == found_file.resolve() and not found.standard
+    assert "pr.template names a file that does not exist: nope.md" in found.diagnosis
+    found_file.unlink()
     _write(tmp_path / "specs" / "config.yaml", "pr:\n  template: ../elsewhere.md\n")
-    with pytest.raises(TemplateError, match="outside the repository"):
-        discover(tmp_path)
+    found = discover(tmp_path)
+    assert found.standard
+    assert "pr.template points outside the repository: ../elsewhere.md" in found.diagnosis
+
+
+def test_an_unusable_config_template_keeps_the_several_templates_diagnosis(tmp_path):
+    _write(tmp_path / ".github" / "PULL_REQUEST_TEMPLATE" / "bug.md")
+    _write(tmp_path / ".github" / "PULL_REQUEST_TEMPLATE" / "feature.md")
+    _write(tmp_path / "specs" / "config.yaml", "pr:\n  template: nope.md\n")
+    found = discover(tmp_path)
+    assert found.standard and "does not exist: nope.md" in found.diagnosis
+    assert "several templates" in found.diagnosis
+
+
+def test_discover_reads_the_config_it_is_given(tmp_path):
+    chosen = _write(tmp_path / ".github" / "PULL_REQUEST_TEMPLATE" / "feature.md")
+    _write(tmp_path / ".github" / "PULL_REQUEST_TEMPLATE" / "bug.md")
+    found = discover(tmp_path, PrConfig(template=".github/PULL_REQUEST_TEMPLATE/feature.md"))
+    assert found.path == chosen.resolve() and found.diagnosis is None
 
 
 def test_config_template_auto_discovers_like_an_absent_value(tmp_path):

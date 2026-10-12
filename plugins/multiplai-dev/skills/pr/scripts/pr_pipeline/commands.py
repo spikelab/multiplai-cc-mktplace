@@ -17,8 +17,8 @@ from pathlib import Path
 from multiplai_core.log_utils import log_event
 
 from . import fill, gates, github, markers
-from .template import (Section, TemplateError, discover, is_checkbox, load, load_config, normalize_title, parse,
-                       set_tick)
+from .template import (PrConfig, Section, TemplateError, discover, is_checkbox, load, load_config, normalize_title,
+                       parse, set_tick)
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def _ask(prompt: str) -> str:
 
 
 def render_body(repo: Path, change_dir: Path, *, base: str | None, head: str, ticket_url: str | None,
-                section_files: list[Path]) -> Rendered:
+                section_files: list[Path], config: PrConfig | None = None) -> Rendered:
     """Template + sources (+ one model call when the template needs prose) → a gated body.
 
     A failed gate, or an answer that does not parse, is re-asked once with
@@ -58,7 +58,7 @@ def render_body(repo: Path, change_dir: Path, *, base: str | None, head: str, ti
     from multiplai_core.structured import StructuredAnswerError, parse_answer, reformat_prompt
 
     try:
-        found = discover(repo)
+        found = discover(repo, config)
         sections = load(found.path)
     except TemplateError as e:
         raise Refused(str(e)) from e
@@ -106,11 +106,17 @@ def render_body(repo: Path, change_dir: Path, *, base: str | None, head: str, ti
     raise GateFailed(problem)
 
 
-def _resolve_repo(path: str) -> Path:
-    repo = Path(path).expanduser().resolve()
-    if not repo.is_dir() or github.repo_root(repo) is None:
+def _resolve_repo(path: str) -> tuple[Path, PrConfig]:
+    """The git root holding *path*, and the `pr:` settings in *path*/specs/config.yaml.
+
+    *path* may be a subdirectory, as for a monorepo subpackage: buildme and its setup keep
+    that project's `pr:` block in its own specs/config.yaml, while the PR templates, the
+    diff and every `gh` call belong to the whole repository."""
+    project = Path(path).expanduser().resolve()
+    root = github.repo_root(project) if project.is_dir() else None
+    if root is None:
         raise Refused(f"--repo {path} is not a git repository")
-    return repo
+    return root.resolve(), load_config(project)
 
 
 def _change_dir(path: str) -> Path:
@@ -146,12 +152,12 @@ def _size_field(r: Rendered | None) -> str:
 
 
 def cmd_render(args) -> int:
-    repo = _resolve_repo(args.repo)
+    repo, config = _resolve_repo(args.repo)
     change_dir = _change_dir(args.change_dir)
     head = github.current_branch(repo)
     base = github.git_default_branch(repo)
     r = render_body(repo, change_dir, base=base, head=head, ticket_url=None,
-                    section_files=[Path(p) for p in args.section])
+                    section_files=[Path(p) for p in args.section], config=config)
     if r.sources.size:
         print(r.sources.size.line(), file=sys.stderr, flush=True)
     _diagnose(r.diagnoses, sys.stderr)
@@ -165,19 +171,15 @@ def cmd_render(args) -> int:
 
 
 def cmd_open(args) -> int:
-    repo = _resolve_repo(args.repo)
+    repo, config = _resolve_repo(args.repo)
     change_dir = _change_dir(args.change_dir)
     head = args.head or github.current_branch(repo)
     if not head or head == "HEAD":
         raise Refused("no branch to open the PR from: pass --head, or check out a branch")
-    try:
-        config = load_config(repo)
-    except TemplateError as e:
-        raise Refused(str(e)) from e
     draft = args.draft or (not args.ready and config.draft)
     base = args.base or github.gh_default_branch(repo) or github.git_default_branch(repo)
     r = render_body(repo, change_dir, base=base, head=head, ticket_url=args.ticket_url,
-                    section_files=[Path(p) for p in args.section])
+                    section_files=[Path(p) for p in args.section], config=config)
     title = args.title or f"buildme: {r.sources.change_name}"
     if r.sources.size:
         print(r.sources.size.line(), flush=True)
@@ -253,7 +255,7 @@ def _adopt(current: str, r: Rendered) -> fill.Assembled:
 
 
 def cmd_edit(args) -> int:
-    repo = _resolve_repo(args.repo)
+    repo, config = _resolve_repo(args.repo)
     change_dir = _change_dir(args.change_dir)
     pr, res = github.view_pr(repo, args.pr)
     if pr is None:
@@ -280,7 +282,7 @@ def cmd_edit(args) -> int:
             raise Refused(f"no rights to edit PR {number} (viewerPermission={permission})")
 
     r = render_body(repo, change_dir, base=base, head=head, ticket_url=None,
-                    section_files=[Path(p) for p in args.section])
+                    section_files=[Path(p) for p in args.section], config=config)
     args._log_fields.update(template=_template_rel(r, repo), diff=_size_field(r))
     if r.sources.size:
         print(r.sources.size.line(), flush=True)

@@ -121,6 +121,25 @@ def test_render_prints_only_the_body_and_calls_no_gh(tmp_path, capsys):
     assert "DIFF:2 files, +3 -1" in captured.err
 
 
+def test_render_from_a_subproject_reads_its_config_and_the_repo_root_templates(tmp_path, capsys):
+    # buildme runs a monorepo subpackage with --repo <subproject>: its specs/config.yaml holds
+    # the pr: block buildme setup wrote, while GitHub's templates live at the git root.
+    repo, change = _setup(tmp_path)
+    tdir = repo / ".github" / "PULL_REQUEST_TEMPLATE"
+    tdir.mkdir(parents=True)
+    (tdir / "bug.md").write_text("Bug intro.\n\n## Why\n")
+    (tdir / "feature.md").write_text("Feature intro.\n\n## Why\n")
+    sub = repo / "packages" / "api"
+    (sub / "specs").mkdir(parents=True)
+    assert run(["render", "--repo", str(sub), "--change-dir", str(change)]) == 0
+    captured = capsys.readouterr()
+    assert "several templates" in captured.err  # found at the git root, not under the subproject
+    (sub / "specs" / "config.yaml").write_text("pr:\n  template: .github/PULL_REQUEST_TEMPLATE/feature.md\n")
+    assert run(["render", "--repo", str(sub), "--change-dir", str(change)]) == 0
+    captured = capsys.readouterr()
+    assert "Feature intro." in captured.out and "several templates" not in captured.err
+
+
 # --- edit ---------------------------------------------------------------------
 
 

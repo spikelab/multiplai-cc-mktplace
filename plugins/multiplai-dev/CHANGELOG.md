@@ -25,7 +25,8 @@ time, not derived from a tag.
   finds the template where GitHub looks for one (`.github/`, the repo root,
   `docs/`, or a `PULL_REQUEST_TEMPLATE/` directory, names in any case), or
   takes `pr.template` from `specs/config.yaml` (`auto`, buildme's default,
-  means find it). With no template, or several and no choice made, it uses a
+  means find it; a path to no file, or outside the repository, is reported
+  and the template is found as if it were unset). With no template, or several and no choice made, it uses a
   standard template that ships with the skill:
   Why, Blocks, Documentation, Companion artifacts, Ticket and Size.
 - The template's headings, checkboxes and comments are always kept. Sections
@@ -57,7 +58,9 @@ time, not derived from a tag.
   `git.pr`. When the PR cannot be opened,
   `build-progress.md` now lists the pr skill's command first, then
   `gh pr create`. A build started from a ticket passes the ticket's link, so
-  the PR's Ticket section shows it.
+  the PR's Ticket section shows it. A build of a project inside a larger
+  repository (a monorepo package) uses the `pr:` settings in that project's
+  own `specs/config.yaml`, where `buildme setup` writes them.
 
 ## [0.40.0] - 2026-10-12
 

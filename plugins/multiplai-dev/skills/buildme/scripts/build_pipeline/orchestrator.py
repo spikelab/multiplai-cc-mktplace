@@ -1118,10 +1118,15 @@ def _pr_skill_dir() -> Path:
 
 
 def _pr_open_argv(
-    worktree: Path, change_dir: Path, branch: str, title: str, *,
+    project_dir: Path, change_dir: Path, branch: str, title: str, *,
     draft: bool = True, sections: list[Path] | None = None, ticket_url: str | None = None,
 ) -> list[str]:
     """``pr_pipeline open`` for a branch this pipeline already pushed.
+
+    ``--repo`` is the project dir inside the build's worktree, not the
+    worktree root: a nested project (monorepo subpackage) keeps its ``pr:``
+    block in its own ``specs/config.yaml``, which the skill reads under
+    ``--repo``; it finds the repo root itself for the templates and git.
 
     Run as a subprocess (``uv run --directory``), not imported, so buildme
     does not depend on uv resolving a path source between two workspace
@@ -1129,7 +1134,7 @@ def _pr_open_argv(
     argv = [
         "uv", "run", "--directory", str(_pr_skill_dir()),
         "python", "-m", "pr_pipeline", "open",
-        "--repo", str(worktree), "--change-dir", str(change_dir),
+        "--repo", str(project_dir), "--change-dir", str(change_dir),
         "--head", branch, "--title", title, "--no-push",
     ]
     # Always say which: git.pr is buildme's choice, and the skill's own
@@ -1195,7 +1200,7 @@ def _run_publish(
     sections = [p for p in [_worktree_section(state, docs_dir)] if p is not None]
     sections += _pre_publish_sections(config, state, docs_dir)
     pr_argv = _pr_open_argv(
-        worktree, docs_dir, state.branch, title, draft=draft, sections=sections,
+        config.project_dir, docs_dir, state.branch, title, draft=draft, sections=sections,
         ticket_url=state.ticket_url,
     )
     manual = git_ops.manual_finish_commands(

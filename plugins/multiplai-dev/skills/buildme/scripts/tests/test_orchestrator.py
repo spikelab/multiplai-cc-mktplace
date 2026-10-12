@@ -1690,12 +1690,20 @@ class TestNestedProjectDir:
         assert _worktree_count(repo) == 2, "resume must adopt, not create"
 
 
-async def _published_build(tmp_path, change: str):
-    """A worktree build with an origin, ready for _run_publish."""
+async def _published_build(tmp_path, change: str, sub: str | None = None):
+    """A worktree build with an origin, ready for _run_publish. With *sub*, the
+    project is that subdirectory of the repo (a monorepo subpackage)."""
     repo = make_repo(tmp_path / "proj")
     make_bare_origin(repo, tmp_path / "origin.git")
-    config = BuildConfig(project_dir=repo, change_name=change)
-    config.specs_dir = repo / "specs"
+    project = repo
+    if sub:
+        project = repo / sub
+        project.mkdir(parents=True)
+        (project / "keep.txt").write_text("k\n")
+        _git(repo, "add", f"{sub}/keep.txt")
+        _git(repo, "commit", "-m", "chore: nested pkg")
+    config = BuildConfig(project_dir=project, change_name=change)
+    config.specs_dir = project / "specs"
     state = BuildState(change_name=change, mode="scratch", tier="advanced",
                        state_file=str(config.state_file_path()))
     cm = ChangeManager(config.specs_dir)
@@ -1740,6 +1748,18 @@ class TestPublishHandsOffToThePrSkill:
         assert argv[argv.index("--head") + 1] == "buildme/handoff"
         assert argv[argv.index("--title") + 1] == "buildme: handoff"
         assert "--no-push" in argv, "buildme pushes itself, so PUSHED: and push failures are unchanged"
+
+    @pytest.mark.asyncio
+    async def test_a_nested_project_passes_its_own_dir_so_its_pr_settings_apply(
+            self, tmp_path, monkeypatch, captured):
+        # buildme setup writes `pr:` to <project_dir>/specs/config.yaml; the pr skill reads
+        # specs/config.yaml under --repo, so --repo must be the subproject, not the worktree root.
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        config, state, progress = await _published_build(tmp_path, "nestedpub", sub="packages/api")
+        assert _run_publish(config, state, progress) is True
+        argv = captured["argv"]
+        assert config.project_dir == Path(state.worktree_path) / "packages" / "api"
+        assert argv[argv.index("--repo") + 1] == str(config.project_dir)
 
     @pytest.mark.asyncio
     async def test_a_ticket_started_build_passes_its_ticket_url(self, tmp_path, monkeypatch, captured):
