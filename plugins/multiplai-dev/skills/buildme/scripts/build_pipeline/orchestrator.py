@@ -762,6 +762,13 @@ async def _run_codebase_analysis_phase(
     if state.spec_gen is None:
         state.spec_gen = SpecGenState()
     state.spec_gen.codebase_analysis_path = str(output)
+    from .code_analysis import NOT_ANALYSED_HEADING
+
+    if analysis.startswith(NOT_ANALYSED_HEADING):
+        log.info("SKIP phase=CODEBASE_ANALYSIS reason=no-git-commit dir=%s report=%s", config.project_dir, output)
+        progress.log_phase("CODEBASE_ANALYSIS", "skipped — the project has no git commit to read the code at; "
+                           f"{output} says so and lists its source files")
+        return
     log.info("Wrote codebase analysis: %s (%d chars)", output, len(analysis))
     progress.log_phase("CODEBASE_ANALYSIS", f"Codebase analysis written to {output}")
 

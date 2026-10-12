@@ -67,6 +67,10 @@ PATH_RULE = ("- `path` is the path exactly as listed above, relative to your wor
              "(the project root).")
 
 HEADINGS = ("Architecture", "Patterns", "Dependencies", "Conventions")
+# The first line of the report written when there is no commit to read the code at.
+NOT_ANALYSED_HEADING = "# Codebase analysis: not analysed"
+# Working-tree source files listed in that report; the rest are counted.
+MAX_LISTED_FILES = 100
 
 
 @dataclass
@@ -127,6 +131,39 @@ def source_files(project_dir: Path, git: ProjectGit) -> dict[str, str]:
             continue
         out[path] = text
     return out
+
+
+def working_tree_source_files(project_dir: Path) -> list[str]:
+    """The project's source files on disk, by the same rules as `source_files`
+    (no test, vendored, generated or tool files), for a project with no commit."""
+    from .orchestrator import _SOURCE_SUFFIXES
+
+    out: list[str] = []
+    for root, dirs, files in os.walk(project_dir):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
+        for name in sorted(files):
+            path = (Path(root) / name).relative_to(project_dir).as_posix()
+            if Path(name).suffix in _SOURCE_SUFFIXES and not name.endswith(GENERATED_SUFFIXES) \
+                    and not is_test_file(path):
+                out.append(path)
+    return out
+
+
+def no_commit_report(project_dir: Path) -> str:
+    """What `codebase-analysis.md` says when the project has source files and no commit
+    (a `--no-worktree` build `git init`s without committing): that nothing was
+    analysed and why, and which source files exist, so the design does not read
+    the project as new."""
+    files = working_tree_source_files(project_dir)
+    lines = [NOT_ANALYSED_HEADING, "",
+             "The project has no git commit, and the codebase analysis reads the code at a commit so "
+             "that every fact it reports can be checked there. Nothing below describes what the code "
+             "does. The project is not new: these source files are in its working tree. To get the "
+             "analysis, commit them before the build starts.", ""]
+    lines += [f"- `{p}`" for p in files[:MAX_LISTED_FILES]]
+    if len(files) > MAX_LISTED_FILES:
+        lines.append(f"- … and {len(files) - MAX_LISTED_FILES} more")
+    return "\n".join(lines) + "\n"
 
 
 def line_count(text: str) -> int:

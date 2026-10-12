@@ -228,7 +228,42 @@ class TestRunCodebaseAnalysis:
         project.mkdir()
         (project / "app.py").write_text("x = 1\n")
         md = await run_codebase_analysis(project, _config(project), call=_fake_call())
-        assert md.startswith("(analysis failed:")
+        assert md.startswith(code_analysis.NOT_ANALYSED_HEADING)
+        assert "(analysis failed" not in md
+        assert "- `app.py`" in md
+
+
+class TestNoCommit:
+    """A `--no-worktree` build runs `git init` without committing (orchestrator
+    `_run_bootstrap`), so the project can hold source files and no commit."""
+
+    @pytest.mark.asyncio
+    async def test_the_phase_calls_no_model_and_labels_the_report_as_not_an_analysis(self, tmp_path):
+        from build_pipeline.orchestrator import _run_codebase_analysis_phase
+        from build_pipeline.progress import ProgressWriter
+        from build_pipeline.spec_generator import read_codebase_analysis
+        from build_pipeline.state import BuildState
+
+        project = tmp_path / "inited"
+        (project / "src").mkdir(parents=True)
+        (project / "src" / "app.py").write_text("x = 1\n")
+        (project / "node_modules" / "m").mkdir(parents=True)
+        (project / "node_modules" / "m" / "index.js").write_text("module.exports = 1\n")
+        subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+        config = _config(project)
+        state = BuildState(change_name="feat", mode="scratch", tier="advanced")
+        call = AsyncMock()
+        progress = ProgressWriter(tmp_path / "p.md")
+        with patch("build_pipeline.llm_steps.spec_steps._codebase_analysis_call", call):
+            await _run_codebase_analysis_phase(config, state, progress)
+        call.assert_not_awaited()
+        assert not (config.change_dir / "facts.json").exists()
+        text = read_codebase_analysis(state)
+        assert text.startswith(code_analysis.NOT_ANALYSED_HEADING)
+        assert "no git commit" in text and "- `src/app.py`" in text
+        assert "node_modules" not in text
+        assert "(analysis failed" not in text
+        assert "skipped" in (tmp_path / "p.md").read_text()
 
 
 class TestGreenfield:

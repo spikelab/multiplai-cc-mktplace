@@ -383,7 +383,9 @@ async def run_codebase_analysis(project_dir: Path, config, *, call: CallFn | Non
 
     A failed slice degrades to a labelled "(analysis failed: ...)" line rather
     than taking the others down: a partial picture of the codebase is worth
-    more to the design than none. *call* replaces the model call (tests).
+    more to the design than none. A project with no commit
+    gets `code_analysis.no_commit_report` instead: labelled as not analysed,
+    with its source files listed. *call* replaces the model call (tests).
     """
     if not project_dir.exists():
         return "(new project — no existing code)"
@@ -396,7 +398,7 @@ async def run_codebase_analysis(project_dir: Path, config, *, call: CallFn | Non
         name=config.project_name or project_dir.name, change_dir=config.change_dir,
     )
     if analysis is None:
-        return "(analysis failed: the project has no git commit to read the code at)"
+        return code_analysis.no_commit_report(project_dir)
     log.info("Codebase analysis: %d facts kept, %d dropped, %d slice(s) failed, %d file(s) not analysed",
              len(analysis.gated.facts), len(analysis.gated.dropped), len(analysis.failed),
              len(analysis.not_analysed))
