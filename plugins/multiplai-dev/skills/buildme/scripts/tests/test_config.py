@@ -640,6 +640,76 @@ class TestConfigPaths:
         assert config.change_dir == tmp_path / "specs" / "changes" / "my-feature"
 
 
+class TestPathOverrides:
+    """`change_dir`, `tasks_file` and `state_file`: the findings stage points
+    the TDD engine at a round's own files, in a change that may be archived."""
+
+    def _config(self, tmp_path):
+        config = BuildConfig(project_dir=tmp_path, change_name="feat")
+        config.specs_dir = tmp_path / "specs"
+        return config
+
+    def test_defaults_are_todays_paths(self, tmp_path):
+        config = self._config(tmp_path)
+        change = tmp_path / "specs" / "changes" / "feat"
+        assert config.change_dir == change
+        assert config.tasks_path == change / "tasks.md"
+        assert config.state_file_path() == change / ".build-state.json"
+
+    def test_an_archived_change_dir(self, tmp_path):
+        config = self._config(tmp_path)
+        archived = tmp_path / "specs" / "archive" / "2026-10-12-feat"
+        config.change_dir = archived
+        config.tasks_file = "findings-r1-tasks.md"
+        config.state_file = ".findings-r1-state.json"
+        assert config.change_dir == archived
+        assert config.tasks_path == archived / "findings-r1-tasks.md"
+        assert config.state_file_path() == archived / ".findings-r1-state.json"
+        assert config.design_path == archived / "design.md"
+
+    def test_a_relative_override_is_read_under_specs(self, tmp_path):
+        config = self._config(tmp_path)
+        config.change_dir = "archive/2026-10-12-feat"
+        assert config.change_dir == tmp_path / "specs" / "archive" / "2026-10-12-feat"
+
+    def test_clearing_the_override_restores_the_default(self, tmp_path):
+        config = self._config(tmp_path)
+        config.change_dir = tmp_path / "specs" / "archive" / "2026-10-12-feat"
+        config.change_dir = None
+        assert config.change_dir == tmp_path / "specs" / "changes" / "feat"
+
+    @pytest.mark.parametrize("target", [
+        "../outside",
+        "registry/feat",
+        "archive",
+        "archive/2026-10-12-feat/requirements",
+        "changes/../../etc",
+        "archive/.hidden",
+    ])
+    def test_an_override_outside_changes_or_archive_is_refused(self, tmp_path, target):
+        config = self._config(tmp_path)
+        with pytest.raises(ValueError):
+            config.change_dir = target
+        assert config.change_dir == tmp_path / "specs" / "changes" / "feat"
+
+    @pytest.mark.parametrize("name", ["", "..", "../tasks.md", "sub/tasks.md"])
+    def test_a_file_override_stays_in_the_change_dir(self, tmp_path, name):
+        config = self._config(tmp_path)
+        config.tasks_file = name
+        config.state_file = name
+        with pytest.raises(ValueError):
+            config.tasks_path
+        with pytest.raises(ValueError):
+            config.state_file_path()
+
+    def test_the_override_follows_a_rebind(self, tmp_path):
+        config = self._config(tmp_path)
+        config.change_dir = tmp_path / "specs" / "archive" / "2026-10-12-feat"
+        wt = tmp_path / "wt"
+        config.rebind_project_dir(wt)
+        assert config.change_dir == wt / "specs" / "archive" / "2026-10-12-feat"
+
+
 def _config_from_yaml(tmp_path, yaml_text):
     specs = tmp_path / "specs"
     specs.mkdir()

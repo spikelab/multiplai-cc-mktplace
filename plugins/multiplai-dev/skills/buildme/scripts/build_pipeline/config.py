@@ -737,6 +737,16 @@ class BuildConfig:
     config_dir: Path = field(default_factory=lambda: Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser())
     specs_dir: Path = field(default_factory=lambda: Path.cwd() / "specs")
 
+    # Overrides the findings stage (`python -m build_pipeline findings`) sets
+    # so the TDD engine runs a round's own task file against its own state
+    # file, in a change that `--auto` may already have archived. The defaults
+    # are today's paths. `tasks_file` and `state_file` are file names inside
+    # `change_dir`; the `change_dir` setter stores its target relative to
+    # `specs_dir`, so `rebind_project_dir` carries it into the worktree.
+    tasks_file: str = "tasks.md"
+    state_file: str = ".build-state.json"
+    _change_dir_override: str = field(default="", repr=False)
+
     # Model for LLM calls
     model: str = DEFAULT_MODEL
 
@@ -1252,11 +1262,40 @@ class BuildConfig:
 
     @property
     def change_dir(self) -> Path:
+        if self._change_dir_override:
+            return self.specs_dir / self._change_dir_override
         # Normalize the change name so a hostile/careless --change value
         # (e.g. '../../foo') can't escape specs/changes/ — archive() will
         # shutil.move this directory, so an out-of-tree path is dangerous.
         from .change_manager import normalize_change_name
         return self.specs_dir / "changes" / normalize_change_name(self.change_name)
+
+    @change_dir.setter
+    def change_dir(self, value: Path | str | None) -> None:
+        """Point `change_dir` at another change directory; None or "" restores
+        the default. The target must be one directory directly under
+        `specs/changes/` or `specs/archive/` (ValueError otherwise), the same
+        bound the default path keeps through `normalize_change_name`."""
+        if value is None or str(value) == "":
+            self._change_dir_override = ""
+            return
+        specs = Path(self.specs_dir).resolve()
+        target = (Path(self.specs_dir) / value).resolve()
+        try:
+            rel = target.relative_to(specs)
+        except ValueError:
+            raise ValueError(f"change_dir {value} is not inside {self.specs_dir}") from None
+        if len(rel.parts) != 2 or rel.parts[0] not in ("changes", "archive") \
+                or rel.parts[1].startswith("."):
+            raise ValueError(
+                f"change_dir {value} must be a directory directly under "
+                f"{self.specs_dir / 'changes'} or {self.specs_dir / 'archive'}")
+        self._change_dir_override = rel.as_posix()
+
+    def _file_in_change_dir(self, name: str, what: str) -> Path:
+        if not name or name in (".", "..") or "/" in name or "\\" in name:
+            raise ValueError(f"{what} must be a file name inside the change directory, got {name!r}")
+        return self.change_dir / name
 
     @property
     def research_path(self) -> Path:
@@ -1268,7 +1307,7 @@ class BuildConfig:
 
     @property
     def tasks_path(self) -> Path:
-        return self.change_dir / "tasks.md"
+        return self._file_in_change_dir(self.tasks_file, "tasks_file")
 
     @property
     def rubric_path(self) -> Path:
@@ -1295,7 +1334,7 @@ class BuildConfig:
         return self.change_dir / "prototype"
 
     def state_file_path(self) -> Path:
-        return self.change_dir / ".build-state.json"
+        return self._file_in_change_dir(self.state_file, "state_file")
 
     def progress_file_path(self) -> Path:
         return self.project_dir / "build-progress.md"

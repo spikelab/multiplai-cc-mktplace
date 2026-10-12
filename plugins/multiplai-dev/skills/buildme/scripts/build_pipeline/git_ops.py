@@ -373,6 +373,9 @@ def commit_paths(worktree: Path, message: str, paths: list[str]) -> str | None:
 # not) — with a `git clean` on the other side of the disagreement.
 BOOKKEEPING_EXCLUDES = [
     ":(exclude,glob)**/.build-state.json",
+    # The findings stage's checkpoints: its round loop, and each round's TDD engine.
+    ":(exclude,glob)**/.findings-state.json",
+    ":(exclude,glob)**/.findings-r*-state.json",
     ":(exclude,glob)**/.board.json",
     ":(exclude,glob)**/build-progress.md",
     # Section files publish hands the pr skill (orchestrator._pre_publish_sections).
