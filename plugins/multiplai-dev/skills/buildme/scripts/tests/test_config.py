@@ -1324,7 +1324,7 @@ class TestBuildConfigModelFields:
 
 
 class TestPlanSplitTriggers:
-    """W14's oversized-plan triggers. 8 is a placeholder, not a measurement —
+    """W14's oversized-plan triggers. 10 is a placeholder, not a measurement —
     which is exactly why it is a conf knob and not a constant in the source."""
 
     @staticmethod
@@ -1335,8 +1335,8 @@ class TestPlanSplitTriggers:
     def test_defaults(self, tmp_path):
         with patch.dict(os.environ, self._env(tmp_path), clear=True):
             config = BuildConfig()
-        assert config.plan_split_block_trigger == 8
-        assert config.plan_split_package_trigger == 3
+        assert config.plan_split_block_trigger == 10
+        assert config.plan_split_package_trigger == 5
 
     def test_read_from_the_conf(self, tmp_path):
         body = ("[buildme.plan_review]\nPLAN_SPLIT_BLOCK_TRIGGER=12\n"
@@ -1351,7 +1351,7 @@ class TestPlanSplitTriggers:
         with patch.dict(os.environ, self._env(tmp_path, body), clear=True):
             with caplog.at_level("WARNING"):
                 config = BuildConfig()
-        assert config.plan_split_block_trigger == 8
+        assert config.plan_split_block_trigger == 10
         assert any("PLAN_SPLIT_BLOCK_TRIGGER" in r.getMessage() for r in caplog.records)
 
 
@@ -1530,3 +1530,131 @@ class TestConventionFiles:
             text = config.standards_text(["src/a.py"])
         assert "SRC-RULE" in text
         assert any("Conventions file unreadable" in r.getMessage() for r in caplog.records)
+
+
+class TestIntakeAndStageKeys:
+    """`intake`, `interview`, `architecture`, `pr`, `findings`, `mutation` and
+    `models` in specs/config.yaml: every default reproduces a repo without the
+    keys, and every invalid value warns and keeps the default."""
+
+    def test_defaults_with_no_file(self, tmp_path):
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = tmp_path / "specs"
+        config._load_specs_config()
+        assert config.intake.provider == "none"
+        assert config.intake.options == {}
+        assert config.interview_mode == "user"
+        assert config.architecture == ""
+        assert config.pr.template == "auto"
+        assert config.pr.max_change_lines == 1000
+        assert config.findings.authors == "collaborators"
+        assert config.findings.max_rounds == 3
+        assert config.mutation.enabled is True
+        assert config.mutation.min_score == 0.8
+        assert config.model_specs == {}
+
+    def test_each_key_is_read(self, tmp_path):
+        config = _config_from_yaml(tmp_path, """
+intake:
+  provider: plane
+  plane:
+    project: DB
+interview: ticket
+architecture: docs/architecture.md
+pr:
+  template: .github/pull_request_template.md
+  max_change_lines: 400
+findings:
+  authors: [alice, bob]
+  max_rounds: 5
+mutation:
+  enabled: false
+  min_score: 0.65
+models:
+  spec: claude:opus
+  agent: pi:qwen3-coder@openrouter
+""")
+        assert config.intake.provider == "plane"
+        assert config.intake.options == {"project": "DB"}
+        assert config.interview_mode == "ticket"
+        assert config.architecture == "docs/architecture.md"
+        assert config.pr.template == ".github/pull_request_template.md"
+        assert config.pr.max_change_lines == 400
+        assert config.findings.authors == ["alice", "bob"]
+        assert config.findings.max_rounds == 5
+        assert config.mutation.enabled is False
+        assert config.mutation.min_score == 0.65
+        assert config.model_specs == {"spec": "claude:opus",
+                                      "agent": "pi:qwen3-coder@openrouter"}
+
+    def test_github_provider_and_self_interview(self, tmp_path):
+        config = _config_from_yaml(tmp_path, "intake: {provider: github}\ninterview: self\n")
+        assert config.intake.provider == "github"
+        assert config.interview_mode == "self"
+
+    @pytest.mark.parametrize("yaml_text, attr, expected", [
+        ("intake: {provider: jira}\n", ("intake", "provider"), "none"),
+        ("intake: [plane]\n", ("intake", "provider"), "none"),
+        ("interview: maybe\n", ("interview_mode",), "user"),
+        ("architecture: [a, b]\n", ("architecture",), ""),
+        ("pr: {template: 3}\n", ("pr", "template"), "auto"),
+        ("pr: {max_change_lines: lots}\n", ("pr", "max_change_lines"), 1000),
+        ("pr: {max_change_lines: 0}\n", ("pr", "max_change_lines"), 1000),
+        ("findings: {authors: everyone}\n", ("findings", "authors"), "collaborators"),
+        ("findings: {authors: []}\n", ("findings", "authors"), "collaborators"),
+        ("findings: {max_rounds: -1}\n", ("findings", "max_rounds"), 3),
+        ("mutation: {enabled: sometimes}\n", ("mutation", "enabled"), True),
+        ("mutation: {min_score: 1.5}\n", ("mutation", "min_score"), 0.8),
+        ("mutation: {min_score: high}\n", ("mutation", "min_score"), 0.8),
+    ])
+    def test_invalid_value_warns_and_falls_back(self, tmp_path, caplog, yaml_text,
+                                                attr, expected):
+        with caplog.at_level("WARNING"):
+            config = _config_from_yaml(tmp_path, yaml_text)
+        value = config
+        for part in attr:
+            value = getattr(value, part)
+        assert value == expected
+        assert any("config.yaml" in r.getMessage() for r in caplog.records
+                   if r.levelname == "WARNING")
+
+    def test_unknown_model_prefix_is_dropped_with_a_warning(self, tmp_path, caplog):
+        with caplog.at_level("WARNING"):
+            config = _config_from_yaml(
+                tmp_path, "models:\n  spec: claude:opus\n  agent: gpt-5\n  review: 7\n")
+        assert config.model_specs == {"spec": "claude:opus"}
+        assert any("models.agent" in r.getMessage() for r in caplog.records)
+        assert any("models.review" in r.getMessage() for r in caplog.records)
+
+    def test_auto_turns_user_into_self(self, tmp_path, caplog):
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text("interview: user\n")
+        config = BuildConfig(project_dir=tmp_path, auto=True)
+        config.specs_dir = specs
+        with caplog.at_level("INFO"):
+            config._load_specs_config()
+        assert config.interview_mode == "self"
+        assert any("user → self" in r.getMessage() for r in caplog.records)
+
+    def test_auto_keeps_ticket(self, tmp_path):
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text("interview: ticket\n")
+        config = BuildConfig(project_dir=tmp_path, auto=True)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert config.interview_mode == "ticket"
+
+    def test_auto_with_no_config_file_still_resolves_to_self(self, tmp_path):
+        from build_pipeline.__main__ import build_parser
+
+        args = build_parser().parse_args(
+            ["build", "--auto", "--project-dir", str(tmp_path)])
+        config = BuildConfig.from_cli_args(args)
+        assert config.interview_mode == "self"
+
+    def test_provider_table_is_the_single_source(self):
+        from build_pipeline.config import INTAKE_PROVIDERS
+
+        assert set(INTAKE_PROVIDERS) == {"none", "plane", "github"}

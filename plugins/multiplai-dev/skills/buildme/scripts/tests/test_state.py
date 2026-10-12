@@ -459,6 +459,15 @@ class TestDocsUpdatePhaseAndImpact:
         assert not s.is_phase_complete(BuildPhase.DOCS_UPDATE)
         assert not s.is_phase_complete(BuildPhase.RESPEC)
 
+    def test_legacy_checkpoint_loads_with_intake_fields_at_defaults(self):
+        s = BuildState.load(FIXTURES / "build-state-pre-docs-update.json")
+        assert s.interview_waiting is False
+        assert s.split_required is False
+        assert s.size_accepted is False
+        assert s.ticket_ref is None
+        assert s.ticket_url is None
+        assert s.plan_file is None
+
     def test_legacy_checkpoint_past_respec_does_not_go_back_for_docs(self):
         """A build already past RESPEC has its documentation window behind it;
         inserting a phase must not send it backwards."""

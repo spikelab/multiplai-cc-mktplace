@@ -218,7 +218,7 @@ async def _generate_single_artifact(
             context,
             config,
             interview_summary=state.interview_summary or "",
-            research=state.research_path or "",
+            research=read_research(state),
             codebase_analysis=read_codebase_analysis(state),
             reference_docs=config.reference_docs_text(),
         )
@@ -444,6 +444,28 @@ def read_codebase_analysis(state: BuildState) -> str:
         return path.read_text()
     log.warning("Recorded codebase analysis is not a readable file: %s", raw)
     return raw
+
+
+def read_research(state: BuildState) -> str:
+    """The research file's *content*, fenced as untrusted, for the proposal prompt.
+
+    The checkpoint stores a path (`state.research_path`); the prompt's
+    `## Research Findings` slot needs what the file says. Research is written
+    from web pages and other external text, so it goes in an untrusted-content
+    fence: data for the proposal, never instructions to it. No path recorded
+    returns "" (the prompt then says "(no research conducted)"); a recorded
+    path that is not a readable file warns and returns "(none provided)".
+    """
+    raw = state.research_path or ""
+    if not raw:
+        return ""
+    path = Path(raw)
+    if not path.is_file():
+        log.warning("Recorded research is not a readable file: %s", raw)
+        return "(none provided)"
+    from multiplai_core.untrusted import fence
+
+    return "\n".join(fence(path.read_text(), source=path.name)) or "(none provided)"
 
 
 def _dependency_list_text(deps: list[NewDependency]) -> str:

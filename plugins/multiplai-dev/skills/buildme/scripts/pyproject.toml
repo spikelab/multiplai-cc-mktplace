@@ -15,6 +15,10 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
+    # Round-trip YAML for `build_pipeline setup`: it edits specs/config.yaml
+    # and must keep the comments and key order a person wrote. Used only in
+    # setup.py; every reader stays on PyYAML.
+    "ruamel.yaml>=0.19",
 ]
 
 [project.optional-dependencies]
