@@ -1778,6 +1778,7 @@ name = "review-pipeline"
 version = "0.1.0"
 source = { editable = "plugins/multiplai-dev/skills/review/scripts" }
 dependencies = [
+    { name = "code-facts" },
     { name = "multiplai-core", extra = ["sdk"] },
     { name = "pydantic" },
     { name = "python-dotenv" },
@@ -1800,6 +1801,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "code-facts", editable = "plugins/multiplai-dev/lib/code_facts" },
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4" },
     { name = "multiplai-core", extras = ["sdk"], git = "https://github.com/spikelab/multiplai-core?branch=main" },
     { name = "pydantic", specifier = ">=2" },
