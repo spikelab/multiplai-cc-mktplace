@@ -441,11 +441,13 @@ async def _ticket_interview(config, state, args, state_path, progress, contexts,
         board.record(config, state, BuildPhase.INTERVIEW_DONE, progress=progress)
 
     interview_path = change_dir / "interview.md"
-    if (not replies and not state.interview_waiting and state.interview_summary
-            and interview_path.is_file()):
+    if not state.interview_waiting and state.interview_summary and interview_path.is_file():
         # A retry of a build that already finished its interview (a FAILED
         # checkpoint re-runs every phase): reuse it. Asking again would print
         # INTERVIEW:WAITING and the wrapper would post the questions twice.
+        # This holds when the retry repeats --interview-replies too: the retry
+        # sets up a new worktree without interview-questions.md, so the
+        # replies have no questions to match and the questioner would run.
         log.info("phase=INTERVIEW mode=ticket — reusing %s", interview_path)
         finish(None, f"Interview already saved in {interview_path}; reused")
         return None

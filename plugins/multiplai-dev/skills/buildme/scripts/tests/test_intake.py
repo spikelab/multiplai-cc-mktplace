@@ -340,13 +340,17 @@ class TestTicketMode:
         assert "Do the CSV export." in (config.change_dir / "plan.md").read_text()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("retry_keeps_replies", [False, True])
     async def test_a_failed_build_retried_does_not_ask_on_the_ticket_again(
-        self, tmp_path, monkeypatch, capsys,
+        self, tmp_path, monkeypatch, capsys, retry_keeps_replies,
     ):
         """After the replies run finished the interview, a later failure sets the
         state to FAILED and every phase re-runs. The retry must reuse the saved
         interview, not print INTERVIEW:WAITING (the wrapper would post the
-        same questions a second time) or call the questioner again."""
+        same questions a second time) or call the questioner again. That holds
+        whether the retry drops --interview-replies or repeats it: the retry
+        sets up a new worktree, where interview-questions.md is not carried
+        over, so a repeated --interview-replies has no questions to match."""
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         repo = make_repo(tmp_path / "proj")
         ticket = self._ticket(tmp_path)
@@ -368,14 +372,15 @@ class TestTicketMode:
         assert BuildState.load(config.state_file_path()).phase == BuildPhase.FAILED
         capsys.readouterr()
 
-        # The retry: the same command, without --interview-replies, after the
-        # wrapper's scratch ticket file was cleaned up.
+        # The retry: the same command, with or without --interview-replies,
+        # after the wrapper's scratch ticket file was cleaned up.
         ticket.unlink()
+        retry = dict(common, interview_replies=str(replies)) if retry_keeps_replies else common
         config = _config(repo, "csv", interview_mode="ticket")
         mocks = _spec_stage_mocks()
         with mocks[0], mocks[1], mocks[2], \
                 patch("build_pipeline.llm_steps.interview_steps.agent_call_structured", call):
-            rc = await run_orchestrator(config, _args(repo, "csv", **common))
+            rc = await run_orchestrator(config, _args(repo, "csv", **retry))
         out = capsys.readouterr().out
         assert rc == 0
         assert "INTERVIEW:WAITING" not in out
