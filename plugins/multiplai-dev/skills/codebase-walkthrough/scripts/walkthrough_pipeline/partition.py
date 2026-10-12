@@ -2,48 +2,25 @@
 
 Each unit stays at or under `--unit-lines`. A single file already over the
 limit goes alone and is flagged `oversize`. `gates.partition_gate` checks that
-every file is in exactly one unit.
+every file is in exactly one unit. The split itself is `code_facts.partition`.
 """
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+from code_facts import Scope, partition as partition_scope
 
 from .models import TargetInfo, Unit
 
 
 def partition(target: TargetInfo, limit: int) -> list[Unit]:
-    by_dir: dict[str, list[str]] = {}
-    for f in target.files:
-        by_dir.setdefault(str(PurePosixPath(f).parent), []).append(f)
-    units: list[Unit] = []
-
-    def flush(files: list[str]) -> None:
-        if files:
-            lines = sum(target.file_lines.get(f, 0) for f in files)
-            units.append(Unit(id=f"u{len(units) + 1}", files=[target.ws(f) for f in files], lines=lines))
-
-    # Directories stay whole when they fit in the unit being filled; small
-    # directories share a unit; a directory larger than the limit is split by size.
-    current: list[str] = []
-    size = 0
-    for d in sorted(by_dir):
-        files = sorted(by_dir[d])
-        total = sum(target.file_lines.get(f, 0) for f in files)
-        if size + total > limit:
-            flush(current)
-            current, size = [], 0
-        for f in files:
-            n = target.file_lines.get(f, 0)
-            if n > limit:
-                units.append(Unit(id=f"u{len(units) + 1}", files=[target.ws(f)], lines=n, oversize=True))
-                continue
-            if size + n > limit:
-                flush(current)
-                current, size = [], 0
-            current.append(f)
-            size += n
-    flush(current)
+    # Split on repo-relative paths, so directories sort as before, then make
+    # every path workspace-relative.
+    scope = Scope.whole_files((f, target.file_lines.get(f, 0)) for f in target.files)
+    units = partition_scope(scope, limit)
+    for u in units:
+        u.files = [target.ws(f) for f in u.files]
+        for s in u.spans:
+            s.path = target.ws(s.path)
     return units
 
 

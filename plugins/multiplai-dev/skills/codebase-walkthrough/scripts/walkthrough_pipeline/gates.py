@@ -33,6 +33,14 @@ def split_path(repos: dict[str, RepoInfo], ws_path: str) -> tuple[RepoInfo, str]
     return repo, rel
 
 
+def repo_resolver(repos: dict[str, RepoInfo]):
+    """`resolve(path, side)` for code_facts: a workspace path at its repo's commit (one side only)."""
+    def resolve(ws_path: str, side: str = "head") -> tuple[str, str, str] | None:
+        found = split_path(repos, ws_path)
+        return None if found is None else (found[0].path, found[0].head_sha, found[1])
+    return resolve
+
+
 def file_at_commit(repos: dict[str, RepoInfo], ws_path: str) -> str | None:
     found = split_path(repos, ws_path)
     return None if found is None else file_at(found[0].path, found[0].head_sha, found[1])

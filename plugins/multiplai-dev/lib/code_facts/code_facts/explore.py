@@ -52,6 +52,8 @@ async def bounded(items: Iterable[T], fn: Callable[[T], Awaitable[R]], limit: in
         async with asyncio.TaskGroup() as tg:
             tasks = [tg.create_task(guarded(item)) for item in items]
     except* Exception as group:
+        # Re-raise the first underlying error, not the group, so callers can
+        # catch BudgetExceededError / RepoTrustError by type.
         raise group.exceptions[0] from None
     return [t.result() for t in tasks]
 
