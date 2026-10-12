@@ -81,6 +81,8 @@ def outcome(rnd: FindingsRound, record: TriageRecord) -> str:
         if fix and fix.get("impl"):
             test = f" (failing test first in `{_short(fix.get('test'))}`)" if fix.get("test") else ""
             parts.append(f"Fixed in `{_short(fix['impl'])}`{test}.")
+        elif fix and fix.get("failed"):
+            parts.append(f"Not fixed: {fix['failed']}.")
         else:
             parts.append("Not fixed: the fix did not produce a commit.")
     elif t.verdict == Verdict.SPEC_CHANGE and not parts:

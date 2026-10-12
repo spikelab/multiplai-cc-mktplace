@@ -26,6 +26,7 @@ from multiplai_core.untrusted import defang
 
 from .. import git_ops
 from ..config import BuildConfig
+from ..models import BlockInfo, BlockStatus
 from ..state import BuildState
 from .models import TriageRecord, Verdict
 
@@ -109,14 +110,15 @@ def write_tasks(change_dir: Path, round_n: int, records: list[TriageRecord]) -> 
 
 def fixes_from_state(state_path: Path, blocks: dict[int, str]) -> dict[str, dict[str, str]]:
     """Row key → the block's test and impl commits, from the round's engine
-    checkpoint. A block with no impl commit is left out (not fixed)."""
+    checkpoint. A block that is not done, or has no impl commit, is left out
+    (not fixed): a failed block's commits are discarded (`failed_block`)."""
     if not state_path.exists():
         return {}
     state = BuildState.load(state_path)
     out: dict[str, dict[str, str]] = {}
     for b in (state.tdd.blocks if state.tdd else []):
         key = blocks.get(b.number)
-        if key and b.impl_commit:
+        if key and b.impl_commit and b.status == BlockStatus.DONE:
             out[key] = {"test": b.test_commit or "", "impl": b.impl_commit,
                         "status": b.status.value}
     return out
@@ -142,6 +144,34 @@ async def run_code_step(config: BuildConfig, change_dir: Path, round_n: int,
     fixes = fixes_from_state(rc.state_file_path(), blocks)
     log.info("DONE findings_code round=%d exit=%d fixed=%d", round_n, code, len(fixes))
     return CodeResult(exit_code=code, blocks=blocks, fixes=fixes)
+
+
+def failed_block(state_path: Path) -> BlockInfo | None:
+    """The block the engine stopped on, when it stopped because that block
+    failed: its RED gate, implementation or review. None when it stopped for
+    anything else (an agent timeout, the budget, a gate before or after the
+    blocks), which a re-run may get past."""
+    if not state_path.exists():
+        return None
+    tdd = BuildState.load(state_path).tdd
+    if not tdd or tdd.current_block >= len(tdd.blocks):
+        return None
+    block = tdd.blocks[tdd.current_block]
+    if block.status != BlockStatus.FAILED or block.timed_out:
+        return None
+    return block
+
+
+def skip_block(state_path: Path, number: int) -> bool:
+    """Move the round's engine checkpoint past failed block *number*, so the
+    next engine run goes on with the blocks after it. False when the
+    checkpoint is not stopped on that block."""
+    state = BuildState.load(state_path)
+    tdd = state.tdd
+    if not tdd or tdd.current_block >= len(tdd.blocks) or tdd.blocks[tdd.current_block].number != number:
+        return False
+    state.advance_block(state_path)
+    return True
 
 
 def commit_round_files(project_dir: Path, round_n: int, paths: list[Path]) -> str | None:

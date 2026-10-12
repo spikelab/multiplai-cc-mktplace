@@ -700,6 +700,59 @@ class TestStop:
         assert len(rows) == 1 and "r1:" in rows[0] and "r2:" in rows[0]
 
 
+class TestCodeStepFailure:
+    @pytest.mark.asyncio
+    async def test_a_fix_that_never_goes_red_is_answered_and_the_round_goes_on(
+            self, built, fake_pr):
+        """A block the TDD engine fails (here the test never fails before the
+        fix: triage was wrong) must not stop every reply of the round."""
+        repo, change, config = built
+        fix_thread = fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+        question = fake_pr.add_thread("alice", "is this right?", fid="c1")
+        triage_call = FakeTriage({
+            "add subtracts": FIX,
+            "is this right": Triage(verdict=Verdict.QUESTION, reason="It is."),
+        })
+        run, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
+        stubs = [p for p in engine_stubs(repo)
+                 if getattr(p, "attribute", "") != "run_test_suite"]
+        stubs.append(patch("build_pipeline.tdd_engine.run_test_suite",
+                           return_value=(0, "1 passed")))
+        with _Stubs(stubs):
+            exit_code = await loop.run_findings(run)
+
+        assert exit_code == 0, lines
+        assert lines[-1] == "FINDINGS:DONE:1"
+        replies = {r[1]: r[2] for r in fake_pr.replies()}
+        assert set(replies) == {fix_thread, question}
+        assert "Not fixed" in replies[fix_thread]
+        assert "refs/buildme/wip/calc/r1-code-block1" in replies[fix_thread]
+        assert "Question; nothing was changed." in replies[question]
+        # The failed block's commits are not pushed; its work is kept.
+        assert not [s for s in _subjects(repo) if "Fix finding ab12" in s]
+        assert "refs/buildme/wip/calc/r1-code-block1" in _wip(repo)
+        assert _git(repo, "status", "--porcelain", "--untracked-files=no").strip() == ""
+        assert not (repo / "tests" / "test_calc.py").exists()
+        assert _git(repo, "show", "refs/buildme/wip/calc/r1-code-block1:tests/test_calc.py")
+
+
+    @pytest.mark.asyncio
+    async def test_an_engine_stop_that_is_not_a_failed_block_stays_resumable(self, built, fake_pr):
+        """A timeout or a budget stop is no verdict on the finding: nothing is
+        answered, and a re-run resumes the code step."""
+        repo, change, config = built
+        fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+
+        async def timed_out(rc, args, standalone):
+            return 4
+
+        run, lines = _run(config, change, triage_call=FakeTriage({"add subtracts": FIX}),
+                          review=FakeReview(fake_pr), engine=timed_out)
+        assert await loop.run_findings(run) == 4
+        assert lines[-1].startswith("FINDINGS:FAILED:code:")
+        assert fake_pr.replies() == []
+
+
 class TestReviewBody:
     @pytest.mark.asyncio
     async def test_a_finding_the_review_put_in_its_body_starts_the_next_round(

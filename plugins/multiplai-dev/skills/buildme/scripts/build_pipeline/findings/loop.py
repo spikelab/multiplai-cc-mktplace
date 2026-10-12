@@ -211,6 +211,30 @@ async def _step(run: FindingsRun, st: BuildState, rnd: FindingsRound, name: str,
     log.info("DONE findings_step round=%d step=%s", rnd.number, name)
 
 
+def keep_failed_block(run: FindingsRun, rnd: FindingsRound, block) -> str | None:
+    """Keep a failed block's work under `refs/buildme/wip/<change>/r<N>-code-block<k>`,
+    then discard back to the commit the block started from, so none of its
+    commits (a test that still fails, say) is pushed. Returns the ref, or None
+    when the block left nothing behind."""
+    repo = run.project_dir
+    start = block.baseline_commit
+    if not start:
+        raise StepFailed("code", f"block {block.number} failed and its start commit is unknown; "
+                                 f"inspect {repo}")
+    if git_ops.tree_is_clean(repo) and git_ops.rev_parse_head(repo) == start:
+        return None
+    ref = wip_ref(run, rnd, f"code-block{block.number}")
+    if git_ops.save_wip_ref(repo, ref, f"wip(findings-r{rnd.number}): block {block.number} "
+                                       "failed, kept before discard") is None:
+        raise StepFailed("code", f"could not write {ref}, so the tree was left as it is; "
+                                 f"inspect {repo} before re-running")
+    run.emit(f"FINDINGS:WIP:{ref}")
+    if not git_ops.discard_to(repo, start, f"findings r{rnd.number} block {block.number}"):
+        raise StepFailed("code", f"block {block.number}'s work is kept under {ref}, but the "
+                                 f"discard back to {start[:12]} was refused; inspect {repo}")
+    return ref
+
+
 # --- review -------------------------------------------------------------------
 
 
@@ -289,14 +313,34 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         code.commit_round_files(run.project_dir, n, paths)
         if not rnd.blocks:
             return
-        result = await code.run_code_step(run.config, run.change_dir, n, records,
-                                          blocks=rnd.blocks, engine=seams.engine)
-        rnd.fixes = result.fixes
-        save()
-        if result.exit_code != 0:
-            raise StepFailed("code", f"the TDD engine stopped (exit {result.exit_code}); "
-                                     f"its checkpoint is {rnd.engine_state_path}",
-                             exit_code=result.exit_code)
+        engine_state = Path(rnd.engine_state_path)
+        # A block the engine fails is answered "not fixed" and the round goes
+        # on with the next block, so one wrong triage cannot hold back every
+        # reply. Anything else that stops the engine stays a resumable failure.
+        for _ in range(len(rnd.blocks) + 1):
+            result = await code.run_code_step(run.config, run.change_dir, n, records,
+                                              blocks=rnd.blocks, engine=seams.engine)
+            failed = {k: v for k, v in rnd.fixes.items() if v.get("failed")}
+            rnd.fixes = {**failed, **result.fixes}
+            save()
+            if result.exit_code == 0:
+                return
+            block = code.failed_block(engine_state)
+            if block is None:
+                break
+            ref = keep_failed_block(run, rnd, block)
+            key = rnd.blocks.get(block.number) or f"block:{block.number}"
+            kept = f"; its work is kept under `{ref}`" if ref else ""
+            rnd.fixes[key] = {"failed": f"the TDD engine could not complete block "
+                                        f"{block.number} (its RED gate, implementation or "
+                                        f"review failed){kept}"}
+            save()
+            run.emit(f"FINDINGS:BLOCK_FAILED:{block.number}:{key}")
+            if not code.skip_block(engine_state, block.number):
+                break
+        raise StepFailed("code", f"the TDD engine stopped (exit {result.exit_code}); "
+                                 f"its checkpoint is {rnd.engine_state_path}",
+                         exit_code=result.exit_code)
 
     async def do_publish() -> None:
         try:

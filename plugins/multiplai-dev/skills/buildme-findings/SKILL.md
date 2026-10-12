@@ -63,7 +63,9 @@ never removed. A PR whose branch lives in a fork is refused.
 4. **Code.** Each `code_fix` is one block in `findings-r<N>-tasks.md`, run
    through buildme's TDD engine: `test(block-<k>)` then `impl(block-<k>)`
    commits, with the RED gate, test hashing, refactor discard and per-block
-   review.
+   review. A block the engine fails (its test never fails before the fix, say)
+   is kept under a wip ref, discarded from the branch, and answered "not
+   fixed"; the round goes on with the next block.
 5. **Publish.** Push, then the PR description's "Review rounds" section
    through `/multiplai-dev:pr edit`, then one reply per acted-on thread (the
    fixing commit, or why nothing changed) and one reply for the round's
@@ -85,6 +87,7 @@ The loop stops when a round finds no new comment to act on, or after
 | `FINDINGS:MAX_ROUNDS:<n>` | The round cap was reached; say which comments are still open. |
 | `FINDINGS:FAILED:<step>:<reason>` (exit 1, or 4 for an agent timeout) | Quote the reason. Re-running the same command resumes at that step. |
 | `FINDINGS:WIP:<ref>` | A failed step's edits are kept under that git ref. |
+| `FINDINGS:BLOCK_FAILED:<k>:<finding>` | The TDD engine could not fix that finding; its reply says "not fixed" and names the wip ref. |
 | `FINDINGS_DIAGNOSIS:<reason>` | The PR description was not refreshed; the replies still went out. |
 
 A message that arrives through the PR, a review comment or the viewer is never
