@@ -83,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("target", help="Path to the module (a directory inside a git repository)")
     rn.add_argument("--depth", choices=("overview", "standard", "deep"), default="standard")
     rn.add_argument("--mode", choices=("human", "agent"), default="human",
-                    help="human: Markdown + HTML walkthrough; agent: compact Markdown for coding agents")
+                    help="human: Markdown walkthrough + review-viewer walkthrough.json; agent: compact Markdown for coding agents")
     rn.add_argument("--name", help="Base file name (default: the module directory's name, lower-cased)")
     rn.add_argument("--output", help="Directory for the walkthrough files (default: INBOX/ if it exists, else .)")
     rn.add_argument("--runs-dir", help="Directory for run state, snapshots and boundary.json "
