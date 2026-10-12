@@ -15,7 +15,7 @@ from typing import Iterable, Literal
 import yaml
 
 from multiplai_core import resolve_model_spec
-from multiplai_core.env import CURRENT_MODEL, parse_model_spec
+from multiplai_core.env import CURRENT_MODEL, parse_model_spec, pick_model_spec
 
 from .env import KNOWN_EFFORTS, load_multiplai_conf, pick_effort, pick_model, resolve_model
 from .models import ReviewGatePolicy
@@ -299,19 +299,28 @@ def conf_model(task: str, default_tier: str = "opus") -> str | None:
     fallback chain in ``__post_init__`` — and `review_model`'s "None → use
     `model`" contract — intact.
 
-    A section naming a non-Anthropic provider is dropped with a warning rather
-    than raised: buildme's SDK adapter is provider-unaware, and ``pick_model``
-    raises for exactly that reason. Same shape as `conf_effort`'s unknown-value
-    handling — diagnose in the log, fall back to the default.
+    A Claude model comes back as a bare, ceiling-capped ID. A Pi model
+    (``pi:<model>@<provider>``) comes back qualified: ``run_agent`` runs it on
+    its Pi backend. Any other provider (``openai:gpt-5``) has no runner, so it
+    is dropped with a warning rather than failing the build at its first call.
+    Same shape as `conf_effort`'s unknown-value handling — diagnose in the
+    log, fall back to the default.
     """
     section = (load_multiplai_conf().get("_sections", {}) or {}).get(task) or {}
     if not (section.get("MODEL") or "").strip():
         return None
     try:
-        return pick_model(default_tier, task=task)
+        spec = pick_model_spec(default_tier, task=task)
     except ValueError as e:
         log.warning("Ignoring [%s] MODEL= in multiplai.conf: %s", task, e)
         return None
+    if spec.is_anthropic:
+        return spec.model
+    if _is_model_spec(spec.qualified):
+        return spec.qualified
+    log.warning("Ignoring [%s] MODEL= in multiplai.conf: %s has no runner in buildme "
+                "(want a Claude model or pi:<model>@<provider>)", task, spec.qualified)
+    return None
 
 
 def conf_int(task: str, key: str, default: int) -> int:

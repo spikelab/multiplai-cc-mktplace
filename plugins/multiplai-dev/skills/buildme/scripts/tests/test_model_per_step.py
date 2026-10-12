@@ -144,6 +144,27 @@ class TestPrecedence:
             assert config.model_specs == {"default": form}, form
 
 
+class TestConfModel:
+    """`conf_model` keeps a Pi model instead of dropping it."""
+
+    def test_a_pi_model_in_a_step_section_is_kept(self, tmp_path, no_conf):
+        from build_pipeline.config import conf_model
+
+        conf = Path(os.environ["CLAUDE_MULTIPLAI_HOME"]) / "multiplai.conf"
+        conf.write_text(f"[buildme.agent]\nMODEL={PI_SPEC}\n")
+        assert conf_model("buildme.agent") == PI_SPEC
+        assert _config(tmp_path).model_for("implementer") == PI_SPEC
+
+    def test_a_provider_with_no_runner_is_still_dropped(self, tmp_path, no_conf, caplog):
+        from build_pipeline.config import conf_model
+
+        conf = Path(os.environ["CLAUDE_MULTIPLAI_HOME"]) / "multiplai.conf"
+        conf.write_text("[buildme.agent]\nMODEL=openai:gpt-5\n")
+        with caplog.at_level(logging.WARNING):
+            assert conf_model("buildme.agent") is None
+        assert any("no runner" in r.getMessage() for r in caplog.records)
+
+
 class TestPassThrough:
     @pytest.mark.asyncio
     async def test_a_pi_spec_reaches_run_agent_unchanged(self, tmp_path, no_conf, monkeypatch):
