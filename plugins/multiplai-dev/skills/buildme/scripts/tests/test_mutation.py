@@ -543,6 +543,33 @@ class TestRunMutationStep:
         assert run.call_count == 2
 
     @pytest.mark.asyncio
+    async def test_survivor_round_that_rewrites_tracked_tool_caches_is_committed(self, project):
+        """Block commits run `git add -A`, so in a project whose .gitignore
+        does not cover them, `.pyc` and `.coverage` files end up tracked.
+        cosmic-ray restoring the source changes its mtime, so the next pytest
+        run rewrites the tracked `.pyc` with new bytes. That is not an edit
+        and must not discard a green round."""
+        repo = project[0]
+        (repo / "src" / "__pycache__").mkdir()
+        (repo / "src" / "__pycache__" / "calc.cpython-312.pyc").write_bytes(b"old")
+        (repo / ".coverage").write_text("old")
+        _commit_all(repo, "feat: block commit that swept in caches")
+        config, state, progress = _setup(project)
+
+        async def _agent(**_kw):
+            (repo / "src" / "__pycache__" / "calc.cpython-312.pyc").write_bytes(b"new")
+            (repo / ".coverage").write_text("new")
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation",
+                   side_effect=[_result(7, 3), _result(10, 0)]) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is True
+        assert run.call_count == 2
+        assert state.tdd.mutation_done is True
+
+    @pytest.mark.asyncio
     async def test_survivor_round_that_edits_source_fails_the_step(self, project):
         config, state, progress = _setup(project)
         repo = project[0]

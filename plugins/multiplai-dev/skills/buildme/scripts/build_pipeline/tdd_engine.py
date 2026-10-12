@@ -1981,9 +1981,8 @@ def _snapshot_source_files(config: BuildConfig) -> dict[str, str] | None:
         if proc.returncode != 0:
             log.warning("Could not list source files: %s", proc.stderr.strip())
             return None
-        untracked = "-o" in argv
         for name in proc.stdout.split("\0"):
-            if not name or (untracked and _is_tool_cache(name)):
+            if not name or _is_tool_cache(name):
                 continue
             if _TEST_PATH_RE.search(name) or Path(name).name in _BOOKKEEPING_NAMES:
                 continue
@@ -2004,8 +2003,9 @@ def _snapshot_source_files(config: BuildConfig) -> dict[str, str] | None:
 _BOOKKEEPING_NAMES = frozenset({".build-state.json", ".board.json", "build-progress.md"})
 
 # What running the suite or installing the project writes into a tree whose
-# .gitignore does not cover it. Only untracked paths are skipped this way: a
-# tracked file under one of these is still checked.
+# .gitignore does not cover it. Tracked paths are skipped too: block commits
+# run `git add -A`, so such a tree already tracks these, and the next pytest
+# run rewrites a tracked .pyc whenever cosmic-ray has touched the source.
 _TOOL_CACHE_DIRS = frozenset({
     "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis",
     ".tox", ".nox", ".venv", "venv", "node_modules",
