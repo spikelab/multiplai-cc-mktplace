@@ -224,6 +224,20 @@ class TestRoundRecords:
         assert "return a + b\n" in seen[1]
         assert "block-01-round-1.json" not in seen[1]
 
+    @pytest.mark.asyncio
+    async def test_the_whole_build_diff_leaves_the_round_records_out(self, project):
+        from build_pipeline.tdd_engine import capture_build_diff
+        p = project
+        stack, _, _ = _engine([_failing([_finding()]), _passing()],
+                              _fixer(p.dir, {"app.py": FIXED}))
+        with stack:
+            assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+
+        assert "specs/changes/test/reviews/" in _git(p.dir, "ls-files")
+        diff = capture_build_diff(p.config, p.state)
+        assert "return a + b\n" in diff
+        assert "reviews/block-01-round-1.json" not in diff
+
     def test_record_round_refuses_to_overwrite(self, tmp_path):
         block = BlockInfo(number=3, name="B", description="d")
         first = review_rounds.record_round(tmp_path, block, head_sha="a" * 40,

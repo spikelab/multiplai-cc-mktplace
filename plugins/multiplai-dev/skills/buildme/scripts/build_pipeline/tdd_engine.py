@@ -250,17 +250,9 @@ def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
     committed with the block, and are the review's output, not its input.
     """
     target = block.baseline_commit or "HEAD"
-    argv = ["git", "diff", target]
-    try:
-        records = (config.change_dir / review_rounds.REVIEWS_DIR).resolve().relative_to(
-            Path(config.project_dir).resolve())
-        # An exclude-only pathspec keeps the whole-repo scope of a bare `git diff`.
-        argv += ["--", f":(exclude,literal){records.as_posix()}"]
-    except ValueError:
-        pass
     try:
         proc = subprocess.run(
-            argv,
+            ["git", "diff", target, *_without_review_records(config)],
             cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
         )
         if proc.returncode != 0:
@@ -276,6 +268,20 @@ def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
     if len(diff) > MAX_REVIEW_DIFF_CHARS:
         diff = diff[:MAX_REVIEW_DIFF_CHARS] + "\n... (diff truncated for review)"
     return diff
+
+
+def _without_review_records(config: BuildConfig) -> list[str]:
+    """Pathspec args that leave the change dir's review round records out of a
+    `git diff`. They are committed with each block, and a diff capped at
+    `MAX_REVIEW_DIFF_CHARS` must not spend its budget on them: `specs/` sorts
+    before most source directories, so the cap would cut code instead."""
+    try:
+        records = (config.change_dir / review_rounds.REVIEWS_DIR).resolve().relative_to(
+            Path(config.project_dir).resolve())
+    except ValueError:
+        return []
+    # An exclude-only pathspec keeps the whole-repo scope of a bare `git diff`.
+    return ["--", f":(exclude,literal){records.as_posix()}"]
 
 
 EXIT_SUCCESS = 0
@@ -2110,7 +2116,7 @@ def capture_build_diff(config: BuildConfig, state: BuildState) -> str:
     target = baseline or "HEAD"
     try:
         proc = subprocess.run(
-            ["git", "diff", target],
+            ["git", "diff", target, *_without_review_records(config)],
             cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
         )
         if proc.returncode != 0:
