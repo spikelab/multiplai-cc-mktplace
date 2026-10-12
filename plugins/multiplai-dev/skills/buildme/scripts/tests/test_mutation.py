@@ -901,6 +901,31 @@ class TestRunMutationStep:
         assert "test(mutation)" not in _git(repo, "log", "--all", "--format=%s")
 
     @pytest.mark.asyncio
+    async def test_a_round_that_switched_branch_without_committing_fails_the_step(
+            self, project):
+        """The agent switched to another branch at the same sha and left its
+        tests uncommitted. HEAD's sha did not move, but a commit now would land
+        on that other branch, never on the build branch: the step fails and
+        commits nothing anywhere."""
+        config, state, progress = _setup(project)
+        repo = project[0]
+        branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+
+        async def _agent(**_kw):
+            _git(repo, "switch", "-q", "-c", "scratch")
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(9, 1)) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is False
+        assert run.call_count == 1
+        assert state.tdd.mutation_done is False
+        assert "test(mutation)" not in _git(repo, "log", "--all", "--format=%s")
+        assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "scratch"
+        assert branch != "scratch"
+
+    @pytest.mark.asyncio
     async def test_uncommitted_edits_at_entry_are_not_committed_or_mutated(self, project):
         """Edits the whole-change refactor left uncommitted (verification failed
         and the discard was refused, or a red suite skipped its checkpoint) are

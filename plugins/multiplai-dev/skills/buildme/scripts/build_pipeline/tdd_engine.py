@@ -2167,17 +2167,23 @@ async def _run_mutation_round(
     # go back into the tree so every check below sees what it changed, and
     # buildme commits (or discards) the round itself. A HEAD that cannot be
     # brought back to the checkpoint leaves nothing safe to commit or reset.
+    # The branch is compared even when the sha did not move: a switch to a new
+    # branch at the same commit would put buildme's commits on that branch.
     head = git_ops.rev_parse_head(config.project_dir)
-    if head != rewind_to:
-        same_branch = git_ops.current_branch(config.project_dir) == branch
-        if not (same_branch and git_ops.unwind_commits_to(
-                config.project_dir, rewind_to, "mutation survivor round")):
-            where = (f"to {head[:8]}" if head else "somewhere git could not read")
-            return _RoundOutcome(
-                f"The test writer moved HEAD from {rewind_to[:8]} {where}"
-                f"{'' if same_branch else ' on another branch'}, and it could not be "
-                "brought back, so nothing was committed — inspect the tree.",
-                discard_failed=True)
+    on_branch = git_ops.current_branch(config.project_dir)
+    if on_branch != branch:
+        return _RoundOutcome(
+            f"The test writer left branch {branch or '(unknown)'} for "
+            f"{on_branch or 'a branch git could not read'}, so nothing was "
+            "committed — inspect the tree.",
+            discard_failed=True)
+    if head != rewind_to and not git_ops.unwind_commits_to(
+            config.project_dir, rewind_to, "mutation survivor round"):
+        where = (f"to {head[:8]}" if head else "somewhere git could not read")
+        return _RoundOutcome(
+            f"The test writer moved HEAD from {rewind_to[:8]} {where}, and it could not be "
+            "brought back, so nothing was committed — inspect the tree.",
+            discard_failed=True)
     if not result.success:
         reason = "timeout" if result.timed_out else (result.error or "agent failed")
         return _discard(
