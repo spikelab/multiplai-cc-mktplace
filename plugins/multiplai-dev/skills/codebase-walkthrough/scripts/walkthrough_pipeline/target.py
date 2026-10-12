@@ -1,8 +1,8 @@
 """Resolve the module to explain, and take snapshots of commits.
 
 Read-only over every repository. The only git commands run anywhere in the
-pipeline are `rev-parse`, `show`, `archive` and `ls-files`, each a fixed argv
-with `shell=False`. Nothing checks out, fetches or writes to a repo.
+pipeline are `rev-parse`, `show`, `archive`, `ls-files` and `ls-tree`, each a
+fixed argv with `shell=False`. Nothing checks out, fetches or writes to a repo.
 
 The working tree of the target is never read: its files are listed from a
 `git archive` of HEAD, and agents read that snapshot.
@@ -63,7 +63,7 @@ def require_rg() -> None:
 
 def git(repo: str | Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     """Run one git command against *repo*; stdout/stderr as text."""
-    if args and args[0] not in ("rev-parse", "show", "archive", "ls-files"):
+    if args and args[0] not in ("rev-parse", "show", "archive", "ls-files", "ls-tree"):
         raise TargetError(f"git {args[0]} is not allowed here")
     proc = subprocess.run(
         [*GIT_ARGV, "-C", str(repo), *args],
@@ -83,6 +83,17 @@ def head_sha(repo: str | Path) -> str | None:
     proc = git(repo, "rev-parse", "--verify", "--quiet", "HEAD^{commit}", check=False)
     sha = proc.stdout.strip()
     return sha if proc.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", sha) else None
+
+
+def tree_files(repo: str | Path, sha: str, subpath: str) -> list[str]:
+    """Every path git lists at *sha* under *subpath*, repo-relative.
+
+    The same `git ls-tree -r --name-only` that `review-viewer serve --tree` runs,
+    so this is the list of files the viewer counts as changed in a tree target.
+    """
+    spec = ["--", subpath] if subpath else []
+    out = git(repo, "ls-tree", "-r", "-z", "--name-only", sha, *spec).stdout
+    return [f for f in out.split("\0") if f]
 
 
 def remote_url(repo: str | Path) -> str | None:

@@ -576,9 +576,11 @@ def cmd_walkthrough_status(args) -> int:
         f = by_id[fid]
         print(f"  {fid} {f.severity} {f.status} {f.file}:{f.line_start} {f.claim}")
     have = {a.topic for a in wt.assessments} if wt else set()
-    missing = [t for t in walkthrough.MUST_ASSESS if t not in have]
+    missing = [t for t in walkthrough.must_assess(ff) if t not in have]
     print(f"assessments missing ({len(missing)}): {', '.join(missing)}")
-    print("risk: " + ("missing" if not wt or wt.risk is None else
+    tree = gitdata.is_tree_review(t)
+    print("risk: " + ("not needed for a tree" if tree and (not wt or wt.risk is None) else
+                      "missing" if not wt or wt.risk is None else
                       f"tier {wt.risk.tier}, {'revertable' if wt.risk.revertable else 'not revertable'}"))
     st = served.stats or {}
     tiers = st.get("tiers") or {}

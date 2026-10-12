@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .gitdata import GIT_MISSING, GitError, _is_binary, git, split_lines
+from .gitdata import GIT_MISSING, GitError, _is_binary, git, is_tree_review, split_lines
 from .mailbox import atomic_write
 from .models import ASSESSMENT_TITLE_MAX, FindingsFile, Walkthrough
 
@@ -29,6 +29,13 @@ NOT_SHOWN_LABELS = ("low-value", "repeat")
 CRITICAL_IMPACTS = ("breaks-users", "breaks-business")
 # Assessments a walkthrough must carry when it says it is complete.
 MUST_ASSESS = ("commits", "tests")
+
+
+def must_assess(ff: FindingsFile) -> tuple[str, ...]:
+    """The assessments a complete walkthrough of this target needs. A tree target
+    (a module walkthrough, or `review --tree`) is not a change: no commit says why,
+    no test covers a change, and nothing is merged, so it needs none, and no risk."""
+    return () if is_tree_review(ff.target) else MUST_ASSESS
 # Topics a new walkthrough may no longer use: size is measured, and risk is the
 # header score built from `risk` (models.RiskInput).
 RETIRED_TOPICS = {"size": "size is measured from git", "risk": "risk is scored from the `risk` block"}
@@ -175,11 +182,11 @@ def check(wt: Walkthrough, ff: FindingsFile) -> list[str]:
     for topic in sorted({t for t in topics if t != "other" and topics.count(t) > 1}):
         errors.append(f"assessment {topic}: more than one assessment has this topic")
     if wt.complete:
-        for topic in MUST_ASSESS:
+        for topic in must_assess(ff):
             if topic not in topics:
                 errors.append(f"walkthrough: complete is true but there is no {topic!r} "
                               "assessment")
-        if wt.risk is None:
+        if wt.risk is None and not is_tree_review(t):
             errors.append("walkthrough: complete is true but there is no 'risk' block")
         uncovered, unlinked = coverage(wt, ff)
         for path in uncovered:
