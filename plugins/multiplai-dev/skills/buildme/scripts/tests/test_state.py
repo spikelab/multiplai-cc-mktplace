@@ -649,3 +649,38 @@ class TestPrePlanReviewCheckpointResume:
         written = json.loads(out.read_text())["spec_gen"]
         assert written["plan_review_done"] is False
         assert written["plan_review_regen_done"] is False
+
+
+class TestPreFindingsCheckpoint:
+    """A .build-state.json written before `BuildState.findings` existed. The
+    findings rounds are not a BuildPhase, so the only thing to keep is that
+    old checkpoints load with the field unset."""
+
+    def test_pre_findings_fixture_has_no_findings_field(self):
+        """Guard the guard: a regenerated fixture would stop testing this."""
+        raw = (FIXTURES / "build-state-pre-findings.json").read_text()
+        assert "findings" not in raw
+
+    def test_pre_findings_checkpoint_loads_with_findings_none(self):
+        s = BuildState.load(FIXTURES / "build-state-pre-findings.json")
+        assert s.findings is None
+        assert s.phase == BuildPhase.PUBLISH
+        assert s.tdd.blocks[0].status == BlockStatus.DONE
+
+    def test_findings_state_survives_checkpoint_and_reload(self, tmp_path):
+        from build_pipeline.findings.models import PRComment, Triage, Verdict
+        from build_pipeline.state import FindingsRound, FindingsState
+
+        rnd = FindingsRound(number=1, started=["fetch"],
+                            comments=[PRComment(id=7, kind="review", author="a")],
+                            triaged={7: Triage(verdict=Verdict.QUESTION, reason="why")},
+                            blocks={1: "comment:7"})
+        s = BuildState(change_name="c", mode="only", tier="advanced",
+                       findings=FindingsState(pr=3, repo="o/r", branch="buildme/c",
+                                              change_dir="/x", rounds=[rnd]))
+        path = tmp_path / ".findings-state.json"
+        s.checkpoint(path)
+        back = BuildState.load(path).findings
+        assert back.rounds[0].triaged[7].verdict == Verdict.QUESTION
+        assert back.rounds[0].blocks == {1: "comment:7"}
+        assert back.seen_ids() == {7}

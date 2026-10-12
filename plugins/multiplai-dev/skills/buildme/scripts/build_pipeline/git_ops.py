@@ -40,6 +40,8 @@ _PUSH_TIMEOUT = 300
 _GH_TIMEOUT = 300
 # The pr skill may make one model call and re-ask it once.
 _PR_SKILL_TIMEOUT = 1500
+# A whole /multiplai-dev:review run on a PR (finders, verify, explain).
+_REVIEW_SKILL_TIMEOUT = 4 * 3600
 
 
 class GitLifecycleError(RuntimeError):
@@ -92,6 +94,12 @@ def _run_gh(argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_T
 def _run_pr_skill(argv: list[str], cwd: Path | str | None = None,
                   timeout: int = _PR_SKILL_TIMEOUT) -> GitResult:
     """Separate seam for the pr skill's subprocess so tests can stub it."""
+    return _run(argv, cwd=cwd, timeout=timeout)
+
+
+def _run_review_skill(argv: list[str], cwd: Path | str | None = None,
+                      timeout: int = _REVIEW_SKILL_TIMEOUT) -> GitResult:
+    """Separate seam for the review skill's subprocess (the findings stage)."""
     return _run(argv, cwd=cwd, timeout=timeout)
 
 
@@ -295,6 +303,56 @@ def create_worktree(repo: Path, branch: str, dest: Path) -> GitResult:
     return res
 
 
+def worktree_for_branch(repo: Path | str, branch: str) -> Path | None:
+    """The worktree that has *branch* checked out, or None."""
+    res = _run(["git", "worktree", "list", "--porcelain"], cwd=repo)
+    if not res.ok:
+        return None
+    path: Path | None = None
+    for line in res.stdout.splitlines():
+        if line.startswith("worktree "):
+            path = Path(line.split(" ", 1)[1].strip())
+        elif line.strip() == f"branch refs/heads/{branch}" and path is not None:
+            return path
+    return None
+
+
+def add_worktree_for_branch(repo: Path, branch: str, dest: Path) -> GitResult:
+    """Check an existing branch out in a new worktree at *dest*: the local
+    branch when there is one, else a local branch tracking
+    ``origin/<branch>`` (fetched first). Never forces, never resets a branch.
+    Raises GitLifecycleError with the git error."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if branch_exists(repo, branch):
+        argv = ["git", "worktree", "add", str(dest), branch]
+    else:
+        fetch = _run(["git", "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
+                     cwd=repo, timeout=_PUSH_TIMEOUT)
+        if not fetch.ok:
+            raise GitLifecycleError(
+                f"Branch '{branch}' is not local and `git fetch origin {branch}` failed: "
+                f"{(fetch.stderr or fetch.stdout).strip()}")
+        argv = ["git", "worktree", "add", "--track", "-b", branch, str(dest), f"origin/{branch}"]
+    res = _run(argv, cwd=repo, timeout=_GIT_TIMEOUT)
+    if not res.ok:
+        raise GitLifecycleError(
+            f"Failed to check out {branch} in a worktree at {dest}: "
+            f"{(res.stderr or res.stdout).strip()}")
+    log.info("WORKTREE added path=%s branch=%s repo=%s", dest, branch, repo)
+    return res
+
+
+def fast_forward_from_origin(worktree: Path, branch: str) -> GitResult:
+    """Bring *branch* up to ``origin/<branch>`` when that is a fast-forward
+    (someone pushed to the PR). Never merges, never resets: a diverged branch
+    is left alone and the later push reports it."""
+    fetch = _run(["git", "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
+                 cwd=worktree, timeout=_PUSH_TIMEOUT)
+    if not fetch.ok:
+        return fetch
+    return _run(["git", "merge", "--ff-only", f"origin/{branch}"], cwd=worktree)
+
+
 def remove_worktree(repo: Path, dest: Path) -> GitResult:
     """DOCUMENTED HELPER — `git worktree remove`, deliberately never called
     by the pipeline (test_git_ops.py asserts no other module references it).
@@ -438,6 +496,29 @@ def commit_tree(repo: Path | str, message: str, label: str = "") -> str | None:
         return None
     log.info("COMMIT %s sha=%s", label, sha[:8])
     return sha
+
+
+def save_wip_ref(repo: Path | str, ref: str, message: str) -> str | None:
+    """Keep the tree's current work under *ref* (``refs/buildme/wip/...``)
+    before a discard: commit whatever is uncommitted (``commit_tree``, so
+    bookkeeping stays out) and point *ref* at HEAD. Returns the sha the ref
+    names, or None when the ref could not be written (logged; never raises).
+    The commit stays on the branch until the caller's ``discard_to`` moves the
+    branch back; the ref keeps it reachable after that."""
+    if not ref.startswith("refs/buildme/wip/") or not _run(
+            ["git", "check-ref-format", ref], cwd=repo).ok:
+        log.warning("Refusing to write wip ref %r", ref)
+        return None
+    commit_tree(repo, message, f"wip {ref}")
+    head = rev_parse_head(repo)
+    if not head:
+        return None
+    res = _run(["git", "update-ref", ref, head], cwd=repo)
+    if not res.ok:
+        log.warning("Failed to write %s: %s", ref, res.stderr.strip())
+        return None
+    log.info("WIP %s sha=%s", ref, head[:8])
+    return head
 
 
 def rev_parse_head(repo: Path | str) -> str | None:

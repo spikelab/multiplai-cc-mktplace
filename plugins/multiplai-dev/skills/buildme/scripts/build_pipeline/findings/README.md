@@ -93,7 +93,7 @@ gh api repos/spikelab/github-tests/collaborators/octocat/permission --jq '{permi
 {"permission":"none","role_name":""}
 ```
 
-`resolveReviewThread` was never called.
+No call that resolves a review thread was made.
 
 ### What this means for the code
 
