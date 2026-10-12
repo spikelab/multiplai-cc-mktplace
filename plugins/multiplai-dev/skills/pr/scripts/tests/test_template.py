@@ -124,6 +124,25 @@ def test_config_defaults_when_there_is_no_pr_block(tmp_path):
     assert cfg.template is None and cfg.draft is True
 
 
+@pytest.mark.parametrize("text", [
+    "pr: [a, b]\n",                      # `pr:` not a mapping
+    "pr:\n  template: 3\n",              # `pr.template` not a string
+    "pr:\n  draft: maybe\n",             # `pr.draft` not a boolean
+    "pr:\n  template: [\n",              # not valid YAML
+    "- just a list\n",                   # top level not a mapping
+])
+def test_a_malformed_pr_block_warns_and_uses_the_defaults_as_buildme_does(tmp_path, caplog, text):
+    # buildme's config.py warns and falls back on these same values, then runs this skill
+    # with that config: refusing here would fail every PUBLISH buildme itself ran.
+    found_file = _write(tmp_path / ".github" / "pull_request_template.md")
+    _write(tmp_path / "specs" / "config.yaml", text)
+    with caplog.at_level("WARNING", logger="pr_pipeline"):
+        cfg = load_config(tmp_path)
+        assert discover(tmp_path).path == found_file
+    assert cfg.template is None and cfg.draft is True
+    assert "specs/config.yaml" in caplog.text
+
+
 # --- parsing --------------------------------------------------------------------
 
 

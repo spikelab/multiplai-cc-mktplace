@@ -20,11 +20,14 @@ headings.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+log = logging.getLogger(__name__)
 
 STANDARD_TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "pull_request_template.md"
 
@@ -54,25 +57,36 @@ class Discovery:
 
 
 def load_config(repo: Path) -> PrConfig:
-    """`pr.template` and `pr.draft` from `<repo>/specs/config.yaml`; defaults when absent or `auto`."""
+    """`pr.template` and `pr.draft` from `<repo>/specs/config.yaml`; defaults when absent or `auto`.
+
+    A malformed value is warned about and replaced by its default, never refused:
+    buildme's config.py does the same with the same file and then runs this skill, so
+    refusing here would fail the PUBLISH of a build buildme already ran with that config."""
     path = repo / "specs" / "config.yaml"
     if not path.is_file():
         return PrConfig()
     try:
         data = yaml.safe_load(path.read_text()) or {}
     except yaml.YAMLError as e:
-        raise TemplateError(f"{path} is not valid YAML: {e}") from e
-    pr = data.get("pr") if isinstance(data, dict) else None
+        log.warning("%s is not valid YAML, using the pr defaults: %s", path, e)
+        return PrConfig()
+    if not isinstance(data, dict):
+        log.warning("%s is not a mapping, using the pr defaults", path)
+        return PrConfig()
+    pr = data.get("pr")
     if pr is None:
         return PrConfig()
     if not isinstance(pr, dict):
-        raise TemplateError(f"`pr:` in {path} must be a mapping, got {type(pr).__name__}")
+        log.warning("`pr:` in %s must be a mapping, got %s: using the pr defaults", path, type(pr).__name__)
+        return PrConfig()
     template = pr.get("template")
     if template is not None and not isinstance(template, str):
-        raise TemplateError(f"`pr.template` in {path} must be a repo-relative path")
+        log.warning("`pr.template` in %s must be a repo-relative path, got %r: discovering the template", path, template)
+        template = None
     draft = pr.get("draft", True)
     if not isinstance(draft, bool):
-        raise TemplateError(f"`pr.draft` in {path} must be true or false")
+        log.warning("`pr.draft` in %s must be true or false, got %r: opening a draft", path, draft)
+        draft = True
     if template == AUTO_TEMPLATE:
         template = None
     return PrConfig(template=template or None, draft=draft)

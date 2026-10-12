@@ -50,7 +50,10 @@ The template is, in order: `pr.template` in `<repo>/specs/config.yaml` (a
 repo-relative path; `auto`, buildme's default, counts as unset); else the first found of `.github/`, the repo root and
 `docs/`, each checked for `pull_request_template.md` and then a
 `PULL_REQUEST_TEMPLATE/` directory (names matched in any case). A directory
-with one `.md` file uses it.
+with one `.md` file uses it. A malformed `pr:` block (not a mapping, a
+`pr.template` that is not a string, a `pr.draft` that is not true or false,
+or a `config.yaml` that is not valid YAML) logs a warning and uses the
+defaults, as buildme does with the same file.
 
 The **standard template** (`templates/pull_request_template.md`, shipped with
 this skill) is used when the repo has no template, or a template directory
