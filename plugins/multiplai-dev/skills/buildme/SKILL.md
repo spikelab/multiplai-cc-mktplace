@@ -82,7 +82,8 @@ keeps the default.
 | `findings.authors` | `collaborators` or a list of GitHub logins | `collaborators` | stored only, for the findings stage |
 | `findings.max_rounds` | int | `3` | stored only, for the findings stage |
 | `mutation.enabled` / `mutation.min_score` | bool / float | `true` / `0.8` | stored only, for mutation testing |
-| `models.<step>` | `claude:<name>` or `pi:<model>@<provider>` | `{}` | stored only; other prefixes are dropped with a warning |
+| `models.<key>` | a step, a stage (`spec`, `agent`, `review`) or `default`, set to a model spec | `{}` | every model call; see [Tuning model and effort](#tuning-model-and-effort-multiplaiconf) |
+| `tier` | `advanced` \| `standard` | unset | the tier, only when `models.default` is not a Claude model |
 
 **Commit `specs/config.yaml`.** The build's worktree branches from `HEAD`, so an
 uncommitted config never reaches it. With `git.worktree` on, the pipeline stops
@@ -217,15 +218,70 @@ push/PR commands from `build-progress.md`).
 
 ## Tuning model and effort (multiplai.conf)
 
-Model and effort are two axes of one decision; both are set from
-`multiplai.conf` without a code edit. Sections:
+Model and effort are two axes of one decision. Each step's model can be set in
+`specs/config.yaml` under `models:`; `multiplai.conf` sets per-stage models and
+efforts without a code edit.
+
+### `models:` in specs/config.yaml
+
+```yaml
+models:
+  default: opus            # any spec: haiku | sonnet | opus | fable | claude:<x> | pi:<model>@<provider>
+  spec: sonnet             # stage defaults
+  agent: opus
+  review: fable
+  test_writer: opus        # step keys
+  implementer: pi:deepseek/deepseek-v4-flash@fireworks
+```
+
+A value is a model spec:
+
+- a Claude model: `haiku`, `sonnet`, `opus`, `fable`, a `claude-…` ID, or
+  either one prefixed `claude:` (or `anthropic:`). Fable ranks above Opus, so
+  an `opus` ceiling (`MULTIPLAI_MODEL`) turns a `fable` request into Opus.
+- a Pi model: `pi:<model-id>@<provider>`. It runs through
+  `multiplai-core`'s Pi backend, so it **needs Pi installed and configured;
+  not covered here**. A missing `pi` binary fails that step; it does not fall
+  back to Claude.
+
+An unknown key, or a value that is neither, is dropped with a warning.
+
+Each step resolves its model through this chain, and the first one set wins:
+
+1. `models.<step>`
+2. `models.<stage>` (the step's stage, below)
+3. the stage's `multiplai.conf` model: `[buildme.spec]`, `[buildme.agent]`
+   or `[buildme.review] MODEL=` (`review_model`, which `code_review.model` and
+   `BUILDME_REVIEW_MODEL` also set); `[buildme.plan_review] MODEL=` for
+   `plan_review`, and none for `adjudication`
+4. `models.default`
+5. `[buildme] MODEL=` (the whole pipeline's model)
+
+With no `models:` key and no stage model (link 3), every step runs on the
+model it ran on before `models:` existed. A stage model now reaches every step
+of its stage: `[buildme.spec] MODEL=` used to reach only the interview,
+`[buildme.agent] MODEL=` reached nothing, and `review_model` did not reach
+the test-quality audit.
+
+| Stage | Steps |
+|---|---|
+| `spec` | `spec_artifact` (every spec artifact, use-cases included), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `interview`, `research` |
+| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `integration_fix`, `review_fix`, `docs_update`, `prototype` |
+| `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt) |
+
+The tier (advanced or standard) comes from the default model: Fable, or Opus
+4.5 and later, is advanced. A Pi model's version says nothing about the tier,
+so when `models.default` is a `pi:` spec the tier comes from `BUILDME_TIER`
+(env) or `tier:` in specs/config.yaml, and is `standard` when neither is set.
+
+### multiplai.conf
 
 | Section | Tunes |
 |---|---|
 | `[buildme]` | `MODEL=` and `EFFORT=` for the whole pipeline |
-| `[buildme.spec]` | `EFFORT=` for spec generation, audits, rubric |
-| `[buildme.review]` | `EFFORT=` for code review, test-quality audit |
-| `[buildme.agent]` | `EFFORT=` for the TDD agents (test writer, implementer, per-block refactorer, the whole-change refactor pass, fix) |
+| `[buildme.spec]` | `MODEL=` and `EFFORT=` for spec generation, audits, rubric |
+| `[buildme.review]` | `MODEL=` and `EFFORT=` for code review, test-quality audit |
+| `[buildme.agent]` | `MODEL=` and `EFFORT=` for the TDD agents (test writer, implementer, per-block refactorer, the whole-change refactor pass, fix) |
 
 ```ini
 [buildme]
@@ -236,10 +292,12 @@ EFFORT=medium
 EFFORT=high
 ```
 
-A step section falls back to `[buildme]`, which falls back to the SDK default
+A stage section's `MODEL=` takes a Claude model or a `pi:` spec. A step
+section falls back to `[buildme]`, which falls back to the SDK default
 (unset). The `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT` ceilings still cap the
-result, so a budget run forces everything down and a conf override cannot
-escape it.
+result for Claude models, so a budget run forces everything down and a conf
+override cannot escape it. A `pi:` spec is not capped: the Claude ranking
+means nothing for another vendor's model.
 
 ## Scale Assessment (MANDATORY)
 
