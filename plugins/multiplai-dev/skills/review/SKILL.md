@@ -540,5 +540,8 @@ stage runs on the session's model.
   `<out>/legacy/<directory name>/` and appends a `migrated` ledger line
   (with `migrated_from`) for every `findings.json` in it, top level, under
   `rounds/` or deeper. It never moves, changes or deletes anything in
-  `<dir>`, and skips a directory already copied, so a second run copies
-  nothing. Files directly under `<dir>` (rollups) are not copied.
+  `<dir>`, and skips a directory already copied (recorded in
+  `legacy/sources.jsonl`), so a second run copies nothing. A directory whose
+  name another source already used (the same PR in `INBOX/reviews` and in an
+  archive) is copied to `<name>~<6 hex>/`. Files directly under `<dir>`
+  (rollups) are not copied.

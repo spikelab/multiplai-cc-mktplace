@@ -430,7 +430,7 @@ def test_migrate_copies_appends_ledger_lines_leaves_the_source_and_skips_on_a_se
 
     assert main(["migrate", "--from", str(src)]) == 0
     legacy = tmp_path / "data" / "reviews" / "legacy"
-    assert sorted(p.name for p in legacy.iterdir()) == ["r2__repo--pr-1", "repo--pr-1"]
+    assert sorted(p.name for p in legacy.iterdir() if p.is_dir()) == ["r2__repo--pr-1", "repo--pr-1"]
     for rel in ("findings.json", "rounds/eeeeeeeeeeee/findings.json", "viewer/decisions.json", "progress.log"):
         assert (legacy / "repo--pr-1" / rel).read_bytes() == (src / "repo--pr-1" / rel).read_bytes()
     assert (legacy / "r2__repo--pr-1" / "1791-abc" / "findings.json").is_file()
@@ -452,6 +452,28 @@ def test_migrate_copies_appends_ledger_lines_leaves_the_source_and_skips_on_a_se
     assert "copied 0" in capsys.readouterr().out
     assert len(_ledger_lines(tmp_path, "migrated")) == 3
     assert _snapshot(src) == before
+
+
+def test_migrate_keeps_both_of_two_sources_with_one_directory_name(tmp_path, capsys):
+    """INBOX/reviews and an archive can both hold `repo--pr-1`; the second is not taken for the first."""
+    first, second = tmp_path / "INBOX" / "reviews", tmp_path / "archive"
+    _legacy_reviews(first)
+    _legacy_reviews(second)
+    (second / "repo--pr-1" / "progress.log").write_text("the archived copy\n")
+    assert main(["migrate", "--from", str(first)]) == 0
+    assert main(["migrate", "--from", str(second)]) == 0
+    legacy = tmp_path / "data" / "reviews" / "legacy"
+    dirs = sorted(p.name for p in legacy.iterdir() if p.is_dir())
+    assert len(dirs) == 4 and "repo--pr-1" in dirs
+    (other,) = [d for d in dirs if d.startswith("repo--pr-1~")]
+    assert (legacy / other / "progress.log").read_text() == "the archived copy\n"
+    assert (legacy / "repo--pr-1" / "progress.log").read_text() == "DONE\n"
+    lines = len(_ledger_lines(tmp_path, "migrated"))
+    capsys.readouterr()
+    assert main(["migrate", "--from", str(second)]) == 0
+    assert main(["migrate", "--from", str(first)]) == 0
+    assert capsys.readouterr().out.count("copied 0") == 2
+    assert len(_ledger_lines(tmp_path, "migrated")) == lines
 
 
 def test_migrate_refuses_a_source_that_is_not_a_directory(tmp_path, capsys):

@@ -7,14 +7,19 @@ Each directory directly under the source is copied whole to
 `migrated_from` naming the directory it was read from. Files directly under
 the source (rollups, `runs.jsonl`) are not reviews and are not copied.
 
-The source is only read: nothing in it is moved, changed or deleted. A
-directory already copied is skipped, so running it twice copies nothing the
-second time. A copy is made under a hidden name and renamed when complete, so
-a copy cut short is redone, never taken for a finished one.
+The source is only read: nothing in it is moved, changed or deleted. Each
+copy is recorded in `<out>/legacy/sources.jsonl` (source path, copy's name),
+and a source directory recorded there is skipped, so running it twice copies
+nothing the second time. Two sources can hold a directory of one name
+(`INBOX/reviews/x` and an archive's `x`): the second is copied to
+`<name>~<6 hex of its source path>/`, never taken for the first. A copy is
+made under a hidden name and renamed when complete, so a copy cut short is
+redone, never taken for a finished one.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -26,6 +31,7 @@ from . import ledger
 log = logging.getLogger(__name__)
 
 PARTIAL_PREFIX = ".partial-"
+SOURCES_FILE = "sources.jsonl"
 
 
 class MigrateError(Exception):
@@ -59,6 +65,28 @@ def _ledger_line(findings: Path, source_dir: Path, copy_dir: Path, session_id: s
     }
 
 
+def _copied(dest_root: Path) -> set[str]:
+    """Source directories already copied, from `sources.jsonl`."""
+    try:
+        text = (dest_root / SOURCES_FILE).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return set()
+    done = set()
+    for raw in text.splitlines():
+        try:
+            entry = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("source"):
+            done.add(str(entry["source"]))
+    return done
+
+
+def _record(dest_root: Path, src: Path, name: str) -> None:
+    with (dest_root / SOURCES_FILE).open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"source": str(src), "dest": name}) + "\n")
+
+
 def migrate(source: Path, out: Path, *, session_id: str = "") -> MigrateResult:
     """Copy every directory under *source* to `<out>/legacy/`; see the module docstring."""
     source = source.expanduser().resolve()
@@ -68,13 +96,21 @@ def migrate(source: Path, out: Path, *, session_id: str = "") -> MigrateResult:
     if dest_root == source or source in dest_root.parents or dest_root in source.parents:
         raise MigrateError(f"{source} and the copy's directory {dest_root} overlap; pass another --out")
     result = MigrateResult(dest=dest_root)
+    copied = _copied(dest_root)
     for src in sorted(p for p in source.iterdir() if p.is_dir() and not p.is_symlink()):
-        dest = dest_root / src.name
-        if dest.exists():
+        if str(src) in copied:
+            result.skipped.append(src.name)
+            continue
+        name = src.name
+        if (dest_root / name).exists():  # another source's directory of the same name
+            name = f"{src.name}~{hashlib.sha256(str(src).encode()).hexdigest()[:6]}"
+        dest = dest_root / name
+        if dest.exists():  # this source's own copy, renamed before a stop kept it out of sources.jsonl
+            _record(dest_root, src, name)
             result.skipped.append(src.name)
             continue
         dest_root.mkdir(parents=True, exist_ok=True)
-        partial = dest_root / f"{PARTIAL_PREFIX}{src.name}"
+        partial = dest_root / f"{PARTIAL_PREFIX}{name}"
         shutil.rmtree(partial, ignore_errors=True)
         try:
             shutil.copytree(src, partial, symlinks=True)
@@ -82,6 +118,7 @@ def migrate(source: Path, out: Path, *, session_id: str = "") -> MigrateResult:
             shutil.rmtree(partial, ignore_errors=True)
             raise MigrateError(f"cannot copy {src} to {dest}: {e}") from e
         partial.rename(dest)
+        _record(dest_root, src, name)
         result.copied.append(src.name)
         for findings in sorted(src.rglob("findings.json")):
             rel = findings.parent.relative_to(src)
