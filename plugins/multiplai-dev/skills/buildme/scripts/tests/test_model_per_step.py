@@ -298,6 +298,8 @@ CALL_SITES = {
         ("fix_model", ("integration_fix", "integration_fix_escalated")),
     ("tdd_engine.py", "_run_integration_and_review", "run_implementer"):
         ("config.model_for('review_fix')", ("review_fix",)),
+    ("tdd_engine.py", "_run_fix_on_pass", "run_implementer"):
+        ("config.model_for('review_fix')", ("review_fix",)),
     ("tdd_engine.py", "_run_refactor_all", "run_refactor_all"):
         ("config.model_for('refactor_all')", ("refactor_all",)),
     ("tdd_engine.py", "_run_mutation_round", "run_mutation_test_writer"):

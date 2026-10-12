@@ -192,8 +192,12 @@ class TestCodeStep:
 
         assert result.exit_code == 0
         subjects = _subjects(repo)
-        assert subjects[:2] == ["impl(block-1): Fix finding ab12", "test(block-1): Fix finding ab12"]
-        assert result.fixes["finding:ab12"]["impl"] == _git(repo, "rev-parse", "HEAD").strip()
+        # The block's last commit carries only its review round record.
+        assert subjects[:3] == ["fix(block-1): Fix finding ab12",
+                                "impl(block-1): Fix finding ab12", "test(block-1): Fix finding ab12"]
+        assert _git(repo, "show", "--name-only", "--format=", "HEAD").split() == [
+            (change / "reviews" / "block-01-round-1.json").relative_to(repo).as_posix()]
+        assert result.fixes["finding:ab12"]["impl"] == _git(repo, "rev-parse", "HEAD~1").strip()
         assert (change / ".build-state.json").read_text() == before
         assert (change / ".findings-r1-state.json").exists()
         tracked = _git(repo, "ls-files").splitlines()

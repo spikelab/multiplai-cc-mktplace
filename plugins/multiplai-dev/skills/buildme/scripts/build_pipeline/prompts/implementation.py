@@ -259,3 +259,22 @@ Report what you changed and why, grouped by the five categories above, and
 confirm the full suite is green. If you changed nothing, say so plainly — "the
 blocks were already consistent" is a valid and useful result.
 """
+
+
+# Appended to every review-fix brief (`tdd_engine._review_fix_brief`): the
+# failing-score fix and the fix on a block that passed. Not a template — it
+# carries no placeholders and is concatenated, so it never meets `.format()`.
+# The SEARCHED: section it asks for is parsed by `gates.parse_searched` into the
+# round record; a missing one is recorded as null, never treated as a failure.
+REVIEW_FIX_SELF_CHECK = """\
+## Before you finish
+
+1. For each finding, check the other branches of the same function, and the
+   rest of this block's diff, for the same mistake. Fix every instance you find.
+2. Re-read `git diff` of your own changes and look for new bugs you introduced.
+3. End your report with a `SEARCHED:` section: one line per finding, saying
+   where you looked for the same mistake. For example:
+
+SEARCHED:
+- <finding>: <the functions, branches and files you checked>
+"""

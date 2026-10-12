@@ -68,9 +68,11 @@ def _failing(findings=()):
 
 
 @pytest.fixture
-def project(tmp_path):
+def project(tmp_path, monkeypatch):
     """A one-block build in a real git repo whose suite fails while
     `broken.flag` exists, so a fix agent can turn the tests red."""
+    # The integration gate runs the project's test command only in a trusted repo.
+    monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
     project_dir = tmp_path / "project"
     (project_dir / "specs" / "changes" / "test").mkdir(parents=True)
     (project_dir / "app.py").write_text(BUGGY)
