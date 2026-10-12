@@ -42,8 +42,10 @@ never removed. A PR whose branch lives in a fork is refused.
 
 ## What one round does
 
-1. **Fetch.** Unresolved review threads and top-level comments posted since
-   the last round. Only authors in `findings.authors` count (default
+1. **Fetch.** Unresolved review threads, plus top-level comments and review
+   bodies posted since the last round. A review body gives one comment per
+   finding marker in it: `/multiplai-dev:review post` puts a finding on lines
+   outside the PR's diff there. Only authors in `findings.authors` count (default
    `collaborators`: `role_name` `admin`, `maintain` or `write` on the repo),
    and bots only when listed in `findings.allow_bots`. A comment carrying an
    injection pattern is listed and not acted on.
@@ -63,7 +65,7 @@ never removed. A PR whose branch lives in a fork is refused.
 5. **Publish.** Push, then the PR description's "Review rounds" section
    through `/multiplai-dev:pr edit`, then one reply per acted-on thread (the
    fixing commit, or why nothing changed) and one reply for the round's
-   top-level comments. Replies go out only after the push succeeded. Threads
+   top-level comments and review bodies. Replies go out only after the push succeeded. Threads
    are never resolved.
 6. **Review.** `/multiplai-dev:review --pr <number>` runs on the new head.
 
@@ -108,7 +110,7 @@ different PR, repository or branch.
 - **Runs agents that edit the worktree and run its test command**, as a
   buildme build does (needs `--trust-repo`).
 - **Uses the GitHub CLI** (`gh`) under the user's login: reads review threads,
-  PR comments and collaborator permissions; pushes the PR's branch
+  review bodies, PR comments and collaborator permissions; pushes the PR's branch
   (`git push`, never `--force`); edits the PR description through the pr
   skill; posts replies to review comments and one PR comment per round; and,
   under `--auto`, posts the re-review's findings through the review skill.

@@ -33,6 +33,12 @@ def _thread(tid, comments, *, resolved=False, outdated=False, path="src/calc.py"
             "line": line, "comments": {"nodes": comments}}
 
 
+def _review(rid, login, body, submitted="2026-10-12T11:00:00Z", state="COMMENTED"):
+    return {"id": rid, "user": {"login": login, "type": "User"}, "body": body, "state": state,
+            "submitted_at": submitted,
+            "html_url": f"https://github.com/{REPO}/pull/7#pullrequestreview-{rid}"}
+
+
 def _issue(cid, login, body, created="2026-10-12T11:00:00Z", user_type="User"):
     return {"id": cid, "user": {"login": login, "type": user_type}, "body": body,
             "created_at": created, "html_url": f"https://github.com/{REPO}/pull/7#issuecomment-{cid}"}
@@ -41,9 +47,10 @@ def _issue(cid, login, body, created="2026-10-12T11:00:00Z", user_type="User"):
 class FakeGitHub:
     """Answers the reads fetch.py makes; records every argv."""
 
-    def __init__(self, pages=None, issues=None, roles=None):
+    def __init__(self, pages=None, issues=None, roles=None, reviews=None):
         self.pages = pages if pages is not None else [[]]
         self.issues = issues or []
+        self.reviews = reviews or []
         self.roles = roles or {}
         self.calls: list[list[str]] = []
 
@@ -60,6 +67,8 @@ class FakeGitHub:
             return git_ops.GitResult(argv, 0, json.dumps(data), "")
         if argv[:3] == ["gh", "api", "--paginate"] and argv[3].endswith("/comments"):
             return git_ops.GitResult(argv, 0, "\n".join(json.dumps(c) for c in self.issues), "")
+        if argv[:3] == ["gh", "api", "--paginate"] and argv[3].endswith("/reviews"):
+            return git_ops.GitResult(argv, 0, "\n".join(json.dumps(r) for r in self.reviews), "")
         if argv[:2] == ["gh", "api"] and argv[2].endswith("/permission"):
             login = argv[2].split("/")[-2]
             if login not in self.roles:
@@ -136,6 +145,41 @@ class TestFetch:
                           created="2026-10-12T12:30:00Z")])
         comments = fetch.fetch_comments(REPO, 7, "2026-10-12T10:00:00Z")
         assert [(c.id, c.kind) for c in comments] == [(11, "issue")]
+
+    def test_findings_in_a_review_body_are_read_one_per_marker(self, gh):
+        """`/multiplai-dev:review post` puts a finding on lines outside the
+        diff in the review's own body, not in a thread."""
+        m1 = MARKER
+        m2 = MARKER.replace("0123456789", "abcdef0123")
+        body = ("Code review: 3 findings, 1 inline, 2 on lines outside this PR's diff\n\n"
+                "1. add subtracts (HIGH)\n\nadd(2, 2) is 0\n\n"
+                f"https://github.com/{REPO}/blob/abc/calc.py#L1-L3\n{m1}\n\n"
+                "2. no docstring (MEDIUM)\n\nthe module says nothing\n\n"
+                f"https://github.com/{REPO}/blob/abc/calc.py#L1-L2\n{m2}\n\n"
+                "\U0001f916 Generated with multiplai-dev:review\n")
+        gh(reviews=[
+            _review(500, "alice", body),
+            _review(501, "alice", "Code review: 1 finding, 1 inline, 0 on lines outside this "
+                                  "PR's diff\n\n\U0001f916 Generated with multiplai-dev:review\n"),
+            _review(502, "bob", ""),
+            _review(503, "carol", "Looks fine overall, but see the naming."),
+            _review(504, "carol", "draft", state="PENDING"),
+            _review(505, "carol", "before since", submitted="2026-10-12T09:00:00Z"),
+        ])
+        comments = fetch.fetch_comments(REPO, 7, "2026-10-12T10:00:00Z")
+        assert [(c.kind, c.finding_id, c.review_id) for c in comments] == [
+            ("review_body", "0123456789", 500), ("review_body", "abcdef0123", 500),
+            ("review_body", None, 503)]
+        assert "add subtracts" in comments[0].body and "no docstring" not in comments[0].body
+        assert "no docstring" in comments[1].body and "add subtracts" not in comments[1].body
+        assert "Code review:" not in comments[0].body
+        assert comments[0].url.endswith("#pullrequestreview-500")
+        # Ids never collide with each other or with a GitHub comment id, and
+        # stay the same on the next fetch, so a seen finding is not re-read.
+        ids = [c.id for c in comments]
+        assert len(set(ids)) == 3 and all(i < 0 for i in ids)
+        assert ids == [c.id for c in fetch.fetch_comments(REPO, 7, "2026-10-12T10:00:00Z")]
+        assert comments[2].label == "review 503"
 
     def test_the_pr_skills_edit_notice_is_not_a_comment_to_act_on(self, gh):
         notice = ("The pr skill (`/multiplai-dev:pr`) edited this PR's description.\n\n"

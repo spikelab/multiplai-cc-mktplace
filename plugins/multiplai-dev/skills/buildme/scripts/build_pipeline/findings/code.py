@@ -54,7 +54,7 @@ def _line(text: str, limit: int = 1200) -> str:
 
 def block_ident(record: TriageRecord) -> str:
     c = record.comment
-    return f"finding {c.finding_id}" if c.finding_id else f"comment {c.id}"
+    return f"finding {c.finding_id}" if c.finding_id else c.label
 
 
 def render_tasks(round_n: int, records: list[TriageRecord]) -> tuple[str, dict[int, str]]:

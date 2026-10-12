@@ -219,6 +219,7 @@ class FakePR:
     def __init__(self, roles=None):
         self.threads: list[dict] = []
         self.issues: list[dict] = []
+        self.reviews: list[dict] = []
         self.roles = roles if roles is not None else {"alice": "write", "bob": "read"}
         self.events: list[tuple] = []
         self.sections: list[str] = []
@@ -244,6 +245,21 @@ class FakePR:
                             "html_url": f"https://github.com/{REPO}/pull/{PR}#issuecomment-{cid}"})
         return cid
 
+    def add_review_body(self, author: str, findings: list[tuple[str, str]],
+                        submitted="2026-10-12T12:30:00Z") -> int:
+        """A review whose findings sit in its body, as `review post` writes the
+        ones on lines outside the diff: [(text, finding id)]."""
+        rid = self._id()
+        body = [f"Code review: {len(findings)} findings, 0 inline, {len(findings)} on lines "
+                "outside this PR's diff", ""]
+        for i, (text, fid) in enumerate(findings, 1):
+            body += [f"{i}. {text} (MEDIUM)", "", _marker(fid), ""]
+        self.reviews.append({"id": rid, "user": {"login": author, "type": "User"},
+                             "body": "\n".join(body), "state": "COMMENTED",
+                             "submitted_at": submitted,
+                             "html_url": f"https://github.com/{REPO}/pull/{PR}#pullrequestreview-{rid}"})
+        return rid
+
     def _node(self, cid, author, body):
         return {"databaseId": cid, "author": {"login": author, "__typename": "User"},
                 "authorAssociation": "NONE", "body": body, "createdAt": "2026-10-12T10:00:00Z",
@@ -259,6 +275,8 @@ class FakePR:
                 "pageInfo": {"hasNextPage": False, "endCursor": None},
                 "nodes": json.loads(json.dumps(self.threads))}}}}}
             return ok(json.dumps(data))
+        if argv[:3] == ["gh", "api", "--paginate"] and argv[3].endswith("/reviews"):
+            return ok("\n".join(json.dumps(r) for r in self.reviews))
         if argv[:3] == ["gh", "api", "--paginate"]:
             return ok("\n".join(json.dumps(c) for c in self.issues))
         if argv[:2] == ["gh", "api"] and argv[2].endswith("/permission"):
@@ -675,6 +693,34 @@ class TestStop:
         rows = [ln for ln in (change / "findings-r2.md").read_text().splitlines()
                 if ln.startswith("| d1 ")]
         assert len(rows) == 1 and "r1:" in rows[0] and "r2:" in rows[0]
+
+
+class TestReviewBody:
+    @pytest.mark.asyncio
+    async def test_a_finding_the_review_put_in_its_body_starts_the_next_round(
+            self, built, fake_pr):
+        """A finding on lines outside the PR's diff goes in the review's body;
+        the next round must read it, act on it and answer it."""
+        repo, change, config = built
+        fake_pr.add_thread("alice", "first look", fid="d1")
+        review = FakeReview(fake_pr)
+
+        def post(run, run_dir):
+            review.posts.append(run_dir)
+            if len(review.posts) == 1:
+                fake_pr.add_review_body("alice", [("the helper is never called", "e2")])
+            return True, ""
+
+        review.post = post
+        triage_call = FakeTriage({"never called": Triage(verdict=Verdict.QUESTION,
+                                                         reason="It is called by main.")})
+        run, lines = _run(config, change, triage_call=triage_call, review=review)
+        assert await loop.run_findings(run) == 0
+        assert lines[-1] == "FINDINGS:DONE:2", lines
+        assert any("the helper is never called" in p for p in triage_call.prompts)
+        replies = [e[1] for e in fake_pr.events if e[0] == "issue_reply"]
+        assert len(replies) == 1 and "finding e2" in replies[0]
+        assert "Question; nothing was changed." in replies[0]
 
 
 class TestDirtyTree:

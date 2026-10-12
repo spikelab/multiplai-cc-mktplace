@@ -42,6 +42,12 @@ _PR_NOTICE_RE = re.compile(r"<!--\s*multiplai-pr:notice\s+v=\d+\s*-->")
 # multiplai-dev 0.42.0 posted the same comment without the marker.
 _PR_NOTICE_UNMARKED = "The pr skill (`/multiplai-dev:pr`) edited this PR's description."
 
+# The first line of a review body `/multiplai-dev:review post` writes
+# (review_pipeline/post.py `review_body`). Its findings are the marked parts
+# that follow; a body with this line and no marker holds no finding.
+_REVIEW_POST_HEAD_RE = re.compile(
+    r"\ACode review: \d+ findings?, \d+ inline, \d+ on lines outside this PR's diff[^\n]*\n?")
+
 # `role_name` values that count as "collaborators with write access".
 WRITE_ROLES = frozenset({"admin", "maintain", "write"})
 
@@ -187,13 +193,86 @@ def _issue_comments(repo: str, pr: int, since: str | None, cwd: Path | None) -> 
     return out
 
 
+def review_body_id(review_id: int, finding_id: str | None) -> int:
+    """The id of a comment read from a review's body. Negative, so it never
+    equals a GitHub comment id; one per finding marker (a review body can
+    hold several), and the same on every fetch, so a finding already seen is
+    not read again. A body with no marker is one comment, `-review_id`;
+    marked ones sit below -2**50, past any review id."""
+    if finding_id is None:
+        return -review_id
+    return -(1 << 50) - int(finding_id[:12], 16)
+
+
+def _split_review_body(body: str) -> list[tuple[str, str | None]]:
+    """[(text, finding id)]: one part per finding marker, each ending with its
+    marker; the whole body as one part when it has none. Empty when the body
+    is only `review post`'s count line."""
+    rest = _REVIEW_POST_HEAD_RE.sub("", body, count=1)
+    marks = list(FINDING_MARKER_RE.finditer(rest))
+    if not marks:
+        if rest != body:
+            return []   # review post's body for a review with every finding inline
+        return [(body, None)] if body.strip() else []
+    out, start = [], 0
+    for m in marks:
+        out.append((rest[start:m.end()].strip(), m["id"]))
+        start = m.end()
+    return out
+
+
+def _review_bodies(repo: str, pr: int, since: str | None, cwd: Path | None) -> list[PRComment]:
+    """Comments in the bodies of the PR's reviews submitted after *since*. A
+    review's body has no thread, so it is answered like a top-level comment."""
+    res = git_ops._run_gh(["gh", "api", "--paginate", f"repos/{repo}/pulls/{pr}/reviews",
+                           "--jq", ".[]"], cwd=cwd)
+    if not res.ok:
+        raise FetchError(f"listing PR reviews failed (exit {res.returncode}): "
+                         f"{(res.stderr or res.stdout).strip()}")
+    out: list[PRComment] = []
+    seen: set[int] = set()
+    for line in res.stdout.splitlines():
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise FetchError(f"a PR review is not JSON: {e}") from e
+        if r.get("state") == "PENDING":
+            continue
+        submitted = r.get("submitted_at") or ""
+        if since and submitted <= since:
+            continue
+        body = r.get("body") or ""
+        if is_pipeline_reply(body) or is_pr_skill_notice(body):
+            continue
+        user = r.get("user") or {}
+        login = user.get("login") or "ghost"
+        for text, finding_id in _split_review_body(body):
+            cid = review_body_id(r["id"], finding_id)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            out.append(PRComment(
+                id=cid, kind="review_body", review_id=r["id"], author=login,
+                is_bot=_is_bot(login, user_type=user.get("type")),
+                body=text, url=r.get("html_url") or "", created_at=submitted,
+                finding_id=finding_id,
+            ))
+    return out
+
+
 def fetch_comments(repo: str, pr: int, since: str | None, *,
                    cwd: Path | None = None) -> list[PRComment]:
     """Unresolved review-thread comments (outdated ones kept and marked), plus
-    top-level comments created after *since* (an ISO-8601 UTC timestamp, as
-    GitHub writes them; None for every one). The pipeline's own replies are
-    left out. Raises `FetchError` when a read fails."""
-    return [*_review_comments(repo, pr, cwd), *_issue_comments(repo, pr, since, cwd)]
+    top-level comments and review bodies created after *since* (an ISO-8601
+    UTC timestamp, as GitHub writes them; None for every one). A review body
+    gives one comment per finding marker in it: `/multiplai-dev:review post`
+    puts a finding on lines outside the PR's diff there, not in a thread. The
+    pipeline's own replies are left out. Raises `FetchError` when a read
+    fails."""
+    return [*_review_comments(repo, pr, cwd), *_issue_comments(repo, pr, since, cwd),
+            *_review_bodies(repo, pr, since, cwd)]
 
 
 def _bare(login: str) -> str:

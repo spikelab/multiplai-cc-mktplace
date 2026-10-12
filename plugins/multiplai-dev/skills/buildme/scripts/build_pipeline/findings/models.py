@@ -29,7 +29,9 @@ class PRComment(BaseModel):
     """One comment on the PR: a review-thread comment or a top-level comment."""
 
     id: int                                # GitHub's numeric id (`databaseId` for a review comment)
-    kind: Literal["review", "issue"]       # in a review thread, or a top-level (issue) comment
+    # In a review thread, a top-level (issue) comment, or part of a review's
+    # own body (no thread: answered like a top-level comment).
+    kind: Literal["review", "issue", "review_body"]
     author: str
     is_bot: bool = False
     body: str = ""                         # untrusted
@@ -41,6 +43,7 @@ class PRComment(BaseModel):
     reply_to: int | None = None            # the thread's first comment: where a reply goes
     outdated: bool = False
     finding_id: str | None = None          # from the review's hidden marker, when present
+    review_id: int | None = None           # for a review_body comment: the review's id
     # Set by fetch.prepare():
     allowed: bool = False
     injection: bool = False
@@ -52,6 +55,14 @@ class PRComment(BaseModel):
         return f"finding:{self.finding_id}" if self.finding_id else f"comment:{self.id}"
 
     @property
+    def label(self) -> str:
+        """How the comment is named to a reader when it has no finding id
+        (a review-body comment's `id` is made up; see `fetch.review_body_id`)."""
+        if self.kind == "review_body":
+            return f"review {self.review_id}"
+        return f"comment {self.id}"
+
+    @property
     def location(self) -> str:
         if self.path and self.line:
             return f"{self.path}:{self.line}"
@@ -59,7 +70,7 @@ class PRComment(BaseModel):
 
     def fenced_body(self) -> str:
         """The body, defanged and fenced, labelled with the comment's URL."""
-        lines = fence(self.body, source=self.url or f"comment {self.id}")
+        lines = fence(self.body, source=self.url or self.label)
         return "\n".join(lines) if lines else "(empty comment)"
 
 

@@ -100,10 +100,11 @@ def reply_body(rnd: FindingsRound, record: TriageRecord) -> str:
 
 
 def issue_reply_body(rnd: FindingsRound, records: list[TriageRecord]) -> str:
-    lines = [f"buildme findings, round {rnd.number}: the top-level comments.", ""]
+    lines = [f"buildme findings, round {rnd.number}: the comments outside review threads.", ""]
     for r in records:
         c = r.comment
-        link = f"[comment {c.id}]({c.url})" if c.url else f"comment {c.id}"
+        ident = f"finding {c.finding_id}" if c.finding_id else c.label
+        link = f"[{ident}]({c.url})" if c.url else ident
         lines.append(f"- {link} by @{c.author}: {outcome(rnd, r)} {_line(r.triage.reason, 600)}")
     return "\n".join(lines) + f"\n\n{REPLY_MARKER}"
 
@@ -120,7 +121,7 @@ def render_section(fs: FindingsState) -> str:
             out += ["| Comment | Verdict | Outcome |", "|---|---|---|"]
             for r in acted:
                 c = r.comment
-                ident = f"finding {c.finding_id}" if c.finding_id else f"comment {c.id}"
+                ident = f"finding {c.finding_id}" if c.finding_id else c.label
                 link = f"[{ident}]({c.url})" if c.url else ident
                 out.append(f"| {link} | {r.triage.verdict.value} | "
                            f"{outcome(rnd, r).replace('|', '/')} |")
@@ -221,7 +222,8 @@ def publish_round(fs: FindingsState, rnd: FindingsRound, *, project_dir: Path, c
                                f"{' '.join((res.stderr or res.stdout).split())[:400]}")
         rnd.replies_sent.append(key)
         save()
-    issue = [r for r in records if r.comment.kind == "issue"]
+    # Top-level comments and review bodies have no thread to reply in.
+    issue = [r for r in records if r.comment.kind != "review"]
     key = f"issue:r{rnd.number}"
     if issue and key not in rnd.replies_sent:
         res = _post_issue_comment(fs.repo, fs.pr, issue_reply_body(rnd, issue), project_dir)

@@ -145,12 +145,12 @@ def render_findings(round_n: int, records: list[TriageRecord],
         c = last.comment
         verdict = last.triage.verdict.value if last.triage else "not acted on"
         reason = last.triage.reason if last.triage else last.note
-        link = f"[{c.kind} {c.id}]({c.url})" if c.url else f"{c.kind} {c.id}"
+        link = f"[{c.label}]({c.url})" if c.url else c.label
         past = "; ".join(
             f"r{h.round}: {h.triage.verdict.value if h.triage else 'not acted on'} ({h.comment.id})"
             for h in history
         )
-        ident = c.finding_id or f"comment {c.id}"
+        ident = c.finding_id or c.label
         out.append(
             f"| {_cell(ident, 40)} | {_cell(c.author, 60)} | {link} | "
             f"{'yes' if c.allowed else 'no'} | {verdict} | {_cell(reason)} | {_cell(past, 600)} |"

@@ -8,7 +8,7 @@ again until a round finds nothing new or `findings.max_rounds` is reached.
 | Module | What it does |
 |---|---|
 | `models.py` | `PRComment`, `Verdict`, `Triage`, `TriageRecord`, `SpecChange` |
-| `fetch.py` | lists unresolved review threads and top-level comments; decides whose comments are acted on; fences every body |
+| `fetch.py` | lists unresolved review threads, top-level comments and the findings in review bodies; decides whose comments are acted on; fences every body |
 | `triage.py` | one read-only agent per allowed comment; writes `findings-r<N>.md` |
 | `spec.py` | writes `respec-findings-r<N>.md`, applies it to the change's requirements, commits `spec(findings-r<N>): …` |
 | `code.py` | writes `findings-r<N>-tasks.md` and runs the TDD engine on it against `.findings-r<N>-state.json`, through the `BuildConfig` overrides `change_dir`, `tasks_file` and `state_file` |
