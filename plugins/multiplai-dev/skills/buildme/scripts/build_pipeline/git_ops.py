@@ -498,38 +498,9 @@ def push_branch(worktree: Path, branch: str) -> GitResult:
     return _run(["git", "push", "-u", "origin", branch], cwd=worktree, timeout=_PUSH_TIMEOUT)
 
 
-def pr_skill_dir() -> Path:
-    """The pr skill's script directory: ``<skills>/pr/scripts``. ``<skills>`` is
-    ``parents[3]`` of this file (build_pipeline → scripts → buildme → skills),
-    which is the ``skills/`` directory both in the repo and in an installed
-    copy of the plugin, since that copy holds the whole plugin tree."""
-    return Path(__file__).resolve().parents[3] / "pr" / "scripts"
-
-
-def pr_open_argv(
-    worktree: Path, change_dir: Path, branch: str, title: str, *,
-    draft: bool = True, sections: list[Path] | None = None,
-) -> list[str]:
-    """``pr_pipeline open`` for a branch this pipeline already pushed.
-
-    Run as a subprocess (``uv run --directory``), not imported, so buildme
-    does not depend on uv resolving a path source between two workspace
-    members inside an installed copy of the plugin."""
-    argv = [
-        "uv", "run", "--directory", str(pr_skill_dir()),
-        "python", "-m", "pr_pipeline", "open",
-        "--repo", str(worktree), "--change-dir", str(change_dir),
-        "--head", branch, "--title", title, "--no-push",
-    ]
-    if not draft:
-        argv.append("--ready")
-    for section in sections or []:
-        argv += ["--section", str(section)]
-    return argv
-
-
 def open_pr_with_skill(worktree: Path, argv: list[str]) -> tuple[str | None, list[str], GitResult]:
-    """Run ``pr_pipeline open``. Returns (pr_url, its PR_DIAGNOSIS lines,
+    """Run the pr skill's ``pr_pipeline open`` (argv from
+    ``orchestrator._pr_open_argv``). Returns (pr_url, its PR_DIAGNOSIS lines,
     result). Never raises."""
     res = _run_pr_skill(argv, cwd=worktree)
     url = None

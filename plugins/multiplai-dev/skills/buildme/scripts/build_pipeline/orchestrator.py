@@ -1008,6 +1008,36 @@ def _pre_publish_sections(config: BuildConfig, state: BuildState, docs_dir: Path
     return paths
 
 
+def _pr_skill_dir() -> Path:
+    """The pr skill's script directory: ``<skills>/pr/scripts``. ``<skills>`` is
+    ``parents[3]`` of this file (build_pipeline → scripts → buildme → skills),
+    which is the ``skills/`` directory both in the repo and in an installed
+    copy of the plugin, since that copy holds the whole plugin tree."""
+    return Path(__file__).resolve().parents[3] / "pr" / "scripts"
+
+
+def _pr_open_argv(
+    worktree: Path, change_dir: Path, branch: str, title: str, *,
+    draft: bool = True, sections: list[Path] | None = None,
+) -> list[str]:
+    """``pr_pipeline open`` for a branch this pipeline already pushed.
+
+    Run as a subprocess (``uv run --directory``), not imported, so buildme
+    does not depend on uv resolving a path source between two workspace
+    members inside an installed copy of the plugin."""
+    argv = [
+        "uv", "run", "--directory", str(_pr_skill_dir()),
+        "python", "-m", "pr_pipeline", "open",
+        "--repo", str(worktree), "--change-dir", str(change_dir),
+        "--head", branch, "--title", title, "--no-push",
+    ]
+    if not draft:
+        argv.append("--ready")
+    for section in sections or []:
+        argv += ["--section", str(section)]
+    return argv
+
+
 def _worktree_section(state: BuildState, docs_dir: Path) -> Path | None:
     """The PR body's note that the build's worktree was left in place."""
     try:
@@ -1060,7 +1090,7 @@ def _run_publish(
 
     sections = [p for p in [_worktree_section(state, docs_dir)] if p is not None]
     sections += _pre_publish_sections(config, state, docs_dir)
-    pr_argv = git_ops.pr_open_argv(
+    pr_argv = _pr_open_argv(
         worktree, docs_dir, state.branch, title, draft=draft, sections=sections,
     )
     manual = git_ops.manual_finish_commands(

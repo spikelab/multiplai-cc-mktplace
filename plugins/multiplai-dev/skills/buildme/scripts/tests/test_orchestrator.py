@@ -1730,7 +1730,9 @@ class TestPublishHandsOffToThePrSkill:
         config, state, progress = await _published_build(tmp_path, "handoff")
         assert _run_publish(config, state, progress) is True
         argv = captured["argv"]
-        skills = Path(git_ops.__file__).resolve().parents[3]
+        from build_pipeline import orchestrator
+
+        skills = Path(orchestrator.__file__).resolve().parents[3]
         assert argv[:4] == ["uv", "run", "--directory", str(skills / "pr" / "scripts")]
         assert argv[4:8] == ["python", "-m", "pr_pipeline", "open"]
         assert argv[argv.index("--repo") + 1] == state.worktree_path

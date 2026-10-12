@@ -356,6 +356,9 @@ class TestPush:
 # --- PR (gh mocked) -------------------------------------------------------
 
 
+from build_pipeline.orchestrator import _pr_open_argv  # noqa: E402
+
+
 class TestOpenPRWithSkill:
     """`gh pr create` moved into the pr skill (its tests: pr/scripts/tests/
     test_commands.py: URL, draft by default, --ready, failure exit codes).
@@ -370,7 +373,7 @@ class TestOpenPRWithSkill:
             return GitResult(argv, 0, "DIFF:2 files, +3 -1\nPR:https://github.com/o/r/pull/42\n", "")
 
         monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
-        argv = git_ops.pr_open_argv(tmp_path, tmp_path / "c", "buildme/c", "buildme: c", draft=True)
+        argv = _pr_open_argv(tmp_path, tmp_path / "c", "buildme/c", "buildme: c", draft=True)
         url, diagnoses, res = git_ops.open_pr_with_skill(tmp_path, argv)
         assert url == "https://github.com/o/r/pull/42"
         assert res.ok and diagnoses == []
@@ -378,7 +381,7 @@ class TestOpenPRWithSkill:
         assert "--ready" not in seen["argv"]
 
     def test_ready_passes_ready(self, tmp_path):
-        argv = git_ops.pr_open_argv(tmp_path, tmp_path / "c", "b", "t", draft=False)
+        argv = _pr_open_argv(tmp_path, tmp_path / "c", "b", "t", draft=False)
         assert "--ready" in argv
 
     def test_failure_returns_none_and_the_diagnosis_without_raising(self, tmp_path, monkeypatch):
@@ -401,7 +404,7 @@ class TestManualFinishCommands:
         assert "--draft" in text
 
     def test_lists_the_pr_skill_before_the_gh_fallback(self, tmp_path):
-        argv = git_ops.pr_open_argv(tmp_path / "wt", tmp_path / "c", "buildme/c", "buildme: c")
+        argv = _pr_open_argv(tmp_path / "wt", tmp_path / "c", "buildme/c", "buildme: c")
         text = git_ops.manual_finish_commands(
             tmp_path / "wt", "buildme/c", "buildme: c", pr_skill_argv=argv,
         )
