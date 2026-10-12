@@ -1,4 +1,4 @@
-"""`migrate --from <dir>`: copy reviews written before 0.33 into the data directory.
+"""`migrate --from <dir>`: copy reviews written before multiplai-dev 0.45 into the data directory.
 
 Each directory directly under the source is copied whole to
 `<out>/legacy/<its name>/` (by default `<data_dir>/reviews/legacy/`), and one

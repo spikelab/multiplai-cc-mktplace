@@ -7,9 +7,11 @@ GitHub renders nothing for it:
 
 - `id` is the finding's v1 id: the first 10 hex characters of a sha1
   (`models.finding_id`).
-- `round` is the review round's directory name under `<out>/<slug>/rounds/`:
-  the round's head sha cut to 12 hex characters, with a `-2`, `-3`, ...
-  suffix for a later round on the same head (`rounds.round_name`).
+- `round` names the review round by its head: the head sha cut to 12 hex
+  characters, with a `-2`, `-3`, ... suffix for a later round on the same
+  head (`rounds.round_name`). Before multiplai-dev 0.45 this was also the
+  round's directory name under `<out>/<slug>/rounds/`; rounds are now kept as
+  `<NN>-<sha12>/`, and the marker keeps its v1 form so posted markers parse.
 - `v` is `MARKER_VERSION`.
 
 A tool that finds review findings on a PR (buildme-findings) fetches the PR's

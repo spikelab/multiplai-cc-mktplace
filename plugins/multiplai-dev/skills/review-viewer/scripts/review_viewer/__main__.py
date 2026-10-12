@@ -99,7 +99,7 @@ def default_reviews_dir() -> Path:
 
 
 def legacy_reviews_dir() -> Path:
-    """Where the review skill wrote before multiplai-dev 0.33: the workspace
+    """Where the review skill wrote before multiplai-dev 0.45: the workspace
     `INBOX/reviews`, else `~/.multiplai/reviews`. Still read when a review is
     not in `default_reviews_dir()`."""
     return output_root() / "reviews"
@@ -190,7 +190,7 @@ def _load_resolved(args, resolved: Resolved):
     kind, path, review = find_review(target, dirs)
     source_notice = None
     if kind != "match" and not args.reviews_dir:
-        # Not in the data directory: look where the review skill wrote before 0.33.
+        # Not in the data directory: look where the review skill wrote before multiplai-dev 0.45.
         old_kind, old_path, old_review = find_review(target, [legacy_reviews_dir()])
         if old_kind == "match" or (kind == "none" and old_kind == "stale"):
             kind, path, review = old_kind, old_path, old_review

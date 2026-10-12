@@ -193,9 +193,15 @@ session.
 Plain-diff mode (a `--target` with no review of the same commits) puts the
 mailbox under `<workspace INBOX or ~/.multiplai>/review-viewer/<slug>/viewer/`. A
 target whose review is found uses that review's `viewer/`. `serve` looks in
-`--reviews-dir` (default: `<workspace INBOX or ~/.multiplai>/reviews`, where
-the review skill writes — `output_root()` and the review skill's
-`default_out()` must agree) for `*/findings.json` with the same base and head.
+`--reviews-dir` (default: `default_reviews_dir()`, `<data_dir>/reviews` from
+multiplai-core's `get_paths()`, where the review skill writes — it and the
+review skill's `default_out()` must agree) for `*/findings.json` with the
+same base and head. With no `--reviews-dir`, a review not matched there is
+looked for in `legacy_reviews_dir()` (`<workspace INBOX or
+~/.multiplai>/reviews`, where the skill wrote before multiplai-dev 0.45); one found there
+loads with a notice naming that location. `gitdata.slug_repo_name()` restates
+the pipeline's slug rule (`<owner>-<repo>` from `origin`, else the directory
+name) for PR, branch, unpushed and tree targets, so both name one directory.
 
 ## Logging
 

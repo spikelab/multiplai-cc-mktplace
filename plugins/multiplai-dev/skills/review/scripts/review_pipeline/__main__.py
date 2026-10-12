@@ -11,7 +11,7 @@
             their labels with the decisions already recorded (writes a report;
             changes no review)
   migrate — copy review directories written elsewhere (INBOX/reviews before
-            0.33) into <out>/legacy/, with a ledger line per findings.json;
+            multiplai-dev 0.45) into <out>/legacy/, with a ledger line per findings.json;
             the source is never changed
 
 stdout contract: progress summary lines, a `summary: <path>` line per finished

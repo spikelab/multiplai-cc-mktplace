@@ -10,7 +10,7 @@ on the same head (a rerun), so the repeat and assess stages have that run to
 compare with. `<NN>` is the two-digit round number, one more than the
 directories already in `rounds/`, so a second run on one head gets the next
 number. The copy is made under a hidden name and renamed when complete.
-Nothing there is ever deleted or overwritten. Rounds kept before 0.33 are
+Nothing there is ever deleted or overwritten. Rounds kept before multiplai-dev 0.45 are
 named `<sha12>/` and `<sha12>-2/`; they are still read, ordered by
 `generated_at`.
 

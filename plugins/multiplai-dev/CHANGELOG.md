@@ -17,6 +17,42 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-10-12
+
+### Changed
+- `/multiplai-dev:review` writes to `reviews/` in the multiplai data
+  directory (`<workspace>/.multiplai/data/reviews/` in a workspace) instead
+  of `INBOX/reviews/`. `--out` still overrides it.
+- A review's directory is named after the repository's `origin` remote,
+  `<owner>-<repo>`, not the local directory: the same PR reviewed from the
+  main checkout and from a worktree now goes to one directory
+  (`spikelab-multiplai-cc-mktplace--pr-283`). A repository with no `origin`
+  keeps its directory name.
+- Each earlier round is kept in full (its `progress.log`,
+  `review-state.json`, `diff.patch`, commit and file lists, summaries and
+  checks, not only the findings and the review) under
+  `rounds/<NN>-<head sha>/`, numbered `01`, `02`, …; a second run on the
+  same head gets the next number. Rounds kept by earlier versions
+  (`<sha>/`, `<sha>-2/`) are still read. The round id in posted PR markers
+  is unchanged.
+- `runs.jsonl` lists every run, earlier rounds included, sorted by time.
+- review-viewer looks for a review in the new directory, then in the old
+  `INBOX/reviews/`; a review found only there loads with a notice naming
+  where it came from.
+
+### Added
+- `ledger.jsonl` in the data directory's `reviews/`: one line when a run
+  starts and one when it ends (budget stops, resumes and each batch target
+  included), with its cost and counts. It is never rewritten, so it keeps
+  runs whose directory was deleted.
+- A review killed part way (no end line in the ledger) is no longer started
+  over by accident: running `review` on the same target and head exits 4
+  and prints the `resume` command. `--restart` starts over on purpose.
+- `python -m review_pipeline migrate --from <dir>` copies old review
+  directories (for example `INBOX/reviews`) to `reviews/legacy/` in the
+  data directory and records them in the ledger. It never changes or
+  deletes the source, and a second run copies nothing.
+
 ## [0.44.0] - 2026-10-12
 
 ### Changed
