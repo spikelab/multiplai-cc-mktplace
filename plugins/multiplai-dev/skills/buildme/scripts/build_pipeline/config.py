@@ -828,7 +828,7 @@ class BuildConfig:
         stage = STEP_STAGES[step]
         spec = resolve_model_spec([self.model_specs.get(step), self.model_specs.get(stage)])
         if spec is None:
-            field_model = self._set_model_field(
+            field_model = self._explicit_field_model(
                 _STEP_MODEL_FIELDS.get(step) or _STAGE_MODEL_FIELDS[stage])
             if field_model:
                 return field_model
@@ -837,7 +837,7 @@ class BuildConfig:
             return self.model
         return spec.model if spec.is_anthropic else spec.qualified
 
-    def _set_model_field(self, attr: str) -> str | None:
+    def _explicit_field_model(self, attr: str) -> str | None:
         """*attr*'s value if someone set it, else its roots' (``model`` excluded).
 
         A field in ``_derived_step_fields`` holds a copy of its root, not a
@@ -851,7 +851,7 @@ class BuildConfig:
                 return value
         for derived, root in _STEP_FALLBACKS:
             if derived == attr:
-                value = self._set_model_field(root)
+                value = self._explicit_field_model(root)
                 if value:
                     return value
         return None
