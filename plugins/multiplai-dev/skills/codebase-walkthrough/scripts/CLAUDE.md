@@ -20,7 +20,7 @@ cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && \
 |---|---|
 | `__main__.py` | CLI: `run`, `resume`, `check`. Exit codes: 0 done, 1 error/untrusted/stop, 2 budget stop. |
 | `models.py` | Pydantic models and `STAGES`. `WalkState` is the checkpoint. |
-| `target.py` | Resolves the target, lists its files, snapshots a repo with `git archive` (no `.env*`, binaries or files over 2 MB). `git()` runs only `rev-parse`, `show`, `archive`, `ls-files`. |
+| `target.py` | Resolves the target, lists its files, snapshots a repo with `git archive` (no `.env*`, binaries or files over 2 MB). `git()` runs only `rev-parse`, `show`, `archive`, `ls-files`, `ls-tree`; `tree_files()` is the `ls-tree` list `review-viewer serve --tree` shows. |
 | `repos.py` | Finds repos under the search root (depth 4); the default root is the nearest ancestor holding several repos. |
 | `symbols.py` | Python `ast` over the target: functions, classes, urls, celery tasks, models, outbound HTTP paths, settings, env vars, cache keys. |
 | `references.py` | `rg` picks candidate files (intersected with `git ls-files`); `ast`, `ast-grep` or whole-identifier SQL matching confirms each hit, reading the file at HEAD. |
@@ -30,7 +30,7 @@ cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && \
 | `docs.py`, `fetcher.py`, `netguard.py`, `untrusted.py` | `llms.txt`, page choice, fetch with SSRF and host checks on every redirect, fencing; local docs; the API collection (names, methods, URLs, header names; never `.env*` or `secret` fields). `fetcher.py` is a trimmed copy of deep-research's without trafilatura. |
 | `stages/` | `explore`, `docs`, `trace`, `write`. Each gates its agents' answers and does one re-ask for what failed. |
 | `prompts.py` | One function per agent task; shared rule blocks. |
-| `render.py` | Expands `[[cN]]` / `[[snippet:cN]]` into `path:line` links and snippets from the commit; draws Mermaid from verified data; writes the Markdown, the HTML and the coverage table. |
+| `render.py` | Expands `[[cN]]` / `[[snippet:cN]]` into `path:line` links and snippets from the commit; draws Mermaid from verified data; writes the Markdown, the HTML and the coverage table. In human mode, `render_walkthrough_json()` also writes `<name>-walkthrough.json` for the review-viewer (v1, `review-viewer/schema/walkthrough.v1.schema.json`): base is git's empty tree, one step per H2 anchored on its links into the module directory (the commits and coverage tables, and a section with no such link, go in `overview_md`), every other file under it in `skipped`. `review-viewer/scripts/tests/fixtures/module-walkthrough.json` is a copy the viewer's suite checks; `test_the_viewer_fixture_is_what_run_writes` fails when it drifts. |
 | `check.py` | Re-checks a finished walkthrough's links and snippets against the commits in its header. |
 | `orchestrator.py` | Runs the code stages and agent stages in `STAGES` order, saving state after each; `resume`. |
 | `sdk.py`, `budget.py`, `state.py`, `progress.py`, `config.py` | The same shape as review_pipeline's, on multiplai-core's primitives: trust gate, tool allow-list and the one-reformat call loop (answer parsing from `multiplai_core.structured`); `WalkthroughBudget`, a `multiplai_core.budget.SpendLedger` with a $50 default; atomic checkpoint (`multiplai_core.checkpoint`); `progress.log` (`multiplai_core.progress.ProgressWriter` plus the walkthrough's `STARTED` line); `walkthrough.yaml` > `multiplai.conf` > session model, read with `multiplai_core.stage_config`. |

@@ -1,4 +1,4 @@
-"""Assemble the walkthrough from gated sections. Markdown first; the HTML holds the same text.
+"""Assemble the walkthrough from gated sections. Markdown first; the HTML and walkthrough.json hold the same text.
 
 Code, not a model, turns `[[cN]]` into `path:line` links and `[[snippet:cN]]`
 into the cited lines read with `git show` at the commit. Each link carries its
@@ -10,16 +10,18 @@ entries.
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote as url_quote
 
-from .gates import CITE_ID, lines_at_commit, sections_gate
+from .check import LINK
+from .gates import CITE_ID, file_at_commit, lines_at_commit, sections_gate
 from .models import Citation, RepoInfo, WalkState
 from .stages.write import citations_for_write, required_titles
-from .target import github_web_base
+from .target import github_web_base, tree_files
 
 LANG = {".py": "python", ".ts": "typescript", ".tsx": "tsx", ".js": "javascript", ".jsx": "jsx", ".sql": "sql",
         ".sqlx": "sql", ".yml": "yaml", ".yaml": "yaml", ".json": "json", ".md": "markdown", ".html": "markup",
@@ -195,6 +197,9 @@ def render_markdown(state: WalkState, out_dir: Path) -> str:
     md += [f"# {title}", "",
            f"> Generated {date.today().isoformat()} · depth {state.options.get('depth', 'standard')} · mode {mode} · "
            f"{len(t.files)} files · spent ${spent:.2f} over {calls} agent calls", "",
+           f"- Module directory: `{os.path.relpath(Path(t.repo_path) / t.subpath, out_dir)}`",
+           f"- Depth: `{state.options.get('depth', 'standard')}`",
+           f"- Mode: `{mode}`", "",
            "Every `path:line` below was checked against the commit listed here. "
            "Re-check with `python -m walkthrough_pipeline check <this file>`.", "",
            "## Commits read", "", "| Repo | Path | Commit |", "|---|---|---|"]
@@ -360,6 +365,132 @@ def _cut_appendix(state: WalkState, lk: Linker) -> list[str]:
     return out
 
 
+# --- walkthrough.json, for the review-viewer ------------------------------------------------
+
+# git's empty tree (`git hash-object -t tree /dev/null`). A walkthrough.json whose base is this
+# opens in the review-viewer as a tree target: every file under the module directory is "changed".
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+MERMAID = re.compile(r"```mermaid\n(.*?)```", re.S)
+# walkthrough.v1.schema.json: Diagram.source maxLength.
+DIAGRAM_MAX_CHARS = 20000
+# Sections that go in overview_md, not in a step: the commits table and the coverage table.
+OVERVIEW_SECTIONS = ("Commits read", "Coverage")
+FENCE = re.compile(r"^(`{3,}|~{3,})")
+
+
+def split_sections(md: str) -> tuple[str, list[tuple[str, str]]]:
+    """(the text before the first H2, [(H2 title, text under it)]), in order.
+
+    A `## ` line inside a fenced code block (a snippet of a Markdown file) is not a heading.
+    """
+    intro: list[str] = []
+    sections: list[tuple[str, list[str]]] = []
+    fence = ""
+    for line in md.split("\n"):
+        m = FENCE.match(line)
+        if fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line[len(m.group(1)):].strip():
+                fence = ""
+        elif m:
+            fence = m.group(1)
+        elif line.startswith("## "):
+            sections.append((line[3:].strip(), []))
+            continue
+        (sections[-1][1] if sections else intro).append(line)
+    return "\n".join(intro), [(title, "\n".join(body)) for title, body in sections]
+
+
+def _step_id(title: str, used: set[str], n: int) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:36].strip("-") or f"step-{n}"
+    sid, k = base, 2
+    while sid in used:
+        sid, k = f"{base}-{k}", k + 1
+    used.add(sid)
+    return sid
+
+
+def _line_count(text: str) -> int:
+    """Lines the way git and the viewer number them: split on `\\n`, a final newline ends the last line."""
+    lines = text.split("\n")
+    return len(lines) - (1 if lines and lines[-1] == "" else 0)
+
+
+def _anchors(text: str, state: WalkState, in_tree: set[str], counts: dict[str, int | None]) -> list[dict]:
+    """The section's links into the module's own repo, under the module directory, as viewer anchors."""
+    t = state.target
+    out: list[dict] = []
+    seen: set[tuple[str, int, int]] = set()
+    for m in LINK.finditer(text):
+        key, _, rel = m.group(1).partition("/")
+        if key != t.repo_key or rel not in in_tree:
+            continue
+        if rel not in counts:
+            body = file_at_commit(state.repos, m.group(1))
+            counts[rel] = None if body is None else _line_count(body)
+        n = counts[rel]
+        start = int(m.group(2))
+        if n is None or start > n:
+            continue
+        end = min(int(m.group(3) or start), n)
+        if (rel, start, end) not in seen:
+            seen.add((rel, start, end))
+            out.append({"path": rel, "side": "head", "line_start": start, "line_end": end})
+    return out
+
+
+def _skip_reason(state: WalkState, rel: str) -> str:
+    t = state.target
+    if rel in t.skipped:
+        return f"not read: {t.skipped[rel]}"
+    if "migrations" in PurePosixPath(rel).parts[:-1]:
+        return "in a migrations directory: not read (the coverage table counts migrations)"
+    if rel in t.files:
+        return "read, but no step of this walkthrough cites it"
+    return ("not read: not in the snapshot the agents read (secrets, binaries, vendored directories, "
+            "symlinks and files over 2 MB are left out)")
+
+
+def render_walkthrough_json(state: WalkState, md: str) -> dict:
+    """The walkthrough as a review-viewer `walkthrough.json` (v1) over the module's tree at its commit.
+
+    Each H2 section becomes a step anchored on its links into the module directory. Links into
+    other repos stay in the text. The introduction, the commits and coverage tables, and any
+    section with no link into the module directory go in `overview_md`, because a v1 step needs
+    at least one anchor. Every file under the module directory that no step anchors is listed in
+    `skipped` with the reason, so the viewer counts the walkthrough as covering the whole tree.
+    """
+    t = state.target
+    in_tree = set(tree_files(t.repo_path, t.head_sha, t.subpath))
+    counts: dict[str, int | None] = {}
+    intro, sections = split_sections(md)
+    overview = [intro.strip()]
+    steps: list[dict] = []
+    used: set[str] = set()
+    for title, text in sections:
+        anchors = [] if title in OVERVIEW_SECTIONS else _anchors(text, state, in_tree, counts)
+        if not anchors:
+            overview.append(f"## {title}\n\n{text.strip()}")
+            continue
+        step = {"id": _step_id(title, used, len(steps) + 1), "title": title, "anchors": anchors}
+        m = MERMAID.search(text)
+        if m and len(m.group(1)) <= DIAGRAM_MAX_CHARS:
+            step["diagram"] = {"kind": "mermaid", "source": m.group(1).rstrip("\n")}
+            text = text[:m.start()] + text[m.end():]
+        step["body_md"] = re.sub(r"\n{3,}", "\n\n", text).strip()
+        steps.append(step)
+    anchored = {a["path"] for s in steps for a in s["anchors"]}
+    return {
+        "schema_version": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "base_sha": EMPTY_TREE,
+        "head_sha": t.head_sha,
+        "overview_md": "\n\n".join(p for p in overview if p) + "\n",
+        "steps": steps,
+        "skipped": [{"path": f, "reason": _skip_reason(state, f)} for f in sorted(in_tree - anchored)],
+        "complete": True,
+    }
+
+
 # --- HTML -------------------------------------------------------------------------------
 
 
@@ -409,4 +540,8 @@ def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
         html_path = out_dir / f"{name}-walkthrough.html"
         html_path.write_text(render_html(md, f"{state.target.package} walkthrough"), encoding="utf-8")
         paths.append(html_path)
+        json_path = out_dir / f"{name}-walkthrough.json"
+        json_path.write_text(json.dumps(render_walkthrough_json(state, md), indent=2, ensure_ascii=False) + "\n",
+                             encoding="utf-8")
+        paths.append(json_path)
     return paths

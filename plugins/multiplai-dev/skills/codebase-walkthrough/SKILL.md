@@ -43,8 +43,8 @@ gates never ask a model.
   a model.** Agents read snapshots of those commits with `Read`, `Grep` and
   `Glob` only; the writers get no tools. No agent gets a shell, file edits, or
   web access. This is why it needs `--trust-repo`.
-- **Reads git repositories** with `git rev-parse`, `git show`, `git archive`
-  and `git ls-files` only. It never checks out, fetches, commits or writes to
+- **Reads git repositories** with `git rev-parse`, `git show`, `git archive`,
+  `git ls-files` and `git ls-tree` only. It never checks out, fetches, commits or writes to
   them. It runs `rg` in each repository's working tree to pick which files to
   parse; what it parses is the commit.
 - **Never reads credentials.** `.env*` files are left out of every search and
@@ -81,7 +81,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 |-----|---------|---------|
 | target | Directory of the module, inside a git repository | required |
 | `--depth` | `overview` (skips test files), `standard`, `deep` | `standard` |
-| `--mode` | `human` (Markdown + HTML) or `agent` (compact Markdown for coding agents; no references, docs or scenarios) | `human` |
+| `--mode` | `human` (Markdown, HTML and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or scenarios) | `human` |
 | `--name` | Base file name | the module directory, lower-cased |
 | `--output` | Directory for the walkthrough files | `INBOX/` if it exists, else the current directory |
 | `--search-root` / `--repos` | Where to look for references | the nearest ancestor holding several repositories |
