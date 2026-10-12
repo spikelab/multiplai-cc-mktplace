@@ -15,6 +15,8 @@ from __future__ import annotations
 import hashlib
 from typing import Literal
 
+from code_facts import Dropped as FactDropped
+from code_facts import Fact, FilePurpose, Term
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Severity = Literal["HIGH", "MEDIUM", "LOW"]
@@ -22,7 +24,7 @@ SEVERITIES: tuple[str, ...] = ("HIGH", "MEDIUM", "LOW")
 
 # Stage names in run order. `ReviewState.stage` holds the last one completed.
 STAGES: tuple[str, ...] = (
-    "target", "find", "verify", "merge", "repeats", "assess", "export", "render", "done",
+    "target", "explain", "find", "verify", "merge", "repeats", "assess", "export", "render", "done",
 )
 # Stages a checkpoint written before 0.22 can name. Both ran after verify, so
 # a resumed review of that age continues with merge.
@@ -320,6 +322,18 @@ class Assessment(BaseModel):
     earlier_note: str = ""
 
 
+class ExplainedFacts(BaseModel):
+    """The explain stage's checked facts (`code_facts`), as `facts.json` holds them."""
+    facts: list[Fact] = Field(default_factory=list)
+    files: list[FilePurpose] = Field(default_factory=list)
+    interfaces: list[Fact] = Field(default_factory=list)
+    gotchas: list[Fact] = Field(default_factory=list)
+    conventions: list[Fact] = Field(default_factory=list)
+    terms: list[Term] = Field(default_factory=list)
+    uncovered: list[str] = Field(default_factory=list)
+    dropped: list[FactDropped] = Field(default_factory=list)
+
+
 class ReviewState(BaseModel):
     target: TargetInfo
     stage: str = "target"  # last stage completed
@@ -336,6 +350,11 @@ class ReviewState(BaseModel):
     # Each finder's result by dimension, stored as it returns, so a budget
     # stop during find keeps it and a resumed find runs only the rest.
     finder_results: dict[str, FinderResult] = Field(default_factory=dict)
+    # The explain stage (`explain: true` only): each explore agent's answer by
+    # task key, stored as it returns so a resume asks none twice, and the
+    # facts that passed the citation check. None when explain did not run.
+    explain_answers: dict[str, dict] = Field(default_factory=dict)
+    facts: ExplainedFacts | None = None
     # Shown findings that repeat a finding rejected in an earlier round, by id,
     # stored as the repeats stage finds them; `repeats_checked` lists the ids
     # already sent to the repeats agent, so a resume does not ask again.

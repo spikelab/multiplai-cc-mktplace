@@ -563,3 +563,26 @@ def snapshot_head(target: TargetInfo, dest: Path) -> Path:
         tar.extractall(dest, filter="data")
     (dest / ".review-head").write_text(target.head_sha + "\n", encoding="utf-8")
     return dest
+
+
+def snapshot_base(target: TargetInfo, dest: Path, paths: list[str]) -> Path:
+    """Extract *paths* as they are at base_sha into *dest*, replacing what is there.
+
+    The agents' working directory is the head snapshot. The explain stage's
+    agents also read lines a change removed, so those files are extracted at
+    base, beside it, with `git archive` (which writes nothing to the repo).
+    """
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    if not paths:
+        return dest
+    proc = subprocess.run(
+        [*GIT_ARGV, "-C", target.repo_path, "archive", "--format=tar", target.base_sha, "--", *paths],
+        capture_output=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False,
+    )
+    if proc.returncode != 0:
+        raise TargetError(f"git archive {target.base_sha[:12]} failed: {proc.stderr.decode(errors='replace').strip()}")
+    with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tar:
+        tar.extractall(dest, filter="data")
+    return dest
