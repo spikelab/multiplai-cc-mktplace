@@ -34,8 +34,8 @@ two checks.
 
 **Thresholds are inputs, not constants.** The caller passes
 ``block_trigger`` and ``package_trigger`` (``config.plan_split_block_trigger``,
-default 8, and ``config.plan_split_package_trigger``, default 3). The plan is
-explicit that 8 is a placeholder: nobody has measured the block-count
+default 10, and ``config.plan_split_package_trigger``, default 5). The plan is
+explicit that 10 is a placeholder: nobody has measured the block-count
 distribution across real runs, so any number chosen today is a guess wearing a
 decimal point. Replace it with a measured one — the block count per finished
 run in the run archive, cut at the point where per-block review actually
@@ -706,8 +706,8 @@ def assess_plan_split(
     """Run all three checks with the caller's thresholds.
 
     ``block_trigger`` and ``package_trigger`` come from config
-    (``plan_split_block_trigger``, default 8; ``plan_split_package_trigger``,
-    default 3) and are passed in, never read here — 8 in particular is an
+    (``plan_split_block_trigger``, default 10; ``plan_split_package_trigger``,
+    default 5) and are passed in, never read here — 10 in particular is an
     unmeasured placeholder, not a finding, and this module must not hard-code
     it. The size and package triggers only decide whether the separability
     partition gets a say; :func:`check_atomicity` is consulted at every size.

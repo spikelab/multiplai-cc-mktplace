@@ -57,6 +57,18 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
     cm = ChangeManager(config.specs_dir)
 
+    # A named input file that is gone stops the build (exit 2) only while the
+    # phase that reads it is still ahead; a resume uses the change dir's copy.
+    if args is not None:
+        from .intake import check_input_files
+        change_dirs = [config.change_dir] if config.change_name else []
+        if state_path.exists():
+            change_dirs.append(state_path.parent)
+        error = check_input_files(args, state, change_dirs)
+        if error:
+            print(f"ERROR: {error}", file=sys.stderr, flush=True)
+            return 2
+
     # Set the moment the build's outcome is decided as success (spec-only done,
     # or publish resolved). From then on the checkpoint is deliberately gone,
     # so a late exception (progress cleanup, stdout) must NOT be recorded as
@@ -67,7 +79,13 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # Phase: Bootstrap
         if not state.is_phase_complete(BuildPhase.BOOTSTRAP) and config.mode != "only":
             log.info("START phase=BOOTSTRAP change=%s mode=%s tier=%s", config.change_name, config.mode, config.tier)
-            await _run_bootstrap(config, state, cm, state_path)
+            from .intake import ConfigNotCommittedError
+            try:
+                await _run_bootstrap(config, state, cm, state_path, args=args)
+            except ConfigNotCommittedError as e:
+                log.error("FAILED phase=BOOTSTRAP reason=config-not-committed")
+                print(f"ERROR: {e}", file=sys.stderr, flush=True)
+                return 1
             # Bootstrap may have re-bound config.project_dir to the build's own
             # worktree — every path derived earlier is now stale.
             state_path = config.state_file_path()
@@ -80,52 +98,34 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             # exist yet, and creating it would suppress .change.yaml.
             board.record(config, state, BuildPhase.BOOTSTRAP, progress=progress)
 
-        # Phase: Interview (handled by SKILL.md wrapper — we receive summary)
+        # Phase: Interview. `user`: the SKILL.md wrapper ran the interviewer and
+        # we receive its summary. `self`: questioner + answerer, no human.
+        # `ticket`: questions go on the ticket and the build waits (exit 3).
+        # Every mode saves interview.md in the change dir.
         if not state.is_phase_complete(BuildPhase.INTERVIEW_DONE) and config.mode != "only":
-            interview_summary = getattr(args, "interview_summary", "")
-
-            # Load context files (--context-files) and prepend to interview summary
-            context_files = getattr(args, "context_files", []) or []
-            if context_files:
-                context_parts = []
-                for cf_path in context_files:
-                    cf = Path(cf_path)
-                    if cf.exists():
-                        content = cf.read_text()
-                        context_parts.append(f"--- Context: {cf.name} ---\n{content}")
-                        log.info("Loaded context file: %s (%d chars)", cf_path, len(content))
-                    else:
-                        log.warning("Context file not found: %s", cf_path)
-                if context_parts:
-                    loaded = "\n\n".join(context_parts)
-                    interview_summary = f"{loaded}\n\n--- Interview Summary ---\n{interview_summary}" if interview_summary else loaded
-
-            if interview_summary:
-                log.info("START phase=INTERVIEW summary_len=%d", len(interview_summary))
-                state.interview_summary = interview_summary
-                state.advance_to(BuildPhase.INTERVIEW_DONE, state_path)
-                log.info("DONE phase=INTERVIEW")
-                print("PHASE:INTERVIEW:COMPLETE", flush=True)
-                board.record(config, state, BuildPhase.INTERVIEW_DONE, progress=progress)
-            elif not config.auto:
-                log.warning("SKIP phase=INTERVIEW reason=no-summary-provided")
-                state.advance_to(BuildPhase.INTERVIEW_DONE, state_path)
+            from .intake import run_interview_phase
+            rc = await run_interview_phase(config, state, args, state_path, progress)
+            if rc is not None:
+                return rc
 
         # Phase: Research
         if not state.is_phase_complete(BuildPhase.RESEARCH):
             if config.skip_research:
                 log.info("SKIP phase=RESEARCH reason=--skip-research")
+                log.info("DONE phase=RESEARCH")
                 state.advance_to(BuildPhase.RESEARCH, state_path)
             elif config.mode == "only":
                 log.info("START phase=RESEARCH_CHECK")
                 await _run_research_check(config, state, cm, state_path)
+                log.info("DONE phase=RESEARCH")
             else:
                 log.info("START phase=RESEARCH")
-                research_path = getattr(args, "research_path", "")
-                if research_path:
-                    state.research_path = research_path
+                from .intake import run_research_phase
+                rc = await run_research_phase(config, state, args, state_path, progress)
+                if rc is not None:
+                    return rc
+            if not state.is_phase_complete(BuildPhase.RESEARCH):
                 state.advance_to(BuildPhase.RESEARCH, state_path)
-            log.info("DONE phase=RESEARCH")
             print("PHASE:RESEARCH:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.RESEARCH, progress=progress)
 
@@ -228,6 +228,17 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 state.advance_to(BuildPhase.PLAN_REVIEW, state_path)
             print("PHASE:PLAN_REVIEW:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.PLAN_REVIEW, progress=progress)
+
+        # Size gate — not a BuildPhase: it re-runs on every resume until the
+        # prototype phase is behind the build. A plan that should be split
+        # stops here (exit 3) with split-proposal.md, until --accept-size.
+        if not state.is_phase_complete(BuildPhase.PROTOTYPE):
+            rc = _run_size_gate(
+                config, state, state_path, progress,
+                accept_size=bool(getattr(args, "accept_size", False)),
+            )
+            if rc is not None:
+                return rc
 
         # Phase: Prototype — a cheap artifact that proves the shape before the
         # expensive TDD build. Phase failure is never build failure.
@@ -791,6 +802,7 @@ def _print_prototype_review_paths(config: BuildConfig) -> None:
 
 async def _run_bootstrap(
     config: BuildConfig, state: BuildState, cm: ChangeManager, state_path: Path,
+    *, args=None,
 ) -> None:
     """Set up the build's worktree/branch, project skeleton, specs/, config.yaml.
 
@@ -801,7 +813,19 @@ async def _run_bootstrap(
     """
     import subprocess
 
+    from . import intake
+
+    previous_change_dir = config.change_dir if config.change_name else None
     if config.git.worktree:
+        # The worktree branches from HEAD, so an uncommitted config.yaml would
+        # silently not exist inside it — refuse instead of building without it.
+        # Only the caller's source repo is checked: a FAILED build retried
+        # after _rebind_to_existing_worktree runs bootstrap inside its own
+        # worktree, where the uncommitted config.yaml is the stub bootstrap
+        # wrote itself and the user has nothing to commit.
+        if (not _inside_own_worktree(config, state)
+                and intake.config_yaml_uncommitted(config.project_dir)):
+            raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_COMMITTED)
         _setup_worktree(config, state)
         state_path = config.state_file_path()
         cm = ChangeManager(config.specs_dir)
@@ -821,6 +845,9 @@ async def _run_bootstrap(
     # Create change if name is set
     if config.change_name:
         cm.create_change(config.change_name)
+        if previous_change_dir is not None:
+            intake.carry_over_inputs(previous_change_dir, config.change_dir)
+        _save_intake(config, state, args)
 
     # Write config.yaml if it doesn't exist
     config_yaml = config.specs_dir / "config.yaml"
@@ -835,6 +862,80 @@ async def _run_bootstrap(
 
     state.bootstrap_done = True
     state.advance_to(BuildPhase.BOOTSTRAP, state_path)
+
+
+def _save_intake(config: BuildConfig, state: BuildState, args) -> None:
+    """Record what the build started from, once the change dir exists:
+    --ticket-file → ticket.md (fenced), --plan-file → plan.md, and the
+    ticket ref/url and plan path on the state."""
+    from . import intake
+
+    if args is None:
+        return
+    state.ticket_ref = getattr(args, "ticket_ref", "") or state.ticket_ref
+    state.ticket_url = getattr(args, "ticket_url", "") or state.ticket_url
+    ticket_file = getattr(args, "ticket_file", "") or ""
+    if ticket_file:
+        intake.save_ticket(config.change_dir, ticket_file,
+                           ref=state.ticket_ref or "", url=state.ticket_url or "")
+    plan_file = getattr(args, "plan_file", "") or ""
+    if plan_file and intake.save_plan(config.change_dir, plan_file):
+        state.plan_file = plan_file
+
+
+def _run_size_gate(
+    config: BuildConfig, state: BuildState, state_path: Path,
+    progress: ProgressWriter, *, accept_size: bool,
+) -> int | None:
+    """Stop a plan that should be split, after plan review, until --accept-size.
+
+    An acceptance is saved as ``state.size_accepted``, so a retry without the
+    flag goes on instead of posting the proposal again.
+
+    Re-assesses the final tasks.md with the plan review's own parse and
+    thresholds (``split_assessment``). On ``should_split`` — or when an earlier
+    run already stopped here — writes ``split-proposal.md``, sets
+    ``state.split_required``, prints ``SPLIT:REQUIRED:<path>`` and returns 3.
+    The wrapper posts the proposal on the ticket (or shows it) and stops.
+    """
+    from .intake import MARKER_SPLIT_REQUIRED, WAITING_EXIT
+    from .llm_steps.plan_review_steps import render_split_proposal, split_assessment
+
+    log.info("START phase=SIZE_GATE")
+    _, assessment = split_assessment(config, config.change_dir)
+    should_split = bool(assessment is not None and assessment.should_split)
+    if not should_split and not state.split_required:
+        log.info("DONE phase=SIZE_GATE split=false")
+        return None
+    if accept_size or state.size_accepted:
+        state.split_required = False
+        state.size_accepted = True
+        state.checkpoint(state_path)
+        log.info("DONE phase=SIZE_GATE split=%s accepted=true", should_split)
+        _progress_note(progress, "SIZE_GATE", "Plan size accepted with --accept-size")
+        return None
+
+    path = config.change_dir / "split-proposal.md"
+    if assessment is not None and should_split:
+        path.write_text(render_split_proposal(assessment, config.change_name))
+    state.split_required = True
+    state.checkpoint(state_path)
+    log.info("DONE phase=SIZE_GATE split=true proposal=%s", path)
+    _progress_note(progress, "SIZE_GATE",
+                   f"Plan should be split; proposal in {path}. Re-run with --accept-size to build it as one PR.")
+    print(f"{MARKER_SPLIT_REQUIRED}:{path}", flush=True)
+    return WAITING_EXIT
+
+
+def _inside_own_worktree(config: BuildConfig, state: BuildState) -> bool:
+    """True when the config is already bound inside this build's worktree."""
+    if not state.worktree_path:
+        return False
+    try:
+        config.project_dir.resolve().relative_to(Path(state.worktree_path).resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def _setup_worktree(config: BuildConfig, state: BuildState) -> None:

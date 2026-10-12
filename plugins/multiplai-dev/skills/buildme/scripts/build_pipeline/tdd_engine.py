@@ -4,7 +4,7 @@ Parses tasks.md into blocks, runs model-adaptive TDD cycles per block,
 gates on integration tests and quality reviews after each block, and runs
 a final comprehensive review.
 
-Exit codes: 0=success, 1=build failure, 3=agent timeout.
+Exit codes: 0=success, 1=build failure, 4=agent timeout.
 """
 
 from __future__ import annotations
@@ -260,7 +260,9 @@ def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
 
 EXIT_SUCCESS = 0
 EXIT_BUILD_FAILURE = 1
-EXIT_AGENT_TIMEOUT = 3
+# 4, not 3: `build` passes this code through, and 3 is intake.WAITING_EXIT
+# ("waiting, re-run to resume") — a timeout must never read as waiting.
+EXIT_AGENT_TIMEOUT = 4
 
 # Circuit breaker: attempts 1-2 run the scoped fix prompt; the final attempt
 # escalates — question-the-architecture prompt on config.review_model (when

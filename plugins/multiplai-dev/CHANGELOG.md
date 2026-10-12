@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.38.0] - 2026-10-12
+## [0.39.0] - 2026-10-12
 
 ### Added
 - New `/multiplai-dev:pr` skill: opens a pull request, or refreshes its
@@ -52,6 +52,62 @@ time, not derived from a tag.
   `git.pr`. When the PR cannot be opened,
   `build-progress.md` now lists the pr skill's command first, then
   `gh pr create`.
+
+## [0.38.0] - 2026-10-12
+
+### Added
+- buildme: `/buildme setup` writes or merges `specs/config.yaml` for the repo:
+  which ticket system (`intake.provider`: `plane`, `github` or `none`), which
+  interview mode, an architecture doc, the PR template and whose PR comments
+  count as findings. It keeps the file's comments and key order, never removes
+  a key, and tells you when the file still needs a commit.
+- buildme takes a ticket as input — `/buildme DB-2267`,
+  `/buildme https://github.com/o/r/issues/12`, `/buildme #12` — as well as a
+  file or a prompt. A ticket in a repo with no ticket system configured stops
+  with "run `/buildme setup`". The ticket is saved as `ticket.md` in the change
+  directory, fenced as untrusted text. A plan written with the plan skill can
+  be passed as `--plan-file` and is saved as `plan.md`; its text reaches the
+  spec in every interview mode, as it did when it was sent as a context file.
+- buildme: three interview modes (`interview:` in `specs/config.yaml`).
+  `self` interviews itself with no human: one call asks, a separate call
+  answers from the repo and the ticket, and anything it could not ground is
+  listed as an assumption. `ticket` asks its questions on the ticket and waits
+  for replies; when it has no questions, it goes on without waiting. `user` is the interview you had before. `--auto` turns `user`
+  into `self`. Every mode saves `interview.md`, committed on the build branch.
+- buildme decides whether research is needed instead of asking you up front,
+  and saves the reason in `research.md` either way.
+- buildme stops after plan review when the plan should be split into several
+  PRs, and writes the proposed split to `split-proposal.md`. `--accept-size`
+  builds it as one PR anyway, and a later retry of that build does not stop on
+  size again.
+- buildme: new exit code `3` means "waiting" — on ticket replies
+  (`INTERVIEW:WAITING`), on research (`RESEARCH:NEEDED`) or on a split decision
+  (`SPLIT:REQUIRED`). Re-running the same command resumes.
+
+### Changed
+- buildme: the plan-split triggers are now more than 10 blocks or more than 5
+  top-level packages (were 8 and 3). `multiplai.conf` overrides still apply.
+- buildme: with a worktree build, an uncommitted `specs/config.yaml` now stops
+  the build with a clear error instead of building without it. A failed build
+  retried in its own worktree is not stopped by this check.
+- buildme depends on `ruamel.yaml` (for `setup`).
+- buildme: an agent timeout during the build now exits `4`
+  (`EXIT_AGENT_TIMEOUT = 4`; it was `3`, which now means "waiting"). A wrapper
+  that treated `3` as a timeout should check for `4`.
+- buildme: relative paths given to `--ticket-file`, `--research-path`,
+  `--plan-file`, `--interview-replies` and `--context-files` are read from
+  `--project-dir`. A ticket, research, plan or replies file that does not
+  exist now stops the build with exit `2`, instead of a warning and a build
+  without it — unless the build already saved it in the change directory, so
+  resuming after the wrapper's scratch file is gone still works.
+
+### Fixed
+- buildme: `build --research-path` works. The flag was documented but rejected,
+  and research that did arrive reached the proposal as a file path rather than
+  its content.
+- buildme: the first spec-stage commit now commits the new change directory.
+  With git 2.43 it committed nothing, and the specs only reached the branch with
+  the first build block.
 
 ## [0.37.0] - 2026-10-12
 

@@ -280,6 +280,32 @@ class TestCommitPaths:
         config.pipeline_branch = "buildme/c"
         assert git_ops.commit_stage(config, "feat: x", ["f.txt"]) is not None
 
+    def test_commit_stage_commits_a_new_change_dir_holding_a_bookkeeping_file(
+        self, tmp_path,
+    ):
+        """The first spec-stage commit stages specs/changes/<name> while that
+        directory is wholly untracked and already holds .board.json. Passing
+        the exclude pathspecs to `git add` there staged nothing at all."""
+        from build_pipeline.config import BuildConfig
+
+        repo = make_repo(tmp_path / "proj")
+        config = BuildConfig(project_dir=repo, change_name="c")
+        config.specs_dir = repo / "specs"
+        config.pipeline_branch = "buildme/c"
+        change_dir = config.change_dir
+        change_dir.mkdir(parents=True)
+        (change_dir / "interview.md").write_text("# Interview\n")
+        (change_dir / ".board.json").write_text("{}\n")
+        (change_dir / ".build-state.json").write_text("{}\n")
+
+        sha = git_ops.commit_stage(config, "docs(specs): c", ["specs/changes/c"])
+        assert sha
+        committed = subprocess.run(
+            ["git", "show", "--name-only", "--pretty=format:", "HEAD"],
+            cwd=str(repo), capture_output=True, text=True,
+        ).stdout.split()
+        assert committed == ["specs/changes/c/interview.md"]
+
     def test_commit_stage_excludes_bookkeeping_at_any_depth(self, tmp_path):
         """Staging a whole change (or archive) directory must never sweep
         .build-state.json / .board.json into the commit."""

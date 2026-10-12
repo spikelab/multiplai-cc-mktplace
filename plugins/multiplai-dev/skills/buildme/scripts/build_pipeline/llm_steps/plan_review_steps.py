@@ -112,7 +112,7 @@ def render_split_context(assessment) -> str:
     package.
 
     The triggers are reported as triggers: a fired count is what makes checks 1
-    and 2 worth running, never a verdict. The block trigger's default of 8 is
+    and 2 worth running, never a verdict. The block trigger's default of 10 is
     an unmeasured placeholder and the rendered text says so, so no reviewer
     treats a count as a finding.
 
@@ -229,10 +229,75 @@ def render_split_context(assessment) -> str:
     return "\n".join(lines)
 
 
-def _split_context(config, change_dir: Path) -> str:
-    """Context block describing the plan's independently-shippable groups.
+def render_split_proposal(assessment, change_name: str) -> str:
+    """``split-proposal.md`` for the size gate: the cut, written for a ticket
+    comment or for the user. Block groups (the proposed PRs, in ship order),
+    the cut boundaries, ``split.reason`` and the atomicity evidence.
 
-    Parses `tasks.md` with the engine's own parser
+    Pure: formats the assessment, reads nothing, changes nothing.
+    """
+    split = assessment.split
+    atomicity = assessment.atomicity
+    lines = [
+        f"# Split proposal: {change_name}",
+        "",
+        "buildme stopped after plan review: this plan is larger than one PR "
+        "should be and its blocks come apart cleanly. Proposed split below. "
+        "To build it as one PR anyway, re-run the same command with "
+        "`--accept-size`.",
+        "",
+        f"Blocks: {assessment.block_count} (size trigger >{assessment.block_trigger}: "
+        f"{'fired' if assessment.size_triggered else 'not fired'}). "
+        f"Top-level packages: {assessment.spread.count} (package trigger "
+        f">{assessment.package_trigger}: "
+        f"{'fired' if assessment.package_triggered else 'not fired'}). "
+        "The triggers are unmeasured placeholders, not findings.",
+        "",
+        f"## Proposed PRs — {split.group_count} group(s), in ship order",
+        "",
+    ]
+    for group in split.groups:
+        lines.append(f"{group.index + 1}. {_blocks_phrase(group.block_numbers)} — "
+                     + "; ".join(group.block_names))
+        lines.append(_signature_line("produces", group.produces))
+        lines.append(_signature_line("consumes", group.consumes))
+    if split.boundaries:
+        lines += ["", "## Cuts", ""]
+        for boundary in split.boundaries:
+            crossing = (", ".join(boundary.crossing_signatures)
+                        if boundary.crossing_signatures else "nothing")
+            lines.append(
+                f"- after PR {boundary.after_group + 1}: between block "
+                f"{boundary.last_block_before} and block {boundary.first_block_after}; "
+                f"crosses {crossing}")
+    lines += ["", "## Why", "", split.reason or "(no reason recorded)"]
+    lines += ["", "## Atomicity", "", atomicity.reason or "(no high-risk work found)"]
+    for high_risk in atomicity.high_risk_blocks:
+        evidence = "; ".join(
+            f"{kind}: " + ", ".join(f'"{kw}"' for kw in high_risk.matched_keywords.get(kind, []))
+            for kind in high_risk.kinds
+        )
+        lines.append(f"- block {high_risk.number} ({high_risk.name}) — matched {evidence}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _split_context(config, change_dir: Path) -> str:
+    """The prompt's `{split_context}` text; see :func:`split_assessment`."""
+    return split_assessment(config, change_dir)[0]
+
+
+def split_assessment(config, change_dir: Path):
+    """``(split_context, assessment)`` for tasks.md — one parse, two consumers.
+
+    The text feeds the plan-review prompt; the :class:`PlanSplitAssessment`
+    feeds the size gate after plan review (``orchestrator._run_size_gate``),
+    so the gate and the reviewer judge the same parsed graph. ``assessment`` is
+    None whenever no graph was built (no tasks.md, no blocks, no `Interfaces:`
+    signatures, or an unexpected failure): without signatures every block
+    looks independent, and stopping a build on that would be a false alarm.
+
+    The context block describes the plan's independently-shippable groups.
+    It parses `tasks.md` with the engine's own parser
     (:func:`build_pipeline.tdd_engine.parse_blocks` — the same one the build
     runs on, so the reviewer sees the blocks the builder will see, not a second
     parser's opinion of them), runs the three pure checks in
@@ -263,27 +328,27 @@ def _split_context(config, change_dir: Path) -> str:
                 "No blocks parsed from %s — plan review runs without the "
                 "dependency graph", change_dir / "tasks.md",
             )
-            return ""
+            return "", None
         if not any(block.produces or block.consumes for block in blocks):
             log.info(
                 "%d block(s) in %s declare no Interfaces: signatures — no "
                 "dependency graph to hand the reviewer",
                 len(blocks), change_dir.name,
             )
-            return NO_GRAPH_NOTE
+            return NO_GRAPH_NOTE, None
 
         assessment = assess_plan_split(
             blocks,
-            block_trigger=getattr(config, "plan_split_block_trigger", 8),
-            package_trigger=getattr(config, "plan_split_package_trigger", 3),
+            block_trigger=getattr(config, "plan_split_block_trigger", 10),
+            package_trigger=getattr(config, "plan_split_package_trigger", 5),
         )
-        return render_split_context(assessment)
+        return render_split_context(assessment), assessment
     except Exception as split_err:  # a review without the graph beats no review
         log.warning(
             "Could not build the block dependency graph for %s (non-fatal): %s",
             change_dir, split_err,
         )
-        return ""
+        return "", None
 
 
 async def run_plan_review(
@@ -308,8 +373,8 @@ async def run_plan_review(
         tasks_content=_read(change_dir / "tasks.md", "(no tasks)"),
         rubric_content=_read(change_dir / "rubric.md", "(no rubric)"),
         split_context=split_context,
-        block_trigger=getattr(config, "plan_split_block_trigger", 8),
-        package_trigger=getattr(config, "plan_split_package_trigger", 3),
+        block_trigger=getattr(config, "plan_split_block_trigger", 10),
+        package_trigger=getattr(config, "plan_split_package_trigger", 5),
     )
 
     model = getattr(config, "plan_review_model", None) or config.review_model

@@ -307,19 +307,46 @@ def remove_worktree(repo: Path, dest: Path) -> GitResult:
     return _run(["git", "worktree", "remove", str(dest)], cwd=repo)
 
 
+def _positive_pathspec(exclude: str) -> str:
+    """``:(exclude,glob)**/x`` → ``:(glob)**/x``: the same match, selecting."""
+    magic, _, rest = exclude[2:].partition(")")
+    kept = [m for m in magic.split(",") if m and m != "exclude"]
+    return f":({','.join(kept)}){rest}" if kept else rest
+
+
 def commit_paths(worktree: Path, message: str, paths: list[str]) -> str | None:
     """Stage exactly ``paths`` and commit them. Returns the new SHA, or None
     when there was nothing to commit (or the commit failed — logged, never
     raised: a bookkeeping commit must not kill a build).
 
     Explicit pathspecs only. This function never stages the whole tree.
+
+    Exclude pathspecs (``:(exclude…)``) are applied by staging the positive
+    paths and then resetting the excluded matches out of the index, not by
+    passing them to ``git add``. ``git add -- specs/changes/<name>
+    ':(exclude,glob)**/.board.json'`` stages *nothing* when that directory is
+    wholly untracked and directly holds an excluded file (seen with git
+    2.43), which is exactly the state of a new change directory at its first
+    spec-stage commit.
     """
     if not paths:
         return None
-    add = _run(["git", "add", "--", *paths], cwd=worktree)
+    excludes = [p for p in paths if p.startswith(":(") and "exclude" in p[2:p.find(")")]]
+    positives = [p for p in paths if p not in excludes]
+    if not positives:
+        return None
+    add = _run(["git", "add", "--", *positives], cwd=worktree)
     if not add.ok:
         log.warning("git add failed in %s: %s", worktree, add.stderr.strip())
         return None
+    if excludes:
+        unstage = _run(["git", "reset", "-q", "--",
+                        *(_positive_pathspec(e) for e in excludes)], cwd=worktree)
+        if not unstage.ok:
+            log.warning("git reset of excluded paths failed in %s: %s — not committing",
+                        worktree, unstage.stderr.strip())
+            _run(["git", "reset", "-q", "--", *positives], cwd=worktree)
+            return None
     staged = _run(["git", "diff", "--cached", "--quiet"], cwd=worktree)
     if staged.returncode == 0:
         log.info("Nothing staged to commit in %s (%s)", worktree, message)
