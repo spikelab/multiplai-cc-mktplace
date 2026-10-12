@@ -1,8 +1,8 @@
 """The overlay page for a proof shot (`pipeline.py proof-card`).
 
 Turns a capture directory (shot.png + shot.json, stages/capture.py) into one
-self-contained HTML page for an `alpha` overlay: a rounded card with a drop
-shadow, a bar on top naming the page's domain and capture date, and the
+self-contained HTML page for an `alpha` overlay: a rounded card (no shadow:
+the shipped styles forbid them), a bar on top naming the page's domain and capture date, and the
 screenshot in a window below it. The screenshot is inlined as a
 data:image/png;base64 URI and its pixels are never changed: the highlight
 is a ring drawn on top of the image, around the recorded box, in the style's
@@ -236,7 +236,6 @@ html,body{{margin:0;width:{width}px;height:{height}px;overflow:hidden}}
 body{{font-family:{style.font}}}
 .card{{position:absolute;left:{lay.card_x:.2f}px;top:{lay.card_y:.2f}px;width:{lay.card_w:.2f}px;
   border-radius:{radius:.1f}px;overflow:hidden;background:{style.surface};
-  box-shadow:0 {radius * 1.2:.1f}px {radius * 3:.1f}px rgba(0,0,0,.45),0 2px 6px rgba(0,0,0,.3);
   animation:cardin {style.enter_s:.3f}s {style.easing} {START_S:.3f}s both,
             cardout {style.exit_s:.3f}s cubic-bezier(.6,0,.8,.2) {leave:.3f}s forwards}}
 .bar{{height:{lay.bar_h}px;display:flex;align-items:center;gap:{lay.bar_h * 0.22:.1f}px;

@@ -99,6 +99,12 @@ def test_the_ring_is_drawn_in_the_accent_and_the_domain_is_shown(tmp_path: Path)
     assert page.count("<img") == 1                      # the screenshot itself, unedited
 
 
+def test_the_card_has_no_shadow(tmp_path: Path) -> None:
+    # Both shipped styles forbid shadows (clean-tech.md, flat-vector.md).
+    page, _ = proof_card.build(shot(tmp_path), "scroll", style())
+    assert "shadow" not in page
+
+
 def test_the_card_fits_a_vertical_region(tmp_path: Path) -> None:
     page, _ = proof_card.build(shot(tmp_path), "zoom", style(), width=1080, height=1920)
     card = re.search(r"\.card\{position:absolute;left:([\d.]+)px;top:([\d.]+)px;width:([\d.]+)px", page)
