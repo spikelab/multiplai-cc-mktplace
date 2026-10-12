@@ -943,6 +943,72 @@ class TestEngineCheckpointBudget:
         assert saved.budget["cost_usd"] == 4.25
 
 
+class TestRoundBudget:
+    """`--auto` runs several rounds in one process. Each round's engine is held
+    to `budget.max_usd` on its own spend, the same as when that round runs
+    alone in a fresh process: an earlier round's engine spend, and triage's,
+    must not count against it."""
+
+    @pytest.fixture(autouse=True)
+    def fresh_process_budget(self):
+        from build_pipeline import budget
+        budget.reset()
+        yield
+        budget.reset()
+
+    @pytest.mark.asyncio
+    async def test_the_second_rounds_engine_starts_at_zero_spend(self, built, fake_pr):
+        from types import SimpleNamespace
+
+        from build_pipeline import budget
+        from build_pipeline.tdd_engine import run_tdd_engine
+
+        repo, change, config = built
+        config.budget_max_usd = 1.0
+        config.findings.max_rounds = 2
+        fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+        review = FakeReview(fake_pr, new_threads_per_round=1)   # round 2's finding
+        verdicts = FakeTriage({"add subtracts": FIX, "round 1 finding": FIX})
+
+        async def triage_call(prompt, schema, **kw):
+            budget.record(SimpleNamespace(cost_usd=0.1), label="findings_triage")
+            return await verdicts(prompt, schema, **kw)
+
+        calls = {"n": 0}
+
+        async def test_writer(*_a, **_kw):
+            calls["n"] += 1
+            (repo / "tests").mkdir(exist_ok=True)
+            (repo / "tests" / f"test_r{calls['n']}.py").write_text(
+                f"from calc import add\n\ndef test_r{calls['n']}():\n    assert add(2, 2) == 4\n")
+            return AgentResult(success=True, output="done")
+
+        async def implementer(*_a, **_kw):
+            budget.record(SimpleNamespace(cost_usd=0.6), label="implementer")
+            (repo / "calc.py").write_text(f"def add(a, b):\n    return a + b  # r{calls['n']}\n")
+            return AgentResult(success=True, output="done")
+
+        at_entry: list[float] = []
+
+        async def engine(rc, args, standalone):
+            at_entry.append(budget.get_budget().cost_usd)
+            return await run_tdd_engine(rc, args, standalone=standalone)
+
+        replaced = {"run_test_writer", "run_implementer"}
+        stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") not in replaced]
+        stubs += [patch("build_pipeline.tdd_engine.run_test_writer", side_effect=test_writer),
+                  patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer)]
+        run, lines = _run(config, change, triage_call=triage_call, review=review, engine=engine)
+        with _Stubs(stubs):
+            exit_code = await loop.run_findings(run)
+
+        assert exit_code == 0, lines
+        assert lines[-1] == "FINDINGS:MAX_ROUNDS:2"
+        assert at_entry == [0.0, 0.0]
+        r2 = BuildState.load(change / code.engine_state_name(2))
+        assert r2.budget["cost_usd"] == pytest.approx(0.6)
+
+
 class TestStoppedAfterTheBlocks:
     """The engine runs whole-change steps after its blocks (refactor, mutation
     testing). A failure there comes back on every re-run, so it must not hold
