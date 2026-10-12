@@ -21,7 +21,9 @@ time, not derived from a tag.
 
 ### Added
 - buildme: on Python projects (a `pyproject.toml`, `setup.py`, `setup.cfg`,
-  `pytest.ini`, `tox.ini` or `requirements.txt` at the project root), the
+  `pytest.ini`, `tox.ini` or `requirements.txt` at the project root, and a
+  test command that runs Python: `tdd.test_command`, or the pytest command
+  discovered from `pytest.ini`, `pyproject.toml` or `setup.py`), the
   build now runs mutation testing on the lines it added or modified, right
   after the whole-change refactor. It uses cosmic-ray 8.7.0 as a pinned `uvx`
   tool (`uv` must be installed; the first run downloads it, and without `uv`

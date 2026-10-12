@@ -88,6 +88,12 @@ with use_db(session, WorkDB.Mode.open) as db:
 PYTHON_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg", "pytest.ini",
                   "tox.ini", "requirements.txt")
 
+# The discovery markers (`BuildConfig._discover_test_command`) whose test
+# command is pytest. A command discovered from any other marker (`npm test`
+# from package.json, `cargo test`, ...) never imports the mutated Python, so
+# every mutant would survive and fail the build.
+_PYTHON_DISCOVERY_MARKERS = ("pytest.ini", "pyproject.toml", "setup.py")
+
 
 def mutation_applies(config) -> tuple[bool, str]:
     """Whether the MUTATION step runs for this build, and why not when it doesn't.
@@ -96,6 +102,11 @@ def mutation_applies(config) -> tuple[bool, str]:
     only with `mutation.enabled`. A Python project whose manifest lives below
     the root (a monorepo subdirectory) is not detected and skips with a SKIP
     line naming the markers.
+
+    The test command must also be one that runs the Python: a configured
+    `tdd.test_command` is taken as the project's stated choice, but a
+    discovered one must come from a Python discovery marker. A Node project
+    with a helper `requirements.txt` discovers `npm test` and skips.
     """
     if not config.mutation.enabled:
         return False, "mutation.enabled is false in specs/config.yaml"
@@ -106,6 +117,12 @@ def mutation_applies(config) -> tuple[bool, str]:
                        + ") — mutation testing covers Python projects only")
     if not config.test_command:
         return False, "no test command configured"
+    discovered_from = config.test_command_discovered_from
+    if discovered_from and discovered_from not in _PYTHON_DISCOVERY_MARKERS:
+        return False, (f"the test command `{config.test_command}` was discovered "
+                       f"from {discovered_from} and does not run Python tests — "
+                       "set tdd.test_command in specs/config.yaml to a command "
+                       "that does, or set mutation.enabled: false")
     return True, ""
 
 

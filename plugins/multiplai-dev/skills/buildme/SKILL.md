@@ -193,7 +193,11 @@ push/PR commands from `build-progress.md`).
 Python projects only: one of `pyproject.toml`, `setup.py`, `setup.cfg`,
 `pytest.ini`, `tox.ini` or `requirements.txt` sits at the project root. A
 Python project whose manifest lives in a subdirectory is not detected and
-skips the step. Right after the whole-change refactor, buildme runs
+skips the step. The test command must run Python too: a `tdd.test_command` in
+`specs/config.yaml` is used as given, and a discovered one must be the pytest
+command found from `pytest.ini`, `pyproject.toml` or `setup.py`. A Node project
+with a helper `requirements.txt` discovers `npm test` and skips the step.
+Right after the whole-change refactor, buildme runs
 [cosmic-ray](https://pypi.org/project/cosmic-ray/) 8.7.0 over the **non-test
 `.py` lines the build added or modified** since its first block, using the
 project's own test command. cosmic-ray runs as a pinned tool

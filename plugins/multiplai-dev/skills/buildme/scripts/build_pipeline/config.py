@@ -479,6 +479,10 @@ class BuildConfig:
     project_description: str = ""
     stack: str = ""
     test_command: str = ""
+    # Runtime marker, not user-configurable: the root file test-command
+    # discovery took `test_command` from ("package.json", ...). Empty when the
+    # command was configured (tdd.test_command) or set by the caller.
+    test_command_discovered_from: str = ""
 
     # Memory files
     core_memory_files: list[str] = field(default_factory=lambda: ["technical-pref.md"])
@@ -867,6 +871,7 @@ class BuildConfig:
         for marker, cmd in discovery:
             if marker.exists():
                 self.test_command = cmd
+                self.test_command_discovered_from = marker.name
                 self.stack = self.stack or marker.name.split(".")[0]
                 log.info("Discovered test command: %s", cmd)
                 return

@@ -254,6 +254,46 @@ class TestApplies:
         assert ok is False and "Python" in why
         assert "pyproject.toml" in why
 
+    @pytest.mark.parametrize("helper", ["requirements.txt", "setup.cfg", "tox.ini"])
+    def test_discovered_non_python_test_command_does_not_apply(self, tmp_path, helper):
+        # A Node project with a helper Python file at its root: discovery picks
+        # `npm test`, which never runs the mutated Python, so every mutant would
+        # survive and fail the build.
+        (tmp_path / "package.json").write_text("{}")
+        (tmp_path / helper).write_text("")
+        config = BuildConfig(project_dir=tmp_path, config_dir=tmp_path / "c")
+        config._discover_test_command()
+        assert config.test_command == "npm test"
+        ok, why = mutation.mutation_applies(config)
+        assert ok is False
+        assert "npm test" in why and "package.json" in why
+        assert "tdd.test_command" in why
+
+    @pytest.mark.parametrize("marker", ["pytest.ini", "pyproject.toml", "setup.py"])
+    def test_discovered_python_test_command_applies(self, tmp_path, marker):
+        (tmp_path / marker).write_text("")
+        (tmp_path / "package.json").write_text("{}")
+        config = BuildConfig(project_dir=tmp_path, config_dir=tmp_path / "c")
+        config._discover_test_command()
+        assert config.test_command == "pytest -xvs"
+        assert mutation.mutation_applies(config) == (True, "")
+
+    def test_configured_test_command_is_trusted(self, tmp_path):
+        # tdd.test_command set in specs/config.yaml: discovery never runs, and
+        # the project's own stated command is taken as the one that runs its
+        # Python.
+        (tmp_path / "requirements.txt").write_text("")
+        (tmp_path / "package.json").write_text("{}")
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text("tdd:\n  test_command: uv run pytest -q\n")
+        config = BuildConfig(project_dir=tmp_path, config_dir=tmp_path / "c")
+        config.specs_dir = specs
+        config._load_specs_config()
+        config._discover_test_command()
+        assert config.test_command == "uv run pytest -q"
+        assert mutation.mutation_applies(config) == (True, "")
+
     def test_disabled_does_not_apply(self):
         config = BuildConfig(stack="pyproject", test_command="pytest")
         config.mutation = MutationSettings(enabled=False)
