@@ -258,6 +258,25 @@ jobs:
           uv run --project ../../../../.. --package walkthrough-pipeline \
             --extra dev python -m pytest tests/ -q
 
+  code-facts-tests:
+    name: code_facts tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # code_facts is not a workspace member (its consumers reach it through
+      # an editable path source), so its tests run in walkthrough-pipeline's
+      # environment, which installs it. The tests build a fixture git repo;
+      # no test calls a model.
+      - name: Run tests
+        working-directory: plugins/multiplai-dev/lib/code_facts
+        run: |
+          uv run --project ../../../.. --package walkthrough-pipeline \
+            --extra dev python -m pytest tests/ -q
+
   review-pipeline-tests:
     name: review pipeline tests
     runs-on: ubuntu-latest
