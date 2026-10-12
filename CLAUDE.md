@@ -80,7 +80,7 @@ the stdlib (media, pm, apple in the table below) — it skips installing the
 workspace environment just to run a linter or a stdlib test. Anything under
 `plugins/` that imports dependencies needs `--project`.
 
-CI additionally runs the nine per-plugin test suites, each from its own
+CI additionally runs the ten per-plugin test suites, each from its own
 directory:
 
 | Suite | Command |
@@ -91,6 +91,7 @@ directory:
 | buildme | `cd plugins/multiplai-dev/skills/buildme/scripts && uv run --project ../../../../.. --package build-pipeline --extra dev python -m pytest tests/ -q` |
 | deep-research | `cd plugins/multiplai-research/skills/deep-research/scripts && uv run --project ../../../../.. --package research-pipeline --extra dev python -m pytest tests/ -q` |
 | codebase-walkthrough | `cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && uv run --project ../../../../.. --package walkthrough-pipeline --extra dev python -m pytest tests/ -q` |
+| code_facts | `cd plugins/multiplai-dev/lib/code_facts && uv run --project ../../../.. --package walkthrough-pipeline --extra dev python -m pytest tests/ -q` (not a workspace member: it runs in walkthrough-pipeline's environment, which installs it) |
 | review-viewer | `cd plugins/multiplai-dev/skills/review-viewer/scripts && uv run --project ../../../../.. --package review-viewer --extra dev python -m pytest tests/ -q` |
 | pr | `cd plugins/multiplai-dev/skills/pr/scripts && uv run --project ../../../../.. --package pr-pipeline --extra dev python -m pytest tests/ -q` |
 | `multiplai-apple` | `cd plugins/multiplai-apple && uv run --no-project --with pytest python -m pytest tests/ -q` |
@@ -180,7 +181,10 @@ Three rules, all enforced by `scripts/lint_workspace.py`:
 - **A new script directory with dependencies must be added to `members`.** uv
   does not warn about an undeclared `pyproject.toml` — it silently gives that
   directory its own `.venv`, which is how this repo accumulated four of them
-  (915MB, all gitignored, none noticed for months).
+  (915MB, all gitignored, none noticed for months). The one exception is a
+  shared library under `plugins/*/lib/` (e.g. `code_facts`): it is not a
+  member, and each member that uses it declares an editable `path` source,
+  because uv rejects a member that is also a `path` source.
 - **No script may carry a PEP 723 `# /// script` block.** This was the
   previous convention and it is now a defect, for two independent reasons.
   `uv run` re-resolves inline dependencies on **every** invocation, so the

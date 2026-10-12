@@ -29,7 +29,8 @@ uv run --no-project scripts/lint_workspace.py  # one environment: members declar
 - `lint_workspace.py` keeps this repo on a single uv environment. Every
   `pyproject.toml` under `plugins/` must be a declared member in the root
   `[tool.uv.workspace]` — an undeclared one gets its own `.venv` from uv with
-  no warning — and no script may carry a PEP 723 `# /// script` block, which
+  no warning; a shared library under `plugins/*/lib/` is the exception, reached
+  through an editable `path` source instead — and no script may carry a PEP 723 `# /// script` block, which
   makes `uv run` re-resolve on every invocation. **Run this one locally**: its
   stray-`.venv` check is the only part CI cannot do, because stray venvs are
   gitignored and a fresh checkout never has one.

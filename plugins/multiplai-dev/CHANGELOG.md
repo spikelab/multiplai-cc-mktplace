@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.35.0] - 2026-10-12
+## [0.36.0] - 2026-10-12
 
 ### Added
 - New `/multiplai-dev:pr` skill: opens a pull request, or refreshes its
@@ -45,6 +45,29 @@ time, not derived from a tag.
   resumable PUBLISH step are unchanged. When the PR cannot be opened,
   `build-progress.md` now lists the pr skill's command first, then
   `gh pr create`.
+
+## [0.35.0] - 2026-10-12
+
+### Added
+- `lib/code_facts/`, a package shared inside the plugin that works out what
+  code does: it splits line ranges into units, asks one explore agent per
+  unit, and keeps only facts whose citations re-read at their commit
+  (multiplai-core's `check_quote`). The caller passes in its own model call
+  function and path resolver, so each pipeline keeps its retry policy. A
+  citation can name the `base` or `head` side of a change, and an explore
+  answer can carry `conventions` facts when the caller asks for them. Review
+  and buildme will use it next.
+- CI runs the code_facts tests.
+
+### Changed
+- codebase-walkthrough's explore step runs through `code_facts`. Its output
+  is unchanged; the explore prompt's JSON schema now lists the citation's
+  `side` and the answer's `conventions`, and the run checkpoint stores them.
+- review takes its concurrency limiter from `code_facts` instead of a copy.
+- `code_facts` is not a uv workspace member: walkthrough and review reach it
+  through an editable `path` source, which resolves both in this repo and in
+  an installed copy of the plugin. `scripts/lint_workspace.py` exempts
+  `plugins/*/lib/` from its membership check.
 
 ## [0.34.4] - 2026-10-11
 
