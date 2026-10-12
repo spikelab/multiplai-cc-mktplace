@@ -292,6 +292,30 @@ wheels = [
 ]
 
 [[package]]
+name = "code-facts"
+version = "0.1.0"
+source = { editable = "plugins/multiplai-dev/lib/code_facts" }
+dependencies = [
+    { name = "multiplai-core", extra = ["sdk"] },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "multiplai-core", extras = ["sdk"], git = "https://github.com/spikelab/multiplai-core?branch=main" },
+    { name = "pydantic", specifier = ">=2" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'" },
+]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1754,6 +1778,7 @@ name = "review-pipeline"
 version = "0.1.0"
 source = { editable = "plugins/multiplai-dev/skills/review/scripts" }
 dependencies = [
+    { name = "code-facts" },
     { name = "multiplai-core", extra = ["sdk"] },
     { name = "pydantic" },
     { name = "python-dotenv" },
@@ -1776,6 +1801,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "code-facts", editable = "plugins/multiplai-dev/lib/code_facts" },
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4" },
     { name = "multiplai-core", extras = ["sdk"], git = "https://github.com/spikelab/multiplai-core?branch=main" },
     { name = "pydantic", specifier = ">=2" },
@@ -2216,6 +2242,7 @@ name = "walkthrough-pipeline"
 version = "0.1.0"
 source = { editable = "plugins/multiplai-dev/skills/codebase-walkthrough/scripts" }
 dependencies = [
+    { name = "code-facts" },
     { name = "httpx" },
     { name = "markdown" },
     { name = "multiplai-core", extra = ["sdk"] },
@@ -2238,6 +2265,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "code-facts", editable = "plugins/multiplai-dev/lib/code_facts" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "markdown", specifier = ">=3.5" },
     { name = "multiplai-core", extras = ["sdk"], git = "https://github.com/spikelab/multiplai-core?branch=main" },
