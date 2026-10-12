@@ -10,7 +10,7 @@ job follows the same steps: analyse the video (transcript, silences, scene
 changes, motion), decide what to keep, write an edit list (EDL), render it,
 and check the result. Commands: `prep`, `correct`, `render`, `check`, `proof`,
 `review`, `timeline`, `snap`, `frame`, `shots`, `outdir`, `contact-sheet`, `prefs`,
-`make` (prints the workflow); `pipeline.py <command> --help` for each.
+`sfx-suggest`, `make` (prints the workflow); `pipeline.py <command> --help` for each.
 
 ## Pick the job, then load its guide
 
@@ -208,8 +208,9 @@ all comments in one batch.
 
 At the end of a job, list the corrections the user made — in the review
 mailbox and in chat — that would apply to the next job too (a caption size,
-a colour, "never cut mid-laugh"), each as one short preference line. Leave
-out ones about this video's content. Show the list and ask which to keep.
+a colour, "never cut mid-laugh", a sound-effect level or the sounds they
+kept), each as one short preference line. Leave out ones about this video's
+content. Show the list and ask which to keep.
 **Never write without the user's approval.** Then append the approved lines:
 
 ```bash
@@ -249,6 +250,7 @@ See `examples/demo-narrated.edl.json`. Top-level keys:
 - `transitions` — `[{after, kind, duration}]` (currently only `fade`). Undeclared joins crossfade 0.5 s, except a segment that starts where the previous one ended in the source: that join is a hard cut with unbroken audio. `duration: 0` asks for a hard cut anywhere.
 - `logo` — `{path, position: br|bl|tr|tl, scale, start_at}`
 - `music` — `{file}` OR `{prompt}` (prompt is documented but generation is not available in CPU-only Linux containers — pass `file` or `url`)
+- `sfx` — `[{at, sound, volume_db}]` — short sound effects in output time: `sound` is a path to an audio file the user supplies (no sounds ship with the skill); `volume_db` defaults to -14. At least 0.5 s apart; mixed in after the music, so they never duck it. `pipeline.py sfx-suggest <edl> --clicks <file> --overlays <file>` prints a first list (`references/screencast.md` → Sound effects)
 - `output` — `{width, height, fps, crf, fit, audio_rate}` (defaults 1920×1080, 30 fps, CRF 18, fit `pad`)
   - `fit` — how a segment without a `frame` fills the output: `pad` (letterbox), `blur` (over a blurred copy), `crop` (fill, around the segment's `focus`)
   - `audio_rate` — resample the final audio (reels: `48000`)

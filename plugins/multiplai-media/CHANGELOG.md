@@ -21,6 +21,26 @@ a tag.
 
 Nothing yet.
 
+## [0.9.0] - 2026-10-11
+
+### Added
+
+- **Sound effects on clicks and graphic entrances.** An EDL can now carry an
+  `sfx` list: a short sound at a moment in the finished video, at a quiet
+  default level (`volume_db` -14). Each sound is a path to an audio file you
+  supply; no sounds ship with the skill yet. The sounds are mixed in after the music, so
+  they never make it duck, and a limiter keeps stacked sounds from clipping.
+- **`pipeline.py sfx-suggest <edl> --clicks <file> --overlays <file>`**
+  prints a first `sfx` list for an EDL: the `--clicks` file at each spot the
+  camera follows and the `--overlays` file when each overlay appears, in the
+  finished video's time. It prints what it skipped or dropped and why, and
+  never edits the EDL.
+- Render refuses two sounds less than 0.5 s apart and names both times. It
+  warns when there is more than one sound every 3 seconds on average, which
+  tends to sound busy.
+
+An EDL without `sfx` renders exactly as before.
+
 ## [0.8.0] - 2026-10-11
 
 ### Added
