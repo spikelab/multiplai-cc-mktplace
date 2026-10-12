@@ -39,6 +39,7 @@ import time
 from pathlib import Path
 
 from . import git_ops
+from .config import discover_test_command
 from .gates import _repo_trusted
 from .models import MutationResult, SurvivingMutant
 
@@ -106,7 +107,10 @@ def mutation_applies(config) -> tuple[bool, str]:
     The test command must also be one that runs the Python: a configured
     `tdd.test_command` is taken as the project's stated choice, but a
     discovered one must come from a Python discovery marker. A Node project
-    with a helper `requirements.txt` discovers `npm test` and skips.
+    with a helper `requirements.txt` discovers `npm test` and skips. Bootstrap
+    writes the discovered command into specs/config.yaml, so a resume or a
+    later build loads it as configured; a configured command identical to the
+    one discovery picks for this project counts as discovered.
     """
     if not config.mutation.enabled:
         return False, "mutation.enabled is false in specs/config.yaml"
@@ -118,6 +122,10 @@ def mutation_applies(config) -> tuple[bool, str]:
     if not config.test_command:
         return False, "no test command configured"
     discovered_from = config.test_command_discovered_from
+    if not discovered_from:
+        found = discover_test_command(project_dir)
+        if found and found[0] == config.test_command:
+            discovered_from = found[1]
     if discovered_from and discovered_from not in _PYTHON_DISCOVERY_MARKERS:
         return False, (f"the test command `{config.test_command}` was discovered "
                        f"from {discovered_from} and does not run Python tests — "

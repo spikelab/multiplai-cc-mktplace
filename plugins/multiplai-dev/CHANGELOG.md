@@ -34,9 +34,9 @@ time, not derived from a tag.
   edit tests; the result is written to `specs/changes/<name>/mutation.md`.
 - buildme: a build now fails when its mutation score stays below
   `mutation.min_score` (default `0.8`, to be adjusted once real runs have been
-  measured), when the survivor round edits a non-test file (caches, coverage
-  and junit reports and `*.egg-info` that the suite rewrites do not count, even
-  when tracked), when cosmic-ray
+  measured), when the survivor round edits a non-test file (files the test
+  suite writes when it runs, such as caches, reports, logs or a test database,
+  do not count, even when tracked), when cosmic-ray
   cannot produce a score, or when a change the step has to throw away cannot
   be thrown away (the build then stops without committing anything more).
   It also fails when the tree holds uncommitted changes as the step starts:

@@ -2032,6 +2032,65 @@ def _is_tool_cache(name: str) -> bool:
             or (lowered.startswith("junit") and path.suffix.lower() == ".xml"))
 
 
+def _edits_the_suite_does_not_rewrite(
+    config: BuildConfig, rewind_to: str, before: dict[str, str], changed: list[str],
+) -> tuple[list[str] | None, GateResult | None]:
+    """Which of the *changed* non-test files the agent edited, as opposed to
+    files its own suite runs wrote (a test.db, a *.log, a .benchmarks/ entry,
+    an HTML report — new, or tracked because a block commit swept it in).
+
+    Puts each changed file back as it was at *rewind_to* (a file that did not
+    exist there is deleted), runs the suite once, and returns the files the
+    suite did not write again: those still match the pre-round snapshot.
+    Returns that suite run's gate result too, so the caller does not run the
+    suite twice. The list is None when the check could not be made; a file
+    that cannot be put back is counted as edited."""
+    root = config.project_dir
+    try:
+        proc = subprocess.run(
+            ["git", "ls-tree", "-r", "-z", "--name-only", rewind_to, "--", *changed],
+            cwd=str(root), capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.warning("Could not list the checkpoint's files: %s", e)
+        return None, None
+    if proc.returncode != 0:
+        log.warning("Could not list the checkpoint's files: %s", proc.stderr.strip())
+        return None, None
+    in_checkpoint = {name for name in proc.stdout.split("\0") if name}
+    unrestorable: list[str] = []
+    for name in changed:
+        if name in in_checkpoint:
+            continue
+        if name in before:
+            # Present before the round but not committed: no copy to put back.
+            unrestorable.append(name)
+            continue
+        try:
+            (root / name).unlink(missing_ok=True)
+        except OSError as e:
+            log.warning("Could not remove %s: %s", name, e)
+            unrestorable.append(name)
+    if in_checkpoint:
+        try:
+            proc = subprocess.run(["git", "checkout", rewind_to, "--", *sorted(in_checkpoint)],
+                                  cwd=str(root), capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log.warning("Could not restore the round's non-test files: %s", e)
+            return None, None
+        if proc.returncode != 0:
+            log.warning("Could not restore the round's non-test files: %s",
+                        proc.stderr.strip())
+            return None, None
+    gate = integration_gate(config.test_command, root)
+    rerun = _snapshot_source_files(config)
+    if rerun is None:
+        return None, None
+    edited = sorted(set(unrestorable) | {
+        name for name in changed
+        if name not in unrestorable and rerun.get(name) == before.get(name)})
+    return edited, gate
+
+
 def _format_survivors(config: BuildConfig, result: MutationResult) -> str:
     """The survivor list the mutation test writer sees: location, operator,
     the line as it is now, and cosmic-ray's diff (capped)."""
@@ -2127,19 +2186,23 @@ async def _run_mutation_round(
             f"The test writer failed ({reason}); its edits were NOT discarded.")
 
     after = _snapshot_source_files(config)
+    gate = None
     if before is None or after is None:
-        changed: list[str] | None = None
+        edited: list[str] | None = None
     else:
-        changed = sorted(
+        edited = sorted(
             name for name in set(before) | set(after) if before.get(name) != after.get(name))
-    if changed is None or changed:
-        detail = ("the source snapshot could not be taken" if changed is None
-                  else "non-test files changed: " + ", ".join(changed[:20]))
+        if edited:
+            edited, gate = _edits_the_suite_does_not_rewrite(config, rewind_to, before, edited)
+    if edited is None or edited:
+        detail = ("the source snapshot could not be taken" if edited is None
+                  else "non-test files changed: " + ", ".join(edited[:20]))
         return _discard(f"The test writer's round was discarded: {detail}.",
                         f"The test writer's round must be discarded: {detail}.",
                         source_edited=True)
 
-    gate = integration_gate(config.test_command, config.project_dir)
+    if gate is None:
+        gate = integration_gate(config.test_command, config.project_dir)
     if not gate.passed:
         return _discard(
             f"The new tests left the suite red ({gate.reason[:300]}); the round was "

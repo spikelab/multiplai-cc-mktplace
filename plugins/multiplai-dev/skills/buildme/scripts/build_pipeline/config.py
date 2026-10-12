@@ -446,6 +446,28 @@ def _load_mutation_settings(raw) -> MutationSettings:
     return settings
 
 
+
+# Root file → test command, in the order test-command discovery checks them.
+_TEST_COMMAND_DISCOVERY = (
+    ("pytest.ini", "pytest -xvs"),
+    ("pyproject.toml", "pytest -xvs"),
+    ("setup.py", "pytest -xvs"),
+    ("Package.swift", "swift test"),
+    ("Cargo.toml", "cargo test"),
+    ("go.mod", "go test ./..."),
+    ("package.json", "npm test"),
+)
+
+
+def discover_test_command(project_dir: Path | str) -> tuple[str, str] | None:
+    """(test command, root file it came from) that discovery picks for
+    *project_dir*, or None when no root file matches."""
+    p = Path(project_dir)
+    for marker, cmd in _TEST_COMMAND_DISCOVERY:
+        if (p / marker).exists():
+            return cmd, marker
+    return None
+
 @dataclass
 class BuildConfig:
     """Complete configuration for a build pipeline run."""
@@ -858,23 +880,13 @@ class BuildConfig:
         """Auto-detect test command if not specified in config."""
         if self.test_command:
             return
-        p = self.project_dir
-        discovery = [
-            (p / "pytest.ini", "pytest -xvs"),
-            (p / "pyproject.toml", "pytest -xvs"),
-            (p / "setup.py", "pytest -xvs"),
-            (p / "Package.swift", "swift test"),
-            (p / "Cargo.toml", "cargo test"),
-            (p / "go.mod", "go test ./..."),
-            (p / "package.json", "npm test"),
-        ]
-        for marker, cmd in discovery:
-            if marker.exists():
-                self.test_command = cmd
-                self.test_command_discovered_from = marker.name
-                self.stack = self.stack or marker.name.split(".")[0]
-                log.info("Discovered test command: %s", cmd)
-                return
+        found = discover_test_command(self.project_dir)
+        if found:
+            cmd, marker = found
+            self.test_command = cmd
+            self.test_command_discovered_from = marker
+            self.stack = self.stack or marker.split(".")[0]
+            log.info("Discovered test command: %s", cmd)
 
     @property
     def change_dir(self) -> Path:

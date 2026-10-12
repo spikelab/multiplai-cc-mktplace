@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -277,6 +278,31 @@ class TestApplies:
         config._discover_test_command()
         assert config.test_command == "pytest -xvs"
         assert mutation.mutation_applies(config) == (True, "")
+
+    @pytest.mark.parametrize("helper", ["requirements.txt", "setup.cfg", "tox.ini"])
+    def test_persisted_discovered_non_python_command_does_not_apply(self, tmp_path, helper):
+        # Bootstrap writes the discovered `npm test` into specs/config.yaml as
+        # tdd.test_command, so a resume or a later build loads it as configured
+        # and discovery never runs. It is still discovery's pick from
+        # package.json, and it still never runs the mutated Python.
+        import yaml
+        (tmp_path / "package.json").write_text("{}")
+        (tmp_path / helper).write_text("")
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text(yaml.dump(
+            {"schema": "spec-driven", "tdd": {"enabled": True, "test_command": "npm test"}},
+            default_flow_style=False))
+        config = BuildConfig(project_dir=tmp_path, config_dir=tmp_path / "c")
+        config.specs_dir = specs
+        config._load_specs_config()
+        config._discover_test_command()
+        assert config.test_command == "npm test"
+        assert config.test_command_discovered_from == ""
+        ok, why = mutation.mutation_applies(config)
+        assert ok is False
+        assert "npm test" in why and "package.json" in why
+        assert "tdd.test_command" in why
 
     def test_configured_test_command_is_trusted(self, tmp_path):
         # tdd.test_command set in specs/config.yaml: discovery never runs, and
@@ -664,6 +690,91 @@ class TestRunMutationStep:
             assert await _run_mutation(config, state, progress) is True
         assert run.call_count == 2
         assert state.tdd.mutation_done is True
+
+    @staticmethod
+    def _suite_that_writes(tmp_path: Path, names: list[str]) -> str:
+        """A test command that, like a real suite, writes each of *names* with
+        fresh content on every run (a sqlite file, a log, a benchmark, an HTML
+        report)."""
+        script = tmp_path / "suite.py"
+        script.write_text(
+            "import pathlib, time\n"
+            f"for name in {names!r}:\n"
+            "    p = pathlib.Path(name)\n"
+            "    p.parent.mkdir(parents=True, exist_ok=True)\n"
+            "    p.write_text(str(time.time_ns()))\n")
+        return f"{sys.executable} {script}"
+
+    @pytest.mark.asyncio
+    async def test_survivor_round_whose_suite_writes_other_files_is_committed(
+            self, project, tmp_path):
+        """A suite may write any file its project does not ignore: a test.db,
+        a *.log, a .benchmarks/ entry, report.html — new ones, or ones a block
+        commit already tracks. The agent's own suite runs write them too. They
+        are not edits, so they must not discard a green tests-only round."""
+        repo = project[0]
+        written = ["test.db", "run.log", ".benchmarks/0001.json", "report.html"]
+        (repo / "test.db").write_text("old")
+        (repo / "run.log").write_text("old")
+        _commit_all(repo, "feat: block commit that swept in suite output")
+        test_command = self._suite_that_writes(tmp_path, written)
+        config, state, progress = _setup(project, test_command=test_command)
+
+        async def _agent(**_kw):
+            subprocess.run(test_command.split(), cwd=str(repo), check=True)
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation",
+                   side_effect=[_result(7, 3), _result(10, 0)]) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is True
+        assert run.call_count == 2
+        assert state.tdd.mutation_done is True
+        assert "kill surviving mutants" in _git(repo, "log", "--format=%s")
+
+    @pytest.mark.asyncio
+    async def test_source_edit_is_caught_when_the_suite_also_writes_files(
+            self, project, tmp_path):
+        """The suite's own output is set aside, but a source edit made in the
+        same round still fails the step, and only the source file is named."""
+        repo = project[0]
+        test_command = self._suite_that_writes(tmp_path, ["test.db"])
+        config, state, progress = _setup(project, test_command=test_command)
+
+        async def _agent(**_kw):
+            subprocess.run(test_command.split(), cwd=str(repo), check=True)
+            (repo / "src" / "calc.py").write_text("def add(a, b):\n    return 0\n")
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(9, 1)) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is False
+        assert run.call_count == 1
+        assert state.tdd.mutation_done is False
+        assert "return a + b" in (repo / "src" / "calc.py").read_text()
+        assert "kill surviving mutants" not in _git(repo, "log", "--format=%s")
+        report = (config.change_dir / "mutation.md").read_text()
+        assert "src/calc.py" in report and "test.db" not in report
+
+    @pytest.mark.asyncio
+    async def test_survivor_round_that_adds_a_helper_under_tests_is_committed(self, project):
+        """Anything under a tests directory is a test, helpers included."""
+        config, state, progress = _setup(project)
+        repo = project[0]
+
+        async def _agent(**_kw):
+            (repo / "tests" / "helpers.py").write_text("LIMIT = 9\n")
+            (repo / "tests" / "test_more.py").write_text(
+                "from tests.helpers import LIMIT\n\n\ndef test_x():\n    assert LIMIT == 9\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation",
+                   side_effect=[_result(7, 3), _result(10, 0)]) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is True
+        assert run.call_count == 2
 
     @pytest.mark.asyncio
     async def test_survivor_round_that_edits_source_fails_the_step(self, project):
