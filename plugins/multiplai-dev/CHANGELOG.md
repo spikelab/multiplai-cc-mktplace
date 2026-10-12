@@ -32,7 +32,9 @@ time, not derived from a tag.
   `review-state.json`, `diff.patch`, commit and file lists, summaries and
   checks, not only the findings and the review) under
   `rounds/<NN>-<head sha>/`, numbered `01`, `02`, …; a second run on the
-  same head gets the next number. Rounds kept by earlier versions
+  same head gets the next number. A `--dir` review's imported checkout
+  (`source/`) is not copied into a round: its git already keeps the commit
+  each round names. Rounds kept by earlier versions
   (`<sha>/`, `<sha>-2/`) are still read. The round id in posted PR markers
   is unchanged.
 - `runs.jsonl` lists every run, earlier rounds included, sorted by time.

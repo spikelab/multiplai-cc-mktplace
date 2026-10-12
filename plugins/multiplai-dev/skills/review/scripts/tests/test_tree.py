@@ -464,6 +464,25 @@ def test_a_second_dir_run_keeps_the_commit_an_earlier_review_names(tmp_path, cap
     assert git(copy, "show", f"{head}:app.py") == "print('hi')"
 
 
+def test_a_kept_round_of_a_dir_review_leaves_out_the_imported_source(tmp_path):
+    src = tmp_path / "plain" / "notes-app"
+    write(src, "app.py", "print('hi')\n")
+    out = tmp_path / "out"
+    first, target_dir = _dir_review(src, out)
+    (target_dir / "findings.json").write_text(json.dumps(
+        {"generated_at": "2026-10-12T10:00:00Z", "target": {"head_sha": first.target.head_sha}}))
+    (target_dir / "progress.log").write_text("DONE review finished\n")
+
+    write(src, "app.py", "print('bye')\n")
+    _dir_review(src, out)
+
+    kept = target_dir / "rounds" / f"01-{first.target.head_sha[:12]}"
+    assert (kept / "findings.json").is_file() and (kept / "progress.log").is_file()
+    assert not (kept / "source").exists()  # git still holds the commit the round names, in source/
+    copy = target_dir / "source"
+    assert git(copy, "show", f"{first.target.head_sha}:app.py") == "print('hi')"
+
+
 def test_a_file_deleted_from_the_source_is_gone_from_the_next_import(tmp_path):
     src = tmp_path / "plain" / "notes-app"
     write(src, "a.py", "A = 1\n")

@@ -55,8 +55,10 @@ def _read_json(path: Path) -> dict | None:
 
 
 # Not copied into a kept round: the rounds themselves, the viewer's state (it
-# persists across rounds where it is), and head/base snapshots git rebuilds.
-NOT_KEPT = frozenset({ROUNDS_DIR, "viewer", "tree", "base-tree", "assess-tree"})
+# persists across rounds where it is), head/base snapshots git rebuilds, and a
+# `--dir` review's imported checkout `source/` (its git keeps every commit an
+# earlier round names, and by the time a round is kept it holds the next import).
+NOT_KEPT = frozenset({ROUNDS_DIR, "viewer", "tree", "base-tree", "assess-tree", "source"})
 PARTIAL_PREFIX = ".partial-"
 
 
