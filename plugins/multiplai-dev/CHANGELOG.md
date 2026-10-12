@@ -55,9 +55,15 @@ time, not derived from a tag.
   a comment or posting a reply twice, and a step that failed part way keeps
   its edits under `refs/buildme/wip/<change>/r<N>-<step>`. Commits someone
   else pushed to the PR are kept. It will not start a round on a worktree with
-  uncommitted changes, or resume one with changes outside the change
-  directory (except a stopped code fix's own edits, kept as above), and it
-  will not reuse a change's state for a different PR.
+  uncommitted changes, and it will not reuse a change's state for a different
+  PR. A re-run that resumes a step stops with `FINDINGS:FAILED`, and leaves
+  the worktree as it is, when a file outside the change directory has an
+  uncommitted change the stopped step did not leave there, with the same
+  content, when it stopped (a stopped code fix's own edits are kept as
+  above). When the step recorded nothing as it stopped (its process was
+  killed), any uncommitted change outside the change directory stops it.
+  Resuming triage, spec or code also stops when commits were made on the
+  branch since the step stopped, other than ones pulled from origin.
 - `findings.allow_bots` in `specs/config.yaml`.
 
 ### Changed

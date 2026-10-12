@@ -95,6 +95,15 @@ class TDDState(BaseModel):
 FINDINGS_STEPS = ("fetch", "triage", "spec", "code", "publish", "review")
 
 
+class StepStop(BaseModel):
+    """What the tree held when a findings step last stopped: HEAD, and every
+    uncommitted path outside the change directory with a fingerprint of its
+    content (`git_ops.dirty_files`). A resume keeps and discards only this."""
+
+    head: str | None = None
+    edits: dict[str, str] = Field(default_factory=dict)
+
+
 class FindingsRound(BaseModel):
     """One round of `python -m build_pipeline findings`. Each step in
     `FINDINGS_STEPS` is added to `started` before it runs and to `finished`
@@ -125,6 +134,10 @@ class FindingsRound(BaseModel):
     review_run_dir: str | None = None
     review_waiting: bool = False               # told the human to accept and post
     review_finished_at: str | None = None
+    # step → what the tree held when that step last stopped. Removed when
+    # the step starts again, so a step killed before it could record its
+    # stop has none. Empty in checkpoints written before the field existed.
+    stops: dict[str, StepStop] = Field(default_factory=dict)
 
     @property
     def seen_ids(self) -> set[int]:

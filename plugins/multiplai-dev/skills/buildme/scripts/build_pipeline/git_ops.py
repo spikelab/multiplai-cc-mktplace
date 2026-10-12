@@ -26,6 +26,7 @@ No LLM calls live in this module.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shlex
@@ -596,6 +597,40 @@ def tree_is_clean(repo: Path | str, ignore: Path | str | None = None) -> bool:
         log.warning("git status failed: %s", res.stderr.strip())
         return False
     return not res.stdout.strip()
+
+
+def dirty_files(repo: Path | str, ignore: Path | str | None = None) -> dict[str, str] | None:
+    """Every path under *repo* whose content differs from HEAD (an edit, a
+    deletion, a new file git does not ignore), relative to *repo*, mapped to
+    a fingerprint of its content now: so two calls give equal maps only when
+    the same paths hold the same content. Buildme's bookkeeping and *ignore*
+    (a directory relative to *repo*) are left out, as in `tree_is_clean`.
+    None when git could not be asked."""
+    excludes = list(BOOKKEEPING_EXCLUDES)
+    if ignore is not None:
+        excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
+    changed = _run(["git", "diff", "HEAD", "--name-only", "-z", "--relative", "--no-renames",
+                    "--", ".", *excludes], cwd=repo)
+    untracked = _run(["git", "ls-files", "--others", "--exclude-standard", "-z",
+                      "--", ".", *excludes], cwd=repo)
+    if not (changed.ok and untracked.ok):
+        log.warning("git could not list the changed files: %s",
+                    (changed.stderr or untracked.stderr).strip())
+        return None
+    out: dict[str, str] = {}
+    for rel in filter(None, (changed.stdout + untracked.stdout).split("\0")):
+        path = Path(repo) / rel
+        try:
+            if path.is_symlink():
+                out[rel] = "link:" + os.readlink(path)
+            elif path.is_file():
+                out[rel] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+            else:
+                out[rel] = "other" if path.exists() else "deleted"
+        except OSError as e:
+            log.warning("Could not read %s: %s", path, e)
+            return None
+    return out
 
 
 def discard_to(repo: Path | str, sha: str, label: str = "") -> bool:

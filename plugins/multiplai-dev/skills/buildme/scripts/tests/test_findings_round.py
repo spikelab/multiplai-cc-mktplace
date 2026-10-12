@@ -1229,6 +1229,140 @@ class TestDirtyTree:
         assert calls["n"] == 2
 
 
+class TestResumedStepRefusesOthersWork:
+    """A resumed step keeps what its stopped attempt left under a wip ref and
+    discards back to where it started. It must never do that to work it did
+    not leave: an edit or a commit made after it stopped is refused, and the
+    tree is left exactly as it was."""
+
+    @staticmethod
+    async def _stop_the_code_step(repo, change, config, fake_pr):
+        """Round 1's code step stops on an agent timeout, leaving the
+        implementer's half-done edit to calc.py in the tree."""
+        fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+
+        async def times_out(*_a, **_kw):
+            (repo / "calc.py").write_text("def add(a, b):\n    return a  # half done\n")
+            return AgentResult(success=False, error="Agent timed out after 1800s", timed_out=True)
+
+        run, lines = _run(config, change, triage_call=FakeTriage({"add subtracts": FIX}),
+                          review=FakeReview(fake_pr))
+        stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") != "run_implementer"]
+        stubs.append(patch("build_pipeline.tdd_engine.run_implementer", side_effect=times_out))
+        with _Stubs(stubs):
+            assert await loop.run_findings(run) == 4, lines
+
+    async def _rerun(self, repo, change, config, fake_pr):
+        run, lines = _run(config, change, triage_call=FakeTriage({"add subtracts": FIX}),
+                          review=FakeReview(fake_pr))
+        with _Stubs(engine_stubs(repo)):
+            return await loop.run_findings(run), lines
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("user_file", ["notes.py", "calc.py"])
+    async def test_a_users_edit_on_a_resumed_code_step_is_refused_and_left_in_place(
+            self, built, fake_pr, user_file):
+        """The user's own edit, in a new file or in the file the stopped agent
+        was editing, is refused and stays in the tree; once it is gone, the
+        resume keeps the stopped fix's own edit under the wip ref."""
+        repo, change, config = built
+        await self._stop_the_code_step(repo, change, config, fake_pr)
+        head, wip_before = _git(repo, "rev-parse", "HEAD").strip(), _wip(repo)
+        agents = (repo / "calc.py").read_text()
+        user_text = agents + "# the user's own line\n" if user_file == "calc.py" else "x = 1\n"
+        (repo / user_file).write_text(user_text)
+
+        exit_code, lines = await self._rerun(repo, change, config, fake_pr)
+
+        assert exit_code == 1, lines
+        assert lines[-1].startswith("FINDINGS:FAILED:code:") and "uncommitted" in lines[-1]
+        assert user_file in lines[-1]
+        assert (repo / user_file).read_text() == user_text
+        assert _git(repo, "rev-parse", "HEAD").strip() == head
+        assert _wip(repo) == wip_before
+        assert fake_pr.replies() == []
+
+        # The user stashes their edit; the stopped fix's own edit is kept.
+        if user_file == "calc.py":
+            (repo / "calc.py").write_text(agents)
+        else:
+            (repo / user_file).unlink()
+        exit_code, lines = await self._rerun(repo, change, config, fake_pr)
+        assert exit_code == 0, lines
+        stopped = "refs/buildme/wip/calc/r1-code-block1-stopped"
+        assert stopped in _wip(repo)
+        assert "half done" in _git(repo, "show", f"{stopped}:calc.py")
+        assert "the user's own line" not in _git(repo, "show", f"{stopped}:calc.py")
+        assert "notes.py" not in _git(repo, "ls-tree", "-r", "--name-only", stopped)
+
+    @pytest.mark.asyncio
+    async def test_a_commit_made_after_the_code_step_stopped_is_refused(self, built, fake_pr):
+        """Following "commit them first" must not get the user's commit
+        discarded back to where the stopped block started."""
+        repo, change, config = built
+        await self._stop_the_code_step(repo, change, config, fake_pr)
+        (repo / "notes.py").write_text("x = 1\n")
+        _git(repo, "add", "notes.py")
+        _git(repo, "commit", "-qm", "the user's commit")
+        head, wip_before = _git(repo, "rev-parse", "HEAD").strip(), _wip(repo)
+
+        exit_code, lines = await self._rerun(repo, change, config, fake_pr)
+
+        assert exit_code == 1, lines
+        assert lines[-1].startswith("FINDINGS:FAILED:code:") and "commit" in lines[-1]
+        assert _git(repo, "rev-parse", "HEAD").strip() == head
+        assert _wip(repo) == wip_before
+        assert "half done" in (repo / "calc.py").read_text()
+
+    @pytest.mark.asyncio
+    async def test_a_stop_that_recorded_nothing_refuses_any_edit_outside_the_change(
+            self, built, fake_pr):
+        """A hard kill records nothing, so the stopped agent's edits cannot be
+        told from the user's: any edit outside the change directory is refused."""
+        repo, change, config = built
+        await self._stop_the_code_step(repo, change, config, fake_pr)
+        state_path = change / ".findings-state.json"
+        data = json.loads(state_path.read_text())
+        data["findings"]["rounds"][0]["stops"] = {}
+        state_path.write_text(json.dumps(data))
+
+        exit_code, lines = await self._rerun(repo, change, config, fake_pr)
+
+        assert exit_code == 1, lines
+        assert lines[-1].startswith("FINDINGS:FAILED:code:") and "calc.py" in lines[-1]
+        assert "half done" in (repo / "calc.py").read_text()
+
+    @pytest.mark.asyncio
+    async def test_a_commit_made_after_the_spec_step_failed_is_refused(self, built, fake_pr):
+        repo, change, config = built
+        fake_pr.add_thread("alice", "None should be refused", fid="5e1")
+        triage_call = FakeTriage({
+            "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified")})
+        calls = {"n": 0}
+
+        async def spec_call(prompt, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("model call failed")
+            return SPEC_DELTA
+
+        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
+                      spec_call=spec_call)
+        assert await loop.run_findings(run) == 1
+        (repo / "notes.py").write_text("x = 1\n")
+        _git(repo, "add", "notes.py")
+        _git(repo, "commit", "-qm", "the user's commit")
+        head, wip_before = _git(repo, "rev-parse", "HEAD").strip(), _wip(repo)
+
+        run2, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
+                           spec_call=spec_call)
+        assert await loop.run_findings(run2) == 1
+        assert lines[-1].startswith("FINDINGS:FAILED:spec:") and "commit" in lines[-1]
+        assert calls["n"] == 1
+        assert _git(repo, "rev-parse", "HEAD").strip() == head
+        assert _wip(repo) == wip_before
+
+
 class TestSince:
     @pytest.mark.asyncio
     async def test_a_top_level_comment_posted_during_a_round_is_new_next_round(self, built, fake_pr):

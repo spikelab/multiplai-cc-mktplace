@@ -12,8 +12,10 @@ finished steps and restarts the first unfinished one:
   for a later attempt, so no attempt's ref is overwritten), and only then
   discard back to where the step started (or to what origin has on top of
   that, so a collaborator's pushed commits stay);
-- a resume refuses uncommitted changes outside the change directory, and a
-  state file written for another PR, repo or branch;
+- a resume refuses work its stopped step did not leave (`others_work`): an
+  uncommitted change outside the change directory that the step did not
+  record when it stopped, or, for a step that discards, a commit made since
+  it stopped; and a state file written for another PR, repo or branch;
 - code re-enters `run_tdd_engine`, which resumes from its own checkpoint.
   What the engine's stopped attempt left (a timed-out agent's edits, which
   may be anywhere in the tree, and the stopped block's commits) is first
@@ -38,7 +40,7 @@ from .. import git_ops
 from ..change_manager import normalize_change_name
 from ..config import BuildConfig
 from ..models import BlockStatus, BuildPhase
-from ..state import BuildState, FindingsRound, FindingsState
+from ..state import BuildState, FindingsRound, FindingsState, StepStop
 from . import code, fetch, publish, spec, triage
 from .models import TriageRecord
 
@@ -56,6 +58,10 @@ STEPS = ("triage", "spec", "code", "publish", "review")
 # Steps whose half-done edits are kept under a wip ref and discarded on
 # resume. The code step is not one: the TDD engine resumes its own blocks.
 REWIND_STEPS = ("triage", "spec")
+
+# Steps whose resume keeps the tree's work under a wip ref and discards back
+# to where the step (or its stopped block) started.
+DISCARDING_STEPS = (*REWIND_STEPS, "code")
 
 
 class StepFailed(RuntimeError):
@@ -200,21 +206,90 @@ async def _step(run: FindingsRun, st: BuildState, rnd: FindingsRound, name: str,
     head = git_ops.rev_parse_head(run.project_dir)
     if head:
         rnd.step_heads[name] = head
+    rnd.stops.pop(name, None)    # a kill from here on leaves no record
     save()
     log.info("START findings_step round=%d step=%s", rnd.number, name)
     try:
         await body()
-    except Exception:
-        if name in REWIND_STEPS:
+    except BaseException as e:   # Ctrl-C too: its record lets the resume go on
+        if isinstance(e, Exception) and name in REWIND_STEPS:
             try:
                 keep_and_rewind(run, rnd, name)
-            except StepFailed as e:
-                log.error("findings r%d %s: %s", rnd.number, name, e)
+            except StepFailed as e2:
+                log.error("findings r%d %s: %s", rnd.number, name, e2)
+        record_stop(run, rnd, name)
         save()
         raise
     rnd.finished.append(name)
     save()
     log.info("DONE findings_step round=%d step=%s", rnd.number, name)
+
+
+def record_stop(run: FindingsRun, rnd: FindingsRound, step: str) -> None:
+    """Record what the tree holds as *step* stops: HEAD and its uncommitted
+    paths outside the change directory with their content. Never raises; when
+    git cannot be asked, no record is kept, and a resume then refuses any
+    such change (`others_work`)."""
+    try:
+        edits = git_ops.dirty_files(run.project_dir, ignore=_change_dir_in_project(run))
+        if edits is None:
+            rnd.stops.pop(step, None)
+            return
+        rnd.stops[step] = StepStop(head=git_ops.rev_parse_head(run.project_dir), edits=edits)
+    except Exception:
+        log.exception("findings r%d %s: could not record the stop", rnd.number, step)
+        rnd.stops.pop(step, None)
+
+
+def _names(paths) -> str:
+    paths = sorted(paths)
+    more = f" and {len(paths) - 5} more" if len(paths) > 5 else ""
+    return ", ".join(paths[:5]) + more
+
+
+def others_work(run: FindingsRun, rnd: FindingsRound) -> str | None:
+    """Why a resumed round must not go on, or None. A resumed step that
+    discards (`DISCARDING_STEPS`) keeps everything the tree holds under a wip
+    ref and resets it, so it must first be sure all of that is its own.
+
+    The rule: the stopped step's own work is exactly what `record_stop`
+    recorded when it stopped. An uncommitted path outside the change
+    directory is refused unless the record lists it with the same content
+    (an edit the user made after the stop, even to a file the stopped agent
+    was editing, changes that content). For a discarding step, HEAD must
+    also be where the step stopped, or wholly on origin (the CLI
+    fast-forwards from origin, and `rewind_target` keeps origin's commits):
+    a commit made since the stop would be discarded. A step with no record
+    (killed before it could write one, or a checkpoint older than the
+    record) cannot tell its edits from anyone else's, so any uncommitted
+    path outside the change directory is refused. The change directory
+    itself is the round's own and is not checked."""
+    step = _next_step(rnd)
+    repo = run.project_dir
+    edits = git_ops.dirty_files(repo, ignore=_change_dir_in_project(run))
+    if edits is None:
+        return f"git could not list the changes in {repo}; inspect it before re-running"
+    where = f"{repo} has uncommitted changes outside {run.change_dir}"
+    stop = rnd.stops.get(step) if step in rnd.started else None
+    if stop is None:
+        if not edits:
+            return None
+        why = (f", and the {step} step was stopped without recording its own edits, so "
+               "they cannot be told from anyone else's" if step in rnd.started else "")
+        return f"{where} ({_names(edits)}){why}; stash them first"
+    theirs = [p for p, fp in edits.items() if stop.edits.get(p) != fp]
+    if theirs:
+        return (f"{where} that the stopped {step} step did not leave ({_names(theirs)}); "
+                "stash them first")
+    if step in DISCARDING_STEPS and stop.head:
+        head = git_ops.rev_parse_head(repo)
+        on_origin = bool(head) and git_ops.merge_base(
+            repo, head, f"refs/remotes/origin/{run.branch}") == head
+        if head != stop.head and not on_origin:
+            return (f"commits were added to {run.branch} after the {step} step stopped at "
+                    f"{stop.head[:12]}; resuming would discard them back to where the step "
+                    "started, so move them to another branch first")
+    return None
 
 
 def keep_stopped_code_work(run: FindingsRun, rnd: FindingsRound) -> None:
@@ -223,7 +298,8 @@ def keep_stopped_code_work(run: FindingsRun, rnd: FindingsRound) -> None:
     stopped after the blocks), discard back to the commit that block started
     from (`rewind_target`), and mark the block not started, so the engine
     runs it again on a clean tree. Does nothing before the engine has a
-    checkpoint."""
+    checkpoint. The caller first refuses any work the stopped attempt did
+    not leave (`others_work`)."""
     if not rnd.engine_state_path or not Path(rnd.engine_state_path).exists():
         return
     state_path = Path(rnd.engine_state_path)
@@ -471,21 +547,19 @@ async def run_findings(run: FindingsRun) -> int:
     max_rounds = run.config.findings.max_rounds
     while True:
         rnd = fs.rounds[-1] if fs.rounds and not _round_done(fs.rounds[-1]) else None
+        # A resumed step keeps what the tree holds under a wip ref and resets
+        # it, so anything its stopped attempt did not leave is refused first,
+        # with the tree left as it is.
+        refusal = others_work(run, rnd) if rnd is not None else None
+        if refusal:
+            run.emit(f"FINDINGS:FAILED:{_next_step(rnd)}:{' '.join(refusal.split())}")
+            return EXIT_FAILED
         if rnd is not None and _next_step(rnd) == "code" and "code" in rnd.started:
             try:
                 keep_stopped_code_work(run, rnd)
             except StepFailed as e:
                 run.emit(f"FINDINGS:FAILED:{e.step}:{' '.join(str(e).split())}")
                 return e.exit_code
-        if rnd is not None and not git_ops.tree_is_clean(run.project_dir,
-                                                         ignore=_change_dir_in_project(run)):
-            # A resumed step keeps what the tree holds under a wip ref and
-            # resets it. Only the round's own files, all in the change
-            # directory, may be left over from an interrupted step (the code
-            # step's leftovers were kept and discarded just above).
-            run.emit(f"FINDINGS:FAILED:{_next_step(rnd)}:{run.project_dir} has uncommitted "
-                     f"changes outside {run.change_dir}; commit or stash them first")
-            return EXIT_FAILED
         if rnd is None:
             done = len(fs.rounds)
             if done >= max_rounds:
