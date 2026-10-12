@@ -25,12 +25,16 @@ time, not derived from a tag.
   build now runs mutation testing on the lines it added or modified, right
   after the whole-change refactor. It uses cosmic-ray 8.7.0 as a pinned `uvx`
   tool (`uv` must be installed; the first run downloads it, and without `uv`
-  the build stops with a message saying to install it or turn the step off).
+  the build stops with a message saying to install it or turn the step off;
+  when cosmic-ray cannot be fetched or run, offline or behind a private index,
+  the message also says how to turn the step off).
   Surviving mutants go to one fresh test-writer agent that may only add or
   edit tests; the result is written to `specs/changes/<name>/mutation.md`.
 - buildme: a build now fails when its mutation score stays below
   `mutation.min_score` (default `0.8`, to be adjusted once real runs have been
-  measured), when the survivor round edits a non-test file, when cosmic-ray
+  measured), when the survivor round edits a non-test file (caches, coverage
+  and junit reports and `*.egg-info` that the suite rewrites do not count, even
+  when tracked), when cosmic-ray
   cannot produce a score, or when a change the step has to throw away cannot
   be thrown away (the build then stops without committing anything more).
   It also fails when the tree holds uncommitted changes as the step starts:

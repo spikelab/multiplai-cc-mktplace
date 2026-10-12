@@ -224,9 +224,12 @@ round:
 What fails a build (`EXIT_BUILD_FAILURE`, step not marked done, so a resume
 runs it again): a final score below `min_score`, a survivor round that edited
 or added a non-test file (any extension, so a new `pytest.ini` counts; caches
-such as `__pycache__` or `.pytest_cache` do not), cosmic-ray failing to produce
-a score (`uv` not installed, red baseline, crash, timeout, or every mutant on
-the changed lines erroring), uncommitted changes in the tree when the step
+such as `__pycache__` or `.pytest_cache`, coverage and junit reports such as
+`coverage.xml`, `htmlcov/` or `junit.xml`, and `*.egg-info` do not), cosmic-ray
+failing to produce a score (`uv` not installed, cosmic-ray not fetchable
+offline or from a private index, red baseline, crash, timeout, or every mutant
+on the changed lines erroring; the error says to set `mutation.enabled: false`
+to build without the step), uncommitted changes in the tree when the step
 starts, or a discard git refused — a survivor round or a
 mutated file that could not be thrown away. In that last case buildme commits
 nothing more, `mutation.md` included, and the tree is left as it is for you to

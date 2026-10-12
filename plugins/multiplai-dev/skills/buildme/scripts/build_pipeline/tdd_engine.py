@@ -2007,20 +2007,29 @@ def _snapshot_source_files(config: BuildConfig) -> dict[str, str] | None:
 _BOOKKEEPING_NAMES = frozenset({".build-state.json", ".board.json", "build-progress.md"})
 
 # What running the suite or installing the project writes into a tree whose
-# .gitignore does not cover it. Tracked paths are skipped too: block commits
-# run `git add -A`, so such a tree already tracks these, and the next pytest
-# run rewrites a tracked .pyc whenever cosmic-ray has touched the source.
+# .gitignore does not cover it: caches, coverage and junit reports, and an
+# install's *.egg-info. Tracked paths are skipped too: block commits run
+# `git add -A`, so such a tree already tracks these, and every suite run
+# rewrites them (a .pyc whenever cosmic-ray has touched the source, a report
+# with a fresh timestamp each time).
 _TOOL_CACHE_DIRS = frozenset({
     "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis",
-    ".tox", ".nox", ".venv", "venv", "node_modules",
+    ".tox", ".nox", ".venv", "venv", "node_modules", "htmlcov", ".eggs",
+})
+_SUITE_REPORT_NAMES = frozenset({
+    "coverage.xml", "coverage.json", "coverage.lcov", "lcov.info",
 })
 
 
 def _is_tool_cache(name: str) -> bool:
     path = Path(name)
-    return (any(part in _TOOL_CACHE_DIRS for part in path.parts[:-1])
+    lowered = path.name.lower()
+    return (any(part in _TOOL_CACHE_DIRS or part.endswith(".egg-info")
+                for part in path.parts[:-1])
             or path.suffix in (".pyc", ".pyo")
-            or path.name == ".coverage" or path.name.startswith(".coverage."))
+            or path.name == ".coverage" or path.name.startswith(".coverage.")
+            or lowered in _SUITE_REPORT_NAMES
+            or (lowered.startswith("junit") and path.suffix.lower() == ".xml"))
 
 
 def _format_survivors(config: BuildConfig, result: MutationResult) -> str:

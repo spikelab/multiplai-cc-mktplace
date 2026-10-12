@@ -399,6 +399,33 @@ class TestRunTool:
         assert "install uv" in msg
         assert "mutation.enabled: false" in msg
 
+    def test_tool_that_exits_nonzero_names_the_way_to_turn_it_off(self, tmp_path):
+        """uvx starts but cosmic-ray cannot be fetched or run (offline, no
+        PyPI access, private index): the error carries the tool's own stderr
+        and also says the step can be turned off."""
+        uvx = tmp_path / "uvx"
+        uvx.write_text("#!/bin/sh\necho 'error: Failed to fetch cosmic-ray' >&2\nexit 2\n")
+        uvx.chmod(0o755)
+        with patch.dict(os.environ, {"PATH": f"{tmp_path}:/usr/bin:/bin"}):
+            with pytest.raises(mutation._ToolError) as exc:
+                mutation._run_tool([*mutation._UVX, "cosmic-ray", "init", "a", "b"],
+                                   tmp_path, 10)
+        msg = str(exc.value)
+        assert "exited 2" in msg and "Failed to fetch cosmic-ray" in msg
+        assert "mutation.enabled: false" in msg
+
+    def test_tool_that_times_out_names_the_way_to_turn_it_off(self, tmp_path):
+        uvx = tmp_path / "uvx"
+        uvx.write_text("#!/bin/sh\nsleep 30\n")
+        uvx.chmod(0o755)
+        with patch.dict(os.environ, {"PATH": f"{tmp_path}:/usr/bin:/bin"}):
+            with pytest.raises(mutation._ToolError) as exc:
+                mutation._run_tool([*mutation._UVX, "cosmic-ray", "init", "a", "b"],
+                                   tmp_path, 1)
+        msg = str(exc.value)
+        assert "timed out" in msg
+        assert "mutation.enabled: false" in msg
+
 
 DUMP_PENDING = "\n".join([
     _dump_line("a1", "src/calc.py", 2, "core/ReplaceBinaryOperator_Add_Sub", "skipped",
@@ -559,6 +586,35 @@ class TestRunMutationStep:
         async def _agent(**_kw):
             (repo / "src" / "__pycache__" / "calc.cpython-312.pyc").write_bytes(b"new")
             (repo / ".coverage").write_text("new")
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation",
+                   side_effect=[_result(7, 3), _result(10, 0)]) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is True
+        assert run.call_count == 2
+        assert state.tdd.mutation_done is True
+
+    @pytest.mark.asyncio
+    async def test_survivor_round_that_rewrites_tracked_suite_reports_is_committed(self, project):
+        """Block commits run `git add -A`, so a project whose suite writes
+        coverage.xml, htmlcov/, a junit report or an *.egg-info (from an
+        install) tracks them. The suite rewrites them on every run; that is not
+        an edit and must not discard a green round."""
+        repo = project[0]
+        reports = ["coverage.xml", "coverage.json", "htmlcov/index.html", "junit.xml",
+                   "reports/junit-unit.xml", "src/calc.egg-info/PKG-INFO", "lcov.info"]
+        for name in reports:
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name).write_text("old")
+        _commit_all(repo, "feat: block commit that swept in suite reports")
+        config, state, progress = _setup(project)
+
+        async def _agent(**_kw):
+            for name in reports:
+                (repo / name).write_text("new")
+            (repo / "htmlcov" / "calc_py.html").write_text("new")
             (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
             return AgentResult(success=True, output="STATUS: DONE")
 

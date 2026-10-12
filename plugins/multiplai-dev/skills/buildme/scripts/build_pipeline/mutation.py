@@ -254,6 +254,9 @@ class _ToolError(Exception):
     pass
 
 
+_TURN_OFF = "`mutation.enabled: false` in specs/config.yaml"
+
+
 def _run_tool(argv: list[str], cwd: Path, timeout: float) -> str:
     """Run one cosmic-ray command; return stdout or raise `_ToolError`.
 
@@ -269,18 +272,21 @@ def _run_tool(argv: list[str], cwd: Path, timeout: float) -> str:
         raise _ToolError(
             f"could not start {argv[0]} ({e}). cosmic-ray runs through uv's "
             "`uvx`: install uv (https://docs.astral.sh/uv/), or turn mutation "
-            "testing off with `mutation.enabled: false` in specs/config.yaml"
+            f"testing off with {_TURN_OFF}"
         ) from e
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_group(proc)
         raise _ToolError(f"{' '.join(argv[len(_UVX):len(_UVX) + 2])} timed out after "
-                         f"{int(timeout)}s")
+                         f"{int(timeout)}s. To build without mutation testing, set "
+                         f"{_TURN_OFF}")
     if proc.returncode != 0:
         tail = (err or out or "").strip()[-1500:]
         raise _ToolError(f"{' '.join(argv[len(_UVX):len(_UVX) + 2])} exited "
-                         f"{proc.returncode}: {tail}")
+                         f"{proc.returncode}: {tail}\nIf cosmic-ray could not be "
+                         "fetched (offline, no PyPI access, a private index) or "
+                         f"cannot run here, build without it: set {_TURN_OFF}")
     return out
 
 
