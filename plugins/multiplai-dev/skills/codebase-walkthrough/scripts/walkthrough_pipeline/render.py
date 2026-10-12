@@ -475,8 +475,9 @@ def render_walkthrough_json(state: WalkState, md: str) -> dict:
         m = MERMAID.search(text)
         if m and len(m.group(1)) <= DIAGRAM_MAX_CHARS:
             step["diagram"] = {"kind": "mermaid", "source": m.group(1).rstrip("\n")}
-            text = text[:m.start()] + text[m.end():]
-        step["body_md"] = re.sub(r"\n{3,}", "\n\n", text).strip()
+            # Only the gap the diagram leaves is closed: blank lines inside a snippet are code.
+            text = text[:m.start()].rstrip("\n") + "\n\n" + text[m.end():].lstrip("\n")
+        step["body_md"] = text.strip()
         steps.append(step)
     anchored = {a["path"] for s in steps for a in s["anchors"]}
     return {

@@ -141,6 +141,10 @@ def test_run_writes_a_walkthrough_json_the_viewer_schema_accepts(done_run, ws):
     who = next(s for s in wt["steps"] if s["title"] == "Who calls it and what it calls")
     assert "[`front/src/api.ts:" in who["body_md"]
     assert who["diagram"]["source"].startswith("graph LR") and "```mermaid" not in who["body_md"]
+    md = md_path.read_text()
+    for step in wt["steps"]:                                  # the text is the Markdown's, unchanged
+        if "diagram" not in step:
+            assert step["body_md"] in md, step["id"]
 
 
 def test_the_viewer_fixture_is_what_run_writes(done_run):
