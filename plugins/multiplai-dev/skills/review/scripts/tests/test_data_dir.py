@@ -5,6 +5,7 @@ Every test writes under its own tmp_path: conftest points `ledger.data_dir` ther
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -295,8 +296,54 @@ def test_a_started_line_with_no_end_makes_a_plain_run_exit_4_and_restart_starts_
     assert _ledger_lines(tmp_path, "finished")[-1]["stopped"] is None
 
 
+@pytest.mark.parametrize("stop", [KeyboardInterrupt, asyncio.CancelledError, SystemExit],
+                         ids=["KeyboardInterrupt", "CancelledError", "SystemExit"])
+def test_a_run_stopped_by_the_user_or_the_process_writes_no_end_line(fixture_repo, tmp_path, monkeypatch, stop):
+    """Ctrl-C, a cancelled task or an exiting process is an interrupted run, not a finished one."""
+    from conftest import high_finding
+    from review_pipeline.models import FinderOutput
+
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / f"example-booking-engine--{base}..{head}"
+
+    async def fake(prompt, schema, *, budget_label="", **kwargs):
+        if budget_label == "find:diff-bugs":
+            return FinderOutput(findings=[high_finding()])
+        if budget_label.startswith("find:"):
+            return FinderOutput()
+        raise stop()
+
+    monkeypatch.setattr(sdk, "agent_call_structured", fake)
+    with pytest.raises(stop):
+        main(_review_args(repo, base, head, out))
+    assert [e["event"] for e in _ledger_lines(tmp_path)] == ["started"]
+    assert ledger.interrupted(target_dir, head)
+
+
+def test_the_started_line_comes_after_the_runs_state_is_saved(fixture_repo, tmp_path, agents, monkeypatch):
+    """A run killed right after its `started` line must not leave the last round's state for `resume`."""
+    from review_pipeline import orchestrator
+
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / f"example-booking-engine--{base}..{head}"
+    seen = []
+
+    def started(**kwargs):
+        seen.append(json.loads((target_dir / "review-state.json").read_text())["stage"])
+        raise KeyboardInterrupt
+
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0  # the last round: its state says "done"
+    monkeypatch.setattr(orchestrator.review_ledger, "started", started)
+    with pytest.raises(KeyboardInterrupt):
+        main(_review_args(repo, base, head, out))
+    assert seen == ["target"]
+
+
 DRIVER = """
-import sys, time
+import asyncio, sys
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
@@ -315,7 +362,7 @@ async def fake(prompt, schema, *, budget_label="", **kwargs):
         return FinderOutput(findings=[high_finding()])
     if budget_label.startswith("find:"):
         return FinderOutput()
-    time.sleep(600)  # the verifier never answers; the test kills the run here
+    await asyncio.sleep(600)  # the verifier never answers; the test stops the run here
 
 
 sdk.agent_call_structured = fake
@@ -323,8 +370,13 @@ sys.exit(main(sys.argv[3:]))
 """
 
 
-def test_a_run_killed_after_find_leaves_a_started_line_and_resume_skips_find(fixture_repo, tmp_path, agents, capsys):
-    """Done means 8: SIGTERM once progress.log shows find finished; a plain run exits 4; resume skips find."""
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT], ids=["SIGTERM", "SIGINT"])
+def test_a_run_killed_after_find_leaves_a_started_line_and_resume_skips_find(fixture_repo, tmp_path, agents, capsys,
+                                                                             sig):
+    """Done means 8: SIGTERM once progress.log shows find finished; a plain run exits 4; resume skips find.
+
+    SIGINT (Ctrl-C) cancels the run's task instead of killing the process: it
+    must still read as interrupted, not as a run that finished."""
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     target_dir = out / f"example-booking-engine--{base}..{head}"
@@ -340,7 +392,7 @@ def test_a_run_killed_after_find_leaves_a_started_line_and_resume_skips_find(fix
             assert proc.poll() is None, proc.stderr.read()
             assert time.monotonic() < deadline, "find never finished"
             time.sleep(0.1)
-        proc.send_signal(signal.SIGTERM)
+        proc.send_signal(sig)
         proc.wait(timeout=30)
     finally:
         if proc.poll() is None:

@@ -8,7 +8,8 @@ a path. `--out` still overrides where a review's directory goes.
 `<data_dir>/reviews/ledger.jsonl` gets one line when a run starts
 (`event: "started"`) and one when it ends (`event: "finished"`), for every
 run: a review, a resume, each target of a batch, a run stopped by the budget
-or by the verifier. A run killed before it could write its end line leaves a
+or by the verifier. A run killed before it could write its end line, or
+stopped with Ctrl-C or a cancelled task (which writes none), leaves a
 `started` line with nothing after it for the same `target_dir` and
 `head_sha`: `interrupted()` finds it, and a plain `review` of that target
 refuses to start over. `migrate` adds `event: "migrated"` lines. The file is

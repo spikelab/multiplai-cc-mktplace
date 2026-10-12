@@ -283,7 +283,7 @@ it starts, and a `finished` line when it ends (`generated_at`, `producer`,
 or `failed: <error>`, and the whole `run` object). A resume and each target
 of a batch are runs too. The file is never rewritten. A `started` line with
 no later `finished` line for the same `target_dir` and `head_sha` is a run
-that was killed: a plain `review` of that target then makes no model call,
+that was killed or stopped with Ctrl-C: a plain `review` of that target then makes no model call,
 prints `interrupted run found; continue with: python -m review_pipeline
 resume <target_dir>` and exits `4`. Run that `resume` (it continues from the
 last finished stage), or pass `--restart` to start over on purpose.

@@ -89,19 +89,29 @@ def note_missing_usage(state: ReviewState, ledger: budget.ReviewBudget) -> None:
                             "their cost and tokens are counted as 0")
 
 
+# Stopped, not failed: the run can be resumed, so the ledger gets no end line.
+INTERRUPTIONS = (KeyboardInterrupt, asyncio.CancelledError, SystemExit)
+
+
 async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, *,
                     session_id: str = "") -> Path:
     """Run every stage not yet done; return the findings.json path.
 
-    Appends a `started` line to the review ledger first and a `finished` line
-    when the run ends, however it ends (`stopped` names a budget stop, a
-    verify stop or a failure). A process killed outright writes no end line,
-    which is how the ledger marks an interrupted run.
+    Saves this run's state, then appends a `started` line to the review
+    ledger, so `resume` of a run that stops at once reads this run's state,
+    not the last round's. Appends a `finished` line when the run ends
+    (`stopped` names a budget stop, a verify stop or a failure). A run that is
+    stopped rather than failing writes no end line, which is how the ledger
+    marks an interrupted run: a process killed outright, Ctrl-C or a
+    cancelled task (`KeyboardInterrupt`, `asyncio.CancelledError`), or an
+    exiting process (`SystemExit`).
     """
     t = state.target
     number = f"{rounds.round_number(target_dir):02d}"
+    save_state(state, target_dir)
     review_ledger.started(slug=t.slug, target_dir=target_dir, head_sha=t.head_sha, session_id=session_id)
-    stopped = "failed"
+    stopped: str | None = "failed"
+    interrupted = False
     try:
         path = await _run_stages(state, target_dir, config, session_id=session_id)
         stopped = None
@@ -112,18 +122,28 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
     except VerifyIncomplete:
         stopped = "verify-incomplete"
         raise
+    except INTERRUPTIONS:
+        interrupted = True
+        raise
     except BaseException as e:
         stopped = f"failed: {type(e).__name__}"
         raise
     finally:
-        try:
-            run = run_record(state)
-        except Exception:  # noqa: BLE001 — the ledger line must not hide the run's own error
-            log.warning("cannot build the run record for the ledger", exc_info=True)
-            run = None
-        review_ledger.finished(producer=producer(), session_id=session_id, slug=t.slug, target_dir=target_dir,
-                               round_=number, head_sha=t.head_sha, base_sha=t.base_sha, kind=t.kind, pr=t.pr,
-                               stopped=stopped, run=run)
+        if not interrupted:
+            _finish(state, target_dir, session_id=session_id, number=number, stopped=stopped)
+
+
+def _finish(state: ReviewState, target_dir: Path, *, session_id: str, number: str, stopped: str | None) -> None:
+    """The `finished` ledger line of a run that ended."""
+    t = state.target
+    try:
+        run = run_record(state)
+    except Exception:  # noqa: BLE001 — the ledger line must not hide the run's own error
+        log.warning("cannot build the run record for the ledger", exc_info=True)
+        run = None
+    review_ledger.finished(producer=producer(), session_id=session_id, slug=t.slug, target_dir=target_dir,
+                           round_=number, head_sha=t.head_sha, base_sha=t.base_sha, kind=t.kind, pr=t.pr,
+                           stopped=stopped, run=run)
 
 
 async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig, *,

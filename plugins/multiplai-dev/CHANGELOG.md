@@ -45,7 +45,7 @@ time, not derived from a tag.
   starts and one when it ends (budget stops, resumes and each batch target
   included), with its cost and counts. It is never rewritten, so it keeps
   runs whose directory was deleted.
-- A review killed part way (no end line in the ledger) is no longer started
+- A review killed or stopped with Ctrl-C part way (no end line in the ledger) is no longer started
   over by accident: running `review` on the same target and head exits 4
   and prints the `resume` command. `--restart` starts over on purpose.
 - `python -m review_pipeline migrate --from <dir>` copies old review
