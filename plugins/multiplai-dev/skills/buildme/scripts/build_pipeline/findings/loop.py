@@ -9,7 +9,10 @@ finished steps and restarts the first unfinished one:
 - triage keeps every verdict as it lands, so a resume calls no agent twice;
 - spec and triage, when they fail or were cut off, first keep whatever the
   tree holds under `refs/buildme/wip/<change>/r<N>-<step>`, and only then
-  discard back to where the step started;
+  discard back to where the step started (or to what origin has on top of
+  that, so a collaborator's pushed commits stay);
+- a resume refuses uncommitted changes outside the change directory, and a
+  state file written for another PR, repo or branch;
 - code re-enters `run_tdd_engine`, which resumes from its own checkpoint;
 - publish records each reply before sending the next.
 
@@ -41,6 +44,9 @@ STATE_FILE = ".findings-state.json"
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_WAITING = 3
+
+# A round's steps, in the order they run.
+STEPS = ("triage", "spec", "code", "publish", "review")
 
 # Steps whose half-done edits are kept under a wip ref and discarded on
 # resume. The code step is not one: the TDD engine resumes its own blocks.
@@ -115,6 +121,16 @@ def load_state(run: FindingsRun) -> BuildState:
     )
 
 
+def state_mismatch(run: FindingsRun, fs: FindingsState) -> str | None:
+    """Why the state file belongs to another PR, or None when it is this one's."""
+    theirs = (fs.pr, fs.repo.lower(), fs.branch)
+    if theirs == (run.pr, run.repo.lower(), run.branch):
+        return None
+    return (f"{run.state_path} belongs to PR #{fs.pr} on {fs.repo} (branch {fs.branch}), "
+            f"not PR #{run.pr} on {run.repo} (branch {run.branch}); "
+            "move that file aside to start over for this PR")
+
+
 def all_records(fs: FindingsState) -> list[TriageRecord]:
     out: list[TriageRecord] = []
     for r in fs.rounds:
@@ -133,14 +149,27 @@ def wip_ref(run: FindingsRun, rnd: FindingsRound, step: str) -> str:
     return f"refs/buildme/wip/{normalize_change_name(run.config.change_name)}/r{rnd.number}-{step}"
 
 
+def rewind_target(run: FindingsRun, start: str) -> str:
+    """The commit a step's work is discarded back to: the one it started
+    from, or, when the branch was since fast-forwarded from origin (the CLI
+    does that before a resume), the newest commit origin has on top of it.
+    Triage and spec never push, so nothing origin has is the step's work."""
+    repo = run.project_dir
+    base = git_ops.merge_base(repo, "HEAD", f"refs/remotes/origin/{run.branch}")
+    if base and base != start and git_ops.merge_base(repo, start, base) == start:
+        return base
+    return start
+
+
 def keep_and_rewind(run: FindingsRun, rnd: FindingsRound, step: str) -> None:
     """Keep the step's edits under its wip ref, then discard back to the
-    commit the step started from. Never discards when the ref could not be
-    written."""
+    commit the step started from (`rewind_target`). Never discards when the
+    ref could not be written."""
     start = rnd.step_heads.get(step)
     if not start:
         return
     repo = run.project_dir
+    start = rewind_target(run, start)
     if git_ops.tree_is_clean(repo) and git_ops.rev_parse_head(repo) == start:
         return
     ref = wip_ref(run, rnd, step)
@@ -293,8 +322,9 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             raise _Waiting()
         rnd.review_finished_at = _now()
 
-    for name, body in (("triage", do_triage), ("spec", do_spec), ("code", do_code),
-                       ("publish", do_publish), ("review", do_review)):
+    bodies = {"triage": do_triage, "spec": do_spec, "code": do_code,
+              "publish": do_publish, "review": do_review}
+    for name, body in ((s, bodies[s]) for s in STEPS):
         try:
             await _step(run, st, rnd, name, body)
         except _Waiting:
@@ -320,15 +350,38 @@ def _round_done(rnd: FindingsRound) -> bool:
     return "review" in rnd.finished
 
 
+def _next_step(rnd: FindingsRound) -> str:
+    return next((s for s in STEPS if s not in rnd.finished), "review")
+
+
+def _change_dir_in_project(run: FindingsRun) -> Path | None:
+    try:
+        return Path(run.change_dir).resolve().relative_to(run.project_dir.resolve())
+    except ValueError:
+        return None
+
+
 async def run_findings(run: FindingsRun) -> int:
     """The loop. Returns the process exit code."""
     st = load_state(run)
     fs = st.findings
     assert fs is not None
+    mismatch = state_mismatch(run, fs)
+    if mismatch:
+        run.emit(f"FINDINGS:FAILED:state:{mismatch}")
+        return EXIT_FAILED
     cache: dict[str, bool] = {}
     max_rounds = run.config.findings.max_rounds
     while True:
         rnd = fs.rounds[-1] if fs.rounds and not _round_done(fs.rounds[-1]) else None
+        if rnd is not None and not git_ops.tree_is_clean(run.project_dir,
+                                                         ignore=_change_dir_in_project(run)):
+            # A resumed step keeps what the tree holds under a wip ref and
+            # resets it. Only the round's own files, all in the change
+            # directory, may be left over from an interrupted step.
+            run.emit(f"FINDINGS:FAILED:{_next_step(rnd)}:{run.project_dir} has uncommitted "
+                     f"changes outside {run.change_dir}; commit or stash them first")
+            return EXIT_FAILED
         if rnd is None:
             done = len(fs.rounds)
             if done >= max_rounds:

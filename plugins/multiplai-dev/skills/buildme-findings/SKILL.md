@@ -95,7 +95,11 @@ triage never re-asks a comment it already sorted, the TDD engine resumes its
 own blocks from `.findings-r<N>-state.json`, and no reply is posted twice. A
 step that failed part way keeps its edits under
 `refs/buildme/wip/<change>/r<N>-<step>` before the worktree is reset to where
-the step began.
+the step began, or to the newest commit pulled from origin since then.
+
+A re-run refuses (`FINDINGS:FAILED`) when the worktree has uncommitted changes
+outside the change directory, and when the state file was written for a
+different PR, repository or branch.
 
 ## What this skill does on the machine
 

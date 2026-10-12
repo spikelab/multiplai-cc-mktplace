@@ -337,7 +337,7 @@ def cmd_edit(args) -> int:
         added = ("added these sections below it: " + ", ".join(f"`{k}`" for k in changed) if changed
                  else "added no sections: the description already had every section it writes")
         comment = ("The pr skill (`/multiplai-dev:pr`) edited this PR's description. It kept the existing "
-                   f"text unchanged and {added}.\n")
+                   f"text unchanged and {added}.\n\n{markers.NOTICE}\n")
 
     body_file = Path("<body-file>") if args.dry_run else _body_file(body)
     comment_file = Path("<comment-file>") if args.dry_run else (_body_file(comment) if comment else None)

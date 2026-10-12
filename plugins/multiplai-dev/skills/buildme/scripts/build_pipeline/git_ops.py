@@ -530,6 +530,15 @@ def rev_parse_head(repo: Path | str) -> str | None:
     return res.stdout.strip() or None
 
 
+def merge_base(repo: Path | str, a: str, b: str) -> str | None:
+    """The best common ancestor of *a* and *b*, or None (no common history,
+    an unknown ref, or git could not be asked)."""
+    res = _run(["git", "merge-base", a, b], cwd=repo)
+    if not res.ok:
+        return None
+    return res.stdout.strip() or None
+
+
 def is_ancestor_of_head(repo: Path | str, sha: str) -> bool:
     """Whether *sha* is reachable from HEAD (or is HEAD itself).
 
@@ -545,14 +554,18 @@ def is_ancestor_of_head(repo: Path | str, sha: str) -> bool:
     return res.returncode == 0
 
 
-def tree_is_clean(repo: Path | str) -> bool:
+def tree_is_clean(repo: Path | str, ignore: Path | str | None = None) -> bool:
     """True when *repo* holds nothing but buildme's own bookkeeping.
 
     Used only to decide whether HEAD is a faithful snapshot to discard back
     to. Returns False when git could not be asked — "unknown" must never be
     read as "safe to reset", because a reset over uncommitted work destroys it.
+    *ignore*, a directory relative to *repo*, is left out of the check too.
     """
-    res = _run(["git", "status", "--porcelain", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
+    excludes = list(BOOKKEEPING_EXCLUDES)
+    if ignore is not None:
+        excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
+    res = _run(["git", "status", "--porcelain", "--", ".", *excludes], cwd=repo)
     if not res.ok:
         log.warning("git status failed: %s", res.stderr.strip())
         return False

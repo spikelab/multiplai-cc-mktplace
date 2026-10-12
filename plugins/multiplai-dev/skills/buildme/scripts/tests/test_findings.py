@@ -137,6 +137,21 @@ class TestFetch:
         comments = fetch.fetch_comments(REPO, 7, "2026-10-12T10:00:00Z")
         assert [(c.id, c.kind) for c in comments] == [(11, "issue")]
 
+    def test_the_pr_skills_edit_notice_is_not_a_comment_to_act_on(self, gh):
+        notice = ("The pr skill (`/multiplai-dev:pr`) edited this PR's description.\n\n"
+                  + fetch.PR_NOTICE_MARKER)
+        unmarked = notice.replace(fetch.PR_NOTICE_MARKER, "")   # as 0.42.0 posted it
+        gh(issues=[_issue(11, "alice", notice, created="2026-10-12T12:00:00Z"),
+                   _issue(12, "alice", "a real question", created="2026-10-12T12:01:00Z"),
+                   _issue(13, "alice", unmarked, created="2026-10-12T12:02:00Z")])
+        comments = fetch.fetch_comments(REPO, 7, None)
+        assert [c.id for c in comments] == [12]
+
+    def test_the_notice_marker_is_the_pr_skills_own(self):
+        markers = (Path(__file__).resolve().parents[3] / "pr" / "scripts" / "pr_pipeline"
+                   / "markers.py").read_text()
+        assert f'NOTICE = "{fetch.PR_NOTICE_MARKER}"' in markers
+
     def test_a_failed_read_raises(self, monkeypatch):
         monkeypatch.setattr(git_ops, "_run_gh",
                             lambda argv, cwd=None, timeout=None: git_ops.GitResult(argv, 1, "", "boom"))

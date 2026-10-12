@@ -52,6 +52,9 @@ def _git(repo: Path, *args: str) -> str:
                           text=True).stdout
 
 
+def _wip(repo: Path) -> str:
+    return _git(repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/buildme/wip/")
+
 def _subjects(repo: Path) -> list[str]:
     return _git(repo, "log", "--format=%s").splitlines()
 
@@ -563,6 +566,70 @@ class TestResume:
         assert any(line == f"FINDINGS:WIP:{ref}" for line in lines)
 
 
+    @pytest.mark.asyncio
+    async def test_a_resumed_step_keeps_the_commits_pulled_from_origin(self, built, fake_pr, tmp_path):
+        """The CLI fast-forwards from origin before a resume; the rewind of
+        the interrupted step must not drop a collaborator's pushed commits."""
+        repo, change, config = built
+        origin = tmp_path / "origin.git"
+        _git(tmp_path, "init", "-q", "--bare", str(origin))
+        _git(repo, "remote", "add", "origin", str(origin))
+        _git(repo, "push", "-q", "origin", "buildme/calc")
+        fake_pr.add_thread("alice", "None should be refused", fid="5e1")
+        triage_call = FakeTriage({
+            "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified")})
+        calls = {"n": 0}
+
+        async def spec_call(prompt, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("killed")
+            return SPEC_DELTA
+
+        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
+                      spec_call=spec_call)
+        assert await loop.run_findings(run) == 1
+
+        collab = tmp_path / "collab"
+        _git(tmp_path, "clone", "-q", "-b", "buildme/calc", str(origin), str(collab))
+        _git(collab, "config", "user.email", "c@example.com")
+        _git(collab, "config", "user.name", "c")
+        (collab / "NOTES.md").write_text("a collaborator's note\n")
+        _git(collab, "add", "NOTES.md")
+        _git(collab, "commit", "-qm", "docs: a collaborator's note")
+        _git(collab, "push", "-q", "origin", "buildme/calc")
+        assert git_ops.fast_forward_from_origin(repo, "buildme/calc").ok
+        pulled = _git(repo, "rev-parse", "HEAD").strip()
+
+        run2, lines2 = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
+                            spec_call=spec_call)
+        assert await loop.run_findings(run2) == 0, lines2
+        assert subprocess.run(["git", "merge-base", "--is-ancestor", pulled, "HEAD"],
+                              cwd=repo).returncode == 0
+        assert (repo / "NOTES.md").read_text() == "a collaborator's note\n"
+        assert not any(line.startswith("FINDINGS:WIP:") for line in lines2)
+
+    @pytest.mark.asyncio
+    async def test_a_state_file_for_another_pr_is_refused(self, built, fake_pr):
+        repo, change, config = built
+        fake_pr.add_thread("alice", "question one", fid="c1")
+        q = Triage(verdict=Verdict.QUESTION, reason="answered")
+        run, _ = _run(config, change, triage_call=FakeTriage({"question one": q}),
+                      review=FakeReview(fake_pr))
+        assert await loop.run_findings(run) == 0
+        events = list(fake_pr.events)
+
+        for field, value in (("pr", PR + 1), ("repo", "someone/else"), ("branch", "buildme/other")):
+            other, lines = _run(config, change, triage_call=FakeTriage({}),
+                                review=FakeReview(fake_pr))
+            setattr(other, field, value)
+            assert await loop.run_findings(other) == 1, field
+            assert lines[-1].startswith("FINDINGS:FAILED:state:"), lines
+            assert f"#{PR}" in lines[-1] and loop.STATE_FILE in lines[-1]
+        assert fake_pr.events == events
+        assert len(BuildState.load(change / loop.STATE_FILE).findings.rounds) == 1
+
+
 class TestStop:
     @pytest.mark.asyncio
     async def test_done_when_nothing_new_is_allowed(self, built, fake_pr):
@@ -622,6 +689,66 @@ class TestDirtyTree:
         assert lines[-1].startswith("FINDINGS:FAILED:fetch:") and "uncommitted" in lines[-1]
         assert triage_call.prompts == []
         assert (repo / "calc.py").read_text() == "# someone's edit\n"
+
+
+    @pytest.mark.asyncio
+    async def test_a_resumed_round_refuses_uncommitted_work_outside_the_change(
+            self, built, fake_pr):
+        repo, change, config = built
+        fake_pr.add_thread("alice", "None should be refused", fid="5e1")
+        triage_call = FakeTriage({
+            "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified")})
+        calls = {"n": 0}
+
+        async def spec_call(prompt, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("killed")
+            return SPEC_DELTA
+
+        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
+                      spec_call=spec_call)
+        assert await loop.run_findings(run) == 1
+        head = _git(repo, "rev-parse", "HEAD").strip()
+        wip_before = _wip(repo)
+        (repo / "calc.py").write_text("# someone's edit\n")
+
+        run2, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
+                           spec_call=spec_call)
+        assert await loop.run_findings(run2) == 1
+        assert lines[-1].startswith("FINDINGS:FAILED:spec:") and "uncommitted" in lines[-1]
+        assert calls["n"] == 1
+        assert (repo / "calc.py").read_text() == "# someone's edit\n"
+        assert _git(repo, "rev-parse", "HEAD").strip() == head
+        assert _wip(repo) == wip_before
+
+    @pytest.mark.asyncio
+    async def test_a_round_killed_mid_step_still_resumes_over_its_own_files(self, built, fake_pr):
+        """A kill leaves the step's own files in the change directory; those
+        never block the resume."""
+        repo, change, config = built
+        fake_pr.add_thread("alice", "None should be refused", fid="5e1")
+        triage_call = FakeTriage({
+            "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified")})
+        calls = {"n": 0}
+
+        async def spec_call(prompt, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise KeyboardInterrupt
+            return SPEC_DELTA
+
+        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
+                      spec_call=spec_call)
+        with pytest.raises(KeyboardInterrupt):
+            await loop.run_findings(run)
+        assert (change / "findings-r1.md").exists()
+        assert _git(repo, "status", "--porcelain").strip()
+
+        run2, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
+                           spec_call=spec_call)
+        assert await loop.run_findings(run2) == 0, lines
+        assert calls["n"] == 2
 
 
 class TestSince:

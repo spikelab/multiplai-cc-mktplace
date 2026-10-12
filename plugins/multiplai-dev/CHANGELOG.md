@@ -39,9 +39,16 @@ time, not derived from a tag.
   Review threads are never resolved. A re-run resumes at the step that did not
   finish without re-asking a comment or posting a reply twice, and a step that
   failed part way keeps its edits under `refs/buildme/wip/<change>/r<N>-<step>`.
+  Commits someone else pushed to the PR are kept. It will not start a round
+  on a worktree with uncommitted changes, or resume one with changes outside
+  the change directory, and it will not reuse a change's state for a
+  different PR.
 - `findings.allow_bots` in `specs/config.yaml`.
 
 ### Changed
+- `/multiplai-dev:pr edit` ends the comment it leaves on a PR opened by hand
+  with a hidden marker, so `/multiplai-dev:buildme-findings` does not take that
+  comment for a review comment.
 - `findings.authors` and `findings.max_rounds` are now read by the findings
   stage; before this release they were stored only.
 

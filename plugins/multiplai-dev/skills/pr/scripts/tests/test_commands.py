@@ -285,6 +285,7 @@ def test_hand_opened_pr_with_edit_rights_gets_sections_appended_and_one_comment(
     assert [c[:3] for c in gh_stub.writes()] == [["gh", "pr", "edit"], ["gh", "pr", "comment"]]
     comment = gh_stub.bodies["gh pr comment"]
     assert "edited this PR's description" in comment
+    assert comment.rstrip().endswith(markers.NOTICE), "buildme-findings skips a comment with it"
     for key in ("why", "blocks", "documentation", "companion-artifacts", "ticket", "size"):
         assert f"`{key}`" in comment
 

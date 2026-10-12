@@ -34,6 +34,13 @@ FINDING_MARKER_RE = re.compile(
 # the pipeline's own replies would come back as new comments next round.
 REPLY_MARKER = "<!-- multiplai-buildme:reply v=1 -->"
 _REPLY_MARKER_RE = re.compile(r"<!--\s*multiplai-buildme:reply\s+v=\d+\s*-->")
+# The marker on the comment the pr skill's `edit` posts when it first takes
+# over a PR body (publish runs `edit`), copied from pr_pipeline/markers.py
+# `NOTICE`. That comment is never a review comment to act on.
+PR_NOTICE_MARKER = "<!-- multiplai-pr:notice v=1 -->"
+_PR_NOTICE_RE = re.compile(r"<!--\s*multiplai-pr:notice\s+v=\d+\s*-->")
+# multiplai-dev 0.42.0 posted the same comment without the marker.
+_PR_NOTICE_UNMARKED = "The pr skill (`/multiplai-dev:pr`) edited this PR's description."
 
 # `role_name` values that count as "collaborators with write access".
 WRITE_ROLES = frozenset({"admin", "maintain", "write"})
@@ -71,6 +78,10 @@ def parse_finding_id(body: str | None) -> str | None:
 
 def is_pipeline_reply(body: str | None) -> bool:
     return bool(_REPLY_MARKER_RE.search(body or ""))
+
+
+def is_pr_skill_notice(body: str | None) -> bool:
+    return bool(_PR_NOTICE_RE.search(body or "")) or (body or "").startswith(_PR_NOTICE_UNMARKED)
 
 
 def _split_repo(repo: str) -> tuple[str, str]:
@@ -163,7 +174,7 @@ def _issue_comments(repo: str, pr: int, since: str | None, cwd: Path | None) -> 
         if since and created <= since:
             continue
         body = c.get("body") or ""
-        if is_pipeline_reply(body):
+        if is_pipeline_reply(body) or is_pr_skill_notice(body):
             continue
         user = c.get("user") or {}
         login = user.get("login") or "ghost"
