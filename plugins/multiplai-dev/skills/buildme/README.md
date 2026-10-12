@@ -783,8 +783,9 @@ Gates are pure functions (no LLM calls) that return pass/fail decisions:
 | `docs_freshness_gate` | After the documentation phase | **Never fails.** Prints `DOCS_WARNING:<reason>` when source changed, a changelog exists, and nothing was documented |
 | Baseline test | Before block 1 | Abort (existing tests broken) |
 | Weak test detection | After test writer | Retry with feedback |
-| Test integrity | After GREEN, and after every review-fix | Fail the block (tests were edited after they gated it) |
-| Quality review (graded, panel-merged) | After implementer | Retry implementation (max 3) |
+| Test integrity | After GREEN, after every review-fix, and after the fix on pass | Fail the block (tests were edited after they gated it); during the fix on pass, roll the fix back instead |
+| Quality review (graded, panel-merged) | After implementer | Fix agent on the failing dimensions and every accepted finding, then review again (max 3 reviews). Every round is recorded in `reviews/` |
+| Fix on pass (`code_review.fix_on_pass`, on by default) | A block passed review with accepted Critical/Major/Minor findings | One fix pass on those findings, then suite + test integrity + one more review. Kept only if the suite is green and the block still passes; otherwise rolled back and listed in `unfixed-findings.md`. Never fails the block |
 | Integration | After block done | Integration fix agent (max 2) |
 | Budget | Each block boundary | Stop with a per-phase spend diagnosis |
 | Entry point | Post-TDD | Warn (manual step needed) |
@@ -851,6 +852,46 @@ Two consequences worth knowing before you configure one:
   block — otherwise adding members would make the pipeline *less* reliable.
   A dimension only one member scored is discounted for lack of corroboration.
 
+### Review rounds and the fix on pass
+
+Every review round of every block is written to
+`specs/changes/<name>/reviews/block-<NN>-round-<k>.json`: the scores, the
+weighted average, the gate's verdict and reason, the findings the judge
+accepted and the ones it rejected (with its reason), the brief sent to the fix
+agent, and, once that agent returns, its report, its commit and its `SEARCHED`
+list. Round numbers continue across resumes, and a record is never replaced.
+The records are committed with the block's commits and left out of the diff the
+next reviewer sees.
+
+A block that passes review can still carry accepted findings. With
+`code_review.fix_on_pass` on (the default), the ones rated Critical, Major or
+Minor get one fix pass, which does not count toward the three review
+iterations:
+
+1. Commit the block's work and record the checkpoint (HEAD, clean tree).
+2. Check the budget.
+3. Run the fix agent on those findings only.
+4. Run the suite and the test-integrity gate.
+5. Review and adjudicate once more.
+
+The fix is kept only when the suite is green and the block still passes
+review. Otherwise the tree goes back to the checkpoint. Findings left unfixed
+(the fix was not kept, or not attempted) are appended to
+`specs/changes/<name>/unfixed-findings.md`, and PUBLISH passes that file to the
+pr skill as a PR-body section. The checkpoint and the step reached are saved in
+`.build-state.json` before the fix agent starts, so a build that dies during
+the pass rolls back to the checkpoint on resume and runs the pass again: a
+half-applied fix is never kept. With `fix_on_pass: false` a passing block stops
+its review loop at once, as before.
+
+Every review-fix brief, on the failing-score path and the fix on pass, asks the
+agent to check the other branches of the same function and the rest of the
+block's diff for the same mistake, re-read `git diff` of its own changes, and
+end its report with a `SEARCHED:` section saying where it looked. The section is
+parsed into the round record. A missing one is recorded as `searched: null`
+with a warning, not a failure: code cannot check that a search happened, so it
+records the claim.
+
 ### Budget
 
 Every other loop bound in the pipeline is an iteration count, which does not
@@ -873,6 +914,7 @@ code_review:
     - model: opus
     - model: sonnet
   adjudicate: true         # default; false DROPS findings, never auto-applies
+  fix_on_pass: true        # default; false leaves a passing block's findings unfixed
   gate:
     min_weighted_average: 3.5
     critical_score: 1.0
@@ -932,7 +974,7 @@ State is checkpointed to `.build-state.json` after every phase transition:
 }
 ```
 
-If the build crashes, restarting with the same `--change` name loads state and skips completed phases. Completed blocks are not re-run.
+If the build crashes, restarting with the same `--change` name loads state and skips completed phases. Completed blocks are not re-run. A block that stopped during its fix on pass (`fix_pass` on the block in the checkpoint) is not rebuilt either: the tree goes back to the pass's checkpoint and only the pass runs again.
 
 ## Module Map
 
@@ -942,6 +984,7 @@ If the build crashes, restarting with the same `--change` name loads state and s
 | `orchestrator.py` | Phase sequencing state machine | Delegates |
 | `spec_generator.py` | Artifact pipeline (proposal → rubric) | Via llm_steps |
 | `tdd_engine.py` | Block-by-block TDD with agent spawning | Via llm_steps |
+| `review_rounds.py` | The per-block review round records (`reviews/`) and `unfixed-findings.md` | No |
 | `apply.py` | Manual single-agent implementation | Via sdk |
 | `change_manager.py` | Directory ops, artifact DAG, archiving | No |
 | `config.py` | BuildConfig, tier detection, test discovery, per-step model/effort from `multiplai.conf`, the reviewer's `CLAUDE.md` chain (`convention_files`) | No |
