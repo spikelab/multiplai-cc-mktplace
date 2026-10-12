@@ -472,6 +472,33 @@ def _render_overlays(edl: EDL) -> list[Path]:
     return movs
 
 
+SFX_LIMIT = 0.95               # alimiter ceiling on the mix with sound effects (about -0.45 dBFS)
+
+
+def sfx_graph(edl: EDL, first_input: int, alabel: str) -> tuple[str, list[str], str]:
+    """Filter graph that mixes each sound effect into [alabel] at its time.
+
+    Input `first_input + i` is edl.sfx[i]'s file. This runs after the music
+    is mixed and ducked, so the sounds never duck it. amix keeps the levels
+    as given (normalize=0), and alimiter keeps stacked sounds from clipping.
+    Its auto level is off: on, it scales the output by 1/limit, which puts
+    the limited peaks back at full scale. Returns (graph, the -i arguments,
+    new label).
+    """
+    from stages import sfx as sfx_mod
+    inputs: list[str] = []
+    parts: list[str] = []
+    labels = ""
+    for i, s in enumerate(edl.sfx):
+        inputs += ["-i", str(sfx_mod.resolve(s.sound))]
+        parts.append(f"[{first_input + i}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+                     f"adelay=delays={round(s.at * 1000)}:all=1,volume={s.volume_db}dB[sfx{i}]")
+        labels += f"[sfx{i}]"
+    parts.append(f"[{alabel}]{labels}amix=inputs={len(edl.sfx) + 1}:duration=first:"
+                 f"dropout_transition=0:normalize=0,alimiter=limit={SFX_LIMIT}:level=0[afx]")
+    return "; ".join(parts), inputs, "afx"
+
+
 def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
     brand = brand_mod.load(edl.brand) if edl.brand else brand_mod.default()
     words = _load_words(edl) if _needs_words(edl) else None
@@ -531,6 +558,11 @@ def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
         )
         filter_complex = filter_complex + "; " + bed + "; " + sidechain + "; " + mix
         alabel = "amix"
+
+    if edl.sfx:
+        graph, sfx_inputs, alabel = sfx_graph(edl, cmd_inputs.count("-i"), alabel)
+        cmd_inputs.extend(sfx_inputs)
+        filter_complex += "; " + graph
 
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",

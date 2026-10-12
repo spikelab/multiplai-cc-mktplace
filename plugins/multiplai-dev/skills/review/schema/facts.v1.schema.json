@@ -1,0 +1,255 @@
+{
+  "$defs": {
+    "Citation": {
+      "properties": {
+        "id": {
+          "default": "",
+          "title": "Id",
+          "type": "string"
+        },
+        "line_end": {
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "quote": {
+          "title": "Quote",
+          "type": "string"
+        },
+        "side": {
+          "default": "head",
+          "enum": [
+            "base",
+            "head"
+          ],
+          "title": "Side",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "line_start",
+        "line_end",
+        "quote"
+      ],
+      "title": "Citation",
+      "type": "object"
+    },
+    "Dropped": {
+      "properties": {
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "what": {
+          "title": "What",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage",
+        "what",
+        "reason"
+      ],
+      "title": "Dropped",
+      "type": "object"
+    },
+    "Fact": {
+      "properties": {
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/Citation"
+          },
+          "title": "Citations",
+          "type": "array"
+        },
+        "claim": {
+          "title": "Claim",
+          "type": "string"
+        },
+        "id": {
+          "default": "",
+          "title": "Id",
+          "type": "string"
+        },
+        "source": {
+          "default": "",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim"
+      ],
+      "title": "Fact",
+      "type": "object"
+    },
+    "FilePurpose": {
+      "properties": {
+        "citation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Citation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "purpose": {
+          "title": "Purpose",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "purpose"
+      ],
+      "title": "FilePurpose",
+      "type": "object"
+    },
+    "Term": {
+      "properties": {
+        "citation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Citation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "meaning": {
+          "title": "Meaning",
+          "type": "string"
+        },
+        "term": {
+          "title": "Term",
+          "type": "string"
+        }
+      },
+      "required": [
+        "term",
+        "meaning"
+      ],
+      "title": "Term",
+      "type": "object"
+    }
+  },
+  "$id": "facts.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`facts.json`: the explain stage's checked facts for one base..head.\n\n`facts` holds every fact that passed, with ids `f<N>` and citation ids\n`c<N>`. `interfaces`, `gotchas` and `conventions` repeat some of those\nfacts, with the same ids. `files` gives each file's purpose with the\ncitation that passed. `uncovered` lists files in the scope that no fact\ncites; `dropped` records each claim whose citations all failed.",
+  "properties": {
+    "base_sha": {
+      "title": "Base Sha",
+      "type": "string"
+    },
+    "conventions": {
+      "items": {
+        "$ref": "#/$defs/Fact"
+      },
+      "title": "Conventions",
+      "type": "array"
+    },
+    "dropped": {
+      "items": {
+        "$ref": "#/$defs/Dropped"
+      },
+      "title": "Dropped",
+      "type": "array"
+    },
+    "facts": {
+      "items": {
+        "$ref": "#/$defs/Fact"
+      },
+      "title": "Facts",
+      "type": "array"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/FilePurpose"
+      },
+      "title": "Files",
+      "type": "array"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    },
+    "gotchas": {
+      "items": {
+        "$ref": "#/$defs/Fact"
+      },
+      "title": "Gotchas",
+      "type": "array"
+    },
+    "head_sha": {
+      "title": "Head Sha",
+      "type": "string"
+    },
+    "interfaces": {
+      "items": {
+        "$ref": "#/$defs/Fact"
+      },
+      "title": "Interfaces",
+      "type": "array"
+    },
+    "kind": {
+      "description": "`tree` for a review of files as they stand, no base side",
+      "enum": [
+        "change",
+        "tree"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "terms": {
+      "items": {
+        "$ref": "#/$defs/Term"
+      },
+      "title": "Terms",
+      "type": "array"
+    },
+    "uncovered": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Uncovered",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "generated_at",
+    "base_sha",
+    "head_sha",
+    "kind"
+  ],
+  "title": "FactsFile",
+  "type": "object"
+}

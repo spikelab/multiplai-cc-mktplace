@@ -96,7 +96,7 @@
       "name": "multiplai-dev",
       "source": "./plugins/multiplai-dev",
       "description": "Developer skill pack: spec-driven builds, executable plan authoring, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring.",
-      "version": "0.40.0",
+      "version": "0.41.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -118,7 +118,7 @@
       "name": "multiplai-media",
       "source": "./plugins/multiplai-media",
       "description": "Media skill pack: audio transcription, YouTube transcripts, video editing (screen-recording demos), diagrams, host-browser automation.",
-      "version": "0.8.0",
+      "version": "0.10.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"

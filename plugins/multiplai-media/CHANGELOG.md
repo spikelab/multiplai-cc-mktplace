@@ -21,6 +21,57 @@ a tag.
 
 Nothing yet.
 
+## [0.10.0] - 2026-10-11
+
+### Added
+
+- **Proof shots: a real web page on screen, at the line the narration
+  cites.** `pipeline.py capture <url> --highlight "<words>"` opens the page
+  in headless Chromium, screenshots it (the visible part, or the whole page
+  with `--full-page`) and records where the first line containing those
+  words is. The page is never edited: the highlight is drawn on top later.
+  The matched text is printed inside an untrusted-content fence, because it
+  comes from someone else's page.
+- **`pipeline.py proof-card <shot-dir>`** turns that screenshot into an
+  overlay page in your chosen style: the page on a rounded card with its
+  domain and capture date on top, scrolling down to the line (`--motion
+  scroll`) or zooming in on it (`--motion zoom`), then ringing it in the
+  style's accent colour. Add it to the EDL as an `alpha` overlay. It warns
+  when the overlay is too short to leave the ring on screen for 2 s.
+- **When a page cannot be captured** (an HTTP error, a login wall, a
+  captcha, or no answer), `capture` stops with exit code 2, says what it
+  saw, and tells you to save a screenshot yourself and pass it with
+  `--from-file shot.png --box X,Y,W,H`. Posts on X land here: capture never
+  signs in or uses your browser. Exit code 3 means the shot was taken but
+  the words were not on it.
+
+### Changed
+
+- `capture` is the first part of video-edit that fetches a page over the
+  network; SKILL.md now says so, and says how to treat the text it reads.
+  The video-edit environment now also installs `multiplai-core`, which
+  provides that fence.
+
+## [0.9.0] - 2026-10-11
+
+### Added
+
+- **Sound effects on clicks and graphic entrances.** An EDL can now carry an
+  `sfx` list: a short sound at a moment in the finished video, at a quiet
+  default level (`volume_db` -14). Each sound is a path to an audio file you
+  supply; no sounds ship with the skill yet. The sounds are mixed in after the music, so
+  they never make it duck, and a limiter keeps stacked sounds from clipping.
+- **`pipeline.py sfx-suggest <edl> --clicks <file> --overlays <file>`**
+  prints a first `sfx` list for an EDL: the `--clicks` file at each spot the
+  camera follows and the `--overlays` file when each overlay appears, in the
+  finished video's time. It prints what it skipped or dropped and why, and
+  never edits the EDL.
+- Render refuses two sounds less than 0.5 s apart and names both times. It
+  warns when there is more than one sound every 3 seconds on average, which
+  tends to sound busy.
+
+An EDL without `sfx` renders exactly as before.
+
 ## [0.8.0] - 2026-10-11
 
 ### Added

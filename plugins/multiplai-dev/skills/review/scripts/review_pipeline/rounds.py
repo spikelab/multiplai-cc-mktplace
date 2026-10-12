@@ -2,9 +2,10 @@
 
 A PR is reviewed into the same `<out>/<slug>/` each time, so a new run would
 write over the last round's `findings.json`. Before it does, `keep_round`
-copies that round's files to `rounds/<old head_sha[:12]>/`, also when the new
-run is on the same head (a rerun), so the repeat and assess stages have that
-run to compare with. A second round on one head goes to `<sha12>-2/`, and so
+copies that round's files (`findings.json`, the review, `checks.json` and,
+when the explain stage ran, `facts.json`) to `rounds/<old head_sha[:12]>/`,
+also when the new run is on the same head (a rerun), so the repeat and assess
+stages have that run to compare with. A second round on one head goes to `<sha12>-2/`, and so
 on. Nothing there is ever deleted or overwritten.
 
 A finding the repeats stage matched to a rejected one gets no entry of its
@@ -92,7 +93,7 @@ def keep_round(target_dir: Path, slug: str, new_head_sha: str) -> Path | None:
         return None
     round_dir = _round_dir(target_dir, old_head, str(data.get("generated_at") or ""))
     round_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("findings.json", f"review-{slug}.md", "checks.json"):
+    for name in ("findings.json", f"review-{slug}.md", "checks.json", "facts.json"):
         src, dest = target_dir / name, round_dir / name
         if src.is_file() and not dest.exists():
             shutil.copy2(src, dest)

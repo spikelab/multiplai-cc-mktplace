@@ -21,6 +21,14 @@ def test_range_prompt_names_ranges_and_the_base_side():
     assert "- e/a.py, lines 2-2 (before the change)" in p
 
 
+
+def test_base_dir_says_where_the_lines_before_the_change_are_and_how_to_cite_them():
+    spans = [Span(path="e/a.py", start=3, end=9), Span(path="e/a.py", start=2, end=4, side="base")]
+    p = explore_unit("the change", spans, base_dir="/tmp/review/base-tree/")
+    assert "- e/a.py, lines 3-9\n" in p
+    assert ('- e/a.py, lines 2-4 (before the change; read it at /tmp/review/base-tree/e/a.py, '
+            'and cite it with `side` "base")') in p
+
 def test_missing_files_and_conventions_are_asked_for_only_when_given():
     p = explore_unit("m", [Span.whole("e/a.py", 40)], missing=["e/a.py"], conventions=True)
     assert "An earlier pass left these files" in p

@@ -2265,6 +2265,7 @@ version = "0.0.0"
 source = { virtual = "plugins/multiplai-media/skills/video-edit/scripts" }
 dependencies = [
     { name = "click" },
+    { name = "multiplai-core" },
     { name = "opencv-python-headless" },
     { name = "playwright" },
     { name = "scenedetect" },
@@ -2274,6 +2275,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
+    { name = "multiplai-core", git = "https://github.com/spikelab/multiplai-core?branch=main" },
     { name = "opencv-python-headless", specifier = ">=4.9" },
     { name = "playwright", specifier = "==1.63.0" },
     { name = "scenedetect", specifier = ">=0.7" },
