@@ -32,11 +32,12 @@ REVIEWER_MAX_TURNS = 30
 def _panel_models(config) -> list[str]:
     """The reviewer models for one block review, in panel order.
 
-    Empty/absent `code_review.panel` → a single reviewer on the existing
+    Empty/absent `code_review.panel` → a single reviewer on
+    `config.model_for("review")`, which with no `models:` key is the
     review_model-or-model choice, i.e. exactly today's behavior. A panel is
     opt-in because every extra member is another full-diff call.
     """
-    default = getattr(config, "review_model", None) or config.model
+    default = config.model_for("review")
     panel = getattr(config, "review_panel", None) or []
     return [m for m in panel if m] or [default]
 
@@ -178,7 +179,7 @@ async def run_code_review(
         diff: The git diff to review
         rubric: The rubric.md content
         config: BuildConfig for model selection (config.review_panel, else
-            config.review_model, else config.model)
+            config.model_for("review"))
         spec_context: The spec scenarios this block must satisfy (verbatim)
         standards: Coding-standards doc contents pushed into the reviewer's
             context (empty → the prompt says "(no standards provided)")
@@ -290,7 +291,7 @@ async def run_review_fix(
     result = await agent_call(
         prompt,
         allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-        model=config.model,
+        model=config.model_for("review_fix"),
         effort=config.agent_effort,
         max_turns=20,
         cwd=str(config.project_dir),

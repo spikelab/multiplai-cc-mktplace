@@ -209,6 +209,9 @@ class TestExplainerPath:
             model = None
             project_description = "test project"
 
+            def model_for(self, step):
+                return None
+
         return Dep(), Config()
 
     @pytest.mark.asyncio

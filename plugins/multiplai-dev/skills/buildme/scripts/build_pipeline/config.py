@@ -14,6 +14,9 @@ from typing import Iterable, Literal
 
 import yaml
 
+from multiplai_core import resolve_model_spec
+from multiplai_core.env import CURRENT_MODEL, parse_model_spec
+
 from .env import KNOWN_EFFORTS, load_multiplai_conf, pick_effort, pick_model, resolve_model
 from .models import ReviewGatePolicy
 
@@ -179,7 +182,8 @@ def _pyproject_dependency_specs(data: dict) -> list[str]:
     return specs
 
 
-def detect_tier() -> tuple[Tier, str]:
+def detect_tier(default_spec: str | None = None,
+                configured_tier: str | None = None) -> tuple[Tier, str]:
     """Detect model tier from the model buildme will actually run.
 
     Returns (tier, model_name). Derives advanced/standard from ``DEFAULT_MODEL``
@@ -193,20 +197,39 @@ def detect_tier() -> tuple[Tier, str]:
     Deriving from ``DEFAULT_MODEL`` makes the tier reflect the real model (opus
     → advanced under an opus ceiling). An explicit ``CLAUDE_MODEL``, if set,
     still wins as an override.
+
+    *default_spec* is `models.default` from specs/config.yaml, already
+    resolved, when one is set; it stands in for ``DEFAULT_MODEL``. A Claude
+    model's version says which tier it is. Another vendor's model says nothing
+    about that, so for a non-Anthropic default the tier is pinned by
+    ``BUILDME_TIER`` (env, wins) or *configured_tier* (`tier:` in
+    specs/config.yaml), and is ``standard`` when neither is set.
     """
-    model = os.environ.get("CLAUDE_MODEL") or DEFAULT_MODEL
-    if _is_advanced_model(model):
-        return "advanced", model
-    return "standard", model
+    model = os.environ.get("CLAUDE_MODEL") or default_spec or DEFAULT_MODEL
+    spec = parse_model_spec(model)
+    if not spec.is_anthropic:
+        pinned = os.environ.get("BUILDME_TIER") or configured_tier
+        if pinned in ("advanced", "standard"):
+            return pinned, spec.qualified
+        log.info("tier: standard — the default model %s is not a Claude model, so "
+                 "its version says nothing about the tier; set BUILDME_TIER or "
+                 "`tier:` in specs/config.yaml to pin it", spec.qualified)
+        return "standard", spec.qualified
+    if _is_advanced_model(spec.model):
+        return "advanced", spec.model
+    return "standard", spec.model
 
 
 def _is_advanced_model(model: str) -> bool:
-    """Advanced tier = the Opus family at version >= 4.5.
+    """Advanced tier = Fable, or the Opus family at version >= 4.5.
 
     A version-range check rather than a literal allowlist, so the next Opus bump
     (4-7, 4-8, 5-0, ...) is recognized automatically instead of silently
-    downgrading to 'standard'. Non-Opus models (sonnet/haiku/other) → False.
+    downgrading to 'standard'. Fable ranks above Opus, so any Fable is
+    advanced. Other models (sonnet/haiku/other) → False.
     """
+    if "fable" in model.lower():
+        return True
     m = re.search(r"opus-(\d+)(?:-(\d+))?", model)
     if not m:
         return False
@@ -391,9 +414,71 @@ INTAKE_PROVIDERS: dict[str, str] = {
 
 INTERVIEW_MODES: tuple[str, ...] = ("self", "ticket", "user")
 
-# `models.<step>` values buildme accepts. Stored only (BuildConfig.model_specs);
-# resolving them to a model is a later change.
-MODEL_SPEC_PREFIXES: tuple[str, ...] = ("claude:", "pi:")
+# The three stages a step falls back to in `models:` (specs/config.yaml).
+MODEL_STAGES: tuple[str, ...] = ("spec", "agent", "review")
+
+# Every buildme step that calls a model, and its stage. A step name is the
+# call's `budget_label`, except: every `spec:<id>` artifact (use-cases
+# included) is `spec_artifact`; the unlabeled explainer, prototype and respec
+# calls are named for what they do; `review_fix` is the fix agent the review
+# loop runs (it charges the budget as `implementer`); and
+# `integration_fix_escalated` is the last integration-fix attempt, which has
+# always run on the review model. Each stage holds the steps whose
+# `[buildme.<stage>]` effort they already use.
+STEP_STAGES: dict[str, str] = {
+    "spec_artifact": "spec",
+    "rubric": "spec",
+    "design_audit": "spec",
+    "tasks_audit": "spec",
+    "codebase_analysis": "spec",
+    "explainer": "spec",
+    "respec": "spec",
+    "interview": "spec",
+    "research": "spec",
+    "test_writer": "agent",
+    "implementer": "agent",
+    "refactor": "agent",
+    "refactor_all": "agent",
+    "integration_fix": "agent",
+    "review_fix": "agent",
+    "docs_update": "agent",
+    "prototype": "agent",
+    "review": "review",
+    "adjudication": "review",
+    "test_quality_audit": "review",
+    "plan_review": "review",
+    "integration_fix_escalated": "review",
+}
+
+# The keys `models:` accepts: a step, a stage, or `default`.
+MODEL_KEYS: frozenset[str] = frozenset(STEP_STAGES) | frozenset(MODEL_STAGES) | {"default"}
+
+# The existing per-stage field each step reads at the third link of
+# `BuildConfig.model_for`'s chain: its stage's field, or its own.
+_STAGE_MODEL_FIELDS: dict[str, str] = {
+    "spec": "spec_model", "agent": "agent_model", "review": "review_model",
+}
+_STEP_MODEL_FIELDS: dict[str, str] = {"plan_review": "plan_review_model"}
+
+
+def _is_model_spec(value) -> bool:
+    """Whether *value* names a model buildme can run.
+
+    A Claude model (a family name such as ``fable``, a ``claude-…`` ID, either
+    one with a ``claude:`` or ``anthropic:`` prefix) or a Pi model
+    (``pi:<model>@<provider>``). Anything else, ``gpt-5`` included, is a typo
+    or a backend `run_agent` has no runner for, and the loader drops it.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        spec = parse_model_spec(value)
+    except ValueError:
+        return False
+    if spec.is_anthropic:
+        model = spec.model.lower()
+        return model.startswith("claude-") or any(f in model for f in CURRENT_MODEL)
+    return spec.provider == "pi" and "@" in spec.model
 
 
 @dataclass
@@ -535,9 +620,12 @@ class BuildConfig:
     pr: PrSettings = field(default_factory=PrSettings)
     findings: FindingsSettings = field(default_factory=FindingsSettings)
     mutation: MutationSettings = field(default_factory=MutationSettings)
-    # `models.<step>` → "claude:<name>" | "pi:<model>@<provider>". Parsed and
-    # stored only; nothing reads it in this pipeline yet.
+    # `models:` from specs/config.yaml: step, stage or `default` → a model spec
+    # as written. `model_for` resolves it.
     model_specs: dict[str, str] = field(default_factory=dict)
+    # `tier:` from specs/config.yaml. Read only when the default model is not
+    # a Claude model (see detect_tier).
+    configured_tier: str | None = None
 
     # Runtime marker, not user-configurable: set to the branch name once the
     # pipeline has created its own worktree+branch (or re-bound to one on
@@ -692,6 +780,72 @@ class BuildConfig:
             if attr in self._derived_step_fields and getattr(self, attr) is None:
                 setattr(self, attr, getattr(self, root))
 
+    def model_for(self, step: str) -> str:
+        """The model one step runs on: a bare Claude ID, or a ``pi:…`` spec.
+
+        The chain, first set link wins:
+
+        1. ``models.<step>`` in specs/config.yaml
+        2. ``models.<stage>`` (the step's stage in ``STEP_STAGES``)
+        3. the existing per-stage field (``spec_model`` / ``agent_model`` /
+           ``review_model``; ``plan_review_model`` for ``plan_review``)
+        4. ``models.default``
+        5. ``model``
+
+        Links 1, 2 and 4 go through ``multiplai_core.resolve_model_spec``,
+        which caps a Claude model at ``MULTIPLAI_MODEL`` and passes a Pi spec
+        through. Links 3 and 5 were resolved when the config loaded, so they
+        are returned as they are: resolving them again would pin a dated ID
+        (``claude-opus-4-6``) to the current one and change what today's
+        steps run on. A per-stage field that was only copied from its root
+        is not set; the chain looks at the root instead (``review_model`` for
+        ``plan_review``), and ``model`` comes last.
+
+        A Claude model comes back as a bare ID, the string every call site
+        passed before this method existed; ``run_agent`` reads a bare ID as
+        Anthropic. Any other provider comes back qualified (``pi:…``).
+
+        Raises:
+            KeyError: *step* is not in ``STEP_STAGES``.
+        """
+        stage = STEP_STAGES[step]
+        spec = resolve_model_spec([self.model_specs.get(step), self.model_specs.get(stage)])
+        if spec is None:
+            field_model = self._set_model_field(
+                _STEP_MODEL_FIELDS.get(step) or _STAGE_MODEL_FIELDS[stage])
+            if field_model:
+                return field_model
+            spec = resolve_model_spec([self.model_specs.get("default")])
+        if spec is None:
+            return self.model
+        return spec.model if spec.is_anthropic else spec.qualified
+
+    def _set_model_field(self, attr: str) -> str | None:
+        """*attr*'s value if someone set it, else its roots' (``model`` excluded).
+
+        A field in ``_derived_step_fields`` holds a copy of its root, not a
+        choice, so the roots in ``_STEP_FALLBACKS`` are asked instead.
+        """
+        if attr == "model":
+            return None
+        if attr not in self._derived_step_fields:
+            value = getattr(self, attr, None)
+            if value:
+                return value
+        for derived, root in _STEP_FALLBACKS:
+            if derived == attr:
+                value = self._set_model_field(root)
+                if value:
+                    return value
+        return None
+
+    def default_model_spec(self) -> str | None:
+        """``models.default`` resolved like ``model_for`` resolves it, or None."""
+        spec = resolve_model_spec([self.model_specs.get("default")])
+        if spec is None:
+            return None
+        return spec.model if spec.is_anthropic else spec.qualified
+
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> BuildConfig:
         tier, model_name = detect_tier()
@@ -709,6 +863,12 @@ class BuildConfig:
         )
         config.specs_dir = config.project_dir / "specs"
         config._load_specs_config()
+        # `models.default` and `tier:` come from specs/config.yaml, which
+        # detect_tier above could not see yet.
+        default_spec = config.default_model_spec()
+        if default_spec or config.configured_tier:
+            config.tier, config.model_name = detect_tier(
+                default_spec, configured_tier=config.configured_tier)
         # Also covers a repo with no config.yaml, where the loader returns early.
         config._resolve_auto_interview()
         # config.yaml supplies the default; the CLI flags override it.
@@ -731,7 +891,7 @@ class BuildConfig:
         # caller or multiplai.conf set explicitly are untouched.
         config._resolve_step_fallbacks()
         config._discover_test_command()
-        log.info("Running in %s mode (%s)", tier, model_name)
+        log.info("Running in %s mode (%s)", config.tier, config.model_name)
         return config
 
     def _load_specs_config(self) -> None:
@@ -877,13 +1037,25 @@ class BuildConfig:
         )
 
         specs: dict[str, str] = {}
-        for step, spec in _cfg_mapping(data.get("models"), "models").items():
-            if isinstance(spec, str) and spec.startswith(MODEL_SPEC_PREFIXES):
-                specs[str(step)] = spec
+        for key, spec in _cfg_mapping(data.get("models"), "models").items():
+            key = str(key)
+            if key not in MODEL_KEYS:
+                log.warning("Dropping models.%s in config.yaml — not a buildme step, "
+                            "a stage (%s) or 'default'", key, ", ".join(MODEL_STAGES))
+            elif _is_model_spec(spec):
+                specs[key] = spec.strip()
             else:
-                log.warning("Dropping models.%s value %r in config.yaml — want "
-                            "'claude:<name>' or 'pi:<model>@<provider>'", step, spec)
+                log.warning("Dropping models.%s value %r in config.yaml — want haiku | "
+                            "sonnet | opus | fable | claude:<name> | "
+                            "pi:<model>@<provider>", key, spec)
         self.model_specs = specs
+
+        tier = data.get("tier")
+        if tier is not None and tier not in ("advanced", "standard"):
+            log.warning("Invalid tier value %r in config.yaml — want advanced | "
+                        "standard; ignoring it", tier)
+            tier = None
+        self.configured_tier = tier
 
     def _resolve_auto_interview(self) -> None:
         """--auto has nobody to interview: `user` becomes `self` (logged)."""

@@ -51,7 +51,7 @@ async def run_prototype(config) -> GateResult:
         agent = await agent_call(
             prompt,
             allowed_tools=PROTOTYPE_TOOLS,
-            model=config.model,
+            model=config.model_for("prototype"),
             cwd=str(prototype_dir),
         )
 
