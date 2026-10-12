@@ -338,7 +338,7 @@ the test-quality audit.
 | Stage | Steps |
 |---|---|
 | `spec` | `spec_artifact` (every spec artifact, use-cases included), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `interview`, `research` |
-| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `integration_fix`, `review_fix`, `docs_update`, `prototype` |
+| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `prototype` |
 | `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt) |
 
 The tier (advanced or standard) comes from the default model: Fable, or Opus

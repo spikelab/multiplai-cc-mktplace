@@ -2162,7 +2162,7 @@ async def _run_mutation_round(
     result = await run_mutation_test_writer(
         survivors=_format_survivors(config, first),
         test_command=config.test_command,
-        model=config.model,
+        model=config.model_for("mutation_test_writer"),
         effort=config.agent_effort,
         cwd=str(config.project_dir),
     )

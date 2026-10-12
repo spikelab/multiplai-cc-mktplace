@@ -34,7 +34,8 @@ time, not derived from a tag.
   timing out, stops cosmic-ray and the test run it had in flight, and puts
   back any file it had mutated.
   Surviving mutants go to one fresh test-writer agent that may only add or
-  edit tests; the result is written to `specs/changes/<name>/mutation.md`.
+  edit tests; it runs on `models.mutation_test_writer` (an `agent`-stage
+  step), and the result is written to `specs/changes/<name>/mutation.md`.
 - buildme: a build now fails when its mutation score stays below
   `mutation.min_score` (default `0.8`, to be adjusted once real runs have been
   measured), when the survivor round edits a non-test file (files the test

@@ -448,6 +448,7 @@ STEP_STAGES: dict[str, str] = {
     "implementer": "agent",
     "refactor": "agent",
     "refactor_all": "agent",
+    "mutation_test_writer": "agent",
     "integration_fix": "agent",
     "review_fix": "agent",
     "docs_update": "agent",
