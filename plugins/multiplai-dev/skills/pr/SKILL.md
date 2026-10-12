@@ -66,7 +66,8 @@ Size.
   `tasks.md` (statuses from buildme's `.build-state.json`), the documents the
   build updated, links to `unknowns.md`, `prototype/NOTES.md`,
   `implementation-notes.md` and `respec.md` when present, the ticket link
-  (`--ticket-url`, else a `url:` line in `<change-dir>/ticket.md`), and the
+  (`--ticket-url`, else a `url:` line, or the `Source: <link>` line buildme
+  writes, in `<change-dir>/ticket.md`), and the
   diff size (`git diff --shortstat <base>...<head>`). When the template has
   no Blocks, Documentation or Companion artifacts heading and that section's
   source is not empty, code adds it after the template's sections, so a
@@ -106,7 +107,7 @@ appends sections it has never written. Everything outside markers, including
 a human's ticks on the template's checkboxes, is left alone. A section a
 human deleted stays deleted:
 `PR_DIAGNOSIS:section removed by a human, not restored: <key>`. When
-`ticket.md` has no `url:` line, `edit` keeps the ticket link already in the
+`ticket.md` has no `url:` or `Source: <link>` line, `edit` keeps the ticket link already in the
 description, such as one `open --ticket-url` wrote. When the change dir has
 no `.build-state.json` (buildme deletes it after publishing), `edit` keeps the
 Blocks and Documentation sections already in the description and prints

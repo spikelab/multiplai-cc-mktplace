@@ -1742,6 +1742,22 @@ class TestPublishHandsOffToThePrSkill:
         assert "--no-push" in argv, "buildme pushes itself, so PUSHED: and push failures are unchanged"
 
     @pytest.mark.asyncio
+    async def test_a_ticket_started_build_passes_its_ticket_url(self, tmp_path, monkeypatch, captured):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        config, state, progress = await _published_build(tmp_path, "ticketed")
+        state.ticket_url = "https://plane.example/SPK-7"
+        assert _run_publish(config, state, progress) is True
+        argv = captured["argv"]
+        assert argv[argv.index("--ticket-url") + 1] == "https://plane.example/SPK-7"
+
+    @pytest.mark.asyncio
+    async def test_a_build_without_a_ticket_passes_no_ticket_url(self, tmp_path, monkeypatch, captured):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        config, state, progress = await _published_build(tmp_path, "unticketed")
+        assert _run_publish(config, state, progress) is True
+        assert "--ticket-url" not in captured["argv"]
+
+    @pytest.mark.asyncio
     async def test_ready_pr_passes_ready(self, tmp_path, monkeypatch, captured):
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         config, state, progress = await _published_build(tmp_path, "ready")

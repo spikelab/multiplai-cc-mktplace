@@ -109,6 +109,22 @@ def test_ticket_url_from_the_flag_or_from_ticket_md(tmp_path):
     assert "https://t.example/1" in _render(repo, change, ticket_url="https://t.example/1").body
 
 
+def test_ticket_url_from_the_source_line_buildme_writes(tmp_path):
+    # buildme's intake.save_ticket writes `Source: <url>` above the fenced ticket text.
+    repo = make_repo(tmp_path / "proj")
+    ticket = ("# Ticket SPK-7\n\nSource: https://plane.example/SPK-7\n\n"
+              '<untrusted-content source="https://plane.example/SPK-7">\nDo the thing.\n</untrusted-content>\n')
+    r = _render(repo, make_change(repo, ticket=ticket))
+    assert r.sources.ticket_url == "https://plane.example/SPK-7"
+    assert "https://plane.example/SPK-7" in r.body
+
+
+def test_a_source_line_that_is_not_a_link_is_not_the_ticket_url(tmp_path):
+    repo = make_repo(tmp_path / "proj")
+    r = _render(repo, make_change(repo, ticket="Source: the support inbox\n\nDo the thing.\n"))
+    assert r.sources.ticket_url is None
+
+
 def test_extra_sections_are_appended_with_their_own_heading(tmp_path):
     repo = make_repo(tmp_path / "proj")
     extra = tmp_path / "walk.md"

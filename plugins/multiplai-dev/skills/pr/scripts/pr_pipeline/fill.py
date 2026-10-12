@@ -9,7 +9,8 @@ Sources, all read from `--change-dir` and the git range:
   `unknowns.md`, `prototype/NOTES.md`, `implementation-notes.md` and
   `respec.md` when present. These are what buildme's `_pr_title_body` used.
 - The diff size, from `git diff --shortstat <base>...<head>`.
-- The ticket: `--ticket-url`, else a `url:` line in `<change-dir>/ticket.md`.
+- The ticket: `--ticket-url`, else a `url:` line, or the `Source: <link>` line
+  buildme writes, in `<change-dir>/ticket.md`.
 - Each `--section <file>`: its first line is a Markdown heading.
 
 Template sections titled Why, Blocks, Documentation, Companion artifacts,
@@ -62,7 +63,10 @@ EVIDENCE_FILES = ("proposal.md", "design.md", "tasks.md", *ARTIFACTS)
 SOURCE_FILE_CHARS = 20_000
 STATE_FILE = ".build-state.json"
 _DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
-_TICKET_URL_LINE_RE = re.compile(r"^[ \t]*url:[ \t]*(\S+).*\n?", re.MULTILINE | re.IGNORECASE)
+# `url: <link>`, or the `Source: <link>` line buildme's intake.save_ticket writes
+# above the fenced ticket text; a `Source:` line must hold a link to count.
+_TICKET_URL_LINE_RE = re.compile(
+    r"^[ \t]*(?:url:[ \t]*(\S+)|source:[ \t]*(https?://\S+)).*\n?", re.MULTILINE | re.IGNORECASE)
 
 
 class SourceError(Exception):
@@ -163,7 +167,7 @@ def read_sources(repo: Path, change_dir: Path, *, base: str | None, head: str,
     if ticket.is_file():
         src.ticket_text = ticket.read_text()
     m = _TICKET_URL_LINE_RE.search(src.ticket_text)
-    src.ticket_url = ticket_url or (m.group(1) if m else None)
+    src.ticket_url = ticket_url or (m.group(1) or m.group(2) if m else None)
 
     for name in EVIDENCE_FILES:  # never ticket.md: external text cannot be a checkbox's evidence
         p = change_dir / name

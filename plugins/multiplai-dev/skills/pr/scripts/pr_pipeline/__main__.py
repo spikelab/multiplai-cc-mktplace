@@ -41,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     readiness.add_argument("--draft", action="store_true",
                            help="open it as a draft, whatever pr.draft says")
     op.add_argument("--no-push", action="store_true", help="do not push the branch first")
-    op.add_argument("--ticket-url", help="the ticket's URL (default: a url: line in <change-dir>/ticket.md)")
+    op.add_argument("--ticket-url", help="the ticket's URL (default: a url: or Source: <link> line in <change-dir>/ticket.md)")
     op.add_argument("--dry-run", action="store_true",
                     help="print the commands and the body; write nothing to git or GitHub")
 

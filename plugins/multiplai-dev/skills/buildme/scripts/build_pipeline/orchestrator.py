@@ -1119,7 +1119,7 @@ def _pr_skill_dir() -> Path:
 
 def _pr_open_argv(
     worktree: Path, change_dir: Path, branch: str, title: str, *,
-    draft: bool = True, sections: list[Path] | None = None,
+    draft: bool = True, sections: list[Path] | None = None, ticket_url: str | None = None,
 ) -> list[str]:
     """``pr_pipeline open`` for a branch this pipeline already pushed.
 
@@ -1137,6 +1137,8 @@ def _pr_open_argv(
     argv.append("--draft" if draft else "--ready")
     for section in sections or []:
         argv += ["--section", str(section)]
+    if ticket_url:
+        argv += ["--ticket-url", ticket_url]
     return argv
 
 
@@ -1194,6 +1196,7 @@ def _run_publish(
     sections += _pre_publish_sections(config, state, docs_dir)
     pr_argv = _pr_open_argv(
         worktree, docs_dir, state.branch, title, draft=draft, sections=sections,
+        ticket_url=state.ticket_url,
     )
     manual = git_ops.manual_finish_commands(
         worktree, state.branch, title, include_pr=config.git.pr != "none", draft=draft,
