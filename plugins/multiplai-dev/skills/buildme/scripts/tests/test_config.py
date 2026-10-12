@@ -786,6 +786,16 @@ class TestAdjudicationConfig:
         assert config.adjudicate_findings is False
 
 
+class TestFixOnPassConfig:
+    def test_on_by_default(self, tmp_path):
+        assert BuildConfig().fix_on_pass is True
+        assert _config_from_yaml(tmp_path, "code_review:\n  model: opus\n").fix_on_pass is True
+
+    def test_can_be_disabled(self, tmp_path):
+        config = _config_from_yaml(tmp_path, "code_review:\n  fix_on_pass: false\n")
+        assert config.fix_on_pass is False
+
+
 class TestBudgetConfig:
     def test_unlimited_by_default(self):
         config = BuildConfig()

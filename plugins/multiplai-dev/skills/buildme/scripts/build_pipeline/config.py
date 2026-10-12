@@ -856,6 +856,13 @@ class BuildConfig:
     # unadjudicated reviewer suggestion is the thing this pipeline must never do.
     adjudicate_findings: bool = True
 
+    # Fix a passing block's accepted Critical/Major/Minor findings once
+    # (`code_review.fix_on_pass`). The fix is kept only if the suite stays
+    # green and the block still passes review; otherwise it is rolled back and
+    # the findings go to `unfixed-findings.md`. False: a passing block stops
+    # its review loop at once, as before.
+    fix_on_pass: bool = True
+
     # Per-build ceilings from `budget:` in specs/config.yaml. None = unlimited
     # (the pre-budget behavior).
     budget_max_tokens: int | None = None
@@ -1060,6 +1067,7 @@ class BuildConfig:
         self._load_review_panel(code_review_cfg)
         self._load_review_gate(code_review_cfg)
         self.adjudicate_findings = bool(code_review_cfg.get("adjudicate", True))
+        self.fix_on_pass = bool(code_review_cfg.get("fix_on_pass", True))
         self._load_budget(data.get("budget", {}) or {})
 
         # Gate toggles

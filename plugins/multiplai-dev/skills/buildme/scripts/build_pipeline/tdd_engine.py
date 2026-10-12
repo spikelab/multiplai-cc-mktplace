@@ -25,6 +25,7 @@ from . import budget as budget_mod
 from .budget import BudgetExceededError
 from . import board
 from . import git_ops
+from . import review_rounds
 from .change_manager import extract_global_constraints
 from .config import BuildConfig
 from .gates import (
@@ -34,6 +35,7 @@ from .gates import (
     integration_gate,
     parse_diff_paths,
     parse_implementation_note,
+    parse_searched,
     red_gate,
     review_iteration_gate,
     review_score_gate,
@@ -56,6 +58,7 @@ from .models import (
     BlockStatus,
     BuildPhase,
     FindingAdjudication,
+    FixOnPassState,
     GateResult,
     MutationResult,
     ReviewResult,
@@ -63,6 +66,7 @@ from .models import (
 )
 from .mutation import changed_source_files, mutation_applies, render_report, run_mutation, score_text
 from .progress import ProgressWriter
+from .prompts.implementation import REVIEW_FIX_SELF_CHECK
 from .prompts.review import FINDING_ADJUDICATION_PROMPT
 from .prompts.test_writing import TEST_QUALITY_PROMPT
 from .sdk import llm_call_structured
@@ -238,14 +242,18 @@ def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
     written before baselines existed) and misses committed work. Returns ""
     on git failure — never raises.
 
-    Known limitation: brand-new files that are still untracked (created after
-    the impl commit, e.g. by a review-fix agent) don't appear until the next
-    phase commit tracks them.
+    Files that are still untracked (created after the last phase commit, e.g.
+    by a refactor or fix agent) are added as new-file diffs
+    (`_untracked_diff`): the next commit takes them with the block, so the
+    reviewer must see them before it does.
+
+    The block's review round records (`review_rounds`) are left out: they are
+    committed with the block, and are the review's output, not its input.
     """
     target = block.baseline_commit or "HEAD"
     try:
         proc = subprocess.run(
-            ["git", "diff", target],
+            ["git", "diff", target, *_without_review_records(config)],
             cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
         )
         if proc.returncode != 0:
@@ -254,13 +262,74 @@ def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
                 block.number, target, proc.stderr.strip(),
             )
             return ""
-        diff = proc.stdout
+        diff = proc.stdout + _untracked_diff(config)
     except Exception as e:
         log.warning("Failed to capture diff for block %d: %s", block.number, e)
         return ""
     if len(diff) > MAX_REVIEW_DIFF_CHARS:
         diff = diff[:MAX_REVIEW_DIFF_CHARS] + "\n... (diff truncated for review)"
     return diff
+
+
+def _without_review_records(config: BuildConfig) -> list[str]:
+    """Pathspec args that leave the change dir's review round records out of a
+    `git diff`. They are committed with each block, and a diff capped at
+    `MAX_REVIEW_DIFF_CHARS` must not spend its budget on them: `specs/` sorts
+    before most source directories, so the cap would cut code instead."""
+    try:
+        records = (config.change_dir / review_rounds.REVIEWS_DIR).resolve().relative_to(
+            Path(config.project_dir).resolve())
+    except ValueError:
+        return []
+    # An exclude-only pathspec keeps the whole-repo scope of a bare `git diff`.
+    return ["--", f":(exclude,literal){records.as_posix()}"]
+
+
+def _untracked_diff(config: BuildConfig) -> str:
+    """New-file diffs for every untracked file the next phase commit would take.
+
+    `git diff <baseline>` shows only tracked paths, but `git_ops.commit_tree`
+    runs `git add -A`, so a file an agent created since the last commit is
+    committed with the block without ever being reviewed. Read-only: the
+    index is not touched. Listed the way `commit_tree` stages: not ignored, and
+    not buildme's bookkeeping; the round records stay out as in
+    `_without_review_records`. Stops once the output passes
+    `MAX_REVIEW_DIFF_CHARS`, since the caller cuts it there anyway. Returns ""
+    on git failure."""
+    records = _without_review_records(config)[1:]
+    try:
+        listed = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z",
+             "--", ".", *git_ops.BOOKKEEPING_EXCLUDES, *records],
+            cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
+        )
+    except Exception as e:
+        log.warning("Could not list untracked files for the review diff: %s", e)
+        return ""
+    if listed.returncode != 0:
+        log.warning("Could not list untracked files for the review diff: %s",
+                    listed.stderr.strip())
+        return ""
+    parts: list[str] = []
+    size = 0
+    for name in sorted(n for n in listed.stdout.split("\0") if n):
+        if size > MAX_REVIEW_DIFF_CHARS:
+            break
+        try:
+            # --no-index exits 1 when the files differ, which they always do here.
+            proc = subprocess.run(
+                ["git", "diff", "--no-index", "--", os.devnull, name],
+                cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
+            )
+        except Exception as e:
+            log.warning("Could not diff untracked file %s: %s", name, e)
+            continue
+        if proc.returncode > 1:
+            log.warning("Could not diff untracked file %s: %s", name, proc.stderr.strip())
+            continue
+        parts.append(proc.stdout)
+        size += len(proc.stdout)
+    return "".join(parts)
 
 
 EXIT_SUCCESS = 0
@@ -1430,6 +1499,7 @@ async def _run_integration_and_review(
 
     review_passed = False
     fixes_run = fixes_completed = 0
+    round_path: Path | None = None
     for iteration in range(MAX_REVIEW_ITERATIONS):
         iter_gate = review_iteration_gate(iteration, MAX_REVIEW_ITERATIONS)
         if not iter_gate.passed:
@@ -1474,6 +1544,7 @@ async def _run_integration_and_review(
 
         score_gate = review_score_gate(review, config.review_gate)
         progress.log_review(block.name, iteration + 1, review.weighted_average, score_gate.passed)
+        round_path = _record_review_round(config, block, review, score_gate)
 
         if score_gate.passed:
             review_passed = True
@@ -1488,10 +1559,11 @@ async def _run_integration_and_review(
         fix_brief = score_gate.reason
         if accepted_text:
             fix_brief += f"\n\n## Adjudicated findings (accepted — fix these)\n{accepted_text}"
+        review_rounds.update_round(round_path, fix_brief=_review_fix_description(fix_brief))
         context = assemble_context(block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None)
         fix = await run_implementer(
             block_name=block.name,
-            block_description=f"Fix review issues: {fix_brief}",
+            block_description=_review_fix_description(fix_brief),
             failing_tests=fix_brief,
             context_bundle=context,
             test_command=config.test_command,
@@ -1500,6 +1572,7 @@ async def _run_integration_and_review(
             effort=config.agent_effort,
             cwd=str(config.project_dir),
         )
+        _record_fix(round_path, block, fix)
         fixes_run += 1
         fixes_completed += bool(fix.success)
         if not fix.success and fix.timed_out:
@@ -1522,6 +1595,9 @@ async def _run_integration_and_review(
             f"review-fix {iteration + 1}", fix.output or "",
         ):
             return False
+        # Committed per fix, so the round record can name the fix's commit
+        # and the next round's record its own head.
+        review_rounds.amend_fix(round_path, commit=_git_commit_block_phase(config, "fix", block))
 
     if not review_passed:
         if config.lenient_review:
@@ -1541,16 +1617,360 @@ async def _run_integration_and_review(
             block.resumable = fixes_run > 0 and fixes_completed == 0
             _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
+    elif config.fix_on_pass:
+        if not await _fix_on_pass(block, config, state, progress, block_idx, round_path):
+            return False
 
+    return _finish_block(block, config, state, progress, block_idx, total)
+
+
+def _finish_block(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    block_idx: int,
+    total: int,
+) -> bool:
+    """Commit the block's last edits and mark it DONE."""
     # The review-fix agents' edits are part of this block. Committed here, a
     # later block's discard back to its own start commit cannot drop them,
     # and its first commit does not carry them.
     _git_commit_block_phase(config, "fix", block)
+    block.fix_pass = None
     _mark_block(state, block_idx, BlockStatus.DONE, config)
     log.info("DONE block=%d/%d name=%s", block.number, total, block.name)
     progress.log_block(block.number, total, block.name, "COMPLETE")
     print(f"BLOCK:{block.number}/{total}:{block.name}:COMPLETE")
     return True
+
+
+def _record_review_round(
+    config: BuildConfig, block: BlockInfo, review: ReviewResult, gate: GateResult,
+    kind: str = "review",
+) -> Path | None:
+    """Write this round's record under the change dir's `reviews/`."""
+    return review_rounds.record_round(
+        config.change_dir, block,
+        head_sha=git_ops.rev_parse_head(config.project_dir),
+        review=review,
+        gate_passed=gate.passed,
+        gate_reason=gate.reason,
+        weighted_average=review.weighted_average_with(config.review_gate),
+        kind=kind,
+    )
+
+
+def _review_fix_description(brief: str) -> str:
+    """The block description a review-fix agent gets: the brief, then the
+    instructions to look for the same mistake and re-read its own diff."""
+    return f"Fix review issues: {brief}\n\n{REVIEW_FIX_SELF_CHECK}"
+
+
+def _record_fix(round_path: Path | str | None, block: BlockInfo, fix, **extra) -> None:
+    """Put a returned fix agent's report and `SEARCHED:` list in the round
+    record. A missing section is recorded as `searched: null` with a warning:
+    code cannot check that a search happened, so it records the claim rather
+    than gating on it."""
+    searched = parse_searched(fix.output or "")
+    if searched is None and fix.success:
+        log.warning("Review fix for block %d (%s) reported no SEARCHED: section — "
+                    "recorded as searched: null", block.number, block.name)
+    review_rounds.update_round(round_path, fix={
+        "report": fix.output,
+        "success": fix.success,
+        "timed_out": fix.timed_out,
+        "commit": None,
+        "searched": searched,
+        **extra,
+    })
+
+
+def _discard_keeping_records(config: BuildConfig, sha: str, label: str) -> bool:
+    """`git_ops.discard_to`, keeping every review round record: the rollback
+    is of the fix, not of the record that says what happened to it."""
+    saved = review_rounds.snapshot(config.change_dir)
+    ok = git_ops.discard_to(config.project_dir, sha, label)
+    review_rounds.restore(saved)
+    return ok
+
+
+def _records_dir_in_project(config: BuildConfig) -> Path | None:
+    """The round records' directory relative to the project: the pass writes
+    there itself, and `_discard_keeping_records` puts the records back."""
+    try:
+        return review_rounds.reviews_dir(config.change_dir).resolve().relative_to(
+            Path(config.project_dir).resolve())
+    except ValueError:
+        return None
+
+
+def _record_fix_pass_stop(config: BuildConfig, fp: FixOnPassState) -> None:
+    """Record the tree as the pass leaves it on reaching its next step: HEAD
+    and every uncommitted path with its content. A resume rolls back only
+    this (`_others_work_in_fix_pass`). When git cannot be asked, no record is
+    kept, and a resume then refuses any uncommitted change."""
+    edits = git_ops.dirty_files(config.project_dir, ignore=_records_dir_in_project(config))
+    fp.stop_edits = edits
+    fp.stop_head = git_ops.rev_parse_head(config.project_dir) if edits is not None else None
+
+
+def _others_work_in_fix_pass(config: BuildConfig, fp: FixOnPassState) -> str | None:
+    """Why a resumed fix on pass must not roll the tree back, or None.
+
+    The rollback is a `reset --hard` and a `clean`, so it must first be sure
+    everything it throws away is the stopped pass's own: an uncommitted path
+    must be in the pass's record with the same content (an edit made after
+    the stop, even to a file the fix agent was editing, changes that
+    content), and HEAD must be where the pass stopped. Killed while the fix
+    agent ran, the pass has no record of its edits, so it cannot tell them
+    from anyone else's and refuses any. The round records are the pass's own
+    and are not checked."""
+    repo = config.project_dir
+    edits = git_ops.dirty_files(repo, ignore=_records_dir_in_project(config))
+    head = git_ops.rev_parse_head(repo)
+    if edits is None or head is None:
+        return f"git could not list the changes in {repo}; inspect it before re-running"
+
+    def names(paths: list[str]) -> str:
+        more = f" and {len(paths) - 5} more" if len(paths) > 5 else ""
+        return ", ".join(sorted(paths)[:5]) + more
+
+    recorded = fp.step != "fix_agent" and fp.stop_edits is not None
+    if recorded:
+        theirs = [p for p, content in edits.items() if fp.stop_edits.get(p) != content]
+        if theirs:
+            return (f"{repo} has uncommitted changes the stopped fix on pass did not leave "
+                    f"({names(theirs)}); stash them first")
+    elif edits:
+        why = ("the fix agent was stopped mid-edit" if fp.step == "fix_agent"
+               else "the pass stopped without recording its own edits")
+        return (f"{repo} has uncommitted changes ({names(list(edits))}), and {why}, so they "
+                "cannot be told from anyone else's; stash them first")
+    stopped_at = fp.stop_head if recorded else fp.checkpoint
+    if head != stopped_at:
+        return (f"HEAD moved since the fix on pass stopped at {stopped_at[:12]}; resuming "
+                f"would discard those commits back to {fp.checkpoint[:12]}, so move them "
+                "to another branch first")
+    return None
+
+
+def _restore_block(block: BlockInfo, fp: FixOnPassState) -> None:
+    """Put back the block state the fix on pass started from."""
+    block.test_file_hashes = dict(fp.test_file_hashes)
+    block.test_change_claims = list(fp.test_change_claims)
+    block.implementer_report = fp.implementer_report
+    if fp.review is not None:
+        block.review_scores = fp.review
+
+
+async def _fix_on_pass(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    block_idx: int,
+    round_path: Path | None,
+) -> bool:
+    """Fix the accepted Critical/Major/Minor findings of a block that passed.
+
+    One pass, outside `MAX_REVIEW_ITERATIONS`: checkpoint (HEAD, clean tree)
+    → budget check → fix agent on those findings only → suite +
+    `_enforce_test_integrity` → one more review and adjudication. The fix is
+    kept only when the suite is green and `review_score_gate` still passes;
+    otherwise the tree goes back to the checkpoint. Findings left unfixed go
+    to `unfixed-findings.md`. Returns False only when a rollback was refused,
+    which leaves an unverified fix in the tree.
+    """
+    review = block.review_scores
+    findings = review_rounds.fixable_on_pass(review.findings) if review else []
+    if not findings:
+        return True
+
+    # The checkpoint must be a faithful snapshot: commit what the block has
+    # not committed yet (the commit `_finish_block` would make), then check.
+    _git_commit_block_phase(config, "fix", block)
+    checkpoint = git_ops.rev_parse_head(config.project_dir)
+    if checkpoint is None or not git_ops.tree_is_clean(config.project_dir):
+        return _skip_fix_on_pass(config, block, progress, findings,
+                                 "not attempted (no clean commit to roll back to)")
+    try:
+        budget_mod.check(phase=f"fix on pass of block {block.number}")
+    except BudgetExceededError as e:
+        log.warning("Fix on pass of block %d skipped: %s", block.number, e)
+        return _skip_fix_on_pass(config, block, progress, findings,
+                                 "not attempted (budget ceiling reached)")
+
+    block.fix_pass = FixOnPassState(
+        checkpoint=checkpoint,
+        findings=findings,
+        round_path=str(round_path) if round_path else None,
+        review=review,
+        test_file_hashes=dict(block.test_file_hashes),
+        test_change_claims=list(block.test_change_claims),
+        implementer_report=block.implementer_report,
+    )
+    state.checkpoint(config.state_file_path())
+    return await _run_fix_on_pass(block, config, state, progress, block_idx)
+
+
+def _skip_fix_on_pass(
+    config: BuildConfig, block: BlockInfo, progress: ProgressWriter,
+    findings: list, status: str,
+) -> bool:
+    log.warning("Fix on pass of block %d (%s): %s", block.number, block.name, status)
+    progress.log_agent("ReviewFix", block.name, f"FIX ON PASS {status}")
+    review_rounds.append_unfixed(config.change_dir, block, findings, status)
+    return True
+
+
+async def _run_fix_on_pass(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    block_idx: int,
+) -> bool:
+    """The fix on pass from its fix agent on, for `block.fix_pass`. Also the
+    resume path, after `_resume_fix_on_pass` rolled the tree back."""
+    fp = block.fix_pass
+    state_path = config.state_file_path()
+    accepted = ReviewResult(scores=[], findings=fp.findings).findings_text()
+    brief = (
+        "The block passed review. The judge accepted these findings and they are "
+        "still open: fix them, and change nothing else."
+        f"\n\n## Adjudicated findings (accepted — fix these)\n{accepted}"
+    )
+    review_rounds.update_round(fp.round_path, fix_brief=_review_fix_description(brief))
+    progress.log_agent("ReviewFix", block.name, f"FIX ON PASS — {len(fp.findings)} finding(s)")
+
+    context = assemble_context(block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None)
+    fix = await run_implementer(
+        block_name=block.name,
+        block_description=_review_fix_description(brief),
+        failing_tests=brief,
+        context_bundle=context,
+        test_command=config.test_command,
+        prompt_style=config.implementer_prompt_style,
+        model=config.model_for("review_fix"),
+        effort=config.agent_effort,
+        cwd=str(config.project_dir),
+    )
+    _record_fix(fp.round_path, block, fix, pass_kind="fix_on_pass")
+    if fix.output:
+        block.implementer_report = _trim_evidence(
+            f"{block.implementer_report}\n\n[fix on pass]\n{fix.output}"
+        )
+    _record_fix_pass_stop(config, fp)
+    fp.step = "tests"
+    state.checkpoint(state_path)
+
+    reason = ""
+    if not fix.success:
+        reason = "the fix agent " + ("timed out" if fix.timed_out else "failed")
+    else:
+        gate = integration_gate(config.test_command, config.project_dir)
+        if not gate.passed:
+            reason = f"tests failed after the fix: {gate.reason}"
+        elif not _enforce_test_integrity(block, config, state, progress, block_idx,
+                                         "fix on pass", fix.output or ""):
+            reason = "test files changed during the fix"
+
+    new_review: ReviewResult | None = None
+    if not reason:
+        _record_fix_pass_stop(config, fp)
+        fp.step = "review"
+        state.checkpoint(state_path)
+        try:
+            new_review = await _run_quality_review(block, config)
+        except Exception as e:
+            log.warning("Review after the fix on pass of block %d failed: %s", block.number, e)
+            reason = f"the review after the fix failed: {e}"
+        else:
+            new_review = await _adjudicate_review_findings(
+                new_review, block, config, _capture_block_diff(config, block),
+                build_context=_global_constraints_text(config),
+            )
+            gate = review_score_gate(new_review, config.review_gate)
+            progress.log_review(block.name, block.review_iterations + 1,
+                                new_review.weighted_average, gate.passed)
+            _record_review_round(config, block, new_review, gate, kind="fix_on_pass_review")
+            if not gate.passed:
+                reason = f"the block no longer passes review: {gate.reason}"
+
+    if not reason and new_review is not None:
+        sha = _git_commit_block_phase(config, "fix", block)
+        review_rounds.amend_fix(fp.round_path, commit=sha, kept=True)
+        block.review_scores = new_review
+        review_rounds.append_unfixed(
+            config.change_dir, block, review_rounds.fixable_on_pass(new_review.findings),
+            "not attempted (raised by the review after the kept fix; one fix pass per block)",
+        )
+        log.info("Fix on pass of block %d kept (%s)", block.number, (sha or "no commit")[:8])
+        progress.log_agent("ReviewFix", block.name, "FIX ON PASS KEPT")
+        return True
+
+    review_rounds.amend_fix(fp.round_path, kept=False, not_kept_reason=reason)
+    if not _discard_keeping_records(config, fp.checkpoint, f"fix on pass of block {block.number}"):
+        diagnosis = (f"The fix on pass of block {block.number} was not kept ({reason}) and "
+                     f"could not be rolled back to {fp.checkpoint[:8]}: the tree holds an "
+                     "unverified fix.")
+        log.error("FAIL block=%d name=%s phase=FIX_ON_PASS reason=rollback-refused",
+                  block.number, block.name)
+        progress.log_diagnosis(block.name, diagnosis)
+        block.resumable = False
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
+        return False
+    _restore_block(block, fp)
+    review_rounds.append_unfixed(config.change_dir, block, fp.findings, f"fix not kept: {reason}")
+    log.warning("Fix on pass of block %d rolled back: %s", block.number, reason)
+    progress.log_agent("ReviewFix", block.name, f"FIX ON PASS ROLLED BACK — {reason}")
+    return True
+
+
+async def _resume_fix_on_pass(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+) -> bool:
+    """A build stopped during a block's fix on pass: roll back to its
+    checkpoint and run the pass again, so a half-applied fix is never kept."""
+    block_idx = state.tdd.current_block if state.tdd else 0
+    total = len(state.tdd.blocks) if state.tdd else 0
+    fp = block.fix_pass
+    refusal = _others_work_in_fix_pass(config, fp)
+    if refusal:
+        log.error("FAIL block=%d name=%s phase=FIX_ON_PASS reason=resume-refused: %s",
+                  block.number, block.name, refusal)
+        progress.log_diagnosis(
+            block.name,
+            f"Did not resume the fix on pass of block {block.number}, and rolled nothing "
+            f"back: {refusal}. Then run the build again.",
+        )
+        block.resumable = True
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
+        return False
+    log.warning("Block %d stopped during its fix on pass (step %s): rolling back to %s "
+                "and running the pass again", block.number, fp.step, fp.checkpoint[:8])
+    progress.log_agent("ReviewFix", block.name,
+                       f"RESUMED at {fp.step} — rolling back to {fp.checkpoint[:8]}")
+    if not _discard_keeping_records(config, fp.checkpoint, f"fix on pass of block {block.number}"):
+        progress.log_diagnosis(
+            block.name,
+            f"Could not roll the unfinished fix on pass back to {fp.checkpoint[:8]}; "
+            "the tree may hold a half-applied fix.",
+        )
+        block.resumable = False
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
+        return False
+    _restore_block(block, fp)
+    fp.step = "fix_agent"
+    fp.stop_head = fp.stop_edits = None
+    state.checkpoint(config.state_file_path())
+    if not await _run_fix_on_pass(block, config, state, progress, block_idx):
+        return False
+    return _finish_block(block, config, state, progress, block_idx, total)
 
 
 async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewResult:
@@ -1737,6 +2157,14 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
 
         log.info("Starting block %d/%d: %s", block.number, total_blocks, block.name)
 
+        # A build that stopped during this block's fix on pass: the block had
+        # already passed review, so only the pass runs again.
+        if block.fix_pass is not None:
+            if not await _resume_fix_on_pass(block, config, state, progress):
+                return EXIT_BUILD_FAILURE
+            state.advance_block(state_path)
+            continue
+
         # Run TDD phases
         tdd_ok = await run_block_tdd(block, config, state, progress)
         if not tdd_ok:
@@ -1811,14 +2239,14 @@ def capture_build_diff(config: BuildConfig, state: BuildState) -> str:
     target = baseline or "HEAD"
     try:
         proc = subprocess.run(
-            ["git", "diff", target],
+            ["git", "diff", target, *_without_review_records(config)],
             cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
         )
         if proc.returncode != 0:
             log.warning("Failed to capture full build diff (git diff %s): %s",
                         target, proc.stderr.strip())
             return ""
-        diff = proc.stdout
+        diff = proc.stdout + _untracked_diff(config)
     except Exception as e:
         log.warning("Failed to capture full build diff: %s", e)
         return ""

@@ -16,6 +16,7 @@ from build_pipeline.tdd_engine import (
     run_test_quality_check,
     run_tdd_engine,
     _capture_block_diff,
+    capture_build_diff,
     _detect_entry_point,
     _read_block_test_files,
     _git_commit_block_phase,
@@ -1595,6 +1596,48 @@ class TestEvidenceBasedReview:
         diff = _capture_block_diff(config, block)
         assert "y = 2" in diff
         assert "z = 3  # uncommitted fix" in diff
+
+    def test_capture_block_diff_shows_new_untracked_files(self, tmp_path):
+        """A file created after the last phase commit (by a refactor or fix
+        agent) is committed with the block, so the reviewer must see it while
+        it is still untracked. Bookkeeping, ignored files and the round records
+        stay out: they are never committed with the block, or are the review's
+        own output."""
+        config = self._make_config(tmp_path)
+        baseline = self._init_repo(config.project_dir)
+        project = config.project_dir
+        (project / ".gitignore").write_text("ignored.log\n")
+        subprocess.run(["git", "add", ".gitignore"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-qm", "ignore"], cwd=project, check=True)
+        (project / "pkg").mkdir()
+        (project / "pkg" / "helpers.py").write_text("def helper():\n    return 7\n")
+        (project / "ignored.log").write_text("SECRET LOG LINE\n")
+        config.state_file_path().write_text('{"state": "STATE FILE"}\n')
+        (project / "build-progress.md").write_text("PROGRESS LINE\n")
+        reviews = config.change_dir / "reviews"
+        reviews.mkdir()
+        (reviews / "block-01-round-1.json").write_text('{"round": "ROUND RECORD"}\n')
+
+        block = BlockInfo(number=1, name="B", description="d", baseline_commit=baseline)
+        diff = _capture_block_diff(config, block)
+        assert "pkg/helpers.py" in diff
+        assert "+    return 7" in diff
+        assert "SECRET LOG LINE" not in diff
+        assert "STATE FILE" not in diff
+        assert "PROGRESS LINE" not in diff
+        assert "ROUND RECORD" not in diff
+
+    def test_capture_build_diff_shows_new_untracked_files(self, tmp_path):
+        """The whole-build diff the docs agent gets includes a file the build
+        created and has not committed yet, as the per-block diff does."""
+        config = self._make_config(tmp_path)
+        baseline = self._init_repo(config.project_dir)
+        (config.project_dir / "fresh.py").write_text("FRESH = 1\n")
+        block = BlockInfo(number=1, name="B", description="d", baseline_commit=baseline)
+        state = BuildState(change_name="feat", mode="only", tier="advanced",
+                           tdd=TDDState(blocks=[block]))
+        diff = capture_build_diff(config, state)
+        assert "fresh.py" in diff and "+FRESH = 1" in diff
 
     def test_capture_block_diff_falls_back_to_head(self, tmp_path):
         """Without a recorded baseline, uncommitted changes still get reviewed."""
