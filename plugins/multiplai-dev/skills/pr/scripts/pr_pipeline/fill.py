@@ -256,7 +256,7 @@ def build_prompt(sections: list[Section], plans: list[SectionPlan], src: Sources
         f"Keep everything you write under {model_words} words in total.",
         "",
         "Answer with one JSON object and nothing else:",
-        '{"sections": {"<section title>": "<markdown>"}, "check": ["<checkbox id>"],'
+        '{"sections": {"<section key>": "<markdown>"}, "check": ["<checkbox id>"],'
         ' "evidence": {"<checkbox id>": "<exact quote from one source file>"}}',
         "Tick a checkbox (list its id in `check`) only when a source file shows it is done, and give",
         "a quote copied character for character from that file as its evidence. Code drops a tick",
@@ -264,9 +264,9 @@ def build_prompt(sections: list[Section], plans: list[SectionPlan], src: Sources
         "",
     ]
     if model:
-        out.append("## Sections to write (title, then the template's hint)")
+        out.append("## Sections to write (title and the key to answer it under, then the template's hint)")
         for s in model:
-            out += ["", f"### {s.title}", _hints(s) or "(no hint)"]
+            out += ["", f"### {s.title} (key: {s.key})", _hints(s) or "(no hint)"]
         out.append("")
     if boxes:
         out.append("## Checkboxes")
@@ -408,14 +408,21 @@ def assemble(sections: list[Section], plans: list[SectionPlan], src: Sources, mo
 
 
 def model_sections(answer: FillAnswer, sections: list[Section], plans: list[SectionPlan]) -> dict[str, str]:
-    """The model's text per section key, matched by exact title, then key, then normalized title."""
+    """The model's text per section key, matched by key, then exact title, then normalized title.
+
+    A title the template repeats matches no section: it cannot say which one it answers."""
     wanted = [sections[p.index] for p in plans if p.kind == "model"]
-    by_title = {s.title: s.key for s in wanted}
     by_key = {s.key: s.key for s in wanted}
-    by_norm = {normalize_title(s.title): s.key for s in wanted}
+    by_title = _unique({s.title: s.key for s in wanted}, [s.title for s in wanted])
+    by_norm = _unique({normalize_title(s.title): s.key for s in wanted}, [normalize_title(s.title) for s in wanted])
     out: dict[str, str] = {}
     for name, text in answer.sections.items():
-        key = by_title.get(name) or by_key.get(name) or by_norm.get(normalize_title(name))
+        key = by_key.get(name) or by_title.get(name) or by_norm.get(normalize_title(name))
         if key and key not in out:
             out[key] = (text or "").strip()
     return out
+
+
+def _unique(mapping: dict[str, str], names: list[str]) -> dict[str, str]:
+    """*mapping* without the names that occur more than once in *names*."""
+    return {n: k for n, k in mapping.items() if names.count(n) == 1}

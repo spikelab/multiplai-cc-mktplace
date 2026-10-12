@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from conftest import make_change, make_repo
 
-from pr_pipeline import commands, gates, markers
+from pr_pipeline import commands, fill, gates, markers
 from pr_pipeline.template import parse
 
 TEMPLATE = "## Summary\n<!-- what -->\n\n## Checklist\n- [ ] Tests pass\n- [ ] Docs\n"
@@ -56,6 +56,24 @@ def test_a_template_that_repeats_a_subheading_renders(tmp_path, model_stub):
     body = _render(repo).body
     assert body.count("### Details") == 2
     assert body.index("UI detail.") < body.index("## Backend") < body.index("API detail.")
+
+
+def test_the_prompt_asks_for_each_repeated_section_by_its_key(tmp_path, model_stub):
+    repo = _repo(tmp_path, REPEATED)
+    model_stub.answers = [{"sections": {"frontend": "UI.", "details": "UI detail.",
+                                        "backend": "API.", "details-2": "API detail."}}]
+    _render(repo)
+    assert len(model_stub.prompts) == 1, "the first answer passes; the model is not asked again"
+    prompt = model_stub.prompts[0]
+    assert '"<section key>"' in prompt
+    assert "### Details (key: details)" in prompt and "### Details (key: details-2)" in prompt
+
+
+def test_a_title_the_template_repeats_does_not_answer_either_section():
+    sections = parse(REPEATED)
+    plans = fill.plan_sections(sections)
+    answer = fill.FillAnswer(sections={"Details": "which one?", "details-2": "API detail."})
+    assert fill.model_sections(answer, sections, plans) == {"details-2": "API detail."}
 
 
 def test_checkbox_gate_catches_a_missing_line():
