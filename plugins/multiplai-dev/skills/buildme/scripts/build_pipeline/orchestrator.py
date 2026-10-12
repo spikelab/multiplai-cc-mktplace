@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from . import board, git_ops
@@ -971,66 +972,56 @@ def _spec_paths(config: BuildConfig) -> list[str]:
         return []
 
 
-def _pr_title_body(
-    config: BuildConfig, state: BuildState, docs_dir: Path | None = None,
-) -> tuple[str, str]:
-    """PR title from the change name; body from proposal.md's Why, the block
-    list, and links to whichever companion artifacts the build produced.
+# --- PR body hook -----------------------------------------------------------
+#
+# A contributor adds one section to the PR body without touching the pr skill.
+# It takes (config, state, docs_dir), may write a file under
+# `_pr_sections_dir(docs_dir)` whose first line is a Markdown heading, and
+# returns that path, or None for no section. It runs after the last block and
+# the docs/respec phases, right before publish hands the change to the pr
+# skill, and each path it returns is passed as `--section`. A contributor that
+# raises is logged and skipped; publish goes on. The list starts empty; its
+# first intended user is the walkthrough session's H5 (stale walkthroughs,
+# `plan-shared-code-understanding-2026-10-07.md`).
+PRE_PUBLISH_CONTRIBUTORS: list[Callable[[BuildConfig, BuildState, Path], Path | None]] = []
 
-    ``docs_dir`` is where the change's documents live NOW — after an --auto
-    archive that is ``specs/archive/<date>-<name>/``, not ``config.change_dir``
-    (whose files were all moved, so reading through it would lose the Why and
-    every artifact link)."""
-    docs_dir = docs_dir or config.change_dir
-    title = f"buildme: {config.change_name}"
-    parts: list[str] = []
 
-    why = _proposal_why(docs_dir)
-    if why:
-        parts.append(f"## Why\n\n{why}")
+def _pr_sections_dir(docs_dir: Path) -> Path:
+    """Where section files for the PR body go. Never committed: the directory
+    is in `git_ops.BOOKKEEPING_EXCLUDES`."""
+    return docs_dir / "pr-sections"
 
-    if state.tdd and state.tdd.blocks:
-        lines = "\n".join(
-            f"- Block {b.number}: {b.name} — {b.status.value}" for b in state.tdd.blocks
-        )
-        parts.append(f"## Blocks\n\n{lines}")
 
-    # Named explicitly so a reviewer knows the documentation in this PR was
-    # rewritten by the build and needs reading, not assumed to be untouched.
-    if state.docs_impact:
-        docs = "\n".join(f"- `{name}`" for name in state.docs_impact)
-        parts.append(
-            "## Documentation\n\nUpdated by the build to match the code in this "
-            f"PR:\n\n{docs}"
-        )
+def _pre_publish_sections(config: BuildConfig, state: BuildState, docs_dir: Path) -> list[Path]:
+    """Run each of `PRE_PUBLISH_CONTRIBUTORS` and return the section files they
+    wrote, in order. See the comment above `PRE_PUBLISH_CONTRIBUTORS`."""
+    paths: list[Path] = []
+    for contributor in PRE_PUBLISH_CONTRIBUTORS:
+        name = getattr(contributor, "__name__", repr(contributor))
+        try:
+            path = contributor(config, state, docs_dir)
+        except Exception as e:
+            log.warning("pre-publish contributor %s failed, skipped: %s", name, e, exc_info=True)
+            continue
+        if path is not None:
+            paths.append(Path(path))
+    return paths
 
+
+def _worktree_section(state: BuildState, docs_dir: Path) -> Path | None:
+    """The PR body's note that the build's worktree was left in place."""
     try:
-        base = str(docs_dir.relative_to(config.project_dir))
-    except ValueError:
-        base = f"specs/changes/{config.change_name}"
-    links = [
-        f"- `{base}/{name}`"
-        for name in ("unknowns.md", "prototype/NOTES.md", "implementation-notes.md", "respec.md")
-        if (docs_dir / name).exists()
-    ]
-    if links:
-        parts.append("## Companion artifacts\n\n" + "\n".join(links))
-
-    parts.append(
-        "Opened by the buildme pipeline. The build's worktree is left in place at "
-        f"`{state.worktree_path}` — removing it is the calling session's decision."
-    )
-    return title, "\n\n".join(parts)
-
-
-def _proposal_why(docs_dir: Path) -> str:
-    proposal = docs_dir / "proposal.md"
-    if not proposal.exists():
-        return ""
-    text = proposal.read_text()
-    import re as _re
-    m = _re.search(r"^##\s+Why\s*$(.*?)(?=^##\s|\Z)", text, _re.MULTILINE | _re.DOTALL)
-    return m.group(1).strip() if m else ""
+        directory = _pr_sections_dir(docs_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "worktree.md"
+        path.write_text(
+            "## Worktree\n\nOpened by the buildme pipeline. The build's worktree is left in "
+            f"place at `{state.worktree_path}` — removing it is the calling session's decision.\n"
+        )
+        return path
+    except OSError as e:
+        log.warning("Could not write the worktree section for the PR body: %s", e)
+        return None
 
 
 def _run_publish(
@@ -1040,8 +1031,10 @@ def _run_publish(
     state_path: Path | None = None,
     docs_dir: Path | None = None,
 ) -> bool:
-    """Push the build's branch and open its PR. Returns False when something
-    was left for a human to finish (never raises, never fails the build).
+    """Push the build's branch and open its PR through the pr skill
+    (`pr_pipeline open --no-push`), whose body follows the repo's PR template.
+    Returns False when something was left for a human to finish (never
+    raises, never fails the build).
 
     Skipped entirely when the pipeline does not own a branch: push/PR only
     ever act on a branch this pipeline created, which is what keeps
@@ -1057,15 +1050,23 @@ def _run_publish(
 
     worktree = Path(state.worktree_path)
     draft = config.git.pr == "draft"
-    title, body = _pr_title_body(config, state, docs_dir)
-    manual = git_ops.manual_finish_commands(
-        worktree, state.branch, title, include_pr=config.git.pr != "none", draft=draft,
-    )
+    docs_dir = docs_dir or config.change_dir
+    title = f"buildme: {config.change_name}"
 
     if not config.git.push:
         log.info("SKIP phase=PUBLISH reason=--no-push branch=%s", state.branch)
         print(f"PHASE:PUBLISH:SKIPPED:{state.branch}", flush=True)
         return True
+
+    sections = [p for p in [_worktree_section(state, docs_dir)] if p is not None]
+    sections += _pre_publish_sections(config, state, docs_dir)
+    pr_argv = git_ops.pr_open_argv(
+        worktree, docs_dir, state.branch, title, draft=draft, sections=sections,
+    )
+    manual = git_ops.manual_finish_commands(
+        worktree, state.branch, title, include_pr=config.git.pr != "none", draft=draft,
+        pr_skill_argv=pr_argv,
+    )
 
     log.info("START phase=PUBLISH branch=%s", state.branch)
 
@@ -1096,13 +1097,19 @@ def _run_publish(
         print("PHASE:PUBLISH:COMPLETE", flush=True)
         return True
 
-    url, res = git_ops.open_pr(worktree, title, body, draft=draft)
+    # The pr skill reads the change's blocks and updated documents from the
+    # checkpoint in docs_dir, so it must hold this state.
+    if state_path is not None:
+        state.checkpoint(state_path)
+    url, diagnoses, res = git_ops.open_pr_with_skill(worktree, pr_argv)
+    for line in diagnoses if res.ok else []:
+        log.info("PR_DIAGNOSIS from the pr skill: %s", line)
     if not res.ok:
+        why = "; ".join(diagnoses) or (res.stderr or res.stdout).strip()
         _publish_diagnosis(
             progress,
-            f"`gh pr create` failed (exit {res.returncode}): "
-            f"{(res.stderr or res.stdout).strip()[:800]}. The branch is pushed — "
-            f"only the PR is missing.",
+            f"the pr skill (`pr_pipeline open`) failed (exit {res.returncode}): "
+            f"{why[:800]}. The branch is pushed — only the PR is missing.",
             manual,
         )
         print("PHASE:PUBLISH:FAILED:pr", flush=True)

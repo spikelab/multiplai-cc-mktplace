@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from build_pipeline.orchestrator import (
-    _pr_title_body,
     _run_bootstrap,
     _run_publish,
     run_orchestrator,
@@ -996,7 +995,7 @@ class TestDocsUpdatePhaseWiring:
         the user as a DOCS_WARNING, on stdout and in the progress file."""
         from unittest.mock import AsyncMock, patch
         from build_pipeline.models import GateResult
-        from build_pipeline.orchestrator import _pr_title_body, _run_docs_update_phase
+        from build_pipeline.orchestrator import _run_docs_update_phase
 
         config = self._config(tmp_path)
         (config.project_dir / "README.md").write_text("r")
@@ -1014,9 +1013,8 @@ class TestDocsUpdatePhaseWiring:
         assert "DOCS_WARNING:" in out and "ghost.md" in out
         text = config.progress_file_path().read_text()
         assert "ghost.md" in text and "Updated: README.md" in text
-        _, body = _pr_title_body(config, state)
-        assert "`README.md`" in body
-        assert "ghost.md" not in body
+        # The PR body is the pr skill's: it writes exactly the checkpointed
+        # docs_impact (pr/scripts/tests/test_fill.py).
 
     @pytest.mark.asyncio
     async def test_all_reported_paths_invalid_leaves_the_state_empty(
@@ -1154,31 +1152,8 @@ class TestDocsAgentWritesItDidNotReport:
         assert "DOCS_WARNING" not in capsys.readouterr().out
 
 
-class TestDocsUpdateInThePRBody:
-    def test_pr_body_names_the_documents_the_build_updated(self, tmp_path):
-        from build_pipeline.orchestrator import _pr_title_body
-
-        config = BuildConfig(project_dir=tmp_path, change_name="c")
-        config.specs_dir = tmp_path / "specs"
-        config.change_dir.mkdir(parents=True)
-        state = BuildState(change_name="c", mode="only", tier="advanced")
-        state.docs_impact = ["README.md", "CHANGELOG.md"]
-
-        _, body = _pr_title_body(config, state)
-        assert "## Documentation" in body
-        assert "`README.md`" in body
-        assert "`CHANGELOG.md`" in body
-
-    def test_pr_body_stays_silent_when_no_document_changed(self, tmp_path):
-        from build_pipeline.orchestrator import _pr_title_body
-
-        config = BuildConfig(project_dir=tmp_path, change_name="c")
-        config.specs_dir = tmp_path / "specs"
-        config.change_dir.mkdir(parents=True)
-        state = BuildState(change_name="c", mode="only", tier="advanced")
-
-        _, body = _pr_title_body(config, state)
-        assert "## Documentation" not in body
+# TestDocsUpdateInThePRBody moved to pr/scripts/tests/test_fill.py: the pr
+# skill builds the PR body now.
 
 
 # --- Git lifecycle (work item 4) -----------------------------------------
@@ -1400,9 +1375,12 @@ class TestPublishFailureIsNonFatal:
         state.checkpoint(config.state_file_path())
 
         monkeypatch.setattr(
-            git_ops, "_run_gh",
+            git_ops, "_run_pr_skill",
             lambda argv, cwd=None, timeout=None: GitResult(
-                argv, 1, "", "gh: To get started with GitHub CLI, please run: gh auth login"
+                argv, 2,
+                "PR_DIAGNOSIS:`gh pr create` failed (exit 1): gh: To get started with "
+                "GitHub CLI, please run: gh auth login\n",
+                "",
             ),
         )
 
@@ -1469,17 +1447,18 @@ class TestPublishFailureIsNonFatal:
 
         captured = {}
 
-        def fake_gh(argv, cwd=None, timeout=None):
+        def fake_pr(argv, cwd=None, timeout=None):
             captured["argv"] = argv
-            return GitResult(argv, 0, "https://github.com/o/r/pull/9\n", "")
+            return GitResult(argv, 0, "PR:https://github.com/o/r/pull/9\n", "")
 
-        monkeypatch.setattr(git_ops, "_run_gh", fake_gh)
+        monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
         assert _run_publish(config, state, progress) is True
         assert state.pr_url == "https://github.com/o/r/pull/9"
         out = capsys.readouterr().out
         assert "PR:https://github.com/o/r/pull/9" in out
         assert "PUSHED:buildme/happy" in out
-        assert "--draft" in captured["argv"], "PRs are draft by default"
+        # The pr skill opens a draft unless told --ready.
+        assert "--ready" not in captured["argv"], "PRs are draft by default"
 
     @pytest.mark.asyncio
     async def test_no_push_skips_publish_entirely(self, tmp_path, monkeypatch, capsys):
@@ -1538,21 +1517,23 @@ class TestAutoPublishPRBody:
 
         seen: dict = {}
 
-        def fake_gh(argv, cwd=None, timeout=None):
+        def fake_pr(argv, cwd=None, timeout=None):
             seen["argv"] = argv
-            return GitResult(argv, 0, "https://github.com/o/r/pull/3\n", "")
+            return GitResult(argv, 0, "PR:https://github.com/o/r/pull/3\n", "")
 
-        monkeypatch.setattr(git_ops, "_run_gh", fake_gh)
+        monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
         config2 = BuildConfig(project_dir=repo, change_name="autobody",
                               mode="only", auto=True)
         config2.specs_dir = repo / "specs"
         result = await run_orchestrator(config2, _args(repo, "autobody", auto=True))
 
         assert result == 0
-        body = seen["argv"][seen["argv"].index("--body") + 1]
-        assert "Because the queue drops jobs." in body
-        assert "respec.md" in body
-        assert "specs/archive/" in body, "links must point at the archived layout"
+        # The pr skill reads the documents from the dir it is given (its body
+        # tests: pr/scripts/tests/test_fill.py); that dir must be the archive.
+        change_dir = Path(seen["argv"][seen["argv"].index("--change-dir") + 1])
+        assert "specs/archive/" in str(change_dir), "links must point at the archived layout"
+        assert "Because the queue drops jobs." in (change_dir / "proposal.md").read_text()
+        assert (change_dir / "respec.md").exists()
         assert not config2.change_dir.exists()  # archived
         # Successful publish drops the checkpoint, even from its archived home.
         assert list((config2.specs_dir / "archive").glob("*/.build-state.json")) == []
@@ -1572,8 +1553,8 @@ class TestPublishFailureRecovery:
         worktree = Path(state.worktree_path)
 
         monkeypatch.setattr(
-            git_ops, "_run_gh",
-            lambda argv, cwd=None, timeout=None: GitResult(argv, 1, "", "gh: boom"),
+            git_ops, "_run_pr_skill",
+            lambda argv, cwd=None, timeout=None: GitResult(argv, 2, "PR_DIAGNOSIS:gh: boom\n", ""),
         )
         config2 = BuildConfig(project_dir=repo, change_name="pubfail",
                               mode="only", auto=True)
@@ -1595,9 +1576,9 @@ class TestPublishFailureRecovery:
         # Re-run with gh healthy: adopts the same worktree, retries, cleans up.
         before = _worktree_count(repo)
         monkeypatch.setattr(
-            git_ops, "_run_gh",
+            git_ops, "_run_pr_skill",
             lambda argv, cwd=None, timeout=None: GitResult(
-                argv, 0, "https://github.com/o/r/pull/8\n", ""
+                argv, 0, "PR:https://github.com/o/r/pull/8\n", ""
             ),
         )
         config3 = BuildConfig(project_dir=repo, change_name="pubfail",
@@ -1632,9 +1613,9 @@ class TestPublishFailureRecovery:
         progress = ProgressWriter(config.progress_file_path())
 
         monkeypatch.setattr(
-            git_ops, "_run_gh",
+            git_ops, "_run_pr_skill",
             lambda argv, cwd=None, timeout=None: GitResult(
-                argv, 0, "https://github.com/o/r/pull/9\n", ""
+                argv, 0, "PR:https://github.com/o/r/pull/9\n", ""
             ),
         )
         state_path = config.state_file_path()
@@ -1709,31 +1690,153 @@ class TestNestedProjectDir:
         assert _worktree_count(repo) == 2, "resume must adopt, not create"
 
 
-class TestPRBody:
-    def test_body_carries_why_blocks_and_worktree_note(self, tmp_path):
-        repo = make_repo(tmp_path / "proj")
-        config = BuildConfig(project_dir=repo, change_name="bodytest")
-        config.specs_dir = repo / "specs"
-        config.change_dir.mkdir(parents=True)
-        (config.change_dir / "proposal.md").write_text(
-            "# P\n\n## Why\n\nBecause the thing is broken.\n\n## Impact\n\nnone\n"
-        )
-        (config.change_dir / "respec.md").write_text("delta")
-        from build_pipeline.models import BlockInfo
-        from build_pipeline.state import TDDState
+async def _published_build(tmp_path, change: str):
+    """A worktree build with an origin, ready for _run_publish."""
+    repo = make_repo(tmp_path / "proj")
+    make_bare_origin(repo, tmp_path / "origin.git")
+    config = BuildConfig(project_dir=repo, change_name=change)
+    config.specs_dir = repo / "specs"
+    state = BuildState(change_name=change, mode="scratch", tier="advanced",
+                       state_file=str(config.state_file_path()))
+    cm = ChangeManager(config.specs_dir)
+    await _run_bootstrap(config, state, cm, config.state_file_path())
+    return config, state, ProgressWriter(config.progress_file_path())
 
-        state = BuildState(
-            change_name="bodytest", mode="scratch", tier="advanced",
-            worktree_path=str(repo),
-            tdd=TDDState(blocks=[BlockInfo(number=1, name="First", description="d")]),
+
+def _sections(argv: list[str]) -> list[Path]:
+    return [Path(argv[i + 1]) for i, a in enumerate(argv) if a == "--section"]
+
+
+class TestPublishHandsOffToThePrSkill:
+    """PUBLISH pushes, then runs `pr_pipeline open --no-push` as a subprocess;
+    the body (Why, blocks, docs, artifact links) is the pr skill's and is
+    tested in pr/scripts/tests/."""
+
+    @pytest.fixture
+    def captured(self, monkeypatch):
+        seen: dict = {}
+
+        def fake_pr(argv, cwd=None, timeout=None):
+            seen["argv"] = argv
+            seen["sections"] = {p.name: p.read_text() for p in _sections(argv)}
+            return GitResult(argv, 0, "DIFF:1 files, +1 -0\nPR:https://github.com/o/r/pull/5\n", "")
+
+        monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
+        return seen
+
+    @pytest.mark.asyncio
+    async def test_runs_the_pr_skill_from_the_skills_directory(self, tmp_path, monkeypatch, captured):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        config, state, progress = await _published_build(tmp_path, "handoff")
+        assert _run_publish(config, state, progress) is True
+        argv = captured["argv"]
+        skills = Path(git_ops.__file__).resolve().parents[3]
+        assert argv[:4] == ["uv", "run", "--directory", str(skills / "pr" / "scripts")]
+        assert argv[4:8] == ["python", "-m", "pr_pipeline", "open"]
+        assert argv[argv.index("--repo") + 1] == state.worktree_path
+        assert argv[argv.index("--change-dir") + 1] == str(config.change_dir)
+        assert argv[argv.index("--head") + 1] == "buildme/handoff"
+        assert argv[argv.index("--title") + 1] == "buildme: handoff"
+        assert "--no-push" in argv, "buildme pushes itself, so PUSHED: and push failures are unchanged"
+
+    @pytest.mark.asyncio
+    async def test_ready_pr_passes_ready(self, tmp_path, monkeypatch, captured):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        config, state, progress = await _published_build(tmp_path, "ready")
+        config.git = GitToggles(worktree=True, push=True, pr="ready")
+        assert _run_publish(config, state, progress) is True
+        assert "--ready" in captured["argv"]
+
+    @pytest.mark.asyncio
+    async def test_worktree_note_reaches_the_body_as_a_section(self, tmp_path, monkeypatch, captured):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        config, state, progress = await _published_build(tmp_path, "note")
+        assert _run_publish(config, state, progress) is True
+        note = captured["sections"]["worktree.md"]
+        assert note.startswith("## Worktree\n")
+        assert state.worktree_path in note and "calling session's decision" in note
+        assert _sections(captured["argv"])[0].parent == config.change_dir / "pr-sections"
+
+    @pytest.mark.asyncio
+    async def test_a_contributors_section_reaches_the_section_argv(self, tmp_path, monkeypatch, captured):
+        from build_pipeline import orchestrator
+
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        config, state, progress = await _published_build(tmp_path, "hook")
+
+        def stale_walkthroughs(cfg, st, docs_dir):
+            path = docs_dir / "pr-sections" / "walkthroughs.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("## Stale walkthroughs\n\n- docs/walk.md\n")
+            return path
+
+        monkeypatch.setattr(orchestrator, "PRE_PUBLISH_CONTRIBUTORS", [stale_walkthroughs, lambda *a: None])
+        assert _run_publish(config, state, progress) is True
+        assert captured["sections"]["walkthroughs.md"].startswith("## Stale walkthroughs")
+        assert [p.name for p in _sections(captured["argv"])] == ["worktree.md", "walkthroughs.md"]
+
+    @pytest.mark.asyncio
+    async def test_a_raising_contributor_does_not_stop_publish(self, tmp_path, monkeypatch, captured, capsys):
+        from build_pipeline import orchestrator
+
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        config, state, progress = await _published_build(tmp_path, "raises")
+
+        def broken(cfg, st, docs_dir):
+            raise RuntimeError("contributor bug")
+
+        monkeypatch.setattr(orchestrator, "PRE_PUBLISH_CONTRIBUTORS", [broken])
+        assert _run_publish(config, state, progress) is True
+        out = capsys.readouterr().out
+        assert "PHASE:PUBLISH:COMPLETE" in out and "PR:https://github.com/o/r/pull/5" in out
+        assert [p.name for p in _sections(captured["argv"])] == ["worktree.md"]
+
+    def test_section_files_are_never_committed(self):
+        assert ":(exclude,glob)**/pr-sections/**" in git_ops.BOOKKEEPING_EXCLUDES
+
+    @pytest.mark.asyncio
+    async def test_pr_skill_failure_names_the_skill_and_its_command(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        config, state, progress = await _published_build(tmp_path, "skillfail")
+        monkeypatch.setattr(
+            git_ops, "_run_pr_skill",
+            lambda argv, cwd=None, timeout=None: GitResult(
+                argv, 1, "PR_DIAGNOSIS:a gate rejected the body; nothing was written: too long\n", ""),
         )
-        title, body = _pr_title_body(config, state)
-        assert title == "buildme: bodytest"
-        assert "Because the thing is broken." in body
-        assert "Block 1: First" in body
-        assert "respec.md" in body
-        assert "unknowns.md" not in body  # absent artifacts are not linked
-        assert "calling session's decision" in body
+        assert _run_publish(config, state, progress) is False
+        out = capsys.readouterr().out
+        assert "PHASE:PUBLISH:FAILED:pr" in out
+        assert "PUBLISH_DIAGNOSIS:the pr skill (`pr_pipeline open`) failed (exit 1): a gate rejected" in out
+        text = (Path(state.worktree_path) / "build-progress.md").read_text()
+        assert "python -m pr_pipeline open" in text
+        assert "gh pr create --title 'buildme: skillfail'" in text
+
+
+class TestResumeAtPublish:
+    """Item 13: a checkpoint parked at PUBLISH resumes, runs publish once with
+    the pr skill stubbed, and completes."""
+
+    @pytest.mark.asyncio
+    async def test_parked_checkpoint_publishes_once_and_completes(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo, state = await _bootstrapped_auto_build(tmp_path, "parked", "Why text.")
+        assert BuildState.load(Path(state.state_file)).phase == BuildPhase.PUBLISH
+        calls: list[list[str]] = []
+
+        def fake_pr(argv, cwd=None, timeout=None):
+            calls.append(argv)
+            return GitResult(argv, 0, "PR:https://github.com/o/r/pull/11\n", "")
+
+        monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
+        config = BuildConfig(project_dir=repo, change_name="parked", mode="only", auto=True)
+        config.specs_dir = repo / "specs"
+        result = await run_orchestrator(config, _args(repo, "parked", auto=True))
+
+        assert result == 0
+        assert len(calls) == 1, "publish runs exactly once"
+        out = capsys.readouterr().out
+        assert "PHASE:PUBLISH:COMPLETE" in out and "RESULT:SUCCESS" in out
+        assert "PR:https://github.com/o/r/pull/11" in out
 
 
 class TestPlanReviewPhase:
