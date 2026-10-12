@@ -37,6 +37,7 @@ from build_pipeline.tdd_engine import (
     EXIT_AGENT_TIMEOUT,
 )
 from build_pipeline import budget as budget_mod
+from build_pipeline import git_ops
 from build_pipeline.config import BuildConfig
 from build_pipeline.models import (
     AgentResult,
@@ -2827,6 +2828,38 @@ class TestWholeChangeRefactor:
                    new_callable=AsyncMock, return_value=fail):
             assert await _run_refactor_all(config, state, progress) is True
 
+        assert state.tdd.refactor_all_done is True
+
+    @pytest.mark.parametrize("fail", [
+        AgentResult(success=False, error="crashed"),
+        AgentResult(success=False, timed_out=True),
+    ], ids=["error", "timeout"])
+    @pytest.mark.asyncio
+    async def test_failed_agent_partial_edits_are_rolled_back(self, setup, fail):
+        """An agent that wrote files and then failed or timed out leaves
+        unverified edits behind. The step is marked done, so a resume never
+        re-runs it — left in place, those edits would make every later step
+        that needs a committed tree (MUTATION) refuse on every resume. They
+        are rolled back to the pre-refactor checkpoint, which still holds the
+        build's own uncommitted review fixes."""
+        config, state, progress = setup
+        (config.project_dir / "module.py").write_text(
+            "def add(a, b):\n    return a + b  # review fix\n")
+
+        def _partial_then_fail(*_a, **_kw):
+            (config.project_dir / "module.py").write_text("def add(a, b):\n    return (a +\n")
+            (config.project_dir / "helpers.py").write_text("# half-written\n")
+            return fail
+
+        with patch("build_pipeline.tdd_engine.run_refactor_all",
+                   new_callable=AsyncMock, side_effect=_partial_then_fail):
+            assert await _run_refactor_all(config, state, progress) is True
+
+        assert (config.project_dir / "module.py").read_text() == \
+            "def add(a, b):\n    return a + b  # review fix\n"
+        assert not (config.project_dir / "helpers.py").exists()
+        assert git_ops.tree_is_clean(config.project_dir)
+        assert not any(s.startswith("refactor:") for s in _git_log_subjects(config.project_dir))
         assert state.tdd.refactor_all_done is True
 
     @pytest.mark.asyncio

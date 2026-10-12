@@ -1911,17 +1911,21 @@ async def _run_refactor_all(
     )
 
     if not result.success:
+        # The agent may have written files before it failed or timed out.
+        # Nothing verified them, and the step is marked done below, so a
+        # resume never re-runs it: left in the tree, they would make MUTATION
+        # (which needs a committed tree) refuse on every resume. So they get
+        # the same discard as a pass that failed verification.
         reason = "timeout" if result.timed_out else result.error
         log.warning("FAIL phase=REFACTOR_ALL reason=%s (non-fatal)", reason)
         progress.log_phase("REFACTOR_ALL",
                            "TIMEOUT" if result.timed_out else f"FAILED: {reason}")
-        state.tdd.refactor_all_done = True
-        state.checkpoint(config.state_file_path())
-        return True
-
-    gate = integration_gate(config.test_command, config.project_dir)
-    detail = "" if gate.passed else f"tests failed after refactor: {gate.reason}"
-    if gate.passed:
+        gate = None
+        detail = f"refactor agent did not finish: {reason}"
+    else:
+        gate = integration_gate(config.test_command, config.project_dir)
+        detail = "" if gate.passed else f"tests failed after refactor: {gate.reason}"
+    if gate is not None and gate.passed:
         after = _snapshot_all_test_files(config, state)
         if before is None or after is None:
             log.warning("Test integrity could not run after the whole-change "
@@ -2186,9 +2190,9 @@ async def _run_mutation(
     # leaves the tree committed: the whole-change refactor checkpoints the
     # review fixes and commits or discards its own pass. So uncommitted edits
     # here are ones nothing verified — a refactor whose verification failed
-    # and whose discard git refused, a refactor skipped on a red suite or a
-    # failed checkpoint, a refactor agent that died mid-edit, or a previous
-    # mutation round that could not be discarded. Committing them would put
+    # or whose agent died mid-edit, and whose discard git refused; a refactor
+    # skipped on a red suite or a failed checkpoint; or a previous mutation
+    # round that could not be discarded. Committing them would put
     # them on the build branch and score mutants against them; resetting
     # would destroy work nobody has looked at. So stop and leave them.
     if not git_ops.tree_is_clean(config.project_dir):
