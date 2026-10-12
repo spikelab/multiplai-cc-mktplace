@@ -30,8 +30,9 @@ time, not derived from a tag.
   the build stops with a message saying to install it or turn the step off;
   when cosmic-ray cannot be fetched or run, offline or behind a private index,
   the message also says how to turn the step off).
-  Stopping the build during the step (Ctrl-C, SIGTERM or SIGHUP) stops
-  cosmic-ray too and puts back any file it had mutated.
+  Stopping the build during the step (Ctrl-C, SIGTERM or SIGHUP), or the step
+  timing out, stops cosmic-ray and the test run it had in flight, and puts
+  back any file it had mutated.
   Surviving mutants go to one fresh test-writer agent that may only add or
   edit tests; the result is written to `specs/changes/<name>/mutation.md`.
 - buildme: a build now fails when its mutation score stays below

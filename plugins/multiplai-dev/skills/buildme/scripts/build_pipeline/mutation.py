@@ -287,11 +287,11 @@ _TURN_OFF = "`mutation.enabled: false` in specs/config.yaml"
 def _run_tool(argv: list[str], cwd: Path, timeout: float) -> str:
     """Run one cosmic-ray command; return stdout or raise `_ToolError`.
 
-    Own process group, so a timeout kills cosmic-ray's test subprocesses too
-    and not just the `uvx` wrapper. The same group means the terminal's
-    SIGINT never reaches cosmic-ray, so anything else that ends the wait — a
-    KeyboardInterrupt, a SystemExit from `_exit_on_termination` — kills the
-    group too, before the caller restores the tree under it.
+    Own process group, so the terminal's SIGINT never reaches cosmic-ray.
+    Whatever ends the wait — the timeout, a KeyboardInterrupt, a SystemExit
+    from `_exit_on_termination` — goes through `_kill_group`, which kills
+    cosmic-ray and the test run it has in flight (that run sits in a session
+    of its own, see `_kill_group`) before the caller restores the tree.
     """
     try:
         proc = subprocess.Popen(
@@ -324,22 +324,75 @@ def _run_tool(argv: list[str], cwd: Path, timeout: float) -> str:
 
 
 def _kill_group(proc: subprocess.Popen) -> None:
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(proc.pid, sig)
-        except (ProcessLookupError, PermissionError):
-            return
-        try:
-            proc.communicate(timeout=10)
-            break
-        except subprocess.TimeoutExpired:
-            continue
-    # The leader exiting does not mean the group did: a worker that outlives
-    # it could still write a mutant after the caller has restored the tree.
-    try:
+    """Kill cosmic-ray's process group and every test run it has in flight.
+
+    cosmic-ray 8.7.0 starts each test command with `start_new_session=True`
+    (`cosmic_ray.testing.run_tests`) and kills that session only on its own
+    per-mutant timeout. Killing cosmic-ray's group alone would orphan the test
+    run: a looping mutant would run on, and could write into the tree after
+    the caller restored it. So the group is stopped first, which keeps
+    cosmic-ray from starting another test run and keeps the running one its
+    child; then every process group below it is killed, then the group.
+    """
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(proc.pid, signal.SIGSTOP)
+    for pgid in _descendant_groups(proc.pid):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(pgid, signal.SIGKILL)
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.communicate(timeout=10)
+
+
+def _descendant_groups(root: int) -> set[int]:
+    """Process group ids of every descendant of *root*, other than *root*'s own
+    group and this process's. Empty when the process table cannot be read."""
+    children: dict[int, list[tuple[int, int]]] = {}
+    for pid, ppid, pgid in _process_table():
+        children.setdefault(ppid, []).append((pid, pgid))
+    groups: set[int] = set()
+    seen: set[int] = set()
+    stack = [root]
+    while stack:
+        for child, pgid in children.get(stack.pop(), ()):
+            if child not in seen:
+                seen.add(child)
+                groups.add(pgid)
+                stack.append(child)
+    groups -= {root, os.getpgrp()}
+    return {g for g in groups if g > 1}
+
+
+_PROC = Path("/proc")
+
+
+def _process_table() -> list[tuple[int, int, int]]:
+    """(pid, ppid, pgid) of every visible process: from /proc on Linux, from
+    `ps` elsewhere (macOS). Empty when neither can be read."""
+    rows: list[tuple[int, int, int]] = []
+    if (_PROC / "self" / "stat").exists():
+        for entry in _PROC.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = (entry / "stat").read_text()
+            except OSError:
+                continue
+            # Fields after the parenthesised command: state, ppid, pgrp, ...
+            fields = stat[stat.rindex(")") + 2:].split()
+            rows.append((int(entry.name), int(fields[1]), int(fields[2])))
+        return rows
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid="],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return rows
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 3 and all(p.isdigit() for p in parts):
+            rows.append((int(parts[0]), int(parts[1]), int(parts[2])))
+    return rows
 
 
 @contextlib.contextmanager

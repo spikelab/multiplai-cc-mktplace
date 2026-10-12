@@ -623,6 +623,83 @@ class TestRunTool:
                              capture_output=True, text=True).stdout.strip()
         assert not out or out.startswith("Z"), "cosmic-ray's group survived Ctrl-C"
 
+    @staticmethod
+    def _uvx_with_own_session_test(tmp_path, pid_file):
+        """A `uvx` stub that starts its "test run" the way cosmic-ray 8.7.0's
+        `testing.run_tests` does: `Popen(..., start_new_session=True)`, so the
+        test command sits in a session of its own, outside cosmic-ray's group."""
+        uvx = tmp_path / "uvx"
+        uvx.write_text(
+            f"#!{sys.executable}\n"
+            "import subprocess\n"
+            "p = subprocess.Popen(['sleep', '7733'], start_new_session=True)\n"
+            f"open({str(pid_file)!r}, 'w').write(str(p.pid))\n"
+            "p.wait()\n")
+        uvx.chmod(0o755)
+
+    @staticmethod
+    def _gone(pid, wait=5.0):
+        import signal
+        import time
+
+        def _alive():
+            out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                                 capture_output=True, text=True).stdout.strip()
+            return bool(out) and not out.startswith("Z")
+
+        deadline = time.monotonic() + wait
+        while _alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if _alive():
+            os.kill(pid, signal.SIGKILL)
+            return False
+        return True
+
+    def test_a_timeout_kills_the_test_run_in_its_own_session(self, tmp_path):
+        """cosmic-ray puts each test run in a session of its own, so killing
+        cosmic-ray's group leaves it running: a looping mutant would run
+        forever and could write into the tree after it was restored."""
+        pid_file = tmp_path / "test.pid"
+        self._uvx_with_own_session_test(tmp_path, pid_file)
+        with patch.dict(os.environ, {"PATH": f"{tmp_path}:/usr/bin:/bin"}):
+            with pytest.raises(mutation._ToolError):
+                mutation._run_tool([*mutation._UVX, "cosmic-ray", "exec", "a", "b"],
+                                   tmp_path, 1.5)
+        assert self._gone(int(pid_file.read_text())), \
+            "the in-flight test run survived the timeout"
+
+    @pytest.mark.parametrize("source", ["proc", "ps"])
+    def test_process_table_reads_this_process(self, tmp_path, source):
+        """The process table comes from /proc on Linux and from `ps` where
+        there is no /proc (macOS); both must give pid, ppid and pgid."""
+        if source == "proc" and not (mutation._PROC / "self" / "stat").exists():
+            pytest.skip("no /proc here")
+        with patch.object(mutation, "_PROC",
+                          mutation._PROC if source == "proc" else tmp_path / "none"):
+            table = mutation._process_table()
+        assert (os.getpid(), os.getppid(), os.getpgrp()) in table
+
+    def test_an_interrupt_kills_the_test_run_in_its_own_session(self, tmp_path):
+        import signal
+        pid_file = tmp_path / "test.pid"
+        self._uvx_with_own_session_test(tmp_path, pid_file)
+
+        def _interrupt(signum, frame):
+            raise KeyboardInterrupt
+
+        old = signal.signal(signal.SIGALRM, _interrupt)
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 1.5)
+            with patch.dict(os.environ, {"PATH": f"{tmp_path}:/usr/bin:/bin"}):
+                with pytest.raises(KeyboardInterrupt):
+                    mutation._run_tool([*mutation._UVX, "cosmic-ray", "exec", "a", "b"],
+                                       tmp_path, 60)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, old)
+        assert self._gone(int(pid_file.read_text())), \
+            "the in-flight test run survived the interrupt"
+
 
 DUMP_PENDING = "\n".join([
     _dump_line("a1", "src/calc.py", 2, "core/ReplaceBinaryOperator_Add_Sub", "skipped",
