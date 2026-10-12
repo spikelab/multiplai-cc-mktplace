@@ -37,6 +37,24 @@ def test_heading_gate_catches_a_duplicate_and_an_out_of_order_heading():
     assert "appears 0 times" in gates.check_headings(sections, "## A\n")[0]
 
 
+def test_a_heading_line_inside_a_comment_or_a_fence_is_not_counted():
+    sections = parse("## Summary\n")
+    in_comment = "<!--\n## Summary\n-->\n## Summary\nText.\n"
+    in_fence = "## Summary\n```md\n## Summary\n```\n"
+    assert gates.check_headings(sections, in_comment) == []
+    assert gates.check_headings(sections, in_fence) == []
+    assert "appears 0 times" in gates.check_headings(sections, "<!--\n## Summary\n-->\n")[0]
+
+
+def test_a_template_with_an_example_heading_in_a_comment_renders(tmp_path, model_stub):
+    template = "<!--\nExample:\n## Summary\n-->\n## Summary\n<!-- what -->\n"
+    repo = _repo(tmp_path, template)
+    model_stub.answers = [{"sections": {"summary": "The change."}}]
+    body = _render(repo).body
+    assert gates.check_headings(parse(template), body) == []
+    assert "The change." in body
+
+
 REPEATED = "## Frontend\n<!-- ui -->\n### Details\n<!-- d -->\n## Backend\n<!-- api -->\n### Details\n<!-- d -->\n"
 
 

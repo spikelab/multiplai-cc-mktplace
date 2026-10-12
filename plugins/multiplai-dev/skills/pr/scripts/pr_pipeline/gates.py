@@ -1,7 +1,8 @@
 """Gates on the assembled body. No gate calls a model.
 
 - every template heading line appears as many times as in the template, in
-  template order;
+  template order, counting only lines `parse` reads as headings (a heading
+  line inside an HTML comment or a fenced code block is not one);
 - every template checkbox line appears, unticked unless its id was ticked
   with a quote found verbatim in a source file;
 - every section the model filled is non-empty (or holds the literal
@@ -21,7 +22,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import markers
-from .template import Section, set_tick
+from .template import Section, parse, set_tick
 
 # Spike, 2026-10-12: a PR body longer than 1,500 to 2,500 words does not get
 # read. The gate stops at the upper bound; the model is told to aim for the
@@ -54,8 +55,10 @@ class GateResult:
 
 def check_headings(sections: list[Section], body: str) -> list[str]:
     """Each template heading line appears in the body as many times as in the template, and
-    the n-th copy in the body stands where the n-th copy in the template does, in order."""
-    lines = body.split("\n")
+    the n-th copy in the body stands where the n-th copy in the template does, in order.
+    Only lines `parse` reads as headings count, so a heading line inside a comment or a
+    fence counts in neither the template nor the body."""
+    lines = [s.heading for s in parse(body) if s.level != 0]
     headings = [s.heading for s in sections if s.level != 0]
     errors: list[str] = []
     found: dict[str, list[int]] = {}
