@@ -998,6 +998,44 @@ class TestRunBlockTDD:
         assert block.timed_out is True
 
     @pytest.mark.asyncio
+    async def test_an_agent_error_stops_the_block_resumably(self, setup):
+        """An agent call that errored says nothing about the block's work."""
+        config, state, progress, block = setup
+        fail_result = AgentResult(success=False, error="CLI exited 1")
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=fail_result):
+            assert await run_block_tdd(block, config, state, progress) is False
+
+        assert block.status == BlockStatus.FAILED
+        assert block.resumable is True
+        assert block.timed_out is False
+
+    @pytest.mark.asyncio
+    async def test_an_agent_that_reports_blocked_is_not_resumable(self, setup):
+        config, state, progress, block = setup
+        blocked = AgentResult(success=True, output="Cannot be done.\n\nSTATUS: BLOCKED\n")
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=blocked):
+            assert await run_block_tdd(block, config, state, progress) is False
+
+        assert block.status == BlockStatus.FAILED
+        assert block.resumable is False
+
+    @pytest.mark.asyncio
+    async def test_a_rerun_clears_the_last_attempts_stop_flags(self, setup):
+        config, state, progress, block = setup
+        block.status = BlockStatus.FAILED
+        block.timed_out = True
+        block.resumable = True
+        blocked = AgentResult(success=True, output="Cannot be done.\n\nSTATUS: BLOCKED\n")
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=blocked):
+            assert await run_block_tdd(block, config, state, progress) is False
+
+        assert block.timed_out is False
+        assert block.resumable is False
+
+    @pytest.mark.asyncio
     async def test_implementer_failure(self, setup):
         config, state, progress, block = setup
         ok_result = AgentResult(success=True, output="Tests written")
@@ -1827,6 +1865,26 @@ class TestRunTDDEngineEntryPoint:
 
         assert result == EXIT_BUILD_FAILURE
 
+    @pytest.mark.asyncio
+    async def test_a_rerun_after_a_timeout_that_fails_its_block_is_a_build_failure(self, tdd_setup):
+        """A block that timed out once and then fails on its own work when the
+        build is re-run is a build failure: the earlier timeout must not stick."""
+        config, args = tdd_setup
+        timeout_result = AgentResult(
+            success=False, error="Agent timed out after 1200s", timed_out=True
+        )
+        blocked = AgentResult(success=True, output="Cannot be done.\n\nSTATUS: BLOCKED\n")
+
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
+             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
+                   side_effect=[timeout_result, blocked]):
+            assert await run_tdd_engine(config, args) == EXIT_AGENT_TIMEOUT
+            assert await run_tdd_engine(config, args) == EXIT_BUILD_FAILURE
+
+        block = BuildState.load(config.state_file_path()).tdd.blocks[0]
+        assert block.timed_out is False
+        assert block.resumable is False
+
 
 # Test content the static weak-test scan flags (1/1 weak) vs. accepts.
 WEAK_TESTS_OUTPUT = "def test_something():\n    assert True\n"
@@ -2039,6 +2097,63 @@ class TestReviewExhaustionEnforcement:
         assert block.green_evidence
         assert "GREEN evidence" in progress.path.read_text()
 
+    @pytest.mark.asyncio
+    async def test_review_exhaustion_is_not_resumable(self, setup):
+        """The block's own work failed review: a re-run has nothing to get past."""
+        config, state, progress, block = setup
+        with patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                   return_value=self._failing_review()), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
+                   return_value=AgentResult(success=True, output="fixed")):
+            assert await _run_integration_and_review(block, config, state, progress) is False
+        assert block.status == BlockStatus.FAILED
+        assert block.resumable is False
+
+    @pytest.mark.asyncio
+    async def test_review_exhaustion_with_no_fix_agent_completing_is_resumable(self, setup):
+        """Review fixes that all errored never tried the fix: a re-run may."""
+        config, state, progress, block = setup
+        with patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                   return_value=self._failing_review()), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
+                   return_value=AgentResult(success=False, error="CLI exited 1")):
+            assert await _run_integration_and_review(block, config, state, progress) is False
+        assert block.status == BlockStatus.FAILED
+        assert block.resumable is True
+
+    @pytest.mark.asyncio
+    async def test_a_review_call_that_raises_stops_the_block_resumably(self, setup):
+        config, state, progress, block = setup
+        with patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                   side_effect=RuntimeError("model unavailable")):
+            assert await _run_integration_and_review(block, config, state, progress) is False
+        assert block.status == BlockStatus.FAILED
+        assert block.resumable is True
+        assert block.timed_out is False
+
+    @pytest.mark.asyncio
+    async def test_a_budget_stop_in_review_stops_the_block_resumably(self, setup):
+        """A re-run with a raised ceiling gets past a budget stop."""
+        config, state, progress, block = setup
+
+        class _Usage:
+            input_tokens, output_tokens = 500, 0
+            cache_read_tokens = cache_creation_tokens = 0
+            cost_usd = 0.0
+
+        budget_mod.reset()
+        try:
+            budget_mod.configure(max_tokens=100)
+            budget_mod.record(_Usage(), label="spec")
+            with patch("build_pipeline.tdd_engine._run_quality_review",
+                       new_callable=AsyncMock) as review:
+                assert await _run_integration_and_review(block, config, state, progress) is False
+        finally:
+            budget_mod.reset()
+        review.assert_not_awaited()
+        assert block.status == BlockStatus.FAILED
+        assert block.resumable is True
+
 
 class TestEntryPointSmokeRun:
     """_verify_entry_point actually executes the entry point — no fabricated pass."""
@@ -2166,6 +2281,23 @@ class TestIntegrationFixCircuitBreaker:
         assert "DIAGNOSIS (Block1)" in progress_text
         assert "circular import between a and b" in progress_text
         assert "ESCALATED" in progress_text
+        # Every fix agent ran and the suite still fails: the block's own work.
+        assert block.resumable is False
+
+    @pytest.mark.asyncio
+    async def test_exhaustion_with_no_fix_agent_completing_is_resumable(self, setup):
+        """Fix agents that all errored never tried the fix: a re-run may."""
+        config, state, progress, block = setup
+        failing_gate = GateResult(passed=False, reason="failing", metadata={})
+        errored = AgentResult(success=False, error="CLI exited 1")
+
+        with patch("build_pipeline.tdd_engine.integration_gate", return_value=failing_gate), \
+             patch("build_pipeline.tdd_engine.run_integration_fix", new_callable=AsyncMock,
+                   return_value=errored):
+            assert await _run_integration_and_review(block, config, state, progress) is False
+
+        assert block.status == BlockStatus.FAILED
+        assert block.resumable is True
 
     @pytest.mark.asyncio
     async def test_escalation_falls_back_to_build_model(self, setup):

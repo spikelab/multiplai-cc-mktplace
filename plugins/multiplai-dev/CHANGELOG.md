@@ -17,6 +17,71 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-10-12
+
+### Added
+- New `/multiplai-dev:buildme-findings <pr>` skill (`python -m build_pipeline
+  findings --pr <n>`): fixes a PR's review comments through buildme's own
+  process. It reads the PR's unresolved review threads, new top-level
+  comments, and the findings `/multiplai-dev:review` puts in a review's body
+  (those on lines outside the PR's diff), acts only on those from
+  `findings.authors` (default: anyone with `admin`, `maintain` or `write` on
+  the repo) and the bots in `findings.allow_bots`, and sorts each with a
+  read-only agent that sees the comment only as fenced, untrusted text.
+  `findings-r<N>.md` in the change directory lists every comment with its
+  verdict. A finding that needs a spec change gets one:
+  `respec-findings-r<N>.md` is applied to the change's requirements, each
+  requirement edited inside its own section, and to `specs/registry/` when the
+  change is archived; it is committed as `spec(findings-r<N>)` before any
+  code, with or without `--auto`. Each code defect becomes a block run by the
+  TDD engine with a failing test first and every gate a build has; a block the
+  engine cannot fix is kept under a wip ref, left off the branch, and answered
+  "not fixed". A block stopped by an agent that timed out or errored, or by
+  the budget, is not answered: re-running the command keeps that attempt's
+  edits under `refs/buildme/wip/<change>/r<N>-code-block<k>-stopped` and runs
+  the block again. A wip ref is never overwritten: a later attempt at the same
+  step goes under the same name with `-2`, `-3`, and so on. When the commit
+  that would keep the edits fails (a pre-commit hook rejects it, say), no ref
+  is written and the edits are left in the tree, never discarded. When every block
+  is done but a step the engine runs after them fails (the whole-change
+  refactor's budget stop, or mutation testing), the fixes are still pushed and
+  answered, and each reply says what failed after them; a test suite that
+  fails before any fix stops the round with a message saying so. The skill then pushes, adds a "Review rounds" section to the PR
+  description through `/multiplai-dev:pr`, replies in each thread with the
+  fixing commit or the reason nothing changed, and re-runs
+  `/multiplai-dev:review`. Rounds repeat until nothing new is left or
+  `findings.max_rounds` (default 3) is reached. Review threads are never
+  resolved. A re-run resumes at the step that did not finish without re-asking
+  a comment or posting a reply twice, and a step that failed part way keeps
+  its edits under `refs/buildme/wip/<change>/r<N>-<step>`. Commits someone
+  else pushed to the PR are kept. It will not start a round on a worktree with
+  uncommitted changes, and it will not reuse a change's state for a different
+  PR. A re-run that resumes a step stops with `FINDINGS:FAILED`, and leaves
+  the worktree as it is, when a file outside the change directory has an
+  uncommitted change the stopped step did not leave there, with the same
+  content, when it stopped (a stopped code fix's own edits are kept as
+  above). When the step recorded nothing as it stopped (its process was
+  killed), any uncommitted change outside the change directory stops it.
+  Resuming triage, spec or code also stops when commits were made on the
+  branch since the step stopped, other than ones pulled from origin.
+  Each round's TDD engine is held to the `budget:` ceilings on that round's
+  own spend, also when `--auto` runs several rounds in one process; the
+  triage and spec agents' spend is not counted against them.
+- `findings.allow_bots` in `specs/config.yaml`.
+
+### Changed
+- `/multiplai-dev:pr edit` ends the comment it leaves on a PR opened by hand
+  with a hidden marker, so `/multiplai-dev:buildme-findings` does not take that
+  comment for a review comment.
+- `findings.authors` and `findings.max_rounds` are now read by the findings
+  stage; before this release they were stored only.
+- buildme commits the edits a block's review fixes make as
+  `fix(block-<n>)` in that block. Before, they stayed uncommitted and went
+  into whatever buildme committed next.
+- A buildme block that timed out and then fails for another reason when the
+  build is re-run now ends the build with exit 1. Before, it exited 4, the
+  code for an agent timeout, on every later run.
+
 ## [0.42.0] - 2026-10-12
 
 ### Added

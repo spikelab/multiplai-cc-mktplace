@@ -610,3 +610,75 @@ class TestDiscardToAncestorGuard:
     def test_unknown_ancestry_is_never_treated_as_safe(self, tmp_path):
         """Git could not be asked → "unknown", which must not mean "destroy"."""
         assert git_ops.is_ancestor_of_head(tmp_path / "nonexistent", "a" * 40) is False
+
+
+class TestSaveWipRef:
+    """`save_wip_ref` keeps a step's work reachable before a discard. A second
+    attempt at the same step must not move the first attempt's ref: its
+    commit would then be reachable from nothing and could be collected."""
+
+    def test_a_second_save_under_the_same_name_keeps_the_first(self, tmp_path):
+        repo = make_repo(tmp_path / "proj")
+        base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        ref = "refs/buildme/wip/calc/r1-spec"
+
+        (repo / "attempt.txt").write_text("first\n")
+        first = git_ops.save_wip_ref(repo, ref, "wip one")
+        assert first == ref
+        first_sha = _git(repo, "rev-parse", ref).stdout.strip()
+        assert git_ops.discard_to(repo, base, "spec")
+
+        (repo / "attempt.txt").write_text("second\n")
+        second = git_ops.save_wip_ref(repo, ref, "wip two")
+        assert second == f"{ref}-2"
+        assert _git(repo, "rev-parse", ref).stdout.strip() == first_sha
+        assert _git(repo, "show", f"{ref}:attempt.txt").stdout == "first\n"
+        assert _git(repo, "show", f"{second}:attempt.txt").stdout == "second\n"
+        assert git_ops.discard_to(repo, base, "spec")
+
+        (repo / "attempt.txt").write_text("third\n")
+        assert git_ops.save_wip_ref(repo, ref, "wip three") == f"{ref}-3"
+
+    def test_saving_the_same_commit_again_reuses_its_ref(self, tmp_path):
+        repo = make_repo(tmp_path / "proj")
+        ref = "refs/buildme/wip/calc/r1-code-stopped"
+        (repo / "attempt.txt").write_text("x\n")
+        assert git_ops.save_wip_ref(repo, ref, "wip") == ref
+        assert git_ops.save_wip_ref(repo, ref, "wip") == ref
+        refs = _git(repo, "for-each-ref", "--format=%(refname)", "refs/buildme/wip/").stdout
+        assert refs.split() == [ref]
+
+    def test_a_ref_outside_the_wip_namespace_is_refused(self, tmp_path):
+        repo = make_repo(tmp_path / "proj")
+        assert git_ops.save_wip_ref(repo, "refs/heads/main", "wip") is None
+
+    def test_a_rejected_wip_commit_writes_no_ref(self, tmp_path):
+        """When the WIP commit fails (a pre-commit hook rejects it), HEAD
+        does not hold the edits, so a ref at HEAD would keep nothing and the
+        caller's discard would destroy them. No ref, and the edits stay."""
+        repo = make_repo(tmp_path / "proj")
+        head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        hook = repo / ".git" / "hooks" / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        (repo / "attempt.txt").write_text("unsaved\n")
+        ref = "refs/buildme/wip/calc/r1-code-block1"
+
+        assert git_ops.save_wip_ref(repo, ref, "wip") is None
+        assert subprocess.run(["git", "rev-parse", "--verify", "-q", ref],
+                              cwd=str(repo), capture_output=True).returncode != 0
+        assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head
+        assert (repo / "attempt.txt").read_text() == "unsaved\n"
+
+    def test_a_clean_tree_with_moved_head_still_gets_a_ref(self, tmp_path):
+        """Nothing uncommitted (the step committed its own work) is not a
+        failure: the ref names HEAD, which holds everything."""
+        repo = make_repo(tmp_path / "proj")
+        (repo / "attempt.txt").write_text("committed\n")
+        _git(repo, "add", "attempt.txt")
+        _git(repo, "commit", "-q", "-m", "step's own commit")
+        head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        ref = "refs/buildme/wip/calc/r1-spec"
+
+        assert git_ops.save_wip_ref(repo, ref, "wip") == ref
+        assert _git(repo, "rev-parse", ref).stdout.strip() == head

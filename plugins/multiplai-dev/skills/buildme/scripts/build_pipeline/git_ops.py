@@ -26,6 +26,7 @@ No LLM calls live in this module.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shlex
@@ -40,6 +41,8 @@ _PUSH_TIMEOUT = 300
 _GH_TIMEOUT = 300
 # The pr skill may make one model call and re-ask it once.
 _PR_SKILL_TIMEOUT = 1500
+# A whole /multiplai-dev:review run on a PR (finders, verify, explain).
+_REVIEW_SKILL_TIMEOUT = 4 * 3600
 
 
 class GitLifecycleError(RuntimeError):
@@ -92,6 +95,12 @@ def _run_gh(argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_T
 def _run_pr_skill(argv: list[str], cwd: Path | str | None = None,
                   timeout: int = _PR_SKILL_TIMEOUT) -> GitResult:
     """Separate seam for the pr skill's subprocess so tests can stub it."""
+    return _run(argv, cwd=cwd, timeout=timeout)
+
+
+def _run_review_skill(argv: list[str], cwd: Path | str | None = None,
+                      timeout: int = _REVIEW_SKILL_TIMEOUT) -> GitResult:
+    """Separate seam for the review skill's subprocess (the findings stage)."""
     return _run(argv, cwd=cwd, timeout=timeout)
 
 
@@ -295,6 +304,56 @@ def create_worktree(repo: Path, branch: str, dest: Path) -> GitResult:
     return res
 
 
+def worktree_for_branch(repo: Path | str, branch: str) -> Path | None:
+    """The worktree that has *branch* checked out, or None."""
+    res = _run(["git", "worktree", "list", "--porcelain"], cwd=repo)
+    if not res.ok:
+        return None
+    path: Path | None = None
+    for line in res.stdout.splitlines():
+        if line.startswith("worktree "):
+            path = Path(line.split(" ", 1)[1].strip())
+        elif line.strip() == f"branch refs/heads/{branch}" and path is not None:
+            return path
+    return None
+
+
+def add_worktree_for_branch(repo: Path, branch: str, dest: Path) -> GitResult:
+    """Check an existing branch out in a new worktree at *dest*: the local
+    branch when there is one, else a local branch tracking
+    ``origin/<branch>`` (fetched first). Never forces, never resets a branch.
+    Raises GitLifecycleError with the git error."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if branch_exists(repo, branch):
+        argv = ["git", "worktree", "add", str(dest), branch]
+    else:
+        fetch = _run(["git", "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
+                     cwd=repo, timeout=_PUSH_TIMEOUT)
+        if not fetch.ok:
+            raise GitLifecycleError(
+                f"Branch '{branch}' is not local and `git fetch origin {branch}` failed: "
+                f"{(fetch.stderr or fetch.stdout).strip()}")
+        argv = ["git", "worktree", "add", "--track", "-b", branch, str(dest), f"origin/{branch}"]
+    res = _run(argv, cwd=repo, timeout=_GIT_TIMEOUT)
+    if not res.ok:
+        raise GitLifecycleError(
+            f"Failed to check out {branch} in a worktree at {dest}: "
+            f"{(res.stderr or res.stdout).strip()}")
+    log.info("WORKTREE added path=%s branch=%s repo=%s", dest, branch, repo)
+    return res
+
+
+def fast_forward_from_origin(worktree: Path, branch: str) -> GitResult:
+    """Bring *branch* up to ``origin/<branch>`` when that is a fast-forward
+    (someone pushed to the PR). Never merges, never resets: a diverged branch
+    is left alone and the later push reports it."""
+    fetch = _run(["git", "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
+                 cwd=worktree, timeout=_PUSH_TIMEOUT)
+    if not fetch.ok:
+        return fetch
+    return _run(["git", "merge", "--ff-only", f"origin/{branch}"], cwd=worktree)
+
+
 def remove_worktree(repo: Path, dest: Path) -> GitResult:
     """DOCUMENTED HELPER — `git worktree remove`, deliberately never called
     by the pipeline (test_git_ops.py asserts no other module references it).
@@ -373,6 +432,9 @@ def commit_paths(worktree: Path, message: str, paths: list[str]) -> str | None:
 # not) — with a `git clean` on the other side of the disagreement.
 BOOKKEEPING_EXCLUDES = [
     ":(exclude,glob)**/.build-state.json",
+    # The findings stage's checkpoints: its round loop, and each round's TDD engine.
+    ":(exclude,glob)**/.findings-state.json",
+    ":(exclude,glob)**/.findings-r*-state.json",
     ":(exclude,glob)**/.board.json",
     ":(exclude,glob)**/build-progress.md",
     # Section files publish hands the pr skill (orchestrator._pre_publish_sections).
@@ -437,11 +499,69 @@ def commit_tree(repo: Path | str, message: str, label: str = "") -> str | None:
     return sha
 
 
+def save_wip_ref(repo: Path | str, ref: str, message: str) -> str | None:
+    """Keep the tree's current work under *ref* (``refs/buildme/wip/...``)
+    before a discard: commit whatever is uncommitted (``commit_tree``, so
+    bookkeeping stays out) and point a new ref at HEAD. Returns the ref
+    written, or None when no ref could be written (logged; never raises).
+
+    An existing ref is never moved: a step that stops twice would otherwise
+    leave its first attempt's commit reachable from nothing. A later attempt
+    goes under ``<ref>-2``, ``<ref>-3``, and so on; a ref that already names
+    HEAD is returned as it is. The commit stays on the branch until the
+    caller's ``discard_to`` moves the branch back; the ref keeps it reachable
+    after that. When the WIP commit fails and the tree still holds
+    uncommitted work, no ref is written and None is returned, so the caller
+    never discards edits the ref does not hold."""
+    if not ref.startswith("refs/buildme/wip/") or not _run(
+            ["git", "check-ref-format", ref], cwd=repo).ok:
+        log.warning("Refusing to write wip ref %r", ref)
+        return None
+    # commit_tree returns None both for "nothing to commit" and for "the
+    # commit failed" (a hook rejected it, signing failed). Only the first
+    # leaves HEAD holding the work; after the second, a ref at HEAD would keep
+    # nothing and the caller's discard would destroy the edits.
+    if commit_tree(repo, message, f"wip {ref}") is None and not tree_is_clean(repo):
+        log.warning("Refusing to write wip ref %r: the WIP commit failed and the tree "
+                    "still holds uncommitted work", ref)
+        return None
+    head = rev_parse_head(repo)
+    if not head:
+        return None
+    for attempt in range(1, 1000):
+        name = ref if attempt == 1 else f"{ref}-{attempt}"
+        held = _run(["git", "rev-parse", "--verify", "-q", name], cwd=repo)
+        if held.ok:
+            if held.stdout.strip() == head:
+                log.info("WIP %s already names sha=%s", name, head[:8])
+                return name
+            continue
+        # An empty old value makes update-ref create the ref only if it
+        # does not exist, so a ref written meanwhile is never moved.
+        res = _run(["git", "update-ref", name, head, ""], cwd=repo)
+        if res.ok:
+            log.info("WIP %s sha=%s", name, head[:8])
+            return name
+        log.warning("Failed to write %s: %s", name, res.stderr.strip())
+        return None
+    log.warning("Refusing to write wip ref %r: every attempt name is taken", ref)
+    return None
+
+
 def rev_parse_head(repo: Path | str) -> str | None:
     """*repo*'s HEAD SHA, or None (not a repo / no commits)."""
     res = _run(["git", "rev-parse", "HEAD"], cwd=repo)
     if not res.ok:
         log.warning("git rev-parse HEAD failed: %s", res.stderr.strip())
+        return None
+    return res.stdout.strip() or None
+
+
+def merge_base(repo: Path | str, a: str, b: str) -> str | None:
+    """The best common ancestor of *a* and *b*, or None (no common history,
+    an unknown ref, or git could not be asked)."""
+    res = _run(["git", "merge-base", a, b], cwd=repo)
+    if not res.ok:
         return None
     return res.stdout.strip() or None
 
@@ -461,18 +581,56 @@ def is_ancestor_of_head(repo: Path | str, sha: str) -> bool:
     return res.returncode == 0
 
 
-def tree_is_clean(repo: Path | str) -> bool:
+def tree_is_clean(repo: Path | str, ignore: Path | str | None = None) -> bool:
     """True when *repo* holds nothing but buildme's own bookkeeping.
 
     Used only to decide whether HEAD is a faithful snapshot to discard back
     to. Returns False when git could not be asked — "unknown" must never be
     read as "safe to reset", because a reset over uncommitted work destroys it.
+    *ignore*, a directory relative to *repo*, is left out of the check too.
     """
-    res = _run(["git", "status", "--porcelain", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
+    excludes = list(BOOKKEEPING_EXCLUDES)
+    if ignore is not None:
+        excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
+    res = _run(["git", "status", "--porcelain", "--", ".", *excludes], cwd=repo)
     if not res.ok:
         log.warning("git status failed: %s", res.stderr.strip())
         return False
     return not res.stdout.strip()
+
+
+def dirty_files(repo: Path | str, ignore: Path | str | None = None) -> dict[str, str] | None:
+    """Every path under *repo* whose content differs from HEAD (an edit, a
+    deletion, a new file git does not ignore), relative to *repo*, mapped to
+    a fingerprint of its content now: so two calls give equal maps only when
+    the same paths hold the same content. Buildme's bookkeeping and *ignore*
+    (a directory relative to *repo*) are left out, as in `tree_is_clean`.
+    None when git could not be asked."""
+    excludes = list(BOOKKEEPING_EXCLUDES)
+    if ignore is not None:
+        excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
+    changed = _run(["git", "diff", "HEAD", "--name-only", "-z", "--relative", "--no-renames",
+                    "--", ".", *excludes], cwd=repo)
+    untracked = _run(["git", "ls-files", "--others", "--exclude-standard", "-z",
+                      "--", ".", *excludes], cwd=repo)
+    if not (changed.ok and untracked.ok):
+        log.warning("git could not list the changed files: %s",
+                    (changed.stderr or untracked.stderr).strip())
+        return None
+    out: dict[str, str] = {}
+    for rel in filter(None, (changed.stdout + untracked.stdout).split("\0")):
+        path = Path(repo) / rel
+        try:
+            if path.is_symlink():
+                out[rel] = "link:" + os.readlink(path)
+            elif path.is_file():
+                out[rel] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+            else:
+                out[rel] = "other" if path.exists() else "deleted"
+        except OSError as e:
+            log.warning("Could not read %s: %s", path, e)
+            return None
+    return out
 
 
 def discard_to(repo: Path | str, sha: str, label: str = "") -> bool:

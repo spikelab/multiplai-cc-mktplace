@@ -81,8 +81,9 @@ keeps the default.
 | `architecture` | repo-relative path | `""` | stored only, for now |
 | `pr.template` | `auto` or a path | `auto` | stored only, for the PR stage |
 | `pr.max_change_lines` | int | `1000` | stored only, for the PR stage |
-| `findings.authors` | `collaborators` or a list of GitHub logins | `collaborators` | stored only, for the findings stage |
-| `findings.max_rounds` | int | `3` | stored only, for the findings stage |
+| `findings.authors` | `collaborators` or a list of GitHub logins | `collaborators` | `/multiplai-dev:buildme-findings`: whose PR comments are acted on. `collaborators` means anyone whose `role_name` on the repo is `admin`, `maintain` or `write` |
+| `findings.max_rounds` | int | `3` | `/multiplai-dev:buildme-findings`: fix-and-re-review rounds before it stops |
+| `findings.allow_bots` | list of bot logins | `[]` | `/multiplai-dev:buildme-findings`: bots whose comments are acted on; any other bot's are listed and skipped |
 | `mutation.enabled` / `mutation.min_score` | bool / float | `true` / `0.8` | the mutation-testing step; `timeout` and `max_mutants` too (see [Mutation testing](#mutation-testing)) |
 | `models.<key>` | a step, a stage (`spec`, `agent`, `review`) or `default`, set to a model spec | `{}` | every model call; see [Tuning model and effort](#tuning-model-and-effort-multiplaiconf) |
 | `tier` | `advanced` \| `standard` | unset | the tier, only when `models.default` is not a Claude model |
@@ -356,9 +357,9 @@ the test-quality audit.
 
 | Stage | Steps |
 |---|---|
-| `spec` | `spec_artifact` (every spec artifact, use-cases included), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `interview`, `research` |
+| `spec` | `spec_artifact` (every spec artifact, use-cases included), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `interview`, `research`, `findings_spec` (the findings stage's spec delta) |
 | `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `prototype` |
-| `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt) |
+| `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt), `findings_triage` (the findings stage's one read-only agent per PR comment) |
 
 The tier (advanced or standard) comes from the default model: Fable, or Opus
 4.5 and later, is advanced. A Pi model's version says nothing about the tier,

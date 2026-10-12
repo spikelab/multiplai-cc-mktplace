@@ -90,7 +90,7 @@ def _mark_block(
 def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -> str | None:
     """Commit the block phase's changes in the project repo.
 
-    phase: "test", "impl" or "refactor" (used for the conventional-commit
+    phase: "test", "impl", "refactor" or "fix" (used for the conventional-commit
     prefix). Returns the new commit's SHA, or None if there was nothing to
     commit or the commit failed (logged as a warning — never raises).
     """
@@ -715,6 +715,7 @@ async def _enforce_test_quality(
     except Exception as e:
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_AUDIT error=%s",
                   block.number, block.name, e)
+        block.resumable = True
         progress.log_agent("TestQualityAuditor", block.name, f"ERROR: {e}")
         _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
@@ -746,6 +747,7 @@ async def _enforce_test_quality(
     )
     if not retry.success:
         block.timed_out = retry.timed_out
+        block.resumable = True
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_RETRY error=%s",
                   block.number, block.name, retry.error)
         progress.log_agent("TestWriter", block.name, "TIMEOUT" if retry.timed_out else "FAILED")
@@ -765,6 +767,7 @@ async def _enforce_test_quality(
     except Exception as e:
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_REAUDIT error=%s",
                   block.number, block.name, e)
+        block.resumable = True
         progress.log_agent("TestQualityAuditor", block.name, f"ERROR: {e}")
         _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
@@ -850,6 +853,7 @@ async def _enforce_red_gate(
             )
             if not retry.success:
                 block.timed_out = retry.timed_out
+                block.resumable = True
                 log.error("FAIL block=%d name=%s phase=RED_GATE_RETRY error=%s",
                           block.number, block.name, retry.error)
                 progress.log_agent("TestWriter", block.name, "TIMEOUT" if retry.timed_out else "FAILED")
@@ -966,6 +970,10 @@ async def run_block_tdd(
     block_idx = state.tdd.current_block if state.tdd else 0
     total = len(state.tdd.blocks) if state.tdd else 0
     cwd = str(config.project_dir)
+    # Why the last attempt stopped says nothing about this one: a block that
+    # timed out and now fails its RED gate is a build failure, not a timeout.
+    block.timed_out = False
+    block.resumable = False
 
     # Record the pre-block diff baseline (stamped once at block START —
     # survives resume via state). The quality review diffs the working tree
@@ -1029,6 +1037,7 @@ async def run_block_tdd(
         # rather than raising — propagate that so the orchestrator returns
         # EXIT_AGENT_TIMEOUT instead of a generic build failure.
         block.timed_out = test_result.timed_out
+        block.resumable = True
         reason = "timeout" if test_result.timed_out else "error"
         log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=%s error=%s",
                   block.number, block.name, reason, test_result.error)
@@ -1098,6 +1107,7 @@ async def run_block_tdd(
 
     if not impl_result.success:
         block.timed_out = impl_result.timed_out
+        block.resumable = True
         reason = "timeout" if impl_result.timed_out else "error"
         log.error("FAIL block=%d name=%s phase=IMPLEMENT reason=%s error=%s",
                   block.number, block.name, reason, impl_result.error)
@@ -1347,6 +1357,7 @@ async def _run_integration_and_review(
         # Circuit breaker: scoped fixes first, then one architecture-questioning
         # escalation, then FAILED with a diagnosis — never an endless fix loop.
         last_fix_output = ""
+        fix_completed = False
         for attempt in range(MAX_INTEGRATION_FIX_ATTEMPTS):
             escalated = attempt == MAX_INTEGRATION_FIX_ATTEMPTS - 1
             fix_model = config.model_for(
@@ -1368,6 +1379,7 @@ async def _run_integration_and_review(
             )
             # A timed-out or failed fix leaves success=False; retry until attempts run out.
             if fix_result.success:
+                fix_completed = True
                 last_fix_output = fix_result.output
                 gate = integration_gate(config.test_command, config.project_dir)
                 if gate.passed:
@@ -1383,6 +1395,8 @@ async def _run_integration_and_review(
                 f"Last fix agent report:\n{last_fix_output or '(no fix agent completed)'}"
             )
             progress.log_diagnosis(block.name, diagnosis)
+            # No fix agent completed: the failure was never worked on.
+            block.resumable = not fix_completed
             _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
 
@@ -1404,6 +1418,7 @@ async def _run_integration_and_review(
     progress.log_block(block.number, total, block.name, "REVIEWING")
 
     review_passed = False
+    fixes_run = fixes_completed = 0
     for iteration in range(MAX_REVIEW_ITERATIONS):
         iter_gate = review_iteration_gate(iteration, MAX_REVIEW_ITERATIONS)
         if not iter_gate.passed:
@@ -1419,6 +1434,7 @@ async def _run_integration_and_review(
             log.error("FAIL block=%d name=%s phase=REVIEW reason=budget_exhausted",
                       block.number, block.name)
             progress.log_diagnosis(block.name, f"{e}\n{e.diagnosis}")
+            block.resumable = True
             state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
             return False
 
@@ -1432,6 +1448,7 @@ async def _run_integration_and_review(
                 block.number, block.name, iteration + 1, e,
             )
             progress.log_review(block.name, iteration + 1, 0.0, False)
+            block.resumable = True
             _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
 
@@ -1472,6 +1489,8 @@ async def _run_integration_and_review(
             effort=config.agent_effort,
             cwd=str(config.project_dir),
         )
+        fixes_run += 1
+        fixes_completed += bool(fix.success)
         if not fix.success and fix.timed_out:
             log.warning("Fix agent timed out during review iteration %d", iteration + 1)
         if fix.output:
@@ -1507,9 +1526,15 @@ async def _run_integration_and_review(
                       "after %d iterations", block.number, block.name, MAX_REVIEW_ITERATIONS)
             progress.log_block(block.number, total, block.name, "FAILED — review exhausted")
             print(f"BLOCK:{block.number}/{total}:{block.name}:REVIEW_EXHAUSTED")
+            # Every review fix errored: the findings were never worked on.
+            block.resumable = fixes_run > 0 and fixes_completed == 0
             _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
 
+    # The review-fix agents' edits are part of this block. Committed here, a
+    # later block's discard back to its own start commit cannot drop them,
+    # and its first commit does not carry them.
+    _git_commit_block_phase(config, "fix", block)
     _mark_block(state, block_idx, BlockStatus.DONE, config)
     log.info("DONE block=%d/%d name=%s", block.number, total, block.name)
     progress.log_block(block.number, total, block.name, "COMPLETE")

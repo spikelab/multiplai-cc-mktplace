@@ -15,6 +15,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from . import budget
+from .findings.models import PRComment, SpecChange, Triage
 from .models import BlockInfo, BlockStatus, BuildPhase
 
 log = logging.getLogger(__name__)
@@ -91,6 +92,76 @@ class TDDState(BaseModel):
     e2e_done: bool = False
 
 
+FINDINGS_STEPS = ("fetch", "triage", "spec", "code", "publish", "review")
+
+
+class StepStop(BaseModel):
+    """What the tree held when a findings step last stopped: HEAD, and every
+    uncommitted path outside the change directory with a fingerprint of its
+    content (`git_ops.dirty_files`). A resume keeps and discards only this."""
+
+    head: str | None = None
+    edits: dict[str, str] = Field(default_factory=dict)
+
+
+class FindingsRound(BaseModel):
+    """One round of `python -m build_pipeline findings`. Each step in
+    `FINDINGS_STEPS` is added to `started` before it runs and to `finished`
+    after, so a resume restarts at the first unfinished step."""
+
+    number: int
+    since: str | None = None                   # top-level comments after this are new
+    fetched_at: str | None = None              # when this round's fetch started: the next round's `since`
+    started: list[str] = Field(default_factory=list)
+    finished: list[str] = Field(default_factory=list)
+    step_heads: dict[str, str] = Field(default_factory=dict)  # step → HEAD when it started
+    comments: list[PRComment] = Field(default_factory=list)   # new this round, as fetched
+    triaged: dict[int, Triage] = Field(default_factory=dict)  # comment id → verdict
+    delta_path: str | None = None
+    spec_changes: list[SpecChange] = Field(default_factory=list)
+    spec_commit: str | None = None
+    tasks_path: str | None = None
+    engine_state_path: str | None = None
+    blocks: dict[int, str] = Field(default_factory=dict)      # block number → row key
+    fixes: dict[str, dict[str, str]] = Field(default_factory=dict)  # row key → commits
+    # Why the TDD engine stopped after its block loop (a whole-change step
+    # after the blocks failed); the fixes are still published. None in
+    # checkpoints written before the field existed.
+    code_check_failed: str | None = None
+    pushed_head: str | None = None
+    body_updated: bool = False
+    replies_sent: list[str] = Field(default_factory=list)     # reply keys, in order sent
+    review_run_dir: str | None = None
+    review_waiting: bool = False               # told the human to accept and post
+    review_finished_at: str | None = None
+    # step → what the tree held when that step last stopped. Removed when
+    # the step starts again, so a step killed before it could record its
+    # stop has none. Empty in checkpoints written before the field existed.
+    stops: dict[str, StepStop] = Field(default_factory=dict)
+
+    @property
+    def seen_ids(self) -> set[int]:
+        return {c.id for c in self.comments}
+
+
+class FindingsState(BaseModel):
+    """The findings rounds on one PR. Saved on its own, as a `BuildState`
+    with only this field set, in `<change>/.findings-state.json`: the build's
+    `.build-state.json` is never recreated."""
+
+    pr: int
+    repo: str
+    branch: str
+    change_dir: str
+    rounds: list[FindingsRound] = Field(default_factory=list)
+
+    def seen_ids(self) -> set[int]:
+        out: set[int] = set()
+        for r in self.rounds:
+            out |= r.seen_ids
+        return out
+
+
 class BuildState(BaseModel):
     """Root state for the entire build pipeline."""
 
@@ -145,6 +216,10 @@ class BuildState(BaseModel):
     # Sub-pipeline state
     spec_gen: SpecGenState | None = None
     tdd: TDDState | None = None
+    # Review-comment rounds after the build (`python -m build_pipeline
+    # findings`). Not a BuildPhase: they track their own steps. None in every
+    # build checkpoint, including those written before the field existed.
+    findings: FindingsState | None = None
 
     # Cumulative spend, snapshotted on every checkpoint. A resumed build
     # restores it (see run_tdd_engine) — otherwise resume would hand a runaway
@@ -156,8 +231,12 @@ class BuildState(BaseModel):
     started_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
-    def checkpoint(self, path: Path | None = None) -> None:
+    def checkpoint(self, path: Path | None = None, *, keep_budget: bool = False) -> None:
         """Serialize state to disk, atomically.
+
+        The `budget` field is replaced with this process's spend, unless
+        *keep_budget*: a caller that edits a checkpoint it loaded, outside the
+        run that owns it, passes it so the spend the file holds survives.
 
         The checkpoint is the build's only crash-recovery record, and it is
         rewritten after every block phase — so a truncated write is a real
@@ -172,7 +251,8 @@ class BuildState(BaseModel):
         target = path or Path(self.state_file)
         if not target.name:
             return
-        self.budget = budget.get_budget().to_state()
+        if not keep_budget:
+            self.budget = budget.get_budget().to_state()
         self.updated_at = datetime.now(timezone.utc).isoformat()
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(

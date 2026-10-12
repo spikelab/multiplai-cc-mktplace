@@ -4,12 +4,14 @@ Subcommands for dev/debug use (only /buildme is user-facing):
   build         — Full orchestrator (mode detect → interview → research → specs → build)
   spec-generate — Artifact generation pipeline
   tdd           — TDD implementation engine
+  findings      — Fix a PR's review comments, reply on the PR, re-review (rounds)
   archive       — Archive a completed change (merge delta specs → main registry)
   setup         — Write or merge specs/config.yaml (the wrapper asks the questions)
   config-get    — Print one resolved specs/config.yaml value (e.g. intake.provider)
 
 Exit codes: 0 done, 1 failure, 2 usage, 3 waiting on a human or the wrapper
-(stdout says which: INTERVIEW:WAITING, RESEARCH:NEEDED or SPLIT:REQUIRED).
+(stdout says which: INTERVIEW:WAITING, RESEARCH:NEEDED, SPLIT:REQUIRED or
+FINDINGS:REVIEW_READY), 4 an agent timed out.
 """
 
 from __future__ import annotations
@@ -160,6 +162,18 @@ def build_parser() -> argparse.ArgumentParser:
     _add_trust_repo_flag(tdd)
     _add_lenient_review_flag(tdd)
 
+    # --- findings ---
+    findings = sub.add_parser(
+        "findings",
+        help="Fix a PR's review comments through the spec and TDD process, reply, re-review")
+    findings.add_argument("--pr", type=int, required=True, help="The PR number")
+    findings.add_argument("--change", default="",
+                          help="Change name (default: from the PR's buildme/<name> branch)")
+    findings.add_argument("--project-dir", default=".", help="Project directory")
+    findings.add_argument("--auto", action="store_true",
+                          help="Unattended: post each re-review's findings without the viewer")
+    _add_trust_repo_flag(findings)
+
     # --- archive ---
     archive = sub.add_parser("archive", help="Archive a completed change")
     archive.add_argument("--change", required=True, help="Change name")
@@ -250,6 +264,10 @@ def main(argv: list[str] | None = None) -> int:
         from .tdd_engine import run_tdd_engine
         config = BuildConfig.from_cli_args(args)
         return asyncio.run(run_tdd_engine(config, args))
+
+    elif args.command == "findings":
+        from .findings.cli import run_cli
+        return run_cli(args)
 
     elif args.command == "archive":
         from .change_manager import ChangeManager

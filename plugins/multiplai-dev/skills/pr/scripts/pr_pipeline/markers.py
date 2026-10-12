@@ -20,6 +20,9 @@ import re
 from dataclasses import dataclass, field
 
 MANAGED = "<!-- pr:managed v1 -->"
+# Ends the comment `edit` posts on a body it did not manage before, so a tool
+# reading the PR's comments (buildme-findings) can tell it is not a review.
+NOTICE = "<!-- multiplai-pr:notice v=1 -->"
 WRITTEN = "written"
 _TOKEN_RE = re.compile(r"<!-- pr:(begin|end) ([A-Za-z0-9:_.-]+) -->")
 _ANY_PR_TOKEN_RE = re.compile(r"<!--\s*pr:")

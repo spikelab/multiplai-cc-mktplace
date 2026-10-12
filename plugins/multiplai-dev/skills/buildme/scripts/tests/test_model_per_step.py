@@ -58,6 +58,7 @@ TODAY.update({
     "review": lambda c: c.review_model or c.model,
     "plan_review": lambda c: c.plan_review_model or c.review_model,
     "integration_fix_escalated": lambda c: c.review_model or c.model,
+    "findings_triage": lambda c: c.review_model or c.model,
 })
 
 
@@ -229,6 +230,10 @@ class TestTier:
 # step(s) that source names). Sites whose model is a parameter or a local
 # name the step that fills it.
 CALL_SITES = {
+    ("findings/spec.py", "write_delta", "call"):
+        ("config.model_for('findings_spec')", ("findings_spec",)),
+    ("findings/triage.py", "triage_comment", "call"):
+        ("config.model_for('findings_triage')", ("findings_triage",)),
     ("llm_steps/docs_steps.py", "run_docs_update", "agent_call"):
         ("config.model_for('docs_update')", ("docs_update",)),
     ("llm_steps/interview_steps.py", "ask_questions", "call"):

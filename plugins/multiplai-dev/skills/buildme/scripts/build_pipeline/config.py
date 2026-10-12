@@ -444,6 +444,7 @@ STEP_STAGES: dict[str, str] = {
     "respec": "spec",
     "interview": "spec",
     "research": "spec",
+    "findings_spec": "spec",
     "test_writer": "agent",
     "implementer": "agent",
     "refactor": "agent",
@@ -458,6 +459,7 @@ STEP_STAGES: dict[str, str] = {
     "test_quality_audit": "review",
     "plan_review": "review",
     "integration_fix_escalated": "review",
+    "findings_triage": "review",
 }
 
 # The keys `models:` accepts: a step, a stage, or `default`.
@@ -520,10 +522,17 @@ class PrSettings:
 
 @dataclass
 class FindingsSettings:
-    """`findings:` block. Stored for the findings stage; not read yet."""
+    """`findings:` block, read by `python -m build_pipeline findings`.
+
+    `authors`: `collaborators` (anyone whose `role_name` on the repo is
+    `admin`, `maintain` or `write`) or a list of GitHub logins whose PR
+    comments are acted on. `max_rounds`: fix rounds before the loop stops.
+    `allow_bots`: bot logins whose comments are acted on; any other bot's are
+    listed and skipped."""
 
     authors: str | list[str] = "collaborators"
     max_rounds: int = 3
+    allow_bots: list[str] = field(default_factory=list)
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -727,6 +736,16 @@ class BuildConfig:
     # Paths (resolved after config load)
     config_dir: Path = field(default_factory=lambda: Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser())
     specs_dir: Path = field(default_factory=lambda: Path.cwd() / "specs")
+
+    # Overrides the findings stage (`python -m build_pipeline findings`) sets
+    # so the TDD engine runs a round's own task file against its own state
+    # file, in a change that `--auto` may already have archived. The defaults
+    # are today's paths. `tasks_file` and `state_file` are file names inside
+    # `change_dir`; the `change_dir` setter stores its target relative to
+    # `specs_dir`, so `rebind_project_dir` carries it into the worktree.
+    tasks_file: str = "tasks.md"
+    state_file: str = ".build-state.json"
+    _change_dir_override: str = field(default="", repr=False)
 
     # Model for LLM calls
     model: str = DEFAULT_MODEL
@@ -1107,9 +1126,18 @@ class BuildConfig:
             log.warning("Invalid findings.authors value %r in config.yaml — using "
                         "'collaborators'", authors)
             authors = "collaborators"
+        allow_bots = findings_cfg.get("allow_bots", [])
+        if allow_bots is None:
+            allow_bots = []
+        if not (isinstance(allow_bots, list)
+                and all(isinstance(b, str) and b.strip() for b in allow_bots)):
+            log.warning("Invalid findings.allow_bots value %r in config.yaml — using []",
+                        allow_bots)
+            allow_bots = []
         self.findings = FindingsSettings(
             authors=authors,
             max_rounds=_cfg_int(findings_cfg.get("max_rounds", 3), "findings.max_rounds", 3),
+            allow_bots=[b.strip() for b in allow_bots],
         )
 
         specs: dict[str, str] = {}
@@ -1234,11 +1262,40 @@ class BuildConfig:
 
     @property
     def change_dir(self) -> Path:
+        if self._change_dir_override:
+            return self.specs_dir / self._change_dir_override
         # Normalize the change name so a hostile/careless --change value
         # (e.g. '../../foo') can't escape specs/changes/ — archive() will
         # shutil.move this directory, so an out-of-tree path is dangerous.
         from .change_manager import normalize_change_name
         return self.specs_dir / "changes" / normalize_change_name(self.change_name)
+
+    @change_dir.setter
+    def change_dir(self, value: Path | str | None) -> None:
+        """Point `change_dir` at another change directory; None or "" restores
+        the default. The target must be one directory directly under
+        `specs/changes/` or `specs/archive/` (ValueError otherwise), the same
+        bound the default path keeps through `normalize_change_name`."""
+        if value is None or str(value) == "":
+            self._change_dir_override = ""
+            return
+        specs = Path(self.specs_dir).resolve()
+        target = (Path(self.specs_dir) / value).resolve()
+        try:
+            rel = target.relative_to(specs)
+        except ValueError:
+            raise ValueError(f"change_dir {value} is not inside {self.specs_dir}") from None
+        if len(rel.parts) != 2 or rel.parts[0] not in ("changes", "archive") \
+                or rel.parts[1].startswith("."):
+            raise ValueError(
+                f"change_dir {value} must be a directory directly under "
+                f"{self.specs_dir / 'changes'} or {self.specs_dir / 'archive'}")
+        self._change_dir_override = rel.as_posix()
+
+    def _file_in_change_dir(self, name: str, what: str) -> Path:
+        if not name or name in (".", "..") or "/" in name or "\\" in name:
+            raise ValueError(f"{what} must be a file name inside the change directory, got {name!r}")
+        return self.change_dir / name
 
     @property
     def research_path(self) -> Path:
@@ -1250,7 +1307,7 @@ class BuildConfig:
 
     @property
     def tasks_path(self) -> Path:
-        return self.change_dir / "tasks.md"
+        return self._file_in_change_dir(self.tasks_file, "tasks_file")
 
     @property
     def rubric_path(self) -> Path:
@@ -1277,7 +1334,7 @@ class BuildConfig:
         return self.change_dir / "prototype"
 
     def state_file_path(self) -> Path:
-        return self.change_dir / ".build-state.json"
+        return self._file_in_change_dir(self.state_file, "state_file")
 
     def progress_file_path(self) -> Path:
         return self.project_dir / "build-progress.md"
