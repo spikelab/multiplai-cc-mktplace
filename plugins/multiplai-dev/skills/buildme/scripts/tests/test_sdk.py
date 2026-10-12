@@ -208,9 +208,7 @@ class TestExplainerPath:
         class Config:
             model = None
             project_description = "test project"
-
-            def model_for(self, step):
-                return None
+            model_for = staticmethod(lambda step: None)
 
         return Dep(), Config()
 
