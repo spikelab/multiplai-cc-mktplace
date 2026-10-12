@@ -6,7 +6,7 @@ Subcommands (see --help for all):
   correct <cache> <fixes.json>  Fix misheard words before they become captions.
   proof <mp4> --edl E --out P   One PNG of the reel, moment by moment, to check before reporting.
   lint-overlay <page.html>      Check an overlay page for what breaks a seeked render.
-  sfx-suggest <edl.json>        A click on each follow target and a pop on each overlay, as an `sfx` list.
+  sfx-suggest <edl.json>        A sound on each follow target and each overlay start, as an `sfx` list.
   capture <url> --highlight T   Screenshot a real web page and record where a line of it is.
   proof-card <shot-dir>         An alpha overlay page showing that screenshot, moving to the line.
   shots <cache> --from --to     The shots in a range, 3 frames each, for framing a broadcast feed.
@@ -81,7 +81,12 @@ def cmd_sfx_suggest(args: argparse.Namespace) -> int:
     to stdout as JSON, and what was skipped or dropped goes to stderr."""
     import json
     from stages import sfx
-    kept, notes = sfx.suggest(EDL.load(args.edl), clicks=args.clicks, overlays=args.overlays)
+    try:
+        clicks, overlays = str(sfx.resolve(args.clicks)), str(sfx.resolve(args.overlays))
+    except FileNotFoundError as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 2
+    kept, notes = sfx.suggest(EDL.load(args.edl), clicks=clicks, overlays=overlays)
     print(json.dumps(kept, indent=1))
     for n in notes:
         print(f"⚠ {n}", file=sys.stderr)
@@ -451,8 +456,8 @@ def main() -> int:
 
     sx = sub.add_parser("sfx-suggest", help="print an sfx list: a sound on each follow target and each overlay start")
     sx.add_argument("edl", help="path to EDL JSON")
-    sx.add_argument("--clicks", default="click", help="sound for follow targets (default click)")
-    sx.add_argument("--overlays", default="pop", help="sound for overlay starts (default pop)")
+    sx.add_argument("--clicks", required=True, help="audio file for follow targets (a click)")
+    sx.add_argument("--overlays", required=True, help="audio file for overlay starts (a pop)")
     sx.set_defaults(func=cmd_sfx_suggest)
 
     cp = sub.add_parser("capture", help="screenshot a real web page and record where a line of it is (uses the network)")

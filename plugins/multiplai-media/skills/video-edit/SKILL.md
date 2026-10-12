@@ -274,7 +274,7 @@ See `examples/demo-narrated.edl.json`. Top-level keys:
 - `transitions` — `[{after, kind, duration}]` (currently only `fade`). Undeclared joins crossfade 0.5 s, except a segment that starts where the previous one ended in the source: that join is a hard cut with unbroken audio. `duration: 0` asks for a hard cut anywhere.
 - `logo` — `{path, position: br|bl|tr|tl, scale, start_at}`
 - `music` — `{file}` OR `{prompt}` (prompt is documented but generation is not available in CPU-only Linux containers — pass `file` or `url`)
-- `sfx` — `[{at, sound, volume_db}]` — short sound effects in output time: `sound` is a preset (`click`, `pop`, `tick`, `whoosh`, `chime`; CC0 files in `assets/sfx/`) or a path to an audio file; `volume_db` defaults to -14. At least 0.5 s apart; mixed in after the music, so they never duck it. `pipeline.py sfx-suggest <edl>` prints a first list (`references/screencast.md` → Sound effects)
+- `sfx` — `[{at, sound, volume_db}]` — short sound effects in output time: `sound` is a path to an audio file the user supplies (no sounds ship with the skill); `volume_db` defaults to -14. At least 0.5 s apart; mixed in after the music, so they never duck it. `pipeline.py sfx-suggest <edl> --clicks <file> --overlays <file>` prints a first list (`references/screencast.md` → Sound effects)
 - `output` — `{width, height, fps, crf, fit, audio_rate}` (defaults 1920×1080, 30 fps, CRF 18, fit `pad`)
   - `fit` — how a segment without a `frame` fills the output: `pad` (letterbox), `blur` (over a blurred copy), `crop` (fill, around the segment's `focus`)
   - `audio_rate` — resample the final audio (reels: `48000`)
@@ -309,7 +309,6 @@ Keys for reels (see `references/reels.md`):
 | Transcription (macOS host, multilingual) | mlx_whisper + whisper-large-v3 / whisper-medium | MIT |
 | Captions | libass (ffmpeg `subtitles` filter) | ISC |
 | Music fetching, reference videos (URL path) | yt-dlp | Unlicense |
-| Sound effects (bundled, `assets/sfx/`) | Kenney.nl UI Audio and Interface Sounds | CC0 |
 | Motion graphics frames, proof-shot screenshots | Playwright + headless Chromium | Apache-2.0 / BSD-3 |
 | Pointer and click detection | OpenCV (opencv-python-headless) | Apache-2.0 / MIT |
 | Music generation (optional, Mac/GPU only) | ACE-Step / ACE-Step-1.5 | Apache-2.0 / MIT |

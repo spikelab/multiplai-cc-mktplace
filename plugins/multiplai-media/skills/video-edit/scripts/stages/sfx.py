@@ -1,9 +1,8 @@
 """Short sound effects on clicks and graphic entrances.
 
-The presets are five CC0 files from Kenney.nl, shipped in assets/sfx/ (their
-licence and origin are in assets/sfx/LICENSE.txt). An EDL names a preset or
-a path to the user's own audio file; composite.render() mixes them in after
-the music, so they never duck it.
+No sounds ship with the skill: an EDL names each sound by the path to an
+audio file the user supplies. composite.render() mixes them in after the
+music, so they never duck it.
 
 suggest() proposes a list for an EDL: a click at each follow target and a pop
 at each overlay's start, in output time, without two sounds closer than
@@ -16,31 +15,19 @@ from pathlib import Path
 from stages import timeline
 from stages.edl import EDL, SFX_MIN_GAP_S
 
-SFX_DIR = Path(__file__).resolve().parents[2] / "assets" / "sfx"
-
-PRESETS: dict[str, str] = {
-    "click": "click.ogg",       # a mouse click, 0.06 s
-    "pop": "pop.ogg",           # a soft pluck for a graphic appearing, 0.10 s
-    "tick": "tick.ogg",         # a very short tick, 0.02 s
-    "whoosh": "whoosh.ogg",     # a rising sweep for a bigger entrance, 0.38 s
-    "chime": "chime.ogg",       # a two-note confirmation, 0.29 s
-}
-
 
 def resolve(sound: str) -> Path:
-    """The audio file for a preset name, or for a path to the user's own file."""
-    if sound in PRESETS:
-        return SFX_DIR / PRESETS[sound]
+    """The audio file a sound names: a path to the user's own file."""
     p = Path(sound).expanduser()
     if p.is_file():
         return p.resolve()
-    if p.suffix or "/" in sound:
-        raise FileNotFoundError(f"sound file not found: {p}")
-    raise ValueError(f"unknown sound {sound!r}; use one of {', '.join(PRESETS)} or a path to an audio file.")
+    raise FileNotFoundError(f"sound file not found: {p} (a sound is a path to an audio file)")
 
 
-def suggest(edl: EDL, clicks: str = "click", overlays: str = "pop") -> tuple[list[dict], list[str]]:
+def suggest(edl: EDL, clicks: str, overlays: str) -> tuple[list[dict], list[str]]:
     """Sounds for each follow target and each overlay's start, in output time.
+
+    `clicks` and `overlays` are the audio files to use for each.
 
     A target in a cut or a muted (sped-up past 4x) part has no output time
     and is skipped. A sound within SFX_MIN_GAP_S of the one kept before it

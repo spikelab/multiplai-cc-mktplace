@@ -190,8 +190,8 @@ SFX_BUSY_EVERY_S = 3.0         # warn when sounds come more often than this on a
 class Sfx:
     """A short sound effect (stages/sfx.py) played from output time `at`."""
     at: float                   # output seconds
-    sound: str                  # a preset name (click, pop, tick, whoosh, chime) or an audio file
-    volume_db: float = -14.0    # gain on the file, which peaks near 0 dBFS
+    sound: str                  # path to an audio file
+    volume_db: float = -14.0    # gain on the file
 
 
 @dataclass
@@ -369,8 +369,7 @@ class EDL:
                                      "move one, shorten one, or give them separate regions.")
 
     def _validate_sfx(self) -> list[str]:
-        """Each sound starts inside the video, names a preset or a file that
-        exists, and is at least SFX_MIN_GAP_S after the one before. Warns
+        """Each sound starts inside the video, names a file that exists, and is at least SFX_MIN_GAP_S after the one before. Warns
         when sounds come more often than once every SFX_BUSY_EVERY_S on
         average: a first version with sounds everywhere is the usual mistake."""
         if not self.sfx:
@@ -383,7 +382,7 @@ class EDL:
                                  f"(0–{total:.2f}s).")
             try:
                 sfx_mod.resolve(s.sound)
-            except (ValueError, FileNotFoundError) as e:
+            except FileNotFoundError as e:
                 raise ValueError(f"sfx {i}: {e}") from None
         times = sorted(s.at for s in self.sfx)
         for a, b in zip(times, times[1:]):
