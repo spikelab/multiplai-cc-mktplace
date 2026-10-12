@@ -115,6 +115,10 @@ class FindingsRound(BaseModel):
     engine_state_path: str | None = None
     blocks: dict[int, str] = Field(default_factory=dict)      # block number → row key
     fixes: dict[str, dict[str, str]] = Field(default_factory=dict)  # row key → commits
+    # Why the TDD engine stopped after its block loop (a whole-change step
+    # after the blocks failed); the fixes are still published. None in
+    # checkpoints written before the field existed.
+    code_check_failed: str | None = None
     pushed_head: str | None = None
     body_updated: bool = False
     replies_sent: list[str] = Field(default_factory=list)     # reply keys, in order sent
@@ -214,8 +218,12 @@ class BuildState(BaseModel):
     started_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
-    def checkpoint(self, path: Path | None = None) -> None:
+    def checkpoint(self, path: Path | None = None, *, keep_budget: bool = False) -> None:
         """Serialize state to disk, atomically.
+
+        The `budget` field is replaced with this process's spend, unless
+        *keep_budget*: a caller that edits a checkpoint it loaded, outside the
+        run that owns it, passes it so the spend the file holds survives.
 
         The checkpoint is the build's only crash-recovery record, and it is
         rewritten after every block phase — so a truncated write is a real
@@ -230,7 +238,8 @@ class BuildState(BaseModel):
         target = path or Path(self.state_file)
         if not target.name:
             return
-        self.budget = budget.get_budget().to_state()
+        if not keep_budget:
+            self.budget = budget.get_budget().to_state()
         self.updated_at = datetime.now(timezone.utc).isoformat()
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(

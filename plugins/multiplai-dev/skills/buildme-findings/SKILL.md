@@ -85,7 +85,8 @@ The loop stops when a round finds no new comment to act on, or after
 | `FINDINGS:REVIEW_READY:<dir>` (exit 3) | The re-review is done. Hand `<dir>/findings.json` to `/multiplai-dev:review-viewer`; after the user accepts findings, post them with `/multiplai-dev:review`'s `post` step on their yes, then run this command again to start the next round. |
 | `FINDINGS:DONE:<rounds>` | Nothing new to act on; the PR is ready for a human. |
 | `FINDINGS:MAX_ROUNDS:<n>` | The round cap was reached; say which comments are still open. |
-| `FINDINGS:FAILED:<step>:<reason>` (exit 1, or 4 for an agent timeout) | Quote the reason. Re-running the same command resumes at that step. A resumed code step first keeps the stopped attempt's edits under a wip ref, then runs that block again. |
+| `FINDINGS:FAILED:<step>:<reason>` (exit 1, or 4 for an agent timeout) | Quote the reason. Re-running the same command resumes at that step. A resumed code step first keeps the stopped attempt's edits under a wip ref, then runs that block again. When the reason says the test suite fails before any fix, the suite must pass before a re-run can get further. |
+| `FINDINGS:CODE_CHECK_FAILED:<reason>` | Every fix passed its block's gates and is committed, but a step the TDD engine runs after the fixes (the whole-change refactor's budget stop, or mutation testing) failed. The fixes are still pushed and answered, and each reply says what failed. |
 | `FINDINGS:WIP:<ref>` | A failed or stopped step's edits are kept under that git ref. |
 | `FINDINGS:BLOCK_FAILED:<k>:<finding>` | The TDD engine could not fix that finding; its reply says "not fixed" and names the wip ref. |
 | `FINDINGS_DIAGNOSIS:<reason>` | The PR description was not refreshed; the replies still went out. |
@@ -101,7 +102,8 @@ is never written. Re-running the command resumes at the first unfinished step:
 triage never re-asks a comment it already sorted, the TDD engine resumes its
 own blocks from `.findings-r<N>-state.json`, and no reply is posted twice. A
 step that failed part way keeps its edits under
-`refs/buildme/wip/<change>/r<N>-<step>` before the worktree is reset to where
+`refs/buildme/wip/<change>/r<N>-<step>` (`-2`, `-3`, ... for a later attempt,
+so no attempt's ref is overwritten) before the worktree is reset to where
 the step began, or to the newest commit pulled from origin since then.
 
 A re-run refuses (`FINDINGS:FAILED`) when the worktree has uncommitted changes

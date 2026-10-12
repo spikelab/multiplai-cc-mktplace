@@ -177,26 +177,60 @@ def stopped_block(state_path: Path) -> BlockInfo | None:
 def restart_block(state_path: Path, number: int) -> None:
     """Set block *number* in the round's engine checkpoint back to not
     started, after its work was discarded: the engine then stamps a new
-    start commit and keeps no commit that left the branch."""
+    start commit and keeps no commit that left the branch. The spend the
+    checkpoint holds is kept: this may run in a new process, whose budget
+    is empty, and the resumed engine restores its budget from it."""
     state = BuildState.load(state_path)
     for b in (state.tdd.blocks if state.tdd else []):
         if b.number == number:
             b.status = BlockStatus.PENDING
             b.baseline_commit = b.test_commit = b.impl_commit = b.refactor_commit = None
             b.timed_out = b.resumable = False
-    state.checkpoint(state_path)
+    state.checkpoint(state_path, keep_budget=True)
 
 
 def skip_block(state_path: Path, number: int) -> bool:
     """Move the round's engine checkpoint past failed block *number*, so the
     next engine run goes on with the blocks after it. False when the
-    checkpoint is not stopped on that block."""
+    checkpoint is not stopped on that block. Keeps the checkpoint's spend,
+    as `restart_block` does."""
     state = BuildState.load(state_path)
     tdd = state.tdd
     if not tdd or tdd.current_block >= len(tdd.blocks) or tdd.blocks[tdd.current_block].number != number:
         return False
-    state.advance_block(state_path)
+    tdd.current_block += 1
+    state.checkpoint(state_path, keep_budget=True)
     return True
+
+
+def stopped_after_blocks(state_path: Path) -> str | None:
+    """Why the engine stopped after its block loop, or None when it stopped
+    before or inside it (or there is no checkpoint). Past the loop, every
+    block is done or was failed, answered "not fixed" and skipped; what
+    stopped the engine is a whole-change step it runs after the blocks: a
+    refactor pass, which stops only on the budget, or mutation testing. Each
+    done block's fix has by then passed its own RED, test-hash and review
+    gates and is committed."""
+    if not state_path.exists():
+        return None
+    tdd = BuildState.load(state_path).tdd
+    if not tdd or not tdd.blocks or tdd.current_block < len(tdd.blocks):
+        return None
+    if not tdd.refactor_all_done:
+        return "the budget stopped the whole-change refactor"
+    if not tdd.mutation_done:
+        return ("mutation testing failed (a score below mutation.min_score, or cosmic-ray "
+                "could not score the changed lines; the progress log says which)")
+    return "a whole-change check failed"
+
+
+def baseline_red(state_path: Path) -> bool:
+    """True when the engine stopped at its baseline gate: the suite failed
+    before any block ran."""
+    if not state_path.exists():
+        return False
+    tdd = BuildState.load(state_path).tdd
+    return bool(tdd) and not tdd.baseline_tests_pass
 
 
 def commit_round_files(project_dir: Path, round_n: int, paths: list[Path]) -> str | None:

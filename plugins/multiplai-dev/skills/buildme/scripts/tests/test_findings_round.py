@@ -865,6 +865,126 @@ class TestCodeStepFailure:
         assert "# review fix" in (repo / "calc.py").read_text()
 
 
+class TestEngineCheckpointBudget:
+    """The round's engine checkpoint holds what the engine has spent, and a
+    resumed engine restores it so `budget.max_usd` binds across re-runs.
+    Restarting or skipping a block in a new process must keep that spend."""
+
+    SPENT = {"calls": 7, "input_tokens": 1000, "output_tokens": 500, "cache_read_tokens": 0,
+             "cache_creation_tokens": 0, "total_tokens": 1500, "cost_usd": 4.25,
+             "by_label": {"implementer": 4.25}, "max_tokens": None, "max_usd": 5.0}
+
+    def _engine_state(self, tmp_path, status: str) -> Path:
+        path = tmp_path / ".findings-r1-state.json"
+        path.write_text(json.dumps({
+            "change_name": "calc", "mode": "only", "tier": "advanced", "phase": "tdd_build",
+            "budget": self.SPENT,
+            "tdd": {"blocks": [{"number": 1, "name": "Fix", "description": "d",
+                                "status": status, "baseline_commit": "a" * 40,
+                                "resumable": True}],
+                    "current_block": 0, "baseline_tests_pass": True},
+        }))
+        return path
+
+    @pytest.fixture(autouse=True)
+    def fresh_process_budget(self):
+        from build_pipeline import budget
+        budget.reset()     # a new process: nothing spent in memory
+        yield
+        budget.reset()
+
+    def test_restarting_a_block_keeps_the_spend(self, tmp_path):
+        path = self._engine_state(tmp_path, "failed")
+        code.restart_block(path, 1)
+        saved = BuildState.load(path)
+        assert saved.tdd.blocks[0].status.value == "pending"
+        assert saved.budget["cost_usd"] == 4.25
+        assert saved.budget["total_tokens"] == 1500
+
+    def test_skipping_a_block_keeps_the_spend(self, tmp_path):
+        path = self._engine_state(tmp_path, "failed")
+        assert code.skip_block(path, 1)
+        saved = BuildState.load(path)
+        assert saved.tdd.current_block == 1
+        assert saved.budget["cost_usd"] == 4.25
+
+
+class TestStoppedAfterTheBlocks:
+    """The engine runs whole-change steps after its blocks (refactor, mutation
+    testing). A failure there comes back on every re-run, so it must not hold
+    back fixes that every block gate already passed."""
+
+    @pytest.mark.asyncio
+    async def test_a_mutation_failure_after_every_block_is_done_still_publishes(
+            self, built, fake_pr):
+        repo, change, config = built
+        fix_thread = fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+        review = FakeReview(fake_pr)
+        run, lines = _run(config, change, triage_call=FakeTriage({"add subtracts": FIX}),
+                          review=review)
+        async def refactor_all(config_, state, progress):
+            state.tdd.refactor_all_done = True    # as every non-budget path does
+            state.checkpoint(config_.state_file_path())
+            return True
+
+        stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") != "_run_refactor_all"]
+        stubs += [
+            patch("build_pipeline.tdd_engine._run_refactor_all", side_effect=refactor_all),
+            patch("build_pipeline.tdd_engine._run_mutation", new_callable=AsyncMock,
+                  return_value=False)]
+        with _Stubs(stubs):
+            exit_code = await loop.run_findings(run)
+
+        assert exit_code == 0, lines
+        assert lines[-1] == "FINDINGS:DONE:1"
+        assert any(ln.startswith("FINDINGS:CODE_CHECK_FAILED:") and "mutation" in ln
+                   for ln in lines), lines
+        assert not [ln for ln in lines if ln.startswith("FINDINGS:FAILED")]
+        impl = _git(repo, "log", "--format=%H", "-1", "--grep", "^impl(block-1)").strip()
+        kinds = [e[0] for e in fake_pr.events]
+        assert kinds.index("push") < kinds.index("reply")
+        replies = {r[1]: r[2] for r in fake_pr.replies()}
+        assert impl[:12] in replies[fix_thread]
+        assert "mutation" in replies[fix_thread]
+        assert review.calls == 1
+
+    def test_a_skipped_failed_block_still_counts_as_past_the_blocks(self, tmp_path):
+        """Block 1 failed and was skipped, block 2 is done, then mutation
+        testing failed: the engine is past its blocks."""
+        path = tmp_path / ".findings-r1-state.json"
+        path.write_text(json.dumps({
+            "change_name": "calc", "mode": "only", "tier": "advanced", "phase": "tdd_build",
+            "tdd": {"blocks": [
+                {"number": 1, "name": "A", "description": "d", "status": "failed"},
+                {"number": 2, "name": "B", "description": "d", "status": "done",
+                 "impl_commit": "b" * 40}],
+                "current_block": 2, "baseline_tests_pass": True, "refactor_all_done": True},
+        }))
+        assert "mutation testing failed" in code.stopped_after_blocks(path)
+        data = json.loads(path.read_text())
+        data["tdd"]["current_block"] = 1
+        path.write_text(json.dumps(data))
+        assert code.stopped_after_blocks(path) is None
+
+    @pytest.mark.asyncio
+    async def test_a_red_suite_before_any_fix_says_so(self, built, fake_pr):
+        """A red baseline is not something a plain re-run gets past: the
+        reason must say the suite has to pass first."""
+        repo, change, config = built
+        fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+        run, lines = _run(config, change, triage_call=FakeTriage({"add subtracts": FIX}),
+                          review=FakeReview(fake_pr))
+        from build_pipeline.models import GateResult
+        stubs = engine_stubs(repo) + [
+            patch("build_pipeline.tdd_engine.baseline_test_gate",
+                  return_value=GateResult(passed=False, reason="2 failed"))]
+        with _Stubs(stubs):
+            assert await loop.run_findings(run) == 1, lines
+        assert lines[-1].startswith("FINDINGS:FAILED:code:")
+        assert "test suite fails before any fix" in lines[-1]
+        assert fake_pr.replies() == []
+
+
 class TestReviewBody:
     @pytest.mark.asyncio
     async def test_a_finding_the_review_put_in_its_body_starts_the_next_round(
@@ -876,9 +996,15 @@ class TestReviewBody:
         review = FakeReview(fake_pr)
 
         def post(run, run_dir):
+            from datetime import datetime, timedelta
             review.posts.append(run_dir)
             if len(review.posts) == 1:
-                fake_pr.add_review_body("alice", [("the helper is never called", "e2")])
+                # Submitted after the round's fetch, whatever the clock says now.
+                st = BuildState.load(change / ".findings-state.json")
+                fetched = datetime.strptime(st.findings.rounds[0].fetched_at, "%Y-%m-%dT%H:%M:%SZ")
+                after = (fetched + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                fake_pr.add_review_body("alice", [("the helper is never called", "e2")],
+                                        submitted=after)
             return True, ""
 
         review.post = post

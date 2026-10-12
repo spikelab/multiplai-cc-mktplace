@@ -8,7 +8,8 @@ finished steps and restarts the first unfinished one:
 
 - triage keeps every verdict as it lands, so a resume calls no agent twice;
 - spec and triage, when they fail or were cut off, first keep whatever the
-  tree holds under `refs/buildme/wip/<change>/r<N>-<step>`, and only then
+  tree holds under `refs/buildme/wip/<change>/r<N>-<step>` (`-2`, `-3`, ...
+  for a later attempt, so no attempt's ref is overwritten), and only then
   discard back to where the step started (or to what origin has on top of
   that, so a collaborator's pushed commits stay);
 - a resume refuses uncommitted changes outside the change directory, and a
@@ -176,9 +177,10 @@ def keep_and_rewind(run: FindingsRun, rnd: FindingsRound, step: str) -> None:
     start = rewind_target(run, start)
     if git_ops.tree_is_clean(repo) and git_ops.rev_parse_head(repo) == start:
         return
-    ref = wip_ref(run, rnd, step)
-    if git_ops.save_wip_ref(repo, ref, f"wip(findings-r{rnd.number}): {step}, kept before discard") is None:
-        raise StepFailed(step, f"could not write {ref}, so the tree was left as it is; "
+    name = wip_ref(run, rnd, step)
+    ref = git_ops.save_wip_ref(repo, name, f"wip(findings-r{rnd.number}): {step}, kept before discard")
+    if ref is None:
+        raise StepFailed(step, f"could not write {name}, so the tree was left as it is; "
                                f"inspect {repo} before re-running")
     run.emit(f"FINDINGS:WIP:{ref}")
     if not git_ops.discard_to(repo, start, f"findings r{rnd.number} {step}"):
@@ -232,10 +234,11 @@ def keep_stopped_code_work(run: FindingsRun, rnd: FindingsRound) -> None:
         return
     start = rewind_target(run, start)
     if not (git_ops.tree_is_clean(repo) and git_ops.rev_parse_head(repo) == start):
-        ref = wip_ref(run, rnd, f"code-block{block.number}-stopped" if block else "code-stopped")
-        if git_ops.save_wip_ref(repo, ref, f"wip(findings-r{rnd.number}): code, kept "
-                                           "before the resume") is None:
-            raise StepFailed("code", f"could not write {ref}, so the tree was left as it is; "
+        name = wip_ref(run, rnd, f"code-block{block.number}-stopped" if block else "code-stopped")
+        ref = git_ops.save_wip_ref(repo, name, f"wip(findings-r{rnd.number}): code, kept "
+                                               "before the resume")
+        if ref is None:
+            raise StepFailed("code", f"could not write {name}, so the tree was left as it is; "
                                      f"inspect {repo} before re-running")
         run.emit(f"FINDINGS:WIP:{ref}")
         if not git_ops.discard_to(repo, start, f"findings r{rnd.number} code resume"):
@@ -257,10 +260,11 @@ def keep_failed_block(run: FindingsRun, rnd: FindingsRound, block) -> str | None
                                  f"inspect {repo}")
     if git_ops.tree_is_clean(repo) and git_ops.rev_parse_head(repo) == start:
         return None
-    ref = wip_ref(run, rnd, f"code-block{block.number}")
-    if git_ops.save_wip_ref(repo, ref, f"wip(findings-r{rnd.number}): block {block.number} "
-                                       "failed, kept before discard") is None:
-        raise StepFailed("code", f"could not write {ref}, so the tree was left as it is; "
+    name = wip_ref(run, rnd, f"code-block{block.number}")
+    ref = git_ops.save_wip_ref(repo, name, f"wip(findings-r{rnd.number}): block {block.number} "
+                                           "failed, kept before discard")
+    if ref is None:
+        raise StepFailed("code", f"could not write {name}, so the tree was left as it is; "
                                  f"inspect {repo} before re-running")
     run.emit(f"FINDINGS:WIP:{ref}")
     if not git_ops.discard_to(repo, start, f"findings r{rnd.number} block {block.number}"):
@@ -359,6 +363,21 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             save()
             if result.exit_code == 0:
                 return
+            # A step the engine runs after its blocks (the whole-change
+            # refactor's budget stop, mutation testing) fails the same way on
+            # every re-run. Every fix has passed its block's gates and is
+            # committed, so publish them and say what failed after them.
+            after = code.stopped_after_blocks(engine_state)
+            if after:
+                rnd.code_check_failed = after
+                save()
+                run.emit(f"FINDINGS:CODE_CHECK_FAILED:{after}")
+                return
+            if code.baseline_red(engine_state):
+                raise StepFailed("code", "the PR's test suite fails before any fix (the TDD "
+                                         "engine's baseline gate), so no fix can be tested; "
+                                         "make the suite pass, then re-run",
+                                 exit_code=result.exit_code)
             block = code.failed_block(engine_state)
             if block is None:
                 break

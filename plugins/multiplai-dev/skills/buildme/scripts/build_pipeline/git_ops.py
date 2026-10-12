@@ -501,10 +501,15 @@ def commit_tree(repo: Path | str, message: str, label: str = "") -> str | None:
 def save_wip_ref(repo: Path | str, ref: str, message: str) -> str | None:
     """Keep the tree's current work under *ref* (``refs/buildme/wip/...``)
     before a discard: commit whatever is uncommitted (``commit_tree``, so
-    bookkeeping stays out) and point *ref* at HEAD. Returns the sha the ref
-    names, or None when the ref could not be written (logged; never raises).
-    The commit stays on the branch until the caller's ``discard_to`` moves the
-    branch back; the ref keeps it reachable after that."""
+    bookkeeping stays out) and point a new ref at HEAD. Returns the ref
+    written, or None when no ref could be written (logged; never raises).
+
+    An existing ref is never moved: a step that stops twice would otherwise
+    leave its first attempt's commit reachable from nothing. A later attempt
+    goes under ``<ref>-2``, ``<ref>-3``, and so on; a ref that already names
+    HEAD is returned as it is. The commit stays on the branch until the
+    caller's ``discard_to`` moves the branch back; the ref keeps it reachable
+    after that."""
     if not ref.startswith("refs/buildme/wip/") or not _run(
             ["git", "check-ref-format", ref], cwd=repo).ok:
         log.warning("Refusing to write wip ref %r", ref)
@@ -513,12 +518,24 @@ def save_wip_ref(repo: Path | str, ref: str, message: str) -> str | None:
     head = rev_parse_head(repo)
     if not head:
         return None
-    res = _run(["git", "update-ref", ref, head], cwd=repo)
-    if not res.ok:
-        log.warning("Failed to write %s: %s", ref, res.stderr.strip())
+    for attempt in range(1, 1000):
+        name = ref if attempt == 1 else f"{ref}-{attempt}"
+        held = _run(["git", "rev-parse", "--verify", "-q", name], cwd=repo)
+        if held.ok:
+            if held.stdout.strip() == head:
+                log.info("WIP %s already names sha=%s", name, head[:8])
+                return name
+            continue
+        # An empty old value makes update-ref create the ref only if it
+        # does not exist, so a ref written meanwhile is never moved.
+        res = _run(["git", "update-ref", name, head, ""], cwd=repo)
+        if res.ok:
+            log.info("WIP %s sha=%s", name, head[:8])
+            return name
+        log.warning("Failed to write %s: %s", name, res.stderr.strip())
         return None
-    log.info("WIP %s sha=%s", ref, head[:8])
-    return head
+    log.warning("Refusing to write wip ref %r: every attempt name is taken", ref)
+    return None
 
 
 def rev_parse_head(repo: Path | str) -> str | None:
