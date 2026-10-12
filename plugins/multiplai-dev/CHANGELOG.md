@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.39.0] - 2026-10-12
+## [0.40.0] - 2026-10-12
 
 ### Added
 - New `/multiplai-dev:pr` skill: opens a pull request, or refreshes its
@@ -57,6 +57,40 @@ time, not derived from a tag.
   `git.pr`. When the PR cannot be opened,
   `build-progress.md` now lists the pr skill's command first, then
   `gh pr create`.
+
+## [0.39.0] - 2026-10-12
+
+### Added
+- buildme: every step can run on its own model. `models:` in
+  `specs/config.yaml` takes a step (`test_writer`, `implementer`, `review`,
+  `plan_review`, …), a stage (`spec`, `agent`, `review`) or `default`, set to
+  `haiku`, `sonnet`, `opus`, `fable`, `claude:<name>` or
+  `pi:<model>@<provider>`. A step takes the first of: its own key, its stage's
+  key, the stage's `multiplai.conf` model, `models.default`, the pipeline's
+  model. With no `models:` key and no stage model set, every step runs on the
+  model it ran on before. SKILL.md § "Tuning model and effort" lists every
+  step and its stage.
+- buildme runs a `pi:` model through multiplai-core's Pi backend (core
+  v0.19.0). This needs Pi installed and configured, which buildme does not
+  do; a missing `pi` binary fails the step rather than falling back to Claude.
+- buildme: Claude Fable counts as the advanced tier. When `models.default` is
+  a `pi:` model, the tier comes from `BUILDME_TIER` or `tier:` in
+  `specs/config.yaml`, and is `standard` otherwise, with a log line saying why.
+
+### Changed
+- buildme: a stage's `multiplai.conf` model now reaches every step of that
+  stage. `[buildme.spec] MODEL=` used to reach only the interview and now also
+  reaches spec generation, the audits, the rubric, the explainer and the
+  respec proposal; `[buildme.agent] MODEL=` reached no step and now reaches
+  the TDD agents, the docs update and the prototype; `review_model`
+  (`code_review.model`, `BUILDME_REVIEW_MODEL`, `[buildme.review] MODEL=`)
+  now also reaches the test-quality audit. Finding adjudication stays on the
+  pipeline's model.
+- buildme: a `pi:` model in a `[buildme.*] MODEL=` section of
+  `multiplai.conf` is used instead of dropped. A provider buildme has no
+  runner for (`openai:`) is still dropped with a warning.
+- buildme: `models:` values are no longer stored only; a bare Claude family
+  name (`opus`) is now accepted, and an unknown key is dropped with a warning.
 
 ## [0.38.0] - 2026-10-12
 

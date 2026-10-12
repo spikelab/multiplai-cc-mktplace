@@ -50,7 +50,7 @@ async def run_docs_update(config, state=None) -> tuple[list[str], GateResult]:
         agent = await agent_call(
             prompt,
             allowed_tools=DOCS_TOOLS,
-            model=config.model,
+            model=config.model_for("docs_update"),
             effort=config.spec_effort,
             cwd=str(config.project_dir),
             budget_label="docs_update",

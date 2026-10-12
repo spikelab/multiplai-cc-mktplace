@@ -359,9 +359,8 @@ async def run_plan_review(
 ) -> PlanReviewResult:
     """Review tasks.md against the rubric, the constraints and the use cases.
 
-    Runs as a read-only subagent on `plan_review_model` / `plan_review_effort`,
-    both read with a fallback so this does not depend on which config fields
-    have landed. Returns the findings; raises whatever `agent_call_structured`
+    Runs as a read-only subagent on `config.model_for("plan_review")` and
+    `plan_review_effort` (read with a fallback to `review_effort`). Returns the findings; raises whatever `agent_call_structured`
     raises (the stage above treats that as non-fatal).
     """
     use_cases = _read(change_dir / "use-cases.md", NO_USE_CASES)
@@ -377,7 +376,7 @@ async def run_plan_review(
         package_trigger=getattr(config, "plan_split_package_trigger", 5),
     )
 
-    model = getattr(config, "plan_review_model", None) or config.review_model
+    model = config.model_for("plan_review")
     effort = getattr(config, "plan_review_effort", None) or config.review_effort
 
     log.info("Running plan review on %s", change_dir.name)
