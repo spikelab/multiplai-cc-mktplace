@@ -24,8 +24,9 @@ time, not derived from a tag.
   description, so the description follows the repository's PR template. It
   finds the template where GitHub looks for one (`.github/`, the repo root,
   `docs/`, or a `PULL_REQUEST_TEMPLATE/` directory, names in any case), or
-  takes `pr.template` from `specs/config.yaml`. With no template, or several
-  and no choice made, it uses a standard template that ships with the skill:
+  takes `pr.template` from `specs/config.yaml` (`auto`, buildme's default,
+  means find it). With no template, or several and no choice made, it uses a
+  standard template that ships with the skill:
   Why, Blocks, Documentation, Companion artifacts, Ticket and Size.
 - The template's headings, checkboxes and comments are always kept. Sections
   the change's own files answer are filled from them; one model call with no

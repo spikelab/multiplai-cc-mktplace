@@ -110,6 +110,14 @@ def test_config_template_that_is_missing_or_outside_the_repo_is_refused(tmp_path
         discover(tmp_path)
 
 
+def test_config_template_auto_discovers_like_an_absent_value(tmp_path):
+    # buildme setup writes `pr.template: auto` as its default; it means "find it", not a file.
+    found_file = _write(tmp_path / ".github" / "pull_request_template.md")
+    _write(tmp_path / "specs" / "config.yaml", "pr:\n  template: auto\n")
+    assert load_config(tmp_path).template is None
+    assert discover(tmp_path).path == found_file
+
+
 def test_config_defaults_when_there_is_no_pr_block(tmp_path):
     _write(tmp_path / "specs" / "config.yaml", "git:\n  pr: draft\n")
     cfg = load_config(tmp_path)

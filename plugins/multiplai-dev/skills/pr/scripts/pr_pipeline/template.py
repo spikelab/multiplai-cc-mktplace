@@ -32,6 +32,8 @@ STANDARD_TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "pull_re
 LOCATIONS = (".github", "", "docs")
 TEMPLATE_NAME = "pull_request_template.md"
 TEMPLATE_DIR = "pull_request_template"
+# The `pr.template` value buildme setup writes by default: discover, as when unset.
+AUTO_TEMPLATE = "auto"
 
 
 class TemplateError(Exception):
@@ -52,7 +54,7 @@ class Discovery:
 
 
 def load_config(repo: Path) -> PrConfig:
-    """`pr.template` and `pr.draft` from `<repo>/specs/config.yaml`; defaults when absent."""
+    """`pr.template` and `pr.draft` from `<repo>/specs/config.yaml`; defaults when absent or `auto`."""
     path = repo / "specs" / "config.yaml"
     if not path.is_file():
         return PrConfig()
@@ -71,6 +73,8 @@ def load_config(repo: Path) -> PrConfig:
     draft = pr.get("draft", True)
     if not isinstance(draft, bool):
         raise TemplateError(f"`pr.draft` in {path} must be true or false")
+    if template == AUTO_TEMPLATE:
+        template = None
     return PrConfig(template=template or None, draft=draft)
 
 
