@@ -160,7 +160,13 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   through `_discard_keeping_records` (a `discard_to` that puts the round
   records back afterwards) and lands in `unfixed-findings.md`. On resume,
   `run_tdd_engine` sees `fix_pass` and calls `_resume_fix_on_pass`, which rolls
-  back first and runs the pass again: never keep a half-applied fix. The pass
+  back first and runs the pass again: never keep a half-applied fix. Before it
+  rolls back, `_others_work_in_fix_pass` refuses any uncommitted change or
+  commit the stopped pass did not leave: `_record_fix_pass_stop` records HEAD
+  and `git_ops.dirty_files` as the pass reaches `tests` and `review`, and a
+  pass stopped at `fix_agent` has no record, so any uncommitted change there
+  is refused. A refusal marks the block FAILED and `resumable` with
+  `fix_pass` kept, so the next run tries again. Otherwise the pass
   never fails the block, except when the rollback itself is refused.
 - **`SEARCHED:` is recorded, not gated.** Every review-fix brief ends with
   `prompts.implementation.REVIEW_FIX_SELF_CHECK`. `parse_searched` puts the

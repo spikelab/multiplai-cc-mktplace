@@ -33,6 +33,7 @@ from build_pipeline.models import (
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState, TDDState
 from build_pipeline.tdd_engine import (
+    EXIT_BUILD_FAILURE,
     EXIT_SUCCESS,
     _run_integration_and_review,
     run_tdd_engine,
@@ -397,6 +398,110 @@ class TestFixOnPass:
         assert rounds[1]["fix"]["searched"] == ["add(): both branches"]
         # The dead attempt's report is kept next to the one that finished.
         assert rounds[1]["earlier_fixes"][0]["report"] == "fixed"
+
+    @staticmethod
+    async def _kill_after_fix_agent(p):
+        """Run the pass and die before the second review, leaving the fix
+        agent's half-applied fix in the tree."""
+        class Killed(BaseException):
+            pass
+
+        stack, _, _ = _engine([_passing([_finding()]), Killed()],
+                              _fixer(p.dir, {"app.py": "half-applied\n"}))
+        with stack, pytest.raises(Killed):
+            await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+
+    @staticmethod
+    async def _resume(p, reviews=(), fixer=None):
+        """Re-run the engine from its checkpoint; returns (exit code, fix mock)."""
+        stack, _, fix = _engine(list(reviews), fixer or _fixer(p.dir, {"app.py": FIXED}))
+        with stack, \
+             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock), \
+             patch("build_pipeline.tdd_engine._run_refactor_all", new_callable=AsyncMock,
+                   return_value=True), \
+             patch("build_pipeline.tdd_engine._run_mutation", new_callable=AsyncMock,
+                   return_value=True):
+            p.config.gates.e2e_test_entry_point_check = False
+            code = await run_tdd_engine(p.config, SimpleNamespace(block=None), standalone=False)
+        return code, fix
+
+    def _assert_refused(self, p, code, fix, head):
+        assert code == EXIT_BUILD_FAILURE
+        fix.assert_not_awaited()
+        assert _git(p.dir, "rev-parse", "HEAD") == head  # nothing was reset
+        saved = BuildState.load(p.config.state_file_path()).tdd.blocks[0]
+        assert saved.fix_pass is not None  # the next resume tries the pass again
+        assert saved.status == BlockStatus.FAILED and saved.resumable is True
+        assert "Did not resume the fix on pass" in p.config.progress_file_path().read_text()
+
+    @pytest.mark.asyncio
+    async def test_a_resume_refuses_a_file_the_user_added_after_the_stop(self, project):
+        p = project
+        await self._kill_after_fix_agent(p)
+        head = _git(p.dir, "rev-parse", "HEAD")
+        (p.dir / "mine.py").write_text("the user's work\n")
+
+        code, fix = await self._resume(p)
+
+        self._assert_refused(p, code, fix, head)
+        assert (p.dir / "mine.py").read_text() == "the user's work\n"
+        assert (p.dir / "app.py").read_text() == "half-applied\n"
+
+        # Once the user moves their work away, the resume rolls back and reruns.
+        (p.dir / "mine.py").unlink()
+        code, fix = await self._resume(p, [_passing()])
+        assert code == EXIT_SUCCESS
+        assert fix.await_count == 1
+        assert (p.dir / "app.py").read_text() == FIXED
+
+    @pytest.mark.asyncio
+    async def test_a_resume_refuses_an_edit_to_a_file_the_fix_agent_left(self, project):
+        p = project
+        await self._kill_after_fix_agent(p)
+        head = _git(p.dir, "rev-parse", "HEAD")
+        (p.dir / "app.py").write_text("half-applied\n# and the user's line\n")
+
+        code, fix = await self._resume(p)
+
+        self._assert_refused(p, code, fix, head)
+        assert (p.dir / "app.py").read_text() == "half-applied\n# and the user's line\n"
+
+    @pytest.mark.asyncio
+    async def test_a_resume_refuses_a_commit_added_after_the_stop(self, project):
+        p = project
+        await self._kill_after_fix_agent(p)
+        (p.dir / "app.py").write_text("the user's commit\n")
+        _git(p.dir, "commit", "-qam", "user")
+        head = _git(p.dir, "rev-parse", "HEAD")
+
+        code, fix = await self._resume(p)
+
+        self._assert_refused(p, code, fix, head)
+        assert (p.dir / "app.py").read_text() == "the user's commit\n"
+
+    @pytest.mark.asyncio
+    async def test_a_resume_refuses_edits_left_by_a_fix_agent_killed_mid_edit(self, project):
+        """Killed while the fix agent ran: no record says which edits are
+        the agent's, so none of them is discarded."""
+        p = project
+
+        class Killed(BaseException):
+            pass
+
+        def dying_fixer(**kwargs):
+            (p.dir / "app.py").write_text("half-applied\n")
+            raise Killed()
+
+        stack, _, _ = _engine([_passing([_finding()])], dying_fixer)
+        with stack, pytest.raises(Killed):
+            await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+        assert BuildState.load(p.config.state_file_path()).tdd.blocks[0].fix_pass.step == "fix_agent"
+        head = _git(p.dir, "rev-parse", "HEAD")
+
+        code, fix = await self._resume(p)
+
+        self._assert_refused(p, code, fix, head)
+        assert (p.dir / "app.py").read_text() == "half-applied\n"
 
 
 # --- Item 12: the fix agent looks for the same mistake ---------------------

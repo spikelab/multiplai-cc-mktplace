@@ -1647,6 +1647,66 @@ def _discard_keeping_records(config: BuildConfig, sha: str, label: str) -> bool:
     return ok
 
 
+def _records_dir_in_project(config: BuildConfig) -> Path | None:
+    """The round records' directory relative to the project: the pass writes
+    there itself, and `_discard_keeping_records` puts the records back."""
+    try:
+        return review_rounds.reviews_dir(config.change_dir).resolve().relative_to(
+            Path(config.project_dir).resolve())
+    except ValueError:
+        return None
+
+
+def _record_fix_pass_stop(config: BuildConfig, fp: FixOnPassState) -> None:
+    """Record the tree as the pass leaves it on reaching its next step: HEAD
+    and every uncommitted path with its content. A resume rolls back only
+    this (`_others_work_in_fix_pass`). When git cannot be asked, no record is
+    kept, and a resume then refuses any uncommitted change."""
+    edits = git_ops.dirty_files(config.project_dir, ignore=_records_dir_in_project(config))
+    fp.stop_edits = edits
+    fp.stop_head = git_ops.rev_parse_head(config.project_dir) if edits is not None else None
+
+
+def _others_work_in_fix_pass(config: BuildConfig, fp: FixOnPassState) -> str | None:
+    """Why a resumed fix on pass must not roll the tree back, or None.
+
+    The rollback is a `reset --hard` and a `clean`, so it must first be sure
+    everything it throws away is the stopped pass's own: an uncommitted path
+    must be in the pass's record with the same content (an edit made after
+    the stop, even to a file the fix agent was editing, changes that
+    content), and HEAD must be where the pass stopped. Killed while the fix
+    agent ran, the pass has no record of its edits, so it cannot tell them
+    from anyone else's and refuses any. The round records are the pass's own
+    and are not checked."""
+    repo = config.project_dir
+    edits = git_ops.dirty_files(repo, ignore=_records_dir_in_project(config))
+    head = git_ops.rev_parse_head(repo)
+    if edits is None or head is None:
+        return f"git could not list the changes in {repo}; inspect it before re-running"
+
+    def names(paths: list[str]) -> str:
+        more = f" and {len(paths) - 5} more" if len(paths) > 5 else ""
+        return ", ".join(sorted(paths)[:5]) + more
+
+    recorded = fp.step != "fix_agent" and fp.stop_edits is not None
+    if recorded:
+        theirs = [p for p, content in edits.items() if fp.stop_edits.get(p) != content]
+        if theirs:
+            return (f"{repo} has uncommitted changes the stopped fix on pass did not leave "
+                    f"({names(theirs)}); stash them first")
+    elif edits:
+        why = ("the fix agent was stopped mid-edit" if fp.step == "fix_agent"
+               else "the pass stopped without recording its own edits")
+        return (f"{repo} has uncommitted changes ({names(list(edits))}), and {why}, so they "
+                "cannot be told from anyone else's; stash them first")
+    stopped_at = fp.stop_head if recorded else fp.checkpoint
+    if head != stopped_at:
+        return (f"HEAD moved since the fix on pass stopped at {stopped_at[:12]}; resuming "
+                f"would discard those commits back to {fp.checkpoint[:12]}, so move them "
+                "to another branch first")
+    return None
+
+
 def _restore_block(block: BlockInfo, fp: FixOnPassState) -> None:
     """Put back the block state the fix on pass started from."""
     block.test_file_hashes = dict(fp.test_file_hashes)
@@ -1753,6 +1813,7 @@ async def _run_fix_on_pass(
         block.implementer_report = _trim_evidence(
             f"{block.implementer_report}\n\n[fix on pass]\n{fix.output}"
         )
+    _record_fix_pass_stop(config, fp)
     fp.step = "tests"
     state.checkpoint(state_path)
 
@@ -1769,6 +1830,7 @@ async def _run_fix_on_pass(
 
     new_review: ReviewResult | None = None
     if not reason:
+        _record_fix_pass_stop(config, fp)
         fp.step = "review"
         state.checkpoint(state_path)
         try:
@@ -1829,6 +1891,18 @@ async def _resume_fix_on_pass(
     block_idx = state.tdd.current_block if state.tdd else 0
     total = len(state.tdd.blocks) if state.tdd else 0
     fp = block.fix_pass
+    refusal = _others_work_in_fix_pass(config, fp)
+    if refusal:
+        log.error("FAIL block=%d name=%s phase=FIX_ON_PASS reason=resume-refused: %s",
+                  block.number, block.name, refusal)
+        progress.log_diagnosis(
+            block.name,
+            f"Did not resume the fix on pass of block {block.number}, and rolled nothing "
+            f"back: {refusal}. Then run the build again.",
+        )
+        block.resumable = True
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
+        return False
     log.warning("Block %d stopped during its fix on pass (step %s): rolling back to %s "
                 "and running the pass again", block.number, fp.step, fp.checkpoint[:8])
     progress.log_agent("ReviewFix", block.name,
@@ -1844,6 +1918,7 @@ async def _resume_fix_on_pass(
         return False
     _restore_block(block, fp)
     fp.step = "fix_agent"
+    fp.stop_head = fp.stop_edits = None
     state.checkpoint(config.state_file_path())
     if not await _run_fix_on_pass(block, config, state, progress, block_idx):
         return False

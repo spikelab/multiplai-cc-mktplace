@@ -34,7 +34,12 @@ time, not derived from a tag.
   review; otherwise the block goes back to where it was. Findings left unfixed
   are listed in `specs/changes/<name>/unfixed-findings.md`, which buildme adds
   to the PR body. A build that stops during this pass rolls it back and runs it
-  again when resumed. `fix_on_pass: false` keeps the old behaviour.
+  again when resumed. Before rolling back, the resume checks that the tree
+  holds only what the stopped pass left: an edit or commit made since the stop
+  (or any uncommitted edit, when the build stopped while the fix agent was
+  still writing) stops the resume with the files named and nothing rolled
+  back; stash or move them and run the build again. `fix_on_pass: false`
+  keeps the old behaviour.
 
 ### Changed
 - buildme's review-fix agent is now asked to look for the same mistake in the
