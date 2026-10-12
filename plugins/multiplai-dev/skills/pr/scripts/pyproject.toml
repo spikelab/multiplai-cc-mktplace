@@ -9,6 +9,8 @@ dependencies = [
     "multiplai-core[sdk]",
     "pydantic>=2",
     "pyyaml>=6",
+    # multiplai_core.env.load_env reads .env with it (the model call's credentials).
+    "python-dotenv>=1",
 ]
 
 [project.optional-dependencies]

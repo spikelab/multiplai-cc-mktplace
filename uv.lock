@@ -1249,6 +1249,7 @@ source = { editable = "plugins/multiplai-dev/skills/pr/scripts" }
 dependencies = [
     { name = "multiplai-core", extra = ["sdk"] },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
 
@@ -1270,6 +1271,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
+    { name = "python-dotenv", specifier = ">=1" },
     { name = "pyyaml", specifier = ">=6" },
 ]
 provides-extras = ["dev"]
