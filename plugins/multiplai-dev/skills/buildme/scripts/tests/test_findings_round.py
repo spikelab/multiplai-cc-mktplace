@@ -610,6 +610,47 @@ class TestStop:
         assert len(rows) == 1 and "r1:" in rows[0] and "r2:" in rows[0]
 
 
+class TestDirtyTree:
+    @pytest.mark.asyncio
+    async def test_a_new_round_refuses_uncommitted_work(self, built, fake_pr):
+        repo, change, config = built
+        (repo / "calc.py").write_text("# someone's edit\n")
+        fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+        triage_call = FakeTriage({})
+        run, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
+        assert await loop.run_findings(run) == 1
+        assert lines[-1].startswith("FINDINGS:FAILED:fetch:") and "uncommitted" in lines[-1]
+        assert triage_call.prompts == []
+        assert (repo / "calc.py").read_text() == "# someone's edit\n"
+
+
+class TestSince:
+    @pytest.mark.asyncio
+    async def test_a_top_level_comment_posted_during_a_round_is_new_next_round(self, built, fake_pr):
+        from datetime import datetime, timedelta
+        repo, change, config = built
+        fake_pr.add_issue("alice", "question one", created="2026-01-01T00:00:00Z")
+        review = FakeReview(fake_pr)
+
+        def post(run, run_dir):
+            review.posts.append(run_dir)
+            if len(review.posts) == 1:
+                st = BuildState.load(change / ".findings-state.json")
+                fetched = datetime.strptime(st.findings.rounds[0].fetched_at, "%Y-%m-%dT%H:%M:%SZ")
+                during = (fetched + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                fake_pr.add_issue("alice", "question two", created=during)
+            return True, ""
+
+        review.post = post
+        q = Triage(verdict=Verdict.QUESTION, reason="answered")
+        triage_call = FakeTriage({"question one": q, "question two": q})
+        run, lines = _run(config, change, triage_call=triage_call, review=review)
+        assert await loop.run_findings(run) == 0
+        assert len(triage_call.prompts) == 2
+        assert "question two" in triage_call.prompts[1]
+        assert lines[-1] == "FINDINGS:DONE:2"
+
+
 def test_no_code_path_resolves_a_review_thread():
     """Done means 14: the pipeline only replies."""
     name = "resolve" + "ReviewThread"

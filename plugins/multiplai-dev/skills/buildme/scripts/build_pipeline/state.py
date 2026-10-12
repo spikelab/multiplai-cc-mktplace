@@ -102,6 +102,7 @@ class FindingsRound(BaseModel):
 
     number: int
     since: str | None = None                   # top-level comments after this are new
+    fetched_at: str | None = None              # when this round's fetch started: the next round's `since`
     started: list[str] = Field(default_factory=list)
     finished: list[str] = Field(default_factory=list)
     step_heads: dict[str, str] = Field(default_factory=dict)  # step → HEAD when it started

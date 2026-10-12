@@ -334,7 +334,17 @@ async def run_findings(run: FindingsRun) -> int:
             if done >= max_rounds:
                 run.emit(f"FINDINGS:MAX_ROUNDS:{done}")
                 return EXIT_OK
-            since = fs.rounds[-1].review_finished_at if fs.rounds else None
+            if not git_ops.tree_is_clean(run.project_dir):
+                # A failed step keeps the tree's edits under a wip ref and
+                # resets it; never do that to work this pipeline did not make.
+                run.emit(f"FINDINGS:FAILED:fetch:{run.project_dir} has uncommitted changes; "
+                         "commit or stash them first")
+                return EXIT_FAILED
+            # The previous round's fetch time, not its review's end: a comment
+            # posted while that round ran must still count as new. Comments
+            # already seen are dropped by id below.
+            since = fs.rounds[-1].fetched_at if fs.rounds else None
+            fetched_at = _now()
             try:
                 comments = fetch.fetch_comments(fs.repo, fs.pr, since, cwd=run.project_dir)
             except fetch.FetchError as e:
@@ -349,8 +359,8 @@ async def run_findings(run: FindingsRun) -> int:
                              c.id, c.author, triage.should_triage(c)[1])
                 run.emit(f"FINDINGS:DONE:{done}")
                 return EXIT_OK
-            rnd = FindingsRound(number=done + 1, since=since, comments=new,
-                                started=["fetch"], finished=["fetch"])
+            rnd = FindingsRound(number=done + 1, since=since, fetched_at=fetched_at,
+                                comments=new, started=["fetch"], finished=["fetch"])
             fs.rounds.append(rnd)
             st.checkpoint(run.state_path)
             acted = sum(1 for c in new if triage.should_triage(c)[0])
