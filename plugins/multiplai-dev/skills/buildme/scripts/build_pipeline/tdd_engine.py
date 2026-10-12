@@ -1963,11 +1963,12 @@ async def _run_refactor_all(
 
 def _snapshot_source_files(config: BuildConfig) -> dict[str, str] | None:
     """{project-relative path: sha256} for every non-test file the survivor
-    round must leave alone: every tracked file, plus untracked `.py` files (a
-    new source module), minus anything `_TEST_PATH_RE` calls a test and
-    buildme's own bookkeeping. None when git could not list them — "not
-    checked", never "everything was deleted" (same contract as
-    `_snapshot_test_files`)."""
+    round must leave alone: every tracked file, plus every untracked file not
+    ignored by git (a new source module, a root pytest.ini that would change
+    how the second run is scored), minus anything `_TEST_PATH_RE` calls a
+    test, buildme's own bookkeeping, and the caches running the suite writes
+    (`_is_tool_cache`). None when git could not list them — "not checked",
+    never "everything was deleted" (same contract as `_snapshot_test_files`)."""
     names: set[str] = set()
     for argv in (["git", "ls-files", "-z"],
                  ["git", "ls-files", "-z", "-o", "--exclude-standard"]):
@@ -1982,7 +1983,7 @@ def _snapshot_source_files(config: BuildConfig) -> dict[str, str] | None:
             return None
         untracked = "-o" in argv
         for name in proc.stdout.split("\0"):
-            if not name or (untracked and not name.endswith(".py")):
+            if not name or (untracked and _is_tool_cache(name)):
                 continue
             if _TEST_PATH_RE.search(name) or Path(name).name in _BOOKKEEPING_NAMES:
                 continue
@@ -2001,6 +2002,21 @@ def _snapshot_source_files(config: BuildConfig) -> dict[str, str] | None:
 # buildme's own files, by basename — the source snapshot must not count them
 # as edits (they change on every checkpoint). Mirrors git_ops.BOOKKEEPING_EXCLUDES.
 _BOOKKEEPING_NAMES = frozenset({".build-state.json", ".board.json", "build-progress.md"})
+
+# What running the suite or installing the project writes into a tree whose
+# .gitignore does not cover it. Only untracked paths are skipped this way: a
+# tracked file under one of these is still checked.
+_TOOL_CACHE_DIRS = frozenset({
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis",
+    ".tox", ".nox", ".venv", "venv", "node_modules",
+})
+
+
+def _is_tool_cache(name: str) -> bool:
+    path = Path(name)
+    return (any(part in _TOOL_CACHE_DIRS for part in path.parts[:-1])
+            or path.suffix in (".pyc", ".pyo")
+            or path.name == ".coverage" or path.name.startswith(".coverage."))
 
 
 def _format_survivors(config: BuildConfig, result: MutationResult) -> str:
@@ -2239,6 +2255,13 @@ async def _run_mutation(
     if not git_ops.tree_is_clean(config.project_dir):
         return _fail("the tree has uncommitted changes after mutation testing — "
                      "refusing to commit the report on top of them")
+
+    # No score with no errors means no mutant was generated on the changed
+    # lines: nothing to judge, so the step passes. No score with errors means
+    # every mutant errored, so cosmic-ray could not judge the tests at all.
+    if final.score is None and final.errors:
+        return _fail(f"cosmic-ray did not produce a score: all {final.errors} "
+                     "mutant(s) on the changed lines errored and none could be judged")
 
     min_score = config.mutation.min_score
     passed = final.score is None or final.score >= min_score

@@ -466,6 +466,83 @@ class TestRunMutationStep:
         assert _git(project[0], "log", "-1", "--format=%s") == "test(mutation): record mutation score"
 
     @pytest.mark.asyncio
+    async def test_no_mutant_generated_passes_with_no_score(self, project):
+        """No mutant on the changed lines (nothing errored either): nothing to
+        score, so the step passes."""
+        config, state, progress = _setup(project)
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(0, 0)):
+            assert await _run_mutation(config, state, progress) is True
+        assert state.tdd.mutation_done is True
+        assert "n/a" in (config.change_dir / "mutation.md").read_text()
+
+    @pytest.mark.asyncio
+    async def test_every_mutant_errored_fails_the_step(self, project):
+        """Mutants were generated but none could be judged (worker exception,
+        abnormal exit, incompetent): cosmic-ray produced no score, which fails
+        the build rather than passing as "no mutants ran"."""
+        config, state, progress = _setup(project)
+        repo = project[0]
+        head = _git(repo, "rev-parse", "HEAD")
+        errored = _result(0, 0)
+        errored.errors = 3
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=errored), \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer") as writer:
+            assert await _run_mutation(config, state, progress) is False
+        writer.assert_not_called()
+        assert state.tdd.mutation_done is False
+        assert _git(repo, "rev-parse", "HEAD") == head
+        log_text = (repo / "build-progress.md").read_text()
+        assert "did not produce a score" in log_text and "PASSED" not in log_text
+
+    @pytest.mark.asyncio
+    async def test_survivor_round_that_adds_a_non_test_file_fails_the_step(self, project):
+        """A new untracked non-test file of any extension (a source module, a
+        root pytest.ini that changes how the second run is scored) is a
+        non-test edit: the round is discarded and nothing is committed."""
+        config, state, progress = _setup(project)
+        repo = project[0]
+
+        async def _agent(**_kw):
+            (repo / "src" / "helper.py").write_text("X = 1\n")
+            (repo / "pytest.ini").write_text("[pytest]\naddopts = -k nothing\n")
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(9, 1)) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is False
+        assert run.call_count == 1
+        assert state.tdd.mutation_done is False
+        assert "kill surviving mutants" not in _git(repo, "log", "--format=%s")
+        assert not (repo / "pytest.ini").exists()
+        assert not (repo / "src" / "helper.py").exists()
+        report = (config.change_dir / "mutation.md").read_text()
+        assert "pytest.ini" in report and "src/helper.py" in report
+
+    @pytest.mark.asyncio
+    async def test_survivor_round_that_only_leaves_tool_caches_is_committed(self, project):
+        """Running the suite writes caches (`__pycache__`, `.pytest_cache`,
+        `.coverage`) into a project with no .gitignore for them. Those are not
+        edits, so they must not discard a green round."""
+        config, state, progress = _setup(project)
+        repo = project[0]
+
+        async def _agent(**_kw):
+            (repo / "src" / "__pycache__").mkdir()
+            (repo / "src" / "__pycache__" / "calc.cpython-312.pyc").write_bytes(b"\0")
+            (repo / ".pytest_cache" / "v").mkdir(parents=True)
+            (repo / ".pytest_cache" / "v" / "lastfailed").write_text("{}")
+            (repo / ".coverage").write_text("x")
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation",
+                   side_effect=[_result(7, 3), _result(10, 0)]) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is True
+        assert run.call_count == 2
+
+    @pytest.mark.asyncio
     async def test_survivor_round_that_edits_source_fails_the_step(self, project):
         config, state, progress = _setup(project)
         repo = project[0]
