@@ -281,7 +281,17 @@ def cmd_edit(args) -> int:
         if not ok:
             raise Refused(f"no rights to edit PR {number} (viewerPermission={permission})")
 
-    r = render_body(repo, change_dir, base=base, head=head, ticket_url=None,
+    # Measure the PR as GitHub has it: its head commit, fetched from refs/pull/<n>/head when this
+    # checkout lacks it. A same-named local branch may be another branch (a fork's `main`) or
+    # stale. With --push the local branch is about to become the head, so it is what to measure.
+    diff_head = head
+    oid = pr.get("headRefOid") or ""
+    if github.is_oid(oid) and not args.push:
+        fetched, why = github.fetch_pr_head(repo, number, oid)
+        if not fetched:
+            _diagnose([f"could not fetch PR {number}'s head commit {oid[:12]}: {why}"])
+        diff_head = oid
+    r = render_body(repo, change_dir, base=base, head=diff_head, ticket_url=None,
                     section_files=[Path(p) for p in args.section], config=config)
     args._log_fields.update(template=_template_rel(r, repo), diff=_size_field(r))
     if r.sources.size:

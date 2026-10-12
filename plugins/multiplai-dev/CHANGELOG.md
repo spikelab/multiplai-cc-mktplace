@@ -45,6 +45,11 @@ time, not derived from a tag.
   the PR, it writes nothing. Once buildme has deleted its `.build-state.json`
   after publishing, `edit` keeps the Documentation and Blocks sections already
   in the description instead of blanking them.
+- `edit` measures the diff on the PR's own head commit, fetching it from
+  GitHub when your checkout lacks it, so a PR from a fork, or a branch you
+  never fetched, gets its own size and file list. When that commit cannot be
+  fetched, the Size section says it was not measured, instead of describing
+  whatever branch you have checked out.
 
 ### Changed
 - buildme's PUBLISH stage opens its PR through the pr skill, so a build in a

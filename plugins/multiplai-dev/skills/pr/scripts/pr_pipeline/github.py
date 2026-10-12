@@ -99,17 +99,48 @@ def git_default_branch(repo: Path) -> str | None:
     return None
 
 
-def diff_refs(repo: Path, base: str, head: str) -> tuple[str, str]:
+def diff_refs(repo: Path, base: str, head: str) -> tuple[str, str | None]:
     """The refs to diff: `origin/<base>` when it exists (what GitHub compares against), and *head*
-    when it exists locally, else `origin/<head>` when only the remote-tracking ref exists, else `HEAD`."""
+    when it exists locally, else `origin/<head>` when only the remote-tracking ref exists.
+
+    A named *head* that is in neither place gives None, never `HEAD`: the checked-out branch is
+    some other branch, and its size and files would describe the wrong change. Only an empty
+    *head* (no branch name to go on) means `HEAD`."""
     base_ref = f"origin/{base}" if _ref_exists(repo, f"origin/{base}") else base
-    if head and _ref_exists(repo, head):
-        head_ref = head
-    elif head and _ref_exists(repo, f"origin/{head}"):
-        head_ref = f"origin/{head}"
-    else:
-        head_ref = "HEAD"
-    return base_ref, head_ref
+    if not head:
+        return base_ref, "HEAD"
+    if _ref_exists(repo, head):
+        return base_ref, head
+    if _ref_exists(repo, f"origin/{head}"):
+        return base_ref, f"origin/{head}"
+    return base_ref, None
+
+
+def _head_missing(head: str) -> str:
+    return f"`{head}` is not in this checkout (no local ref and no `origin/{head}`); fetch it first"
+
+
+_OID_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def is_oid(text: str) -> bool:
+    """A full SHA-1 or SHA-256 commit id, safe to put in a git argv."""
+    return bool(_OID_RE.fullmatch(text))
+
+
+def fetch_pr_head(repo: Path, number: str, oid: str) -> tuple[bool, str]:
+    """Make the PR's head commit *oid* available locally: already there, or fetched from
+    origin's `refs/pull/<number>/head`, which GitHub keeps for every PR, a fork's included.
+    (False, why) when it still is not there."""
+    if _ref_exists(repo, oid):
+        return True, ""
+    res = _run(["git", "fetch", "--quiet", "--no-tags", "origin", f"refs/pull/{number}/head"], cwd=repo)
+    if not res.ok:
+        return False, f"`{res.command}` failed: {res.why()}"
+    if not _ref_exists(repo, oid):
+        return False, (f"origin's refs/pull/{number}/head is not {oid[:12]}: "
+                       "the PR was pushed to since `gh pr view` read it")
+    return True, ""
 
 
 _SHORTSTAT_RE = {
@@ -122,6 +153,8 @@ _SHORTSTAT_RE = {
 def shortstat(repo: Path, base: str, head: str) -> tuple[DiffSize | None, str]:
     """`git diff --shortstat <base>...<head>`, parsed; (None, why) when git fails."""
     base_ref, head_ref = diff_refs(repo, base, head)
+    if head_ref is None:
+        return None, _head_missing(head)
     res = _run(["git", "diff", "--shortstat", f"{base_ref}...{head_ref}"], cwd=repo)
     if not res.ok:
         return None, f"`{res.command}` failed: {res.why()}"
@@ -132,6 +165,8 @@ def shortstat(repo: Path, base: str, head: str) -> tuple[DiffSize | None, str]:
 def changed_files(repo: Path, base: str, head: str, limit: int = 300) -> list[str]:
     """`git diff --name-status <base>...<head>` lines, at most *limit*; [] when git fails."""
     base_ref, head_ref = diff_refs(repo, base, head)
+    if head_ref is None:
+        return []
     res = _run(["git", "diff", "--name-status", f"{base_ref}...{head_ref}"], cwd=repo)
     if not res.ok:
         return []
@@ -150,7 +185,7 @@ def gh_default_branch(repo: Path) -> str | None:
 
 def view_pr(repo: Path, pr: str) -> tuple[dict | None, Result]:
     res = _run_gh(["gh", "pr", "view", pr, "--json",
-                   "body,author,number,url,baseRefName,headRefName"], cwd=repo)
+                   "body,author,number,url,baseRefName,headRefName,headRefOid"], cwd=repo)
     if not res.ok:
         return None, res
     try:

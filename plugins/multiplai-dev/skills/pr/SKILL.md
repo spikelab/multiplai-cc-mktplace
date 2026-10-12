@@ -23,14 +23,15 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/pr/scripts" python -m pr_pipeli
 | Command | Does |
 |---|---|
 | `open --repo <dir> --change-dir <dir> [--base <branch>] [--head <branch>] [--title <t>] [--ready \| --draft] [--no-push] [--section <file>]… [--ticket-url <url>] [--dry-run]` | Pushes the branch (`git push -u origin <head>`, never `--force`) unless `--no-push`, then opens the PR with `gh pr create --body-file`. Draft unless `--ready`, or `pr.draft: false` in `specs/config.yaml`; `--draft` opens a draft whatever `pr.draft` says. Title defaults to `buildme: <change-name>`. |
-| `edit <pr-number\|url> --repo <dir> --change-dir <dir> [--section <file>]… [--push] [--dry-run]` | Reads the current description (`gh pr view --json body`), refreshes the sections this skill owns, and writes the whole description back with `gh pr edit --body-file`. Pushes first only with `--push`. Never changes the title or labels. |
+| `edit <pr-number\|url> --repo <dir> --change-dir <dir> [--section <file>]… [--push] [--dry-run]` | Reads the current description (`gh pr view --json body`), refreshes the sections this skill owns, and writes the whole description back with `gh pr edit --body-file`. Pushes first only with `--push`. Measures the diff on the PR's head commit (`headRefOid`), fetched from `origin` when the checkout lacks it, so a fork's PR or a branch never fetched is measured right; with `--push`, on the local branch being pushed. When that commit cannot be had, the Size section says "not measured" with a `PR_DIAGNOSIS:` line, rather than measuring whatever is checked out. Never changes the title or labels. |
 | `render --repo <dir> --change-dir <dir> [--section <file>]…` | Prints the description `open` would write. No `gh` call, no push. |
 
 `--change-dir` is the change's documents: `specs/changes/<name>/` or its
 archive. `--section <file>` adds a section: the file's first line is its
 Markdown heading, the rest its content. `--dry-run` prints the write commands
 and the description and writes nothing to git or GitHub (it still reads: the
-default branch, and on `edit` the current description).
+default branch, and on `edit` the current description and the PR's head
+commit, fetched as below).
 
 Ask before running `open` or `edit` without `--dry-run`: both write to GitHub
 under the user's `gh` login.
@@ -40,6 +41,9 @@ under the user's `gh` login.
 - `git push -u origin <branch>` (`open` without `--no-push`, `edit --push`).
 - `gh pr create` (`open`), `gh pr edit` (`edit`).
 - `gh pr comment`: once, on `edit` of a PR that was opened by hand (below).
+- `git fetch --no-tags origin refs/pull/<n>/head` (`edit` without `--push`, only when
+  the checkout lacks the PR's head commit): adds that commit's objects and
+  `FETCH_HEAD`, and creates no branch.
 
 It needs the GitHub CLI (`gh`), logged in with `gh auth login`, for `open` and
 `edit`. It never merges, closes a PR, deletes a branch, or force-pushes.

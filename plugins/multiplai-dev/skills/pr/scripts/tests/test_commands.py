@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 from conftest import git, make_bare_origin, make_change, make_repo
@@ -347,6 +348,64 @@ def test_edit_appends_a_new_extra_section(tmp_path, gh_stub, capsys):
     new = gh_stub.bodies["gh pr edit"]
     assert new.startswith(body.rstrip("\n").split("\n", 1)[0])
     assert new.rstrip().endswith(f"## Findings fixed\n{markers.wrap('extra:findings-fixed', '- round 1')}")
+
+
+def _pr_head_on_origin(repo, tmp_path) -> str:
+    """A PR head commit (1 file, +1 -0 against main) that exists only as origin's
+    `refs/pull/7/head`, as a fork's PR does. Returns its sha."""
+    make_bare_origin(repo, tmp_path / "origin.git")
+    git(repo, "checkout", "-q", "-b", "contrib", "main")
+    (repo / "c.txt").write_text("c\n")
+    git(repo, "add", "c.txt")
+    git(repo, "commit", "-q", "-m", "contrib")
+    sha = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "push", "-q", "origin", "contrib:refs/pull/7/head")
+    git(repo, "checkout", "-q", "feat/x")
+    git(repo, "branch", "-q", "-D", "contrib")
+    git(repo, "reflog", "expire", "--expire=now", "--all")
+    git(repo, "gc", "-q", "--prune=now")
+    return sha
+
+
+def test_edit_measures_the_prs_head_commit_not_a_same_named_local_branch(tmp_path, gh_stub, capsys):
+    # The PR's head is a fork's `feat/x`; the local `feat/x` is a different branch. The size and
+    # the file list must describe the PR, fetched from origin's refs/pull/<n>/head.
+    repo, change = _setup(tmp_path)
+    body = _managed_body(repo, change, capsys)
+    sha = _pr_head_on_origin(repo, tmp_path)
+    assert subprocess.run(["git", "cat-file", "-e", sha], cwd=repo).returncode != 0, "not fetched yet"
+    pr = json.loads(_pr_json(body)) | {"headRefOid": sha}
+    gh_stub.on(["gh", "pr", "view"], stdout=json.dumps(pr)).on(["gh", "pr", "edit"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 0
+    out = capsys.readouterr().out
+    assert "DIFF:1 files, +1 -0" in out and "DIFF:2 files" not in out
+    new = gh_stub.bodies["gh pr edit"]
+    assert "1 files changed, +1 -0 lines" in new
+
+
+def test_edit_refuses_to_measure_when_the_prs_head_cannot_be_fetched(tmp_path, gh_stub, capsys):
+    repo, change = _setup(tmp_path, origin=True)
+    body = _managed_body(repo, change, capsys)
+    pr = json.loads(_pr_json(body)) | {"headRefName": "fork-only", "headRefOid": "1" * 40}
+    gh_stub.on(["gh", "pr", "view"], stdout=json.dumps(pr)).on(["gh", "pr", "edit"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 0
+    out = capsys.readouterr().out
+    assert "DIFF:" not in out
+    assert "PR_DIAGNOSIS:could not fetch PR 7's head commit" in out
+    assert "PR_DIAGNOSIS:diff size not measured" in out
+    new = gh_stub.bodies["gh pr edit"]
+    assert "2 files changed" not in new and "_Not measured:" in new
+
+
+def test_edit_ignores_a_head_oid_that_is_not_a_commit_id(tmp_path, gh_stub, capsys):
+    repo, change = _setup(tmp_path)
+    body = _managed_body(repo, change, capsys)
+    pr = json.loads(_pr_json(body)) | {"headRefOid": "--output=x"}
+    gh_stub.on(["gh", "pr", "view"], stdout=json.dumps(pr)).on(["gh", "pr", "edit"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 0
+    out = capsys.readouterr().out
+    assert "DIFF:2 files, +3 -1" in out and "could not fetch" not in out
+    assert not (repo / "x").exists()
 
 
 def test_edit_push_pushes_before_editing(tmp_path, gh_stub, capsys):

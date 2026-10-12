@@ -102,6 +102,18 @@ def test_size_uses_origin_head_when_the_pr_branch_is_only_remote_tracking(tmp_pa
     assert sorted(github.changed_files(repo, "main", "feat/x")) == ["A\tb.txt", "M\ta.txt"]
 
 
+def test_size_is_not_measured_when_the_named_head_is_not_in_the_checkout(tmp_path):
+    # A PR branch never fetched (or a fork's): measuring the checked-out branch instead would
+    # put another branch's size and files in the description.
+    repo = make_repo(tmp_path / "proj")
+    r = _render(repo, make_change(repo), head="never-fetched")
+    assert r.sources.size is None
+    assert "never-fetched" in r.sources.size_note
+    assert any("diff size not measured" in d and "never-fetched" in d for d in r.diagnoses)
+    assert "2 files changed" not in r.body
+    assert github.changed_files(repo, "main", "never-fetched") == []
+
+
 def test_ticket_url_from_the_flag_or_from_ticket_md(tmp_path):
     repo = make_repo(tmp_path / "proj")
     change = make_change(repo, ticket="# Ticket\n\nurl: https://plane.example/SPK-12\n\nDo the thing.\n")
