@@ -17,6 +17,34 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-10-12
+
+### Added
+- New `/multiplai-dev:buildme-findings <pr>` skill (`python -m build_pipeline
+  findings --pr <n>`): fixes a PR's review comments through buildme's own
+  process. It reads the PR's unresolved review threads and new top-level
+  comments, acts only on those from `findings.authors` (default: anyone with
+  `admin`, `maintain` or `write` on the repo) and the bots in
+  `findings.allow_bots`, and sorts each with a read-only agent that sees the
+  comment only as fenced, untrusted text. `findings-r<N>.md` in the change
+  directory lists every comment with its verdict. A finding that needs a spec
+  change gets one: `respec-findings-r<N>.md` is applied to the change's
+  requirements and committed as `spec(findings-r<N>)` before any code, with
+  or without `--auto`. Each code defect becomes a block run by the TDD engine
+  with a failing test first and every gate a build has. The skill then pushes,
+  adds a "Review rounds" section to the PR description through
+  `/multiplai-dev:pr`, replies in each thread with the fixing commit or the
+  reason nothing changed, and re-runs `/multiplai-dev:review`. Rounds repeat
+  until nothing new is left or `findings.max_rounds` (default 3) is reached.
+  Review threads are never resolved. A re-run resumes at the step that did not
+  finish without re-asking a comment or posting a reply twice, and a step that
+  failed part way keeps its edits under `refs/buildme/wip/<change>/r<N>-<step>`.
+- `findings.allow_bots` in `specs/config.yaml`.
+
+### Changed
+- `findings.authors` and `findings.max_rounds` are now read by the findings
+  stage; before this release they were stored only.
+
 ## [0.42.0] - 2026-10-12
 
 ### Added
