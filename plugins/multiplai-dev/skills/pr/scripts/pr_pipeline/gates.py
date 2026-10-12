@@ -1,6 +1,7 @@
 """Gates on the assembled body. No gate calls a model.
 
-- every template heading appears once, in template order;
+- every template heading line appears as many times as in the template, in
+  template order;
 - every template checkbox line appears, unticked unless its id was ticked
   with a quote found verbatim in a source file;
 - every section the model filled is non-empty (or holds the literal
@@ -52,19 +53,28 @@ class GateResult:
 
 
 def check_headings(sections: list[Section], body: str) -> list[str]:
+    """Each template heading line appears in the body as many times as in the template, and
+    the n-th copy in the body stands where the n-th copy in the template does, in order."""
     lines = body.split("\n")
+    headings = [s.heading for s in sections if s.level != 0]
     errors: list[str] = []
+    found: dict[str, list[int]] = {}
+    for h in dict.fromkeys(headings):
+        found[h] = [i for i, line in enumerate(lines) if line == h]
+        want = headings.count(h)
+        if len(found[h]) != want:
+            expected = "once" if want == 1 else str(want)
+            errors.append(f"template heading {h!r} appears {len(found[h])} times, expected {expected}")
     last = -1
-    for s in sections:
-        if s.level == 0:
+    used: dict[str, int] = {}
+    for h in headings:
+        if len(found[h]) != headings.count(h):
             continue
-        at = [i for i, line in enumerate(lines) if line == s.heading]
-        if len(at) != 1:
-            errors.append(f"template heading {s.heading!r} appears {len(at)} times, expected once")
-            continue
-        if at[0] < last:
-            errors.append(f"template heading {s.heading!r} is out of template order")
-        last = max(last, at[0])
+        at = found[h][used.get(h, 0)]
+        used[h] = used.get(h, 0) + 1
+        if at < last:
+            errors.append(f"template heading {h!r} is out of template order")
+        last = max(last, at)
     return errors
 
 

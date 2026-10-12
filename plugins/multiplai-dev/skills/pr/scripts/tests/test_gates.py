@@ -37,6 +37,27 @@ def test_heading_gate_catches_a_duplicate_and_an_out_of_order_heading():
     assert "appears 0 times" in gates.check_headings(sections, "## A\n")[0]
 
 
+REPEATED = "## Frontend\n<!-- ui -->\n### Details\n<!-- d -->\n## Backend\n<!-- api -->\n### Details\n<!-- d -->\n"
+
+
+def test_a_heading_the_template_repeats_passes_when_the_body_repeats_it_in_order():
+    sections = parse(REPEATED)
+    assert gates.check_headings(sections, REPEATED) == []
+    errors = gates.check_headings(sections, "## Frontend\n### Details\n## Backend\n")
+    assert errors == ["template heading '### Details' appears 1 times, expected 2"]
+    assert "out of template order" in gates.check_headings(
+        sections, "### Details\n## Frontend\n### Details\n## Backend\n")[0]
+
+
+def test_a_template_that_repeats_a_subheading_renders(tmp_path, model_stub):
+    repo = _repo(tmp_path, REPEATED)
+    model_stub.answers = [{"sections": {"frontend": "UI.", "details": "UI detail.",
+                                        "backend": "API.", "details-2": "API detail."}}]
+    body = _render(repo).body
+    assert body.count("### Details") == 2
+    assert body.index("UI detail.") < body.index("## Backend") < body.index("API detail.")
+
+
 def test_checkbox_gate_catches_a_missing_line():
     sections = parse("## C\n- [ ] Tests pass\n")
     assert gates.check_checkboxes(sections, "## C\n", set()) == ["template checkbox line '- [ ] Tests pass' is missing"]

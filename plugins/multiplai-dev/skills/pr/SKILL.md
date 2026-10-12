@@ -78,7 +78,8 @@ Size.
 - The template's headings, checkbox lines and HTML comments are kept byte for
   byte. A checkbox is ticked only when the model quotes, character for
   character, a source file showing it is done; otherwise it stays unticked.
-- Gates, in code: every template heading appears once, in order; every
+- Gates, in code: every template heading appears as often as in the
+  template, in order; every
   checkbox line is there; every section the model wrote is non-empty (or
   says `_Not applicable to this change._`); the description is at most 2,500
   words with HTML comments removed (on `edit`, only the text this skill owns
