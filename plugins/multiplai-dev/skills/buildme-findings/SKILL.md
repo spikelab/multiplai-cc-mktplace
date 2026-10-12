@@ -56,8 +56,10 @@ never removed. A PR whose branch lives in a fork is refused.
    rounds.
 3. **Spec.** For a `spec_change`, or a fix that contradicts the spec, one
    model call writes `respec-findings-r<N>.md`; the pipeline applies it to the
-   change's `requirements/*.md` and commits `spec(findings-r<N>): <ids>`
-   before any code changes, with or without `--auto`.
+   change's `requirements/*.md` (and, when the change is archived, to
+   `specs/registry/`, which the archive already merged it into) and commits
+   `spec(findings-r<N>): <ids>` before any code changes, with or without
+   `--auto`.
 4. **Code.** Each `code_fix` is one block in `findings-r<N>-tasks.md`, run
    through buildme's TDD engine: `test(block-<k>)` then `impl(block-<k>)`
    commits, with the RED gate, test hashing, refactor discard and per-block

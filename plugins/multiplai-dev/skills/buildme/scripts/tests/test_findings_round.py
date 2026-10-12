@@ -68,6 +68,10 @@ def built(tmp_path, monkeypatch):
     change = repo / "specs" / ARCHIVED
     (change / "requirements").mkdir(parents=True)
     (change / "requirements" / "calc.md").write_text(REQUIREMENTS)
+    # The archive merged the change's requirements: a new capability's
+    # registry file starts as a copy of them.
+    (repo / "specs" / "registry").mkdir(parents=True)
+    (repo / "specs" / "registry" / "calc.md").write_text(REQUIREMENTS)
     (change / "design.md").write_text("# Design\n")
     (change / "tasks.md").write_text("## 1. Add\n\nAdd two numbers.\n")
     (change / ".build-state.json").write_text(json.dumps(BUILD_STATE, indent=2))
@@ -478,6 +482,7 @@ class TestSpecChangeRound:
         test_i = subjects.index("test(block-1): Fix finding ab12")
         assert spec_i > test_i   # log is newest first: the spec commit is older
         assert "rejects None" in (change / "requirements" / "calc.md").read_text()
+        assert "rejects None" in (repo / "specs" / "registry" / "calc.md").read_text()
         findings_md = (change / "findings-r1.md").read_text()
         assert "## Spec changes" in findings_md and "rejects None" in findings_md
         section = fake_pr.sections[-1]

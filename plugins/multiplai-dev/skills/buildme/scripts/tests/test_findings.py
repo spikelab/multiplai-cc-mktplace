@@ -470,3 +470,158 @@ class TestSpecStep:
         changes, sha = await spec.run_spec_step(_config(repo), change_dir, 1,
                                                 [_record(1, Verdict.CODE_FIX)], call=fail)
         assert (changes, sha) == ([], None)
+
+
+SECTIONED = """## ADDED Requirements
+
+### Requirement: Sum
+The calculator adds two numbers.
+
+### Requirement: Product
+The calculator multiplies two numbers.
+
+## MODIFIED Requirements
+
+### Requirement: Div
+The calculator divides, refusing zero.
+
+### Requirement: Mod
+The calculator takes a remainder.
+
+## REMOVED Requirements
+
+### Requirement: Legacy
+"""
+
+
+def _section(text: str, op: str) -> str:
+    """The text of one `## <op> Requirements` section."""
+    start = text.index(f"## {op} Requirements")
+    nxt = text.find("\n## ", start + 1)
+    return text[start:nxt if nxt != -1 else len(text)]
+
+
+def _delta(*parts: str, findings="comment:1") -> str:
+    return f"# Capability: calc\nFindings: {findings}\n\n" + "\n".join(parts)
+
+
+class TestSpecDeltaOnTheChangesOwnFile:
+    """The change's requirements/<cap>.md is itself a delta, split into
+    ADDED/MODIFIED/REMOVED sections; an edit keeps every requirement in its
+    section."""
+
+    async def _apply(self, tmp_path, text, delta, records=None):
+        repo, change_dir = _repo_with_change(tmp_path)
+        (change_dir / "requirements" / "calc.md").write_text(text)
+
+        async def fake_llm(prompt, **kw):
+            return delta
+
+        changes, sha = await spec.run_spec_step(
+            _config(repo), change_dir, 1, records or [_record(1, Verdict.SPEC_CHANGE)],
+            call=fake_llm)
+        return repo, change_dir, changes, sha, (change_dir / "requirements" / "calc.md").read_text()
+
+    @pytest.mark.asyncio
+    async def test_modifying_the_last_requirement_of_a_section_keeps_the_next_heading(self, tmp_path):
+        delta = _delta("## MODIFIED Requirements\n\n### Requirement: Product\n"
+                       "The calculator multiplies two numbers and rejects None.\n")
+        *_, changes, _, req = await self._apply(tmp_path, SECTIONED, delta)
+        assert "rejects None" in _section(req, "ADDED")
+        modified = _section(req, "MODIFIED")
+        assert "### Requirement: Div" in modified and "### Requirement: Mod" in modified
+        assert "### Requirement: Legacy" in _section(req, "REMOVED")
+        assert [(c.requirement, c.applied) for c in changes] == [("Product", True)]
+
+    @pytest.mark.asyncio
+    async def test_removing_the_last_requirement_of_a_section_keeps_the_next_heading(self, tmp_path):
+        delta = _delta("## REMOVED Requirements\n\n### Requirement: Product\n")
+        *_, changes, _, req = await self._apply(tmp_path, SECTIONED, delta)
+        assert "Product" not in req
+        assert "### Requirement: Div" in _section(req, "MODIFIED")
+        assert [(c.requirement, c.applied) for c in changes] == [("Product", True)]
+
+    @pytest.mark.asyncio
+    async def test_removing_a_modified_requirement_moves_it_to_removed(self, tmp_path):
+        delta = _delta("## REMOVED Requirements\n\n### Requirement: Mod\n")
+        *_, changes, _, req = await self._apply(tmp_path, SECTIONED, delta)
+        assert "Mod" not in _section(req, "MODIFIED")
+        assert "### Requirement: Mod" in _section(req, "REMOVED")
+        assert "### Requirement: Legacy" in _section(req, "REMOVED")
+
+    @pytest.mark.asyncio
+    async def test_an_added_requirement_goes_in_the_added_section(self, tmp_path):
+        delta = _delta("## ADDED Requirements\n\n### Requirement: Neg\nThe calculator negates.\n")
+        *_, changes, _, req = await self._apply(tmp_path, SECTIONED, delta)
+        assert "### Requirement: Neg" in _section(req, "ADDED")
+        assert "Neg" not in _section(req, "REMOVED")
+        assert [(c.requirement, c.operation, c.applied) for c in changes] == [
+            ("Neg", "ADDED", True)]
+
+
+class TestSpecChangeIsAppliedOnlyWhenItChangedSomething:
+    @pytest.mark.asyncio
+    async def test_a_requirement_the_delta_did_not_change_is_not_applied(self, tmp_path):
+        repo, change_dir = _repo_with_change(tmp_path)
+        same = REQUIREMENTS.split("## ADDED Requirements\n\n", 1)[1]
+
+        async def fake_llm(prompt, **kw):
+            return _delta("## MODIFIED Requirements\n\n" + same + "\n"
+                          "### Requirement: Nope\nThere is no such requirement.\n")
+
+        changes, _ = await spec.run_spec_step(_config(repo), change_dir, 1,
+                                              [_record(1, Verdict.SPEC_CHANGE)], call=fake_llm)
+        assert [(c.requirement, c.applied) for c in changes] == [("Sum", False), ("Nope", False)]
+        assert all(c.declined_reason for c in changes)
+        assert (change_dir / "requirements" / "calc.md").read_text() == REQUIREMENTS
+
+
+class TestSpecChangeOnAnArchivedChange:
+    """After an `--auto` build the change is archived and its requirements are
+    already merged into specs/registry/: the live spec is the registry."""
+
+    def _archived(self, tmp_path):
+        repo = tmp_path
+        _git(repo, "init", "-q", "-b", "main")
+        _git(repo, "config", "user.email", "t@example.com")
+        _git(repo, "config", "user.name", "t")
+        change_dir = repo / "specs" / "archive" / "2026-10-11-calc"
+        (change_dir / "requirements").mkdir(parents=True)
+        (change_dir / "requirements" / "calc.md").write_text(REQUIREMENTS)
+        registry = repo / "specs" / "registry" / "calc.md"
+        registry.parent.mkdir(parents=True)
+        registry.write_text("# calc\n\n" + REQUIREMENTS.split("\n\n", 1)[1])
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "build")
+        return repo, change_dir, registry
+
+    @pytest.mark.asyncio
+    async def test_the_registry_changes_with_the_archived_change(self, tmp_path):
+        repo, change_dir, registry = self._archived(tmp_path)
+
+        async def fake_llm(prompt, **kw):
+            return DELTA
+
+        changes, sha = await spec.run_spec_step(
+            _config(repo), change_dir, 1, [_record(1, Verdict.SPEC_CHANGE)], call=fake_llm)
+        assert sha
+        assert "rejects None" in registry.read_text()
+        assert registry.read_text().count("### Requirement: Sum") == 1
+        assert "rejects None" in (change_dir / "requirements" / "calc.md").read_text()
+        committed = _git(repo, "show", "--name-only", "--format=", "HEAD").split()
+        assert "specs/registry/calc.md" in committed
+        assert [(c.requirement, c.applied) for c in changes if c.applied] == [("Sum", True)]
+
+    @pytest.mark.asyncio
+    async def test_an_active_change_leaves_the_registry_to_its_archive(self, tmp_path):
+        repo, change_dir = _repo_with_change(tmp_path)
+        registry = repo / "specs" / "registry" / "calc.md"
+        registry.parent.mkdir(parents=True)
+        registry.write_text("# calc\n")
+
+        async def fake_llm(prompt, **kw):
+            return DELTA
+
+        await spec.run_spec_step(_config(repo), change_dir, 1,
+                                 [_record(1, Verdict.SPEC_CHANGE)], call=fake_llm)
+        assert registry.read_text() == "# calc\n"
