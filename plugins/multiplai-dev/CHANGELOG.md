@@ -17,6 +17,26 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-10-12
+
+### Added
+- `codebase-walkthrough` in human mode also writes `<name>-walkthrough.json`
+  next to its Markdown, and step 2 opens it in the review-viewer as a tree
+  of the module's directory at the commit it read (`serve --tree`). Each
+  section of the walkthrough is a step there, anchored on the lines it cites
+  in the module; every other file under the module is listed with the reason
+  no step covers it. The step-through HTML page is still written, for now.
+- The walkthrough's Markdown header names the module directory, the depth
+  and the mode it was run with.
+
+### Changed
+- `review-viewer`: a complete walkthrough of a tree target (`serve --tree`)
+  no longer needs the `commits` and `tests` assessments or the `risk` block,
+  since a tree is not a change. It must still cover or skip every file.
+  Existing walkthrough files load as before; the schema is unchanged.
+- `codebase-walkthrough` now also runs `git ls-tree` (read-only) on the
+  module's repository, to list the files the viewer shows.
+
 ## [0.35.0] - 2026-10-12
 
 ### Added
