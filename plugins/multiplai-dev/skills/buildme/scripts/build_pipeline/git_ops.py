@@ -509,12 +509,21 @@ def save_wip_ref(repo: Path | str, ref: str, message: str) -> str | None:
     goes under ``<ref>-2``, ``<ref>-3``, and so on; a ref that already names
     HEAD is returned as it is. The commit stays on the branch until the
     caller's ``discard_to`` moves the branch back; the ref keeps it reachable
-    after that."""
+    after that. When the WIP commit fails and the tree still holds
+    uncommitted work, no ref is written and None is returned, so the caller
+    never discards edits the ref does not hold."""
     if not ref.startswith("refs/buildme/wip/") or not _run(
             ["git", "check-ref-format", ref], cwd=repo).ok:
         log.warning("Refusing to write wip ref %r", ref)
         return None
-    commit_tree(repo, message, f"wip {ref}")
+    # commit_tree returns None both for "nothing to commit" and for "the
+    # commit failed" (a hook rejected it, signing failed). Only the first
+    # leaves HEAD holding the work; after the second, a ref at HEAD would keep
+    # nothing and the caller's discard would destroy the edits.
+    if commit_tree(repo, message, f"wip {ref}") is None and not tree_is_clean(repo):
+        log.warning("Refusing to write wip ref %r: the WIP commit failed and the tree "
+                    "still holds uncommitted work", ref)
+        return None
     head = rev_parse_head(repo)
     if not head:
         return None

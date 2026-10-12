@@ -651,3 +651,34 @@ class TestSaveWipRef:
     def test_a_ref_outside_the_wip_namespace_is_refused(self, tmp_path):
         repo = make_repo(tmp_path / "proj")
         assert git_ops.save_wip_ref(repo, "refs/heads/main", "wip") is None
+
+    def test_a_rejected_wip_commit_writes_no_ref(self, tmp_path):
+        """When the WIP commit fails (a pre-commit hook rejects it), HEAD
+        does not hold the edits, so a ref at HEAD would keep nothing and the
+        caller's discard would destroy them. No ref, and the edits stay."""
+        repo = make_repo(tmp_path / "proj")
+        head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        hook = repo / ".git" / "hooks" / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        (repo / "attempt.txt").write_text("unsaved\n")
+        ref = "refs/buildme/wip/calc/r1-code-block1"
+
+        assert git_ops.save_wip_ref(repo, ref, "wip") is None
+        assert subprocess.run(["git", "rev-parse", "--verify", "-q", ref],
+                              cwd=str(repo), capture_output=True).returncode != 0
+        assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head
+        assert (repo / "attempt.txt").read_text() == "unsaved\n"
+
+    def test_a_clean_tree_with_moved_head_still_gets_a_ref(self, tmp_path):
+        """Nothing uncommitted (the step committed its own work) is not a
+        failure: the ref names HEAD, which holds everything."""
+        repo = make_repo(tmp_path / "proj")
+        (repo / "attempt.txt").write_text("committed\n")
+        _git(repo, "add", "attempt.txt")
+        _git(repo, "commit", "-q", "-m", "step's own commit")
+        head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        ref = "refs/buildme/wip/calc/r1-spec"
+
+        assert git_ops.save_wip_ref(repo, ref, "wip") == ref
+        assert _git(repo, "rev-parse", ref).stdout.strip() == head

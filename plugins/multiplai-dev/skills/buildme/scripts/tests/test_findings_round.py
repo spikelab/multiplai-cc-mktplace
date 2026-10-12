@@ -588,6 +588,35 @@ class TestResume:
         assert not (repo / "half-written.txt").exists()
         assert any(line == f"FINDINGS:WIP:{ref}" for line in lines)
 
+    @pytest.mark.asyncio
+    async def test_a_rejected_wip_commit_leaves_the_edits_in_the_tree(
+            self, built, fake_pr, monkeypatch):
+        """When a hook rejects the WIP commit, no ref holds the edits, so the
+        step must not discard them and must not report them as kept."""
+        repo, change, config = built
+        fake_pr.add_thread("alice", "None should be refused", fid="5e1")
+        triage_call = FakeTriage({
+            "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified")})
+
+        async def spec_call(prompt, **kw):
+            (repo / "half-written.txt").write_text("agent edit\n")
+            hook = repo / ".git" / "hooks" / "pre-commit"
+            hook.write_text("#!/bin/sh\nexit 1\n")
+            hook.chmod(0o755)
+            raise RuntimeError("agent failed mid-turn")
+
+        discarded: list[str] = []
+        monkeypatch.setattr(git_ops, "discard_to",
+                            lambda repo_, sha, label="": discarded.append(sha) or True)
+        run, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
+                          spec_call=spec_call)
+        assert await loop.run_findings(run) == 1
+
+        assert discarded == []
+        assert (repo / "half-written.txt").read_text() == "agent edit\n"
+        assert not any(line.startswith("FINDINGS:WIP:") for line in lines)
+        assert _wip(repo) == ""
+
 
     @pytest.mark.asyncio
     async def test_a_resumed_step_keeps_the_commits_pulled_from_origin(self, built, fake_pr, tmp_path):

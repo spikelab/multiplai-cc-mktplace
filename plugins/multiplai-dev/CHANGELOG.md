@@ -40,7 +40,9 @@ time, not derived from a tag.
   the budget, is not answered: re-running the command keeps that attempt's
   edits under `refs/buildme/wip/<change>/r<N>-code-block<k>-stopped` and runs
   the block again. A wip ref is never overwritten: a later attempt at the same
-  step goes under the same name with `-2`, `-3`, and so on. When every block
+  step goes under the same name with `-2`, `-3`, and so on. When the commit
+  that would keep the edits fails (a pre-commit hook rejects it, say), no ref
+  is written and the edits are left in the tree, never discarded. When every block
   is done but a step the engine runs after them fails (the whole-change
   refactor's budget stop, or mutation testing), the fixes are still pushed and
   answered, and each reply says what failed after them; a test suite that
