@@ -1549,6 +1549,7 @@ class TestIntakeAndStageKeys:
         assert config.pr.max_change_lines == 1000
         assert config.findings.authors == "collaborators"
         assert config.findings.max_rounds == 3
+        assert config.findings.allow_bots == []
         assert config.mutation.enabled is True
         assert config.mutation.min_score == 0.8
         assert config.model_specs == {}
@@ -1567,6 +1568,7 @@ pr:
 findings:
   authors: [alice, bob]
   max_rounds: 5
+  allow_bots: [renovate-bot]
 mutation:
   enabled: false
   min_score: 0.65
@@ -1582,6 +1584,7 @@ models:
         assert config.pr.max_change_lines == 400
         assert config.findings.authors == ["alice", "bob"]
         assert config.findings.max_rounds == 5
+        assert config.findings.allow_bots == ["renovate-bot"]
         assert config.mutation.enabled is False
         assert config.mutation.min_score == 0.65
         assert config.model_specs == {"spec": "claude:opus",
@@ -1603,6 +1606,8 @@ models:
         ("findings: {authors: everyone}\n", ("findings", "authors"), "collaborators"),
         ("findings: {authors: []}\n", ("findings", "authors"), "collaborators"),
         ("findings: {max_rounds: -1}\n", ("findings", "max_rounds"), 3),
+        ("findings: {allow_bots: dependabot}\n", ("findings", "allow_bots"), []),
+        ("findings: {allow_bots: [3]}\n", ("findings", "allow_bots"), []),
         ("mutation: {enabled: sometimes}\n", ("mutation", "enabled"), True),
         ("mutation: {min_score: 1.5}\n", ("mutation", "min_score"), 0.8),
         ("mutation: {min_score: high}\n", ("mutation", "min_score"), 0.8),

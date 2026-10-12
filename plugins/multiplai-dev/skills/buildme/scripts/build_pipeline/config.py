@@ -520,10 +520,17 @@ class PrSettings:
 
 @dataclass
 class FindingsSettings:
-    """`findings:` block. Stored for the findings stage; not read yet."""
+    """`findings:` block, read by `python -m build_pipeline findings`.
+
+    `authors`: `collaborators` (anyone whose `role_name` on the repo is
+    `admin`, `maintain` or `write`) or a list of GitHub logins whose PR
+    comments are acted on. `max_rounds`: fix rounds before the loop stops.
+    `allow_bots`: bot logins whose comments are acted on; any other bot's are
+    listed and skipped."""
 
     authors: str | list[str] = "collaborators"
     max_rounds: int = 3
+    allow_bots: list[str] = field(default_factory=list)
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -1107,9 +1114,18 @@ class BuildConfig:
             log.warning("Invalid findings.authors value %r in config.yaml — using "
                         "'collaborators'", authors)
             authors = "collaborators"
+        allow_bots = findings_cfg.get("allow_bots", [])
+        if allow_bots is None:
+            allow_bots = []
+        if not (isinstance(allow_bots, list)
+                and all(isinstance(b, str) and b.strip() for b in allow_bots)):
+            log.warning("Invalid findings.allow_bots value %r in config.yaml — using []",
+                        allow_bots)
+            allow_bots = []
         self.findings = FindingsSettings(
             authors=authors,
             max_rounds=_cfg_int(findings_cfg.get("max_rounds", 3), "findings.max_rounds", 3),
+            allow_bots=[b.strip() for b in allow_bots],
         )
 
         specs: dict[str, str] = {}
