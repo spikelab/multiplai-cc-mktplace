@@ -81,6 +81,13 @@ class TDDState(BaseModel):
     # otherwise re-run it (and pay for it) every time. Old checkpoints default
     # to False, which re-runs a pass that is idempotent by construction.
     refactor_all_done: bool = False
+    # The MUTATION sub-step (cosmic-ray over the build's changed lines) runs
+    # after the whole-change refactor and commits its own survivor-round tests
+    # and mutation.md, so nothing on disk says it passed — without the flag a
+    # resume would re-run every mutant. Set only when the score met
+    # `mutation.min_score` (or the step was skipped); a failed step stays False
+    # so a resume runs it again. Old checkpoints default to False.
+    mutation_done: bool = False
     e2e_done: bool = False
 
 

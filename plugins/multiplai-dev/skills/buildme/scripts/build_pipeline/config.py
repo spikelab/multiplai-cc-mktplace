@@ -448,6 +448,7 @@ STEP_STAGES: dict[str, str] = {
     "implementer": "agent",
     "refactor": "agent",
     "refactor_all": "agent",
+    "mutation_test_writer": "agent",
     "integration_fix": "agent",
     "review_fix": "agent",
     "docs_update": "agent",
@@ -525,24 +526,9 @@ class FindingsSettings:
     max_rounds: int = 3
 
 
-@dataclass
-class MutationSettings:
-    """`mutation:` block. Stored for the mutation-testing stage; not read yet."""
-
-    enabled: bool = True
-    min_score: float = 0.8
-
-
 def _cfg_int(value, key: str, default: int) -> int:
     """A positive int from config.yaml, or *default* with a warning."""
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        log.warning("Invalid %s value %r in config.yaml — using %r", key, value, default)
-        return default
-    return value
-
-
-def _cfg_bool(value, key: str, default: bool) -> bool:
-    if not isinstance(value, bool):
         log.warning("Invalid %s value %r in config.yaml — using %r", key, value, default)
         return default
     return value
@@ -572,6 +558,85 @@ _STEP_FALLBACKS: tuple[tuple[str, str], ...] = (
     ("plan_review_model", "model"),
 )
 
+
+@dataclass
+class MutationSettings:
+    """`mutation:` in specs/config.yaml — the TDD engine's MUTATION sub-step.
+
+    `min_score` defaults to 0.8 with no measurement behind it: nobody has run
+    mutation testing on buildme output yet, so the default is a starting point
+    to be adjusted from real runs.
+    """
+    enabled: bool = True
+    min_score: float = 0.8
+    timeout: float = 30.0      # seconds per test-suite run under a mutant
+    max_mutants: int = 300     # above it, a deterministic sample runs
+
+
+def _load_mutation_settings(raw) -> MutationSettings:
+    """Validate `mutation:`; a bad value keeps its default and logs a warning,
+    like `_normalize_prototype_toggle` — never a crash, never a silent change."""
+    settings = MutationSettings()
+    if raw is None:
+        return settings
+    if not isinstance(raw, dict):
+        log.warning("mutation: in config.yaml is not a mapping — using defaults")
+        return settings
+    enabled = raw.get("enabled", True)
+    if isinstance(enabled, bool):
+        settings.enabled = enabled
+    elif str(enabled).strip().lower() in ("yes", "on", "1", "true"):
+        settings.enabled = True
+    elif str(enabled).strip().lower() in ("no", "off", "0", "false"):
+        settings.enabled = False
+    else:
+        log.warning("Unrecognized mutation.enabled value %r in config.yaml — using true", enabled)
+
+    def _number(key, default, *, cast, ok, rule):
+        value = raw.get(key, default)
+        if isinstance(value, bool):
+            log.warning("Invalid mutation.%s=%r in config.yaml (%s) — using %r", key, value, rule, default)
+            return default
+        try:
+            number = cast(value)
+        except (TypeError, ValueError):
+            log.warning("Invalid mutation.%s=%r in config.yaml (%s) — using %r", key, value, rule, default)
+            return default
+        if not ok(number) or (cast is int and number != value):
+            log.warning("Invalid mutation.%s=%r in config.yaml (%s) — using %r", key, value, rule, default)
+            return default
+        return number
+
+    settings.min_score = _number("min_score", settings.min_score, cast=float,
+                                 ok=lambda v: 0.0 <= v <= 1.0, rule="a number from 0 to 1")
+    settings.timeout = _number("timeout", settings.timeout, cast=float,
+                               ok=lambda v: v > 0, rule="seconds, above 0")
+    settings.max_mutants = _number("max_mutants", settings.max_mutants, cast=int,
+                                   ok=lambda v: v > 0, rule="a whole number above 0")
+    return settings
+
+
+
+# Root file → test command, in the order test-command discovery checks them.
+_TEST_COMMAND_DISCOVERY = (
+    ("pytest.ini", "pytest -xvs"),
+    ("pyproject.toml", "pytest -xvs"),
+    ("setup.py", "pytest -xvs"),
+    ("Package.swift", "swift test"),
+    ("Cargo.toml", "cargo test"),
+    ("go.mod", "go test ./..."),
+    ("package.json", "npm test"),
+)
+
+
+def discover_test_command(project_dir: Path | str) -> tuple[str, str] | None:
+    """(test command, root file it came from) that discovery picks for
+    *project_dir*, or None when no root file matches."""
+    p = Path(project_dir)
+    for marker, cmd in _TEST_COMMAND_DISCOVERY:
+        if (p / marker).exists():
+            return cmd, marker
+    return None
 
 @dataclass
 class BuildConfig:
@@ -606,6 +671,10 @@ class BuildConfig:
     project_description: str = ""
     stack: str = ""
     test_command: str = ""
+    # Runtime marker, not user-configurable: the root file test-command
+    # discovery took `test_command` from ("package.json", ...). Empty when the
+    # command was configured (tdd.test_command) or set by the caller.
+    test_command_discovered_from: str = ""
 
     # Memory files
     core_memory_files: list[str] = field(default_factory=lambda: ["technical-pref.md"])
@@ -623,10 +692,12 @@ class BuildConfig:
     # Git lifecycle toggles
     git: GitToggles = field(default_factory=GitToggles)
 
+    # MUTATION sub-step settings (`mutation:` in specs/config.yaml)
+    mutation: MutationSettings = field(default_factory=MutationSettings)
+
     # Ticket intake (`intake:`), interview mode (`interview:`) and the stored-only
-    # blocks for later stages (`architecture`, `pr`, `findings`, `mutation`,
-    # `models`). Every default reproduces the behaviour of a repo without the
-    # keys.
+    # blocks for later stages (`architecture`, `pr`, `findings`, `models`).
+    # Every default reproduces the behaviour of a repo without the keys.
     intake: IntakeConfig = field(default_factory=IntakeConfig)
     # "self" | "ticket" | "user". Under --auto, "user" resolves to "self"
     # (nobody is there to answer); "ticket" is kept, since asking on the
@@ -635,7 +706,6 @@ class BuildConfig:
     architecture: str = ""
     pr: PrSettings = field(default_factory=PrSettings)
     findings: FindingsSettings = field(default_factory=FindingsSettings)
-    mutation: MutationSettings = field(default_factory=MutationSettings)
     # `models:` from specs/config.yaml: step, stage or `default` → a model spec
     # as written. `model_for` resolves it.
     model_specs: dict[str, str] = field(default_factory=dict)
@@ -974,6 +1044,7 @@ class BuildConfig:
             prototype=_normalize_prototype_toggle(prototype.get("enabled", "auto")),
             respec_halt_on_contradiction=respec.get("halt_on_contradiction", False),
         )
+        self.mutation = _load_mutation_settings(data.get("mutation"))
 
         # Git lifecycle: git: {worktree: true, push: true, pr: draft|ready|none}
         git_cfg = data.get("git", {}) or {}
@@ -990,8 +1061,8 @@ class BuildConfig:
         self._load_intake_and_stage_settings(data)
 
     def _load_intake_and_stage_settings(self, data: dict) -> None:
-        """`intake`, `interview`, `architecture`, `pr`, `findings`, `mutation`
-        and `models`. An invalid value logs a warning and keeps the default,
+        """`intake`, `interview`, `architecture`, `pr`, `findings` and
+        `models` (`mutation` is `_load_mutation_settings`). An invalid value logs a warning and keeps the default,
         the same contract as `git.pr`."""
         intake_cfg = _cfg_mapping(data.get("intake"), "intake")
         provider = str(intake_cfg.get("provider", "none") or "none").lower()
@@ -1039,18 +1110,6 @@ class BuildConfig:
         self.findings = FindingsSettings(
             authors=authors,
             max_rounds=_cfg_int(findings_cfg.get("max_rounds", 3), "findings.max_rounds", 3),
-        )
-
-        mutation_cfg = _cfg_mapping(data.get("mutation"), "mutation")
-        min_score = mutation_cfg.get("min_score", 0.8)
-        if isinstance(min_score, bool) or not isinstance(min_score, (int, float)) \
-                or not 0.0 <= float(min_score) <= 1.0:
-            log.warning("Invalid mutation.min_score value %r in config.yaml — using 0.8",
-                        min_score)
-            min_score = 0.8
-        self.mutation = MutationSettings(
-            enabled=_cfg_bool(mutation_cfg.get("enabled", True), "mutation.enabled", True),
-            min_score=float(min_score),
         )
 
         specs: dict[str, str] = {}
@@ -1165,22 +1224,13 @@ class BuildConfig:
         """Auto-detect test command if not specified in config."""
         if self.test_command:
             return
-        p = self.project_dir
-        discovery = [
-            (p / "pytest.ini", "pytest -xvs"),
-            (p / "pyproject.toml", "pytest -xvs"),
-            (p / "setup.py", "pytest -xvs"),
-            (p / "Package.swift", "swift test"),
-            (p / "Cargo.toml", "cargo test"),
-            (p / "go.mod", "go test ./..."),
-            (p / "package.json", "npm test"),
-        ]
-        for marker, cmd in discovery:
-            if marker.exists():
-                self.test_command = cmd
-                self.stack = self.stack or marker.name.split(".")[0]
-                log.info("Discovered test command: %s", cmd)
-                return
+        found = discover_test_command(self.project_dir)
+        if found:
+            cmd, marker = found
+            self.test_command = cmd
+            self.test_command_discovered_from = marker
+            self.stack = self.stack or marker.split(".")[0]
+            log.info("Discovered test command: %s", cmd)
 
     @property
     def change_dir(self) -> Path:

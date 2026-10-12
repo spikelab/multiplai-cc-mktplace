@@ -436,6 +436,57 @@ class AgentResult(BaseModel):
     elapsed_seconds: float = 0.0
 
 
+# --- Mutation testing (the MUTATION sub-step of the TDD engine) ---
+
+class SurvivingMutant(BaseModel):
+    """One mutant the suite did not kill, as `cosmic-ray dump` reports it."""
+    path: str
+    line: int
+    operator: str
+    mutant_id: str
+    # cosmic-ray's own unified diff of the mutation, handed to the
+    # survivor-round test writer so it sees exactly what changed.
+    diff: str = ""
+
+
+class MutationResult(BaseModel):
+    """Outcome of one cosmic-ray run over the lines the build changed.
+
+    `ok` is False when the tool could not produce a trustworthy result (not
+    installed, baseline red, crashed, timed out) — `error` says why, and the
+    counts are not a score. `score` is killed / (killed + survived), with
+    timed-out test runs counted as killed (and reported in `timeouts`); it is
+    None when no mutant ran, because a ratio over nothing is not evidence.
+    """
+    ok: bool
+    error: str | None = None
+    tool_version: str = ""
+    files: list[str] = Field(default_factory=list)
+    killed: int = 0
+    survived: int = 0
+    timeouts: int = 0
+    # Mutants whose run could not be judged (worker exception, abnormal exit,
+    # incompetent mutation). Left out of the score.
+    errors: int = 0
+    # Mutants generated over the changed lines before any sampling.
+    candidates: int = 0
+    # Mutants dropped by the `max_mutants` cap (deterministic sample).
+    sampled_out: int = 0
+    score: float | None = None
+    survivors: list[SurvivingMutant] = Field(default_factory=list)
+    # True when the tree was not clean after the run — a mutated file
+    # cosmic-ray did not restore, or files the test command wrote — and
+    # buildme discarded back to the committed sha.
+    mutant_left_on_disk: bool = False
+    # True when that discard failed: the tree still holds what the run left
+    # behind, so nothing may be committed on top of it.
+    discard_failed: bool = False
+    # Seconds each mutant's test run was allowed: `mutation.timeout`, raised
+    # to a multiple of the measured unmutated run when the suite is slower.
+    test_timeout: float = 0.0
+    elapsed_seconds: float = 0.0
+
+
 # --- Implementation notes (spec ↔ implementation loop) ---
 
 SPEC_IMPACT_LEVELS = ("none", "clarify", "contradicts")

@@ -511,6 +511,28 @@ def discard_to(repo: Path | str, sha: str, label: str = "") -> bool:
     return True
 
 
+def unwind_commits_to(repo: Path | str, sha: str, label: str = "") -> bool:
+    """Move the current branch back to *sha* and keep every change made since.
+
+    For an agent that holds `Bash` and committed its own work: `reset --soft`
+    puts its commits' changes back into the index and tree, so buildme can
+    check them and commit them itself (or discard them). Same guard as
+    `discard_to`: *sha* must still be an ancestor of HEAD. Returns False (with
+    a warning) when git refused — never raises.
+    """
+    if not is_ancestor_of_head(repo, sha):
+        log.warning("Refusing to unwind %s: %s is not an ancestor of HEAD",
+                    label, sha[:8])
+        return False
+    reset = _run(["git", "reset", "--soft", sha], cwd=repo)
+    if not reset.ok:
+        log.warning("Could not unwind %s (soft reset to %s): %s",
+                    label, sha[:8], reset.stderr.strip() or reset.stdout.strip())
+        return False
+    log.info("UNWIND %s soft reset to %s", label, sha[:8])
+    return True
+
+
 def push_branch(worktree: Path, branch: str) -> GitResult:
     """``git push -u origin <branch>``. Never forces. Never raises."""
     return _run(["git", "push", "-u", "origin", branch], cwd=worktree, timeout=_PUSH_TIMEOUT)

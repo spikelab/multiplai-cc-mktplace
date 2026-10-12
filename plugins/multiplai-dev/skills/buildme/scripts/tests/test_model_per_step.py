@@ -267,6 +267,8 @@ CALL_SITES = {
         ("model", ("refactor",)),
     ("llm_steps/tdd_steps.py", "run_refactor_all", "agent_call"):
         ("model", ("refactor_all",)),
+    ("llm_steps/tdd_steps.py", "run_mutation_test_writer", "agent_call"):
+        ("model", ("mutation_test_writer",)),
     ("llm_steps/tdd_steps.py", "run_integration_fix", "agent_call"):
         ("model", ("integration_fix", "integration_fix_escalated")),
     ("rubric.py", "generate_rubric", "llm_call"):
@@ -293,6 +295,8 @@ CALL_SITES = {
         ("config.model_for('review_fix')", ("review_fix",)),
     ("tdd_engine.py", "_run_refactor_all", "run_refactor_all"):
         ("config.model_for('refactor_all')", ("refactor_all",)),
+    ("tdd_engine.py", "_run_mutation_round", "run_mutation_test_writer"):
+        ("config.model_for('mutation_test_writer')", ("mutation_test_writer",)),
 }
 
 SDK_CALLS = {"llm_call", "agent_call", "llm_call_structured", "agent_call_structured"}
