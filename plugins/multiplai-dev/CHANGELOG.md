@@ -48,6 +48,8 @@ time, not derived from a tag.
 - A review killed or stopped with Ctrl-C part way (no end line in the ledger) is no longer started
   over by accident: running `review` on the same target and head exits 4
   and prints the `resume` command. `--restart` starts over on purpose.
+  buildme's findings stage resumes such a review of the PR head (one its
+  own timeout killed, say) instead of counting it as a failed review.
 - `python -m review_pipeline migrate --from <dir>` copies old review
   directories (for example `INBOX/reviews`) to `reviews/legacy/` in the
   data directory and records them in the ledger. It never changes or

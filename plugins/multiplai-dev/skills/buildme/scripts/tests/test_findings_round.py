@@ -1390,6 +1390,50 @@ class TestSince:
         assert lines[-1] == "FINDINGS:DONE:2"
 
 
+class TestReviewInterrupted:
+    """A review of this PR head that was killed (buildme's own subprocess
+    timeout, say) makes the next plain `review` exit 4 and name the resume
+    command: the findings loop resumes it instead of failing every later round."""
+
+    TARGET = "/data/reviews/spikelab-calc--pr-7"
+
+    @staticmethod
+    def _run(config, change):
+        return loop.FindingsRun(config=config, pr=PR, repo=REPO, branch="buildme/calc", change_dir=change,
+                                auto=True, trust_repo=True, emit=lambda _: None)
+
+    def _calls(self, monkeypatch, results):
+        calls: list[list[str]] = []
+
+        def fake(argv, cwd=None, timeout=None):
+            calls.append(argv)
+            return results.pop(0)
+
+        monkeypatch.setattr(git_ops, "_run_review_skill", fake)
+        return calls
+
+    def test_an_interrupted_review_is_resumed(self, built, monkeypatch):
+        repo, change, config = built
+        stopped = git_ops.GitResult([], 4, "out: /data/reviews\n",
+                                    "STOPPED: interrupted run found; continue with: python -m review_pipeline "
+                                    f"resume {self.TARGET}\nTo start over instead, pass --restart.\n")
+        resumed = git_ops.GitResult([], 0, f"findings: {self.TARGET}/findings.json\n", "")
+        calls = self._calls(monkeypatch, [stopped, resumed])
+        outcome = loop.run_review(self._run(config, change), None)
+        assert outcome.ok and outcome.run_dir == self.TARGET
+        assert calls[0][calls[0].index("review_pipeline") + 1:] == [
+            "review", "--repo", str(repo), "--pr", str(PR), "--trust-repo"]
+        assert calls[1][calls[1].index("review_pipeline") + 1:] == ["resume", self.TARGET, "--trust-repo"]
+
+    def test_a_budget_stop_is_not_taken_for_an_interrupted_run(self, built, monkeypatch):
+        repo, change, config = built
+        budget = git_ops.GitResult([], 4, "", "STOPPED: over budget\nResume with: python -m review_pipeline "
+                                              "resume <out>/<slug> --max-cost-usd <higher>\n")
+        calls = self._calls(monkeypatch, [budget])
+        outcome = loop.run_review(self._run(config, change), None)
+        assert not outcome.ok and len(calls) == 1 and "review exited 4" in outcome.detail
+
+
 def test_no_code_path_resolves_a_review_thread():
     """Done means 14: the pipeline only replies."""
     name = "resolve" + "ReviewThread"
