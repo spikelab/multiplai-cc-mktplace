@@ -516,6 +516,17 @@ def assemble_context(
             + config.unknowns_path.read_text()
         )
 
+    # Checked facts about the existing code the block's tasks name (`block_facts:
+    # true`, off by default). Re-checked at the current HEAD, because earlier
+    # blocks have committed changes since the codebase analysis wrote them.
+    if config.block_facts and role in ("test_writer", "implementer"):
+        from .code_analysis import FACTS_FILE, block_facts_section
+        facts = block_facts_section(
+            block, config.codebase_analysis_path.parent / FACTS_FILE, config.project_dir,
+        )
+        if facts:
+            parts.append("\n" + facts)
+
     # Rubric (for reviewers — include for all so agents know quality bar)
     if config.rubric_path.exists():
         parts.append(f"\n## Evaluation Rubric\n{config.rubric_path.read_text()}")
