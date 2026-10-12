@@ -352,6 +352,17 @@ class TestApplies:
             "src/calc.py", "src/docs.py", "src/docs/render.py",
             "src/migrations_helper.py", "src/setup_helpers.py"]
 
+    def test_changed_source_files_drops_django_tests_modules(self, project):
+        # Django's `startapp` writes each app's tests to `<app>/tests.py`.
+        # It is a test module: mutating it would score the tests themselves.
+        repo, baseline = project
+        (repo / "polls").mkdir()
+        (repo / "polls" / "tests.py").write_text("def test_x():\n    assert 1\n")
+        (repo / "polls" / "views.py").write_text("x = 1\n")
+        _commit_all(repo, "feat: polls app")
+        assert mutation.changed_source_files(repo, baseline) == [
+            "polls/views.py", "src/calc.py"]
+
 
 # --- run_mutation (subprocess boundary stubbed) ----------------------------
 
@@ -987,6 +998,89 @@ class TestRunMutationStep:
         assert "kill surviving mutants" not in _git(repo, "log", "--format=%s")
         report = (config.change_dir / "mutation.md").read_text()
         assert "src/calc.py" in report and "test.db" not in report
+
+    @pytest.mark.asyncio
+    async def test_survivor_round_whose_suite_rewrites_a_golden_file_is_committed(
+            self, project, tmp_path):
+        """A tracked file the full suite rewrites to its committed bytes (a
+        golden JSON, a test.db built from fixed fixtures) is the suite's
+        output even when it comes out the same as before the round. The
+        agent's partial run left other bytes in it; that is not an edit and
+        must not discard a green tests-only round."""
+        repo = project[0]
+        (repo / "golden.json").write_text("{\"full\": true}")
+        _commit_all(repo, "feat: block commit that swept in the golden file")
+        script = tmp_path / "suite.py"
+        script.write_text(
+            "import pathlib\n"
+            "pathlib.Path('golden.json').write_text('{\"full\": true}')\n")
+        test_command = f"{sys.executable} {script}"
+        config, state, progress = _setup(project, test_command=test_command)
+
+        async def _agent(**_kw):
+            # What running one test file alone writes there.
+            (repo / "golden.json").write_text("{\"full\": false}")
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation",
+                   side_effect=[_result(7, 3), _result(10, 0)]) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is True
+        assert run.call_count == 2
+        assert state.tdd.mutation_done is True
+        assert "kill surviving mutants" in _git(repo, "log", "--format=%s")
+        assert (repo / "golden.json").read_text() == "{\"full\": true}"
+
+    @pytest.mark.asyncio
+    async def test_source_edit_is_caught_when_the_suite_rewrites_a_golden_file(
+            self, project, tmp_path):
+        """Setting the golden file aside does not let a source edit through."""
+        repo = project[0]
+        (repo / "golden.json").write_text("{\"full\": true}")
+        _commit_all(repo, "feat: block commit that swept in the golden file")
+        script = tmp_path / "suite.py"
+        script.write_text(
+            "import pathlib\n"
+            "pathlib.Path('golden.json').write_text('{\"full\": true}')\n")
+        test_command = f"{sys.executable} {script}"
+        config, state, progress = _setup(project, test_command=test_command)
+
+        async def _agent(**_kw):
+            (repo / "golden.json").write_text("{\"full\": false}")
+            (repo / "src" / "calc.py").write_text("def add(a, b):\n    return 0\n")
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(9, 1)), \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is False
+        assert "return a + b" in (repo / "src" / "calc.py").read_text()
+        report = (config.change_dir / "mutation.md").read_text()
+        assert "src/calc.py" in report and "golden.json" not in report
+
+    @pytest.mark.asyncio
+    async def test_survivor_round_that_edits_a_django_tests_module_is_committed(
+            self, project):
+        """`<app>/tests.py` is where Django keeps an app's tests; the survivor
+        round may edit it."""
+        repo = project[0]
+        (repo / "polls").mkdir()
+        (repo / "polls" / "tests.py").write_text("def test_x():\n    assert 1 == 1\n")
+        _commit_all(repo, "feat: polls app")
+        config, state, progress = _setup(project)
+
+        async def _agent(**_kw):
+            with (repo / "polls" / "tests.py").open("a") as f:
+                f.write("\n\ndef test_y():\n    assert 2 == 2\n")
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with patch("build_pipeline.tdd_engine.run_mutation",
+                   side_effect=[_result(7, 3), _result(10, 0)]) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is True
+        assert run.call_count == 2
+        assert "kill surviving mutants" in _git(repo, "log", "--format=%s")
 
     @pytest.mark.asyncio
     async def test_survivor_round_that_adds_a_helper_under_tests_is_committed(self, project):

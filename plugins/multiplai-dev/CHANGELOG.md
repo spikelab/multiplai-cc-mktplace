@@ -27,7 +27,8 @@ time, not derived from a tag.
   build now runs mutation testing on the lines it added or modified, right
   after the whole-change refactor. Python files the tests never import
   (`setup.py`, `noxfile.py`, `fabfile.py`, `manage.py`, the root `docs/` or
-  `doc/` tree, and `migrations/` or `alembic/` directories) are not mutated. It uses cosmic-ray 8.7.0 as a pinned `uvx`
+  `doc/` tree, and `migrations/` or `alembic/` directories) are not mutated,
+  nor are test modules, Django's `<app>/tests.py` among them. It uses cosmic-ray 8.7.0 as a pinned `uvx`
   tool (`uv` must be installed; the first run downloads it, and without `uv`
   the build stops with a message saying to install it or turn the step off;
   when cosmic-ray cannot be fetched or run, offline or behind a private index,
@@ -41,8 +42,9 @@ time, not derived from a tag.
 - buildme: a build now fails when its mutation score stays below
   `mutation.min_score` (default `0.8`, to be adjusted once real runs have been
   measured), when the survivor round edits a non-test file (files the test
-  suite writes when it runs, such as caches, reports, logs or a test database,
-  do not count, even when tracked), when cosmic-ray
+  suite writes when it runs, such as caches, reports, logs, a test database
+  or a golden file it writes back to the same bytes, do not count, even when
+  tracked; Django's `<app>/tests.py` counts as a test), when cosmic-ray
   cannot produce a score, or when a change the step has to throw away cannot
   be thrown away (the build then stops without committing anything more).
   It also fails when the tree holds uncommitted changes as the step starts:

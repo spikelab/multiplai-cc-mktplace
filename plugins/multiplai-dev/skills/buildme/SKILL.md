@@ -243,7 +243,10 @@ line, operator, the line as it is now, and the mutation's diff) and may add or
 edit **tests only**. The implementer is not called. buildme then checks the
 round:
 
-- a changed non-test file discards the round and **fails the build**;
+- a changed non-test file discards the round and **fails the build**. Files
+  the suite writes when it runs (caches, reports, a test database, a golden
+  file it writes back to the same bytes) do not count, and Django's
+  `<app>/tests.py` is a test;
 - a red suite discards the round, and the first score stands;
 - a green round is committed as `test(mutation): kill surviving mutants` and
   cosmic-ray runs again for the final score. If the agent committed its own

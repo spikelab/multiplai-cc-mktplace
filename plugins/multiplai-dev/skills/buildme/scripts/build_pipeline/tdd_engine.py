@@ -126,6 +126,7 @@ _TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]+\.py|[^/]+_test\.py|conftest\.py)$"
 _TEST_PATH_RE = re.compile(
     r"(^|/)("
     r"test_[^/]+\.py|[^/]+_test\.py|conftest\.py"        # Python
+    r"|tests\.py"                                         # Django: <app>/tests.py
     r"|[^/]+_test\.go"                                    # Go
     r"|[^/]+Tests?\.swift"                                # Swift
     r"|[^/]+\.(test|spec)\.[cm]?[jt]sx?"                  # JS/TS
@@ -2044,11 +2045,15 @@ def _edits_the_suite_does_not_rewrite(
     an HTML report — new, or tracked because a block commit swept it in).
 
     Puts each changed file back as it was at *rewind_to* (a file that did not
-    exist there is deleted), runs the suite once, and returns the files the
+    exist there is deleted), runs the suite once, and keeps the files the
     suite did not write again: those still match the pre-round snapshot.
-    Returns that suite run's gate result too, so the caller does not run the
-    suite twice. The list is None when the check could not be made; a file
-    that cannot be put back is counted as edited."""
+    A file the full suite writes to the same bytes every run (a golden JSON,
+    a test.db built from fixed fixtures) matches it too, so each committed
+    file kept that way gets the agent's version back for one more suite run:
+    the ones that run rewrites are the suite's output, and go back to the
+    checkpoint. Returns the first suite run's gate result too, so the caller
+    does not run the suite again. The list is None when the check could not
+    be made; a file that cannot be put back is counted as edited."""
     root = config.project_dir
     try:
         proc = subprocess.run(
@@ -2061,6 +2066,16 @@ def _edits_the_suite_does_not_rewrite(
         log.warning("Could not list the checkpoint's files: %s", proc.stderr.strip())
         return None, None
     in_checkpoint = {name for name in proc.stdout.split("\0") if name}
+    # The agent's version of each committed file, for the second run below.
+    # None: the agent deleted it. A file that cannot be read is left out.
+    agent_versions: dict[str, bytes | None] = {}
+    for name in in_checkpoint:
+        try:
+            agent_versions[name] = (root / name).read_bytes()
+        except FileNotFoundError:
+            agent_versions[name] = None
+        except OSError as e:
+            log.warning("Could not read %s: %s", name, e)
     unrestorable: list[str] = []
     for name in changed:
         if name in in_checkpoint:
@@ -2092,7 +2107,55 @@ def _edits_the_suite_does_not_rewrite(
     edited = sorted(set(unrestorable) | {
         name for name in changed
         if name not in unrestorable and rerun.get(name) == before.get(name)})
-    return edited, gate
+    suite_written = _rewritten_by_the_suite(
+        config, rewind_to,
+        {name: agent_versions[name] for name in edited
+         if name in agent_versions and name not in unrestorable})
+    if suite_written is None:
+        return None, None
+    return [name for name in edited if name not in suite_written], gate
+
+
+def _rewritten_by_the_suite(
+    config: BuildConfig, rewind_to: str, agent_versions: dict[str, bytes | None],
+) -> set[str] | None:
+    """Which of these committed files the suite writes: each gets the agent's
+    version back (None: deleted), the suite runs once, and a file that run
+    changed is the suite's output. Those go back to *rewind_to*; the others
+    keep the agent's version, which the caller discards with the round.
+    None when the check could not be made."""
+    if not agent_versions:
+        return set()
+    root = config.project_dir
+    put_back: dict[str, str | None] = {}
+    for name, data in agent_versions.items():
+        try:
+            if data is None:
+                (root / name).unlink(missing_ok=True)
+                put_back[name] = None
+            else:
+                (root / name).write_bytes(data)
+                put_back[name] = hashlib.sha256(data).hexdigest()
+        except OSError as e:
+            log.warning("Could not put back the agent's %s: %s", name, e)
+    if not put_back:
+        return set()
+    integration_gate(config.test_command, root)
+    rerun = _snapshot_source_files(config)
+    if rerun is None:
+        return None
+    written = {name for name, digest in put_back.items() if rerun.get(name) != digest}
+    if written:
+        try:
+            proc = subprocess.run(["git", "checkout", rewind_to, "--", *sorted(written)],
+                                  cwd=str(root), capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log.warning("Could not restore the suite's output files: %s", e)
+            return None
+        if proc.returncode != 0:
+            log.warning("Could not restore the suite's output files: %s", proc.stderr.strip())
+            return None
+    return written
 
 
 def _format_survivors(config: BuildConfig, result: MutationResult) -> str:
