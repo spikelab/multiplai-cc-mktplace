@@ -265,8 +265,9 @@ EXIT_BUILD_FAILURE = 1
 EXIT_AGENT_TIMEOUT = 4
 
 # Circuit breaker: attempts 1-2 run the scoped fix prompt; the final attempt
-# escalates — question-the-architecture prompt on config.review_model (when
-# set). Exhaustion fails the block with a diagnosis in build-progress.md.
+# escalates — question-the-architecture prompt on
+# config.model_for("integration_fix_escalated"), the review model when one is
+# set. Exhaustion fails the block with a diagnosis in build-progress.md.
 MAX_INTEGRATION_FIX_ATTEMPTS = 3
 MAX_REVIEW_ITERATIONS = 3
 
@@ -590,7 +591,7 @@ async def _audit_test_quality(test_files_content: str, contracts: str, config: B
         test_files=test_files_content,
         contracts=contracts or "(none provided)",
     )
-    return await llm_call_structured(prompt, TestQualityAudit, model=config.model,
+    return await llm_call_structured(prompt, TestQualityAudit, model=config.model_for("test_quality_audit"),
                                      effort=config.review_effort, max_retries=1,
                                      budget_label="test_quality_audit")
 
@@ -650,7 +651,7 @@ async def _adjudicate_review_findings(
     )
     try:
         adjudication = await llm_call_structured(
-            prompt, FindingAdjudication, model=config.model,
+            prompt, FindingAdjudication, model=config.model_for("adjudication"),
             effort=config.review_effort, max_retries=1,
             budget_label="adjudication",
         )
@@ -734,7 +735,7 @@ async def _enforce_test_quality(
         specs=specs,
         context_bundle=context,
         test_command=config.test_command,
-        model=config.model,
+        model=config.model_for("test_writer"),
         effort=config.agent_effort,
         cwd=str(config.project_dir),
     )
@@ -838,7 +839,7 @@ async def _enforce_red_gate(
                 specs=specs,
                 context_bundle=context,
                 test_command=config.test_command,
-                model=config.model,
+                model=config.model_for("test_writer"),
                 effort=config.agent_effort,
                 cwd=str(config.project_dir),
             )
@@ -1013,7 +1014,7 @@ async def run_block_tdd(
         specs=specs,
         context_bundle=context,
         test_command=config.test_command,
-        model=config.model,
+        model=config.model_for("test_writer"),
         effort=config.agent_effort,
         cwd=cwd,
     )
@@ -1085,7 +1086,7 @@ async def run_block_tdd(
         context_bundle=impl_context,
         test_command=config.test_command,
         prompt_style=config.implementer_prompt_style,
-        model=config.model,
+        model=config.model_for("implementer"),
         effort=config.agent_effort,
         cwd=cwd,
     )
@@ -1156,7 +1157,7 @@ async def run_block_tdd(
             block_description=block.description,
             context_bundle=refactor_context,
             test_command=config.test_command,
-            model=config.model,
+            model=config.model_for("refactor"),
             effort=config.agent_effort,
             cwd=cwd,
         )
@@ -1343,7 +1344,8 @@ async def _run_integration_and_review(
         last_fix_output = ""
         for attempt in range(MAX_INTEGRATION_FIX_ATTEMPTS):
             escalated = attempt == MAX_INTEGRATION_FIX_ATTEMPTS - 1
-            fix_model = (config.review_model or config.model) if escalated else config.model
+            fix_model = config.model_for(
+                "integration_fix_escalated" if escalated else "integration_fix")
             log.info("Integration fix attempt %d/%d%s", attempt + 1,
                      MAX_INTEGRATION_FIX_ATTEMPTS, " (escalated)" if escalated else "")
             if escalated:
@@ -1461,7 +1463,7 @@ async def _run_integration_and_review(
             context_bundle=context,
             test_command=config.test_command,
             prompt_style=config.implementer_prompt_style,
-            model=config.model,
+            model=config.model_for("review_fix"),
             effort=config.agent_effort,
             cwd=str(config.project_dir),
         )
@@ -1515,7 +1517,7 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
 
     Reviews the block's ACTUAL diff (pre-block baseline → working tree), with
     the project's coding standards pushed into the reviewer's context, via
-    llm_steps.review_steps.run_code_review (which honors config.review_model).
+    llm_steps.review_steps.run_code_review (which runs on config.model_for("review")).
 
     Propagates LLMCallError / LLMCallTimeoutError on failure. Callers must
     handle the exception and fail the block — silently fabricating passing
@@ -1897,7 +1899,7 @@ async def _run_refactor_all(
         design=config.design_path.read_text() if config.design_path.exists() else "(no design.md)",
         rubric=config.rubric_path.read_text() if config.rubric_path.exists() else "(no rubric.md)",
         test_command=config.test_command,
-        model=config.model,
+        model=config.model_for("refactor_all"),
         effort=config.agent_effort,
         cwd=str(config.project_dir),
     )

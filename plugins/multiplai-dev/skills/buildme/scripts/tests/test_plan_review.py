@@ -108,6 +108,9 @@ def _stub_config(tmp_path, **overrides):
     )
     for key, value in overrides.items():
         setattr(config, key, value)
+    # BuildConfig.model_for("plan_review")'s chain, for the fields this stub has.
+    config.model_for = lambda step: (getattr(config, "plan_review_model", None)
+                                     or config.review_model)
     return config
 
 

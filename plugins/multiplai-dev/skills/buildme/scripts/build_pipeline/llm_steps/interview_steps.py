@@ -71,7 +71,7 @@ async def ask_questions(config, inputs: str, *, call=None) -> list[str]:
         prompt,
         InterviewQuestions,
         allowed_tools=INTERVIEW_TOOLS,
-        model=config.spec_model,
+        model=config.model_for("interview"),
         effort=config.spec_effort,
         max_turns=INTERVIEW_MAX_TURNS,
         cwd=str(config.project_dir),
@@ -94,7 +94,7 @@ async def answer_questions(
         prompt,
         InterviewAnswers,
         allowed_tools=INTERVIEW_TOOLS,
-        model=config.spec_model,
+        model=config.model_for("interview"),
         effort=config.spec_effort,
         max_turns=INTERVIEW_MAX_TURNS,
         cwd=str(config.project_dir),
@@ -130,7 +130,7 @@ async def decide_research(
     return await call(
         prompt,
         ResearchDecision,
-        model=config.spec_model,
+        model=config.model_for("research"),
         effort=config.spec_effort,
         budget_label="research",
     )
