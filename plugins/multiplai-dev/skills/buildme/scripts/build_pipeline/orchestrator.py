@@ -1245,11 +1245,17 @@ def _run_publish(
     for line in diagnoses if res.ok else []:
         log.info("PR_DIAGNOSIS from the pr skill: %s", line)
     if not res.ok:
-        why = "; ".join(diagnoses) or (res.stderr or res.stdout).strip()
+        if diagnoses:
+            why = "; ".join(diagnoses)[:800]
+        else:
+            # No PR_DIAGNOSIS line: the skill died first (an import error, uv failing). Its
+            # output is all there is, and a traceback's error is its last line, so keep the end.
+            why = (res.stderr or res.stdout).strip()
+            why = why if len(why) <= 800 else "…" + why[-800:]
         _publish_diagnosis(
             progress,
             f"the pr skill (`pr_pipeline open`) failed (exit {res.returncode}): "
-            f"{why[:800]}. The branch is pushed — only the PR is missing.",
+            f"{why}. The branch is pushed — only the PR is missing.",
             manual,
         )
         print("PHASE:PUBLISH:FAILED:pr", flush=True)
@@ -1288,7 +1294,10 @@ def _publish_diagnosis(progress: ProgressWriter, reason: str, manual: str) -> No
         progress.log_diagnosis("publish", text)
     except OSError as e:
         log.warning("Could not write publish diagnosis to progress file: %s", e)
-    print(f"PUBLISH_DIAGNOSIS:{reason}", flush=True)
+    # A one-line marker: a reason quoting multi-line output (a traceback, git's push
+    # report) is folded onto it, or the lines after the first would carry no prefix.
+    one_line = " | ".join(part.strip() for part in reason.splitlines() if part.strip())
+    print(f"PUBLISH_DIAGNOSIS:{one_line}", flush=True)
 
 
 async def _run_research_check(

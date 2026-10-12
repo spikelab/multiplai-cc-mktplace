@@ -67,6 +67,14 @@ time, not derived from a tag.
   repository (a monorepo package) uses the `pr:` settings in that project's
   own `specs/config.yaml`, where `buildme setup` writes them.
 
+### Fixed
+- buildme: a `PUBLISH_DIAGNOSIS:` line now holds its whole reason on one
+  line. When the pr skill or `git push` failed with output of several lines
+  (a traceback, git's push report), only the first reached that line. When
+  the pr skill fails before it can say why, buildme now reports the end of
+  its output, where a traceback's error is, rather than the first 800
+  characters.
+
 ## [0.41.0] - 2026-10-12
 
 ### Added

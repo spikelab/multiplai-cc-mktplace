@@ -1461,6 +1461,48 @@ class TestPublishFailureIsNonFatal:
         assert "--ready" not in captured["argv"], "PRs are draft by default"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(("stdout", "stderr", "shown", "hidden"), [
+        # The skill died before it could print PR_DIAGNOSIS (an import error, uv failing):
+        # its stderr is the only account of why.
+        ("", "Traceback (most recent call last):\nModuleNotFoundError: No module named 'x'\n",
+         "ModuleNotFoundError: No module named 'x'", None),
+        # Nothing on stderr: stdout is reported instead.
+        ("error: Failed to spawn: `python`\n", "", "Failed to spawn: `python`", None),
+        # stderr wins over stdout when both are there.
+        ("DIFF:2 files, +3 -1\n", "boom on stderr\n", "boom on stderr", "DIFF:2 files"),
+        # A long traceback keeps its end, where the error is, not its first 800 characters.
+        ("", "Traceback (most recent call last):\n" + "  File \"x.py\", line 1, in f\n" * 60
+         + "ValueError: the real reason\n", "ValueError: the real reason", None),
+    ])
+    async def test_a_pr_skill_failure_without_pr_diagnosis_reports_its_output(
+        self, tmp_path, monkeypatch, capsys, stdout, stderr, shown, hidden
+    ):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        make_bare_origin(repo, tmp_path / "origin.git")
+        config = BuildConfig(project_dir=repo, change_name="nodiag")
+        config.specs_dir = repo / "specs"
+        state = BuildState(change_name="nodiag", mode="scratch", tier="advanced",
+                           state_file=str(config.state_file_path()))
+        cm = ChangeManager(config.specs_dir)
+        await _run_bootstrap(config, state, cm, config.state_file_path())
+        progress = ProgressWriter(config.progress_file_path())
+
+        monkeypatch.setattr(git_ops, "_run_pr_skill",
+                            lambda argv, cwd=None, timeout=None: GitResult(argv, 1, stdout, stderr))
+        assert _run_publish(config, state, progress) is False
+        out = capsys.readouterr().out
+        assert "PHASE:PUBLISH:FAILED:pr" in out
+        # PUBLISH_DIAGNOSIS is a one-line marker: the reason must be on that line.
+        diagnosis = next(line for line in out.splitlines() if line.startswith("PUBLISH_DIAGNOSIS:"))
+        assert "failed (exit 1): " in diagnosis and shown in diagnosis
+        assert diagnosis.endswith("The branch is pushed — only the PR is missing.")
+        if hidden:
+            assert hidden not in diagnosis
+        assert shown in (Path(state.worktree_path) / "build-progress.md").read_text()
+        assert state.pr_url is None
+
+    @pytest.mark.asyncio
     async def test_no_push_skips_publish_entirely(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         repo = make_repo(tmp_path / "proj")
