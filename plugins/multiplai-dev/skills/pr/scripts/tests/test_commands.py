@@ -269,6 +269,26 @@ def test_hand_opened_pr_from_the_repo_template_gets_only_the_missing_sections(tm
         assert again.count(once) == 1, f"{once!r} appears {again.count(once)} times on the second edit"
 
 
+def test_hand_opened_pr_with_a_ticked_preamble_box_does_not_get_the_preamble_again(tmp_path, gh_stub,
+                                                                                   model_stub, capsys):
+    # The author ticked the template's preamble checkbox in the GitHub UI: the preamble is still there.
+    repo = make_repo(tmp_path / "proj")
+    (repo / ".github").mkdir()
+    (repo / ".github" / "pull_request_template.md").write_text(REPO_TEMPLATE)
+    change = make_change(repo)
+    model_stub.answers = [{"sections": {"summary": "Model summary.", "notes": "Model notes."}}] * 2
+    existing = REPO_TEMPLATE.replace("- [ ] I ran the tests", "- [x] I ran the tests")
+    existing = existing.replace("\n## Notes\n<!-- Anything else. -->\n", "")
+    gh_stub.on(["gh", "pr", "view"], stdout=_pr_json(existing)).on(["gh", "repo", "view"], stdout="WRITE\n")
+    gh_stub.on(["gh", "pr", "edit"]).on(["gh", "pr", "comment"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 0
+    new = gh_stub.bodies["gh pr edit"]
+    assert existing.rstrip("\n") in new, "the existing text is unchanged"
+    assert new.count("Thanks for opening a PR.") == 1
+    assert new.count("<!-- Fill in every section. -->") == 1
+    assert "- [ ] I ran the tests" not in new and new.count("- [x] I ran the tests") == 1
+
+
 def test_hand_opened_pr_holding_every_section_gets_none_appended(tmp_path, gh_stub, capsys):
     repo, change = _setup(tmp_path)
     existing = STANDARD_TEMPLATE.read_text()
