@@ -10,29 +10,17 @@ Names must not start with `test`, or pytest collects them.
 
 from __future__ import annotations
 
-import functools
 import re
 import subprocess
 from pathlib import Path, PurePosixPath
 
+from multiplai_core.citations import check_quote, file_at, lines_at
+from multiplai_core.citations import normalise_ws as normalise
+
 from .models import (Citation, Fact, GateResult, Hop, Reference, RepoInfo, SymbolEntry, TargetInfo, Unit)
-from .target import _GIT, _env, require_rg
+from .target import require_rg
 
 SMALL_FILE_LINES = 30
-
-
-def normalise(text: str) -> str:
-    return " ".join(text.split())
-
-
-@functools.lru_cache(maxsize=2048)
-def _show(repo_path: str, sha: str, path: str) -> str | None:
-    """File text at *sha*, or None when the path is not in that commit."""
-    proc = subprocess.run([*_GIT, "-C", repo_path, "show", f"{sha}:{path}"],
-                          capture_output=True, stdin=subprocess.DEVNULL, env=_env(), shell=False, check=False)
-    if proc.returncode != 0:
-        return None
-    return proc.stdout.decode("utf-8", errors="replace")
 
 
 def split_path(repos: dict[str, RepoInfo], ws_path: str) -> tuple[RepoInfo, str] | None:
@@ -45,19 +33,22 @@ def split_path(repos: dict[str, RepoInfo], ws_path: str) -> tuple[RepoInfo, str]
     return repo, rel
 
 
+def repo_resolver(repos: dict[str, RepoInfo]):
+    """`resolve(path, side)` for code_facts: a workspace path at its repo's commit (one side only)."""
+    def resolve(ws_path: str, side: str = "head") -> tuple[str, str, str] | None:
+        found = split_path(repos, ws_path)
+        return None if found is None else (found[0].path, found[0].head_sha, found[1])
+    return resolve
+
+
 def file_at_commit(repos: dict[str, RepoInfo], ws_path: str) -> str | None:
     found = split_path(repos, ws_path)
-    if found is None:
-        return None
-    repo, rel = found
-    return _show(repo.path, repo.head_sha, rel)
+    return None if found is None else file_at(found[0].path, found[0].head_sha, found[1])
 
 
 def lines_at_commit(repos: dict[str, RepoInfo], ws_path: str, start: int, end: int) -> list[str] | None:
-    text = file_at_commit(repos, ws_path)
-    if text is None:
-        return None
-    return text.split("\n")[start - 1:end]
+    found = split_path(repos, ws_path)
+    return None if found is None else lines_at(found[0].path, found[0].head_sha, found[1], start, end)
 
 
 # --- citations ----------------------------------------------------------------------
@@ -65,17 +56,15 @@ def lines_at_commit(repos: dict[str, RepoInfo], ws_path: str, start: int, end: i
 
 def citation_gate(repos: dict[str, RepoInfo], citation: Citation) -> GateResult:
     """The quote, whitespace-normalised, is inside lines line_start..line_end at the repo's commit."""
-    quote = normalise(citation.quote)
-    if not quote:
-        return GateResult(passed=False, reason="empty quote")
-    if split_path(repos, citation.path) is None:
-        return GateResult(passed=False, reason="path names no known repo")
-    text = file_at_commit(repos, citation.path)
-    if text is None:
-        return GateResult(passed=False, reason="path not at commit")
-    window = normalise("\n".join(text.split("\n")[citation.line_start - 1:citation.line_end]))
-    if quote not in window:
-        return GateResult(passed=False, reason="quote not at cited lines")
+    found = split_path(repos, citation.path)
+    if found is None:
+        # An empty quote is named first, whatever the path, as before.
+        reason = "empty quote" if not normalise(citation.quote) else "path names no known repo"
+        return GateResult(passed=False, reason=reason)
+    repo, rel = found
+    reason = check_quote(repo.path, repo.head_sha, rel, citation.line_start, citation.line_end, citation.quote)
+    if reason is not None:
+        return GateResult(passed=False, reason=reason)
     return GateResult(passed=True)
 
 

@@ -23,7 +23,7 @@ The page-logic tests need `node`; they fail (not skip) without it.
 | `models.py` | The `findings.json` v1, `checks.json` v1 and `walkthrough.json` v1 pydantic models (source of truth for the three files in `../schema/`), `finding_id()`, `load_checks()`, and the mailbox row models. |
 | `gitdata.py` | Git: `parse_target()` / `resolve_target()` (PR, branch, worktree, `a..b`, `a...b`; same base/head rules as `review_pipeline/target.py`, restated because that member is not importable here), `parse_unified()`, `file_view()` (an unchanged file is served whole with no diff), `allowed_paths()`, `repo_files()` (`ls-tree -r` at head, blobs only, under the tree pathspec; the page cuts the list at `REPO_FILES_MAX`), `definitions()` (`git grep -E` at head for `definition_pattern(name)`, kept to allowed paths, at most `DEFINITIONS_MAX`), `diff_target()`, `tree_target()` (every file at a commit against `EMPTY_TREE`, for `serve --tree`; `is_tree_review()` knows a tree review by that base; `tree_path()` turns a subdirectory `--repo` into the reviewed path, the rule of `review_pipeline.target.tree_root`). Fixed argv, no shell, stdin closed. The only writes to a repo are the fetches named in `../SKILL.md`. |
 | `stats.py` | measured badges: `classify()` a path (lock, generated, test, docs, code), `change_stats()` from `git diff --numstat`, `--name-status` and `git log` (no commits for a tree review, measured over its directory), the size/tests/commits thresholds, PR badges, `per_file` (status letter and line counts per changed file, for the file list), and `tiers` read from a repo's `.review-risk.toml` for the risk score. |
-| `walkthrough.py` | `check()` a walkthrough against the served target, `coverage()`, `put()` by atomic replace. |
+| `walkthrough.py` | `check()` a walkthrough against the served target, `coverage()`, `must_assess()` (none for a tree target), `put()` by atomic replace. |
 | `mailbox.py` | Append-only JSONL rows, `decisions.json` and `viewed.json` by atomic replace; the directory is 0700 and every file 0600. |
 | `server.py` | `ThreadingHTTPServer` subclass (`allow_reuse_address = False`), request checks, routes, idle watchdog. |
 | `registry.py` | Finds live viewers: probes each mailbox's recorded port with that mailbox's token, in parallel. A token is never sent to any other port. |
@@ -139,14 +139,15 @@ at publish time and left in place — it holds no secret):
    whose `impact` is not `breaks-*`: the page never shows them.
 5. Step ids are unique. (`skipped` paths must be changed files too.)
 6. At most one assessment per topic (except `other`); with `complete: true`,
-   the `commits` and `tests` assessments exist.
+   the `commits` and `tests` assessments exist, except for a tree target
+   (`must_assess()`), which is not a change.
 7. No step's `body_md` contains a loaded finding's id: the page shows each
    linked finding in full under the step, so the text explains the code.
 8. No assessment uses the retired `size` or `risk` topics
    (`RETIRED_TOPICS`); files written before 0.22 that use them still load.
 9. Every assessment title is at most `TITLE_MAX` (32) characters
    (`models.ASSESSMENT_TITLE_MAX`, which the schema advertises).
-10. With `complete: true`, the `risk` block exists.
+10. With `complete: true`, the `risk` block exists, except for a tree target.
 
 Any failure → exit 2, every problem listed with its step id, nothing written.
 Otherwise the file is replaced atomically (0600). `GET
@@ -235,6 +236,7 @@ commit and a PR head under `refs/pull/7/head`, for target resolution;
 | `test_stats.py` | path classes, numstat parsing (renames, binary), each badge's thresholds, check counts, stats on the fixture repo |
 | `test_tree_review.py` | `serve --tree [--path]`, a subdirectory `--repo`, no commits, every file added on a live server |
 | `test_walkthrough.py` | each `walkthrough put` rule, the CLI, the route, `step_id` questions |
+| `test_walkthrough_module.py` | a codebase-walkthrough's `walkthrough.json` (`fixtures/module-walkthrough.json`, over that skill's own fixture workspace) passes every check as a tree target |
 | `test_serve_targets.py` | review lookup (match, stale, none) and the `walkthrough:` stdout line |
 | `test_server.py` (also `serve` in a subprocess: `--share slack` reaching the page, a saved review's `review-state.json` turning GitHub on, a `repo_path` that no longer exists), `test_mailbox.py`, `test_models.py`, `test_logging.py`, `test_netinfo.py` | the server, mailbox, contracts, logs, container detection |
 | `test_checks.py` | the `checks.v1` contract, loading it beside findings (present, absent, invalid, other commits), `verifier_citations` |

@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+# The explore answers and units live in code_facts, shared with review and buildme.
+from code_facts.models import Citation, Dropped, ExploreOutput, Fact, FilePurpose, Term, Unit  # noqa: F401
+from pydantic import BaseModel, ConfigDict, Field
 
 # Stage names in run order. `WalkState.stage` holds the last one completed.
 STAGES: tuple[str, ...] = (
@@ -92,47 +94,6 @@ class Reference(_Model):
 # --- agents' answers ---------------------------------------------------------------
 
 
-class Citation(_Model):
-    path: str
-    line_start: int = Field(ge=1)
-    line_end: int = Field(ge=1)
-    quote: str
-    id: str = ""
-
-    @model_validator(mode="after")
-    def _ordered(self) -> "Citation":
-        if self.line_end < self.line_start:
-            raise ValueError(f"line_end {self.line_end} is before line_start {self.line_start}")
-        return self
-
-
-class Fact(_Model):
-    claim: str
-    citations: list[Citation] = Field(default_factory=list)
-    id: str = ""
-    source: str = ""   # which agent produced it: "unit:3", "boundary:inbound:DolceFront:0"
-
-
-class FilePurpose(_Model):
-    path: str
-    purpose: str
-    citation: Citation | None = None
-
-
-class Term(_Model):
-    term: str
-    meaning: str
-    citation: Citation | None = None
-
-
-class ExploreOutput(_Model):
-    facts: list[Fact] = Field(default_factory=list)
-    files: list[FilePurpose] = Field(default_factory=list)
-    interfaces: list[Fact] = Field(default_factory=list)
-    gotchas: list[Fact] = Field(default_factory=list)
-    terms: list[Term] = Field(default_factory=list)
-
-
 class DocClaim(_Model):
     claim: str
     url: str
@@ -185,13 +146,6 @@ class SectionOutput(_Model):
 # --- stage records in the state ------------------------------------------------------
 
 
-class Unit(BaseModel):
-    id: str
-    files: list[str]         # workspace-relative
-    lines: int
-    oversize: bool = False
-
-
 class Scenario(BaseModel):
     seed: dict                 # the boundary entry it starts from (SymbolEntry or Reference dump)
     title: str = ""
@@ -207,12 +161,6 @@ class Section(BaseModel):
     cut: list[dict] = Field(default_factory=list)   # [{text, reasons}]
     glossary: list[Term] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
-
-
-class Dropped(BaseModel):
-    stage: str
-    what: str
-    reason: str
 
 
 class WalkState(BaseModel):

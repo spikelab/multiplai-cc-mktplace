@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.35.0] - 2026-10-11
+## [0.37.0] - 2026-10-12
 
 ### Added
 - buildme: `/buildme setup` writes or merges `specs/config.yaml` for the repo:
@@ -53,9 +53,9 @@ time, not derived from a tag.
   the build with a clear error instead of building without it. A failed build
   retried in its own worktree is not stopped by this check.
 - buildme depends on `ruamel.yaml` (for `setup`).
-- buildme: an agent timeout during the build now exits `4` (it was `3`, which
-  now means "waiting"). A wrapper that treated `3` as a timeout should check
-  for `4`.
+- buildme: an agent timeout during the build now exits `4`
+  (`EXIT_AGENT_TIMEOUT = 4`; it was `3`, which now means "waiting"). A wrapper
+  that treated `3` as a timeout should check for `4`.
 - buildme: relative paths given to `--ticket-file`, `--research-path`,
   `--plan-file`, `--interview-replies` and `--context-files` are read from
   `--project-dir`. A ticket, research, plan or replies file that does not
@@ -70,6 +70,91 @@ time, not derived from a tag.
 - buildme: the first spec-stage commit now commits the new change directory.
   With git 2.43 it committed nothing, and the specs only reached the branch with
   the first build block.
+
+## [0.36.0] - 2026-10-12
+
+### Added
+- `codebase-walkthrough` in human mode also writes `<name>-walkthrough.json`
+  next to its Markdown, and step 2 opens it in the review-viewer as a tree
+  of the module's directory at the commit it read (`serve --tree`). Each
+  section of the walkthrough is a step there, anchored on the lines it cites
+  in the module; every other file under the module is listed with the reason
+  no step covers it. The step-through HTML page is still written, for now.
+- The walkthrough's Markdown header names the module directory, the depth
+  and the mode it was run with.
+
+### Changed
+- `review-viewer`: a complete walkthrough of a tree target (`serve --tree`)
+  no longer needs the `commits` and `tests` assessments or the `risk` block,
+  since a tree is not a change. It must still cover or skip every file.
+  Existing walkthrough files load as before; the schema is unchanged.
+- `codebase-walkthrough` now also runs `git ls-tree` (read-only) on the
+  module's repository, to list the files the viewer shows.
+
+## [0.35.0] - 2026-10-12
+
+### Added
+- `lib/code_facts/`, a package shared inside the plugin that works out what
+  code does: it splits line ranges into units, asks one explore agent per
+  unit, and keeps only facts whose citations re-read at their commit
+  (multiplai-core's `check_quote`). The caller passes in its own model call
+  function and path resolver, so each pipeline keeps its retry policy. A
+  citation can name the `base` or `head` side of a change, and an explore
+  answer can carry `conventions` facts when the caller asks for them. Review
+  and buildme will use it next.
+- CI runs the code_facts tests.
+
+### Changed
+- codebase-walkthrough's explore step runs through `code_facts`. Its output
+  is unchanged; the explore prompt's JSON schema now lists the citation's
+  `side` and the answer's `conventions`, and the run checkpoint stores them.
+- review takes its concurrency limiter from `code_facts` instead of a copy.
+- `code_facts` is not a uv workspace member: walkthrough and review reach it
+  through an editable `path` source, which resolves both in this repo and in
+  an installed copy of the plugin. `scripts/lint_workspace.py` exempts
+  `plugins/*/lib/` from its membership check.
+
+## [0.34.4] - 2026-10-11
+
+### Changed
+- review and codebase-walkthrough check a citation with multiplai-core
+  0.18.0's `check_quote` instead of each carrying its own copy of the
+  `git show` reader and the quote match. What a gate accepts or rejects is
+  unchanged: review still rejects with "path not at head" and
+  `action="reject"`, and walkthrough still checks that a path names a known
+  repo before anything else. One difference: a line range that is not valid
+  (start below 1, or end before start) now reads as no lines, so a quote
+  cited there fails; both pipelines' models already refuse such ranges.
+- Both pipelines' `target.py` take `GIT_ARGV` and `git_env` from
+  multiplai-core in place of their own identical `_GIT` and `_env`.
+- `uv.lock` takes multiplai-core v0.18.0.
+
+## [0.34.3] - 2026-10-11
+
+### Changed
+- buildme's `llm_call_structured` and `agent_call_structured` parse an answer
+  with multiplai-core 0.17.0's `parse_answer`. The retry policy is unchanged:
+  a bad answer still re-runs the whole call, up to `max_retries` times. One
+  visible difference: when an answer holds no JSON at all (a markdown
+  report, say), the error, and so the retry prompt, now says so ("the answer
+  contains no JSON object with the field(s) …") instead of quoting a parse
+  error about the first brace in the prose.
+- buildme keeps its own spend ledger (`budget.py`). It counts spend per phase
+  in tokens, not USD, so it does not move onto multiplai-core's
+  `SpendLedger`.
+
+## [0.34.2] - 2026-10-11
+
+### Changed
+- codebase-walkthrough takes its checkpoint writer, `progress.log` writer,
+  spend ledger, `walkthrough.yaml` helpers and answer parsing from
+  multiplai-core 0.17.0 (`checkpoint`, `progress`, `budget.SpendLedger`,
+  `stage_config`, `structured`) instead of carrying copies of review's. The
+  `progress.log` lines, the $50 default ceiling, the one-reformat re-ask and
+  the config precedence are unchanged. The ledger saved in
+  `walkthrough-state.json` now also records spend per stage (`by_stage`),
+  calls that returned no usage (`no_usage_calls`) and `max_tokens` (null), as
+  review's does; a ledger saved before this loads as before.
 
 ## [0.34.1] - 2026-10-11
 
