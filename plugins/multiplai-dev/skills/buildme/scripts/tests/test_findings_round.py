@@ -1425,6 +1425,30 @@ class TestReviewInterrupted:
             "review", "--repo", str(repo), "--pr", str(PR), "--trust-repo"]
         assert calls[1][calls[1].index("review_pipeline") + 1:] == ["resume", self.TARGET, "--trust-repo"]
 
+    def test_a_review_still_running_is_not_resumed(self, built, monkeypatch):
+        """review holds a lock on the target directory while it runs; a second `review`
+        of it exits 2 saying so, and the loop fails the step instead of starting a resume."""
+        repo, change, config = built
+        running = git_ops.GitResult([], 2, "out: /data/reviews\n",
+                                    f"ERROR: a review of {self.TARGET} is running now (pid 41 on box, "
+                                    "since 2026-10-12T10:00:00Z); wait for it to finish, then run again\n")
+        calls = self._calls(monkeypatch, [running])
+        outcome = loop.run_review(self._run(config, change), None)
+        assert not outcome.ok and len(calls) == 1
+        assert "review exited 2" in outcome.detail and "is running now" in outcome.detail
+
+    def test_a_resume_refused_because_the_run_came_back_fails_the_step(self, built, monkeypatch):
+        """Between the exit 4 and the resume another process may take the run up again:
+        `resume` then refuses (exit 2) and the step fails rather than reading stale output."""
+        repo, change, config = built
+        stopped = git_ops.GitResult([], 4, "", "STOPPED: interrupted run found; continue with: "
+                                               f"python -m review_pipeline resume {self.TARGET}\n")
+        refused = git_ops.GitResult([], 2, "", f"ERROR: a review of {self.TARGET} is running now "
+                                               "(pid 41 on box, since 2026-10-12T10:00:00Z)\n")
+        calls = self._calls(monkeypatch, [stopped, refused])
+        outcome = loop.run_review(self._run(config, change), None)
+        assert not outcome.ok and len(calls) == 2 and "is running now" in outcome.detail
+
     def test_a_budget_stop_is_not_taken_for_an_interrupted_run(self, built, monkeypatch):
         repo, change, config = built
         budget = git_ops.GitResult([], 4, "", "STOPPED: over budget\nResume with: python -m review_pipeline "

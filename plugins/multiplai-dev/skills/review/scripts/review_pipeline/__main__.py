@@ -21,8 +21,9 @@ line listing the checks.json beside each. `review --plan-only` prints one line
 per file group, a `groups: <n>  finder calls: <n>  files skipped: <n>` line and
 a final `plan: <path>` line, and calls no model.
 
-Exit codes: 0 done; 1 a target failed; 2 bad input, unresolvable target, or
-post refused; 3 repository not trusted; 4 the budget circuit breaker stopped
+Exit codes: 0 done; 1 a target failed; 2 bad input, unresolvable target,
+post refused, or another process is running a review of the target now
+(runlock.py); 3 repository not trusted; 4 the budget circuit breaker stopped
 the run (resume with a higher --max-cost-usd to continue), or `review` found
 an interrupted run of the same target and head in the ledger (resume it, or
 pass --restart); 5 the verifier gave no usable answer for some findings after

@@ -296,6 +296,52 @@ def test_a_started_line_with_no_end_makes_a_plain_run_exit_4_and_restart_starts_
     assert _ledger_lines(tmp_path, "finished")[-1]["stopped"] is None
 
 
+def test_a_review_running_now_is_not_read_as_interrupted_and_nothing_starts_a_second_run_in_its_directory(
+        fixture_repo, tmp_path, agents, capsys):
+    """A running review leaves the same `started` line as a killed one. While a
+    process holds the target's run lock, `review`, `review --restart` and
+    `resume` all refuse (exit 2) and write nothing; once it lets go, the same
+    ledger line reads as interrupted again (exit 4)."""
+    from review_pipeline import runlock
+
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    out.mkdir()
+    target_dir = out / f"example-booking-engine--{base}..{head}"
+    ledger.started(slug=target_dir.name, target_dir=target_dir, head_sha=head, session_id="a run still going")
+    fake = agents()
+    with runlock.hold(target_dir):
+        for argv in (_review_args(repo, base, head, out), _review_args(repo, base, head, out, "--restart"),
+                     ["resume", str(target_dir), "--trust-repo"]):
+            capsys.readouterr()
+            assert main(argv) == 2, argv
+            err = capsys.readouterr().err
+            assert f"a review of {target_dir} is running now (pid {os.getpid()} on " in err, err
+            assert "interrupted run found" not in err
+    assert fake.calls == [] and not target_dir.exists()
+    assert [e["event"] for e in _ledger_lines(tmp_path)] == ["started"]
+
+    capsys.readouterr()
+    assert main(_review_args(repo, base, head, out)) == 4
+    assert "interrupted run found" in capsys.readouterr().err
+
+
+def test_two_targets_of_a_batch_in_one_directory_do_not_run_at_once(fixture_repo, tmp_path, agents, capsys):
+    """The second of two batch entries naming the same target fails while the first holds its
+    directory, and says it is running, not that it was interrupted."""
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    out.mkdir()
+    batch_file = tmp_path / "batch.yaml"
+    entry = {"repo": str(repo), "range": f"{base}..{head}"}
+    batch_file.write_text(json.dumps([entry, entry]))
+    agents()
+    assert main(["--out", str(out), "batch", str(batch_file), "--trust-repo", "--parallel", "2"]) == 1
+    printed = capsys.readouterr().out
+    assert "is running now" in printed and "interrupted run found" not in printed, printed
+    assert len(_ledger_lines(tmp_path, "started")) == 1
+
+
 @pytest.mark.parametrize("stop", [KeyboardInterrupt, asyncio.CancelledError, SystemExit],
                          ids=["KeyboardInterrupt", "CancelledError", "SystemExit"])
 def test_a_run_stopped_by_the_user_or_the_process_writes_no_end_line(fixture_repo, tmp_path, monkeypatch, stop):

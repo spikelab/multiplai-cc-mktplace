@@ -286,7 +286,13 @@ no later `finished` line for the same `target_dir` and `head_sha` is a run
 that was killed or stopped with Ctrl-C: a plain `review` of that target then makes no model call,
 prints `interrupted run found; continue with: python -m review_pipeline
 resume <target_dir>` and exits `4`. Run that `resume` (it continues from the
-last finished stage), or pass `--restart` to start over on purpose.
+last finished stage), or pass `--restart` to start over on purpose. A review
+that is still running leaves the same `started` line, so every run holds a
+lock on its target directory (`<out>/.locks/<slug>.lock`) until it ends:
+while another process holds it, `review` (with or without `--restart`),
+`--plan-only` and `resume` of that target print `a review of <target_dir> is
+running now (pid <n> on <host>, since <time>)` and exit `2` without writing
+anything. Wait for that run to finish; do not resume it.
 
 Each target gets `<out>/<slug>/` with `progress.log`. While the run is going,
 check it with a bounded loop, never a bare `tail -f`:
@@ -299,8 +305,8 @@ until grep -qE '^\[[^]]*\] (DONE|FAILED)' <out>/<slug>/progress.log; do sleep 20
 background task's own completion notice also ends the wait.
 
 Exit codes: `0` done; `1` a batch target or every finder failed (the message
-says which); `2` bad input or a target that does not resolve (no output is
-written); `3` repository not trusted; `4` the budget circuit breaker stopped
+says which); `2` bad input, a target that does not resolve, or a target another
+process is reviewing now (no output is written); `3` repository not trusted; `4` the budget circuit breaker stopped
 the run at `--max-cost-usd` (default 50 per target), or the ledger shows an
 interrupted run of the same target and head (the message names the
 `resume` command). On a budget `4`, report the spend

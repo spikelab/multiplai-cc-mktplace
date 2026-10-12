@@ -52,6 +52,11 @@ time, not derived from a tag.
   and prints the `resume` command. `--restart` starts over on purpose.
   buildme's findings stage resumes such a review of the PR head (one its
   own timeout killed, say) instead of counting it as a failed review.
+  A review that is still running is not mistaken for one of these: each
+  run holds a lock on its target directory until it ends, and while it
+  does, a second `review`, `review --restart`, `--plan-only` or `resume` of
+  that target exits 2 saying it is running, so two runs never write the
+  same directory at once.
 - `python -m review_pipeline migrate --from <dir>` copies old review
   directories (for example `INBOX/reviews`) to `reviews/legacy/` in the
   data directory and records them in the ledger. It never changes or

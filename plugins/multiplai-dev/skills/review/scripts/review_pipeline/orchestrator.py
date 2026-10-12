@@ -7,6 +7,7 @@ continues from the first stage not yet done.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import shutil
 from dataclasses import dataclass, field
@@ -16,7 +17,7 @@ import yaml
 
 from multiplai_core.log_utils import log_event
 
-from . import budget, ledger as review_ledger, rounds, target as target_mod, timings
+from . import budget, ledger as review_ledger, rounds, runlock, target as target_mod, timings
 from .config import ReviewConfig, run_config
 from .export import producer, run_record, to_findings_file, write_checks_file, write_findings_file
 from .facts import FACTS_FILE
@@ -54,6 +55,22 @@ class InterruptedRun(ReviewError):
     def __init__(self, target_dir: Path):
         self.target_dir = target_dir
         super().__init__(f"interrupted run found; continue with: python -m review_pipeline resume {target_dir}")
+
+
+class RunInProgress(ReviewError):
+    """Another process is running a review of this target directory now (runlock.py). Exit code 2."""
+
+    def __init__(self, locked: runlock.Locked):
+        self.target_dir = locked.target_dir
+        super().__init__(str(locked))
+
+
+def _hold(stack: contextlib.ExitStack, target_dir: Path) -> None:
+    """Take the target directory's run lock for as long as *stack* is open; raise RunInProgress if held."""
+    try:
+        stack.enter_context(runlock.hold(target_dir))
+    except runlock.Locked as e:
+        raise RunInProgress(e) from None
 
 
 @dataclass
@@ -238,8 +255,15 @@ async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig
     return findings_path
 
 
-def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False) -> tuple[ReviewState, Path]:
+def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
+            lock: contextlib.ExitStack | None = None) -> tuple[ReviewState, Path]:
     """Resolve and gate the target, then write its directory. Raises ReviewError.
+
+    With *lock*, the target directory's run lock is taken on it before the
+    ledger check and before anything is written there (for a `--dir` target,
+    before the copy into `source/`), and stays held until the caller closes
+    the stack: a review running in that directory now raises RunInProgress,
+    so it is never read as interrupted and never written over.
 
     A `--dir` target is first copied into `<out>/<slug>/source/` and committed
     there (`import_dir`), then reviewed as a tree at that commit. With
@@ -250,11 +274,18 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False)
     repo, tree, name, src = spec.repo, spec.tree, None, None
     info = None
     needs: list = []
+    locked: Path | None = None
+    if lock is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
     try:
         if spec.dir:
             src = Path(spec.dir).expanduser().resolve()
             name = target_mod.dir_name(src)
-            repo = str(target_mod.import_dir(src, out_dir / target_mod.sanitize_slug(f"{name}--tree")))
+            import_to = out_dir / target_mod.sanitize_slug(f"{name}--tree")
+            if lock is not None:
+                _hold(lock, import_to)
+                locked = import_to
+            repo = str(target_mod.import_dir(src, import_to))
             tree = "HEAD"
         resolved = target_mod.resolve(repo, branch=spec.branch, pr=spec.pr, range_=spec.range, tree=tree,
                                       path=spec.path, base_branch=spec.base_branch, fetch=spec.fetch)
@@ -274,6 +305,8 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False)
     if info is None:
         info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in, needs=needs)
     target_dir = out_dir / info.slug
+    if lock is not None and target_dir != locked:
+        _hold(lock, target_dir)
     if check_interrupted and not spec.restart and review_ledger.interrupted(target_dir, info.head_sha):
         raise InterruptedRun(target_dir)
     # A directory an earlier round wrote: keep that round's findings before
@@ -301,28 +334,33 @@ def plan_text(state: ReviewState, config: ReviewConfig) -> str:
 
 def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[str, Path]:
     """Resolve the target and write `plan.txt` beside `skipped.txt`; no model call, no ledger."""
-    state, target_dir = prepare(spec, out_dir)
-    text = plan_text(state, config)
-    path = target_dir / "plan.txt"
-    path.write_text(text, encoding="utf-8")
+    with contextlib.ExitStack() as lock:
+        state, target_dir = prepare(spec, out_dir, lock=lock)
+        text = plan_text(state, config)
+        path = target_dir / "plan.txt"
+        path.write_text(text, encoding="utf-8")
     return text, path
 
 
 async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:
-    state, target_dir = prepare(spec, out_dir, check_interrupted=True)
-    # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.
-    (target_dir / "progress.log").unlink(missing_ok=True)
-    # The last round's facts.json is kept in rounds/ by prepare; the explain stage writes
-    # this run's one, and a run with explain off must not leave the old one beside its findings.
-    (target_dir / FACTS_FILE).unlink(missing_ok=True)
-    return await run_state(state, target_dir, config, session_id=session_id)
+    with contextlib.ExitStack() as lock:
+        state, target_dir = prepare(spec, out_dir, check_interrupted=True, lock=lock)
+        # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.
+        (target_dir / "progress.log").unlink(missing_ok=True)
+        # The last round's facts.json is kept in rounds/ by prepare; the explain stage writes
+        # this run's one, and a run with explain off must not leave the old one beside its findings.
+        (target_dir / FACTS_FILE).unlink(missing_ok=True)
+        return await run_state(state, target_dir, config, session_id=session_id)
 
 
 async def resume(target_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:
-    state = load_state(target_dir / "review-state.json")
-    if state is None:
-        raise ReviewError(f"no readable review-state.json in {target_dir}")
-    return await run_state(state, target_dir, config, session_id=session_id)
+    """Continue the run saved in *target_dir*. Refuses (RunInProgress) while a process is still running it."""
+    with contextlib.ExitStack() as lock:
+        _hold(lock, target_dir)
+        state = load_state(target_dir / "review-state.json")
+        if state is None:
+            raise ReviewError(f"no readable review-state.json in {target_dir}")
+        return await run_state(state, target_dir, config, session_id=session_id)
 
 
 # --- the assess stage alone, on a saved review ------------------------------------
