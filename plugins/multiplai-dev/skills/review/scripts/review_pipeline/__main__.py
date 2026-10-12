@@ -200,7 +200,8 @@ def main(argv: list[str] | None = None) -> int:
         except MigrateError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
-        print(f"migrate: copied {len(result.copied)}, skipped {len(result.skipped)} already copied, "
+        finished = f", finished {len(result.finished)} an earlier run stopped part way" if result.finished else ""
+        print(f"migrate: copied {len(result.copied)}{finished}, skipped {len(result.skipped)} already copied, "
               f"{result.lines} ledger lines; into {result.dest}")
         return 0
 

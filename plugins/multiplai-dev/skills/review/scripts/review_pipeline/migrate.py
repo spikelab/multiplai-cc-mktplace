@@ -8,13 +8,18 @@ Each directory directly under the source is copied whole to
 the source (rollups, `runs.jsonl`) are not reviews and are not copied.
 
 The source is only read: nothing in it is moved, changed or deleted. Each
-copy is recorded in `<out>/legacy/sources.jsonl` (source path, copy's name),
-and a source directory recorded there is skipped, so running it twice copies
-nothing the second time. Two sources can hold a directory of one name
-(`INBOX/reviews/x` and an archive's `x`): the second is copied to
-`<name>~<6 hex of its source path>/`, never taken for the first. A copy is
-made under a hidden name and renamed when complete, so a copy cut short is
-redone, never taken for a finished one.
+source directory gets two lines in `<out>/legacy/sources.jsonl`: `copying`
+(source path, copy's name) before anything is written, and `done` once the
+copy and all its ledger lines are written. A source whose last line is
+`done` is skipped, so running it twice copies nothing the second time. A
+source left at `copying` by a run that stopped is finished under the name
+that line gave it: copied if its copy is missing, and given only the ledger
+lines it does not have yet (matched by `migrated_from` and `target_dir`).
+Two sources can hold a directory of one name (`INBOX/reviews/x` and an
+archive's `x`): the second is copied to `<name>~<6 hex of its source
+path>/`, never taken for the first. A copy is made under a hidden name and
+renamed when complete, so a copy cut short is redone, never taken for a
+finished one.
 """
 
 from __future__ import annotations
@@ -43,6 +48,7 @@ class MigrateResult:
     dest: Path
     copied: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    finished: list[str] = field(default_factory=list)  # copied by a run that stopped before recording it
     lines: int = 0
 
 
@@ -65,26 +71,35 @@ def _ledger_line(findings: Path, source_dir: Path, copy_dir: Path, session_id: s
     }
 
 
-def _copied(dest_root: Path) -> set[str]:
-    """Source directories already copied, from `sources.jsonl`."""
+def _sources(dest_root: Path) -> dict[str, dict]:
+    """{source path: {"dest": copy's name, "done": bool}} from `sources.jsonl`; a source's last line wins.
+
+    A line with no `state` (none is written now) counts as done."""
     try:
         text = (dest_root / SOURCES_FILE).read_text(encoding="utf-8")
     except FileNotFoundError:
-        return set()
-    done = set()
+        return {}
+    sources: dict[str, dict] = {}
     for raw in text.splitlines():
         try:
             entry = json.loads(raw)
         except ValueError:
             continue
-        if isinstance(entry, dict) and entry.get("source"):
-            done.add(str(entry["source"]))
-    return done
+        if isinstance(entry, dict) and entry.get("source") and entry.get("dest"):
+            sources[str(entry["source"])] = {"dest": str(entry["dest"]),
+                                             "done": entry.get("state", "done") == "done"}
+    return sources
 
 
-def _record(dest_root: Path, src: Path, name: str) -> None:
+def _record(dest_root: Path, src: Path, name: str, state: str) -> None:
     with (dest_root / SOURCES_FILE).open("a", encoding="utf-8") as f:
-        f.write(json.dumps({"source": str(src), "dest": name}) + "\n")
+        f.write(json.dumps({"source": str(src), "dest": name, "state": state}) + "\n")
+
+
+def _logged() -> set[tuple[str, str]]:
+    """(migrated_from, target_dir) of every `migrated` line already in the ledger."""
+    return {(str(e.get("migrated_from")), str(e.get("target_dir"))) for e in ledger.read()
+            if e.get("event") == "migrated"}
 
 
 def migrate(source: Path, out: Path, *, session_id: str = "") -> MigrateResult:
@@ -96,34 +111,43 @@ def migrate(source: Path, out: Path, *, session_id: str = "") -> MigrateResult:
     if dest_root == source or source in dest_root.parents or dest_root in source.parents:
         raise MigrateError(f"{source} and the copy's directory {dest_root} overlap; pass another --out")
     result = MigrateResult(dest=dest_root)
-    copied = _copied(dest_root)
+    sources = _sources(dest_root)
+    claimed = {e["dest"] for e in sources.values()}
+    logged = _logged()
     for src in sorted(p for p in source.iterdir() if p.is_dir() and not p.is_symlink()):
-        if str(src) in copied:
+        entry = sources.get(str(src))
+        if entry and entry["done"]:
             result.skipped.append(src.name)
             continue
-        name = src.name
-        if (dest_root / name).exists():  # another source's directory of the same name
-            name = f"{src.name}~{hashlib.sha256(str(src).encode()).hexdigest()[:6]}"
+        if entry:  # a run stopped part way through this source: finish it under the same name
+            name = entry["dest"]
+        else:
+            name = src.name
+            if (dest_root / name).exists() or name in claimed:  # another source's directory of the same name
+                name = f"{src.name}~{hashlib.sha256(str(src).encode()).hexdigest()[:6]}"
+            dest_root.mkdir(parents=True, exist_ok=True)
+            _record(dest_root, src, name, "copying")
+            claimed.add(name)
         dest = dest_root / name
-        if dest.exists():  # this source's own copy, renamed before a stop kept it out of sources.jsonl
-            _record(dest_root, src, name)
-            result.skipped.append(src.name)
-            continue
-        dest_root.mkdir(parents=True, exist_ok=True)
-        partial = dest_root / f"{PARTIAL_PREFIX}{name}"
-        shutil.rmtree(partial, ignore_errors=True)
-        try:
-            shutil.copytree(src, partial, symlinks=True)
-        except OSError as e:  # shutil.Error is an OSError
+        if dest.exists():  # renamed into place by a run that stopped before its `done` line
+            result.finished.append(src.name)
+        else:
+            partial = dest_root / f"{PARTIAL_PREFIX}{name}"
             shutil.rmtree(partial, ignore_errors=True)
-            raise MigrateError(f"cannot copy {src} to {dest}: {e}") from e
-        partial.rename(dest)
-        _record(dest_root, src, name)
-        result.copied.append(src.name)
+            try:
+                shutil.copytree(src, partial, symlinks=True)
+            except OSError as e:  # shutil.Error is an OSError
+                shutil.rmtree(partial, ignore_errors=True)
+                raise MigrateError(f"cannot copy {src} to {dest}: {e}") from e
+            partial.rename(dest)
+            result.copied.append(src.name)
         for findings in sorted(src.rglob("findings.json")):
             rel = findings.parent.relative_to(src)
             line = _ledger_line(findings, findings.parent, dest / rel, session_id)
-            if line is not None:
-                ledger.append(line)
-                result.lines += 1
+            if line is None or (line["migrated_from"], line["target_dir"]) in logged:
+                continue
+            ledger.append(line)
+            logged.add((line["migrated_from"], line["target_dir"]))
+            result.lines += 1
+        _record(dest_root, src, name, "done")
     return result

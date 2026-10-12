@@ -528,5 +528,41 @@ def test_migrate_keeps_both_of_two_sources_with_one_directory_name(tmp_path, cap
     assert len(_ledger_lines(tmp_path, "migrated")) == lines
 
 
+class _Killed(BaseException):
+    """A migrate run killed between two writes."""
+
+
+@pytest.mark.parametrize("at", [1, 2, 3], ids=["before-any-line", "after-one-dir", "mid-dir"])
+def test_migrate_stopped_part_way_finishes_on_a_rerun_without_a_second_copy(tmp_path, monkeypatch, at):
+    """A run stopped after a copy was renamed into place, at any ledger line, is completed by the
+    next run: no `<name>~<hash>` copy, and every findings.json gets exactly one ledger line."""
+    from review_pipeline import migrate as migrate_mod
+
+    src = tmp_path / "INBOX" / "reviews"
+    _legacy_reviews(src)
+    real_append, calls = ledger.append, []
+
+    def append(entry):
+        calls.append(entry)
+        if len(calls) == at:
+            raise _Killed
+        real_append(entry)
+
+    monkeypatch.setattr(migrate_mod.ledger, "append", append)
+    with pytest.raises(_Killed):
+        migrate_mod.migrate(src, tmp_path / "data" / "reviews")
+    monkeypatch.setattr(migrate_mod.ledger, "append", real_append)
+
+    assert main(["migrate", "--from", str(src)]) == 0
+    legacy = tmp_path / "data" / "reviews" / "legacy"
+    assert sorted(p.name for p in legacy.iterdir() if p.is_dir()) == ["r2__repo--pr-1", "repo--pr-1"]
+    froms = sorted(e["migrated_from"] for e in _ledger_lines(tmp_path, "migrated"))
+    assert froms == sorted([str(src / "repo--pr-1"), str(src / "repo--pr-1" / "rounds" / "eeeeeeeeeeee"),
+                            str(src / "r2__repo--pr-1" / "1791-abc")])
+    assert main(["migrate", "--from", str(src)]) == 0
+    assert len(_ledger_lines(tmp_path, "migrated")) == 3
+    assert sorted(p.name for p in legacy.iterdir() if p.is_dir()) == ["r2__repo--pr-1", "repo--pr-1"]
+
+
 def test_migrate_refuses_a_source_that_is_not_a_directory(tmp_path, capsys):
     assert main(["migrate", "--from", str(tmp_path / "missing")]) == 2
