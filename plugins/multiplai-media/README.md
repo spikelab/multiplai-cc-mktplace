@@ -37,6 +37,9 @@ the [`multiplai`](../../README.md) marketplace.
   the SSH bridge. Motion-graphics overlays render in a headless Chromium that
   the skill launches through Playwright; where that browser is missing,
   `render` names the `playwright install chromium-headless-shell` command.
+  `capture` (a screenshot of a real web page, shown as a proof card) uses the
+  same browser and fetches the page over the network; pages behind a login
+  take a screenshot you saved instead (`--from-file`).
 - `host-browser` — needs the multiplai-kit container→host SSH bridge **and an
   explicit opt-in on the host**: in container releases after v0.9.6 the gateway
   refuses `agent-browser` unless

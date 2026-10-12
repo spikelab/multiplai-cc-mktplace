@@ -286,6 +286,21 @@ Paths are relative to the brand file. `accent` colours the spoken word and the
 headline box; `background` fills behind stacked panels. Without a brand file,
 reels use the title-card font, white captions, a yellow highlight and no logo.
 
+### Sound effects
+
+A reel can take a pop when a headline or a graphic appears, and a click
+when the speaker clicks something on screen. No sounds ship with the skill:
+ask the user for the audio files. Never put one on every cut: a
+first version with sounds everywhere sounds busy. (Peverelli, YouTube
+HzXD4GVqXwM)
+
+`pipeline.py sfx-suggest <edl> --clicks <file> --overlays <file>` prints a first `sfx` list from the EDL's
+`follow` targets and overlay starts. Paste it in and keep only the moments that
+matter. The default level is `volume_db` -14; lower it if the review says the
+sounds stand out. Sounds must be at least 0.5 s apart, and render warns at
+more than one every 3 s on average. Record the level and sounds the user
+settles on with `pipeline.py prefs add`.
+
 ## 6. Render and check every clip
 
 ```bash

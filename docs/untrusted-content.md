@@ -79,6 +79,7 @@ convention that the kit ships).
 | multiplai-messaging | `gmail` | Message bodies, subjects, sender names |
 | | `slack` | Message text, channel and user names |
 | multiplai-media | `host-browser` | Page content read out of the real browser |
+| | `video-edit` | Text of the element `capture` matched on a fetched web page (`stages/capture.py`) |
 
 Each of those `SKILL.md` files carries an **Untrusted content** section stating
 the handling rule for its channel.

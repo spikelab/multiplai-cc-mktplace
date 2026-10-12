@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 from pathlib import PurePosixPath
 
+from code_facts import Fact
+
 from .. import checks, sdk, timings
 from ..config import ReviewConfig
 from ..gates import file_at_head, finding_gate, gated_need, reason_kind
@@ -138,6 +140,14 @@ def finding_entry(finding: Finding, calls: list, hunks: dict, target: TargetInfo
     }
 
 
+def group_facts(facts: list[Fact], group: list[str] | None) -> list[Fact]:
+    """The facts a finder is given: all of them for a change; for a tree group, those citing one of its files."""
+    if group is None:
+        return list(facts)
+    files = set(group)
+    return [f for f in facts if any(c.path in files for c in f.citations)]
+
+
 async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
     if state.past("find"):
         return state
@@ -157,20 +167,24 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
                 rules[i] = conventions_blocks(target, group)
     hunks = checks.diff_hunks(ctx.diff[:DIFF_PROMPT_CHARS])
     todo = [p for p in pairs if p[0] not in state.finder_results]
+    facts = state.facts.facts if cfg.find_with_facts and state.facts else []
 
     async def _one(key: str, dimension: str, index: int) -> tuple[FinderResult, AgentCheck]:
         group_rules = rules.get(index, [])
         conventions = "\n".join(block for _, _, block in group_rules)
-        extra = [f"files ({len(groups[index])}, group {index + 1} of {len(groups)})"] if target.is_tree else None
+        extra = [f"files ({len(groups[index])}, group {index + 1} of {len(groups)})"] if target.is_tree else []
+        given_facts = group_facts(facts, groups[index])
+        if given_facts:
+            extra.append(f"checked facts ({len(given_facts)})")
         given = checks.prompt_labels(
             target, diff=None if target.is_tree else ctx.diff, diff_limit=DIFF_PROMPT_CHARS,
             rules=[(path, included) for path, included, _ in group_rules] if dimension == "conventions" else None,
-            extra=extra)
+            extra=extra or None)
         started = checks.now()
         with sdk.recording() as rec:
             try:
                 out = await sdk.agent_call_structured(
-                    prompt.build(target, dimension, ctx.diff, conventions, files=groups[index]),
+                    prompt.build(target, dimension, ctx.diff, conventions, files=groups[index], facts=given_facts),
                     FinderOutput,
                     allowed_tools=sdk.FINDER_TOOLS, model=cfg.finder_model, effort=cfg.effort,
                     max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label=f"find:{dimension}",

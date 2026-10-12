@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.40.0] - 2026-10-12
+## [0.41.0] - 2026-10-12
 
 ### Added
 - buildme: on Python projects (a `pyproject.toml`, `setup.py`, `setup.cfg`,
@@ -58,6 +58,33 @@ time, not derived from a tag.
   edits it had already made are now rolled back to the commit taken before
   it ran, keeping the build's own review fixes. Before, they stayed in the
   tree unverified, and a resumed build kept stopping on them.
+
+## [0.40.0] - 2026-10-12
+
+### Added
+- review: an optional `explain` stage (`explain: true` in `review.yaml`, or
+  `review_explain` in `multiplai.conf`; off by default). Before the finders
+  it works out what the code under review does with the shared
+  `code_facts` step: each changed hunk with 20 lines of context, the lines
+  the change removed (read as they were before it), or every file of a
+  `--tree` review. Only facts whose cited lines are found at the commit are
+  kept, and they are written to `facts.json` beside `findings.json`
+  (contract: `review/schema/facts.v1.schema.json`). The stage counts
+  towards the spend limit, and `resume` does not ask it twice.
+- review: `find_with_facts: true` (needs `explain`; off by default) lists
+  those facts, with their ids, in every finder's prompt. Whether it helps
+  has not been measured on real reviews yet.
+- review-viewer: when a review wrote `facts.json` for the same commits, the
+  session builds the walkthrough's steps from those checked facts and
+  anchors each step on their cited lines, and the overview says so. The
+  page and the walkthrough format are unchanged.
+- code_facts: a span of lines removed by a change can name where the old
+  file is read, and asks for `side: "base"` citations.
+
+### Changed
+- review: an earlier round's `facts.json` is kept under `rounds/` with its
+  `findings.json`. `review/SKILL.md` gathers the `review.yaml` and
+  `multiplai.conf` settings under a new Configuration section.
 
 ## [0.39.0] - 2026-10-12
 
