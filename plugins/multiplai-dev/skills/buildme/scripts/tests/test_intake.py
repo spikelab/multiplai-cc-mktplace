@@ -394,6 +394,70 @@ class TestTicketMode:
             _config(tmp_path, "c", interview_mode="ticket", auto=True), state) == "self"
 
 
+# --- a --plan-file reaches spec generation ------------------------------------
+
+class TestPlanReachesTheSpec:
+    """A plan passed as --plan-file is saved as plan.md. Spec generation reads
+    state.interview_summary (spec_generator.py), so the plan must be in it in
+    every interview mode, as it was when the wrapper sent it as a context file."""
+
+    PLAN = "# Plan: CSV\n\nPLAN-BODY: export orders as CSV.\n\n## Done means\n1. exports\n"
+
+    async def _spec_input(self, tmp_path, monkeypatch, mode, args_over, call=None):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        plan = tmp_path / "plan-in.md"
+        plan.write_text(self.PLAN)
+        config = _config(repo, "csv", interview_mode=mode)
+        seen: list[str] = []
+
+        async def spec(config, args):
+            seen.append(BuildState.load(config.state_file_path()).interview_summary or "")
+            return 0
+
+        mocks = _spec_stage_mocks()
+        with mocks[1], mocks[2], \
+                patch("build_pipeline.spec_generator.run_spec_generator", spec), \
+                patch("build_pipeline.llm_steps.interview_steps.agent_call_structured",
+                      call or FakeCall([], [])):
+            rc = await run_orchestrator(
+                config, _args(repo, "csv", plan_file=str(plan), **args_over))
+        assert rc == 0
+        assert len(seen) == 1, "spec generation ran once"
+        return seen[0], config
+
+    @pytest.mark.asyncio
+    async def test_user_mode_with_only_a_plan(self, tmp_path, monkeypatch):
+        summary, _ = await self._spec_input(tmp_path, monkeypatch, "user", {})
+        assert "PLAN-BODY: export orders as CSV." in summary
+
+    @pytest.mark.asyncio
+    async def test_user_mode_with_a_summary(self, tmp_path, monkeypatch):
+        summary, config = await self._spec_input(
+            tmp_path, monkeypatch, "user", {"interview_summary": "S"})
+        assert "PLAN-BODY: export orders as CSV." in summary
+        assert "S" in summary
+        assert "## Plan" in (config.change_dir / "interview.md").read_text()
+
+    @pytest.mark.asyncio
+    async def test_self_mode(self, tmp_path, monkeypatch):
+        summary, config = await self._spec_input(
+            tmp_path, monkeypatch, "self", {}, call=FakeCall(QUESTIONS, ANSWERS))
+        assert "## Plan" in summary
+        assert "PLAN-BODY: export orders as CSV." in summary
+        assert summary == (config.change_dir / "interview.md").read_text()
+
+    @pytest.mark.asyncio
+    async def test_ticket_mode(self, tmp_path, monkeypatch):
+        ticket = tmp_path / "ticket-in.md"
+        ticket.write_text("# CSV export\n")
+        summary, _ = await self._spec_input(
+            tmp_path, monkeypatch, "ticket",
+            {"ticket_file": str(ticket), "ticket_ref": "#12"})
+        assert "## Plan" in summary
+        assert "PLAN-BODY: export orders as CSV." in summary
+
+
 # --- research ------------------------------------------------------------------
 
 class TestResearch:

@@ -256,8 +256,8 @@ def render_interview(
 ) -> str:
     """The text of ``interview.md``.
 
-    Sections, each only when it has content: the ticket (already fenced), one
-    ``## Context: <name>`` per context file, ``## Interview`` for a summary,
+    Sections, each only when it has content: the ticket (already fenced),
+    ``## Plan`` for ``plan.md``, one ``## Context: <name>`` per context file, ``## Interview`` for a summary,
     then ``## Questions`` / ``## Answers`` / ``## Assumptions`` (self mode) or
     ``## Questions`` / ``## Replies`` (ticket mode). An answer with empty
     ``grounded_in`` goes under Assumptions, never Answers.
@@ -266,6 +266,9 @@ def render_interview(
     ticket = change_dir / "ticket.md"
     if ticket.is_file():
         out += ["## Ticket", "", ticket.read_text().rstrip(), ""]
+    plan = change_dir / "plan.md"
+    if plan.is_file():
+        out += ["## Plan", "", plan.read_text().rstrip(), ""]
     for name, content in contexts or []:
         out += [f"## Context: {name}", "", content.rstrip(), ""]
     if summary:
@@ -379,7 +382,11 @@ async def run_interview_phase(config, state, args, state_path: Path, progress) -
         write_interview(change_dir, text)
         state.interview_summary = text
     else:  # user — the wrapper ran the interviewer skill
-        state_summary = _legacy_summary(summary, contexts)
+        # A --plan-file used to arrive as a context file; it still reaches the
+        # spec the same way, as the first context entry.
+        plan = change_dir / "plan.md"
+        plan_context = [(plan.name, plan.read_text())] if plan.is_file() else []
+        state_summary = _legacy_summary(summary, plan_context + contexts)
         if not state_summary and not (change_dir / "ticket.md").is_file():
             return _no_interview(config, state, state_path)
         write_interview(change_dir, render_interview(change_dir, summary=summary, contexts=contexts))

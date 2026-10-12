@@ -30,7 +30,8 @@ time, not derived from a tag.
   file or a prompt. A ticket in a repo with no ticket system configured stops
   with "run `/buildme setup`". The ticket is saved as `ticket.md` in the change
   directory, fenced as untrusted text. A plan written with the plan skill can
-  be passed as `--plan-file` and is saved as `plan.md`.
+  be passed as `--plan-file` and is saved as `plan.md`; its text reaches the
+  spec in every interview mode, as it did when it was sent as a context file.
 - buildme: three interview modes (`interview:` in `specs/config.yaml`).
   `self` interviews itself with no human: one call asks, a separate call
   answers from the repo and the ticket, and anything it could not ground is
