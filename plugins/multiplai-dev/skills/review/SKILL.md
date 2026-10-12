@@ -456,6 +456,32 @@ jq -s 'group_by(.generated_at[:7]) | map({month: .[0].generated_at[:7], cost_usd
 jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd: (map(.cost_usd) | add), calls: (map(.calls) | add)})' runs.jsonl
 ```
 
+## Configuration
+
+`review.yaml` in the output directory sets `concurrency`, `finder_model`,
+`verifier_model`, `merger_model` (default: the verifier's), `effort`,
+`max_turns`, `explain` and `find_with_facts`. `multiplai.conf` keys
+`review_finder_model`, `review_verifier_model`, `review_effort` and
+`review_explain` apply when the file does not set them. By default every
+stage runs on the session's model.
+
+- `explain` (default `false`): before the finders, run an explain stage
+  that works out what the code under review does, with the same shared step
+  codebase-walkthrough uses (`lib/code_facts/`). Its scope is each changed
+  hunk at head with 20 lines either side, each run of removed lines at
+  base, and no binary files; for `--tree` and `--dir`, every file under
+  review. It keeps only facts whose cited lines a program finds at the
+  commit, and writes them to `facts.json` beside `findings.json`
+  (contract: `schema/facts.v1.schema.json`). review-viewer builds its
+  walkthrough from that file when the commits match. The stage runs on
+  `finder_model`, counts towards `--max-cost-usd` and adds at least one
+  agent call per 6,000 lines in scope (units also break at directories),
+  plus one re-ask per unit that left a file with no fact.
+- `find_with_facts` (default `false`, needs `explain: true`): also list
+  those facts, with their ids, in every finder's prompt. Whether that makes
+  the finders find more real problems has not been measured, so it stays
+  off until real runs on real PRs are compared.
+
 ## Other commands
 
 - `assess-only <out>/<slug> [...] --report <file.md> --trust-repo` runs the
@@ -474,8 +500,3 @@ jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd:
   `LOW-only.md` and `runs.jsonl` in `--out` from the given files (default:
   every `<out>/*/findings.json`). It prints how many files it skipped for
   having no `run`. A review, resume or batch refreshes `runs.jsonl` too.
-- `review.yaml` in the output directory sets `concurrency`, `finder_model`,
-  `verifier_model`, `merger_model` (default: the verifier's), `effort` and
-  `max_turns`. `multiplai.conf` keys `review_finder_model`,
-  `review_verifier_model` and `review_effort` apply when the file does not set
-  them. By default every stage runs on the session's model.
