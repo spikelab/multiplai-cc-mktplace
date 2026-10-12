@@ -267,13 +267,18 @@ def cmd_edit(args) -> int:
 
     done = r.assembled
     if managed:
-        owned = done.owned
+        held: set[str] = set()
         if not r.sources.ticket_url:
             # `edit` has no --ticket-url, and ticket.md has no `url:` line: keep the link that
             # `open --ticket-url` wrote instead of overwriting it with "not applicable".
-            ticket_keys = {r.sections[p.index].key for p in fill.plan_sections(r.sections)
-                           if p.kind == "code:ticket"}
-            owned = {k: v for k, v in owned.items() if k not in ticket_keys}
+            held |= fill.code_keys(r.sections, {"ticket"})
+        if not r.sources.state_found:
+            # buildme deletes `.build-state.json` after it publishes: keep the documents and the
+            # block statuses `open` wrote instead of overwriting them with what is left.
+            held |= fill.code_keys(r.sections, fill.STATE_KINDS)
+            _diagnose([f"no {fill.STATE_FILE} in the change dir: kept the description's "
+                       "Blocks and Documentation sections as they are"])
+        owned = {k: v for k, v in done.owned.items() if k not in held}
         merged = markers.merge(current, owned, done.template_keys, done.tails)
         body, changed = merged.body, merged.changed
         _diagnose([f"section removed by a human, not restored: {k}" for k in merged.not_restored])

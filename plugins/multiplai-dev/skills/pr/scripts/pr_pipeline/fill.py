@@ -18,7 +18,10 @@ is written by one no-tools model call, which also says which checkboxes the
 change satisfies, quoting a source file for each. Ticket text goes to the
 model inside an untrusted-content fence. The ticket link, the size and the
 extra sections never go to the model: code places them, so they are never
-paraphrased. A model's text never replaces a heading, a checkbox line or a
+paraphrased. When the template has no Blocks, Documentation or Companion
+artifacts heading, code appends that section after the template's own, if its
+source is not empty, so a PR from a repo with its own template still names
+the documents the build rewrote. A model's text never replaces a heading, a checkbox line or a
 template comment.
 """
 
@@ -45,6 +48,14 @@ CODE_SECTIONS = {
     "ticket": "ticket",
     "size": "size",
 }
+# Code sections appended after the template's own when it has no heading for them and their source
+# is not empty: (kind, heading, marker key). The keys are the slugs the standard template's
+# headings get, so a body opened with one template and edited with the other keeps one key.
+CODE_TAILS = (("blocks", "## Blocks", "blocks"),
+              ("docs", "## Documentation", "documentation"),
+              ("artifacts", "## Companion artifacts", "companion-artifacts"))
+# Kinds read from buildme's `.build-state.json`, which buildme deletes after a successful publish.
+STATE_KINDS = {"blocks", "docs"}
 ARTIFACTS = ("unknowns.md", "prototype/NOTES.md", "implementation-notes.md", "respec.md")
 # Files a checkbox's evidence may quote, when present in the change dir.
 EVIDENCE_FILES = ("proposal.md", "design.md", "tasks.md", *ARTIFACTS)
@@ -66,6 +77,7 @@ class Sources:
     why: str = ""
     blocks: list[str] = field(default_factory=list)
     docs: list[str] = field(default_factory=list)
+    state_found: bool = False  # `.build-state.json` was there and readable
     artifacts: list[str] = field(default_factory=list)
     ticket_url: str | None = None
     ticket_text: str = ""
@@ -141,6 +153,7 @@ def read_sources(repo: Path, change_dir: Path, *, base: str | None, head: str,
     state = _state(change_dir)
     src = Sources(repo=repo, change_dir=change_dir, change_name=change_name(change_dir))
     src.why = proposal_why(change_dir)
+    src.state_found = bool(state)
     src.blocks = block_lines(change_dir, state)
     src.docs = [str(d) for d in (state.get("docs_impact") or []) if isinstance(d, str)]
     base_rel = _rel(repo, change_dir) or f"specs/changes/{src.change_name}"
@@ -391,6 +404,9 @@ def assemble(sections: list[Section], plans: list[SectionPlan], src: Sources, mo
         parts.append(s.heading + ("\n" + body if body else ""))
 
     tails: list[markers.Tail] = []
+    for kind, heading, key in CODE_TAILS:
+        if kind not in code_kinds_in_template and getattr(src, kind):
+            tails.append(markers.Tail(key, heading, code_content(kind, src)))
     if "ticket" not in code_kinds_in_template and src.ticket_url:
         tails.append(markers.Tail("ticket", "## Ticket", src.ticket_url))
     if "size" not in code_kinds_in_template:
@@ -405,6 +421,16 @@ def assemble(sections: list[Section], plans: list[SectionPlan], src: Sources, mo
     body = "\n".join(header) + ("\n\n" if header else "") + "\n\n".join(parts) + "\n"
     return Assembled(body=body, owned=owned, template_keys=template_keys, tails=tails, ticks=ticks,
                      model_keys=model_keys, written=written)
+
+
+def code_keys(sections: list[Section], kinds: set[str]) -> set[str]:
+    """The marker keys code writes for these kinds: the template's sections and the appended ones."""
+    wanted = {f"code:{kind}" for kind in kinds}
+    keys = {sections[p.index].key for p in plan_sections(sections) if p.kind in wanted}
+    keys |= {key for kind, _, key in CODE_TAILS if kind in kinds}
+    if "ticket" in kinds:
+        keys.add("ticket")
+    return keys
 
 
 def model_sections(answer: FillAnswer, sections: list[Section], plans: list[SectionPlan]) -> dict[str, str]:

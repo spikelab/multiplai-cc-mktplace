@@ -157,13 +157,13 @@ def test_edit_of_a_managed_body_posts_no_comment(tmp_path, gh_stub, capsys):
 def test_edit_does_not_restore_a_deleted_marker_pair(tmp_path, gh_stub, capsys):
     repo, change = _setup(tmp_path)
     body = _managed_body(repo, change, capsys)
-    a = body.index(markers.begin("blocks"))
-    b = body.index(markers.end("blocks")) + len(markers.end("blocks"))
+    a = body.index(markers.begin("why"))
+    b = body.index(markers.end("why")) + len(markers.end("why"))
     deleted = body[:a] + body[b:]
     gh_stub.on(["gh", "pr", "view"], stdout=_pr_json(deleted)).on(["gh", "pr", "edit"])
     assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 0
-    assert "PR_DIAGNOSIS:section removed by a human, not restored: blocks" in capsys.readouterr().out
-    assert markers.begin("blocks") not in gh_stub.bodies["gh pr edit"]
+    assert "PR_DIAGNOSIS:section removed by a human, not restored: why" in capsys.readouterr().out
+    assert markers.begin("why") not in gh_stub.bodies["gh pr edit"]
 
 
 def test_edit_keeps_a_ticket_link_given_only_to_open(tmp_path, gh_stub, capsys):
@@ -177,6 +177,30 @@ def test_edit_keeps_a_ticket_link_given_only_to_open(tmp_path, gh_stub, capsys):
     gh_stub.on(["gh", "pr", "view"], stdout=_pr_json(opened)).on(["gh", "pr", "edit"])
     assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 0
     assert markers.wrap("ticket", ticket) in gh_stub.bodies["gh pr edit"]
+
+
+BUILT_STATE = {"docs_impact": ["README.md"],
+               "tdd": {"blocks": [{"number": 1, "name": "First block", "status": "done"}]}}
+NO_DOCS_TEMPLATE = "## Summary\n<!-- What does this change do? -->\n"
+
+
+@pytest.mark.parametrize("template", [None, NO_DOCS_TEMPLATE], ids=["standard", "repo-template"])
+def test_edit_after_buildme_deleted_its_state_keeps_docs_and_block_statuses(tmp_path, gh_stub, model_stub,
+                                                                             capsys, template):
+    repo = make_repo(tmp_path / "proj")
+    if template:
+        (repo / ".github").mkdir()
+        (repo / ".github" / "pull_request_template.md").write_text(template)
+        model_stub.answers = [{"sections": {"summary": "Stops the queue dropping jobs."}}] * 2
+    change = make_change(repo, state=BUILT_STATE)
+    body = _managed_body(repo, change, capsys)
+    assert "`README.md`" in body and "Block 1: First block — done" in body
+    (change / ".build-state.json").unlink()  # buildme removes it after a successful publish
+    gh_stub.on(["gh", "pr", "view"], stdout=_pr_json(body)).on(["gh", "pr", "edit"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 0
+    new = gh_stub.bodies["gh pr edit"]
+    assert "`README.md`" in new and "Block 1: First block — done" in new
+    assert "PR_DIAGNOSIS:no .build-state.json" in capsys.readouterr().out
 
 
 def test_edit_refuses_nested_markers_with_exit_2(tmp_path, gh_stub, capsys):

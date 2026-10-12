@@ -36,11 +36,16 @@ time, not derived from a tag.
   comments. Your own edits elsewhere in the description stay, and a section
   you deleted stays deleted. On a PR you opened by hand, it adds its sections
   below your text and leaves one comment saying so; without the rights to edit
-  the PR, it writes nothing.
+  the PR, it writes nothing. Once buildme has deleted its `.build-state.json`
+  after publishing, `edit` keeps the Documentation and Blocks sections already
+  in the description instead of blanking them.
 
 ### Changed
 - buildme's PUBLISH stage opens its PR through the pr skill, so a build in a
-  repository with a PR template opens a PR that follows it. Its output lines
+  repository with a PR template opens a PR that follows it. When that
+  template has no Blocks, Documentation or Companion artifacts heading, those
+  sections are added after the template's own, so the PR still names the
+  documents the build rewrote. Its output lines
   (`PUSHED:`, `PR:`, `PUBLISH_DIAGNOSIS:`), its draft default and its
   resumable PUBLISH step are unchanged: buildme passes `--draft` or `--ready`
   to the skill, so the skill's own `pr.draft` setting cannot override

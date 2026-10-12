@@ -67,7 +67,10 @@ Size.
   build updated, links to `unknowns.md`, `prototype/NOTES.md`,
   `implementation-notes.md` and `respec.md` when present, the ticket link
   (`--ticket-url`, else a `url:` line in `<change-dir>/ticket.md`), and the
-  diff size (`git diff --shortstat <base>...<head>`).
+  diff size (`git diff --shortstat <base>...<head>`). When the template has
+  no Blocks, Documentation or Companion artifacts heading and that section's
+  source is not empty, code adds it after the template's sections, so a
+  buildme PR always names the documents the build rewrote.
 - Any other section is written by one model call with no tools. The model
   sees the template's headings and hints, the change's documents, and the
   ticket's text inside an `<untrusted-content>` fence: ticket text is data,
@@ -101,7 +104,11 @@ a human's ticks on the template's checkboxes, is left alone. A section a
 human deleted stays deleted:
 `PR_DIAGNOSIS:section removed by a human, not restored: <key>`. When
 `ticket.md` has no `url:` line, `edit` keeps the ticket link already in the
-description, such as one `open --ticket-url` wrote. A description
+description, such as one `open --ticket-url` wrote. When the change dir has
+no `.build-state.json` (buildme deletes it after publishing), `edit` keeps the
+Blocks and Documentation sections already in the description and prints
+`PR_DIAGNOSIS:no .build-state.json in the change dir: kept the description's Blocks and Documentation sections as they are`.
+A description
 whose markers nest, do not pair up, or repeat a key is refused (exit 2).
 
 **A PR opened by hand** (no `pr:managed` line): `edit` first checks the `gh`

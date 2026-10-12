@@ -163,6 +163,27 @@ def test_the_model_fills_other_sections_and_code_keeps_the_structure(tmp_path, m
     assert len(model_stub.prompts) == 1
 
 
+def test_a_template_without_their_headings_still_gets_docs_blocks_and_artifacts(tmp_path, model_stub):
+    repo = _repo_with_template(tmp_path)
+    model_stub.answers = [{"sections": {"Summary": "Stops the queue dropping jobs."}, "check": [], "evidence": {}}]
+    change = make_change(repo, artifacts=("respec.md",), state={
+        "docs_impact": ["README.md"], "tdd": {"blocks": [{"number": 1, "name": "First block", "status": "done"}]}})
+    body = _render(repo, change).body
+    assert "## Blocks\n<!-- pr:begin blocks -->\n- Block 1: First block — done\n" in body
+    assert "## Documentation\n<!-- pr:begin documentation -->\nUpdated by the build" in body
+    assert "- `README.md`" in body
+    assert "## Companion artifacts\n<!-- pr:begin companion-artifacts -->\n- `specs/changes/feat/respec.md`" in body
+    assert body.index("## Blocks") < body.index("## Documentation") < body.index("## Companion artifacts") \
+        < body.index("## Size")
+
+
+def test_a_template_without_their_headings_gets_no_empty_docs_blocks_or_artifacts(tmp_path, model_stub):
+    repo = _repo_with_template(tmp_path)
+    model_stub.answers = [{"sections": {"Summary": "Stops the queue dropping jobs."}, "check": [], "evidence": {}}]
+    body = _render(repo, make_change(repo, tasks=None)).body
+    assert "## Documentation" not in body and "## Blocks" not in body and "## Companion artifacts" not in body
+
+
 def test_a_ticked_checkbox_without_verbatim_evidence_comes_back_unticked(tmp_path, model_stub):
     repo = _repo_with_template(tmp_path)
     model_stub.answers = [{"sections": {"Summary": "s"}, "check": ["cb1", "cb2"],
