@@ -186,6 +186,51 @@ class TestAfterABuild:
         assert f"the repo `caller` it reads is not a git repository with a commit at {tmp_path / 'caller'}" in out
         assert "not checked" in captured["sections"]["walkthroughs.md"]
 
+    @needs_uv
+    @pytest.mark.asyncio
+    async def test_a_regenerated_walkthrough_keeps_the_projects_repo_key_not_the_worktrees_name(
+            self, tmp_path, monkeypatch, captured, capsys):
+        """The build worktree is `buildme-<change>`; codebase-walkthrough names a repo after its directory
+        unless told otherwise. The run's argv is parsed by the real CLI and its target resolved by the
+        real `build_target`, model-free, in the build worktree."""
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        config, state, progress = await self._build(tmp_path, "regen")
+        worktree = Path(state.worktree_path)
+        assert worktree.name == "buildme-regen"
+        _move_the_cited_line(worktree)
+        config.regenerate_walkthroughs = True
+        resolved: list[str] = []
+        real = git_ops._run_walkthrough_skill
+
+        def fake(argv, cwd=None, timeout=None):
+            verb_at = argv.index("walkthrough_pipeline") + 1
+            if argv[verb_at] == "check":
+                return real(argv, cwd=cwd)
+            probe = git_ops._run([
+                "uv", "run", "--directory", str(walkthroughs.skill_dir()), "python", "-c",
+                "import sys, tempfile; from pathlib import Path\n"
+                "from walkthrough_pipeline.__main__ import build_parser\n"
+                "from walkthrough_pipeline.target import build_target\n"
+                "a = build_parser().parse_args(sys.argv[1:])\n"
+                "print(build_target(a.target, Path(tempfile.mkdtemp()), key=a.repo_key)[1].key)",
+                *argv[verb_at:]], cwd=cwd)
+            assert probe.ok, probe.stderr
+            key = probe.stdout.strip().splitlines()[-1]
+            resolved.append(key)
+            md = worktree / "docs" / "walkthroughs" / MD_NAME
+            md.write_text(_walkthrough(_git(worktree, "rev-parse", "HEAD").stdout.strip(), repo_key=key))
+            return GitResult(argv, 0, "", "")
+
+        monkeypatch.setattr(git_ops, "_run_walkthrough_skill", fake)
+
+        assert _run_publish(config, state, progress) is True
+
+        assert resolved == ["proj"]
+        md = (worktree / "docs" / "walkthroughs" / MD_NAME).read_text()
+        assert "| proj | ../.. |" in md and "buildme-regen" not in md
+        assert f"WALKTHROUGH:STALE:docs/walkthroughs/{MD_NAME} — regenerated and committed" in capsys.readouterr().out
+
     async def _build_from(self, tmp_path, repo: Path, change: str):
         make_bare_origin(repo, tmp_path / "origin.git")
         config = BuildConfig(project_dir=repo, change_name=change)
@@ -253,6 +298,7 @@ class TestRegenerate:
         assert run[run.index("--output") + 1] == str(md.parent)
         assert run[run.index("--max-usd") + 1] == "3"
         assert "--trust-repo" in run and run[run.index("--repos") + 1] == str(stale.project_dir.resolve())
+        assert "--repo-key=proj" in run
         assert _git(stale.project_dir, "log", "-1", "--format=%s").stdout.strip() == \
             f"docs(walkthroughs): regenerate {MD_NAME}"
         assert _git(stale.project_dir, "status", "--porcelain").stdout == ""

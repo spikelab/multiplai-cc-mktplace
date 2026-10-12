@@ -26,9 +26,11 @@ With `regenerate_walkthroughs: true` (off by default: one run may spend up to
 `walkthrough_max_usd`), each walkthrough the build made stale is re-run with the module
 directory, depth and mode its header records, written over the old files, and
 committed to the build branch. The run reads the project's repo only
-(`--repos`), with `--trust-repo` passed only when buildme's own trust check
-passed; a walkthrough that read other repositories is reported, not re-run. A
-run stopped by its spend limit (exit 2) leaves the old file in place.
+(`--repos`) and keeps the key the header gave it (`--repo-key`; the worktree's
+own directory is `buildme-<change>`), with `--trust-repo` passed only when
+buildme's own trust check passed; a walkthrough that read other repositories
+is reported, not re-run. A run stopped by its spend limit (exit 2) leaves the
+old file in place.
 
 The skill runs as a subprocess (`uv run --directory`), like the pr skill, so
 buildme does not depend on walkthrough-pipeline.
@@ -239,6 +241,7 @@ def regenerate(config, w: Walkthrough) -> str:
     res = git_ops._run_walkthrough_skill(_argv(
         "run", str(module), "--depth", fields["Depth"], "--mode", fields["Mode"], "--name", name,
         "--output", str(w.path.parent), "--max-usd", f"{usd:g}", "--trust-repo", "--repos", str(repo),
+        f"--repo-key={w.project_key}",
     ), cwd=config.project_dir)
     if res.returncode == 2:
         return f"not regenerated: the run stopped at its spend limit (${usd:g}); the old file is left in place"

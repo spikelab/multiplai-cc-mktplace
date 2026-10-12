@@ -61,7 +61,12 @@ time, not derived from a tag.
   made stale the way its header says it was made, capped at
   `walkthrough_max_usd` (default 10) per run, and commits it to the build
   branch; it needs `--trust-repo`, and a walkthrough that read other
-  repositories is reported instead of re-run.
+  repositories is reported instead of re-run. The re-run keeps the repo key
+  the walkthrough's header gave the project, not the build worktree's
+  directory name (`buildme-<change>`).
+- codebase-walkthrough: `run --repo-key KEY` names the module's repository
+  `KEY` in the "Commits read" table and every citation, instead of its
+  directory's name.
 
 ## [0.43.0] - 2026-10-12
 

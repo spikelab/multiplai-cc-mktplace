@@ -252,10 +252,11 @@ def list_target_files(snapshot: Path, subpath: str, *, depth: str = "standard") 
 
 
 def build_target(path: str | Path, run_dir: Path, *, name: str | None = None,
-                 depth: str = "standard") -> tuple[TargetInfo, RepoInfo]:
-    """Resolve, snapshot and list the target. Raises TargetError."""
+                 depth: str = "standard", key: str | None = None) -> tuple[TargetInfo, RepoInfo]:
+    """Resolve, snapshot and list the target. Raises TargetError. *key* names the
+    target's repository (default: its directory's name)."""
     root, sub, sha = resolve_target(path)
-    repo = RepoInfo(key=root.name, path=str(root), head_sha=sha, remote_url=remote_url(root))
+    repo = RepoInfo(key=key or root.name, path=str(root), head_sha=sha, remote_url=remote_url(root))
     snap = snapshot_repo(repo, run_dir / "snap" / repo.key)
     files, lines, skipped, n_mig, latest = list_target_files(snap, sub, depth=depth)
     langs: dict[str, int] = {}

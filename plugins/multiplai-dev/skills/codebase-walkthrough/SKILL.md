@@ -89,6 +89,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 | `--name` | Base file name | the module directory, lower-cased |
 | `--output` | Directory for the walkthrough files | `INBOX/` if it exists, else the current directory |
 | `--search-root` / `--repos` | Where to look for references | the nearest ancestor holding several repositories |
+| `--repo-key` | The module repository's name in the "Commits read" table and every citation | the repository directory's name |
 | `--docs` | Vendor docs base URL with an `llms.txt` | none |
 | `--docs-dir` | Local docs directory (repeatable) | a directory next to the repos named after the vendor |
 | `--api-collection` | Bruno/OpenCollection directory | a directory next to the repos holding `opencollection.yml` |
