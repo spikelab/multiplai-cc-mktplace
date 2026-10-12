@@ -122,8 +122,8 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
             log.warning("cannot build the run record for the ledger", exc_info=True)
             run = None
         review_ledger.finished(producer=producer(), session_id=session_id, slug=t.slug, target_dir=target_dir,
-                        round_=number, head_sha=t.head_sha, base_sha=t.base_sha, kind=t.kind, pr=t.pr,
-                        stopped=stopped, run=run)
+                               round_=number, head_sha=t.head_sha, base_sha=t.base_sha, kind=t.kind, pr=t.pr,
+                               stopped=stopped, run=run)
 
 
 async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig, *,

@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     from .post import PostError, post
     from .stages.verify import VerifyIncomplete
 
-    out = Path(args.out).expanduser().resolve() if args.out else default_out()
+    out = Path(args.out).expanduser().resolve() if args.out else default_out().resolve()
 
     if args.command == "rollup":
         paths = [Path(p).resolve() for p in args.paths] or None
