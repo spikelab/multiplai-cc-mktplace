@@ -29,8 +29,10 @@ time, not derived from a tag.
   Why, Blocks, Documentation, Companion artifacts, Ticket and Size.
 - The template's headings, checkboxes and comments are always kept. Sections
   the change's own files answer are filled from them; one model call with no
-  tools writes the rest. A checkbox is ticked only when the model quotes a
-  file that shows it is done. A description over 2,500 words is refused
+  tools writes the rest. A checkbox is ticked only when the model ticks it
+  and its quote appears word for word in one of the change's files; code
+  checks that the quote is there, and the model judges whether it shows the
+  item is done. A description over 2,500 words is refused
   before anything is written.
 - `edit` rewrites only the sections the skill wrote, marked with hidden HTML
   comments. Your own edits elsewhere in the description stay, and a section

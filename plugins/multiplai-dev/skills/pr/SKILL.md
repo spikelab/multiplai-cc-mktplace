@@ -79,8 +79,11 @@ Size.
   template has no heading for them. It is told to keep its text under 1,500
   words.
 - The template's headings, checkbox lines and HTML comments are kept byte for
-  byte. A checkbox is ticked only when the model quotes, character for
-  character, a source file showing it is done; otherwise it stays unticked.
+  byte. A checkbox is ticked only when the model ticks it and gives a quote
+  that code finds, character for character, in one of the change's documents
+  (never the ticket); otherwise it stays unticked. Code checks only that the
+  quote is there. The model alone judges whether the quote shows the item is
+  done, so even a one-word quote that appears in a document passes the check.
 - Gates, in code: every template heading appears as often as in the
   template, in order; every
   checkbox line is there; every section the model wrote is non-empty (or
