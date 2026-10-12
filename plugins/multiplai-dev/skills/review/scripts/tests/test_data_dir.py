@@ -286,14 +286,64 @@ def test_a_started_line_with_no_end_makes_a_plain_run_exit_4_and_restart_starts_
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     target_dir = out / f"example-booking-engine--{base}..{head}"
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    # A rerun on this head saved its state, wrote its `started` line, then died.
     ledger.started(slug=target_dir.name, target_dir=target_dir, head_sha=head, session_id="a run that died")
+    state = (target_dir / "review-state.json").read_bytes()
     fake = agents()
+    capsys.readouterr()
     assert main(_review_args(repo, base, head, out)) == 4
     err = capsys.readouterr().err
     assert f"interrupted run found; continue with: python -m review_pipeline resume {target_dir}" in err
-    assert fake.calls == [] and not target_dir.exists()
+    assert fake.calls == [] and (target_dir / "review-state.json").read_bytes() == state
     assert main(_review_args(repo, base, head, out, "--restart")) == 0
     assert _ledger_lines(tmp_path, "finished")[-1]["stopped"] is None
+
+
+def _break_state(target_dir: Path, how: str) -> None:
+    if how == "dir-deleted":
+        shutil.rmtree(target_dir)
+    elif how == "state-deleted":
+        (target_dir / "review-state.json").unlink()
+    else:
+        (target_dir / "review-state.json").write_text("{not json")
+
+
+@pytest.mark.parametrize("how", ["dir-deleted", "state-deleted", "state-unreadable"])
+def test_a_started_line_with_no_saved_state_left_starts_a_fresh_run_that_closes_it(
+        fixture_repo, tmp_path, agents, how):
+    """`resume` could only fail there (no readable review-state.json), so a plain run starts over instead."""
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / f"example-booking-engine--{base}..{head}"
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    ledger.started(slug=target_dir.name, target_dir=target_dir, head_sha=head, session_id="a run that died")
+    _break_state(target_dir, how)
+    fake = agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    assert fake.calls
+    assert _ledger_lines(tmp_path)[-1]["event"] == "finished" and not ledger.interrupted(target_dir, head)
+    assert main(_review_args(repo, base, head, out)) == 0
+
+
+def test_a_started_line_for_a_head_the_saved_state_is_not_on_starts_a_fresh_run(branch_clone, tmp_path, agents):
+    """The directory's state is another head's: resuming it would finish a review of the wrong commit."""
+    repo, _, head2 = branch_clone
+    out = tmp_path / "out"
+    args = ["--out", str(out), "review", "--repo", str(repo), "--branch", "feature/x", "--trust-repo"]
+    target_dir = out / f"{SLUG_REPO}--feature_x"
+    agents()
+    assert main(args) == 0
+    # A run on head2 died earlier; the directory now holds head1's finished run.
+    ledger.started(slug=target_dir.name, target_dir=target_dir, head_sha=head2, session_id="a run that died")
+    fixture_git(repo, "update-ref", "refs/remotes/origin/feature/x", head2)
+    fake = agents()
+    assert main(args) == 0
+    assert fake.calls
+    assert json.loads((target_dir / "findings.json").read_text())["target"]["head_sha"] == head2
+    assert not ledger.interrupted(target_dir, head2)
 
 
 def test_a_review_running_now_is_not_read_as_interrupted_and_nothing_starts_a_second_run_in_its_directory(
@@ -306,9 +356,12 @@ def test_a_review_running_now_is_not_read_as_interrupted_and_nothing_starts_a_se
 
     repo, base, head = fixture_repo
     out = tmp_path / "out"
-    out.mkdir()
     target_dir = out / f"example-booking-engine--{base}..{head}"
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    # A rerun on this head has saved its state and written its `started` line, and is still going.
     ledger.started(slug=target_dir.name, target_dir=target_dir, head_sha=head, session_id="a run still going")
+    state = (target_dir / "review-state.json").read_bytes()
     fake = agents()
     with runlock.hold(target_dir):
         for argv in (_review_args(repo, base, head, out), _review_args(repo, base, head, out, "--restart"),
@@ -318,8 +371,8 @@ def test_a_review_running_now_is_not_read_as_interrupted_and_nothing_starts_a_se
             err = capsys.readouterr().err
             assert f"a review of {target_dir} is running now (pid {os.getpid()} on " in err, err
             assert "interrupted run found" not in err
-    assert fake.calls == [] and not target_dir.exists()
-    assert [e["event"] for e in _ledger_lines(tmp_path)] == ["started"]
+    assert fake.calls == [] and (target_dir / "review-state.json").read_bytes() == state
+    assert [e["event"] for e in _ledger_lines(tmp_path)] == ["started", "finished", "started"]
 
     capsys.readouterr()
     assert main(_review_args(repo, base, head, out)) == 4

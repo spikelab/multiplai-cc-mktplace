@@ -25,8 +25,8 @@ Exit codes: 0 done; 1 a target failed; 2 bad input, unresolvable target,
 post refused, or another process is running a review of the target now
 (runlock.py); 3 repository not trusted; 4 the budget circuit breaker stopped
 the run (resume with a higher --max-cost-usd to continue), or `review` found
-an interrupted run of the same target and head in the ledger (resume it, or
-pass --restart); 5 the verifier gave no usable answer for some findings after
+an interrupted run of the same target and head in the ledger whose saved
+state is still in the target directory (resume it, or pass --restart); 5 the verifier gave no usable answer for some findings after
 three tries each (resume retries only those).
 
 Every run appends to `<data_dir>/reviews/ledger.jsonl` (see ledger.py),

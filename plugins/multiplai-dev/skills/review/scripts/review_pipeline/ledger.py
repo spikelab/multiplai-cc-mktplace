@@ -12,7 +12,9 @@ or by the verifier. A run killed before it could write its end line, or
 stopped with Ctrl-C or a cancelled task (which writes none), leaves a
 `started` line with nothing after it for the same `target_dir` and
 `head_sha`: `interrupted()` finds it, and a plain `review` of that target
-refuses to start over. A run still going leaves the same line, so
+refuses to start over when the directory still holds that run's saved state
+on that head (orchestrator `_resumable`; without it there is nothing to
+resume, and the review starts over). A run still going leaves the same line, so
 `interrupted()` alone cannot tell the two apart: the orchestrator takes the
 target directory's run lock (runlock.py) before it asks. `migrate` adds `event: "migrated"` lines. The file is
 only ever opened for appending; nothing rewrites or truncates it.

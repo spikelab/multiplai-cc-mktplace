@@ -52,6 +52,10 @@ time, not derived from a tag.
 - A review killed or stopped with Ctrl-C part way (no end line in the ledger) is no longer started
   over by accident: running `review` on the same target and head exits 4
   and prints the `resume` command. `--restart` starts over on purpose.
+  When the target directory no longer holds that run's saved state on that
+  head (deleted, or written over by a run on another head), `review` starts
+  over instead of pointing at a `resume` that would fail or continue the
+  wrong head.
   buildme's findings stage resumes such a review of the PR head (one its
   own timeout killed, say) instead of counting it as a failed review.
   A review that is still running is not mistaken for one of these: each

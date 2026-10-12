@@ -376,8 +376,9 @@ def resume_argv(run: FindingsRun, target_dir: str) -> list[str]:
 
 
 # What `review` prints (exit 4) when the ledger shows a run of this target and
-# head that started and never ended: a review killed by this stage's own
-# subprocess timeout, say. review_pipeline/orchestrator.py `InterruptedRun`.
+# head that started and never ended, and the target directory still holds that
+# run's saved state on this head (without it, `review` starts over itself): a
+# review killed by this stage's own subprocess timeout, say. review_pipeline/orchestrator.py `InterruptedRun`.
 # `review` checks the target directory's run lock first, so a review that is
 # still running exits 2 ("is running now", `RunInProgress`) instead and is
 # never resumed here; a `resume` that finds the lock taken refuses the same way.

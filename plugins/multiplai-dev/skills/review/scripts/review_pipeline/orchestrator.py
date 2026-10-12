@@ -32,7 +32,7 @@ from .stages.find import file_chars, file_groups, finder_dimensions, run_find
 from .stages.merge import run_merge
 from .stages.repeats import run_repeats
 from .stages.verify import VerifyIncomplete, run_verify
-from .state import load_state, save_state
+from .state import STATE_FILE, load_state, save_state
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +50,8 @@ class ReviewError(Exception):
 
 
 class InterruptedRun(ReviewError):
-    """The ledger shows a run of this target and head that started and never ended. Exit code 4."""
+    """The ledger shows a run of this target and head that started and never ended, and its saved
+    state is still in the target directory, so `resume` can continue it. Exit code 4."""
 
     def __init__(self, target_dir: Path):
         self.target_dir = target_dir
@@ -269,7 +270,8 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
     there (`import_dir`), then reviewed as a tree at that commit. With
     *check_interrupted* (a review, not `--plan-only`) and no `spec.restart`, a
     run of this directory and head that the ledger shows started and never
-    ended raises InterruptedRun before anything is written.
+    ended raises InterruptedRun before anything is written, when `resume`
+    can continue it (`_resumable`); otherwise this run starts over.
     """
     repo, tree, name, src = spec.repo, spec.tree, None, None
     info = None
@@ -307,7 +309,7 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
     target_dir = out_dir / info.slug
     if lock is not None and target_dir != locked:
         _hold(lock, target_dir)
-    if check_interrupted and not spec.restart and review_ledger.interrupted(target_dir, info.head_sha):
+    if check_interrupted and not spec.restart and _resumable(target_dir, info.head_sha):
         raise InterruptedRun(target_dir)
     # A directory an earlier round wrote: keep that round's findings before
     # this run writes over them, also when this run is on the same head (a rerun).
@@ -316,6 +318,29 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
         log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
     return ReviewState(target=info, mode=spec.mode, needs=[gated_need(n) for n in needs]), target_dir
+
+
+def _resumable(target_dir: Path, head_sha: str) -> bool:
+    """True when the ledger shows a run of *target_dir* and *head_sha* that never ended and
+    the directory still holds a readable `review-state.json` on that head.
+
+    `run_state` saves the state before it writes the `started` line, so a run
+    that left the line left its state too, unless the directory or the file
+    was deleted since, or a later run on another head wrote over it. Then
+    `resume` would fail or continue the wrong head's review, and nothing
+    would ever close the line: this run starts over instead, and its own end
+    line closes it.
+    """
+    if not review_ledger.interrupted(target_dir, head_sha):
+        return False
+    path = target_dir / STATE_FILE
+    saved = load_state(path) if path.is_file() else None
+    if saved is not None and saved.target.head_sha == head_sha:
+        return True
+    found = f"a saved state on {saved.target.head_sha[:12]}" if saved is not None else f"no readable {STATE_FILE}"
+    log.warning("%s: the ledger shows an unfinished run on %s, but the directory holds %s; starting over",
+                target_dir, head_sha[:12], found)
+    return False
 
 
 def plan_text(state: ReviewState, config: ReviewConfig) -> str:

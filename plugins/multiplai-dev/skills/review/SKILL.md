@@ -286,7 +286,10 @@ no later `finished` line for the same `target_dir` and `head_sha` is a run
 that was killed or stopped with Ctrl-C: a plain `review` of that target then makes no model call,
 prints `interrupted run found; continue with: python -m review_pipeline
 resume <target_dir>` and exits `4`. Run that `resume` (it continues from the
-last finished stage), or pass `--restart` to start over on purpose. A review
+last finished stage), or pass `--restart` to start over on purpose. When the
+target directory no longer holds a readable `review-state.json` on that head
+(the directory or the file was deleted, or a later run on another head wrote
+over it), there is nothing to resume, and `review` starts over instead. A review
 that is still running leaves the same `started` line, so every run holds a
 lock on its target directory (`<out>/.locks/<slug>.lock`) until it ends:
 while another process holds it, `review` (with or without `--restart`),
