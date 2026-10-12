@@ -22,6 +22,7 @@ from build_pipeline.findings import code
 from build_pipeline.findings.models import PRComment, Triage, TriageRecord, Verdict
 from build_pipeline.models import (
     AgentResult,
+    ReviewFinding,
     ReviewResult,
     ReviewScore,
 )
@@ -945,6 +946,70 @@ class TestEngineCheckpointBudget:
         saved = BuildState.load(path)
         assert saved.tdd.current_block == 1
         assert saved.budget["cost_usd"] == 4.25
+
+
+class TestRoundKilledDuringAFixOnPass:
+    """A round's code step killed during a block's fix on pass. The resume
+    discards back to the block's start commit, which comes before the fix on
+    pass's checkpoint, so the block is built again from its start: the
+    engine must not try to roll back to a checkpoint that left the branch."""
+
+    def test_restarting_a_block_drops_its_fix_on_pass_and_its_claims(self, tmp_path):
+        path = tmp_path / ".findings-r1-state.json"
+        path.write_text(json.dumps({
+            "change_name": "calc", "mode": "only", "tier": "advanced", "phase": "tdd_build",
+            "tdd": {"blocks": [{"number": 1, "name": "Fix", "description": "d",
+                                "status": "reviewing", "baseline_commit": "a" * 40,
+                                "test_change_claims": ["tests/test_calc.py: renamed"],
+                                "fix_pass": {"checkpoint": "b" * 40, "step": "fix_agent"}}],
+                    "current_block": 0, "baseline_tests_pass": True},
+        }))
+        code.restart_block(path, 1)
+        block = BuildState.load(path).tdd.blocks[0]
+        assert block.status.value == "pending"
+        assert block.fix_pass is None
+        assert block.test_change_claims == []
+
+    @pytest.mark.asyncio
+    async def test_the_resumed_round_builds_the_block_again(self, built, fake_pr):
+        repo, change, config = built
+        fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+        minor = ReviewFinding(claim="add has no docstring", severity="Minor",
+                              file_path="calc.py", line=1, evidence="no docstring")
+        passing_with_finding = ReviewResult(
+            scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")],
+            findings=[minor])
+        calls = {"implementer": 0}
+
+        async def implementer(*_a, **_kw):
+            calls["implementer"] += 1
+            if calls["implementer"] == 1:
+                (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+                return AgentResult(success=True, output="done")
+            # The fix on pass's agent: half an edit, then the build is killed.
+            (repo / "calc.py").write_text("def add(a, b):\n    \"\"\"half\n")
+            raise KeyboardInterrupt
+
+        run, _ = _run(config, change, triage_call=FakeTriage({"add subtracts": FIX}),
+                      review=FakeReview(fake_pr))
+        stubs = [p for p in engine_stubs(repo)
+                 if getattr(p, "attribute", "") not in ("run_implementer", "_run_quality_review")]
+        stubs.append(patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer))
+        stubs.append(patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                           return_value=passing_with_finding))
+        with _Stubs(stubs), pytest.raises(KeyboardInterrupt):
+            await loop.run_findings(run)
+        state_path = change / code.engine_state_name(1)
+        assert BuildState.load(state_path).tdd.blocks[0].fix_pass is not None
+
+        run2, lines = _run(config, change, triage_call=FakeTriage({"add subtracts": FIX}),
+                           review=FakeReview(fake_pr))
+        with _Stubs(engine_stubs(repo)):
+            assert await loop.run_findings(run2) == 0, lines
+        block = BuildState.load(state_path).tdd.blocks[0]
+        assert block.status.value == "done"
+        assert block.fix_pass is None
+        assert (repo / "calc.py").read_text() == "def add(a, b):\n    return a + b\n"
 
 
 class TestRoundBudget:
