@@ -37,8 +37,10 @@ time, not derived from a tag.
   is unchanged.
 - `runs.jsonl` lists every run, earlier rounds included, sorted by time.
 - review-viewer looks for a review in the new directory, then in the old
-  `INBOX/reviews/`; a review found only there loads with a notice naming
-  where it came from.
+  `INBOX/reviews/` and in the copies `migrate` made of it; a review found
+  only there loads with a notice naming where it came from. Those old
+  reviews are still matched by the checkout's directory name their slugs
+  carry.
 
 ### Added
 - `ledger.jsonl` in the data directory's `reviews/`: one line when a run

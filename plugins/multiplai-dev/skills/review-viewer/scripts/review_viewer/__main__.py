@@ -33,8 +33,8 @@ from multiplai_core.log_utils import log_event, setup_logging
 from pydantic import ValidationError
 
 from . import gitdata, netinfo, registry, server, stats, walkthrough
-from .gitdata import (EMPTY_TREE, GitError, Resolved, TargetError, TargetSpec, diff_findings, parse_target,
-                      resolve_target)
+from .gitdata import (EMPTY_TREE, GitError, Resolved, TargetError, TargetSpec, diff_findings, legacy_slug,
+                      parse_target, resolve_target)
 from .mailbox import MAX_ROW_BYTES, Mailbox, MailboxError, utc_now
 from .models import (CHECKS_SCHEMA_PATH, SCHEMA_PATH, WALKTHROUGH_SCHEMA_PATH, FindingsFile, OutboxRow,
                      checks_schema_text, findings_digest, load_findings, schema_text,
@@ -69,7 +69,7 @@ def output_root() -> Path:
     being reviewed, and the output would land in its working tree. Holds the
     mailboxes of a diff served with no review; reviews themselves are found
     in `default_reviews_dir()`, then `legacy_reviews_dir()` (this root's
-    `reviews/`)."""
+    `reviews/`) and `migrated_reviews_dir()`."""
     cfg = os.environ.get("CLAUDE_CONFIG_DIR")
     if cfg:
         marker = Path(cfg) / ".workspace"
@@ -105,21 +105,48 @@ def legacy_reviews_dir() -> Path:
     return output_root() / "reviews"
 
 
-def find_review(target, dirs: list[Path]) -> tuple[str, Path | None, FindingsFile | None]:
-    """Look for a review of these commits under `<dir>/*/findings.json`.
+def migrated_reviews_dir() -> Path:
+    """Where the review skill's `migrate` copies those old reviews:
+    `<data_dir>/reviews/legacy/<directory name>/`, holding each directory in
+    its own layout (an archive's reviews sit one level deeper)."""
+    return default_reviews_dir() / "legacy"
+
+
+def _migrated_findings(root: Path) -> list[Path]:
+    """Every findings.json at any depth under *root*, except kept rounds
+    (`rounds/<round>/`) and the viewer's own files."""
+    found = []
+    for p in root.rglob("findings.json"):
+        parts = p.relative_to(root).parts[:-1]
+        if p.is_file() and "rounds" not in parts and "viewer" not in parts:
+            found.append(p)
+    return found
+
+
+def find_review(target, dirs: list[Path], *, deep_dirs: list[Path] | None = None,
+                slugs: set[str] | None = None) -> tuple[str, Path | None, FindingsFile | None]:
+    """Look for a review of these commits under `<dir>/*/findings.json`, and
+    at any depth under each of *deep_dirs* (migrated copies; see
+    `_migrated_findings`).
 
     ("match", path, findings) when one names the same base and head;
-    ("stale", path, findings) when one has the same slug but other commits;
+    ("stale", path, findings) when one has the target's slug but other commits;
     ("none", None, None) otherwise. Newest file wins within each kind.
+    *slugs* are the slugs that count as the target's (default: its own); a
+    review written before multiplai-dev 0.45 carries `legacy_slug(target)`.
 
     Every tree review has the empty tree as its base, so for a tree target the
     commits alone do not say which directory was reviewed: a match must also
-    have the same slug, which names the directory (`<repo>--tree-<path>`).
+    have the target's slug, which names the directory (`<repo>--tree-<path>`).
     """
     tree = target.base_sha == EMPTY_TREE
+    slugs = slugs or {target.slug}
     candidates: list[Path] = []
+    for d in deep_dirs or []:
+        candidates.extend(_migrated_findings(Path(d)))
     for d in dirs:
         candidates.extend(p for p in Path(d).glob("*/findings.json") if p.is_file())
+    # Stable: on equal times (a copy keeps its original's), a migrated copy wins.
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     stale: tuple[Path, FindingsFile] | None = None
     for path in candidates:
@@ -129,9 +156,9 @@ def find_review(target, dirs: list[Path]) -> tuple[str, Path | None, FindingsFil
             log.warning("skipping %s while looking for a review: %s", path, exc)
             continue
         t = ff.target
-        if (t.base_sha, t.head_sha) == (target.base_sha, target.head_sha) and (not tree or t.slug == target.slug):
+        if (t.base_sha, t.head_sha) == (target.base_sha, target.head_sha) and (not tree or t.slug in slugs):
             return "match", path, ff
-        if stale is None and t.slug == target.slug:
+        if stale is None and t.slug in slugs:
             stale = (path, ff)
     if stale:
         return "stale", stale[0], stale[1]
@@ -190,18 +217,29 @@ def _load_resolved(args, resolved: Resolved):
     kind, path, review = find_review(target, dirs)
     source_notice = None
     if kind != "match" and not args.reviews_dir:
-        # Not in the data directory: look where the review skill wrote before multiplai-dev 0.45.
-        old_kind, old_path, old_review = find_review(target, [legacy_reviews_dir()])
+        # Not in the data directory: look where the review skill wrote before
+        # multiplai-dev 0.45, and at the copies its `migrate` made of those.
+        # Those reviews name the checkout's directory in their slug.
+        old_slug = legacy_slug(target)
+        copies = migrated_reviews_dir()
+        old_kind, old_path, old_review = find_review(
+            target, [legacy_reviews_dir()], deep_dirs=[copies],
+            slugs={target.slug, old_slug} if old_slug else None)
         if old_kind == "match" or (kind == "none" and old_kind == "stale"):
             kind, path, review = old_kind, old_path, old_review
-            source_notice = (f"This review was loaded from the old location {path.parent}, "
-                             f"not from {default_reviews_dir()}.")
+            if copies in path.parents:
+                source_notice = (f"This review was loaded from {path.parent}, a copy of a review written "
+                                 f"before multiplai-dev 0.45, not from {default_reviews_dir()}.")
+            else:
+                source_notice = (f"This review was loaded from the old location {path.parent}, "
+                                 f"not from {default_reviews_dir()}.")
     pr = resolved.pr.to_dict() if resolved.pr else None
     if kind == "match":
         review.target.repo_path = target.repo_path
         box = path.parent / "viewer"
         meta = {"pr": pr, "notice": source_notice, "review": f"findings: {len(review.findings)}"}
-        return [(review, box)], {target.slug: meta}
+        # Keyed by the review's slug, which the page is keyed by: an old review's differs from the target's.
+        return [(review, box)], {review.target.slug: meta}
     notice = None
     status = "none"
     if kind == "stale":

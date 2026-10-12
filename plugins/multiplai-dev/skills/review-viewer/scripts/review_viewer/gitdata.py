@@ -584,6 +584,21 @@ def slug_repo_name(repo: Path) -> str:
     return origin_name(remote_url(repo)) or repo.name
 
 
+def legacy_slug(target: Target) -> str | None:
+    """The slug a review written before multiplai-dev 0.45 gave *target*: the
+    checkout's directory name where `slug_repo_name()` now puts
+    `<owner>-<repo>`. None when the two are the same, or the slug does not
+    start with the repo part (a range's)."""
+    if not target.repo_path:
+        return None
+    repo = Path(target.repo_path)
+    name = slug_repo_name(repo)
+    prefix = sanitize_slug(name) + "--"
+    if name == repo.name or not target.slug.startswith(prefix):
+        return None
+    return sanitize_slug(f"{repo.name}--{target.slug[len(prefix):]}")
+
+
 def github_web_base(url: str | None) -> str | None:
     """`https://github.com/<owner>/<repo>` for a GitHub remote, else None.
     Copied from `review_pipeline.target`."""

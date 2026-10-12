@@ -8,6 +8,7 @@ from sys import executable as PYTHON
 import pytest
 
 from review_viewer.__main__ import _load_targets, build_parser, find_review
+from review_viewer.gitdata import EMPTY_TREE
 
 
 @pytest.fixture
@@ -119,6 +120,71 @@ def test_the_data_dir_wins_over_the_old_inbox_location(env, fixture_repo, findin
     loaded, meta = _load("--target", "main~1..main", "--repo", str(repo))
     (ff, box), = loaded
     assert box == path.parent / "viewer" and meta[ff.target.slug]["notice"] is None
+
+
+def _workspace(tmp_path):
+    ws = tmp_path / "ws"
+    (ws / "INBOX").mkdir(parents=True)
+    (tmp_path / "cfg" / ".workspace").write_text(str(ws))
+    return ws
+
+
+@pytest.mark.parametrize("where", ["old-name", "from-scratchpad/review-r4_old-name"],
+                         ids=["copied-directory", "archive-layout"])
+def test_a_review_migrate_copied_into_the_data_dir_is_found(env, fixture_repo, findings_path, tmp_path, where):
+    """`migrate` copies old reviews to `<data_dir>/reviews/legacy/<name>/`, one level (or, for an
+    archive's own layout, two) below where new reviews are; the INBOX originals may be gone."""
+    repo, _, _ = fixture_repo
+    _workspace(tmp_path)
+    copies = tmp_path / "data" / "reviews" / "legacy"
+    path = _review(copies, findings_path, name=where)
+    loaded, meta = _load("--target", "main~1..main", "--repo", str(repo))
+    (ff, box), = loaded
+    m = meta[ff.target.slug]
+    assert m["review"] == "findings: 3" and box == path.parent / "viewer"
+    assert m["notice"] == (f"This review was loaded from {path.parent}, a copy of a review written before "
+                           f"multiplai-dev 0.45, not from {tmp_path / 'data' / 'reviews'}.")
+
+
+def test_a_kept_round_in_a_migrated_copy_is_not_loaded_as_the_review(env, fixture_repo, findings_path, tmp_path):
+    repo, _, _ = fixture_repo
+    _workspace(tmp_path)
+    _review(tmp_path / "data" / "reviews" / "legacy", findings_path, name="old-name/rounds/abcdef012345")
+    loaded, meta = _load("--target", "main~1..main", "--repo", str(repo))
+    assert meta[loaded[0][0].target.slug]["review"] == "none"
+
+
+def _github_clone(fixture_repo, dest):
+    """A checkout whose `origin` names a GitHub repo, so its new slugs differ from the old ones."""
+    src, _, _ = fixture_repo
+    subprocess.run(["git", "clone", "-q", str(src), str(dest)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(dest), "remote", "set-url", "origin", "https://github.com/acme/fixture.git"],
+                   check=True, capture_output=True)
+    return dest
+
+
+def test_an_old_inbox_tree_review_named_after_the_directory_is_found(env, fixture_repo, findings_path, tmp_path):
+    """Reviews written before 0.45 carry `<dirname>--…` slugs; the viewer now computes `<owner>-<repo>--…`."""
+    _, _, head = fixture_repo
+    clone = _github_clone(fixture_repo, tmp_path / "old-checkout")
+    ws = _workspace(tmp_path)
+    path = _review(ws / "INBOX" / "reviews", findings_path, name="old-checkout--tree", base_sha=EMPTY_TREE,
+                   head_sha=head, slug="old-checkout--tree")
+    loaded, meta = _load("--tree", "HEAD", "--repo", str(clone))
+    (ff, box), = loaded
+    assert box == path.parent / "viewer" and ff.target.slug == "old-checkout--tree"
+    assert meta[ff.target.slug]["notice"].startswith(f"This review was loaded from the old location {path.parent}")
+
+
+def test_an_old_inbox_review_named_after_the_directory_is_reported_stale(env, fixture_repo, findings_path,
+                                                                         tmp_path):
+    clone = _github_clone(fixture_repo, tmp_path / "old-checkout")
+    ws = _workspace(tmp_path)
+    _review(ws / "INBOX" / "reviews", findings_path, name="old-checkout--tree", base_sha=EMPTY_TREE,
+            head_sha="f" * 40, slug="old-checkout--tree")
+    loaded, meta = _load("--tree", "HEAD", "--repo", str(clone))
+    (ff, _), = loaded
+    assert ff.target.slug == "acme-fixture--tree" and meta[ff.target.slug]["review"] == "stale ffffffff"
 
 
 def test_find_review_skips_broken_files(fixture_repo, findings_path, tmp_path):

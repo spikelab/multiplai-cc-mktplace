@@ -198,8 +198,11 @@ multiplai-core's `get_paths()`, where the review skill writes — it and the
 review skill's `default_out()` must agree) for `*/findings.json` with the
 same base and head. With no `--reviews-dir`, a review not matched there is
 looked for in `legacy_reviews_dir()` (`<workspace INBOX or
-~/.multiplai>/reviews`, where the skill wrote before multiplai-dev 0.45); one found there
-loads with a notice naming that location. `gitdata.slug_repo_name()` restates
+~/.multiplai>/reviews`, where the skill wrote before multiplai-dev 0.45) and, at any
+depth but not in `rounds/`, in `migrated_reviews_dir()` (`<data_dir>/reviews/legacy`,
+where the skill's `migrate` copies them); one found there loads with a notice naming
+that location. Those reviews' slugs name the checkout's directory, so that search also
+accepts `gitdata.legacy_slug()` for a tree match or a stale review. `gitdata.slug_repo_name()` restates
 the pipeline's slug rule (`<owner>-<repo>` from `origin`, else the directory
 name) for PR, branch, unpushed and tree targets, so both name one directory.
 
