@@ -469,6 +469,9 @@ async def _ticket_interview(config, state, args, state_path, progress, contexts,
             log.error("FAILED phase=INTERVIEW reason=%s", e)
             _progress_note(progress, "INTERVIEW", f"Questioner failed: {e}")
             print(f"ERROR: interview questioner failed: {e}", flush=True)
+            state.advance_to(BuildPhase.FAILED, state_path)
+            board.record_failure(config, state, f"interview questioner failed: {e}",
+                                 progress=progress)
             return 1
 
     if not questions:

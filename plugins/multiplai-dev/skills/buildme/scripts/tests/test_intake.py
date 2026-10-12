@@ -384,6 +384,39 @@ class TestTicketMode:
         assert "admins only, all columns." in (config.change_dir / "interview.md").read_text()
         assert "CSV export" in (config.change_dir / "ticket.md").read_text()
 
+    @pytest.mark.asyncio
+    async def test_a_failed_questioner_marks_the_build_failed(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """A questioner error stops the build with exit 1. Like every other
+        failing phase, it moves the checkpoint to FAILED and tells the board,
+        so the state shows the failure and a retry re-runs from the start."""
+        from build_pipeline.sdk import LLMCallError
+
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        ticket = self._ticket(tmp_path)
+        config = _config(repo, "csv", interview_mode="ticket")
+        failing = AsyncMock(side_effect=LLMCallError("questioner down"))
+        with patch("build_pipeline.llm_steps.interview_steps.agent_call_structured", failing), \
+                patch("build_pipeline.board.record_failure") as record_failure:
+            rc = await run_orchestrator(config, _args(
+                repo, "csv", ticket_file=str(ticket), ticket_ref="#12"))
+        assert rc == 1
+        assert "interview questioner failed" in capsys.readouterr().out
+        assert BuildState.load(config.state_file_path()).phase == BuildPhase.FAILED
+        record_failure.assert_called_once()
+        assert "questioner" in record_failure.call_args.args[2]
+
+        # The retry asks again and waits.
+        config = _config(repo, "csv", interview_mode="ticket")
+        with patch("build_pipeline.llm_steps.interview_steps.agent_call_structured",
+                   FakeCall(QUESTIONS, ANSWERS)):
+            rc = await run_orchestrator(config, _args(
+                repo, "csv", ticket_file=str(ticket), ticket_ref="#12"))
+        assert rc == WAITING_EXIT
+        assert "INTERVIEW:WAITING:" in capsys.readouterr().out
+
     def test_ticket_mode_without_a_ticket_falls_back(self, tmp_path):
         from build_pipeline.intake import effective_interview_mode
 
