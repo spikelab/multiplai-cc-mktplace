@@ -323,3 +323,70 @@ def test_a_review_with_explain_off_writes_no_facts_json(fixture_repo, tmp_path, 
     assert main(_review_args(repo, base, head, out)) == 0
     assert "explain" not in fake.calls
     assert not (out / f"booking-engine--{base}..{head}" / "facts.json").exists()
+
+
+# --- G4: the finders given the facts ---------------------------------------------------
+
+
+def _facts() -> list[Fact]:
+    return [Fact(id="f1", claim="KEYWORD filters\n  rate plans",
+                 citations=[Citation(id="c1", path="rateplan_service.py", line_start=1, line_end=1, quote="KEYWORD")]),
+            Fact(id="f2", claim="settings had no name",
+                 citations=[Citation(id="c2", path="settings.py", line_start=2, line_end=3, quote="x", side="base")])]
+
+
+def test_the_finder_prompt_lists_facts_with_their_ids_only_when_given(target_info):
+    from review_pipeline.prompts import find as find_prompt
+
+    plain = find_prompt.build(target_info, "diff-bugs", "the diff")
+    assert find_prompt.FACTS_INTRO not in plain
+    with_facts = find_prompt.build(target_info, "diff-bugs", "the diff", facts=_facts())
+    assert find_prompt.FACTS_INTRO in with_facts
+    assert "- f1: KEYWORD filters rate plans [c1 rateplan_service.py:1-1]" in with_facts
+    assert "- f2: settings had no name [c2 settings.py:2-3 (before the change)]" in with_facts
+    assert '<untrusted-content source="explain stage facts">' in with_facts
+    # after the diff, before the rules that close the prompt
+    assert with_facts.index("the diff") < with_facts.index(find_prompt.FACTS_INTRO) < with_facts.index("Severity:")
+
+
+def test_the_facts_section_is_cut_at_its_budget(target_info, monkeypatch):
+    from review_pipeline.prompts import find as find_prompt
+
+    monkeypatch.setattr(find_prompt, "FACTS_MAX_CHARS", 70)
+    block = find_prompt.facts_block(_facts())
+    assert "- f1:" in block and "- f2:" not in block and "[... 1 more facts cut ...]" in block
+
+
+async def test_find_gives_the_facts_to_finders_only_with_find_with_facts(target_info, tmp_path, monkeypatch):
+    from review_pipeline.models import ExplainedFacts, FinderOutput
+    from review_pipeline.prompts import find as find_prompt
+    from review_pipeline.stages.find import run_find
+
+    prompts: list[str] = []
+
+    async def finder(prompt, schema, *, budget_label="", **kwargs):
+        prompts.append(prompt)
+        return FinderOutput()
+
+    monkeypatch.setattr(sdk, "agent_call_structured", finder)
+    snapshot = tmp_path / "tree"
+    snapshot.mkdir()
+    for on in (False, True):
+        prompts.clear()
+        ctx = RunContext(config=ReviewConfig(concurrency=1, dimensions=("diff-bugs",), explain=True,
+                                             find_with_facts=on),
+                         snapshot=snapshot, diff=Path(target_info.diff_path).read_text())
+        state = ReviewState(target=target_info, facts=ExplainedFacts(facts=_facts()))
+        state = await run_find(state, ctx)
+        assert len(prompts) == 1
+        assert (find_prompt.FACTS_INTRO in prompts[0]) is on
+        assert ("checked facts (2)" in state.checks[0].given) is on
+
+
+def test_a_tree_group_gets_only_the_facts_that_cite_its_files():
+    from review_pipeline.stages.find import group_facts
+
+    facts = _facts()
+    assert group_facts(facts, None) == facts
+    assert [f.id for f in group_facts(facts, ["settings.py"])] == ["f2"]
+    assert group_facts(facts, ["other.py"]) == []
