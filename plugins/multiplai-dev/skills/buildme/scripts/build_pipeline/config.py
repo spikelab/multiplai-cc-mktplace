@@ -722,6 +722,20 @@ class BuildConfig:
     # a Claude model (see detect_tier).
     configured_tier: str | None = None
 
+    # Checked facts about the code (`code_facts`), from specs/config.yaml.
+    # `codebase_analysis_max_units`: the most explore agents the codebase
+    # analysis runs (one per slice of the repo); the files left over are listed
+    # under "Not analysed". `block_facts`: hand each block's test writer and
+    # implementer the facts about the files its tasks name. Off by default:
+    # whether it helps is measured by real builds, which is Spike's call.
+    # `regenerate_walkthroughs` / `walkthrough_max_usd`: re-run a stale
+    # walkthrough under docs/walkthroughs/ after the build, each run capped at
+    # that spend. Off by default: one run may cost up to its cap.
+    codebase_analysis_max_units: int = 12
+    block_facts: bool = False
+    regenerate_walkthroughs: bool = False
+    walkthrough_max_usd: float = 10.0
+
     # Runtime marker, not user-configurable: set to the branch name once the
     # pipeline has created its own worktree+branch (or re-bound to one on
     # resume). None means "we do not own a branch" — every commit/push/PR
@@ -1078,6 +1092,28 @@ class BuildConfig:
         )
 
         self._load_intake_and_stage_settings(data)
+        self._load_code_facts_settings(data)
+
+    def _load_code_facts_settings(self, data: dict) -> None:
+        """`codebase_analysis_max_units`, `block_facts`, `regenerate_walkthroughs`
+        and `walkthrough_max_usd`. An invalid value logs a warning and keeps the
+        default, the same contract as `git.pr`. The two switches take only a
+        YAML boolean, so a typo never turns one on."""
+        self.codebase_analysis_max_units = _cfg_int(
+            data.get("codebase_analysis_max_units", 12), "codebase_analysis_max_units", 12)
+        for key in ("block_facts", "regenerate_walkthroughs"):
+            value = data.get(key, False)
+            if isinstance(value, bool):
+                setattr(self, key, value)
+            else:
+                log.warning("Invalid %s value %r in config.yaml — want true | false; using false",
+                            key, value)
+                setattr(self, key, False)
+        usd = data.get("walkthrough_max_usd", 10.0)
+        if isinstance(usd, bool) or not isinstance(usd, (int, float)) or usd <= 0:
+            log.warning("Invalid walkthrough_max_usd value %r in config.yaml — using 10", usd)
+            usd = 10.0
+        self.walkthrough_max_usd = float(usd)
 
     def _load_intake_and_stage_settings(self, data: dict) -> None:
         """`intake`, `interview`, `architecture`, `pr`, `findings` and

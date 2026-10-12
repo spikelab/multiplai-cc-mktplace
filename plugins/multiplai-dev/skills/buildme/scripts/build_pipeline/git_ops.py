@@ -43,6 +43,9 @@ _GH_TIMEOUT = 300
 _PR_SKILL_TIMEOUT = 1500
 # A whole /multiplai-dev:review run on a PR (finders, verify, explain).
 _REVIEW_SKILL_TIMEOUT = 4 * 3600
+# A codebase-walkthrough `check` is git only; a `run` (regenerate_walkthroughs)
+# is bounded by its own --max-usd, and this only stops one that hangs.
+_WALKTHROUGH_SKILL_TIMEOUT = 4 * 3600
 
 
 class GitLifecycleError(RuntimeError):
@@ -104,6 +107,13 @@ def _run_review_skill(argv: list[str], cwd: Path | str | None = None,
     return _run(argv, cwd=cwd, timeout=timeout)
 
 
+def _run_walkthrough_skill(argv: list[str], cwd: Path | str | None = None,
+                           timeout: int = _WALKTHROUGH_SKILL_TIMEOUT) -> GitResult:
+    """Separate seam for the codebase-walkthrough skill's subprocess
+    (``walkthrough_pipeline check`` and ``run``, after the build)."""
+    return _run(argv, cwd=cwd, timeout=timeout)
+
+
 # --- Inspection -----------------------------------------------------------
 
 
@@ -113,6 +123,25 @@ def repo_root(path: Path | str) -> Path | None:
     if not res.ok:
         return None
     return Path(res.stdout.strip())
+
+
+def path_prefix(path: Path | str) -> str | None:
+    """``path`` relative to its repo's root, as git writes it (``"packages/api/"``,
+    ``""`` at the root), or None when it is not in a repo."""
+    res = _run(["git", "rev-parse", "--show-prefix"], cwd=path)
+    if not res.ok:
+        return None
+    return res.stdout.strip()
+
+
+def files_at(path: Path | str, sha: str) -> list[str] | None:
+    """Every file under ``path`` in commit ``sha``, relative to ``path``
+    (``git ls-tree`` lists from the working directory down), or None."""
+    res = _run(["git", "-c", "core.quotepath=off", "ls-tree", "-r", "-z", "--name-only", sha], cwd=path)
+    if not res.ok:
+        log.warning("git ls-tree %s failed: %s", sha, res.stderr.strip())
+        return None
+    return [p for p in res.stdout.split("\0") if p]
 
 
 def is_git_repo(path: Path | str) -> bool:

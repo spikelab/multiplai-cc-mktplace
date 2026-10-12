@@ -7,7 +7,7 @@ structured output.
 
 from __future__ import annotations
 
-import asyncio
+import functools
 import json
 import logging
 from pathlib import Path
@@ -20,7 +20,7 @@ from ..prompts.spec_generation import (
 )
 from ..prompts.design_audit import DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT
 from ..prompts.explainer import EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT
-from ..sdk import agent_call, llm_call, extract_json, LLMCallError
+from ..sdk import agent_call, agent_call_structured, llm_call, extract_json, LLMCallError
 
 log = logging.getLogger(__name__)
 
@@ -352,66 +352,54 @@ async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
         return []
 
 
-async def run_codebase_analysis(project_dir: Path, config) -> str:
-    """Spawn parallel explore agents to analyze the existing codebase.
+async def _codebase_analysis_call(prompt: str, schema, *, config, budget_label: str = "", **kwargs):
+    """buildme's call function for `code_facts`: one tool-using agent with a
+    structured answer, re-run whole on a failure (`agent_call_structured`), all
+    spend under `codebase_analysis` whatever `code_facts` names the task."""
+    return await agent_call_structured(
+        prompt, schema, model=config.model_for("codebase_analysis"), effort=config.spec_effort,
+        budget_label="codebase_analysis", **kwargs,
+    )
+
+
+async def run_codebase_analysis(project_dir: Path, config, *, call=None) -> str:
+    """Explain the existing codebase as checked, cited facts (`code_facts`).
 
     Wired as BuildPhase.CODEBASE_ANALYSIS (orchestrator, between RESEARCH and
     SPEC_GENERATION); the report is written to
     `specs/changes/<name>/codebase-analysis.md` and inlined into the design
     prompt so the design extends the repo that exists.
 
-    A failed agent degrades to a labelled "(analysis failed: ...)" section
-    rather than taking the other two down — a partial picture of the codebase
-    is worth more to the design than none.
+    One `code_facts` agent per slice of the project's source files at HEAD,
+    with the conventions section on, at most `codebase_analysis_max_units`
+    slices (`code_analysis.limit_scope` keeps the files the change's documents
+    name first, then the most imported, and lists the rest under "Not
+    analysed"). A fact is kept only when one of its citations is found at
+    HEAD. The surviving facts are rendered under Architecture, Patterns,
+    Dependencies and Conventions, each with its `path:line` links, and written
+    to `facts.json` beside the report, in review's `facts.v1` format.
 
-    Returns a combined analysis string covering architecture, patterns, and conventions.
+    A failed slice degrades to a labelled "(analysis failed: ...)" line rather
+    than taking the others down: a partial picture of the codebase is worth
+    more to the design than none. *call* replaces the model call (tests).
     """
     if not project_dir.exists():
         return "(new project — no existing code)"
+    from .. import code_analysis
 
-    prompts = [
-        (
-            "Analyze the directory structure, module organization, and key entry points. "
-            f"Project root: {project_dir}\n"
-            "List: top-level modules, their responsibilities, main entry points. Be concise."
-        ),
-        (
-            "Analyze coding patterns, naming conventions, and error handling patterns. "
-            f"Project root: {project_dir}\n"
-            "List: import style, class vs function patterns, error handling approach, test patterns. Be concise."
-        ),
-        (
-            "Analyze dependencies, configuration, and integration points. "
-            f"Project root: {project_dir}\n"
-            "List: key dependencies, config loading pattern, external service integrations. Be concise."
-        ),
-    ]
-
-    log.info("Running codebase analysis with 3 parallel agents")
-    tasks = [
-        llm_call(
-            p,
-            model=config.model_for("codebase_analysis"),
-            effort=config.spec_effort,
-            allowed_tools=["Read", "Glob", "Grep"],
-            max_turns=5,
-            budget_label="codebase_analysis",
-        )
-        for p in prompts
-    ]
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    parts = []
-    labels = ["Architecture", "Patterns", "Dependencies"]
-    for label, result in zip(labels, results):
-        if isinstance(result, Exception):
-            log.warning("Codebase analysis agent failed: %s", result)
-            parts.append(f"## {label}\n(analysis failed: {result})")
-        else:
-            parts.append(f"## {label}\n{result}")
-
-    return "\n\n".join(parts)
+    md_path = config.codebase_analysis_path
+    call = call or functools.partial(_codebase_analysis_call, config=config)
+    analysis = await code_analysis.analyse(
+        project_dir, call=call, max_units=config.codebase_analysis_max_units,
+        name=config.project_name or project_dir.name, change_dir=config.change_dir,
+    )
+    if analysis is None:
+        return "(analysis failed: the project has no git commit to read the code at)"
+    log.info("Codebase analysis: %d facts kept, %d dropped, %d slice(s) failed, %d file(s) not analysed",
+             len(analysis.gated.facts), len(analysis.gated.dropped), len(analysis.failed),
+             len(analysis.not_analysed))
+    code_analysis.write_facts_file(analysis, md_path.parent)
+    return code_analysis.render_markdown(analysis, project_dir, md_path.parent)
 
 
 def _read_file(path: Path) -> str:
