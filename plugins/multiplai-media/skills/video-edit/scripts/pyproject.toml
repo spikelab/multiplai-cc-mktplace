@@ -23,7 +23,19 @@ dependencies = [
     # Playwright release expects one Chromium build, and the image ships the
     # build that version expects under PLAYWRIGHT_BROWSERS_PATH.
     "playwright==1.63.0",
+    # `capture` prints text read from a web page inside an untrusted-content
+    # fence; the fence and its notice come from multiplai_core.untrusted, the
+    # one implementation every producer shares (docs/untrusted-content.md).
+    "multiplai-core",
 ]
 
 [tool.uv]
 package = false
+
+# Member-local source so this directory also resolves standalone: an
+# installed plugin is a copy of the plugin subtree only, with no workspace
+# root above it, so the bare multiplai-core name would otherwise be looked up
+# on PyPI, where it does not exist. In-repo, uv still resolves through the
+# workspace root and the single uv.lock.
+[tool.uv.sources]
+multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }

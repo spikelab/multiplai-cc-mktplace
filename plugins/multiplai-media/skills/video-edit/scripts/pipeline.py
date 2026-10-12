@@ -7,6 +7,8 @@ Subcommands (see --help for all):
   proof <mp4> --edl E --out P   One PNG of the reel, moment by moment, to check before reporting.
   lint-overlay <page.html>      Check an overlay page for what breaks a seeked render.
   sfx-suggest <edl.json>        A sound on each follow target and each overlay start, as an `sfx` list.
+  capture <url> --highlight T   Screenshot a real web page and record where a line of it is.
+  proof-card <shot-dir>         An alpha overlay page showing that screenshot, moving to the line.
   shots <cache> --from --to     The shots in a range, 3 frames each, for framing a broadcast feed.
   make <source> --prompt TEXT   Natural-language → EDL → render (not yet implemented).
 """
@@ -89,6 +91,66 @@ def cmd_sfx_suggest(args: argparse.Namespace) -> int:
     for n in notes:
         print(f"⚠ {n}", file=sys.stderr)
     return 0
+
+
+def cmd_capture(args: argparse.Namespace) -> int:
+    """Screenshot a web page (or take the user's own screenshot) into a shot
+    directory. Exit codes are capture.py's: 2 when the page cannot be
+    captured as it is, 3 when the highlight text is not in the shot."""
+    from stages import capture
+    try:
+        if args.box and not args.from_file:
+            raise capture.CaptureError("--box goes with --from-file; on a live page use --highlight TEXT")
+        if args.from_file and args.highlight and not args.box:
+            raise capture.CaptureError("with --from-file, give the line to highlight as --box X,Y,W,H "
+                                       "(in the screenshot's pixels); --highlight is then only its label")
+        out = Path(args.out) if args.out else capture.default_dir(args.url, args.job)
+        if args.from_file:
+            box = capture.parse_box(args.box) if args.box else None
+            shot = capture.from_file(args.url, Path(args.from_file), out, box, args.highlight)
+        else:
+            shot = capture.capture(args.url, out, highlight=args.highlight, width=args.width,
+                                   height=args.height, full_page=args.full_page)
+    except capture.CaptureError as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return e.code
+    meta = shot.meta
+    print(f"SHOT: {shot.dir / 'shot.png'} ({meta['width']}x{meta['height']}, captured {meta['captured_at']})")
+    print(f"META: {shot.dir / 'shot.json'}")
+    hl = meta["highlight"]
+    if hl:
+        print(f"HIGHLIGHT: x={hl['x']} y={hl['y']} w={hl['w']} h={hl['h']} (page pixels)")
+    if shot.matched:
+        print("MATCHED (the whole text of the element that contains the highlight):")
+        for line in capture.fenced(shot.matched, meta["url"]):
+            print(line)
+    for w in shot.warnings or []:
+        print(f"⚠ {w}", file=sys.stderr)
+    return capture.EXIT_NO_MATCH if args.highlight and not hl else 0
+
+
+def cmd_proof_card(args: argparse.Namespace) -> int:
+    """Write the overlay page for a shot directory, then lint it as render will."""
+    from stages import overlay_lint, proof_card
+    try:
+        style = proof_card.load_style(args.style)
+        page, warnings = proof_card.build(Path(args.shot_dir), args.motion, style,
+                                          width=args.width, height=args.height, duration=args.duration)
+    except proof_card.ProofCardError as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(page, encoding="utf-8")
+    findings = overlay_lint.lint(page, mode="alpha")
+    for f in findings:
+        print(f"{out.name}: {f}")
+    for w in warnings:
+        print(f"⚠ {w}", file=sys.stderr)
+    print(f"CARD: {out.resolve()} ({args.width}x{args.height}, {args.duration:g} s, motion {args.motion})")
+    print(f'EDL: {{"html": "{out.resolve()}", "style": "{args.style}", "mode": "alpha", '
+          f'"start": <s>, "end": <s + {args.duration:g}>}}')
+    return 1 if overlay_lint.errors(findings) else 0
 
 
 def cmd_prep(args: argparse.Namespace) -> int:
@@ -397,6 +459,34 @@ def main() -> int:
     sx.add_argument("--clicks", required=True, help="audio file for follow targets (a click)")
     sx.add_argument("--overlays", required=True, help="audio file for overlay starts (a pop)")
     sx.set_defaults(func=cmd_sfx_suggest)
+
+    cp = sub.add_parser("capture", help="screenshot a real web page and record where a line of it is (uses the network)")
+    cp.add_argument("url", help="the page's address (with --from-file: the address the screenshot shows)")
+    cp.add_argument("--highlight", default=None, metavar="TEXT",
+                    help="record the box of the first visible element containing TEXT")
+    cp.add_argument("--width", type=int, default=1280, help="viewport width in pixels (default 1280)")
+    cp.add_argument("--height", type=int, default=800, help="viewport height in pixels (default 800)")
+    cp.add_argument("--full-page", action="store_true", help="capture the whole page, not just the viewport")
+    cp.add_argument("--from-file", default=None, metavar="PNG",
+                    help="use a screenshot you saved yourself instead of loading the page")
+    cp.add_argument("--box", default=None, metavar="X,Y,W,H",
+                    help="with --from-file: the line to highlight, in the screenshot's pixels")
+    cp.add_argument("--out", default=None, help="directory for shot.png and shot.json "
+                    "(default: the job's output directory, under proof/)")
+    cp.add_argument("--job", default=None, help="job name for the default directory (default: the domain)")
+    cp.set_defaults(func=cmd_capture)
+
+    pc = sub.add_parser("proof-card", help="an alpha overlay page that shows a captured page and its highlight")
+    pc.add_argument("shot_dir", help="the directory capture wrote (shot.png, shot.json)")
+    pc.add_argument("--motion", default="scroll", choices=["scroll", "zoom", "none"],
+                    help="scroll down to the highlight, zoom in on it, or stay still (default scroll)")
+    pc.add_argument("--style", required=True, help="a style name (references/styles/) or a style file")
+    pc.add_argument("--width", type=int, default=1920, help="the overlay region's width (default 1920)")
+    pc.add_argument("--height", type=int, default=1080, help="the overlay region's height (default 1080)")
+    pc.add_argument("--duration", type=float, default=6.0,
+                    help="the overlay's length in seconds, end minus start in the EDL (default 6)")
+    pc.add_argument("--out", required=True, help="HTML file to write")
+    pc.set_defaults(func=cmd_proof_card)
 
     pp = sub.add_parser("prep", help="detect cuts + transcribe + write context bundle")
     pp.add_argument("source", help="path to screen recording")

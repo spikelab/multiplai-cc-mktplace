@@ -106,6 +106,23 @@ sounds everywhere, and he turned them down and removed some until it fit.
 - When the user settles on a level or a choice of sounds, offer it as a
   preference (`pipeline.py prefs add`, SKILL.md step 7).
 
+## Proof shots
+
+When the narration cites a page on the web (an announcement, a pricing
+page, a changelog entry), show the real page: Peverelli's editor puts "a
+screenshot of that announcement" on screen and zooms to the line, so "it
+only shows you exact facts". (Peverelli, YouTube HzXD4GVqXwM)
+
+- **capture → card → overlay:** `pipeline.py capture <url> --highlight
+  "<words>"` screenshots the page and records the line's box;
+  `pipeline.py proof-card <shot-dir> --motion scroll|zoom --style <style>`
+  writes an overlay page; add it as an `alpha` overlay starting on the word
+  that names the page. The full steps are in `motion.md`, section 5.
+- **Real pages only, unedited**, with the domain visible on the card.
+- **One line highlighted, held at least 2 s** after the scroll or zoom ends.
+- **X posts and pages behind a login** need a screenshot from the user:
+  `capture <url> --from-file shot.png --box X,Y,W,H`.
+
 ## Choose music that fits
 
 Music is part of the edit, not an afterthought. Before rendering:
