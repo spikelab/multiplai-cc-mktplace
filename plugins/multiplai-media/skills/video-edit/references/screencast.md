@@ -91,14 +91,14 @@ sounds everywhere, and he turned them down and removed some until it fit.
 
 - **Use them on clicks and on graphic entrances**, and only the ones that
   matter. Never on every cut.
-- **Get a first list from the EDL**: `pipeline.py sfx-suggest <edl>` prints
-  a `click` at each `follow` target and a `pop` at each overlay's start, in
-  output time, and says on stderr which ones it skipped or dropped. Paste the
+- **Get a first list from the EDL**: `pipeline.py sfx-suggest <edl> --clicks
+  <file> --overlays <file>` prints the `--clicks` file at each `follow` target
+  and the `--overlays` file at each overlay's start, in output time, and says on stderr which ones it skipped or dropped. Paste the
   list into the EDL as `sfx`, then remove what does not need a sound.
-- **Presets:** `click`, `pop`, `tick`, `whoosh` (a bigger entrance) and
-  `chime` (a finished step). Or give a path to the user's own audio file.
-- **Level:** the default `volume_db` is -14; the files peak near full scale.
-  Lower it (-18, -20) when the review says the sounds stand out. They are
+- **Sounds:** no sounds ship with the skill. Each `sound` is a path to an
+  audio file; ask the user for the files they want (a click, a pop for an
+  entrance).
+- **Level:** the default `volume_db` is -14. Lower it (-18, -20) when the review says the sounds stand out. They are
   mixed in after the music, so they never duck it, and a limiter keeps them
   from clipping.
 - **Spacing:** two sounds must be at least 0.5 s apart (render refuses
