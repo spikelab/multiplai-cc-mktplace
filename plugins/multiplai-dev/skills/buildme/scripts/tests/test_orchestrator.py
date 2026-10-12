@@ -1891,6 +1891,26 @@ class TestPublishHandsOffToThePrSkill:
         assert "python -m pr_pipeline open" in text
         assert "gh pr create --title 'buildme: skillfail'" in text
 
+    @pytest.mark.asyncio
+    async def test_an_existing_prs_url_from_gh_reaches_the_publish_diagnosis(self, tmp_path, monkeypatch, capsys):
+        # gh prints the existing PR's URL on the line after "already exists:"; the pr
+        # skill folds that onto its one PR_DIAGNOSIS line (pr tests:
+        # test_open_folds_a_multi_line_gh_error_onto_one_diagnosis_line).
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        config, state, progress = await _published_build(tmp_path, "exists")
+        existing = "https://github.com/o/r/pull/9"
+        monkeypatch.setattr(
+            git_ops, "_run_pr_skill",
+            lambda argv, cwd=None, timeout=None: GitResult(
+                argv, 2,
+                "PR_DIAGNOSIS:`gh pr create` failed (exit 1): a pull request for branch "
+                f'"buildme/exists" into branch "main" already exists: {existing}\n', ""),
+        )
+        assert _run_publish(config, state, progress) is False
+        diagnosis = [line for line in capsys.readouterr().out.splitlines()
+                     if line.startswith("PUBLISH_DIAGNOSIS:")]
+        assert len(diagnosis) == 1 and f"already exists: {existing}" in diagnosis[0]
+
 
 class TestResumeAtPublish:
     """Item 13: a checkpoint parked at PUBLISH resumes, runs publish once with

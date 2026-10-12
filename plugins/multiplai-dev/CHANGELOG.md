@@ -74,6 +74,10 @@ time, not derived from a tag.
   the pr skill fails before it can say why, buildme now reports the end of
   its output, where a traceback's error is, rather than the first 800
   characters.
+- pr: every `PR_DIAGNOSIS:` line holds its whole message on one line. A
+  multi-line `gh` error used to put its later lines on stdout with no prefix,
+  so buildme dropped them; gh's "a pull request ... already exists:" lost the
+  existing PR's URL that way.
 
 ## [0.41.0] - 2026-10-12
 

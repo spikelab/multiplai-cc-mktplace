@@ -101,6 +101,45 @@ def test_open_gh_failure_exits_2_with_a_diagnosis(tmp_path, gh_stub, capsys, log
     assert logged[-1][1] == "failed"
 
 
+def test_open_folds_a_multi_line_gh_error_onto_one_diagnosis_line(tmp_path, gh_stub, capsys):
+    # gh puts the existing PR's URL on the line after its message. A caller keeps only
+    # lines that start with PR_DIAGNOSIS:, so the URL must be on the same line.
+    repo, change = _setup(tmp_path)
+    existing = "https://github.com/o/r/pull/9"
+    gh_stub.on(["gh", "repo", "view"], stdout="main\n").on(
+        ["gh", "pr", "create"], 1,
+        stderr=f'a pull request for branch "feat" into branch "main" already exists:\n{existing}\n')
+    assert run(["open", "--repo", str(repo), "--change-dir", str(change), "--no-push"]) == 2
+    out = capsys.readouterr().out.splitlines()
+    diagnoses = [line for line in out if line.startswith("PR_DIAGNOSIS:")]
+    assert len(diagnoses) == 1
+    assert diagnoses[0].endswith(f"already exists: {existing}")
+    prefixes = ("PUSHED:", "PR:", "PR_EDITED:", "DIFF:", "PR_DIAGNOSIS:")
+    assert [line for line in out if not line.startswith(prefixes)] == []
+
+
+@pytest.mark.parametrize("error, code, expected", [
+    (commands.GateFailed("too long\nno summary"), 1,
+     "PR_DIAGNOSIS:a gate rejected the body; nothing was written: too long no summary"),
+    (commands.Refused("gh failed:\n  first\n\n  second"), 2, "PR_DIAGNOSIS:gh failed: first second"),
+    (RuntimeError("first\nsecond"), 2, "PR_DIAGNOSIS:pr render failed: RuntimeError: first second"),
+])
+def test_every_diagnosis_from_run_is_one_line(tmp_path, monkeypatch, capsys, logged, error, code, expected):
+    def boom(args):
+        raise error
+
+    monkeypatch.setitem(commands.COMMANDS, "render", boom)
+    repo, change = _setup(tmp_path)
+    assert run(["render", "--repo", str(repo), "--change-dir", str(change)]) == code
+    assert capsys.readouterr().out.splitlines() == [expected]
+
+
+def test_a_listed_diagnosis_with_newlines_prints_as_one_line(capsys):
+    commands._diagnose(["could not fetch: fatal: x\nfatal: y", "plain"])
+    assert capsys.readouterr().out.splitlines() == [
+        "PR_DIAGNOSIS:could not fetch: fatal: x fatal: y", "PR_DIAGNOSIS:plain"]
+
+
 def test_open_gate_failure_exits_1_and_writes_nothing(tmp_path, gh_stub, model_stub, capsys):
     repo, change = _setup(tmp_path)
     (repo / "pull_request_template.md").write_text("## Summary\n")
@@ -441,3 +480,18 @@ def test_an_error_while_starting_up_exits_2_not_1(tmp_path, monkeypatch, capsys)
     repo, change = _setup(tmp_path)
     assert cli.main(["render", "--repo", str(repo), "--change-dir", str(change)]) == 2
     assert "PR_DIAGNOSIS:pr render failed to start: PermissionError: cannot read .env" in capsys.readouterr().out
+
+
+def test_a_multi_line_error_while_starting_up_is_one_diagnosis_line(tmp_path, monkeypatch, capsys):
+    import multiplai_core.env
+
+    from pr_pipeline import __main__ as cli
+
+    def boom(*a, **k):
+        raise PermissionError("cannot read .env\nline two")
+
+    monkeypatch.setattr(multiplai_core.env, "load_env", boom)
+    repo, change = _setup(tmp_path)
+    assert cli.main(["render", "--repo", str(repo), "--change-dir", str(change)]) == 2
+    assert capsys.readouterr().out.splitlines() == [
+        "PR_DIAGNOSIS:pr render failed to start: PermissionError: cannot read .env line two"]

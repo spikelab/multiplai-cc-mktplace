@@ -150,7 +150,8 @@ comment.
 Stdout lines: `PUSHED:<branch>`, `PR:<url>`, `PR_EDITED:<url>`,
 `DIFF:<files> files, +<added> -<removed>`, `PR_DIAGNOSIS:<reason>`.
 `render` prints only the description on stdout, with its `DIFF:` and
-`PR_DIAGNOSIS:` lines on stderr.
+`PR_DIAGNOSIS:` lines on stderr. Each `PR_DIAGNOSIS:` line holds its whole
+reason: a multi-line `gh` or `git` error is joined onto it with spaces.
 
 | Exit | Meaning |
 |---|---|

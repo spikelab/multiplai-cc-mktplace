@@ -72,7 +72,9 @@ def main(argv: list[str] | None = None) -> int:
         from . import commands
     except Exception as e:  # before commands.run's handler exists: exit 2, never Python's 1, which means a gate
         traceback.print_exc()
-        print(f"PR_DIAGNOSIS:pr {args.command} failed to start: {type(e).__name__}: {e}", flush=True)
+        # On one line, like commands._diagnose (which may be the import that failed).
+        why = " ".join(part.strip() for part in str(e).splitlines() if part.strip())
+        print(f"PR_DIAGNOSIS:pr {args.command} failed to start: {type(e).__name__}: {why}", flush=True)
         return 2
 
     return commands.run(args)

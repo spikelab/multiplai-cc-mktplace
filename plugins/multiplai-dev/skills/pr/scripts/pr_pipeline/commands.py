@@ -133,9 +133,16 @@ def _body_file(body: str) -> Path:
     return Path(f.name)
 
 
+def _one_line(text: str) -> str:
+    """Join a multi-line message (gh's stderr, an exception) onto one line."""
+    return " ".join(part.strip() for part in text.splitlines() if part.strip())
+
+
 def _diagnose(lines: list[str], stream=None) -> None:
+    # One line each: a caller keeps only lines that start with PR_DIAGNOSIS:, and gh
+    # puts details such as an existing PR's URL on the line after its message.
     for line in lines:
-        print(f"PR_DIAGNOSIS:{line}", file=stream or sys.stdout, flush=True)
+        print(f"PR_DIAGNOSIS:{_one_line(line)}", file=stream or sys.stdout, flush=True)
 
 
 def _template_rel(r: Rendered, repo: Path) -> str:
@@ -380,18 +387,18 @@ def run(args) -> int:
     try:
         code = COMMANDS[args.command](args)
     except GateFailed as e:
-        print(f"PR_DIAGNOSIS:a gate rejected the body; nothing was written: {e}", flush=True)
+        _diagnose([f"a gate rejected the body; nothing was written: {e}"])
         log_event("pr", "failed", f"pr {args.command}: a gate rejected the body", level="WARNING",
                   subcommand=args.command, gate="rejected", **args._log_fields)
         return 1
     except Refused as e:
-        print(f"PR_DIAGNOSIS:{e}", flush=True)
+        _diagnose([str(e)])
         log_event("pr", "failed", f"pr {args.command} refused or failed", level="WARNING",
                   subcommand=args.command, gate="passed-or-not-run", reason=str(e)[:300], **args._log_fields)
         return 2
     except Exception as e:  # an unreadable file, or a bug: exit 2, never Python's 1, which means a gate
         log.exception("pr %s failed", args.command)
-        print(f"PR_DIAGNOSIS:pr {args.command} failed: {type(e).__name__}: {e}", flush=True)
+        _diagnose([f"pr {args.command} failed: {type(e).__name__}: {e}"])
         log_event("pr", "failed", f"pr {args.command} failed: {type(e).__name__}", level="ERROR",
                   subcommand=args.command, gate="not-run", **args._log_fields)
         return 2
