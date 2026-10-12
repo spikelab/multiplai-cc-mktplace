@@ -341,6 +341,12 @@ def run(args) -> int:
         log_event("pr", "failed", f"pr {args.command} refused or failed", level="WARNING",
                   subcommand=args.command, gate="passed-or-not-run", reason=str(e)[:300], **args._log_fields)
         return 2
+    except Exception as e:  # an unreadable file, or a bug: exit 2, never Python's 1, which means a gate
+        log.exception("pr %s failed", args.command)
+        print(f"PR_DIAGNOSIS:pr {args.command} failed: {type(e).__name__}: {e}", flush=True)
+        log_event("pr", "failed", f"pr {args.command} failed: {type(e).__name__}", level="ERROR",
+                  subcommand=args.command, gate="not-run", **args._log_fields)
+        return 2
     log_event("pr", "done", f"pr {args.command} done", subcommand=args.command, gate="passed",
               **args._log_fields)
     return code

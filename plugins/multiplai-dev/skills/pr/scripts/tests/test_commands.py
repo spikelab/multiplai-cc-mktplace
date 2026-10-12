@@ -214,3 +214,15 @@ def test_edit_push_pushes_before_editing(tmp_path, gh_stub, capsys):
     assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change), "--push"]) == 0
     assert "PUSHED:feat/x" in capsys.readouterr().out
     assert git(tmp_path / "origin.git", "branch", "--list", "feat/x").strip()
+
+
+def test_an_unexpected_error_exits_2_not_1(tmp_path, monkeypatch, capsys, logged):
+    repo, change = _setup(tmp_path)
+
+    def boom(*a, **k):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(commands, "render_body", boom)
+    assert run(["render", "--repo", str(repo), "--change-dir", str(change)]) == 2
+    assert "PR_DIAGNOSIS:pr render failed: UnicodeDecodeError" in capsys.readouterr().out
+    assert logged[-1][1] == "failed"
