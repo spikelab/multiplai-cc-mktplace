@@ -48,7 +48,7 @@ async def _audit_agent_text(prompt: str, config, *, budget_label: str) -> str:
     result = await agent_call(
         prompt,
         allowed_tools=AUDITOR_TOOLS,
-        model=config.model,
+        model=config.model_for(budget_label),
         effort=config.spec_effort,
         max_turns=AUDITOR_MAX_TURNS,
         cwd=str(config.project_dir),
@@ -105,7 +105,7 @@ async def generate_artifact(
     log.info("Generating artifact: %s", artifact_id)
     result = await llm_call(
         prompt,
-        model=config.model,
+        model=config.model_for("spec_artifact"),
         effort=config.spec_effort,
         system_prompt=(
             "You are a technical specification generator. Your ONLY job is to "
@@ -246,7 +246,7 @@ async def run_explainer(dep, config, usage_context: str = "") -> str:
     log.info("Running explainer for dependency: %s", dep.name)
     return await llm_call(
         prompt,
-        model=config.model,
+        model=config.model_for("explainer"),
         allowed_tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep"],
         max_turns=12,
     )
@@ -391,7 +391,7 @@ async def run_codebase_analysis(project_dir: Path, config) -> str:
     tasks = [
         llm_call(
             p,
-            model=config.model,
+            model=config.model_for("codebase_analysis"),
             effort=config.spec_effort,
             allowed_tools=["Read", "Glob", "Grep"],
             max_turns=5,

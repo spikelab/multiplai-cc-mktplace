@@ -191,7 +191,7 @@ async def run_respec_audit(config, state=None) -> Path | None:
     try:
         body = await llm_call(
             prompt,
-            model=config.model,
+            model=config.model_for("respec"),
             system_prompt=(
                 "You are a specification editor proposing a delta. Output the "
                 "proposed delta document directly as markdown — do not use "
