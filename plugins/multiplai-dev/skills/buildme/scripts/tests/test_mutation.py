@@ -580,6 +580,49 @@ class TestRunTool:
             os.kill(child, signal.SIGKILL)
         assert not alive, "cosmic-ray's process group survived the interrupt"
 
+    def test_a_real_ctrl_c_under_asyncio_run_kills_the_group_at_once(self, tmp_path):
+        """buildme runs under `asyncio.run`, whose SIGINT handler only cancels
+        the main task on the first Ctrl-C and raises nothing. `run_mutation`
+        blocks the event loop in `communicate`, so without a handler of its
+        own the first Ctrl-C would wait out cosmic-ray, which keeps mutating
+        files meanwhile. A real SIGINT is sent here, through asyncio's handler,
+        and must end the wait and kill the group well before the child exits."""
+        import asyncio
+        import signal
+        import threading
+        import time
+        pid_file = tmp_path / "child.pid"
+        uvx = tmp_path / "uvx"
+        uvx.write_text(f"#!/bin/sh\nsleep 6 &\necho $! > {pid_file}\nwait\n")
+        uvx.chmod(0o755)
+        outcome = {}
+
+        async def _main():
+            assert signal.getsignal(signal.SIGINT) is not signal.default_int_handler, \
+                "asyncio.run did not install its SIGINT handler"
+            threading.Timer(1.0, os.kill, (os.getpid(), signal.SIGINT)).start()
+            started = time.monotonic()
+            try:
+                with mutation._exit_on_termination():
+                    mutation._run_tool([*mutation._UVX, "cosmic-ray", "exec", "a", "b"],
+                                       tmp_path, 60)
+            except KeyboardInterrupt:
+                outcome["raised_in_wait"] = True
+                raise
+            finally:
+                outcome["elapsed"] = time.monotonic() - started
+
+        with patch.dict(os.environ, {"PATH": f"{tmp_path}:/usr/bin:/bin"}):
+            with pytest.raises(KeyboardInterrupt):
+                asyncio.run(_main())
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        assert outcome.get("raised_in_wait"), "Ctrl-C did not interrupt the wait"
+        assert outcome["elapsed"] < 4, f"waited {outcome['elapsed']:.1f}s for cosmic-ray"
+        child = int(pid_file.read_text())
+        out = subprocess.run(["ps", "-o", "stat=", "-p", str(child)],
+                             capture_output=True, text=True).stdout.strip()
+        assert not out or out.startswith("Z"), "cosmic-ray's group survived Ctrl-C"
+
 
 DUMP_PENDING = "\n".join([
     _dump_line("a1", "src/calc.py", 2, "core/ReplaceBinaryOperator_Add_Sub", "skipped",

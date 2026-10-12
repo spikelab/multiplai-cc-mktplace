@@ -344,13 +344,22 @@ def _kill_group(proc: subprocess.Popen) -> None:
 
 @contextlib.contextmanager
 def _exit_on_termination():
-    """Turn SIGTERM and SIGHUP into SystemExit for the length of the block.
+    """Make SIGINT, SIGTERM and SIGHUP raise for the length of the block.
 
-    Their default action ends the process at once, with no `finally` run, so
-    the detached cosmic-ray would keep rewriting source files and the mutant
-    on disk would never be discarded. A handler someone else installed is
-    left alone, and outside the main thread (where Python cannot set one)
-    this does nothing.
+    SIGTERM and SIGHUP become SystemExit: their default action ends the
+    process at once, with no `finally` run, so the detached cosmic-ray would
+    keep rewriting source files and the mutant on disk would never be
+    discarded. A handler someone else installed for them is left alone.
+
+    SIGINT becomes KeyboardInterrupt unless it is ignored. buildme runs under
+    `asyncio.run`, whose SIGINT handler only cancels the main task on the
+    first Ctrl-C; `run_mutation` blocks the event loop in `communicate`, so
+    that cancel is not seen until cosmic-ray finishes on its own. Raising in
+    the wait is what lets `_run_tool` kill the group at once. The previous
+    handler is put back afterwards.
+
+    Outside the main thread (where Python cannot set a handler) this does
+    nothing.
     """
     if threading.current_thread() is not threading.main_thread():
         yield
@@ -359,10 +368,15 @@ def _exit_on_termination():
     def _raise(signum, _frame):
         raise SystemExit(128 + signum)
 
+    def _interrupt(_signum, _frame):
+        raise KeyboardInterrupt
+
     previous = {}
     for sig in (signal.SIGTERM, signal.SIGHUP):
         if signal.getsignal(sig) == signal.SIG_DFL:
             previous[sig] = signal.signal(sig, _raise)
+    if signal.getsignal(signal.SIGINT) not in (signal.SIG_IGN, None):
+        previous[signal.SIGINT] = signal.signal(signal.SIGINT, _interrupt)
     try:
         yield
     finally:
