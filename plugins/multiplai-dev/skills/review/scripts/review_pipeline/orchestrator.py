@@ -16,9 +16,9 @@ import yaml
 
 from multiplai_core.log_utils import log_event
 
-from . import budget, rounds, target as target_mod, timings
+from . import budget, ledger as review_ledger, rounds, target as target_mod, timings
 from .config import ReviewConfig, run_config
-from .export import to_findings_file, write_checks_file, write_findings_file
+from .export import producer, run_record, to_findings_file, write_checks_file, write_findings_file
 from .facts import FACTS_FILE
 from .gates import gated_need, reason_kind
 from .models import MODES, SEVERITIES, ReviewState
@@ -48,6 +48,14 @@ class ReviewError(Exception):
     """Bad input or an unresolvable target. Exit code 2."""
 
 
+class InterruptedRun(ReviewError):
+    """The ledger shows a run of this target and head that started and never ended. Exit code 4."""
+
+    def __init__(self, target_dir: Path):
+        self.target_dir = target_dir
+        super().__init__(f"interrupted run found; continue with: python -m review_pipeline resume {target_dir}")
+
+
 @dataclass
 class TargetSpec:
     repo: str
@@ -62,6 +70,7 @@ class TargetSpec:
     path: str | None = None  # with tree: only this directory
     dir: str | None = None   # a directory not under git, copied and reviewed as a tree
     mode: str = "full"  # `full` or `critical` (models.MODES)
+    restart: bool = False  # start over even when the ledger shows an interrupted run
 
 
 def _count_line(counts: dict[str, int]) -> str:
@@ -82,7 +91,43 @@ def note_missing_usage(state: ReviewState, ledger: budget.ReviewBudget) -> None:
 
 async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, *,
                     session_id: str = "") -> Path:
-    """Run every stage not yet done; return the findings.json path."""
+    """Run every stage not yet done; return the findings.json path.
+
+    Appends a `started` line to the review ledger first and a `finished` line
+    when the run ends, however it ends (`stopped` names a budget stop, a
+    verify stop or a failure). A process killed outright writes no end line,
+    which is how the ledger marks an interrupted run.
+    """
+    t = state.target
+    number = f"{rounds.round_number(target_dir):02d}"
+    review_ledger.started(slug=t.slug, target_dir=target_dir, head_sha=t.head_sha, session_id=session_id)
+    stopped = "failed"
+    try:
+        path = await _run_stages(state, target_dir, config, session_id=session_id)
+        stopped = None
+        return path
+    except budget.BudgetExceededError:
+        stopped = "budget"
+        raise
+    except VerifyIncomplete:
+        stopped = "verify-incomplete"
+        raise
+    except BaseException as e:
+        stopped = f"failed: {type(e).__name__}"
+        raise
+    finally:
+        try:
+            run = run_record(state)
+        except Exception:  # noqa: BLE001 — the ledger line must not hide the run's own error
+            log.warning("cannot build the run record for the ledger", exc_info=True)
+            run = None
+        review_ledger.finished(producer=producer(), session_id=session_id, slug=t.slug, target_dir=target_dir,
+                        round_=number, head_sha=t.head_sha, base_sha=t.base_sha, kind=t.kind, pr=t.pr,
+                        stopped=stopped, run=run)
+
+
+async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig, *,
+                      session_id: str = "") -> Path:
     t = state.target
     ledger = budget.start(config.max_cost_usd, state.budget)
     progress = ProgressWriter(target_dir / "progress.log")
@@ -173,11 +218,14 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
     return findings_path
 
 
-def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
+def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False) -> tuple[ReviewState, Path]:
     """Resolve and gate the target, then write its directory. Raises ReviewError.
 
     A `--dir` target is first copied into `<out>/<slug>/source/` and committed
-    there (`import_dir`), then reviewed as a tree at that commit.
+    there (`import_dir`), then reviewed as a tree at that commit. With
+    *check_interrupted* (a review, not `--plan-only`) and no `spec.restart`, a
+    run of this directory and head that the ledger shows started and never
+    ended raises InterruptedRun before anything is written.
     """
     repo, tree, name, src = spec.repo, spec.tree, None, None
     info = None
@@ -206,6 +254,8 @@ def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
     if info is None:
         info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in, needs=needs)
     target_dir = out_dir / info.slug
+    if check_interrupted and not spec.restart and review_ledger.interrupted(target_dir, info.head_sha):
+        raise InterruptedRun(target_dir)
     # A directory an earlier round wrote: keep that round's findings before
     # this run writes over them, also when this run is on the same head (a rerun).
     kept = rounds.keep_round(target_dir, info.slug, info.head_sha)
@@ -239,7 +289,7 @@ def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[st
 
 
 async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:
-    state, target_dir = prepare(spec, out_dir)
+    state, target_dir = prepare(spec, out_dir, check_interrupted=True)
     # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.
     (target_dir / "progress.log").unlink(missing_ok=True)
     # The last round's facts.json is kept in rounds/ by prepare; the explain stage writes

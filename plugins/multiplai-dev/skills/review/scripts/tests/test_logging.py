@@ -26,7 +26,7 @@ def test_review_logs_events_without_finding_text(fixture_repo, tmp_path, monkeyp
     logs = _get_logs_dir()
     assert (logs / "review-pipeline.log").is_file()
 
-    slug = f"booking-engine--{base}..{head}"
+    slug = f"example-booking-engine--{base}..{head}"
     records = [json.loads(line) for line in (logs / "activity.jsonl").read_text().splitlines() if line.strip()]
     ours = [r for r in records if r.get("component") == "review" and r.get("target") == slug]
     events = {r["event"] for r in ours}

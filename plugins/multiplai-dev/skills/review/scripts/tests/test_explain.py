@@ -401,7 +401,7 @@ def test_a_review_with_explain_on_runs_it_before_find_and_writes_facts_json(fixt
     out.mkdir()
     (out / "review.yaml").write_text("explain: true\n", encoding="utf-8")
     assert main(_review_args(repo, base, head, out)) == 0
-    target_dir = out / f"booking-engine--{base}..{head}"
+    target_dir = out / f"example-booking-engine--{base}..{head}"
     assert fake.calls[0] == "explain" and all(c != "explain" for c in fake.calls[1:])
     assert "explain done: 1 units, 1 facts" in capsys.readouterr().out
     data = json.loads((target_dir / "facts.json").read_text(encoding="utf-8"))
@@ -423,7 +423,7 @@ def test_a_review_with_explain_off_writes_no_facts_json(fixture_repo, tmp_path, 
     out = tmp_path / "out"
     assert main(_review_args(repo, base, head, out)) == 0
     assert "explain" not in fake.calls
-    assert not (out / f"booking-engine--{base}..{head}" / "facts.json").exists()
+    assert not (out / f"example-booking-engine--{base}..{head}" / "facts.json").exists()
 
 
 def test_a_rerun_with_explain_off_leaves_no_facts_json_from_the_earlier_round(fixture_repo, tmp_path, monkeypatch):
@@ -444,7 +444,7 @@ def test_a_rerun_with_explain_off_leaves_no_facts_json_from_the_earlier_round(fi
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     out.mkdir()
-    target_dir = out / f"booking-engine--{base}..{head}"
+    target_dir = out / f"example-booking-engine--{base}..{head}"
     (out / "review.yaml").write_text("explain: true\n", encoding="utf-8")
     assert main(_review_args(repo, base, head, out)) == 0
     assert (target_dir / "facts.json").is_file()

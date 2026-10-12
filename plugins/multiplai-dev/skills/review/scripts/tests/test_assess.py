@@ -108,15 +108,15 @@ def test_a_rerun_on_the_same_head_keeps_each_round_in_its_own_directory(tmp_path
                                                             "findings": []}))
     finish("2026-01-01T00:00:00Z")
     first = rounds.keep_round(tmp_path, "t", OLD_HEAD)
-    assert first == tmp_path / "rounds" / OLD_HEAD[:12]
+    assert first == tmp_path / "rounds" / f"01-{OLD_HEAD[:12]}"
     assert rounds.keep_round(tmp_path, "t", OLD_HEAD) == first  # started again before it finished: one copy
     finish("2026-01-02T00:00:00Z")
     second = rounds.keep_round(tmp_path, "t", OLD_HEAD)
-    assert second == tmp_path / "rounds" / f"{OLD_HEAD[:12]}-2"
+    assert second == tmp_path / "rounds" / f"02-{OLD_HEAD[:12]}"
     assert json.loads((first / "findings.json").read_text())["generated_at"] == "2026-01-01T00:00:00Z"
     assert json.loads((second / "findings.json").read_text())["generated_at"] == "2026-01-02T00:00:00Z"
     finish("2026-01-03T00:00:00Z")
-    assert rounds.keep_round(tmp_path, "t", "3" * 40) == tmp_path / "rounds" / f"{OLD_HEAD[:12]}-3"
+    assert rounds.keep_round(tmp_path, "t", "3" * 40) == tmp_path / "rounds" / f"03-{OLD_HEAD[:12]}"
 
 
 def test_a_same_head_rerun_reads_the_decisions_made_on_the_round_it_replaces(tmp_path):
@@ -156,9 +156,9 @@ def test_keep_round_never_overwrites_a_round_already_kept(tmp_path):
     (tmp_path / "findings.json").write_text(json.dumps({"generated_at": "2026-01-03T00:00:00Z",
                                                         "target": {"head_sha": OLD_HEAD}, "findings": []}))
     (tmp_path / "review-t.md").write_text("# review")
-    assert rounds.keep_round(tmp_path, "t", "3" * 40) == kept
+    assert rounds.keep_round(tmp_path, "t", "3" * 40) == tmp_path / "rounds" / f"02-{OLD_HEAD[:12]}"
     assert (kept / "findings.json").read_text() == '{"original": true}'
-    assert (kept / "review-t.md").read_text() == "# review"  # a file not kept yet is still copied
+    assert (tmp_path / "rounds" / f"02-{OLD_HEAD[:12]}" / "review-t.md").read_text() == "# review"  # a file not kept yet is still copied
 
 
 def _decisions(target_dir: Path, **by_id: tuple[str, str]) -> None:
@@ -556,7 +556,7 @@ def test_a_finding_rejected_in_round_one_comes_back_reworded_and_is_labelled_rep
     current["round"] = "two"
     assert main(args) == 0
 
-    assert (target_dir / "rounds" / round_one_head[:12] / "findings.json").is_file()
+    assert (target_dir / "rounds" / f"01-{round_one_head[:12]}" / "findings.json").is_file()
     data = json.loads((target_dir / "findings.json").read_text())
     (row,) = [f for f in data["findings"] if f["id"] == reworded.id]
     assert row["assessment"] == {
@@ -581,7 +581,7 @@ def test_a_finding_rejected_in_round_one_comes_back_reworded_and_is_labelled_rep
 
     monkeypatch.setattr(sdk, "agent_call_structured", agent_round_three)
     assert main(args) == 0
-    assert (target_dir / "rounds" / round_two_head[:12] / "findings.json").is_file()
+    assert (target_dir / "rounds" / f"02-{round_two_head[:12]}" / "findings.json").is_file()
     assert repeats_asked == []
     data = json.loads((target_dir / "findings.json").read_text())
     (row,) = [f for f in data["findings"] if f["id"] == reworded.id]
