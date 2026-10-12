@@ -118,8 +118,11 @@ whose markers nest, do not pair up, or repeat a key is refused (exit 2).
 login can edit it: `gh repo view --json viewerPermission` is `ADMIN`,
 `MAINTAIN` or `WRITE`, or the PR's author is the login (`gh api user`). If so,
 it adds the managed lines on top, keeps the existing text unchanged, appends
-its sections below, and posts one PR comment saying the pr skill edited the
-description and naming the sections it added. If not, it writes nothing,
+below it the sections the text does not already have (a section is already
+there when the text has a heading with its title; the template's preamble is
+when the text contains it), and posts one PR comment saying the pr skill
+edited the description and naming the sections it added. A PR opened in the
+GitHub UI from the repo's template so gets no heading, hint or checkbox twice. If not, it writes nothing,
 prints `PR_DIAGNOSIS:no rights to edit PR <n> (viewerPermission=<value>)` and
 exits 2. An edit of a description that already has `pr:managed` posts no
 comment.

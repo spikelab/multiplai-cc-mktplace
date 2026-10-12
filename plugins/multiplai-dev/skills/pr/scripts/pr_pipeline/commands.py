@@ -17,7 +17,8 @@ from pathlib import Path
 from multiplai_core.log_utils import log_event
 
 from . import fill, gates, github, markers
-from .template import Section, TemplateError, discover, load, load_config
+from .template import (Section, TemplateError, discover, is_checkbox, load, load_config, normalize_title, parse,
+                       set_tick)
 
 log = logging.getLogger(__name__)
 
@@ -222,13 +223,33 @@ def _can_edit(repo: Path, pr: dict) -> tuple[bool, str]:
     return bool(author and login and author == login), permission or "unknown"
 
 
-def _adopt(current: str, done: fill.Assembled) -> str:
+def _match_text(text: str) -> str:
+    """*text* with every checkbox unticked and whitespace collapsed, for a containment check."""
+    lines = [set_tick(line, False) if is_checkbox(line) else line for line in text.split("\n")]
+    return " ".join(" ".join(lines).split())
+
+
+def _adopt(current: str, r: Rendered) -> fill.Assembled:
     """A hand-opened body: the managed lines on top, the existing text unchanged, then the
-    skill's sections."""
-    rendered = done.body.split("\n\n", 1)[1] if "\n\n" in done.body else done.body
-    header = f"{markers.MANAGED}\n{markers.written_line(done.written)}\n\n"
+    skill's sections that the existing text does not already hold.
+
+    A section is already there when the existing text has a heading with its title; the
+    preamble is when the existing text contains it, checkbox ticks aside. A PR opened in the
+    GitHub UI from the repo's template holds both, and appending them again would show every
+    heading, hint and checkbox twice. The `written` list still names every key the skill
+    writes, so a later `edit` does not append a left-out section either."""
+    done = r.assembled
     existing = current.rstrip("\n")
-    return header + (existing + "\n\n" if existing else "") + rendered
+    present = frozenset(normalize_title(s.title) for s in parse(existing)[1:])
+    preamble = "\n".join(b.text for b in r.sections[0].blocks) if r.sections and r.sections[0].level == 0 else ""
+    part = fill.assemble(r.sections, fill.plan_sections(r.sections), r.sources,
+                         {k: done.owned.get(k, "") for k in done.model_keys}, done.ticks, managed_header=False,
+                         skip_titles=present,
+                         skip_preamble=bool(existing) and _match_text(preamble) in _match_text(existing))
+    header = f"{markers.MANAGED}\n{markers.written_line(done.written)}"
+    rendered = part.body.strip("\n")
+    part.body = "\n\n".join(p for p in (header, existing, rendered) if p) + "\n"
+    return part
 
 
 def cmd_edit(args) -> int:
@@ -284,7 +305,9 @@ def cmd_edit(args) -> int:
         _diagnose([f"section removed by a human, not restored: {k}" for k in merged.not_restored])
         _diagnose([f"section not in the PR body, not added: {k}" for k in merged.not_added])
     else:
-        body, changed = _adopt(current, done), list(done.owned)
+        adopted = _adopt(current, r)
+        body, changed = adopted.body, list(adopted.owned)
+        _diagnose([f"section already in the PR body, not appended: {k}" for k in adopted.skipped])
 
     result = gates.GateResult(gates.check_words(gates.edit_word_counts(body), what="the text this skill owns"))
     if not result.ok:
@@ -292,9 +315,10 @@ def cmd_edit(args) -> int:
 
     comment = None
     if not managed:
+        added = ("added these sections below it: " + ", ".join(f"`{k}`" for k in changed) if changed
+                 else "added no sections: the description already had every section it writes")
         comment = ("The pr skill (`/multiplai-dev:pr`) edited this PR's description. It kept the existing "
-                   "text unchanged and added these sections below it: "
-                   + ", ".join(f"`{k}`" for k in changed) + ".\n")
+                   f"text unchanged and {added}.\n")
 
     body_file = Path("<body-file>") if args.dry_run else _body_file(body)
     comment_file = Path("<comment-file>") if args.dry_run else (_body_file(comment) if comment else None)

@@ -36,8 +36,10 @@ time, not derived from a tag.
   before anything is written.
 - `edit` rewrites only the sections the skill wrote, marked with hidden HTML
   comments. Your own edits elsewhere in the description stay, and a section
-  you deleted stays deleted. On a PR you opened by hand, it adds its sections
-  below your text and leaves one comment saying so; without the rights to edit
+  you deleted stays deleted. On a PR you opened by hand, it adds below your text
+  the sections your text lacks (none whose heading is already there, so a PR
+  opened from the repo's template gets no heading twice) and leaves one
+  comment saying so; without the rights to edit
   the PR, it writes nothing. Once buildme has deleted its `.build-state.json`
   after publishing, `edit` keeps the Documentation and Blocks sections already
   in the description instead of blanking them.

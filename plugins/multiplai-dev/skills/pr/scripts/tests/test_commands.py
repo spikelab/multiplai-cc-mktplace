@@ -9,6 +9,7 @@ from conftest import git, make_bare_origin, make_change, make_repo
 
 from pr_pipeline import commands, markers
 from pr_pipeline.__main__ import build_parser
+from pr_pipeline.template import STANDARD_TEMPLATE
 
 URL = "https://github.com/o/r/pull/7"
 
@@ -227,6 +228,57 @@ def test_hand_opened_pr_with_edit_rights_gets_sections_appended_and_one_comment(
     assert "edited this PR's description" in comment
     for key in ("why", "blocks", "documentation", "companion-artifacts", "ticket", "size"):
         assert f"`{key}`" in comment
+
+
+REPO_TEMPLATE = ("Thanks for opening a PR.\n<!-- Fill in every section. -->\n- [ ] I ran the tests\n\n"
+                 "## Summary\n<!-- What changed. -->\n\n## Why\n<!-- The problem. -->\n\n"
+                 "## Notes\n<!-- Anything else. -->\n")
+
+
+def test_hand_opened_pr_from_the_repo_template_gets_only_the_missing_sections(tmp_path, gh_stub, model_stub,
+                                                                               capsys):
+    # Opened in the GitHub UI from the repo's own template: the preamble, the hint comments and the
+    # headings already in the body must not be appended a second time.
+    repo = make_repo(tmp_path / "proj")
+    (repo / ".github").mkdir()
+    (repo / ".github" / "pull_request_template.md").write_text(REPO_TEMPLATE)
+    change = make_change(repo)
+    model_stub.answers = [{"sections": {"summary": "Model summary.", "notes": "Model notes."}}] * 2
+    existing = REPO_TEMPLATE.replace("## Summary\n<!-- What changed. -->\n",
+                                     "## Summary\n<!-- What changed. -->\nI fixed the queue by hand.\n")
+    existing = existing.replace("\n## Notes\n<!-- Anything else. -->\n", "")
+    gh_stub.on(["gh", "pr", "view"], stdout=_pr_json(existing)).on(["gh", "repo", "view"], stdout="WRITE\n")
+    gh_stub.on(["gh", "pr", "edit"]).on(["gh", "pr", "comment"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 0
+    new = gh_stub.bodies["gh pr edit"]
+    assert existing.rstrip("\n") in new, "the existing text is unchanged"
+    for once in ("Thanks for opening a PR.", "<!-- Fill in every section. -->", "- [ ] I ran the tests",
+                 "## Summary", "<!-- What changed. -->", "## Why", "<!-- The problem. -->", "## Notes", "## Size"):
+        assert new.count(once) == 1, f"{once!r} appears {new.count(once)} times"
+    assert "Model notes." in new and "Model summary." not in new
+    comment = gh_stub.bodies["gh pr comment"]
+    assert "`notes`" in comment and "`size`" in comment
+    assert "`summary`" not in comment and "`why`" not in comment
+
+    # The next edit sees a managed body and must not append the sections it left out either.
+    gh_stub.rules.clear()
+    gh_stub.on(["gh", "pr", "view"], stdout=_pr_json(new)).on(["gh", "pr", "edit"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 0
+    again = gh_stub.bodies["gh pr edit"]
+    for once in ("## Summary", "## Why", "## Notes", "## Size"):
+        assert again.count(once) == 1, f"{once!r} appears {again.count(once)} times on the second edit"
+
+
+def test_hand_opened_pr_holding_every_section_gets_none_appended(tmp_path, gh_stub, capsys):
+    repo, change = _setup(tmp_path)
+    existing = STANDARD_TEMPLATE.read_text()
+    gh_stub.on(["gh", "pr", "view"], stdout=_pr_json(existing)).on(["gh", "repo", "view"], stdout="WRITE\n")
+    gh_stub.on(["gh", "pr", "edit"]).on(["gh", "pr", "comment"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 0
+    new = gh_stub.bodies["gh pr edit"]
+    assert new.splitlines().count("## Why") == 1 and new.splitlines().count("## Size") == 1
+    assert "added no sections" in gh_stub.bodies["gh pr comment"]
+    assert "PR_DIAGNOSIS:section already in the PR body, not appended: why" in capsys.readouterr().out
 
 
 def test_hand_opened_pr_by_the_token_owner_counts_as_edit_rights(tmp_path, gh_stub):

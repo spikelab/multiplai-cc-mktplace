@@ -371,27 +371,39 @@ class Assembled:
     ticks: set[str]
     model_keys: list[str]
     written: list[str]
+    skipped: list[str] = field(default_factory=list)  # keys left out because *skip_titles* named them
 
 
 def assemble(sections: list[Section], plans: list[SectionPlan], src: Sources, model_text: dict[str, str],
-             ticks: set[str], *, managed_header: bool = True) -> Assembled:
+             ticks: set[str], *, managed_header: bool = True, skip_titles: frozenset[str] = frozenset(),
+             skip_preamble: bool = False) -> Assembled:
+    """The body. *skip_titles* (normalized titles) leaves out the sections with those titles, with
+    their nested sections, and the appended sections with those headings; *skip_preamble* leaves out
+    the preamble. `edit` uses both when it adopts a hand-opened body that already holds them."""
     owned: dict[str, str] = {}
+    skipped: list[str] = []
+    skip_until = -1
     template_keys: set[str] = set()
     model_keys: list[str] = []
     parts: list[str] = []
     code_kinds_in_template: set[str] = set()
     for p in plans:
         s = sections[p.index]
+        if p.kind.startswith("code:"):
+            # Counted even when skipped: the template has the section, so it is not appended again.
+            code_kinds_in_template.add(p.kind.split(":", 1)[1])
         if s.level == 0:
-            pre = _preamble(s.blocks, ticks)
+            pre = "" if skip_preamble else _preamble(s.blocks, ticks)
             if pre:
                 parts.append(pre)
             continue
+        if p.index < skip_until or normalize_title(s.title) in skip_titles:
+            skip_until = max(skip_until, s.subtree_end)
+            skipped.append(s.key)
+            continue
         content = None
         if p.kind.startswith("code:"):
-            kind = p.kind.split(":", 1)[1]
-            code_kinds_in_template.add(kind)
-            content = code_content(kind, src)
+            content = code_content(p.kind.split(":", 1)[1], src)
         elif p.kind == "model":
             content = model_text.get(s.key, "")
             model_keys.append(s.key)
@@ -412,6 +424,8 @@ def assemble(sections: list[Section], plans: list[SectionPlan], src: Sources, mo
     if "size" not in code_kinds_in_template:
         tails.append(markers.Tail("size", "## Size", code_content("size", src)))
     tails += src.extras
+    skipped += [t.key for t in tails if normalize_title(t.heading) in skip_titles]
+    tails = [t for t in tails if normalize_title(t.heading) not in skip_titles]
     for t in tails:
         owned[t.key] = t.content
         parts.append(f"{t.heading}\n{markers.wrap(t.key, t.content)}")
@@ -420,7 +434,7 @@ def assemble(sections: list[Section], plans: list[SectionPlan], src: Sources, mo
     header = [markers.MANAGED, markers.written_line(written)] if managed_header else []
     body = "\n".join(header) + ("\n\n" if header else "") + "\n\n".join(parts) + "\n"
     return Assembled(body=body, owned=owned, template_keys=template_keys, tails=tails, ticks=ticks,
-                     model_keys=model_keys, written=written)
+                     model_keys=model_keys, written=written, skipped=skipped)
 
 
 def code_keys(sections: list[Section], kinds: set[str]) -> set[str]:
