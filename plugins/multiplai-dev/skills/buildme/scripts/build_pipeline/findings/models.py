@@ -28,7 +28,8 @@ class Verdict(str, Enum):
 class PRComment(BaseModel):
     """One comment on the PR: a review-thread comment or a top-level comment."""
 
-    id: int                                # GitHub's numeric id (`databaseId` for a review comment)
+    id: int                                # GitHub's numeric id (`databaseId` for a review comment);
+                                           # made up and negative for a review_body (`fetch.review_body_id`)
     # In a review thread, a top-level (issue) comment, or part of a review's
     # own body (no thread: answered like a top-level comment).
     kind: Literal["review", "issue", "review_body"]

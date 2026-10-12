@@ -22,27 +22,31 @@ time, not derived from a tag.
 ### Added
 - New `/multiplai-dev:buildme-findings <pr>` skill (`python -m build_pipeline
   findings --pr <n>`): fixes a PR's review comments through buildme's own
-  process. It reads the PR's unresolved review threads and new top-level
-  comments, acts only on those from `findings.authors` (default: anyone with
-  `admin`, `maintain` or `write` on the repo) and the bots in
-  `findings.allow_bots`, and sorts each with a read-only agent that sees the
-  comment only as fenced, untrusted text. `findings-r<N>.md` in the change
-  directory lists every comment with its verdict. A finding that needs a spec
-  change gets one: `respec-findings-r<N>.md` is applied to the change's
-  requirements and committed as `spec(findings-r<N>)` before any code, with
-  or without `--auto`. Each code defect becomes a block run by the TDD engine
-  with a failing test first and every gate a build has. The skill then pushes,
-  adds a "Review rounds" section to the PR description through
-  `/multiplai-dev:pr`, replies in each thread with the fixing commit or the
-  reason nothing changed, and re-runs `/multiplai-dev:review`. Rounds repeat
-  until nothing new is left or `findings.max_rounds` (default 3) is reached.
-  Review threads are never resolved. A re-run resumes at the step that did not
-  finish without re-asking a comment or posting a reply twice, and a step that
-  failed part way keeps its edits under `refs/buildme/wip/<change>/r<N>-<step>`.
-  Commits someone else pushed to the PR are kept. It will not start a round
-  on a worktree with uncommitted changes, or resume one with changes outside
-  the change directory, and it will not reuse a change's state for a
-  different PR.
+  process. It reads the PR's unresolved review threads, new top-level
+  comments, and the findings `/multiplai-dev:review` puts in a review's body
+  (those on lines outside the PR's diff), acts only on those from
+  `findings.authors` (default: anyone with `admin`, `maintain` or `write` on
+  the repo) and the bots in `findings.allow_bots`, and sorts each with a
+  read-only agent that sees the comment only as fenced, untrusted text.
+  `findings-r<N>.md` in the change directory lists every comment with its
+  verdict. A finding that needs a spec change gets one:
+  `respec-findings-r<N>.md` is applied to the change's requirements, each
+  requirement edited inside its own section, and to `specs/registry/` when the
+  change is archived; it is committed as `spec(findings-r<N>)` before any
+  code, with or without `--auto`. Each code defect becomes a block run by the
+  TDD engine with a failing test first and every gate a build has; a block the
+  engine cannot fix is kept under a wip ref, left off the branch, and answered
+  "not fixed". The skill then pushes, adds a "Review rounds" section to the PR
+  description through `/multiplai-dev:pr`, replies in each thread with the
+  fixing commit or the reason nothing changed, and re-runs
+  `/multiplai-dev:review`. Rounds repeat until nothing new is left or
+  `findings.max_rounds` (default 3) is reached. Review threads are never
+  resolved. A re-run resumes at the step that did not finish without re-asking
+  a comment or posting a reply twice, and a step that failed part way keeps
+  its edits under `refs/buildme/wip/<change>/r<N>-<step>`. Commits someone
+  else pushed to the PR are kept. It will not start a round on a worktree with
+  uncommitted changes, or resume one with changes outside the change
+  directory, and it will not reuse a change's state for a different PR.
 - `findings.allow_bots` in `specs/config.yaml`.
 
 ### Changed
