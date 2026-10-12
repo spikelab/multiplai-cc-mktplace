@@ -67,6 +67,8 @@ _DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
 # above the fenced ticket text; a `Source:` line must hold a link to count.
 _TICKET_URL_LINE_RE = re.compile(
     r"^[ \t]*(?:url:[ \t]*(\S+)|source:[ \t]*(https?://\S+)).*\n?", re.MULTILINE | re.IGNORECASE)
+# Where the fenced, external ticket text starts: a link line at or after it is never the link.
+_FENCE_START_RE = re.compile(r"^[ \t]*<untrusted-content\b", re.MULTILINE | re.IGNORECASE)
 
 
 class SourceError(Exception):
@@ -166,7 +168,9 @@ def read_sources(repo: Path, change_dir: Path, *, base: str | None, head: str,
     ticket = change_dir / "ticket.md"
     if ticket.is_file():
         src.ticket_text = ticket.read_text()
-    m = _TICKET_URL_LINE_RE.search(src.ticket_text)
+    fence_start = _FENCE_START_RE.search(src.ticket_text)
+    header = src.ticket_text[:fence_start.start()] if fence_start else src.ticket_text
+    m = _TICKET_URL_LINE_RE.search(header)
     src.ticket_url = ticket_url or (m.group(1) or m.group(2) if m else None)
 
     for name in EVIDENCE_FILES:  # never ticket.md: external text cannot be a checkbox's evidence

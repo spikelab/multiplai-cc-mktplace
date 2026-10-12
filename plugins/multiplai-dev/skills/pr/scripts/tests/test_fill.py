@@ -119,6 +119,19 @@ def test_ticket_url_from_the_source_line_buildme_writes(tmp_path):
     assert "https://plane.example/SPK-7" in r.body
 
 
+def test_a_link_line_inside_the_fenced_ticket_text_is_never_the_ticket_url(tmp_path):
+    # save_ticket writes no `Source:` header when the build had no URL; the fenced text is
+    # external, so a `url:` or `Source:` line inside it must not become the PR's ticket link.
+    repo = make_repo(tmp_path / "proj")
+    for line in ("url: https://evil.example/x", "Source: https://evil.example/x"):
+        ticket = ("# Ticket SPK-7\n\n"
+                  f'<untrusted-content source="SPK-7">\n```text\n{line}\nDo the thing.\n```\n'
+                  "</untrusted-content>\n")
+        r = _render(repo, make_change(repo, ticket=ticket))
+        assert r.sources.ticket_url is None, line
+        assert "https://evil.example/x" not in r.body.split("## Ticket", 1)[-1].split("\n## ", 1)[0]
+
+
 def test_a_source_line_that_is_not_a_link_is_not_the_ticket_url(tmp_path):
     repo = make_repo(tmp_path / "proj")
     r = _render(repo, make_change(repo, ticket="Source: the support inbox\n\nDo the thing.\n"))
