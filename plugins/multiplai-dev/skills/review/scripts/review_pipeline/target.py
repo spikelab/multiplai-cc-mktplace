@@ -583,6 +583,10 @@ def snapshot_base(target: TargetInfo, dest: Path, paths: list[str]) -> Path:
     )
     if proc.returncode != 0:
         raise TargetError(f"git archive {target.base_sha[:12]} failed: {proc.stderr.decode(errors='replace').strip()}")
-    with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tar:
-        tar.extractall(dest, filter="data")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tar:
+            tar.extractall(dest, filter="data")
+    except tarfile.TarError as e:
+        # The "data" filter refuses, for one, a symlink that is absolute or points outside dest.
+        raise TargetError(f"extracting {target.base_sha[:12]} failed: {e}") from e
     return dest

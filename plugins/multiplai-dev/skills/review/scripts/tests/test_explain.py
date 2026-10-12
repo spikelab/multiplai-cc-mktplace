@@ -255,6 +255,40 @@ async def test_base_files_that_cannot_be_extracted_are_an_error_line_not_a_faile
     assert not (change_ctx.snapshot.parent / BASE_DIR).exists()
 
 
+@pytest.mark.parametrize("link", ["/etc/passwd", "../../outside"])
+async def test_a_deleted_symlink_the_base_side_cannot_extract_is_an_error_line_not_a_failed_review(
+        link, tmp_path, monkeypatch):
+    # tarfile's "data" filter refuses a symlink that is absolute or points outside the destination
+    repo = tmp_path / "links"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _write(repo, {"app.py": "\n".join(_lines(10, "line")) + "\n"})
+    (repo / "link").symlink_to(link)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "link").unlink()
+    _write(repo, {"app.py": "\n".join(_lines(10, "line")).replace("line 5", "changed 5") + "\n"})
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "head")
+    resolved = target.resolve(repo, range_=f"{base}..{_git(repo, 'rev-parse', 'HEAD')}")
+    info = target.build_target(resolved)
+    t = target.write_target_files(info, target.diff_text(resolved.repo, base, info.head_sha), tmp_path / info.slug)
+    target_dir = tmp_path / t.slug
+    ctx = RunContext(config=ReviewConfig(concurrency=1, explain=True),
+                     snapshot=target.snapshot_head(t, target_dir / "tree"),
+                     diff=Path(t.diff_path).read_text(), target_dir=target_dir)
+    canned = Canned([ExploreOutput(facts=[Fact(claim="app.py changes line 5",
+                                               citations=[_cite("app.py", 5, "changed 5")])])])
+    monkeypatch.setattr(sdk, "agent_call_structured", canned)
+    state = await run_explain(ReviewState(target=t), ctx)
+
+    assert len(canned.calls) == 1 and "read it at" not in canned.calls[0]["prompt"]
+    assert len(state.errors) == 1 and state.errors[0].startswith("explain base: ")
+    assert state.stage == "explain" and state.facts.facts
+    assert not (ctx.snapshot.parent / BASE_DIR).exists()
+
+
 async def test_explain_off_makes_no_call_and_writes_nothing(change_target, change_ctx, monkeypatch):
     canned = Canned([])
     monkeypatch.setattr(sdk, "agent_call_structured", canned)
