@@ -33,7 +33,10 @@ time, not derived from a tag.
   every source file instead of three agents of five turns each, so it costs
   more on a large repo; `codebase_analysis_max_units` (default 12) caps the
   agents, keeping the files the change's documents name and then the most
-  imported, and lists the rest under "Not analysed".
+  imported, and lists the rest under "Not analysed". A project with source
+  files and no git commit (a `--no-worktree` build `git init`s without
+  committing) gets a report headed "Codebase analysis: not analysed" that says
+  why and lists the source files, and the phase is logged as skipped.
 
 ### Added
 - `block_facts: true` in `specs/config.yaml` (default `false`): each block's
@@ -42,11 +45,16 @@ time, not derived from a tag.
   an earlier block changed is dropped, and the section says how many were.
 - Before it publishes, a build re-checks every
   `docs/walkthroughs/*-walkthrough.md` in the project at its HEAD with
-  codebase-walkthrough's model-free `check --at-head`, prints the stale ones
-  with their failed citations (`WALKTHROUGH:STALE:`, `WALKTHROUGH_FAIL:`) and
-  lists them in the PR body. `regenerate_walkthroughs: true` (default
-  `false`) re-runs each stale one the way its header says it was made, capped
-  at `walkthrough_max_usd` (default 10) per run, and commits it to the build
+  codebase-walkthrough's model-free `check --at-head`, checks each stale one
+  again at the commit the build started from, prints the ones the build made
+  stale with the citations it broke (`WALKTHROUGH:STALE:`, `WALKTHROUGH_FAIL:`)
+  and lists them in the PR body. One that was already stale before the build
+  is listed apart (`WALKTHROUGH:ALREADY_STALE:`) and never regenerated. A repo
+  the walkthrough also reads is checked where it lives beside the main
+  checkout; when it is not there, the walkthrough is reported as not checked.
+  `regenerate_walkthroughs: true` (default `false`) re-runs each one the build
+  made stale the way its header says it was made, capped at
+  `walkthrough_max_usd` (default 10) per run, and commits it to the build
   branch; it needs `--trust-repo`, and a walkthrough that read other
   repositories is reported instead of re-run.
 

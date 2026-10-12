@@ -89,7 +89,7 @@ keeps the default.
 | `tier` | `advanced` \| `standard` | unset | the tier, only when `models.default` is not a Claude model |
 | `codebase_analysis_max_units` | int | `12` | the codebase analysis: the most explore agents it runs, one per slice of the source files. Over the limit, it keeps the files the change's documents name, then the most imported, and lists the rest under "Not analysed" in `codebase-analysis.md` |
 | `block_facts` | bool | `false` | the TDD engine: the test writer and implementer of each block also get the facts from `facts.json` about the files the block's tasks name, each re-checked at the current HEAD (a fact whose quoted lines changed is dropped, and counted). Off until real builds show it helps |
-| `regenerate_walkthroughs` | bool | `false` | after the build: re-run each stale walkthrough under `docs/walkthroughs/` (see [Step 4](#step-4-report-results)) and commit it to the build branch. Only with `--trust-repo`, and only for a walkthrough that read the project's repo alone |
+| `regenerate_walkthroughs` | bool | `false` | after the build: re-run each walkthrough the build made stale under `docs/walkthroughs/` (see [Step 4](#step-4-report-results)) and commit it to the build branch. Only with `--trust-repo`, and only for a walkthrough that read the project's repo alone |
 | `walkthrough_max_usd` | number | `10` | the spend limit of each walkthrough `regenerate_walkthroughs` re-runs; a run that reaches it leaves the old file in place |
 
 **Commit `specs/config.yaml`.** The build's worktree branches from `HEAD`, so an
@@ -669,11 +669,15 @@ Parse pipeline stdout for progress lines:
 - `PUBLISH_DIAGNOSIS:<reason>` — push/PR could not finish; manual commands are in
   `build-progress.md` (the build still succeeded)
 - `WALKTHROUGH:STALE:<path>` with one `WALKTHROUGH_FAIL:<path>: <citation>: <reason>`
-  per failed citation, then `WALKTHROUGHS:<n> checked, <m> stale` — before
-  publishing, every `docs/walkthroughs/*-walkthrough.md` in the project is
-  re-checked at the build's HEAD with codebase-walkthrough's model-free
-  `check --at-head`; a stale one cites lines the build moved. The same list
-  goes in the PR body as "Stale walkthroughs". With `regenerate_walkthroughs`
+  per citation the build broke, then `WALKTHROUGHS:<n> checked, <m> stale`
+  (and `, <k> already stale at the build's base`) — before publishing, every
+  `docs/walkthroughs/*-walkthrough.md` in the project is re-checked at the
+  build's HEAD with codebase-walkthrough's model-free `check --at-head`, and
+  each stale one again at the commit the build started from; a `STALE` one
+  cites lines the build moved. `WALKTHROUGH:ALREADY_STALE:<path>` was stale
+  before the build and is never regenerated; `WALKTHROUGH:UNCHECKED:<path> — <why>`
+  could not be checked (for example, a repo it reads is not where its header
+  says). The same list goes in the PR body as "Stale walkthroughs". With `regenerate_walkthroughs`
   on, the `STALE` line ends with what its re-run did. `WALKTHROUGHS:NONE:` when
   the project has no walkthroughs there. Tell the user which are stale; they
   run only when the build publishes (not with `--no-push` or `--no-worktree`)
