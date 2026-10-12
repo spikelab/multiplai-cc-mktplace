@@ -1,4 +1,4 @@
-"""Assemble the walkthrough from gated sections. Markdown first; the HTML and walkthrough.json hold the same text.
+"""Assemble the walkthrough from gated sections. Markdown first; walkthrough.json holds the same text.
 
 Code, not a model, turns `[[cN]]` into `path:line` links and `[[snippet:cN]]`
 into the cited lines read with `git show` at the commit. Each link carries its
@@ -9,7 +9,6 @@ entries.
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import re
@@ -27,7 +26,6 @@ LANG = {".py": "python", ".ts": "typescript", ".tsx": "tsx", ".js": "javascript"
         ".sqlx": "sql", ".yml": "yaml", ".yaml": "yaml", ".json": "json", ".md": "markdown", ".html": "markup",
         ".sh": "bash", ".toml": "toml"}
 SNIPPET_MAX_LINES = 40
-TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "walkthrough.html"
 
 
 class Linker:
@@ -492,39 +490,8 @@ def render_walkthrough_json(state: WalkState, md: str) -> dict:
     }
 
 
-# --- HTML -------------------------------------------------------------------------------
-
-
 def markdown_headings(md: str) -> list[str]:
     return [m.group(1).strip() for m in re.finditer(r"^## (.+)$", md, re.M)]
-
-
-def render_html(md: str, title: str) -> str:
-    import markdown as mdlib
-
-    blocks: list[str] = []
-
-    def keep_mermaid(m: re.Match) -> str:
-        blocks.append(m.group(1))
-        return f"\n\nMERMAIDBLOCK{len(blocks) - 1}\n\n"
-
-    text = re.sub(r"```mermaid\n(.*?)```", keep_mermaid, md, flags=re.S)
-    body = mdlib.markdown(text, extensions=["tables", "fenced_code", "sane_lists"])
-    for i, b in enumerate(blocks):
-        body = body.replace(f"<p>MERMAIDBLOCK{i}</p>", f'<pre class="mermaid">{html.escape(b)}</pre>')
-    parts = re.split(r"(?=<h2>)", body)
-    intro, steps = parts[0], parts[1:]
-    nav, sections = [], []
-    for i, s in enumerate(steps, start=1):
-        h = re.match(r"<h2>(.*?)</h2>", s)
-        label = re.sub(r"<[^>]+>", "", h.group(1)) if h else f"Step {i}"
-        nav.append(f'<li><a href="#step-{i}" data-step="{i}">{i}. {label}</a></li>')
-        sections.append(f'<section class="step" id="step-{i}" data-step="{i}">{s}'
-                        f'<nav class="pager"><button class="prev" type="button">Previous</button>'
-                        f'<button class="next" type="button">Next</button></nav></section>')
-    page = TEMPLATE.read_text(encoding="utf-8")
-    return (page.replace("{{TITLE}}", html.escape(title)).replace("{{INTRO}}", intro)
-            .replace("{{NAV}}", "\n".join(nav)).replace("{{STEPS}}", "\n".join(sections)))
 
 
 def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
@@ -538,9 +505,6 @@ def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
     md_path.write_text(md, encoding="utf-8")
     paths = [md_path]
     if state.options.get("mode") != "agent":
-        html_path = out_dir / f"{name}-walkthrough.html"
-        html_path.write_text(render_html(md, f"{state.target.package} walkthrough"), encoding="utf-8")
-        paths.append(html_path)
         json_path = out_dir / f"{name}-walkthrough.json"
         json_path.write_text(json.dumps(render_walkthrough_json(state, md), indent=2, ensure_ascii=False) + "\n",
                              encoding="utf-8")
