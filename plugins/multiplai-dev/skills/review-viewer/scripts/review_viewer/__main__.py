@@ -66,9 +66,10 @@ def output_root() -> Path:
     """Workspace INBOX/ if there is one, else `~/.multiplai`.
 
     Never the directory the user ran from: that is usually the repository
-    being reviewed, and the output would land in its working tree. The
-    review skill's `default_out()` makes the same choice; they must agree,
-    because `find_review()` looks where the review skill writes."""
+    being reviewed, and the output would land in its working tree. Holds the
+    mailboxes of a diff served with no review; reviews themselves are found
+    in `default_reviews_dir()`, then `legacy_reviews_dir()` (this root's
+    `reviews/`)."""
     cfg = os.environ.get("CLAUDE_CONFIG_DIR")
     if cfg:
         marker = Path(cfg) / ".workspace"
@@ -84,9 +85,23 @@ def output_root() -> Path:
 # --- serve --------------------------------------------------------------------
 
 
+def data_dir() -> Path:
+    """multiplai-core's data directory: `$WORKSPACE/.multiplai/data` in a workspace."""
+    from multiplai_core.paths import get_paths
+
+    return Path(get_paths().data_dir)
+
+
 def default_reviews_dir() -> Path:
-    """Where the review skill writes by default: the workspace `INBOX/reviews`,
-    else `~/.multiplai/reviews`."""
+    """Where the review skill writes by default: `<data_dir>/reviews`. Its
+    `default_out()` makes the same choice; they must agree."""
+    return data_dir() / "reviews"
+
+
+def legacy_reviews_dir() -> Path:
+    """Where the review skill wrote before multiplai-dev 0.33: the workspace
+    `INBOX/reviews`, else `~/.multiplai/reviews`. Still read when a review is
+    not in `default_reviews_dir()`."""
     return output_root() / "reviews"
 
 
@@ -173,11 +188,19 @@ def _load_resolved(args, resolved: Resolved):
     dirs = [invocation_path(d) for d in args.reviews_dir] if args.reviews_dir \
         else [default_reviews_dir()]
     kind, path, review = find_review(target, dirs)
+    source_notice = None
+    if kind != "match" and not args.reviews_dir:
+        # Not in the data directory: look where the review skill wrote before 0.33.
+        old_kind, old_path, old_review = find_review(target, [legacy_reviews_dir()])
+        if old_kind == "match" or (kind == "none" and old_kind == "stale"):
+            kind, path, review = old_kind, old_path, old_review
+            source_notice = (f"This review was loaded from the old location {path.parent}, "
+                             f"not from {default_reviews_dir()}.")
     pr = resolved.pr.to_dict() if resolved.pr else None
     if kind == "match":
         review.target.repo_path = target.repo_path
         box = path.parent / "viewer"
-        meta = {"pr": pr, "notice": None, "review": f"findings: {len(review.findings)}"}
+        meta = {"pr": pr, "notice": source_notice, "review": f"findings: {len(review.findings)}"}
         return [(review, box)], {target.slug: meta}
     notice = None
     status = "none"
@@ -665,7 +688,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="run `git fetch origin` in the clone before resolving")
     s.add_argument("--reviews-dir", action="append", default=[],
                    help="where to look for a review of the same commits (repeatable; "
-                        "default: the review skill's output directory)")
+                        "default: the review skill's output directory, <data_dir>/reviews, "
+                        "then the old <workspace>/INBOX/reviews)")
     s.add_argument("--repo-root", help="read git from here instead of target.repo_path")
     s.add_argument("--port", type=int, default=registry.PORT_START,
                    help=f"first port to try (default {registry.PORT_START}; 20 are tried)")

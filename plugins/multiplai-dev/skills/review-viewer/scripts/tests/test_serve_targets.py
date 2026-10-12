@@ -88,11 +88,37 @@ def test_workspace_inbox_wins_when_there_is_one(env, fixture_repo, tmp_path, mon
     assert box == ws / "INBOX" / "review-viewer" / ff.target.slug / "viewer"
 
 
-def test_default_reviews_dir_is_the_review_skills(env, fixture_repo, findings_path):
+def test_default_reviews_dir_is_the_review_skills(env, fixture_repo, findings_path, tmp_path):
     repo, _, _ = fixture_repo
-    _review(env / "reviews", findings_path)
+    _review(tmp_path / "data" / "reviews", findings_path)
     loaded, meta = _load("--target", "main~1..main", "--repo", str(repo))
     assert meta[loaded[0][0].target.slug]["review"] == "findings: 3"
+
+
+def test_a_review_not_in_the_data_dir_is_found_in_the_old_inbox_location(env, fixture_repo, findings_path,
+                                                                         tmp_path):
+    repo, _, _ = fixture_repo
+    ws = tmp_path / "ws"
+    (ws / "INBOX").mkdir(parents=True)
+    (tmp_path / "cfg" / ".workspace").write_text(str(ws))
+    path = _review(ws / "INBOX" / "reviews", findings_path)
+    loaded, meta = _load("--target", "main~1..main", "--repo", str(repo))
+    (ff, box), = loaded
+    m = meta[ff.target.slug]
+    assert m["review"] == "findings: 3" and box == path.parent / "viewer"
+    assert m["notice"] == f"This review was loaded from the old location {path.parent}, not from {tmp_path / 'data' / 'reviews'}."
+
+
+def test_the_data_dir_wins_over_the_old_inbox_location(env, fixture_repo, findings_path, tmp_path):
+    repo, _, _ = fixture_repo
+    ws = tmp_path / "ws"
+    (ws / "INBOX").mkdir(parents=True)
+    (tmp_path / "cfg" / ".workspace").write_text(str(ws))
+    _review(ws / "INBOX" / "reviews", findings_path)
+    path = _review(tmp_path / "data" / "reviews", findings_path)
+    loaded, meta = _load("--target", "main~1..main", "--repo", str(repo))
+    (ff, box), = loaded
+    assert box == path.parent / "viewer" and meta[ff.target.slug]["notice"] is None
 
 
 def test_find_review_skips_broken_files(fixture_repo, findings_path, tmp_path):

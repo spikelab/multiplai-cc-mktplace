@@ -188,7 +188,7 @@ import stat  # noqa: E402
 
 from fixture_repo import build_remote  # noqa: E402
 from review_viewer.gitdata import (  # noqa: E402
-    TargetError, parse_target, resolve_target, sanitize_slug)
+    TargetError, parse_target, resolve_target)
 
 
 @pytest.fixture(scope="module")
@@ -232,7 +232,7 @@ def test_branch_base_is_the_merge_base_not_mains_tip(remote):
     assert t.head_sha == remote["feature_local"]
     assert t.base_sha == remote["head"] != remote["main_tip"]
     assert t.files_changed == ["app/feature.py"]
-    assert t.slug == sanitize_slug(f"{remote['work'].name}--feature") == "work--feature"
+    assert t.slug == f"{remote['work'].parent.name}-origin--feature"
     assert r.pr is None
 
 
@@ -246,7 +246,7 @@ def test_worktree_shows_only_unpushed_commits(remote):
     t = resolve_target(parse_target(str(remote["work"])), None).target
     assert (t.base_sha, t.head_sha) == (remote["feature_pushed"], remote["feature_local"])
     assert t.files_changed == ["app/feature.py"]
-    assert t.slug == "work--feature--unpushed"
+    assert t.slug == f"{remote['work'].parent.name}-origin--feature--unpushed"
 
 
 def test_worktree_without_upstream_uses_the_default_branch(remote, tmp_path):
@@ -302,7 +302,7 @@ def test_pr_resolves_and_fetches_only_objects(remote, tmp_path, monkeypatch):
     r = resolve_target(parse_target("7"), clone)
     assert (r.target.base_sha, r.target.head_sha) == (remote["head"], remote["pr_head"])
     assert r.target.files_changed == ["app/pr.py"]
-    assert r.target.slug == "clone--pr-7" and r.target.label == "clone PR #7"
+    assert r.target.slug == f"{remote['origin'].parent.name}-origin--pr-7" and r.target.label == "clone PR #7"
     assert r.pr.title == "Add PR module" and r.pr.author == "alice"
     assert _refs(clone) == before, "the fetch must not create or move any ref"
     argv = log.read_text().split("\n")
