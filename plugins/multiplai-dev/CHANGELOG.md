@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.41.0] - 2026-10-12
+## [0.42.0] - 2026-10-12
 
 ### Added
 - New `/multiplai-dev:pr` skill: opens a pull request, or refreshes its
@@ -61,6 +61,50 @@ time, not derived from a tag.
   the PR's Ticket section shows it. A build of a project inside a larger
   repository (a monorepo package) uses the `pr:` settings in that project's
   own `specs/config.yaml`, where `buildme setup` writes them.
+
+## [0.41.0] - 2026-10-12
+
+### Added
+- buildme: on Python projects (a `pyproject.toml`, `setup.py`, `setup.cfg`,
+  `pytest.ini`, `tox.ini` or `requirements.txt` at the project root, and a
+  test command that runs Python: `tdd.test_command`, or the pytest command
+  discovered from `pytest.ini`, `pyproject.toml` or `setup.py`), the
+  build now runs mutation testing on the lines it added or modified, right
+  after the whole-change refactor. Python files the tests never import
+  (`setup.py`, `noxfile.py`, `fabfile.py`, `manage.py`, the root `docs/` or
+  `doc/` tree, and `migrations/` or `alembic/` directories) are not mutated,
+  nor are test modules, Django's `<app>/tests.py` among them. It uses cosmic-ray 8.7.0 as a pinned `uvx`
+  tool (`uv` must be installed; the first run downloads it, and without `uv`
+  the build stops with a message saying to install it or turn the step off;
+  when cosmic-ray cannot be fetched or run, offline or behind a private index,
+  the message also says how to turn the step off).
+  Stopping the build during the step (Ctrl-C, SIGTERM or SIGHUP), or the step
+  timing out, stops cosmic-ray and the test run it had in flight, and puts
+  back any file it had mutated.
+  Surviving mutants go to one fresh test-writer agent that may only add or
+  edit tests; it runs on `models.mutation_test_writer` (an `agent`-stage
+  step), and the result is written to `specs/changes/<name>/mutation.md`.
+- buildme: a build now fails when its mutation score stays below
+  `mutation.min_score` (default `0.8`, to be adjusted once real runs have been
+  measured), when the survivor round edits a non-test file (files the test
+  suite writes when it runs, such as caches, reports, logs, a test database
+  or a golden file it writes back to the same bytes, do not count, even when
+  tracked; Django's `<app>/tests.py` counts as a test), when cosmic-ray
+  cannot produce a score, or when a change the step has to throw away cannot
+  be thrown away (the build then stops without committing anything more).
+  It also fails when the tree holds uncommitted changes as the step starts:
+  those are edits nothing verified (a whole-change refactor that failed and
+  could not be undone, for one), and the step neither commits them nor
+  mutation-tests them. Set `mutation: {enabled: false}` in
+  `specs/config.yaml` to turn the step off; `timeout` and `max_mutants` tune
+  its cost. A test suite slower than `timeout` still works: each mutant gets
+  three times the unmutated suite's measured run when that is longer.
+
+### Fixed
+- buildme: when the whole-change refactor agent fails or times out, the
+  edits it had already made are now rolled back to the commit taken before
+  it ran, keeping the build's own review fixes. Before, they stayed in the
+  tree unverified, and a resumed build kept stopping on them.
 
 ## [0.40.0] - 2026-10-12
 

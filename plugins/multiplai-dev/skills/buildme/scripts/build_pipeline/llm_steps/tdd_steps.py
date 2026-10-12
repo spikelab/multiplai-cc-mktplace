@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 
 from ..models import AgentResult
-from ..prompts.test_writing import TEST_WRITER_PROMPT
+from ..prompts.test_writing import MUTATION_TEST_WRITER_PROMPT, TEST_WRITER_PROMPT
 from ..prompts.implementation import (
     IMPLEMENTER_PROMPT_CLEAN,
     IMPLEMENTER_PROMPT_MINIMUM,
@@ -76,6 +76,36 @@ async def run_test_writer(
         budget_label="test_writer",
     )
 
+
+async def run_mutation_test_writer(
+    survivors: str,
+    test_command: str,
+    *,
+    model: str | None = None,
+    effort: str | None = None,
+    cwd: str | None = None,
+) -> AgentResult:
+    """Spawn a fresh test writer for the MUTATION step's one survivor round.
+
+    Same tools and limits as the block test writer, its own prompt and budget
+    label. The implementer is never called in this round: the agent may only
+    add or edit tests, which the engine enforces by hashing the source files.
+    """
+    prompt = MUTATION_TEST_WRITER_PROMPT.format(
+        survivors=survivors,
+        test_command=test_command,
+    )
+    log.info("Spawning mutation test writer")
+    return await agent_call(
+        prompt,
+        allowed_tools=TEST_WRITER_TOOLS,
+        model=model,
+        effort=effort,
+        max_turns=TEST_WRITER_MAX_TURNS,
+        cwd=cwd,
+        call_timeout=TEST_WRITER_TIMEOUT,
+        budget_label="mutation_test_writer",
+    )
 
 async def run_implementer(
     block_name: str,

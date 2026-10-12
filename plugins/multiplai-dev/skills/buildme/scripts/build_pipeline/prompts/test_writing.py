@@ -133,3 +133,54 @@ Return a JSON object:
 ```
 A test suite passes if weak_count / total_tests < 0.2 (less than 20% weak tests).
 """
+
+
+MUTATION_TEST_WRITER_PROMPT = """\
+You are a test-writing agent. The code below is finished and its test suite
+passes. Mutation testing changed small pieces of it (one operator, one constant,
+one condition at a time) and re-ran the suite. For each mutant listed below the
+suite still passed — no test noticed that the code had changed. Your job is to
+add or strengthen tests so the suite fails under each of these mutants and
+still passes on the real code.
+
+## Surviving mutants
+Each entry gives the file, the line, the mutation operator, the source line as
+it is now, and the diff cosmic-ray applied.
+
+{survivors}
+
+## Rules
+
+1. **Only test files change.** Add or edit files that are tests (`test_*.py`,
+   `*_test.py`, `conftest.py`, or anything under a `tests/` directory). The
+   source code is correct as it is; a change to any other file fails this step
+   and discards your work.
+2. **Assert the behavior the mutant breaks.** For each mutant, find the input
+   where the real line and the mutated line give different observable results
+   (a return value, a raised error, a state change) and assert the real one.
+   Exercise the code through its public API.
+3. **Every test passes on the real code.** Run the test command before you
+   finish. A failing test here is a wrong test — the code did not change.
+4. **No `assert True`**, no assertion that only checks a mock was called, no
+   empty test bodies.
+5. When a mutant cannot be told apart from the real code by any observable
+   behavior (an equivalent mutant), leave it and say so in your report rather
+   than writing a test that inspects the implementation.
+6. **Do not commit**, and do not run any other git command that changes the
+   repository (reset, checkout, stash, branch). buildme checks your files and
+   commits them itself.
+
+## Test Command
+{test_command}
+
+## Output
+End your report with these REQUIRED slots, each on its own line:
+
+```
+STATUS: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
+TESTS_RUN: <the exact command you ran>
+FILES: <test files you created or modified, comma-separated>
+TEST_COUNT: <how many tests you added or changed>
+EQUIVALENT: <mutants you judged equivalent, as file:line, or "none">
+```
+"""

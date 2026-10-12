@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import hashlib
 
@@ -45,6 +46,7 @@ from .llm_steps.review_steps import run_code_review
 from .llm_steps.tdd_steps import (
     run_implementer,
     run_integration_fix,
+    run_mutation_test_writer,
     run_refactor_all,
     run_refactorer,
     run_test_writer,
@@ -55,9 +57,11 @@ from .models import (
     BuildPhase,
     FindingAdjudication,
     GateResult,
+    MutationResult,
     ReviewResult,
     TestQualityAudit,
 )
+from .mutation import changed_source_files, mutation_applies, render_report, run_mutation, score_text
 from .progress import ProgressWriter
 from .prompts.review import FINDING_ADJUDICATION_PROMPT
 from .prompts.test_writing import TEST_QUALITY_PROMPT
@@ -122,6 +126,7 @@ _TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]+\.py|[^/]+_test\.py|conftest\.py)$"
 _TEST_PATH_RE = re.compile(
     r"(^|/)("
     r"test_[^/]+\.py|[^/]+_test\.py|conftest\.py"        # Python
+    r"|tests\.py"                                         # Django: <app>/tests.py
     r"|[^/]+_test\.go"                                    # Go
     r"|[^/]+Tests?\.swift"                                # Swift
     r"|[^/]+\.(test|spec)\.[cm]?[jt]sx?"                  # JS/TS
@@ -1720,6 +1725,12 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
     if not await _run_refactor_all(config, state, progress):
         return EXIT_BUILD_FAILURE
 
+    # --- Mutation testing (Python only; cosmic-ray over the changed lines) ---
+    # After the whole-change refactor so it measures the code that ships. A
+    # step that must see the finished, mutation-tested build goes after this.
+    if not await _run_mutation(config, state, progress):
+        return EXIT_BUILD_FAILURE
+
     # --- Entry point verification ---
     if config.gates.e2e_test_entry_point_check and not state.tdd.e2e_done:
         log.info("START phase=E2E_CHECK")
@@ -1905,17 +1916,21 @@ async def _run_refactor_all(
     )
 
     if not result.success:
+        # The agent may have written files before it failed or timed out.
+        # Nothing verified them, and the step is marked done below, so a
+        # resume never re-runs it: left in the tree, they would make MUTATION
+        # (which needs a committed tree) refuse on every resume. So they get
+        # the same discard as a pass that failed verification.
         reason = "timeout" if result.timed_out else result.error
         log.warning("FAIL phase=REFACTOR_ALL reason=%s (non-fatal)", reason)
         progress.log_phase("REFACTOR_ALL",
                            "TIMEOUT" if result.timed_out else f"FAILED: {reason}")
-        state.tdd.refactor_all_done = True
-        state.checkpoint(config.state_file_path())
-        return True
-
-    gate = integration_gate(config.test_command, config.project_dir)
-    detail = "" if gate.passed else f"tests failed after refactor: {gate.reason}"
-    if gate.passed:
+        gate = None
+        detail = f"refactor agent did not finish: {reason}"
+    else:
+        gate = integration_gate(config.test_command, config.project_dir)
+        detail = "" if gate.passed else f"tests failed after refactor: {gate.reason}"
+    if gate is not None and gate.passed:
         after = _snapshot_all_test_files(config, state)
         if before is None or after is None:
             log.warning("Test integrity could not run after the whole-change "
@@ -1952,6 +1967,465 @@ async def _run_refactor_all(
 
     state.tdd.refactor_all_done = True
     state.checkpoint(config.state_file_path())
+    return True
+
+
+def _snapshot_source_files(config: BuildConfig) -> dict[str, str] | None:
+    """{project-relative path: sha256} for every non-test file the survivor
+    round must leave alone: every tracked file, plus every untracked file not
+    ignored by git (a new source module, a root pytest.ini that would change
+    how the second run is scored), minus anything `_TEST_PATH_RE` calls a
+    test, buildme's own bookkeeping, and the caches running the suite writes
+    (`_is_tool_cache`). None when git could not list them — "not checked",
+    never "everything was deleted" (same contract as `_snapshot_test_files`)."""
+    names: set[str] = set()
+    for argv in (["git", "ls-files", "-z"],
+                 ["git", "ls-files", "-z", "-o", "--exclude-standard"]):
+        try:
+            proc = subprocess.run(argv, cwd=str(config.project_dir),
+                                  capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log.warning("Could not list source files: %s", e)
+            return None
+        if proc.returncode != 0:
+            log.warning("Could not list source files: %s", proc.stderr.strip())
+            return None
+        for name in proc.stdout.split("\0"):
+            if not name or _is_tool_cache(name):
+                continue
+            if _TEST_PATH_RE.search(name) or Path(name).name in _BOOKKEEPING_NAMES:
+                continue
+            names.add(name)
+    snapshot: dict[str, str] = {}
+    for name in sorted(names):
+        try:
+            snapshot[name] = hashlib.sha256((config.project_dir / name).read_bytes()).hexdigest()
+        except OSError:
+            # A tracked file already gone is recorded as absent; if it
+            # reappears (or vanishes) later, the comparison sees it.
+            continue
+    return snapshot
+
+
+# buildme's own files, by basename — the source snapshot must not count them
+# as edits (they change on every checkpoint). Mirrors git_ops.BOOKKEEPING_EXCLUDES.
+_BOOKKEEPING_NAMES = frozenset({".build-state.json", ".board.json", "build-progress.md"})
+
+# What running the suite or installing the project writes into a tree whose
+# .gitignore does not cover it: caches, coverage and junit reports, and an
+# install's *.egg-info. Tracked paths are skipped too: block commits run
+# `git add -A`, so such a tree already tracks these, and every suite run
+# rewrites them (a .pyc whenever cosmic-ray has touched the source, a report
+# with a fresh timestamp each time).
+_TOOL_CACHE_DIRS = frozenset({
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis",
+    ".tox", ".nox", ".venv", "venv", "node_modules", "htmlcov", ".eggs",
+})
+_SUITE_REPORT_NAMES = frozenset({
+    "coverage.xml", "coverage.json", "coverage.lcov", "lcov.info",
+})
+
+
+def _is_tool_cache(name: str) -> bool:
+    path = Path(name)
+    lowered = path.name.lower()
+    return (any(part in _TOOL_CACHE_DIRS or part.endswith(".egg-info")
+                for part in path.parts[:-1])
+            or path.suffix in (".pyc", ".pyo")
+            or path.name == ".coverage" or path.name.startswith(".coverage.")
+            or lowered in _SUITE_REPORT_NAMES
+            or (lowered.startswith("junit") and path.suffix.lower() == ".xml"))
+
+
+def _edits_the_suite_does_not_rewrite(
+    config: BuildConfig, rewind_to: str, before: dict[str, str], changed: list[str],
+) -> tuple[list[str] | None, GateResult | None]:
+    """Which of the *changed* non-test files the agent edited, as opposed to
+    files its own suite runs wrote (a test.db, a *.log, a .benchmarks/ entry,
+    an HTML report — new, or tracked because a block commit swept it in).
+
+    Puts each changed file back as it was at *rewind_to* (a file that did not
+    exist there is deleted), runs the suite once, and keeps the files the
+    suite did not write again: those still match the pre-round snapshot.
+    A file the full suite writes to the same bytes every run (a golden JSON,
+    a test.db built from fixed fixtures) matches it too, so each committed
+    file kept that way gets the agent's version back for one more suite run:
+    the ones that run rewrites are the suite's output, and go back to the
+    checkpoint. Returns the first suite run's gate result too, so the caller
+    does not run the suite again. The list is None when the check could not
+    be made; a file that cannot be put back is counted as edited."""
+    root = config.project_dir
+    try:
+        proc = subprocess.run(
+            ["git", "ls-tree", "-r", "-z", "--name-only", rewind_to, "--", *changed],
+            cwd=str(root), capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.warning("Could not list the checkpoint's files: %s", e)
+        return None, None
+    if proc.returncode != 0:
+        log.warning("Could not list the checkpoint's files: %s", proc.stderr.strip())
+        return None, None
+    in_checkpoint = {name for name in proc.stdout.split("\0") if name}
+    # The agent's version of each committed file, for the second run below.
+    # None: the agent deleted it. A file that cannot be read is left out.
+    agent_versions: dict[str, bytes | None] = {}
+    for name in in_checkpoint:
+        try:
+            agent_versions[name] = (root / name).read_bytes()
+        except FileNotFoundError:
+            agent_versions[name] = None
+        except OSError as e:
+            log.warning("Could not read %s: %s", name, e)
+    unrestorable: list[str] = []
+    for name in changed:
+        if name in in_checkpoint:
+            continue
+        if name in before:
+            # Present before the round but not committed: no copy to put back.
+            unrestorable.append(name)
+            continue
+        try:
+            (root / name).unlink(missing_ok=True)
+        except OSError as e:
+            log.warning("Could not remove %s: %s", name, e)
+            unrestorable.append(name)
+    if in_checkpoint:
+        try:
+            proc = subprocess.run(["git", "checkout", rewind_to, "--", *sorted(in_checkpoint)],
+                                  cwd=str(root), capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log.warning("Could not restore the round's non-test files: %s", e)
+            return None, None
+        if proc.returncode != 0:
+            log.warning("Could not restore the round's non-test files: %s",
+                        proc.stderr.strip())
+            return None, None
+    gate = integration_gate(config.test_command, root)
+    rerun = _snapshot_source_files(config)
+    if rerun is None:
+        return None, None
+    edited = sorted(set(unrestorable) | {
+        name for name in changed
+        if name not in unrestorable and rerun.get(name) == before.get(name)})
+    suite_written = _rewritten_by_the_suite(
+        config, rewind_to,
+        {name: agent_versions[name] for name in edited
+         if name in agent_versions and name not in unrestorable})
+    if suite_written is None:
+        return None, None
+    return [name for name in edited if name not in suite_written], gate
+
+
+def _rewritten_by_the_suite(
+    config: BuildConfig, rewind_to: str, agent_versions: dict[str, bytes | None],
+) -> set[str] | None:
+    """Which of these committed files the suite writes: each gets the agent's
+    version back (None: deleted), the suite runs once, and a file that run
+    changed is the suite's output. Those go back to *rewind_to*; the others
+    keep the agent's version, which the caller discards with the round.
+    None when the check could not be made."""
+    if not agent_versions:
+        return set()
+    root = config.project_dir
+    put_back: dict[str, str | None] = {}
+    for name, data in agent_versions.items():
+        try:
+            if data is None:
+                (root / name).unlink(missing_ok=True)
+                put_back[name] = None
+            else:
+                (root / name).write_bytes(data)
+                put_back[name] = hashlib.sha256(data).hexdigest()
+        except OSError as e:
+            log.warning("Could not put back the agent's %s: %s", name, e)
+    if not put_back:
+        return set()
+    integration_gate(config.test_command, root)
+    rerun = _snapshot_source_files(config)
+    if rerun is None:
+        return None
+    written = {name for name, digest in put_back.items() if rerun.get(name) != digest}
+    if written:
+        try:
+            proc = subprocess.run(["git", "checkout", rewind_to, "--", *sorted(written)],
+                                  cwd=str(root), capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log.warning("Could not restore the suite's output files: %s", e)
+            return None
+        if proc.returncode != 0:
+            log.warning("Could not restore the suite's output files: %s", proc.stderr.strip())
+            return None
+    return written
+
+
+def _format_survivors(config: BuildConfig, result: MutationResult) -> str:
+    """The survivor list the mutation test writer sees: location, operator,
+    the line as it is now, and cosmic-ray's diff (capped)."""
+    parts = []
+    for s in result.survivors:
+        try:
+            source_lines = (config.project_dir / s.path).read_text().splitlines()
+            line = source_lines[s.line - 1].strip() if 0 < s.line <= len(source_lines) else ""
+        except OSError:
+            line = ""
+        diff = s.diff.strip()
+        if len(diff) > 1500:
+            diff = diff[:1500] + "\n... (diff truncated)"
+        parts.append(
+            f"### {s.path}:{s.line} — {s.operator}\n"
+            f"Line now: `{line}`\n```diff\n{diff}\n```"
+        )
+    return "\n\n".join(parts)
+
+
+def _write_mutation_report(config: BuildConfig, text: str) -> str | None:
+    """Write `specs/changes/<name>/mutation.md` and commit it. Returns the
+    commit sha (None when nothing was committed — logged by git_ops)."""
+    path = config.change_dir / "mutation.md"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    except OSError as e:
+        log.warning("Could not write %s: %s", path, e)
+        return None
+    return git_ops.commit_tree(config.project_dir, "test(mutation): record mutation score",
+                               "mutation report")
+
+
+class _RoundOutcome(NamedTuple):
+    """What the survivor round did. `discard_failed` means the round's edits
+    are still in the tree — the caller must fail the step and commit nothing,
+    or the next whole-tree commit would sweep them onto the build branch."""
+    note: str
+    source_edited: bool = False
+    sha: str | None = None
+    discard_failed: bool = False
+
+
+async def _run_mutation_round(
+    config: BuildConfig, first: MutationResult, rewind_to: str,
+) -> _RoundOutcome:
+    """The one survivor round.
+
+    `source_edited` means the agent changed a non-test file — the round is
+    discarded and the caller fails the step. A red suite or a failed agent
+    discards the round and keeps the first-run result (sha None). Any discard
+    that git refuses sets `discard_failed`.
+    """
+    def _discard(note_ok: str, note_failed: str, *, source_edited: bool = False) -> _RoundOutcome:
+        if git_ops.discard_to(config.project_dir, rewind_to, "mutation survivor round"):
+            return _RoundOutcome(note_ok, source_edited=source_edited)
+        return _RoundOutcome(
+            note_failed + f" The round's edits could NOT be discarded back to "
+            f"{rewind_to[:8]}, so nothing was committed — inspect the tree.",
+            source_edited=source_edited, discard_failed=True)
+
+    before = _snapshot_source_files(config)
+    branch = git_ops.current_branch(config.project_dir)
+    result = await run_mutation_test_writer(
+        survivors=_format_survivors(config, first),
+        test_command=config.test_command,
+        model=config.model_for("mutation_test_writer"),
+        effort=config.agent_effort,
+        cwd=str(config.project_dir),
+    )
+
+    # The agent holds Bash, so it may have committed its own work. Its commits
+    # go back into the tree so every check below sees what it changed, and
+    # buildme commits (or discards) the round itself. A HEAD that cannot be
+    # brought back to the checkpoint leaves nothing safe to commit or reset.
+    # The branch is compared even when the sha did not move: a switch to a new
+    # branch at the same commit would put buildme's commits on that branch.
+    head = git_ops.rev_parse_head(config.project_dir)
+    on_branch = git_ops.current_branch(config.project_dir)
+    if on_branch != branch:
+        return _RoundOutcome(
+            f"The test writer left branch {branch or '(unknown)'} for "
+            f"{on_branch or 'a branch git could not read'}, so nothing was "
+            "committed — inspect the tree.",
+            discard_failed=True)
+    if head != rewind_to and not git_ops.unwind_commits_to(
+            config.project_dir, rewind_to, "mutation survivor round"):
+        where = (f"to {head[:8]}" if head else "somewhere git could not read")
+        return _RoundOutcome(
+            f"The test writer moved HEAD from {rewind_to[:8]} {where}, and it could not be "
+            "brought back, so nothing was committed — inspect the tree.",
+            discard_failed=True)
+    if not result.success:
+        reason = "timeout" if result.timed_out else (result.error or "agent failed")
+        return _discard(
+            f"The test writer failed ({reason}); its edits were discarded and the "
+            "first-run score stands.",
+            f"The test writer failed ({reason}); its edits were NOT discarded.")
+
+    after = _snapshot_source_files(config)
+    gate = None
+    if before is None or after is None:
+        edited: list[str] | None = None
+    else:
+        edited = sorted(
+            name for name in set(before) | set(after) if before.get(name) != after.get(name))
+        if edited:
+            edited, gate = _edits_the_suite_does_not_rewrite(config, rewind_to, before, edited)
+    if edited is None or edited:
+        detail = ("the source snapshot could not be taken" if edited is None
+                  else "non-test files changed: " + ", ".join(edited[:20]))
+        return _discard(f"The test writer's round was discarded: {detail}.",
+                        f"The test writer's round must be discarded: {detail}.",
+                        source_edited=True)
+
+    if gate is None:
+        gate = integration_gate(config.test_command, config.project_dir)
+    if not gate.passed:
+        return _discard(
+            f"The new tests left the suite red ({gate.reason[:300]}); the round was "
+            "discarded and the first-run score stands.",
+            f"The new tests left the suite red ({gate.reason[:300]}); the round was "
+            "NOT discarded.")
+
+    sha = git_ops.commit_tree(config.project_dir, "test(mutation): kill surviving mutants",
+                              "mutation survivor round")
+    if sha is None:
+        if git_ops.tree_is_clean(config.project_dir):
+            return _RoundOutcome("The test writer changed no files; the first-run score stands.")
+        return _discard("The round's tests could not be committed and were discarded; "
+                        "the first-run score stands.",
+                        "The round's tests could not be committed.")
+    return _RoundOutcome(f"The test writer added or edited tests, committed as {sha[:8]} "
+                         "(`test(mutation): kill surviving mutants`).", sha=sha)
+
+
+async def _run_mutation(
+    config: BuildConfig, state: BuildState, progress: ProgressWriter,
+) -> bool:
+    """The MUTATION sub-step: cosmic-ray over the lines the build changed.
+
+    Returns False when the build must stop — score below `mutation.min_score`,
+    a tool that could not produce a score, a survivor round that edited source,
+    or the budget breaker. Every False leaves `mutation_done` unset, so a
+    resume runs the step again. A skip (not Python, disabled, nothing changed)
+    sets the flag and returns True.
+    """
+    if not state.tdd or state.tdd.mutation_done:
+        return True
+    state_path = config.state_file_path()
+
+    def _skip(reason: str) -> bool:
+        log.info("SKIP phase=MUTATION reason=%s", reason)
+        progress.log_phase("MUTATION", f"SKIPPED — {reason}")
+        state.tdd.mutation_done = True
+        state.checkpoint(state_path)
+        return True
+
+    def _fail(reason: str) -> bool:
+        log.error("FAIL phase=MUTATION reason=%s", reason)
+        progress.log_phase("MUTATION", f"FAILED: {reason}")
+        state.checkpoint(state_path)
+        return False
+
+    applies, why_not = mutation_applies(config)
+    if not applies:
+        return _skip(why_not)
+    baseline = state.tdd.blocks[0].baseline_commit if state.tdd.blocks else None
+    if not baseline:
+        return _skip("no pre-build baseline commit recorded, so the changed lines are unknown")
+
+    # A committed tree is the restore point for cosmic-ray's in-place edits
+    # and for a discarded survivor round. Every verified path into this step
+    # leaves the tree committed: the whole-change refactor checkpoints the
+    # review fixes and commits or discards its own pass. So uncommitted edits
+    # here are ones nothing verified — a refactor whose verification failed
+    # or whose agent died mid-edit, and whose discard git refused; a refactor
+    # skipped on a red suite or a failed checkpoint; or a previous mutation
+    # round that could not be discarded. Committing them would put
+    # them on the build branch and score mutants against them; resetting
+    # would destroy work nobody has looked at. So stop and leave them.
+    if not git_ops.tree_is_clean(config.project_dir):
+        return _fail(
+            "the tree has uncommitted changes that buildme did not verify (see the "
+            "REFACTOR_ALL entry above, or a previous MUTATION failure) — refusing to "
+            "commit them or mutation-test them. Review them, commit or discard them, "
+            "then resume the build")
+    rewind_to = git_ops.rev_parse_head(config.project_dir)
+    if rewind_to is None:
+        return _fail("could not read HEAD to restore to before mutation testing")
+
+    paths = changed_source_files(config.project_dir, baseline)
+    if paths is None:
+        return _fail("could not list the files changed since the pre-build baseline")
+    if not paths:
+        return _skip("no non-test Python file the test suite imports changed")
+
+    log.info("START phase=MUTATION files=%d", len(paths))
+    progress.log_phase("MUTATION", f"Mutating {len(paths)} changed Python file(s)")
+    first = run_mutation(config, baseline, paths)
+    if not first.ok:
+        return _fail(f"cosmic-ray did not produce a score: {first.error}")
+    log.info("MUTATION first_run score=%s survivors=%d",
+             score_text(first), len(first.survivors))
+
+    final = first
+    round_note = "No survivors — no round was needed."
+    if first.survivors:
+        try:
+            budget_mod.check(phase="mutation survivor round")
+        except BudgetExceededError as e:
+            log.error("FAIL phase=MUTATION reason=budget_exhausted")
+            progress.log_phase("BUDGET", f"STOPPED: {e}\n{e.diagnosis}")
+            state.checkpoint(state_path)
+            return False
+        progress.log_agent("MutationTestWriter", "survivors",
+                           f"{len(first.survivors)} surviving mutant(s)")
+        outcome = await _run_mutation_round(config, first, rewind_to)
+        round_note = outcome.note
+        if outcome.discard_failed:
+            # No report: writing it means a whole-tree commit, which would put
+            # the round's red tests or source edits onto the build branch.
+            return _fail(round_note)
+        if outcome.source_edited:
+            _write_mutation_report(config, render_report(
+                first=first, final=first, round_note=round_note,
+                min_score=config.mutation.min_score, passed=False))
+            return _fail(round_note)
+        if outcome.sha:
+            second = run_mutation(config, baseline, paths)
+            if second.discard_failed:
+                return _fail(f"the second cosmic-ray run left the tree changed and "
+                             f"it could not be discarded: {second.error}")
+            if second.ok:
+                final = second
+            else:
+                round_note += (f" The second cosmic-ray run failed ({second.error}); "
+                               "the first-run score stands.")
+
+    # Every path above leaves the tree committed or discarded. If it is not,
+    # the report's whole-tree commit would carry whatever is there onto the
+    # build branch, so stop instead.
+    if not git_ops.tree_is_clean(config.project_dir):
+        return _fail("the tree has uncommitted changes after mutation testing — "
+                     "refusing to commit the report on top of them")
+
+    # No score with no errors means no mutant was generated on the changed
+    # lines: nothing to judge, so the step passes. No score with errors means
+    # every mutant errored, so cosmic-ray could not judge the tests at all.
+    if final.score is None and final.errors:
+        return _fail(f"cosmic-ray did not produce a score: all {final.errors} "
+                     "mutant(s) on the changed lines errored and none could be judged")
+
+    min_score = config.mutation.min_score
+    passed = final.score is None or final.score >= min_score
+    _write_mutation_report(config, render_report(
+        first=first, final=final, round_note=round_note,
+        min_score=min_score, passed=passed))
+
+    if not passed:
+        return _fail(f"mutation score {score_text(final)} is below "
+                     f"mutation.min_score {min_score:.2f} — see "
+                     f"{config.change_dir / 'mutation.md'}")
+    state.tdd.mutation_done = True
+    state.checkpoint(state_path)
+    log.info("DONE phase=MUTATION result=passed score=%s", score_text(final))
+    progress.log_phase("MUTATION", f"PASSED — score {score_text(final)}")
     return True
 
 
