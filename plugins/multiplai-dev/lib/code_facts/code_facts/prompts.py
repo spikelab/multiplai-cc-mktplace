@@ -35,21 +35,30 @@ def schema_json(model) -> str:
     return json.dumps(model.model_json_schema(), indent=1)
 
 
-def _listing(spans: list[Span]) -> str:
+def _listing(spans: list[Span], base_dir: str = "") -> str:
     out = []
     for s in spans:
         if s.whole_file:
             out.append(f"- {s.path} ({s.lines} lines)")
         else:
-            when = " (before the change)" if s.side == "base" else ""
+            when = ""
+            if s.side == "base":
+                where = (f"; read it at {base_dir.rstrip('/')}/{s.path}, and cite it with `side` \"base\""
+                         if base_dir else "")
+                when = f" (before the change{where})"
             out.append(f"- {s.path}, lines {s.start}-{s.end}{when}")
     return "\n".join(out)
 
 
 def explore_unit(name: str, spans: list[Span], schema=ExploreOutput, depth: str = "standard",
                  missing: list[str] | None = None, *, conventions: bool = False,
-                 path_rule: str = PATH_RULE) -> str:
-    """The prompt for one unit. When every span is a whole file, it explains a module."""
+                 path_rule: str = PATH_RULE, base_dir: str = "") -> str:
+    """The prompt for one unit. When every span is a whole file, it explains a module.
+
+    *base_dir* is where the files as they were before a change can be read
+    (the working directory holds only the files after it). Base-side spans
+    name it; their citations still use the path as given, with `side` "base".
+    """
     whole = all(s.whole_file for s in spans)
     focus = ""
     if missing:
@@ -72,7 +81,7 @@ Line ranges in your part of the code:"""
         cover = "every range\n  above"
     extra = CONVENTIONS_SECTION if conventions else ""
     return f"""{intro}
-{_listing(spans)}
+{_listing(spans, base_dir)}
 {focus}
 Return ONE JSON object:
 - `facts`: what the code does and how, as short claims, each with citations. Cover {cover}: its role, its main functions or classes, how data flows through it, what it writes
