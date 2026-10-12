@@ -333,6 +333,40 @@ class TestFixOnPass:
         assert _unfixed(p) == ""
 
     @pytest.mark.asyncio
+    async def test_the_review_after_the_fix_sees_a_file_the_fix_created(self, project):
+        """The fix is committed only after the second review keeps it, so a new
+        file the fix agent wrote is still untracked when that review runs. It
+        is committed with the fix, so the reviewer and the adjudicator must
+        both see it."""
+        p = project
+        helper = "def helper():\n    return 'HELPER BODY'\n"
+        reviewed, adjudicated = [], []
+
+        async def review(block, config):
+            from build_pipeline.tdd_engine import _capture_block_diff
+            reviewed.append(_capture_block_diff(config, block))
+            return _passing([_finding()])
+
+        async def adjudicate(review, block, config, diff, **kwargs):
+            adjudicated.append(diff)
+            return review
+
+        with patch("build_pipeline.tdd_engine._run_quality_review", side_effect=review), \
+             patch("build_pipeline.tdd_engine._adjudicate_review_findings",
+                   side_effect=adjudicate), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
+                   side_effect=_fixer(p.dir, {"app.py": FIXED, "helpers.py": helper})):
+            assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+
+        assert len(reviewed) == 2 and len(adjudicated) == 2
+        for diff in (reviewed[1], adjudicated[1]):
+            assert "helpers.py" in diff
+            assert "HELPER BODY" in diff
+        # And the kept fix commits it.
+        fix_commit = _rounds(p)[1]["fix"]["commit"]
+        assert "helpers.py" in _git(p.dir, "show", "--name-only", "--format=", fix_commit)
+
+    @pytest.mark.asyncio
     async def test_fix_on_pass_false_keeps_todays_behaviour(self, project):
         p = project
         p.config.fix_on_pass = False

@@ -53,6 +53,15 @@ time, not derived from a tag.
   record can name the commit. A block also ends with one more `fix(block-N)`
   commit that carries its round records.
 
+### Fixed
+- buildme's per-block reviewer, the judge of its findings, the whole-change
+  refactor and the documentation step now see new files that are not
+  committed yet. Before, a
+  file a fix or refactor agent created (a new `helpers.py`, say) was left out
+  of the diff they were given, but was still committed with the block, so it
+  reached the branch unreviewed. Ignored files and buildme's own bookkeeping
+  stay out, as they stay out of the commit.
+
 ## [0.44.0] - 2026-10-12
 
 ### Changed

@@ -242,9 +242,10 @@ def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
     written before baselines existed) and misses committed work. Returns ""
     on git failure — never raises.
 
-    Known limitation: brand-new files that are still untracked (created after
-    the impl commit, e.g. by a review-fix agent) don't appear until the next
-    phase commit tracks them.
+    Files that are still untracked (created after the last phase commit, e.g.
+    by a refactor or fix agent) are added as new-file diffs
+    (`_untracked_diff`): the next commit takes them with the block, so the
+    reviewer must see them before it does.
 
     The block's review round records (`review_rounds`) are left out: they are
     committed with the block, and are the review's output, not its input.
@@ -261,7 +262,7 @@ def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
                 block.number, target, proc.stderr.strip(),
             )
             return ""
-        diff = proc.stdout
+        diff = proc.stdout + _untracked_diff(config)
     except Exception as e:
         log.warning("Failed to capture diff for block %d: %s", block.number, e)
         return ""
@@ -282,6 +283,53 @@ def _without_review_records(config: BuildConfig) -> list[str]:
         return []
     # An exclude-only pathspec keeps the whole-repo scope of a bare `git diff`.
     return ["--", f":(exclude,literal){records.as_posix()}"]
+
+
+def _untracked_diff(config: BuildConfig) -> str:
+    """New-file diffs for every untracked file the next phase commit would take.
+
+    `git diff <baseline>` shows only tracked paths, but `git_ops.commit_tree`
+    runs `git add -A`, so a file an agent created since the last commit is
+    committed with the block without ever being reviewed. Read-only: the
+    index is not touched. Listed the way `commit_tree` stages: not ignored, and
+    not buildme's bookkeeping; the round records stay out as in
+    `_without_review_records`. Stops once the output passes
+    `MAX_REVIEW_DIFF_CHARS`, since the caller cuts it there anyway. Returns ""
+    on git failure."""
+    records = _without_review_records(config)[1:]
+    try:
+        listed = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z",
+             "--", ".", *git_ops.BOOKKEEPING_EXCLUDES, *records],
+            cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
+        )
+    except Exception as e:
+        log.warning("Could not list untracked files for the review diff: %s", e)
+        return ""
+    if listed.returncode != 0:
+        log.warning("Could not list untracked files for the review diff: %s",
+                    listed.stderr.strip())
+        return ""
+    parts: list[str] = []
+    size = 0
+    for name in sorted(n for n in listed.stdout.split("\0") if n):
+        if size > MAX_REVIEW_DIFF_CHARS:
+            break
+        try:
+            # --no-index exits 1 when the files differ, which they always do here.
+            proc = subprocess.run(
+                ["git", "diff", "--no-index", "--", os.devnull, name],
+                cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
+            )
+        except Exception as e:
+            log.warning("Could not diff untracked file %s: %s", name, e)
+            continue
+        if proc.returncode > 1:
+            log.warning("Could not diff untracked file %s: %s", name, proc.stderr.strip())
+            continue
+        parts.append(proc.stdout)
+        size += len(proc.stdout)
+    return "".join(parts)
 
 
 EXIT_SUCCESS = 0
@@ -2198,7 +2246,7 @@ def capture_build_diff(config: BuildConfig, state: BuildState) -> str:
             log.warning("Failed to capture full build diff (git diff %s): %s",
                         target, proc.stderr.strip())
             return ""
-        diff = proc.stdout
+        diff = proc.stdout + _untracked_diff(config)
     except Exception as e:
         log.warning("Failed to capture full build diff: %s", e)
         return ""
