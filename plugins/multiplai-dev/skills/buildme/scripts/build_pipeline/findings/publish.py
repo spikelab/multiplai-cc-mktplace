@@ -162,7 +162,9 @@ def pr_edit_argv(project_dir: Path, change_dir: Path, pr: int, section: Path) ->
 
 
 def update_body(project_dir: Path, change_dir: Path, pr: int, fs: FindingsState) -> tuple[bool, list[str]]:
-    """(edited, its PR_DIAGNOSIS lines). Never raises."""
+    """(edited, its PR_DIAGNOSIS lines). The pr skill prints PR_DIAGNOSIS
+    lines after a successful edit too (a section it kept as it was), so the
+    lines say why the refresh failed only when *edited* is False. Never raises."""
     section = write_section(change_dir, fs)
     argv = pr_edit_argv(project_dir, change_dir, pr, section)
     res = git_ops._run_pr_skill(argv, cwd=project_dir)
@@ -206,8 +208,10 @@ def publish_round(fs: FindingsState, rnd: FindingsRound, *, project_dir: Path, c
 
     if not rnd.body_updated:
         ok, diagnoses = update_body(project_dir, change_dir, fs.pr, fs)
+        # FINDINGS_DIAGNOSIS means the description was not refreshed; a
+        # successful edit's lines are notes about what it kept.
         for d in diagnoses:
-            emit(f"FINDINGS_DIAGNOSIS:{d}")
+            emit(f"FINDINGS_NOTE:{d}" if ok else f"FINDINGS_DIAGNOSIS:{d}")
         if ok:
             rnd.body_updated = True
             save()

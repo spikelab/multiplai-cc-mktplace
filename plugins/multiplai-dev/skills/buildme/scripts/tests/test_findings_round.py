@@ -229,6 +229,8 @@ class FakePR:
         self.sections: list[str] = []
         self._next = 100
         self.fail_reply_to: set[int] = set()
+        self.edit_stdout = ""      # extra stdout the pr skill's edit prints
+        self.edit_rc = 0
 
     def _id(self) -> int:
         self._next += 1
@@ -316,7 +318,10 @@ class FakePR:
         section = Path(argv[argv.index("--section") + 1]).read_text()
         self.sections.append(section)
         self.events.append(("pr_edit",))
-        return git_ops.GitResult(argv, 0, f"PR_EDITED:https://github.com/{REPO}/pull/{PR}\n", "")
+        if self.edit_rc:
+            return git_ops.GitResult(argv, self.edit_rc, self.edit_stdout, "refused")
+        return git_ops.GitResult(
+            argv, 0, self.edit_stdout + f"PR_EDITED:https://github.com/{REPO}/pull/{PR}\n", "")
 
 
 @pytest.fixture
@@ -1012,6 +1017,42 @@ class TestStoppedAfterTheBlocks:
         assert lines[-1].startswith("FINDINGS:FAILED:code:")
         assert "test suite fails before any fix" in lines[-1]
         assert fake_pr.replies() == []
+
+
+class TestBodyRefresh:
+    """The pr skill's edit prints PR_DIAGNOSIS lines on success too (a kept
+    section, say). Only a failed edit means the description was not
+    refreshed, so only then is a line FINDINGS_DIAGNOSIS."""
+
+    STATE_NOTE = ("no .build-state.json in the change dir: kept the description's "
+                  "Blocks and Documentation sections as they are")
+
+    @pytest.mark.asyncio
+    async def test_a_note_from_a_successful_edit_is_not_a_failed_refresh(self, built, fake_pr):
+        repo, change, config = built
+        fake_pr.add_thread("alice", "question one", fid="c1")
+        fake_pr.edit_stdout = f"PR_DIAGNOSIS:{self.STATE_NOTE}\n"
+        run, lines = _run(config, change, triage_call=FakeTriage(
+            {"question one": Triage(verdict=Verdict.QUESTION, reason="answered")}),
+            review=FakeReview(fake_pr))
+        assert await loop.run_findings(run) == 0, lines
+        assert not [ln for ln in lines if ln.startswith("FINDINGS_DIAGNOSIS:")]
+        assert f"FINDINGS_NOTE:{self.STATE_NOTE}" in lines
+
+    @pytest.mark.asyncio
+    async def test_a_failed_edit_reports_why_the_refresh_failed(self, built, fake_pr):
+        repo, change, config = built
+        fake_pr.add_thread("alice", "question one", fid="c1")
+        fake_pr.edit_stdout = "PR_DIAGNOSIS:no rights to edit PR 7\n"
+        fake_pr.edit_rc = 2
+        run, lines = _run(config, change, triage_call=FakeTriage(
+            {"question one": Triage(verdict=Verdict.QUESTION, reason="answered")}),
+            review=FakeReview(fake_pr))
+        await loop.run_findings(run)
+        diagnoses = [ln for ln in lines if ln.startswith("FINDINGS_DIAGNOSIS:")]
+        assert diagnoses[0] == "FINDINGS_DIAGNOSIS:no rights to edit PR 7"
+        assert diagnoses[1].startswith("FINDINGS_DIAGNOSIS:pr skill edit exited 2")
+        assert not [ln for ln in lines if ln.startswith("FINDINGS_NOTE:")]
 
 
 class TestReviewBody:
