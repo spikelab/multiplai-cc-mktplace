@@ -75,6 +75,32 @@ def test_message_says_what_to_do(repo):
     assert "root" in problem
 
 
+# --- undeclared members ----------------------------------------------------
+
+def test_undeclared_member_is_caught(repo):
+    stray = repo / "plugins/myplug/skills/other/scripts"
+    stray.mkdir(parents=True)
+    (stray / "pyproject.toml").write_text('[project]\nname = "other"\n')
+    (problem,) = lint_workspace.check_members()
+    assert "plugins/myplug/skills/other/scripts" in problem
+
+
+def test_plugin_lib_is_exempt_from_membership(repo):
+    """A plugins/*/lib/ package is reached through a path source, never a member."""
+    lib = repo / "plugins/myplug/lib/shared"
+    lib.mkdir(parents=True)
+    (lib / "pyproject.toml").write_text('[project]\nname = "shared"\n')
+    assert lint_workspace.check_members() == []
+
+
+def test_lib_exemption_is_only_at_plugin_level(repo):
+    """A lib/ directory deeper inside a skill is not a plugin library."""
+    deep = repo / "plugins/myplug/skills/thing/lib/x"
+    deep.mkdir(parents=True)
+    (deep / "pyproject.toml").write_text('[project]\nname = "x"\n')
+    assert len(lint_workspace.check_members()) == 1
+
+
 # --- the check is wired in --------------------------------------------------
 
 def test_nested_lock_check_is_registered():

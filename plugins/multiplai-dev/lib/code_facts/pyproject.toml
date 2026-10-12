@@ -1,0 +1,40 @@
+[project]
+name = "code-facts"
+version = "0.1.0"
+description = "Works out what code does: agents read line ranges at commits and return facts whose citations re-read at that commit. Shared by codebase-walkthrough, review and buildme."
+requires-python = ">=3.12"
+dependencies = [
+    # The [sdk] extra: callers pass in a call function built on
+    # multiplai_core.run_agent(), so core owns the SDK version floor.
+    "multiplai-core[sdk]",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+# The same as the `dev` extra, as a dependency group, so the bare
+# `uv run --directory <this dir> python -m pytest tests/` works too.
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# multiplai-core is a git direct reference (not on PyPI)
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["code_facts"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+# Member-local source so this directory also resolves standalone — an
+# installed plugin is a copy of the plugin subtree only (no workspace root
+# above it). In-repo, uv resolves through the workspace root and the single
+# uv.lock.
+[tool.uv.sources]
+multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }

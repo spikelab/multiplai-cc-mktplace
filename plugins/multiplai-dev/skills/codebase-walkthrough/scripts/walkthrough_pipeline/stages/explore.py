@@ -1,7 +1,8 @@
 """explore: one agent per unit of target files, one per group of boundary entries.
 
 Gates, all in code:
-- `citation_gate` on every citation; a fact with no passing citation is dropped and counted.
+- every citation is re-read at its repo's commit (`code_facts`, through `multiplai_core.check_quote`);
+  a fact with no passing citation is dropped and counted.
 - `file_coverage_gate`: each target file has a surviving fact, or is 30 lines or fewer.
 - `boundary_coverage_gate`: each boundary entry is cited by a surviving fact.
 Misses get one re-ask naming them; whatever is still missing goes into the coverage table.
@@ -9,16 +10,14 @@ Misses get one re-ask naming them; whatever is still missing goes into the cover
 
 from __future__ import annotations
 
-import logging
+from code_facts import Span, citation_keeper, gate_answers as gate_explore_answers, reask_units, run_tasks
 
 from .. import sdk
-from ..gates import boundary_coverage_gate, citation_gate, entry_key, file_coverage_gate, target_files_ws
-from ..models import Citation, Dropped, ExploreOutput, Fact, Reference, SymbolEntry, Term, WalkState
+from ..gates import boundary_coverage_gate, entry_key, file_coverage_gate, repo_resolver, target_files_ws
+from ..models import ExploreOutput, Reference, SymbolEntry, WalkState
 from ..partition import ws_lines
-from ..prompts import explore_boundary, explore_unit
-from . import RunContext, bounded, context_lines, fix_citation
-
-log = logging.getLogger(__name__)
+from ..prompts import WS_PATH_RULE, explore_boundary, explore_unit
+from . import RunContext, context_lines
 
 GROUP_SIZE = 60
 OUTBOUND_KINDS = ("http", "import")
@@ -61,92 +60,36 @@ def _entry_head(e: SymbolEntry | Reference, ctx: RunContext) -> tuple[str, str]:
 def _unit_prompt(state: WalkState, unit_id: str, missing: list[str] | None = None) -> str:
     unit = next(u for u in state.units if u.id == unit_id)
     lines = ws_lines(state.target)
-    files = [(f, lines.get(f, 0)) for f in unit.files]
-    return explore_unit(state.target.package, files, ExploreOutput, state.options.get("depth", "standard"), missing)
+    spans = [Span.whole(f, lines.get(f, 0)) for f in unit.files]
+    return explore_unit(state.target.package, spans, ExploreOutput, state.options.get("depth", "standard"), missing,
+                        path_rule=WS_PATH_RULE)
 
 
 def _group_prompt(state: WalkState, key: str, entries: list, ctx: RunContext, missing: list[str] | None = None) -> str:
     return explore_boundary(key, state.target.package, [_entry_head(e, ctx) for e in entries], ExploreOutput, missing)
 
 
-async def _ask(key: str, prompt: str, state: WalkState, ctx: RunContext) -> None:
+def _ask_kwargs(state: WalkState, ctx: RunContext) -> dict:
+    """How code_facts asks: walkthrough's call settings, and which failures leave a task empty."""
     cfg = ctx.config
-    try:
-        out = await sdk.agent_call_structured(
-            prompt, ExploreOutput, allowed_tools=sdk.EXPLORE_TOOLS, model=cfg.explore_model, effort=cfg.effort,
-            max_turns=cfg.max_turns, cwd=str(ctx.snap_root), budget_label=f"explore:{key.split(':')[0]}",
-        )
-        state.explore_answers[key] = out.model_dump()
-    except sdk.RepoTrustError:
-        raise
-    except sdk.AgentCallError as e:
-        log.error("explore %s failed", key, exc_info=True)
-        state.explore_answers[key] = {"error": str(e).splitlines()[0][:200]}
-        state.errors.append(f"explore {key}: {str(e).splitlines()[0][:200]}")
-    if ctx.progress:
-        n = len(state.explore_answers[key].get("facts", []))
-        ctx.progress.line(f"  explore {key}: {n} facts")
+    return dict(
+        call_kwargs=dict(allowed_tools=sdk.EXPLORE_TOOLS, model=cfg.explore_model, effort=cfg.effort,
+                         max_turns=cfg.max_turns, cwd=str(ctx.snap_root)),
+        errors=state.errors, recoverable=(sdk.AgentCallError,), fatal=(sdk.RepoTrustError,),
+        progress=ctx.progress.line if ctx.progress else None,
+    )
 
 
 def gate_answers(state: WalkState, ctx: RunContext) -> None:
     """Rebuild the gated facts from every stored answer, in task order. Deterministic."""
-    facts: list[Fact] = []
-    purposes: dict[str, str] = {}
-    interfaces: list[int] = []
-    gotchas: list[int] = []
-    terms: dict[str, Term] = {}
-    dropped: list[Dropped] = [d for d in state.dropped if d.stage != "explore"]
-
-    def keep(c: Citation | None) -> Citation | None:
-        if c is None:
-            return None
-        c = fix_citation(c, ctx.snap_root)
-        g = citation_gate(ctx.repos, c)
-        if g.passed:
-            return c
-        ctx.gate_reasons.append(g.reason)
-        return None
-
-    for key, raw in state.explore_answers.items():
-        if "error" in raw:
-            continue
-        out = ExploreOutput.model_validate(raw)
-        for bucket, items in (("fact", out.facts), ("interface", out.interfaces), ("gotcha", out.gotchas)):
-            for f in items:
-                good = [c for c in (keep(c) for c in f.citations) if c is not None]
-                if not good:
-                    dropped.append(Dropped(stage="explore", what=f.claim[:300], reason="no citation passed"))
-                    continue
-                facts.append(Fact(claim=f.claim, citations=good, source=f"{key}/{bucket}"))
-                if bucket == "interface":
-                    interfaces.append(len(facts) - 1)
-                elif bucket == "gotcha":
-                    gotchas.append(len(facts) - 1)
-        for fp in out.files:
-            c = keep(fp.citation)
-            if c is not None:
-                purposes.setdefault(c.path, fp.purpose)
-                facts.append(Fact(claim=f"{c.path.split('/')[-1]}: {fp.purpose}", citations=[c],
-                                  source=f"{key}/file"))
-        for t in out.terms:
-            c = keep(t.citation)
-            if c is None:
-                dropped.append(Dropped(stage="explore", what=f"term {t.term}", reason="no citation passed"))
-                continue
-            terms.setdefault(t.term.lower(), Term(term=t.term, meaning=t.meaning, citation=c))
-
-    n = 0
-    for i, f in enumerate(facts):
-        f.id = f"f{i + 1}"
-        for c in f.citations:
-            n += 1
-            c.id = f"c{n}"
-    state.facts = facts
-    state.file_purposes = purposes
-    state.interfaces = [facts[i].id for i in interfaces]
-    state.gotchas = [facts[i].id for i in gotchas]
-    state.terms = list(terms.values())
-    state.dropped = dropped
+    keep = citation_keeper(repo_resolver(ctx.repos), root=ctx.snap_root, reasons=ctx.gate_reasons)
+    g = gate_explore_answers(state.explore_answers, keep)
+    state.facts = g.facts
+    state.file_purposes = g.purposes
+    state.interfaces = g.interfaces
+    state.gotchas = g.gotchas
+    state.terms = g.terms
+    state.dropped = [d for d in state.dropped if d.stage != "explore"] + g.dropped
 
 
 async def run_explore(state: WalkState, ctx: RunContext) -> WalkState:
@@ -156,22 +99,18 @@ async def run_explore(state: WalkState, ctx: RunContext) -> WalkState:
     tasks: list[tuple[str, str]] = [(f"unit:{u.id}", _unit_prompt(state, u.id)) for u in state.units]
     tasks += [(f"boundary:{k}", _group_prompt(state, k, v, ctx)) for k, v in groups.items()]
 
-    async def one(task: tuple[str, str]) -> None:
-        await _ask(task[0], task[1], state, ctx)
-
-    await bounded([t for t in tasks if t[0] not in state.explore_answers], one, ctx.config.concurrency)
+    # The walkthrough's own call function: on an unusable answer it re-asks once to reformat.
+    call = sdk.agent_call_structured
+    ask = _ask_kwargs(state, ctx)
+    await run_tasks(tasks, call, state.explore_answers, concurrency=ctx.config.concurrency, **ask)
     gate_answers(state, ctx)
 
     # One re-ask per task that left files or entries uncovered.
     lines = ws_lines(state.target)
     files = target_files_ws(state.target)
     missing_files = set(file_coverage_gate(files, lines, state.facts))
-    retry: list[tuple[str, str]] = []
-    for u in state.units:
-        miss = [f for f in u.files if f in missing_files]
-        key = f"unit:{u.id}:reask"
-        if miss and key not in state.explore_answers:
-            retry.append((key, _unit_prompt(state, u.id, miss)))
+    retry = reask_units(state.units, missing_files, state.explore_answers,
+                        lambda u, miss: _unit_prompt(state, u.id, miss))
     for k, entries in groups.items():
         miss_keys = set(boundary_coverage_gate(entries, state.facts))
         key = f"boundary:{k}:reask"
@@ -181,7 +120,7 @@ async def run_explore(state: WalkState, ctx: RunContext) -> WalkState:
     if retry:
         if ctx.progress:
             ctx.progress.line(f"  explore: re-asking {len(retry)} task(s) for uncovered files or entries")
-        await bounded(retry, one, ctx.config.concurrency)
+        await run_tasks(retry, call, state.explore_answers, concurrency=ctx.config.concurrency, **ask)
         gate_answers(state, ctx)
 
     state.uncovered_files = file_coverage_gate(files, lines, state.facts)
