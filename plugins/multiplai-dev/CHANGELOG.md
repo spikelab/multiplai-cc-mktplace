@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.45.0] - 2026-10-12
+## [0.46.0] - 2026-10-12
 
 ### Changed
 - `/multiplai-dev:review` writes to `reviews/` in the multiplai data
@@ -67,6 +67,51 @@ time, not derived from a tag.
   directories (for example `INBOX/reviews`) to `reviews/legacy/` in the
   data directory and records them in the ledger. It never changes or
   deletes the source, and a second run copies nothing.
+
+## [0.45.0] - 2026-10-12
+
+### Added
+- buildme keeps every review round of every block. Each one is written to
+  `specs/changes/<name>/reviews/block-<NN>-round-<k>.json` with the scores,
+  the gate's verdict and reason, the findings the judge accepted and the ones
+  it rejected (with its reason), the brief sent to the fix agent, and the fix
+  agent's report, commit and where it searched. A new round never replaces an
+  earlier file, including across a resume. The records are committed with the
+  block and are not part of the diff the next reviewer sees.
+- A block that passes review with accepted Critical, Major or Minor findings
+  now gets one fix pass on them (`code_review.fix_on_pass` in
+  `specs/config.yaml`, on by default). The fix is kept only when the suite stays
+  green, the test files are untouched, and the block still passes a second
+  review; otherwise the block goes back to where it was. Findings left unfixed
+  are listed in `specs/changes/<name>/unfixed-findings.md`, which buildme adds
+  to the PR body. A build that stops during this pass rolls it back and runs it
+  again when resumed. Before rolling back, the resume checks that the tree
+  holds only what the stopped pass left: an edit or commit made since the stop
+  (or any uncommitted edit, when the build stopped while the fix agent was
+  still writing) stops the resume with the files named and nothing rolled
+  back; stash or move them and run the build again. `fix_on_pass: false`
+  keeps the old behaviour.
+
+### Changed
+- buildme's review-fix agent is now asked to look for the same mistake in the
+  other branches of the function and in the rest of the block's diff, to
+  re-read its own `git diff` before finishing, and to end its report with a
+  `SEARCHED:` section saying where it looked. The section is recorded in the
+  round record; a report without one is recorded as `searched: null` with a
+  warning, never a failure.
+- Each review fix on a block that failed review is now committed as it lands
+  (`fix(block-N): …`), rather than once at the end of the block, so its round
+  record can name the commit. A block also ends with one more `fix(block-N)`
+  commit that carries its round records.
+
+### Fixed
+- buildme's per-block reviewer, the judge of its findings, the whole-change
+  refactor and the documentation step now see new files that are not
+  committed yet. Before, a
+  file a fix or refactor agent created (a new `helpers.py`, say) was left out
+  of the diff they were given, but was still committed with the block, so it
+  reached the branch unreviewed. Ignored files and buildme's own bookkeeping
+  stay out, as they stay out of the commit.
 
 ## [0.44.0] - 2026-10-12
 

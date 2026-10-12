@@ -8,6 +8,7 @@
 | `orchestrator.py` | Phase sequencing state machine | Delegates |
 | `spec_generator.py` | Artifact pipeline (proposal → tasks → rubric) | Via llm_steps |
 | `tdd_engine.py` | Block-by-block TDD with agent spawning. Each block runs test → implement → **refactor** on every tier; the refactor is verified (suite re-run + `unchanged_tests_gate`) and its diff discarded on failure. `_run_refactor_all` is the one conservative whole-change pass, between the block loop and the entry-point check, guarded by `TDDState.refactor_all_done`. buildme runs no whole-change review: that is `/multiplai-dev:review`, on the PR. | Via llm_steps |
+| `review_rounds.py` | The per-block review loop's records, in the change dir: `reviews/block-<NN>-round-<k>.json` (`record_round` creates the next free number exclusively and never replaces a file; `update_round` / `amend_fix` fill in the fix brief and the fix agent's report, commit, `SEARCHED` list and whether it was kept; a resumed attempt's earlier fix moves to `earlier_fixes`), `snapshot`/`restore` (so a rollback keeps the records), and `unfixed-findings.md` (`append_unfixed`, heading first: it is a PR-body section, `orchestrator.unfixed_findings_section`). `fixable_on_pass` picks the Critical/Major/Minor findings. Never raises. | No |
 | `mutation.py` | The TDD engine's MUTATION sub-step, Python only (`mutation_applies`: one of `PYTHON_MARKERS` at the project root, and `mutation.enabled` — not `config.stack`, which records only the first marker discovery found and stays `""` when `tdd.test_command` is set). `run_mutation` runs cosmic-ray as a pinned `uvx --from cosmic-ray==8.7.0` tool (never a dependency): `init` → `cr-filter-git` (branch = the first block's `baseline_commit`, so only lines changed since it) → optional deterministic `max_mutants` sample → `baseline` (its own config, timeout `_SETUP_TIMEOUT`, because cosmic-ray applies `timeout` to the baseline too and a timed-out baseline reads as red) → `exec` (per-mutant timeout = `mutant_timeout`: `mutation.timeout` or `_BASELINE_FACTOR`× the measured baseline, whichever is longer) → `dump`, from a temp dir outside the worktree. The test command is wrapped in `env PATH=<buildme's PATH>` because `uvx` puts the tool's `bin/` first. `parse_dump` turns the JSON into a `MutationResult`. Refuses a dirty tree; after the run, a mutated file left in the tree is discarded back to HEAD, and a refused discard sets `MutationResult.discard_failed`. The discard sits in a `finally`, so it also runs on Ctrl-C, and `_exit_on_termination` turns SIGTERM/SIGHUP into `SystemExit` and SIGINT into `KeyboardInterrupt` for the run so they reach it too (SIGINT because `asyncio.run`'s own handler only cancels the main task, which the blocking `communicate` never sees); `_run_tool` kills cosmic-ray's process group (its own session, so the terminal's SIGINT never reaches it) on any exception or timeout before the discard; `_kill_group` first stops that group and kills every process group below it, because cosmic-ray starts each test run in a session of its own and would leave it running. The engine side (`tdd_engine._run_mutation`, guarded by `TDDState.mutation_done`) fails on a dirty tree at entry instead of checkpointing it (every verified path leaves the tree committed, so leftover edits are unverified), runs one survivor round with `run_mutation_test_writer`, folds any commits the agent made back into the tree with `git_ops.unwind_commits_to` (soft reset, ancestor-guarded) so buildme checks and commits them itself, rejects any non-test edit by hashing, and writes `mutation.md`. Any refused discard (`_RoundOutcome.discard_failed`, `discard_failed` on a run) fails the step **before** the report's whole-tree commit, which would otherwise sweep the leftover edits onto the build branch. | No (the survivor round is an agent, spawned by the engine) |
 | `change_manager.py` | Manages specs/ directory (DAG, status, templates, archiving) | No |
 | `config.py` | BuildConfig, tier detection, test command discovery, reference-doc resolution (`stack_reference_docs`/`reference_docs_text`: built-in stack map + `reference_docs:` overrides from `specs/config.yaml` + django/fastapi/react manifest detection; `summarize_reference_doc` reduces an over-limit doc on section boundaries and always emits the full section index). Also the per-step tuning knobs: `conf_model`/`conf_int` join `conf_effort` as the multiplai.conf readers that can say "the conf said nothing" (`pick_model` cannot — it always returns a concrete ID), feeding `spec_model`/`agent_model`/`plan_review_model`, `plan_review_effort` and the two `plan_split_*_trigger` integers; `specs/config.yaml` overrides a conf-supplied `review_model`, which is what `_review_model_from_conf` exists to record. `model_for(step)` is the one place a call site gets its model: `models.<step>` → `models.<stage>` → the per-stage field → `models.default` → `model`, over the `STEP_STAGES` table (`tests/test_model_per_step.py` fails when a model-bearing call site is not in it). `convention_files()` resolves the project's own `CLAUDE.md` chain for the reviewer. | No |
@@ -15,7 +16,7 @@
 | `setup.py` | `setup` (round-trip edit of `specs/config.yaml` with ruamel.yaml — the only ruamel user) and `config-get`. | No |
 | `state.py` | BuildState with checkpoint/resume | No |
 | `models.py` | Pydantic models for all structured data | No |
-| `gates.py` | Quality gate assertions (pure code) + agent-report parsers (`parse_agent_status`, `parse_implementation_note`, `parse_docs_impact`). New gates: `unknowns_gate`, `prototype_required`, `prototype_gate`, `docs_freshness_gate` (warn-only). | No |
+| `gates.py` | Quality gate assertions (pure code) + agent-report parsers (`parse_agent_status`, `parse_implementation_note`, `parse_docs_impact`, `parse_searched` for a review-fix agent's `SEARCHED:` section). New gates: `unknowns_gate`, `prototype_required`, `prototype_gate`, `docs_freshness_gate` (warn-only). | No |
 | `budget.py` | Per-build token/cost ledger + circuit-breaker (module singleton) | No |
 | `dependencies.py` | Pure detection of dependencies **new to this project**: parses the proposal's `## Impact` and design's `## Decisions`, subtracts every manifest (`pyproject.toml`, `package.json`, `Package.swift`, `Cargo.toml`, `go.mod`, `requirements.txt`) and every existing import. Feeds the B1 explainer gate. No LLM, no network. | No |
 | `git_ops.py` | Every `git`/`gh` invocation: worktree+branch setup, explicit-path commits, the TDD loop's whole-tree `commit_tree`/`tree_is_clean`/`discard_to`, push, and the seam that runs the pr skill (`_run_pr_skill`, `open_pr_with_skill`; the argv, `uv run --directory ../../pr/scripts python -m pr_pipeline open --no-push`, is `orchestrator._pr_open_argv`), which opens the PR from the repo's template. `shell=False`, fixed argv, never merges/force-pushes/deletes; the one destructive call (`discard_to`) refuses unless the target sha is still an ancestor of HEAD. `BOOKKEEPING_EXCLUDES` is the single list of buildme's own files (`pr-sections/` included), honored by every commit path and by the discard's `clean`. | No |
@@ -145,6 +146,33 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   a prompt instruction is a hint and `unchanged_tests_gate` is the
   enforcement. It runs at BOTH writable windows (after GREEN, and after every
   review-fix iteration), because the review-fix agent IS the implementer.
+- **Every review round is kept, and the fix on pass is all-or-nothing.**
+  `_run_integration_and_review` writes a round record (`review_rounds`) after
+  each adjudication and commits each failing-score fix as it lands, so the
+  record names its commit. A passing block's accepted Critical/Major/Minor
+  findings get one fix pass (`code_review.fix_on_pass`, outside
+  `MAX_REVIEW_ITERATIONS`): `_fix_on_pass` commits the block and takes HEAD as
+  the checkpoint only on a clean tree, checks the budget, saves
+  `BlockInfo.fix_pass` (`FixOnPassState`) to the checkpoint file, then
+  `_run_fix_on_pass` runs the fix agent, the suite, `_enforce_test_integrity`
+  and one more review. The fix is kept only when the suite is green and
+  `review_score_gate` still passes; anything else goes back to the checkpoint
+  through `_discard_keeping_records` (a `discard_to` that puts the round
+  records back afterwards) and lands in `unfixed-findings.md`. On resume,
+  `run_tdd_engine` sees `fix_pass` and calls `_resume_fix_on_pass`, which rolls
+  back first and runs the pass again: never keep a half-applied fix. Before it
+  rolls back, `_others_work_in_fix_pass` refuses any uncommitted change or
+  commit the stopped pass did not leave: `_record_fix_pass_stop` records HEAD
+  and `git_ops.dirty_files` as the pass reaches `tests` and `review`, and a
+  pass stopped at `fix_agent` has no record, so any uncommitted change there
+  is refused. A refusal marks the block FAILED and `resumable` with
+  `fix_pass` kept, so the next run tries again. Otherwise the pass
+  never fails the block, except when the rollback itself is refused.
+- **`SEARCHED:` is recorded, not gated.** Every review-fix brief ends with
+  `prompts.implementation.REVIEW_FIX_SELF_CHECK`. `parse_searched` puts the
+  section in the round record; a missing one is `searched: null` and a
+  warning. Code cannot check that a search happened, so failing on it would
+  only reward agents that write the section without searching.
 - **`TEST CHANGE REQUIRED:` is an escape hatch, not an authorization.** It
   downgrades the gate to a flag, re-baselines the hashes (so one declared
   change cannot excuse every later silent one), and hands the reason to the
@@ -271,6 +299,8 @@ specs/
 │   ├── rubric.md
 │   ├── prototype/                    — NOTES.md + the cheap shape proof
 │   ├── implementation-notes.md       — agent SURPRISES/SPEC_IMPACT, appended live
+│   ├── reviews/block-<NN>-round-<k>.json — one per review round of each block
+│   ├── unfixed-findings.md           — accepted findings a passing block left unfixed
 │   ├── respec.md                     — proposed spec delta (never auto-applied)
 │   └── requirements/<capability>.md  — BDD scenarios (one per capability)
 ├── registry/<capability>.md          — main spec registry (merged from archives)

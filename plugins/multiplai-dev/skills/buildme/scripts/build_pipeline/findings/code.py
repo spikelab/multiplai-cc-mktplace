@@ -186,15 +186,21 @@ def stopped_block(state_path: Path) -> BlockInfo | None:
 def restart_block(state_path: Path, number: int) -> None:
     """Set block *number* in the round's engine checkpoint back to not
     started, after its work was discarded: the engine then stamps a new
-    start commit and keeps no commit that left the branch. The spend the
-    checkpoint holds is kept: this may run in a new process, whose budget
-    is empty, and the resumed engine restores its budget from it."""
+    start commit and keeps no commit that left the branch. A fix on pass in
+    flight is dropped with them: its checkpoint left the branch too, so the
+    engine builds the block again instead of rolling back to it, and the
+    test-change claims of the discarded attempt describe no test that is
+    left. The spend the checkpoint holds is kept: this may run in a new
+    process, whose budget is empty, and the resumed engine restores its
+    budget from it."""
     state = BuildState.load(state_path)
     for b in (state.tdd.blocks if state.tdd else []):
         if b.number == number:
             b.status = BlockStatus.PENDING
             b.baseline_commit = b.test_commit = b.impl_commit = b.refactor_commit = None
             b.timed_out = b.resumable = False
+            b.fix_pass = None
+            b.test_change_claims = []
     state.checkpoint(state_path, keep_budget=True)
 
 

@@ -515,6 +515,37 @@ class ImplementationNote(BaseModel):
 
 # --- Block state ---
 
+class FixOnPassState(BaseModel):
+    """A block's fix-on-pass, in flight: what a resume needs to undo it.
+
+    Written to the block (so to `.build-state.json`) before the fix agent
+    starts and cleared when the block is marked DONE. A build that finds one
+    on resume rolls the tree back to `checkpoint` and runs the pass again, so
+    a half-applied fix is never kept. The other fields are the block's state
+    at the checkpoint, put back on a rollback.
+    """
+
+    checkpoint: str
+    # fix_agent → tests → review: the last step this pass started.
+    step: str = "fix_agent"
+    findings: list[ReviewFinding] = Field(default_factory=list)
+    # The round record whose findings this pass fixes.
+    round_path: str | None = None
+    # The review the block passed with; it stands again after a rollback.
+    review: ReviewResult | None = None
+    test_file_hashes: dict[str, str] = Field(default_factory=dict)
+    test_change_claims: list[str] = Field(default_factory=list)
+    implementer_report: str = ""
+    # The tree as the pass left it when it reached `step` "tests" or
+    # "review": HEAD, and every uncommitted path with a fingerprint of its
+    # content (`git_ops.dirty_files`). A resume rolls back only this; anything
+    # else in the tree was made by someone else after the stop. None at
+    # "fix_agent" (the tree must still be the clean checkpoint, but the agent
+    # may have been killed mid-edit) or when git could not be asked.
+    stop_head: str | None = None
+    stop_edits: dict[str, str] | None = None
+
+
 class BlockInfo(BaseModel):
     """Parsed from tasks.md — represents one implementation block."""
     number: int
@@ -570,6 +601,8 @@ class BlockInfo(BaseModel):
     # Persisted here so a resumed build keeps the learning it already
     # collected; also appended to implementation-notes.md as they arrive.
     notes: list[ImplementationNote] = Field(default_factory=list)
+    # Set while the fix-on-pass runs (see FixOnPassState); None otherwise.
+    fix_pass: FixOnPassState | None = None
 
 
 # --- Change artifacts ---

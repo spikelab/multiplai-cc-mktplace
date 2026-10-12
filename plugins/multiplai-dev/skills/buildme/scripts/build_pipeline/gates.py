@@ -455,7 +455,7 @@ def prototype_gate(prototype_dir: Path) -> GateResult:
 
 # Every REQUIRED slot label an agent report can carry — used as the stop
 # boundary when reading the free-text SURPRISES slot.
-_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IMPACT"
+_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IMPACT|SEARCHED"
 
 # The colon after a slot label is MANDATORY — every legitimate slot form
 # carries one (`SURPRISES: x`, `- **SURPRISES:** x`, `**SURPRISES**: x`).
@@ -534,6 +534,43 @@ def parse_implementation_note(
         surprises=surprises,
         spec_impact=spec_impact,
     )
+
+
+# --- Review fix: where the agent looked (SEARCHED: slot) ---
+
+# A review-fix agent ends its report with `SEARCHED:` — per finding, where it
+# looked for the same mistake. Same label grammar as SURPRISES: the colon is
+# mandatory, and the section runs to the next slot label or the end.
+_SEARCHED_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?SEARCHED" + _SLOT_COLON + r"[ \t]*"
+    r"(.*?)"
+    r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")"
+    + _SLOT_COLON + r"|\Z)",
+    re.MULTILINE | re.IGNORECASE | re.DOTALL,
+)
+
+
+def parse_searched(output: str) -> list[str] | None:
+    """The entries of a review-fix agent's `SEARCHED:` section, one per line,
+    bullets stripped. ``None`` when the report has no such section, so a
+    record can tell "did not say" from "said nothing". The last section wins,
+    as in `parse_implementation_note`.
+
+    Code cannot check that a search happened; this records the claim.
+    """
+    matches = _SEARCHED_RE.findall(output or "")
+    if not matches:
+        return None
+    entries = []
+    for line in matches[-1].splitlines():
+        text = line.strip()
+        if text.startswith("```"):
+            continue
+        if text[:2] in ("- ", "* "):
+            text = text[2:].strip()
+        if text:
+            entries.append(text)
+    return entries
 
 
 # --- Documentation update (DOCS_IMPACT: slot) ---

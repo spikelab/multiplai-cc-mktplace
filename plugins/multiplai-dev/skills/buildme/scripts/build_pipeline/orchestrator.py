@@ -18,7 +18,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import board, git_ops, walkthroughs
+from . import board, git_ops, review_rounds, walkthroughs
 from .change_manager import ChangeManager
 from .config import BuildConfig
 from .models import BoardColumn, BuildPhase
@@ -1092,8 +1092,17 @@ def _spec_paths(config: BuildConfig) -> list[str]:
 # raises is logged and skipped; publish goes on. `walkthroughs.pr_section`
 # reports the walkthroughs under docs/walkthroughs/ whose cited lines the build
 # moved (and regenerates them when `regenerate_walkthroughs` is on).
+def unfixed_findings_section(config: BuildConfig, state: BuildState, docs_dir: Path) -> Path | None:
+    """The change's `unfixed-findings.md`, when the TDD engine wrote one: the
+    accepted review findings a block that passed kept unfixed (its fix on pass
+    was not kept, or not attempted). The file starts with its own heading."""
+    path = Path(docs_dir) / review_rounds.UNFIXED_FINDINGS_FILE
+    return path if path.is_file() else None
+
+
 PRE_PUBLISH_CONTRIBUTORS: list[Callable[[BuildConfig, BuildState, Path], Path | None]] = [
     walkthroughs.pr_section,
+    unfixed_findings_section,
 ]
 
 
