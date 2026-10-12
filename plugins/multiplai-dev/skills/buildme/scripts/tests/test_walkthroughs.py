@@ -84,14 +84,7 @@ class TestAfterABuild:
         return seen
 
     async def _build(self, tmp_path, change: str):
-        repo = _project(tmp_path / "proj")
-        make_bare_origin(repo, tmp_path / "origin.git")
-        config = BuildConfig(project_dir=repo, change_name=change)
-        config.specs_dir = repo / "specs"
-        state = BuildState(change_name=change, mode="scratch", tier="advanced",
-                           state_file=str(config.state_file_path()))
-        await _run_bootstrap(config, state, ChangeManager(config.specs_dir), config.state_file_path())
-        return config, state, ProgressWriter(config.progress_file_path())
+        return await self._build_from(tmp_path, _project(tmp_path / "proj"), change)
 
     @needs_uv
     @pytest.mark.asyncio
@@ -111,6 +104,7 @@ class TestAfterABuild:
         assert body.startswith("## Stale walkthroughs\n")
         assert f"`docs/walkthroughs/{MD_NAME}`: 1 citation(s) failed" in body
         assert "proj/src/calc.py:2-2: quote not at cited lines" in body
+        assert f"passed at the build's base commit `{state.base_sha[:12]}`" in body
         # regenerate_walkthroughs is off by default: only the check ran, no walkthrough run.
         assert config.regenerate_walkthroughs is False
         assert recorded and all(argv[argv.index("walkthrough_pipeline") + 1] == "check" for argv in recorded)
@@ -126,6 +120,80 @@ class TestAfterABuild:
         assert f"WALKTHROUGH:FRESH:docs/walkthroughs/{MD_NAME}" in out
         assert "WALKTHROUGHS:1 checked, 0 stale" in out
         assert "walkthroughs.md" not in captured["sections"]
+
+    @needs_uv
+    @pytest.mark.asyncio
+    async def test_a_walkthrough_already_stale_at_the_base_is_not_blamed_on_the_build_or_regenerated(
+            self, tmp_path, monkeypatch, captured, recorded, capsys):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        repo = _project(tmp_path / "proj")
+        _move_the_cited_line(repo)  # on main, before the build starts
+        config, state, progress = await self._build_from(tmp_path, repo, "unrelated")
+        config.regenerate_walkthroughs = True
+
+        assert _run_publish(config, state, progress) is True
+
+        out = capsys.readouterr().out
+        assert f"WALKTHROUGH:ALREADY_STALE:docs/walkthroughs/{MD_NAME}" in out
+        assert "WALKTHROUGHS:1 checked, 0 stale, 1 already stale at the build's base" in out
+        body = captured["sections"]["walkthroughs.md"]
+        assert "This build moved lines" not in body
+        assert f"`docs/walkthroughs/{MD_NAME}`: already stale at the build's base commit" in body
+        assert all(argv[argv.index("walkthrough_pipeline") + 1] == "check" for argv in recorded), \
+            "a walkthrough the build did not make stale is never regenerated"
+
+    @needs_uv
+    @pytest.mark.asyncio
+    async def test_a_sibling_repo_is_checked_where_it_lives_not_beside_the_worktree(
+            self, tmp_path, monkeypatch, captured, capsys):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        caller = make_repo(tmp_path / "caller")
+        (caller / "use.py").write_text("from calc import add\n")
+        _git(caller, "add", "use.py")
+        _git(caller, "commit", "-m", "use calc")
+        caller_sha = _git(caller, "rev-parse", "HEAD").stdout.strip()
+        repo = _project(tmp_path / "proj")
+        md = repo / "docs" / "walkthroughs" / MD_NAME
+        md.write_text(_walkthrough(_git(repo, "rev-parse", "HEAD").stdout.strip(),
+                                   rows=f"| caller | ../../../caller | `{caller_sha}` |\n")
+                      + '\nIt is called from [`caller/use.py:1`](x "from calc import add").\n')
+        _git(repo, "commit", "-am", "docs: cite the caller")
+        config, state, progress = await self._build_from(tmp_path, repo, "sibling")
+
+        assert _run_publish(config, state, progress) is True
+
+        out = capsys.readouterr().out
+        assert f"WALKTHROUGH:FRESH:docs/walkthroughs/{MD_NAME}" in out, out
+        assert "walkthroughs.md" not in captured["sections"]
+
+    @needs_uv
+    @pytest.mark.asyncio
+    async def test_a_sibling_repo_that_is_not_there_is_not_checked_rather_than_stale(
+            self, tmp_path, monkeypatch, captured, capsys):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = _project(tmp_path / "proj")
+        md = repo / "docs" / "walkthroughs" / MD_NAME
+        md.write_text(_walkthrough(_git(repo, "rev-parse", "HEAD").stdout.strip(),
+                                   rows=f"| caller | ../../../caller | `{'0' * 40}` |\n"))
+        _git(repo, "commit", "-am", "docs: cite a missing caller")
+        config, state, progress = await self._build_from(tmp_path, repo, "missing")
+
+        assert _run_publish(config, state, progress) is True
+
+        out = capsys.readouterr().out
+        assert f"WALKTHROUGH:UNCHECKED:docs/walkthroughs/{MD_NAME}" in out
+        assert f"the repo `caller` it reads is not a git repository with a commit at {tmp_path / 'caller'}" in out
+        assert "not checked" in captured["sections"]["walkthroughs.md"]
+
+    async def _build_from(self, tmp_path, repo: Path, change: str):
+        make_bare_origin(repo, tmp_path / "origin.git")
+        config = BuildConfig(project_dir=repo, change_name=change)
+        config.specs_dir = repo / "specs"
+        state = BuildState(change_name=change, mode="scratch", tier="advanced",
+                           state_file=str(config.state_file_path()))
+        await _run_bootstrap(config, state, ChangeManager(config.specs_dir), config.state_file_path())
+        return config, state, ProgressWriter(config.progress_file_path())
 
 
 class TestNoWalkthroughs:
@@ -210,6 +278,7 @@ class TestRegenerate:
     def test_not_when_it_reads_other_repositories(self, stale, monkeypatch, tmp_path):
         md = stale.project_dir / "docs" / "walkthroughs" / MD_NAME
         sha = "0" * 40
+        make_repo(tmp_path / "caller")  # where `../../../caller` resolves from the walkthrough
         md.write_text(_walkthrough(sha, rows=f"| caller | ../../../caller | `{sha}` |\n"))
         seen = _stub(monkeypatch)
         path = walkthroughs.pr_section(stale, None, tmp_path / "docs")
@@ -236,3 +305,30 @@ class TestRegenerate:
         path = walkthroughs.pr_section(stale, None, tmp_path / "docs")
         assert self._runs(seen) == []
         assert "not checked; the check did not run (exit 127)" in path.read_text()
+
+
+class TestAtTheBase:
+    def test_only_the_citations_the_build_broke_are_listed_and_the_rest_counted(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        repo = _project(tmp_path / "proj")
+        base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        _move_the_cited_line(repo)
+        old, new = "proj/src/calc.py:9-9: quote not at cited lines", "proj/src/calc.py:2-2: quote not at cited lines"
+        seen: list[list[str]] = []
+
+        def fake(argv, cwd=None, timeout=None):
+            seen.append(argv)
+            fails = [old, new] if "--at-head" in argv else [old]
+            return GitResult(argv, 1, "".join(f"FAIL {f}\n" for f in fails), "")
+
+        monkeypatch.setattr(git_ops, "_run_walkthrough_skill", fake)
+        config = BuildConfig(project_dir=repo, change_name="c")
+        state = SimpleNamespace(base_sha=base, source_repo=None, worktree_path=None)
+        path = walkthroughs.pr_section(config, state, tmp_path / "docs")
+
+        body = path.read_text()
+        assert f"`docs/walkthroughs/{MD_NAME}`: 1 citation(s) failed (1 more already failed at the base)" in body
+        assert new in body and old not in body
+        at_base = [a for a in seen if "--at-head" not in a]
+        assert len(at_base) == 1 and f"proj={repo.resolve()}" in at_base[0]

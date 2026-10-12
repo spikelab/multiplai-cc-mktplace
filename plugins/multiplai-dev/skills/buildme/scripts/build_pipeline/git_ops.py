@@ -144,6 +144,12 @@ def files_at(path: Path | str, sha: str) -> list[str] | None:
     return [p for p in res.stdout.split("\0") if p]
 
 
+def text_at(path: Path | str, sha: str, rel: str) -> str | None:
+    """The text of *rel* (relative to *path*) in commit *sha*, or None when it is not there."""
+    res = _run(["git", "show", f"{sha}:./{rel}"], cwd=path)
+    return res.stdout if res.ok else None
+
+
 def is_git_repo(path: Path | str) -> bool:
     return repo_root(path) is not None
 

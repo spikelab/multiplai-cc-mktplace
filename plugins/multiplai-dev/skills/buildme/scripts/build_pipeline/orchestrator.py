@@ -966,6 +966,7 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
     state.source_repo = str(repo)
     state.branch = branch
     state.worktree_path = str(dest)
+    state.base_sha = git_ops.rev_parse_head(dest)
     # Re-bind to the SAME subdirectory inside the worktree, not its root — a
     # nested project (monorepo subpackage) must keep building where it lives.
     config.rebind_project_dir(dest / offset)
