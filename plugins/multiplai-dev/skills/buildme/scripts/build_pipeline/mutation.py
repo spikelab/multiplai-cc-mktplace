@@ -27,6 +27,7 @@ mutant was left on disk.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -35,6 +36,7 @@ import shlex
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -286,7 +288,10 @@ def _run_tool(argv: list[str], cwd: Path, timeout: float) -> str:
     """Run one cosmic-ray command; return stdout or raise `_ToolError`.
 
     Own process group, so a timeout kills cosmic-ray's test subprocesses too
-    and not just the `uvx` wrapper.
+    and not just the `uvx` wrapper. The same group means the terminal's
+    SIGINT never reaches cosmic-ray, so anything else that ends the wait — a
+    KeyboardInterrupt, a SystemExit from `_exit_on_termination` — kills the
+    group too, before the caller restores the tree under it.
     """
     try:
         proc = subprocess.Popen(
@@ -306,6 +311,9 @@ def _run_tool(argv: list[str], cwd: Path, timeout: float) -> str:
         raise _ToolError(f"{' '.join(argv[len(_UVX):len(_UVX) + 2])} timed out after "
                          f"{int(timeout)}s. To build without mutation testing, set "
                          f"{_TURN_OFF}")
+    except BaseException:
+        _kill_group(proc)
+        raise
     if proc.returncode != 0:
         tail = (err or out or "").strip()[-1500:]
         raise _ToolError(f"{' '.join(argv[len(_UVX):len(_UVX) + 2])} exited "
@@ -323,9 +331,43 @@ def _kill_group(proc: subprocess.Popen) -> None:
             return
         try:
             proc.communicate(timeout=10)
-            return
+            break
         except subprocess.TimeoutExpired:
             continue
+    # The leader exiting does not mean the group did: a worker that outlives
+    # it could still write a mutant after the caller has restored the tree.
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+@contextlib.contextmanager
+def _exit_on_termination():
+    """Turn SIGTERM and SIGHUP into SystemExit for the length of the block.
+
+    Their default action ends the process at once, with no `finally` run, so
+    the detached cosmic-ray would keep rewriting source files and the mutant
+    on disk would never be discarded. A handler someone else installed is
+    left alone, and outside the main thread (where Python cannot set one)
+    this does nothing.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def _raise(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    previous = {}
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        if signal.getsignal(sig) == signal.SIG_DFL:
+            previous[sig] = signal.signal(sig, _raise)
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def run_mutation(config, baseline_sha: str, paths: list[str]) -> MutationResult:
@@ -352,6 +394,21 @@ def run_mutation(config, baseline_sha: str, paths: list[str]) -> MutationResult:
         base.error = "could not read HEAD to restore to"
         return base
 
+    result = base
+    # Whatever ends the run — an error, Ctrl-C, SIGTERM — a mutant cosmic-ray
+    # left on disk is discarded before this returns or the exception goes on,
+    # or a resume would offer it to the user as unverified work to commit.
+    try:
+        with _exit_on_termination():
+            result = _run_cosmic_ray(config, baseline_sha, paths, project_dir, base)
+    finally:
+        _restore_tree(project_dir, restore_to, result)
+    result.elapsed_seconds = round(time.monotonic() - started, 1)
+    return result
+
+
+def _run_cosmic_ray(config, baseline_sha: str, paths: list[str], project_dir: Path,
+                    base: MutationResult) -> MutationResult:
     settings = config.mutation
     result = base
     test_timeout = float(settings.timeout)
@@ -408,7 +465,11 @@ def run_mutation(config, baseline_sha: str, paths: list[str]) -> MutationResult:
         except (ValueError, TypeError, KeyError, IndexError) as e:
             result = base
             result.error = f"could not parse cosmic-ray output: {e}"
+    return result
 
+
+def _restore_tree(project_dir: Path, restore_to: str, result: MutationResult) -> None:
+    """Discard a mutated file left in the tree back to *restore_to*."""
     if not git_ops.tree_is_clean(project_dir):
         result.mutant_left_on_disk = True
         if git_ops.discard_to(project_dir, restore_to, "mutation run"):
@@ -420,8 +481,6 @@ def run_mutation(config, baseline_sha: str, paths: list[str]) -> MutationResult:
             result.error = ((result.error + "; ") if result.error else "") + (
                 "a mutated file was left in the tree and could NOT be discarded "
                 f"back to {restore_to[:8]} — inspect the tree before shipping")
-    result.elapsed_seconds = round(time.monotonic() - started, 1)
-    return result
 
 
 def score_text(result: MutationResult | None) -> str:

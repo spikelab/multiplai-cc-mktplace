@@ -439,6 +439,56 @@ class TestRunMutation:
         assert mutation.mutant_timeout(30.0, 0.5) == 30.0
         assert mutation.mutant_timeout(30.0, 20.0) == 20.0 * mutation._BASELINE_FACTOR
 
+    def test_an_interrupt_mid_run_still_discards_the_mutant(self, project):
+        """Ctrl-C (KeyboardInterrupt) while cosmic-ray has a mutant on disk:
+        the tree is discarded back to HEAD before the interrupt propagates, so
+        a resume never sees the mutant as unverified work to commit."""
+        config, _, _ = _setup(project)
+        repo, baseline = project
+        _, stub = self._stub_tool()
+
+        def _tool(argv, cwd, timeout):
+            if argv[len(mutation._UVX):][:2] == ["cosmic-ray", "exec"]:
+                (Path(cwd) / "src" / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+                raise KeyboardInterrupt
+            return stub(argv, cwd, timeout)
+
+        with patch("build_pipeline.mutation._run_tool", side_effect=_tool):
+            with pytest.raises(KeyboardInterrupt):
+                mutation.run_mutation(config, baseline, ["src/calc.py"])
+        assert "return a + b" in (repo / "src" / "calc.py").read_text()
+        assert _git(repo, "status", "--porcelain") == ""
+
+    def test_sigterm_mid_run_discards_the_mutant_and_exits(self, project):
+        """SIGTERM's default action ends the process with no cleanup at all,
+        leaving the detached cosmic-ray rewriting files. During the run it
+        becomes a SystemExit(143) instead, so the tree is restored first; the
+        previous handler is back afterwards. The handler is called directly
+        rather than by sending a real SIGTERM, which would kill pytest itself
+        if the handler were missing."""
+        import signal
+        config, _, _ = _setup(project)
+        repo, baseline = project
+        _, stub = self._stub_tool()
+        before = signal.getsignal(signal.SIGTERM)
+        assert before == signal.SIG_DFL
+
+        def _tool(argv, cwd, timeout):
+            if argv[len(mutation._UVX):][:2] == ["cosmic-ray", "exec"]:
+                (Path(cwd) / "src" / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+                handler = signal.getsignal(signal.SIGTERM)
+                assert callable(handler), "no SIGTERM handler during the run"
+                handler(signal.SIGTERM, None)
+            return stub(argv, cwd, timeout)
+
+        with patch("build_pipeline.mutation._run_tool", side_effect=_tool):
+            with pytest.raises(SystemExit) as exc:
+                mutation.run_mutation(config, baseline, ["src/calc.py"])
+        assert exc.value.code == 128 + signal.SIGTERM
+        assert "return a + b" in (repo / "src" / "calc.py").read_text()
+        assert _git(repo, "status", "--porcelain") == ""
+        assert signal.getsignal(signal.SIGTERM) == before
+
     def test_a_dirty_tree_that_cannot_be_discarded_is_flagged(self, project):
         config, _, _ = _setup(project)
         _, baseline = project
@@ -491,6 +541,44 @@ class TestRunTool:
         msg = str(exc.value)
         assert "timed out" in msg
         assert "mutation.enabled: false" in msg
+
+    def test_an_interrupt_kills_the_whole_process_group(self, tmp_path):
+        """A KeyboardInterrupt while cosmic-ray runs must not leave its process
+        group running: it was started in its own session, so the terminal's
+        SIGINT never reaches it, and it would go on rewriting source files."""
+        import signal
+        import time
+        pid_file = tmp_path / "child.pid"
+        uvx = tmp_path / "uvx"
+        uvx.write_text(f"#!/bin/sh\nsleep 7731 &\necho $! > {pid_file}\nwait\n")
+        uvx.chmod(0o755)
+
+        def _interrupt(signum, frame):
+            raise KeyboardInterrupt
+
+        def _alive(pid):
+            out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                                 capture_output=True, text=True).stdout.strip()
+            return bool(out) and not out.startswith("Z")
+
+        old = signal.signal(signal.SIGALRM, _interrupt)
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 1.0)
+            with patch.dict(os.environ, {"PATH": f"{tmp_path}:/usr/bin:/bin"}):
+                with pytest.raises(KeyboardInterrupt):
+                    mutation._run_tool([*mutation._UVX, "cosmic-ray", "exec", "a", "b"],
+                                       tmp_path, 60)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, old)
+        child = int(pid_file.read_text())
+        deadline = time.monotonic() + 5
+        while _alive(child) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        alive = _alive(child)
+        if alive:
+            os.kill(child, signal.SIGKILL)
+        assert not alive, "cosmic-ray's process group survived the interrupt"
 
 
 DUMP_PENDING = "\n".join([
