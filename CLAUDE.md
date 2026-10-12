@@ -179,7 +179,10 @@ Three rules, all enforced by `scripts/lint_workspace.py`:
 - **A new script directory with dependencies must be added to `members`.** uv
   does not warn about an undeclared `pyproject.toml` — it silently gives that
   directory its own `.venv`, which is how this repo accumulated four of them
-  (915MB, all gitignored, none noticed for months).
+  (915MB, all gitignored, none noticed for months). The one exception is a
+  shared library under `plugins/*/lib/` (e.g. `code_facts`): it is not a
+  member, and each member that uses it declares an editable `path` source,
+  because uv rejects a member that is also a `path` source.
 - **No script may carry a PEP 723 `# /// script` block.** This was the
   previous convention and it is now a defect, for two independent reasons.
   `uv run` re-resolves inline dependencies on **every** invocation, so the

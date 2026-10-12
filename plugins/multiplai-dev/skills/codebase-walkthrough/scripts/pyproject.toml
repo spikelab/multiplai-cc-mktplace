@@ -45,6 +45,8 @@ asyncio_mode = "auto"
 # uv.lock.
 [tool.uv.sources]
 multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }
-# The shared explore step. A path source, not `workspace = true`: the installed
-# plugin is plugins/multiplai-dev/ alone, and lib/ sits inside that copy.
-code-facts = { path = "../../../lib/code_facts" }
+# The shared explore step. An editable path source, not `workspace = true`:
+# the installed plugin is plugins/multiplai-dev/ alone, and lib/ sits inside
+# that copy. code_facts is not a workspace member, because uv rejects a member
+# that is also reached through a path source.
+code-facts = { path = "../../../lib/code_facts", editable = true }

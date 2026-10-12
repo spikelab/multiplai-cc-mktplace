@@ -72,6 +72,11 @@ def check_members() -> list[str]:
 
     An undeclared one is not a style problem: uv gives it its own environment,
     which is precisely the state this repo is moving away from.
+
+    A pyproject.toml under `plugins/*/lib/` is exempt. Those are libraries that
+    members reach through an editable `path` source, so the installed plugin
+    copy (with no workspace root above it) can still find them. uv rejects a
+    workspace member that is also a `path` source, so they cannot be members.
     """
     declared = _declared_members()
     return [
@@ -79,8 +84,14 @@ def check_members() -> list[str]:
         f"[tool.uv.workspace] members — uv will give it its own .venv. "
         f"Add it to pyproject.toml, or delete the file."
         for p in _found_pyprojects()
-        if p.parent.resolve() not in declared
+        if p.parent.resolve() not in declared and not _is_plugin_lib(p)
     ]
+
+
+def _is_plugin_lib(pyproject: Path) -> bool:
+    """True for a pyproject.toml anywhere under `plugins/<plugin>/lib/`."""
+    parts = pyproject.relative_to(REPO_ROOT).parts
+    return len(parts) > 3 and parts[0] == "plugins" and parts[2] == "lib"
 
 
 def check_members_exist() -> list[str]:

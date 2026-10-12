@@ -31,7 +31,6 @@ package = false
 [tool.uv.workspace]
 members = [
     "plugins/multiplai-context/scripts",
-    "plugins/multiplai-dev/lib/code_facts",
     "plugins/multiplai-dev/skills/buildme/scripts",
     "plugins/multiplai-dev/skills/codebase-walkthrough/scripts",
     "plugins/multiplai-dev/skills/deepen/scripts",
