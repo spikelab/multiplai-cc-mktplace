@@ -752,6 +752,118 @@ class TestCodeStepFailure:
         assert lines[-1].startswith("FINDINGS:FAILED:code:")
         assert fake_pr.replies() == []
 
+    @pytest.mark.asyncio
+    async def test_a_rerun_after_a_timeout_resumes_and_answers_a_block_that_then_fails(
+            self, built, fake_pr):
+        """Exit 4 says re-run. The re-run must get past the timed-out attempt's
+        half-done edits, and a block that then fails on its own work is
+        answered "not fixed" rather than read as the same timeout again."""
+        repo, change, config = built
+        fix_thread = fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+
+        async def times_out(*_a, **_kw):
+            (repo / "calc.py").write_text("def add(a, b):\n    return a  # half done\n")
+            return AgentResult(success=False, error="Agent timed out after 1800s", timed_out=True)
+
+        run, lines = _run(config, change, triage_call=FakeTriage({"add subtracts": FIX}),
+                          review=FakeReview(fake_pr))
+        stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") != "run_implementer"]
+        stubs.append(patch("build_pipeline.tdd_engine.run_implementer", side_effect=times_out))
+        with _Stubs(stubs):
+            assert await loop.run_findings(run) == 4, lines
+        assert lines[-1].startswith("FINDINGS:FAILED:code:")
+        assert fake_pr.replies() == []
+
+        # The re-run: the test now passes with no fix, so triage was wrong.
+        run2, lines2 = _run(config, change, triage_call=FakeTriage({"add subtracts": FIX}),
+                            review=FakeReview(fake_pr))
+        stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") != "run_test_suite"]
+        stubs.append(patch("build_pipeline.tdd_engine.run_test_suite", return_value=(0, "1 passed")))
+        with _Stubs(stubs):
+            assert await loop.run_findings(run2) == 0, lines2
+        assert lines2[-1] == "FINDINGS:DONE:1"
+        replies = {r[1]: r[2] for r in fake_pr.replies()}
+        assert "Not fixed" in replies[fix_thread]
+        # The timed-out attempt's edits are kept under a wip ref, not on the branch.
+        stopped = "refs/buildme/wip/calc/r1-code-block1-stopped"
+        assert stopped in _wip(repo)
+        assert "half done" in _git(repo, "show", f"{stopped}:calc.py")
+        assert "half done" not in (repo / "calc.py").read_text()
+
+    @pytest.mark.asyncio
+    async def test_an_agent_error_is_resumed_not_answered(self, built, fake_pr):
+        """An agent call that errored is no verdict on the finding: nothing is
+        answered or skipped, and the re-run fixes it."""
+        repo, change, config = built
+        fix_thread = fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+        run, lines = _run(config, change, triage_call=FakeTriage({"add subtracts": FIX}),
+                          review=FakeReview(fake_pr))
+        stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") != "run_implementer"]
+        stubs.append(patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
+                           return_value=AgentResult(success=False, error="CLI exited 1")))
+        with _Stubs(stubs):
+            assert await loop.run_findings(run) == 1, lines
+        assert lines[-1].startswith("FINDINGS:FAILED:code:")
+        assert not [ln for ln in lines if ln.startswith("FINDINGS:BLOCK_FAILED")]
+        assert fake_pr.replies() == []
+
+        run2, lines2 = _run(config, change, triage_call=FakeTriage({"add subtracts": FIX}),
+                            review=FakeReview(fake_pr))
+        with _Stubs(engine_stubs(repo)):
+            assert await loop.run_findings(run2) == 0, lines2
+        replies = {r[1]: r[2] for r in fake_pr.replies()}
+        assert "Fixed in" in replies[fix_thread]
+        assert "a + b" in (repo / "calc.py").read_text()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_block_keeps_the_previous_blocks_review_fix(self, built, fake_pr):
+        """Block 1 passes only after a review-fix; block 2 fails. Discarding
+        block 2 must not take block 1's review-fix off the branch."""
+        repo, change, config = built
+        first = fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+        second = fake_pr.add_thread("alice", "sub is missing", fid="cd34")
+        triage_call = FakeTriage({
+            "add subtracts": FIX,
+            "sub is missing": Triage(verdict=Verdict.CODE_FIX, reason="no sub",
+                                     locations=["calc.py:1"], failing_test="sub(3, 1) returns 2"),
+        })
+        writes_test = _agent_writes(repo, "tests/test_calc.py",
+                                    "from calc import add\n\ndef test_add():\n"
+                                    "    assert add(2, 2) == 4\n")
+
+        async def test_writer(*a, **kw):
+            if "cd34" in kw.get("block_name", ""):
+                return AgentResult(success=True, output="Cannot.\n\nSTATUS: BLOCKED\n")
+            return await writes_test(*a, **kw)
+
+        impl_calls = {"n": 0}
+
+        async def implementer(*_a, **_kw):
+            impl_calls["n"] += 1
+            tail = "  # review fix" if impl_calls["n"] > 1 else ""
+            (repo / "calc.py").write_text(f"def add(a, b):\n    return a + b{tail}\n")
+            return AgentResult(success=True, output="done")
+
+        failing = ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=2, evidence="weak")])
+        passing = ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])
+        replaced = {"run_test_writer", "run_implementer", "_run_quality_review"}
+        stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") not in replaced]
+        stubs += [
+            patch("build_pipeline.tdd_engine.run_test_writer", side_effect=test_writer),
+            patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer),
+            patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                  side_effect=[failing, passing]),
+        ]
+        run, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
+        with _Stubs(stubs):
+            assert await loop.run_findings(run) == 0, lines
+
+        replies = {r[1]: r[2] for r in fake_pr.replies()}
+        assert "Fixed in" in replies[first]
+        assert "Not fixed" in replies[second]
+        assert "# review fix" in _git(repo, "show", "HEAD:calc.py")
+        assert "# review fix" in (repo / "calc.py").read_text()
+
 
 class TestReviewBody:
     @pytest.mark.asyncio

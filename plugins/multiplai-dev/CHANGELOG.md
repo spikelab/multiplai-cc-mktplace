@@ -36,7 +36,10 @@ time, not derived from a tag.
   code, with or without `--auto`. Each code defect becomes a block run by the
   TDD engine with a failing test first and every gate a build has; a block the
   engine cannot fix is kept under a wip ref, left off the branch, and answered
-  "not fixed". The skill then pushes, adds a "Review rounds" section to the PR
+  "not fixed". A block stopped by an agent that timed out or errored, or by
+  the budget, is not answered: re-running the command keeps that attempt's
+  edits under `refs/buildme/wip/<change>/r<N>-code-block<k>-stopped` and runs
+  the block again. The skill then pushes, adds a "Review rounds" section to the PR
   description through `/multiplai-dev:pr`, replies in each thread with the
   fixing commit or the reason nothing changed, and re-runs
   `/multiplai-dev:review`. Rounds repeat until nothing new is left or
@@ -46,7 +49,8 @@ time, not derived from a tag.
   its edits under `refs/buildme/wip/<change>/r<N>-<step>`. Commits someone
   else pushed to the PR are kept. It will not start a round on a worktree with
   uncommitted changes, or resume one with changes outside the change
-  directory, and it will not reuse a change's state for a different PR.
+  directory (except a stopped code fix's own edits, kept as above), and it
+  will not reuse a change's state for a different PR.
 - `findings.allow_bots` in `specs/config.yaml`.
 
 ### Changed
@@ -55,6 +59,12 @@ time, not derived from a tag.
   comment for a review comment.
 - `findings.authors` and `findings.max_rounds` are now read by the findings
   stage; before this release they were stored only.
+- buildme commits the edits a block's review fixes make as
+  `fix(block-<n>)` in that block. Before, they stayed uncommitted and went
+  into whatever buildme committed next.
+- A buildme block that timed out and then fails for another reason when the
+  build is re-run now ends the build with exit 1. Before, it exited 4, the
+  code for an agent timeout, on every later run.
 
 ## [0.42.0] - 2026-10-12
 

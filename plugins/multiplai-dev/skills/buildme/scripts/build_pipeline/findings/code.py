@@ -149,17 +149,42 @@ async def run_code_step(config: BuildConfig, change_dir: Path, round_n: int,
 def failed_block(state_path: Path) -> BlockInfo | None:
     """The block the engine stopped on, when it stopped because that block
     failed: its RED gate, implementation or review. None when it stopped for
-    anything else (an agent timeout, the budget, a gate before or after the
-    blocks), which a re-run may get past."""
+    anything else (an agent call that timed out or errored, the budget, a gate
+    before or after the blocks), which a re-run may get past."""
     if not state_path.exists():
         return None
     tdd = BuildState.load(state_path).tdd
     if not tdd or tdd.current_block >= len(tdd.blocks):
         return None
     block = tdd.blocks[tdd.current_block]
-    if block.status != BlockStatus.FAILED or block.timed_out:
+    if block.status != BlockStatus.FAILED or block.timed_out or block.resumable:
         return None
     return block
+
+
+def stopped_block(state_path: Path) -> BlockInfo | None:
+    """The block the engine was in when it last stopped, by any cause (a
+    resumable stop, a kill), or None when it stopped outside the blocks."""
+    if not state_path.exists():
+        return None
+    tdd = BuildState.load(state_path).tdd
+    if not tdd or tdd.current_block >= len(tdd.blocks):
+        return None
+    block = tdd.blocks[tdd.current_block]
+    return None if block.status == BlockStatus.DONE else block
+
+
+def restart_block(state_path: Path, number: int) -> None:
+    """Set block *number* in the round's engine checkpoint back to not
+    started, after its work was discarded: the engine then stamps a new
+    start commit and keeps no commit that left the branch."""
+    state = BuildState.load(state_path)
+    for b in (state.tdd.blocks if state.tdd else []):
+        if b.number == number:
+            b.status = BlockStatus.PENDING
+            b.baseline_commit = b.test_commit = b.impl_commit = b.refactor_commit = None
+            b.timed_out = b.resumable = False
+    state.checkpoint(state_path)
 
 
 def skip_block(state_path: Path, number: int) -> bool:

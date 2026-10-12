@@ -13,7 +13,11 @@ finished steps and restarts the first unfinished one:
   that, so a collaborator's pushed commits stay);
 - a resume refuses uncommitted changes outside the change directory, and a
   state file written for another PR, repo or branch;
-- code re-enters `run_tdd_engine`, which resumes from its own checkpoint;
+- code re-enters `run_tdd_engine`, which resumes from its own checkpoint.
+  What the engine's stopped attempt left (a timed-out agent's edits, which
+  may be anywhere in the tree, and the stopped block's commits) is first
+  kept under `refs/buildme/wip/<change>/r<N>-code-block<k>-stopped` and
+  discarded back to where that block started, so the block runs again;
 - publish records each reply before sending the next.
 
 The loop stops when a fetch finds no new comment to act on
@@ -32,7 +36,7 @@ from typing import Awaitable, Callable
 from .. import git_ops
 from ..change_manager import normalize_change_name
 from ..config import BuildConfig
-from ..models import BuildPhase
+from ..models import BlockStatus, BuildPhase
 from ..state import BuildState, FindingsRound, FindingsState
 from . import code, fetch, publish, spec, triage
 from .models import TriageRecord
@@ -209,6 +213,36 @@ async def _step(run: FindingsRun, st: BuildState, rnd: FindingsRound, name: str,
     rnd.finished.append(name)
     save()
     log.info("DONE findings_step round=%d step=%s", rnd.number, name)
+
+
+def keep_stopped_code_work(run: FindingsRun, rnd: FindingsRound) -> None:
+    """Before a code step resumes: keep what the engine's stopped attempt
+    left under `r<N>-code-block<k>-stopped` (`r<N>-code-stopped` when it
+    stopped after the blocks), discard back to the commit that block started
+    from (`rewind_target`), and mark the block not started, so the engine
+    runs it again on a clean tree. Does nothing before the engine has a
+    checkpoint."""
+    if not rnd.engine_state_path or not Path(rnd.engine_state_path).exists():
+        return
+    state_path = Path(rnd.engine_state_path)
+    repo = run.project_dir
+    block = code.stopped_block(state_path)
+    start = (block.baseline_commit if block else None) or git_ops.rev_parse_head(repo)
+    if not start:
+        return
+    start = rewind_target(run, start)
+    if not (git_ops.tree_is_clean(repo) and git_ops.rev_parse_head(repo) == start):
+        ref = wip_ref(run, rnd, f"code-block{block.number}-stopped" if block else "code-stopped")
+        if git_ops.save_wip_ref(repo, ref, f"wip(findings-r{rnd.number}): code, kept "
+                                           "before the resume") is None:
+            raise StepFailed("code", f"could not write {ref}, so the tree was left as it is; "
+                                     f"inspect {repo} before re-running")
+        run.emit(f"FINDINGS:WIP:{ref}")
+        if not git_ops.discard_to(repo, start, f"findings r{rnd.number} code resume"):
+            raise StepFailed("code", f"the stopped work is kept under {ref}, but the discard "
+                                     f"back to {start[:12]} was refused; inspect {repo}")
+    if block is not None and block.status != BlockStatus.PENDING:
+        code.restart_block(state_path, block.number)
 
 
 def keep_failed_block(run: FindingsRun, rnd: FindingsRound, block) -> str | None:
@@ -418,11 +452,18 @@ async def run_findings(run: FindingsRun) -> int:
     max_rounds = run.config.findings.max_rounds
     while True:
         rnd = fs.rounds[-1] if fs.rounds and not _round_done(fs.rounds[-1]) else None
+        if rnd is not None and _next_step(rnd) == "code" and "code" in rnd.started:
+            try:
+                keep_stopped_code_work(run, rnd)
+            except StepFailed as e:
+                run.emit(f"FINDINGS:FAILED:{e.step}:{' '.join(str(e).split())}")
+                return e.exit_code
         if rnd is not None and not git_ops.tree_is_clean(run.project_dir,
                                                          ignore=_change_dir_in_project(run)):
             # A resumed step keeps what the tree holds under a wip ref and
             # resets it. Only the round's own files, all in the change
-            # directory, may be left over from an interrupted step.
+            # directory, may be left over from an interrupted step (the code
+            # step's leftovers were kept and discarded just above).
             run.emit(f"FINDINGS:FAILED:{_next_step(rnd)}:{run.project_dir} has uncommitted "
                      f"changes outside {run.change_dir}; commit or stash them first")
             return EXIT_FAILED
