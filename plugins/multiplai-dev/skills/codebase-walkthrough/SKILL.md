@@ -1,6 +1,6 @@
 ---
 name: codebase-walkthrough
-description: Explains a module end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and a step-through HTML page, or compact Markdown for coding agents.
+description: Explains a module end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and opens it in the review-viewer, or compact Markdown for coding agents.
 when_to_use: 'Triggers: walk me through this module, explain this codebase, onboard me, codebase tour, walkthrough, /multiplai-dev:codebase-walkthrough'
 model: opus
 effort: medium
@@ -85,7 +85,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 |-----|---------|---------|
 | target | Directory of the module, inside a git repository | required |
 | `--depth` | `overview` (skips test files), `standard`, `deep` | `standard` |
-| `--mode` | `human` (Markdown, HTML and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or scenarios) | `human` |
+| `--mode` | `human` (Markdown and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or scenarios) | `human` |
 | `--name` | Base file name | the module directory, lower-cased |
 | `--output` | Directory for the walkthrough files | `INBOX/` if it exists, else the current directory |
 | `--search-root` / `--repos` | Where to look for references | the nearest ancestor holding several repositories |
@@ -133,7 +133,7 @@ only if the user raises the ceiling:
 The run prints `walkthrough: <path>` for each file written. Read the
 `## Coverage` section of the Markdown file and paste its table into chat as it
 is, with the list of files that have no surviving fact. Then give the paths of
-the Markdown and HTML files.
+the Markdown and `walkthrough.json` files.
 
 Then, in human mode, open the walkthrough in the review-viewer. Start it in
 the background (Bash tool, `run_in_background: true`):

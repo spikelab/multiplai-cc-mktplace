@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.37.0] - 2026-10-12
+## [0.38.0] - 2026-10-12
 
 ### Added
 - buildme: on Python projects (a `pyproject.toml`, `setup.py`, `setup.cfg`,
@@ -52,6 +52,16 @@ time, not derived from a tag.
   edits it had already made are now rolled back to the commit taken before
   it ran, keeping the build's own review fixes. Before, they stayed in the
   tree unverified, and a resumed build kept stopping on them.
+
+## [0.37.0] - 2026-10-12
+
+### Removed
+- `codebase-walkthrough` no longer writes the step-through HTML page
+  (`<name>-walkthrough.html`). In human mode it writes the Markdown
+  walkthrough and `<name>-walkthrough.json`, and step 2 opens that file in
+  the review-viewer, which is now the only page. Agent mode is unchanged.
+- The `markdown` package is no longer a dependency of the walkthrough
+  pipeline; only the HTML page used it.
 
 ## [0.36.0] - 2026-10-12
 
