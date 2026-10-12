@@ -289,6 +289,53 @@ async def test_a_deleted_symlink_the_base_side_cannot_extract_is_an_error_line_n
     assert not (ctx.snapshot.parent / BASE_DIR).exists()
 
 
+@pytest.mark.parametrize("where", ["archive", "extract"])
+async def test_an_os_error_from_the_base_snapshot_is_an_error_line_not_a_failed_review(
+        where, change_target, change_ctx, monkeypatch):
+    # E2BIG when the path list overflows argv; ENOSPC or ENAMETOOLONG when the files are written
+    if where == "archive":
+        real_run = target.subprocess.run
+
+        def run(argv, *a, **kw):
+            if "archive" in argv:
+                raise OSError(7, "Argument list too long")
+            return real_run(argv, *a, **kw)
+        monkeypatch.setattr(target.subprocess, "run", run)
+    else:
+        def extractall(self, *a, **kw):
+            raise OSError(28, "No space left on device")
+        monkeypatch.setattr(target.tarfile.TarFile, "extractall", extractall)
+    canned = Canned([_reask_answer()])
+    monkeypatch.setattr(sdk, "agent_call_structured", canned)
+    state = await run_explain(ReviewState(target=change_target), change_ctx)
+
+    assert len(canned.calls) == 1 and "read it at" not in canned.calls[0]["prompt"]
+    assert len(state.errors) == 1 and state.errors[0].startswith("explain base: ")
+    assert ("Argument list too long" if where == "archive" else "No space left on device") in state.errors[0]
+    assert state.stage == "explain" and state.facts.facts
+    assert not (change_ctx.snapshot.parent / BASE_DIR).exists()
+
+
+def test_a_long_base_path_list_is_archived_in_batches_that_fit_argv(change_target, tmp_path, monkeypatch):
+    # a PR that deletes enough files would otherwise pass git archive more argv than the OS allows
+    monkeypatch.setattr(target, "ARCHIVE_ARGV_BYTES", 12)
+    real_run = target.subprocess.run
+    archives: list[list[str]] = []
+
+    def run(argv, *a, **kw):
+        if "archive" in argv:
+            archives.append(argv[argv.index("--") + 1:])
+        return real_run(argv, *a, **kw)
+    monkeypatch.setattr(target.subprocess, "run", run)
+    paths = ["app.py", "gone.py", "logo.bin", "old_name.py"]
+    dest = target.snapshot_base(change_target, tmp_path / "base", paths)
+
+    assert len(archives) > 1 and sorted(p for batch in archives for p in batch) == paths
+    assert all(len(batch) == 1 or sum(len(p) + 1 for p in batch) <= 12 for batch in archives)
+    assert sorted(p.name for p in dest.iterdir()) == paths
+    assert (dest / "gone.py").read_text() == "\n".join(_lines(5, "gone")) + "\n"
+
+
 async def test_explain_off_makes_no_call_and_writes_nothing(change_target, change_ctx, monkeypatch):
     canned = Canned([])
     monkeypatch.setattr(sdk, "agent_call_structured", canned)

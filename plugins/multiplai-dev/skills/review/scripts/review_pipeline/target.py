@@ -565,18 +565,59 @@ def snapshot_head(target: TargetInfo, dest: Path) -> Path:
     return dest
 
 
+# Bytes of paths one `git archive` is given. A PR that deletes many files would
+# otherwise overflow the OS argv limit (E2BIG); 64 KiB is well inside Linux's
+# and macOS's, environment included.
+ARCHIVE_ARGV_BYTES = 64 * 1024
+
+
+def _archive_batches(paths: list[str]) -> list[list[str]]:
+    """Split *paths* into lists of at most ARCHIVE_ARGV_BYTES each; a longer path goes alone."""
+    batches: list[list[str]] = []
+    batch: list[str] = []
+    size = 0
+    for p in paths:
+        n = len(os.fsencode(p)) + 1
+        if batch and size + n > ARCHIVE_ARGV_BYTES:
+            batches.append(batch)
+            batch, size = [], 0
+        batch.append(p)
+        size += n
+    if batch:
+        batches.append(batch)
+    return batches
+
+
 def snapshot_base(target: TargetInfo, dest: Path, paths: list[str]) -> Path:
     """Extract *paths* as they are at base_sha into *dest*, replacing what is there.
 
     The agents' working directory is the head snapshot. The explain stage's
     agents also read lines a change removed, so those files are extracted at
-    base, beside it, with `git archive` (which writes nothing to the repo).
+    base, beside it, with `git archive` (which writes nothing to the repo), in
+    batches that fit argv. Any failure, an OSError included, is a TargetError.
     """
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
-    if not paths:
-        return dest
+    for batch in _archive_batches(paths):
+        try:
+            proc = subprocess.run(
+                [*GIT_ARGV, "-C", target.repo_path, "archive", "--format=tar", target.base_sha, "--", *batch],
+                capture_output=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False,
+            )
+        except OSError as e:
+            # E2BIG, or git missing
+            raise TargetError(f"git archive {target.base_sha[:12]} failed: {e}") from e
+        if proc.returncode != 0:
+            raise TargetError(f"git archive {target.base_sha[:12]} failed: {proc.stderr.decode(errors='replace').strip()}")
+        try:
+            with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tar:
+                tar.extractall(dest, filter="data")
+        except (tarfile.TarError, OSError) as e:
+            # The "data" filter refuses, for one, a symlink that is absolute or points outside dest;
+            # writing the files can fail with ENOSPC or ENAMETOOLONG.
+            raise TargetError(f"extracting {target.base_sha[:12]} failed: {e}") from e
+    return dest
     proc = subprocess.run(
         [*GIT_ARGV, "-C", target.repo_path, "archive", "--format=tar", target.base_sha, "--", *paths],
         capture_output=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False,
