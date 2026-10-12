@@ -64,6 +64,9 @@ time, not derived from a tag.
   killed), any uncommitted change outside the change directory stops it.
   Resuming triage, spec or code also stops when commits were made on the
   branch since the step stopped, other than ones pulled from origin.
+  Each round's TDD engine is held to the `budget:` ceilings on that round's
+  own spend, also when `--auto` runs several rounds in one process; the
+  triage and spec agents' spend is not counted against them.
 - `findings.allow_bots` in `specs/config.yaml`.
 
 ### Changed
