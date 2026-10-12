@@ -42,7 +42,9 @@ time, not derived from a tag.
 - buildme's PUBLISH stage opens its PR through the pr skill, so a build in a
   repository with a PR template opens a PR that follows it. Its output lines
   (`PUSHED:`, `PR:`, `PUBLISH_DIAGNOSIS:`), its draft default and its
-  resumable PUBLISH step are unchanged. When the PR cannot be opened,
+  resumable PUBLISH step are unchanged: buildme passes `--draft` or `--ready`
+  to the skill, so the skill's own `pr.draft` setting cannot override
+  `git.pr`. When the PR cannot be opened,
   `build-progress.md` now lists the pr skill's command first, then
   `gh pr create`.
 

@@ -382,7 +382,12 @@ class TestOpenPRWithSkill:
 
     def test_ready_passes_ready(self, tmp_path):
         argv = _pr_open_argv(tmp_path, tmp_path / "c", "b", "t", draft=False)
-        assert "--ready" in argv
+        assert "--ready" in argv and "--draft" not in argv
+
+    def test_draft_passes_draft_so_pr_draft_false_cannot_override_it(self, tmp_path):
+        # git.pr: draft is buildme's choice; the skill's pr.draft must not flip it.
+        argv = _pr_open_argv(tmp_path, tmp_path / "c", "b", "t", draft=True)
+        assert "--draft" in argv and "--ready" not in argv
 
     def test_failure_returns_none_and_the_diagnosis_without_raising(self, tmp_path, monkeypatch):
         monkeypatch.setattr(

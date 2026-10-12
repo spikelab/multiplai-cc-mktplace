@@ -64,6 +64,20 @@ def test_open_ready_and_config_draft_false_open_ready_for_review(tmp_path, gh_st
     assert "--draft" not in gh_stub.writes()[-1]
 
 
+def test_open_draft_flag_overrides_config_draft_false(tmp_path, gh_stub):
+    # buildme passes its own git.pr choice: --draft must win over pr.draft: false.
+    repo, change = _setup(tmp_path)
+    gh_stub.on(["gh", "repo", "view"], stdout="main\n").on(["gh", "pr", "create"], stdout=URL)
+    (repo / "specs" / "config.yaml").write_text("pr:\n  draft: false\n")
+    assert run(["open", "--repo", str(repo), "--change-dir", str(change), "--no-push", "--draft"]) == 0
+    assert "--draft" in gh_stub.writes()[-1]
+
+
+def test_open_draft_and_ready_together_are_refused():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["open", "--repo", "r", "--change-dir", "c", "--draft", "--ready"])
+
+
 def test_open_dry_run_prints_the_commands_and_body_and_writes_nothing(tmp_path, gh_stub, capsys):
     repo, change = _setup(tmp_path, origin=True)
     gh_stub.on(["gh", "repo", "view"], stdout="main\n")

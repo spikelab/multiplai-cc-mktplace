@@ -1031,8 +1031,9 @@ def _pr_open_argv(
         "--repo", str(worktree), "--change-dir", str(change_dir),
         "--head", branch, "--title", title, "--no-push",
     ]
-    if not draft:
-        argv.append("--ready")
+    # Always say which: git.pr is buildme's choice, and the skill's own
+    # pr.draft setting must not override it.
+    argv.append("--draft" if draft else "--ready")
     for section in sections or []:
         argv += ["--section", str(section)]
     return argv

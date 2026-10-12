@@ -35,7 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
     op.add_argument("--base", help="the base branch (default: the repo's default branch)")
     op.add_argument("--head", help="the branch to open the PR from (default: the current branch)")
     op.add_argument("--title", help="the PR title (default: buildme: <change-name>)")
-    op.add_argument("--ready", action="store_true", help="open it ready for review instead of as a draft")
+    readiness = op.add_mutually_exclusive_group()
+    readiness.add_argument("--ready", action="store_true",
+                           help="open it ready for review, whatever pr.draft says")
+    readiness.add_argument("--draft", action="store_true",
+                           help="open it as a draft, whatever pr.draft says")
     op.add_argument("--no-push", action="store_true", help="do not push the branch first")
     op.add_argument("--ticket-url", help="the ticket's URL (default: a url: line in <change-dir>/ticket.md)")
     op.add_argument("--dry-run", action="store_true",

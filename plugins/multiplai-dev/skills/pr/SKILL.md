@@ -22,7 +22,7 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/pr/scripts" python -m pr_pipeli
 
 | Command | Does |
 |---|---|
-| `open --repo <dir> --change-dir <dir> [--base <branch>] [--head <branch>] [--title <t>] [--ready] [--no-push] [--section <file>]… [--ticket-url <url>] [--dry-run]` | Pushes the branch (`git push -u origin <head>`, never `--force`) unless `--no-push`, then opens the PR with `gh pr create --body-file`. Draft unless `--ready`, or `pr.draft: false` in `specs/config.yaml`. Title defaults to `buildme: <change-name>`. |
+| `open --repo <dir> --change-dir <dir> [--base <branch>] [--head <branch>] [--title <t>] [--ready \| --draft] [--no-push] [--section <file>]… [--ticket-url <url>] [--dry-run]` | Pushes the branch (`git push -u origin <head>`, never `--force`) unless `--no-push`, then opens the PR with `gh pr create --body-file`. Draft unless `--ready`, or `pr.draft: false` in `specs/config.yaml`; `--draft` opens a draft whatever `pr.draft` says. Title defaults to `buildme: <change-name>`. |
 | `edit <pr-number\|url> --repo <dir> --change-dir <dir> [--section <file>]… [--push] [--dry-run]` | Reads the current description (`gh pr view --json body`), refreshes the sections this skill owns, and writes the whole description back with `gh pr edit --body-file`. Pushes first only with `--push`. Never changes the title or labels. |
 | `render --repo <dir> --change-dir <dir> [--section <file>]…` | Prints the description `open` would write. No `gh` call, no push. |
 

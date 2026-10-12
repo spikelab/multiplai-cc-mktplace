@@ -173,7 +173,7 @@ def cmd_open(args) -> int:
         config = load_config(repo)
     except TemplateError as e:
         raise Refused(str(e)) from e
-    draft = not args.ready and config.draft
+    draft = args.draft or (not args.ready and config.draft)
     base = args.base or github.gh_default_branch(repo) or github.git_default_branch(repo)
     r = render_body(repo, change_dir, base=base, head=head, ticket_url=args.ticket_url,
                     section_files=[Path(p) for p in args.section])
