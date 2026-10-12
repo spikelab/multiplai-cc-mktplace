@@ -41,6 +41,48 @@ time, not derived from a tag.
   its cost. A test suite slower than `timeout` still works: each mutant gets
   three times the unmutated suite's measured run when that is longer.
 
+## [0.34.4] - 2026-10-11
+
+### Changed
+- review and codebase-walkthrough check a citation with multiplai-core
+  0.18.0's `check_quote` instead of each carrying its own copy of the
+  `git show` reader and the quote match. What a gate accepts or rejects is
+  unchanged: review still rejects with "path not at head" and
+  `action="reject"`, and walkthrough still checks that a path names a known
+  repo before anything else. One difference: a line range that is not valid
+  (start below 1, or end before start) now reads as no lines, so a quote
+  cited there fails; both pipelines' models already refuse such ranges.
+- Both pipelines' `target.py` take `GIT_ARGV` and `git_env` from
+  multiplai-core in place of their own identical `_GIT` and `_env`.
+- `uv.lock` takes multiplai-core v0.18.0.
+
+## [0.34.3] - 2026-10-11
+
+### Changed
+- buildme's `llm_call_structured` and `agent_call_structured` parse an answer
+  with multiplai-core 0.17.0's `parse_answer`. The retry policy is unchanged:
+  a bad answer still re-runs the whole call, up to `max_retries` times. One
+  visible difference: when an answer holds no JSON at all (a markdown
+  report, say), the error, and so the retry prompt, now says so ("the answer
+  contains no JSON object with the field(s) …") instead of quoting a parse
+  error about the first brace in the prose.
+- buildme keeps its own spend ledger (`budget.py`). It counts spend per phase
+  in tokens, not USD, so it does not move onto multiplai-core's
+  `SpendLedger`.
+
+## [0.34.2] - 2026-10-11
+
+### Changed
+- codebase-walkthrough takes its checkpoint writer, `progress.log` writer,
+  spend ledger, `walkthrough.yaml` helpers and answer parsing from
+  multiplai-core 0.17.0 (`checkpoint`, `progress`, `budget.SpendLedger`,
+  `stage_config`, `structured`) instead of carrying copies of review's. The
+  `progress.log` lines, the $50 default ceiling, the one-reformat re-ask and
+  the config precedence are unchanged. The ledger saved in
+  `walkthrough-state.json` now also records spend per stage (`by_stage`),
+  calls that returned no usage (`no_usage_calls`) and `max_tokens` (null), as
+  review's does; a ledger saved before this loads as before.
+
 ## [0.34.1] - 2026-10-11
 
 ### Changed

@@ -20,6 +20,19 @@ dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.7.4] - 2026-10-11
+
+### Changed
+
+- deep-research's `llm_call_structured` parses an answer with multiplai-core
+  0.17.0's `parse_answer`. The retry policy is unchanged: a bad answer still
+  re-runs the call with the error appended, up to `max_retries` times. When
+  an answer holds no JSON at all, the error (and so the retry prompt) now
+  says so ("the answer contains no JSON object with the field(s) …") instead
+  of quoting a parse error about the first brace in the prose. The usage
+  accumulator, the concurrency semaphore and the progress writer stay
+  deep-research's own.
+
 ## [0.7.3] - 2026-10-11
 
 ### Changed

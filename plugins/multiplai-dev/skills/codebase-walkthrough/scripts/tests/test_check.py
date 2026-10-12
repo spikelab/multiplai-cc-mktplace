@@ -137,7 +137,7 @@ def test_check_repo_override_finds_a_moved_repository(fresh_ws, tmp_path, monkey
     moved = tmp_path / "moved-engine"
     fresh_ws["engine"].rename(moved)
     from walkthrough_pipeline import gates
-    gates._show.cache_clear()                             # the run above cached reads at the old path
+    gates.file_at.cache_clear()                           # the run above cached reads at the old path
     capsys.readouterr()
     assert main(["check", str(md)]) == 1                 # the header's path is gone
     capsys.readouterr()

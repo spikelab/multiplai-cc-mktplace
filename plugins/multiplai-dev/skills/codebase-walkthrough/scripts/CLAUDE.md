@@ -25,7 +25,7 @@ cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && \
 | `symbols.py` | Python `ast` over the target: functions, classes, urls, celery tasks, models, outbound HTTP paths, settings, env vars, cache keys. |
 | `references.py` | `rg` picks candidate files (intersected with `git ls-files`); `ast`, `ast-grep` or whole-identifier SQL matching confirms each hit, reading the file at HEAD. |
 | `lsp.py` | `pyright-langserver` references inside the target's own repo, one request at a time (pyright cancels an in-flight one), under one time limit. |
-| `gates.py` | Every gate. Must never import or call `sdk`. |
+| `gates.py` | Every gate. Must never import or call `sdk`. `citation_gate` checks `split_path` itself, then calls `multiplai_core.citations.check_quote`; `file_at_commit`/`lines_at_commit` wrap core `file_at`/`lines_at`, whose cache is `gates.file_at.cache_clear()`. |
 | `partition.py` | Splits the target into units of at most `--unit-lines`; a directory stays whole when it fits. |
 | `docs.py`, `fetcher.py`, `netguard.py`, `untrusted.py` | `llms.txt`, page choice, fetch with SSRF and host checks on every redirect, fencing; local docs; the API collection (names, methods, URLs, header names; never `.env*` or `secret` fields). `fetcher.py` is a trimmed copy of deep-research's without trafilatura. |
 | `stages/` | `explore`, `docs`, `trace`, `write`. Each gates its agents' answers and does one re-ask for what failed. |
@@ -33,7 +33,7 @@ cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && \
 | `render.py` | Expands `[[cN]]` / `[[snippet:cN]]` into `path:line` links and snippets from the commit; draws Mermaid from verified data; writes the Markdown, the HTML and the coverage table. |
 | `check.py` | Re-checks a finished walkthrough's links and snippets against the commits in its header. |
 | `orchestrator.py` | Runs the code stages and agent stages in `STAGES` order, saving state after each; `resume`. |
-| `sdk.py`, `budget.py`, `state.py`, `progress.py`, `config.py` | Copied from review_pipeline: trust gate and tool allow-list, budget breaker, atomic checkpoint, `progress.log`, `walkthrough.yaml` > `multiplai.conf` > session model. |
+| `sdk.py`, `budget.py`, `state.py`, `progress.py`, `config.py` | The same shape as review_pipeline's, on multiplai-core's primitives: trust gate, tool allow-list and the one-reformat call loop (answer parsing from `multiplai_core.structured`); `WalkthroughBudget`, a `multiplai_core.budget.SpendLedger` with a $50 default; atomic checkpoint (`multiplai_core.checkpoint`); `progress.log` (`multiplai_core.progress.ProgressWriter` plus the walkthrough's `STARTED` line); `walkthrough.yaml` > `multiplai.conf` > session model, read with `multiplai_core.stage_config`. |
 
 ## The gates
 

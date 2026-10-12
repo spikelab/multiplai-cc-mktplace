@@ -33,7 +33,8 @@ from multiplai_core.agent_runner import (
     run_agent,
 )
 from multiplai_core.aio import hard_timeout, swallow_task_result as _swallow_task_result  # noqa: F401
-from multiplai_core.text import extract_json  # noqa: F401
+from multiplai_core.structured import parse_answer
+from multiplai_core.text import extract_json  # noqa: F401 — re-exported: sdk.extract_json is used by the fetcher and router
 
 log = logging.getLogger(__name__)
 
@@ -372,8 +373,8 @@ async def llm_call_structured(
 ) -> T:
     """Execute an LLM call and parse the response into a Pydantic model.
 
-    - Extracts the first JSON object from the response
-    - Validates against the schema
+    - Parses the first JSON object in the response into the schema
+      (`multiplai_core.structured.parse_answer`)
     - On validation failure, retries once with an error message appended
     - Raises LLMCallTimeoutError if any attempt exceeds call_timeout seconds
     """
@@ -393,8 +394,7 @@ async def llm_call_structured(
             label=f"{label}:attempt{attempt}" if attempt > 0 else label,
         )
         try:
-            payload = extract_json(raw)
-            return schema.model_validate(payload)
+            return parse_answer(raw, schema)
         except (ValidationError, ValueError, json.JSONDecodeError) as e:
             last_error = e
             log.warning(
