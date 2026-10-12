@@ -17,6 +17,68 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-10-12
+
+### Added
+- New `/multiplai-dev:pr` skill: opens a pull request, or refreshes its
+  description, so the description follows the repository's PR template. It
+  finds the template where GitHub looks for one (`.github/`, the repo root,
+  `docs/`, or a `PULL_REQUEST_TEMPLATE/` directory, names in any case), or
+  takes `pr.template` from `specs/config.yaml` (`auto`, buildme's default,
+  means find it; a path to no file, or outside the repository, is reported
+  and the template is found as if it were unset). With no template, or several and no choice made, it uses a
+  standard template that ships with the skill:
+  Why, Blocks, Documentation, Companion artifacts, Ticket and Size.
+- The template's headings, checkboxes and comments are always kept. Sections
+  the change's own files answer are filled from them; one model call with no
+  tools writes the rest. A checkbox is ticked only when the model ticks it
+  and its quote appears word for word in one of the change's files; code
+  checks that the quote is there, and the model judges whether it shows the
+  item is done. A description over 2,500 words is refused
+  before anything is written.
+- `edit` rewrites only the sections the skill wrote, marked with hidden HTML
+  comments. Your own edits elsewhere in the description stay, and a section
+  you deleted stays deleted. On a PR you opened by hand, it adds below your text
+  the sections your text lacks (none whose heading is already there, so a PR
+  opened from the repo's template gets no heading twice) and leaves one
+  comment saying so; without the rights to edit
+  the PR, it writes nothing. Once buildme has deleted its `.build-state.json`
+  after publishing, `edit` keeps the Documentation and Blocks sections already
+  in the description instead of blanking them.
+- `edit` measures the diff on the PR's own head commit, fetching it from
+  GitHub when your checkout lacks it, so a PR from a fork, or a branch you
+  never fetched, gets its own size and file list. When that commit cannot be
+  fetched, the Size section says it was not measured, instead of describing
+  whatever branch you have checked out.
+
+### Changed
+- buildme's PUBLISH stage opens its PR through the pr skill, so a build in a
+  repository with a PR template opens a PR that follows it. When that
+  template has no Blocks, Documentation or Companion artifacts heading, those
+  sections are added after the template's own, so the PR still names the
+  documents the build rewrote. Its output lines
+  (`PUSHED:`, `PR:`, `PUBLISH_DIAGNOSIS:`), its draft default and its
+  resumable PUBLISH step are unchanged: buildme passes `--draft` or `--ready`
+  to the skill, so the skill's own `pr.draft` setting cannot override
+  `git.pr`. When the PR cannot be opened,
+  `build-progress.md` now lists the pr skill's command first, then
+  `gh pr create`. A build started from a ticket passes the ticket's link, so
+  the PR's Ticket section shows it. A build of a project inside a larger
+  repository (a monorepo package) uses the `pr:` settings in that project's
+  own `specs/config.yaml`, where `buildme setup` writes them.
+
+### Fixed
+- buildme: a `PUBLISH_DIAGNOSIS:` line now holds its whole reason on one
+  line. When the pr skill or `git push` failed with output of several lines
+  (a traceback, git's push report), only the first reached that line. When
+  the pr skill fails before it can say why, buildme now reports the end of
+  its output, where a traceback's error is, rather than the first 800
+  characters.
+- pr: every `PR_DIAGNOSIS:` line holds its whole message on one line. A
+  multi-line `gh` error used to put its later lines on stdout with no prefix,
+  so buildme dropped them; gh's "a pull request ... already exists:" lost the
+  existing PR's URL that way.
+
 ## [0.41.0] - 2026-10-12
 
 ### Added

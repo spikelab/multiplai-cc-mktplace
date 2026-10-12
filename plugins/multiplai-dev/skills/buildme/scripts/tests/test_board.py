@@ -390,8 +390,8 @@ class TestFullRunBoardTrail:
 
         pr_url = "https://github.com/acme/proj/pull/42"
         monkeypatch.setattr(
-            git_ops, "_run_gh",
-            lambda argv, cwd=None, timeout=None: GitResult(argv, 0, pr_url, ""),
+            git_ops, "_run_pr_skill",
+            lambda argv, cwd=None, timeout=None: GitResult(argv, 0, f"PR:{pr_url}\n", ""),
         )
 
         with patch("build_pipeline.spec_generator.run_spec_generator",
@@ -516,9 +516,9 @@ class TestFullRunBoardTrail:
         config.specs_dir = repo / "specs"
 
         monkeypatch.setattr(
-            git_ops, "_run_gh",
+            git_ops, "_run_pr_skill",
             lambda argv, cwd=None, timeout=None: GitResult(
-                argv, 0, "https://github.com/acme/proj/pull/9", "",
+                argv, 0, "PR:https://github.com/acme/proj/pull/9\n", "",
             ),
         )
         with patch("build_pipeline.spec_generator.run_spec_generator",

@@ -382,42 +382,49 @@ class TestPush:
 # --- PR (gh mocked) -------------------------------------------------------
 
 
-class TestOpenPR:
-    def test_success_parses_url_and_passes_draft(self, tmp_path, monkeypatch):
+from build_pipeline.orchestrator import _pr_open_argv  # noqa: E402
+
+
+class TestOpenPRWithSkill:
+    """`gh pr create` moved into the pr skill (its tests: pr/scripts/tests/
+    test_commands.py: URL, draft by default, --ready, failure exit codes).
+    buildme's side runs the skill and reads its stdout lines."""
+
+    def test_success_parses_the_pr_line(self, tmp_path, monkeypatch):
         seen: dict = {}
 
-        def fake_gh(argv, cwd=None, timeout=None):
+        def fake_pr(argv, cwd=None, timeout=None):
             seen["argv"] = argv
             seen["cwd"] = cwd
-            return GitResult(argv, 0, "https://github.com/o/r/pull/42\n", "")
+            return GitResult(argv, 0, "DIFF:2 files, +3 -1\nPR:https://github.com/o/r/pull/42\n", "")
 
-        monkeypatch.setattr(git_ops, "_run_gh", fake_gh)
-        url, res = git_ops.open_pr(tmp_path, "buildme: c", "body", draft=True)
+        monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
+        argv = _pr_open_argv(tmp_path, tmp_path / "c", "buildme/c", "buildme: c", draft=True)
+        url, diagnoses, res = git_ops.open_pr_with_skill(tmp_path, argv)
         assert url == "https://github.com/o/r/pull/42"
-        assert res.ok
-        assert seen["argv"][:3] == ["gh", "pr", "create"]
-        assert "--draft" in seen["argv"]
+        assert res.ok and diagnoses == []
+        assert seen["cwd"] == tmp_path
+        assert "--ready" not in seen["argv"]
 
-    def test_ready_omits_draft_flag(self, tmp_path, monkeypatch):
-        seen: dict = {}
+    def test_ready_passes_ready(self, tmp_path):
+        argv = _pr_open_argv(tmp_path, tmp_path / "c", "b", "t", draft=False)
+        assert "--ready" in argv and "--draft" not in argv
 
-        def fake_gh(argv, cwd=None, timeout=None):
-            seen["argv"] = argv
-            return GitResult(argv, 0, "https://github.com/o/r/pull/7", "")
+    def test_draft_passes_draft_so_pr_draft_false_cannot_override_it(self, tmp_path):
+        # git.pr: draft is buildme's choice; the skill's pr.draft must not flip it.
+        argv = _pr_open_argv(tmp_path, tmp_path / "c", "b", "t", draft=True)
+        assert "--draft" in argv and "--ready" not in argv
 
-        monkeypatch.setattr(git_ops, "_run_gh", fake_gh)
-        git_ops.open_pr(tmp_path, "t", "b", draft=False)
-        assert "--draft" not in seen["argv"]
-
-    def test_failure_returns_none_without_raising(self, tmp_path, monkeypatch):
+    def test_failure_returns_none_and_the_diagnosis_without_raising(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            git_ops, "_run_gh",
-            lambda argv, cwd=None, timeout=None: GitResult(argv, 1, "", "gh: not authenticated"),
+            git_ops, "_run_pr_skill",
+            lambda argv, cwd=None, timeout=None: GitResult(
+                argv, 2, "PR_DIAGNOSIS:gh: not authenticated\n", ""),
         )
-        url, res = git_ops.open_pr(tmp_path, "t", "b")
+        url, diagnoses, res = git_ops.open_pr_with_skill(tmp_path, ["uv"])
         assert url is None
         assert not res.ok
-        assert "not authenticated" in res.stderr
+        assert diagnoses == ["gh: not authenticated"]
 
 
 class TestManualFinishCommands:
@@ -426,6 +433,13 @@ class TestManualFinishCommands:
         assert "git push -u origin buildme/c" in text
         assert "gh pr create --title 'buildme: c'" in text
         assert "--draft" in text
+
+    def test_lists_the_pr_skill_before_the_gh_fallback(self, tmp_path):
+        argv = _pr_open_argv(tmp_path / "wt", tmp_path / "c", "buildme/c", "buildme: c")
+        text = git_ops.manual_finish_commands(
+            tmp_path / "wt", "buildme/c", "buildme: c", pr_skill_argv=argv,
+        )
+        assert text.index("python -m pr_pipeline open") < text.index("gh pr create")
 
     def test_omits_pr_when_not_requested(self, tmp_path):
         text = git_ops.manual_finish_commands(

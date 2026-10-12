@@ -294,6 +294,23 @@ jobs:
           uv run --project ../../../../.. --package review-pipeline \
             --extra dev python -m pytest tests/ -q
 
+  pr-tests:
+    name: pr skill tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # The tests build temporary git repositories; git is on the runner
+      # image. No test calls a model or `gh`.
+      - name: Run tests
+        working-directory: plugins/multiplai-dev/skills/pr/scripts
+        run: |
+          uv run --project ../../../../.. --package pr-pipeline \
+            --extra dev python -m pytest tests/ -q
+
   review-viewer-tests:
     name: review-viewer tests
     runs-on: ubuntu-latest

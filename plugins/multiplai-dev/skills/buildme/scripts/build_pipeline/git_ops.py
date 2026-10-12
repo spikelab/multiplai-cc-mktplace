@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -39,6 +38,8 @@ log = logging.getLogger(__name__)
 _GIT_TIMEOUT = 60
 _PUSH_TIMEOUT = 300
 _GH_TIMEOUT = 300
+# The pr skill may make one model call and re-ask it once.
+_PR_SKILL_TIMEOUT = 1500
 
 
 class GitLifecycleError(RuntimeError):
@@ -85,6 +86,12 @@ def _run(argv: list[str], cwd: Path | str | None = None, timeout: int = _GIT_TIM
 
 def _run_gh(argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_TIMEOUT) -> GitResult:
     """Separate seam for ``gh`` so tests can mock it without mocking git."""
+    return _run(argv, cwd=cwd, timeout=timeout)
+
+
+def _run_pr_skill(argv: list[str], cwd: Path | str | None = None,
+                  timeout: int = _PR_SKILL_TIMEOUT) -> GitResult:
+    """Separate seam for the pr skill's subprocess so tests can stub it."""
     return _run(argv, cwd=cwd, timeout=timeout)
 
 
@@ -368,6 +375,8 @@ BOOKKEEPING_EXCLUDES = [
     ":(exclude,glob)**/.build-state.json",
     ":(exclude,glob)**/.board.json",
     ":(exclude,glob)**/build-progress.md",
+    # Section files publish hands the pr skill (orchestrator._pre_publish_sections).
+    ":(exclude,glob)**/pr-sections/**",
 ]
 
 
@@ -538,38 +547,39 @@ def push_branch(worktree: Path, branch: str) -> GitResult:
     return _run(["git", "push", "-u", "origin", branch], cwd=worktree, timeout=_PUSH_TIMEOUT)
 
 
-def open_pr(worktree: Path, title: str, body: str, draft: bool = True) -> tuple[str | None, GitResult]:
-    """``gh pr create``. Returns (pr_url, result). Never raises."""
-    argv = ["gh", "pr", "create", "--title", title, "--body", body]
-    if draft:
-        argv.append("--draft")
-    res = _run_gh(argv, cwd=worktree)
-    if not res.ok:
-        return None, res
-    url = _extract_pr_url(res.stdout)
-    return url, res
-
-
-_PR_URL_RE = re.compile(r"https://\S*/pull/\d+")
-
-
-def _extract_pr_url(text: str) -> str | None:
-    m = _PR_URL_RE.search(text or "")
-    return m.group(0) if m else None
+def open_pr_with_skill(worktree: Path, argv: list[str]) -> tuple[str | None, list[str], GitResult]:
+    """Run the pr skill's ``pr_pipeline open`` (argv from
+    ``orchestrator._pr_open_argv``). Returns (pr_url, its PR_DIAGNOSIS lines,
+    result). Never raises."""
+    res = _run_pr_skill(argv, cwd=worktree)
+    url = None
+    diagnoses: list[str] = []
+    for line in (res.stdout or "").splitlines():
+        if line.startswith("PR:"):
+            url = line[3:].strip() or None
+        elif line.startswith("PR_DIAGNOSIS:"):
+            diagnoses.append(line[len("PR_DIAGNOSIS:"):].strip())
+    return url, diagnoses, res
 
 
 # --- Diagnosis ------------------------------------------------------------
 
 
 def manual_finish_commands(
-    worktree: Path, branch: str, title: str, *, include_pr: bool = True, draft: bool = True
+    worktree: Path, branch: str, title: str, *, include_pr: bool = True, draft: bool = True,
+    pr_skill_argv: list[str] | None = None,
 ) -> str:
     """The exact commands a human runs to finish by hand after a push/PR
-    failure. Printed into build-progress.md — never executed."""
+    failure. Printed into build-progress.md — never executed. With
+    ``pr_skill_argv``, the PR is opened by the pr skill from the repo's PR
+    template, and ``gh pr create`` is listed after it as the fallback."""
     lines = [
         f"cd {shlex.quote(str(worktree))}",
         f"git push -u origin {shlex.quote(branch)}",
     ]
+    if include_pr and pr_skill_argv:
+        lines.append(" ".join(shlex.quote(a) for a in pr_skill_argv))
+        lines.append("# or, without the repo's PR template:")
     if include_pr:
         pr = f"gh pr create --title {shlex.quote(title)} --body-file -"
         if draft:
