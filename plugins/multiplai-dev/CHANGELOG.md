@@ -17,6 +17,35 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-10-12
+
+### Added
+- New `/multiplai-dev:pr` skill: opens a pull request, or refreshes its
+  description, so the description follows the repository's PR template. It
+  finds the template where GitHub looks for one (`.github/`, the repo root,
+  `docs/`, or a `PULL_REQUEST_TEMPLATE/` directory, names in any case), or
+  takes `pr.template` from `specs/config.yaml`. With no template, or several
+  and no choice made, it uses a standard template that ships with the skill:
+  Why, Blocks, Documentation, Companion artifacts, Ticket and Size.
+- The template's headings, checkboxes and comments are always kept. Sections
+  the change's own files answer are filled from them; one model call with no
+  tools writes the rest. A checkbox is ticked only when the model quotes a
+  file that shows it is done. A description over 2,500 words is refused
+  before anything is written.
+- `edit` rewrites only the sections the skill wrote, marked with hidden HTML
+  comments. Your own edits elsewhere in the description stay, and a section
+  you deleted stays deleted. On a PR you opened by hand, it adds its sections
+  below your text and leaves one comment saying so; without the rights to edit
+  the PR, it writes nothing.
+
+### Changed
+- buildme's PUBLISH stage opens its PR through the pr skill, so a build in a
+  repository with a PR template opens a PR that follows it. Its output lines
+  (`PUSHED:`, `PR:`, `PUBLISH_DIAGNOSIS:`), its draft default and its
+  resumable PUBLISH step are unchanged. When the PR cannot be opened,
+  `build-progress.md` now lists the pr skill's command first, then
+  `gh pr create`.
+
 ## [0.34.4] - 2026-10-11
 
 ### Changed
