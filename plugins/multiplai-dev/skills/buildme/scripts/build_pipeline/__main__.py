@@ -5,6 +5,11 @@ Subcommands for dev/debug use (only /buildme is user-facing):
   spec-generate — Artifact generation pipeline
   tdd           — TDD implementation engine
   archive       — Archive a completed change (merge delta specs → main registry)
+  setup         — Write or merge specs/config.yaml (the wrapper asks the questions)
+  config-get    — Print one resolved specs/config.yaml value (e.g. intake.provider)
+
+Exit codes: 0 done, 1 failure, 2 usage, 3 waiting on a human or the wrapper
+(stdout says which: INTERVIEW:WAITING, RESEARCH:NEEDED or SPLIT:REQUIRED).
 """
 
 from __future__ import annotations
@@ -116,6 +121,22 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--skip-research", action="store_true", help="Skip research phase")
     build.add_argument("--interview-summary", default="", help="Pre-gathered interview summary")
     build.add_argument("--context-files", nargs="*", default=[], help="Brief/context file paths")
+    build.add_argument("--research-path", default="",
+                       help="Research file; its content is saved as research.md in the "
+                            "change dir and fed to the proposal")
+    build.add_argument("--ticket-file", default="",
+                       help="Ticket the wrapper fetched, as Markdown; saved (fenced as "
+                            "untrusted) as ticket.md in the change dir")
+    build.add_argument("--ticket-ref", default="", help="Ticket reference, e.g. DB-2267 or #12")
+    build.add_argument("--ticket-url", default="", help="Ticket URL")
+    build.add_argument("--plan-file", default="",
+                       help="A plan-skill plan (# Plan: + ## Done means); recorded and "
+                            "saved as plan.md")
+    build.add_argument("--interview-replies", default="",
+                       help="interview: ticket — file holding the ticket replies to the "
+                            "posted questions")
+    build.add_argument("--accept-size", action="store_true",
+                       help="Build a plan the size gate says should be split, as one PR")
     _add_trust_repo_flag(build)
     _add_lenient_review_flag(build)
     _add_skip_explainers_flag(build)
@@ -145,6 +166,23 @@ def build_parser() -> argparse.ArgumentParser:
     archive.add_argument("--project-dir", default=".", help="Project directory")
     archive.add_argument("--no-merge", action="store_true", help="Skip merging delta specs into main registry")
 
+    # --- setup ---
+    setup = sub.add_parser("setup", help="Write or merge specs/config.yaml")
+    setup.add_argument("--project-dir", default=".", help="Project directory")
+    setup.add_argument("--provider", choices=["plane", "github", "none"],
+                       help="intake.provider")
+    setup.add_argument("--plane-project", help="intake.plane.project (Plane project key)")
+    setup.add_argument("--interview", choices=["self", "ticket", "user"], help="interview")
+    setup.add_argument("--architecture", help="architecture (repo-relative path)")
+    setup.add_argument("--pr-template", help="pr.template: auto or a path")
+    setup.add_argument("--findings-authors",
+                       help="findings.authors: collaborators, or login,login,…")
+
+    # --- config-get ---
+    cget = sub.add_parser("config-get", help="Print one resolved specs/config.yaml value")
+    cget.add_argument("key", help="Dotted key, e.g. intake.provider or interview")
+    cget.add_argument("--project-dir", default=".", help="Project directory")
+
     return parser
 
 
@@ -165,6 +203,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
 
+    # Input files: relative paths are read from --project-dir (the process
+    # cwd is the scripts dir under `uv run --directory`). Whether a named file
+    # that does not exist is a usage error depends on the checkpoint, so the
+    # orchestrator decides that (intake.check_input_files).
+    if args.command == "build":
+        from .intake import resolve_input_paths
+        resolve_input_paths(args)
+
     # Propagate the repo-trust opt-in to the agent layer (sdk._repo_is_trusted).
     if getattr(args, "trust_repo", False):
         os.environ["BUILDME_TRUST_REPO"] = "1"
@@ -182,7 +228,15 @@ def main(argv: list[str] | None = None) -> int:
         session_id=session_id,
     )
 
-    if args.command == "build":
+    if args.command == "setup":
+        from .setup import run_setup
+        return run_setup(args)
+
+    elif args.command == "config-get":
+        from .setup import config_get
+        return config_get(args)
+
+    elif args.command == "build":
         from .orchestrator import run_orchestrator
         config = BuildConfig.from_cli_args(args)
         return asyncio.run(run_orchestrator(config, args))

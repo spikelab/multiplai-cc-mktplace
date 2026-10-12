@@ -107,6 +107,25 @@ class BuildState(BaseModel):
     interview_summary: str | None = None
     research_path: str | None = None
 
+    # Intake (--ticket-ref / --ticket-url / --plan-file). Recorded so a resume
+    # and the wrapper know what the build was started from. All default to
+    # None, so checkpoints written before intake existed still load.
+    ticket_ref: str | None = None
+    ticket_url: str | None = None
+    plan_file: str | None = None
+    # `interview: ticket` asked its questions on the ticket and is waiting for
+    # replies. The pointer sits at INTERVIEW_DONE, which is_phase_complete
+    # does not count as complete, so a resume re-enters the interview.
+    # Default False for old checkpoints.
+    interview_waiting: bool = False
+    # The plan should be split and the build stopped after plan review; a
+    # re-run stops the same way until --accept-size. Default False.
+    split_required: bool = False
+    # --accept-size was given once for this build. A retry without the flag
+    # (a resume, or a FAILED build re-running every phase) keeps the
+    # acceptance instead of stopping again. Default False.
+    size_accepted: bool = False
+
     # Git lifecycle — set when the pipeline creates its own worktree/branch.
     # Persisted so a resume RE-BINDS to the existing worktree instead of
     # creating a second one. All four default to None, so a .build-state.json

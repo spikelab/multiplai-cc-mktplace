@@ -373,6 +373,74 @@ class GitToggles:
     pr: Literal["draft", "ready", "none"] = "draft"
 
 
+# Ticket providers buildme can take a ticket from (`intake.provider` in
+# specs/config.yaml). One table, mirrored in SKILL.md Step 0: each value says
+# how the *wrapper session* fetches a ticket, because the pipeline itself never
+# talks to a ticket system (pipeline agents deny the Skill tool, and posting is
+# the wrapper's job). Adding a provider later (e.g. `vikunja`) is one entry
+# here plus one SKILL.md subsection; the loader and the pipeline flags do not
+# change, since every provider hands the pipeline the same --ticket-file.
+INTAKE_PROVIDERS: dict[str, str] = {
+    "none": "No ticket system. A ticket-looking input stops with "
+            "'run `/buildme setup`'.",
+    "plane": "Wrapper invokes multiplai-pm:plane `get <ref>` and "
+             "`comments <ref>`; a BLOCKED refusal is a stop.",
+    "github": "Wrapper runs `gh issue view <n> --json "
+              "title,body,comments,url`.",
+}
+
+INTERVIEW_MODES: tuple[str, ...] = ("self", "ticket", "user")
+
+# `models.<step>` values buildme accepts. Stored only (BuildConfig.model_specs);
+# resolving them to a model is a later change.
+MODEL_SPEC_PREFIXES: tuple[str, ...] = ("claude:", "pi:")
+
+
+@dataclass
+class IntakeConfig:
+    """`intake:` block — where a ticket comes from.
+
+    `provider` is a key of INTAKE_PROVIDERS. `options` is the provider's own
+    mapping, passed through untouched (e.g. `plane: {project: DB}`).
+    """
+
+    provider: str = "none"
+    options: dict = field(default_factory=dict)
+
+
+@dataclass
+class PrSettings:
+    """`pr:` block. Stored for the PR stage; nothing in this pipeline reads it yet."""
+
+    template: str = "auto"
+    max_change_lines: int = 1000
+
+
+@dataclass
+class FindingsSettings:
+    """`findings:` block. Stored for the findings stage; not read yet."""
+
+    authors: str | list[str] = "collaborators"
+    max_rounds: int = 3
+
+
+def _cfg_int(value, key: str, default: int) -> int:
+    """A positive int from config.yaml, or *default* with a warning."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        log.warning("Invalid %s value %r in config.yaml — using %r", key, value, default)
+        return default
+    return value
+
+
+def _cfg_mapping(value, key: str) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        log.warning("Invalid %s value %r in config.yaml — ignoring it", key, value)
+        return {}
+    return value
+
+
 # (field, root) pairs for the per-step effort/model fallbacks, in resolution
 # order: a root must be resolved before anything that reads it.
 # `plan_review_model` appears twice so it lands on a concrete ID even when
@@ -420,20 +488,20 @@ def _load_mutation_settings(raw) -> MutationSettings:
     elif str(enabled).strip().lower() in ("no", "off", "0", "false"):
         settings.enabled = False
     else:
-        log.warning("Unrecognized mutation.enabled value %r — using true", enabled)
+        log.warning("Unrecognized mutation.enabled value %r in config.yaml — using true", enabled)
 
     def _number(key, default, *, cast, ok, rule):
         value = raw.get(key, default)
         if isinstance(value, bool):
-            log.warning("Invalid mutation.%s=%r (%s) — using %r", key, value, rule, default)
+            log.warning("Invalid mutation.%s=%r in config.yaml (%s) — using %r", key, value, rule, default)
             return default
         try:
             number = cast(value)
         except (TypeError, ValueError):
-            log.warning("Invalid mutation.%s=%r (%s) — using %r", key, value, rule, default)
+            log.warning("Invalid mutation.%s=%r in config.yaml (%s) — using %r", key, value, rule, default)
             return default
         if not ok(number) or (cast is int and number != value):
-            log.warning("Invalid mutation.%s=%r (%s) — using %r", key, value, rule, default)
+            log.warning("Invalid mutation.%s=%r in config.yaml (%s) — using %r", key, value, rule, default)
             return default
         return number
 
@@ -525,6 +593,21 @@ class BuildConfig:
     # MUTATION sub-step settings (`mutation:` in specs/config.yaml)
     mutation: MutationSettings = field(default_factory=MutationSettings)
 
+    # Ticket intake (`intake:`), interview mode (`interview:`) and the stored-only
+    # blocks for later stages (`architecture`, `pr`, `findings`, `models`).
+    # Every default reproduces the behaviour of a repo without the keys.
+    intake: IntakeConfig = field(default_factory=IntakeConfig)
+    # "self" | "ticket" | "user". Under --auto, "user" resolves to "self"
+    # (nobody is there to answer); "ticket" is kept, since asking on the
+    # ticket works without a human present.
+    interview_mode: str = "user"
+    architecture: str = ""
+    pr: PrSettings = field(default_factory=PrSettings)
+    findings: FindingsSettings = field(default_factory=FindingsSettings)
+    # `models.<step>` → "claude:<name>" | "pi:<model>@<provider>". Parsed and
+    # stored only; nothing reads it in this pipeline yet.
+    model_specs: dict[str, str] = field(default_factory=dict)
+
     # Runtime marker, not user-configurable: set to the branch name once the
     # pipeline has created its own worktree+branch (or re-bound to one on
     # resume). None means "we do not own a branch" — every commit/push/PR
@@ -599,20 +682,20 @@ class BuildConfig:
     # (`[buildme.plan_review] PLAN_SPLIT_BLOCK_TRIGGER=` /
     # `PLAN_SPLIT_PACKAGE_TRIGGER=`).
     #
-    # 8 is a PLACEHOLDER, not a measured number — nobody has measured the
+    # 10 is a PLACEHOLDER, not a measured number — nobody has measured the
     # block-count distribution across real runs, so it is a guess wearing a
     # decimal point. It lives here as a knob rather than a constant in the
     # source precisely so it can be replaced once the run archive says where
     # per-block review actually starts failing.
     plan_split_block_trigger: int = field(
         default_factory=lambda: conf_int("buildme.plan_review",
-                                         "PLAN_SPLIT_BLOCK_TRIGGER", 8))
+                                         "PLAN_SPLIT_BLOCK_TRIGGER", 10))
     # The second trigger: distinct top-level packages a block set touches. A
     # change spanning several packages is a different risk class from a deep
     # change inside one, at identical block count.
     plan_split_package_trigger: int = field(
         default_factory=lambda: conf_int("buildme.plan_review",
-                                         "PLAN_SPLIT_PACKAGE_TRIGGER", 3))
+                                         "PLAN_SPLIT_PACKAGE_TRIGGER", 5))
 
     # Coding-standards docs pushed into the reviewer's context (paths from
     # `standards_files` in specs/config.yaml). Pull-for-implementer,
@@ -695,6 +778,8 @@ class BuildConfig:
         )
         config.specs_dir = config.project_dir / "specs"
         config._load_specs_config()
+        # Also covers a repo with no config.yaml, where the loader returns early.
+        config._resolve_auto_interview()
         # config.yaml supplies the default; the CLI flags override it.
         config.prototype_mode = config.gates.prototype
         if getattr(args, "prototype", False):
@@ -794,6 +879,75 @@ class BuildConfig:
             push=bool(git_cfg.get("push", True)),
             pr=pr_mode,
         )
+
+        self._load_intake_and_stage_settings(data)
+
+    def _load_intake_and_stage_settings(self, data: dict) -> None:
+        """`intake`, `interview`, `architecture`, `pr`, `findings` and
+        `models` (`mutation` is `_load_mutation_settings`). An invalid value logs a warning and keeps the default,
+        the same contract as `git.pr`."""
+        intake_cfg = _cfg_mapping(data.get("intake"), "intake")
+        provider = str(intake_cfg.get("provider", "none") or "none").lower()
+        if provider not in INTAKE_PROVIDERS:
+            log.warning("Invalid intake.provider value %r in config.yaml — using 'none' "
+                        "(known: %s)", provider, ", ".join(INTAKE_PROVIDERS))
+            provider = "none"
+        options = _cfg_mapping(intake_cfg.get(provider), f"intake.{provider}") \
+            if provider != "none" else {}
+        self.intake = IntakeConfig(provider=provider, options=dict(options))
+
+        mode = str(data.get("interview", "user") or "user").lower()
+        if mode not in INTERVIEW_MODES:
+            log.warning("Invalid interview value %r in config.yaml — using 'user'", mode)
+            mode = "user"
+        self.interview_mode = mode
+        self._resolve_auto_interview()
+
+        arch = data.get("architecture", "") or ""
+        if not isinstance(arch, str):
+            log.warning("Invalid architecture value %r in config.yaml — using ''", arch)
+            arch = ""
+        self.architecture = arch
+
+        pr_cfg = _cfg_mapping(data.get("pr"), "pr")
+        template = pr_cfg.get("template", "auto") or "auto"
+        if not isinstance(template, str):
+            log.warning("Invalid pr.template value %r in config.yaml — using 'auto'", template)
+            template = "auto"
+        self.pr = PrSettings(
+            template=template,
+            max_change_lines=_cfg_int(pr_cfg.get("max_change_lines", 1000),
+                                      "pr.max_change_lines", 1000),
+        )
+
+        findings_cfg = _cfg_mapping(data.get("findings"), "findings")
+        authors = findings_cfg.get("authors", "collaborators")
+        if authors != "collaborators" and not (
+            isinstance(authors, list) and authors
+            and all(isinstance(a, str) and a.strip() for a in authors)
+        ):
+            log.warning("Invalid findings.authors value %r in config.yaml — using "
+                        "'collaborators'", authors)
+            authors = "collaborators"
+        self.findings = FindingsSettings(
+            authors=authors,
+            max_rounds=_cfg_int(findings_cfg.get("max_rounds", 3), "findings.max_rounds", 3),
+        )
+
+        specs: dict[str, str] = {}
+        for step, spec in _cfg_mapping(data.get("models"), "models").items():
+            if isinstance(spec, str) and spec.startswith(MODEL_SPEC_PREFIXES):
+                specs[str(step)] = spec
+            else:
+                log.warning("Dropping models.%s value %r in config.yaml — want "
+                            "'claude:<name>' or 'pi:<model>@<provider>'", step, spec)
+        self.model_specs = specs
+
+    def _resolve_auto_interview(self) -> None:
+        """--auto has nobody to interview: `user` becomes `self` (logged)."""
+        if self.auto and self.interview_mode == "user":
+            log.info("interview: user → self under --auto (no human to answer)")
+            self.interview_mode = "self"
 
     def _apply_git_cli_overrides(self, args: argparse.Namespace) -> None:
         """--no-worktree / --no-push / --no-pr / --pr-ready beat config.yaml."""

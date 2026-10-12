@@ -1714,7 +1714,7 @@ class TestExitCodes:
     def test_exit_codes_defined(self):
         assert EXIT_SUCCESS == 0
         assert EXIT_BUILD_FAILURE == 1
-        assert EXIT_AGENT_TIMEOUT == 3
+        assert EXIT_AGENT_TIMEOUT == 4
 
 
 @pytest.fixture
