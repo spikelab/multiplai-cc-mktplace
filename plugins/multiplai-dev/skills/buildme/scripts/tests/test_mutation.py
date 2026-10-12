@@ -330,6 +330,28 @@ class TestApplies:
         repo, baseline = project
         assert mutation.changed_source_files(repo, baseline) == ["src/calc.py"]
 
+    def test_changed_source_files_drops_files_no_test_imports(self, project):
+        # Packaging, task-runner, docs and migration files run outside the
+        # test suite: every mutant on them would survive, and the survivor
+        # round (tests only) could never kill them.
+        repo, baseline = project
+        for name in ("setup.py", "noxfile.py", "fabfile.py", "manage.py",
+                     "src/setup.py", "docs/conf.py", "doc/conf.py",
+                     "src/app/migrations/0001_initial.py",
+                     "alembic/versions/abc123_init.py", "alembic/env.py"):
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name).write_text("x = 1\n")
+        # Look-alike names that are ordinary source stay in; a `docs` package
+        # below the root is code, not a Sphinx tree.
+        for name in ("src/docs.py", "src/migrations_helper.py",
+                     "src/docs/render.py", "src/setup_helpers.py"):
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name).write_text("x = 1\n")
+        _commit_all(repo, "chore: packaging and docs")
+        assert mutation.changed_source_files(repo, baseline) == [
+            "src/calc.py", "src/docs.py", "src/docs/render.py",
+            "src/migrations_helper.py", "src/setup_helpers.py"]
+
 
 # --- run_mutation (subprocess boundary stubbed) ----------------------------
 

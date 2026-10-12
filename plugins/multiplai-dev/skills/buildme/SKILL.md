@@ -230,7 +230,11 @@ with a helper `requirements.txt` discovers `npm test` and skips the step.
 Right after the whole-change refactor, buildme runs
 [cosmic-ray](https://pypi.org/project/cosmic-ray/) 8.7.0 over the **non-test
 `.py` lines the build added or modified** since its first block, using the
-project's own test command. cosmic-ray runs as a pinned tool
+project's own test command. Files the test suite runs but never imports are
+left out: `setup.py`, `noxfile.py`, `fabfile.py` and `manage.py` at any depth,
+`docs/` and `doc/` at the project root, and anything under a `migrations/` or
+`alembic/` directory. Every mutant on them would survive, and the survivor
+round may only edit tests. cosmic-ray runs as a pinned tool
 (`uvx --from cosmic-ray==8.7.0`), so `uv` must be installed; it is not added
 to the project or to buildme's dependencies. The first run downloads it.
 
@@ -270,7 +274,8 @@ nothing more, `mutation.md` included, and the tree is left as it is for you to
 inspect. A bad config value keeps its default and logs a
 warning. When no mutant lands on a changed line, there is no score and the step
 passes. A non-Python project, `enabled: false` or a build that changed no
-Python source logs one `SKIP phase=MUTATION` line and moves on.
+Python source the test suite imports logs one `SKIP phase=MUTATION` line and
+moves on.
 
 Every run that scores writes `specs/changes/<name>/mutation.md`: the score
 before and after the survivor round, the threshold and verdict, the files

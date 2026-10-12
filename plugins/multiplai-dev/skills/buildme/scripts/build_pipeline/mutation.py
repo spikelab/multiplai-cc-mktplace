@@ -32,6 +32,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -136,12 +137,24 @@ def mutation_applies(config) -> tuple[bool, str]:
     return True, ""
 
 
+# Python files a test suite runs but does not import: packaging and task-runner
+# scripts (any depth), the Sphinx tree at the project root, and database
+# migrations. Every mutant on them survives, and the survivor round may only
+# edit tests, so mutating them would only pull the score under `min_score`.
+_NOT_IMPORTED_RE = re.compile(
+    r"(^|/)(setup|noxfile|fabfile|manage)\.py$"
+    r"|^docs?/"
+    r"|(^|/)(migrations|alembic)/"
+)
+
+
 def changed_source_files(project_dir: Path, baseline_sha: str) -> list[str] | None:
     """Non-test `.py` files changed since *baseline_sha*, project-relative.
 
     None when git could not be asked — distinct from `[]` ("asked, and no
     Python source changed"). Deleted files are dropped: there is nothing left
-    to mutate.
+    to mutate. So are files matching `_NOT_IMPORTED_RE`, which the test suite
+    never imports.
     """
     from .tdd_engine import _TEST_FILE_RE, _TEST_PATH_RE
 
@@ -162,6 +175,9 @@ def changed_source_files(project_dir: Path, baseline_sha: str) -> list[str] | No
         if not name.endswith(".py"):
             continue
         if _TEST_FILE_RE.search(name) or _TEST_PATH_RE.search(name):
+            continue
+        if _NOT_IMPORTED_RE.search(name):
+            log.info("MUTATION not mutating %s: the test suite does not import it", name)
             continue
         if (project_dir / name).is_file():
             paths.append(name)

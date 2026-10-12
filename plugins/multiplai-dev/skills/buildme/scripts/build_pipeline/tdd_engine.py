@@ -2291,7 +2291,7 @@ async def _run_mutation(
     if paths is None:
         return _fail("could not list the files changed since the pre-build baseline")
     if not paths:
-        return _skip("no non-test Python file changed")
+        return _skip("no non-test Python file the test suite imports changed")
 
     log.info("START phase=MUTATION files=%d", len(paths))
     progress.log_phase("MUTATION", f"Mutating {len(paths)} changed Python file(s)")

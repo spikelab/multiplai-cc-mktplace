@@ -25,7 +25,9 @@ time, not derived from a tag.
   test command that runs Python: `tdd.test_command`, or the pytest command
   discovered from `pytest.ini`, `pyproject.toml` or `setup.py`), the
   build now runs mutation testing on the lines it added or modified, right
-  after the whole-change refactor. It uses cosmic-ray 8.7.0 as a pinned `uvx`
+  after the whole-change refactor. Python files the tests never import
+  (`setup.py`, `noxfile.py`, `fabfile.py`, `manage.py`, the root `docs/` or
+  `doc/` tree, and `migrations/` or `alembic/` directories) are not mutated. It uses cosmic-ray 8.7.0 as a pinned `uvx`
   tool (`uv` must be installed; the first run downloads it, and without `uv`
   the build stops with a message saying to install it or turn the step off;
   when cosmic-ray cannot be fetched or run, offline or behind a private index,
