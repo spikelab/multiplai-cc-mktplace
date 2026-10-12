@@ -426,6 +426,36 @@ def test_a_review_with_explain_off_writes_no_facts_json(fixture_repo, tmp_path, 
     assert not (out / f"booking-engine--{base}..{head}" / "facts.json").exists()
 
 
+def test_a_rerun_with_explain_off_leaves_no_facts_json_from_the_earlier_round(fixture_repo, tmp_path, monkeypatch):
+    """A rerun on the same head with explain off: the earlier round's facts.json is kept in rounds/, not left on top."""
+    from test_orchestrator import FakeAgents, _review_args
+
+    from review_pipeline.__main__ import main
+
+    fake = FakeAgents()
+
+    async def agents(prompt, schema, *, budget_label="", **kwargs):
+        if budget_label == "explain":
+            return ExploreOutput(facts=[Fact(claim="the keyword is fixed",
+                                             citations=[_cite("rateplan_service.py", 1, "KEYWORD = 'dolcebot'")])])
+        return await fake(prompt, schema, budget_label=budget_label, **kwargs)
+
+    monkeypatch.setattr(sdk, "agent_call_structured", agents)
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    out.mkdir()
+    target_dir = out / f"booking-engine--{base}..{head}"
+    (out / "review.yaml").write_text("explain: true\n", encoding="utf-8")
+    assert main(_review_args(repo, base, head, out)) == 0
+    assert (target_dir / "facts.json").is_file()
+    (out / "review.yaml").write_text("explain: false\n", encoding="utf-8")
+    assert main(_review_args(repo, base, head, out)) == 0
+    assert (target_dir / "findings.json").is_file()
+    assert not (target_dir / "facts.json").exists()
+    (kept,) = (target_dir / "rounds").iterdir()
+    assert (kept / "facts.json").is_file()
+
+
 # --- G4: the finders given the facts ---------------------------------------------------
 
 

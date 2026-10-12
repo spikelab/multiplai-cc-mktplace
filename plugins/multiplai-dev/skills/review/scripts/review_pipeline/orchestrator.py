@@ -19,6 +19,7 @@ from multiplai_core.log_utils import log_event
 from . import budget, rounds, target as target_mod, timings
 from .config import ReviewConfig, run_config
 from .export import to_findings_file, write_checks_file, write_findings_file
+from .facts import FACTS_FILE
 from .gates import gated_need, reason_kind
 from .models import MODES, SEVERITIES, ReviewState
 from .progress import ProgressWriter
@@ -241,6 +242,9 @@ async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, sessi
     state, target_dir = prepare(spec, out_dir)
     # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.
     (target_dir / "progress.log").unlink(missing_ok=True)
+    # The last round's facts.json is kept in rounds/ by prepare; the explain stage writes
+    # this run's one, and a run with explain off must not leave the old one beside its findings.
+    (target_dir / FACTS_FILE).unlink(missing_ok=True)
     return await run_state(state, target_dir, config, session_id=session_id)
 
 
