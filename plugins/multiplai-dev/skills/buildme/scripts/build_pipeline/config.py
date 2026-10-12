@@ -444,6 +444,7 @@ STEP_STAGES: dict[str, str] = {
     "respec": "spec",
     "interview": "spec",
     "research": "spec",
+    "findings_spec": "spec",
     "test_writer": "agent",
     "implementer": "agent",
     "refactor": "agent",
@@ -458,6 +459,7 @@ STEP_STAGES: dict[str, str] = {
     "test_quality_audit": "review",
     "plan_review": "review",
     "integration_fix_escalated": "review",
+    "findings_triage": "review",
 }
 
 # The keys `models:` accepts: a step, a stage, or `default`.

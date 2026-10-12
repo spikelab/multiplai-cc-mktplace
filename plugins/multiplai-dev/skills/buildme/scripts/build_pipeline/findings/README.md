@@ -7,13 +7,13 @@ again until a round finds nothing new or `findings.max_rounds` is reached.
 
 | Module | What it does |
 |---|---|
-| `models.py` | `PRComment`, `Verdict`, `Triage`, and the per-round state kept in `.build-state.json`'s `findings` field |
+| `models.py` | `PRComment`, `Verdict`, `Triage`, `TriageRecord`, `SpecChange` |
 | `fetch.py` | lists unresolved review threads and top-level comments; decides whose comments are acted on; fences every body |
 | `triage.py` | one read-only agent per allowed comment; writes `findings-r<N>.md` |
 | `spec.py` | writes `respec-findings-r<N>.md`, applies it to the change's requirements, commits `spec(findings-r<N>): …` |
-| `fix.py` | writes `findings-r<N>-tasks.md` and runs the TDD engine on it with its own state file |
-| `publish.py` | pushes, refreshes the PR body through the pr skill, replies in each thread |
-| `loop.py` | the round loop, its checkpoints and the `FINDINGS:*` lines |
+| `fix.py` | writes `findings-r<N>-tasks.md` and runs the TDD engine on it with its own state file (not written yet) |
+| `publish.py` | pushes, refreshes the PR body through the pr skill, replies in each thread (not written yet) |
+| `loop.py` | the round loop, its checkpoints and the `FINDINGS:*` lines (not written yet) |
 
 Review threads are never resolved. The pipeline only replies.
 

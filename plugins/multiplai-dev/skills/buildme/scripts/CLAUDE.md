@@ -25,6 +25,7 @@
 | _(logging)_ | Uses shared `log_utils.setup_logging()` from hooks/ | No |
 | `env.py` | .env loading, multiplai.conf parsing, model resolution | No |
 | `progress.py` | Tail-able progress file writer | No |
+| `findings/` | `python -m build_pipeline findings` (in progress): `fetch.py` reads a PR's unresolved review threads and new top-level comments through `git_ops._run_gh`, decides whose are acted on (`findings.authors`, `findings.allow_bots`) and flags injection-shaped bodies; `triage.py` runs one read-only agent (`Read`/`Glob`/`Grep`) per allowed comment on the fenced body and writes `findings-r<N>.md`; `spec.py` writes `respec-findings-r<N>.md`, applies it to the change's `requirements/*.md` with `ChangeManager._apply_delta` and commits `spec(findings-r<N>): <ids>`. `README.md` holds the GitHub calls as checked on a scratch repo. | Via sdk |
 
 ## LLM Steps (llm_steps/)
 
@@ -57,6 +58,7 @@ Templates are Python f-strings with `{placeholders}`. Each template is a constan
 | `rubric_prompts.py` | RUBRIC_PROMPT |
 | `plan_review.py` | PLAN_REVIEW_PROMPT |
 | `interview.py` | QUESTIONER_PROMPT, ANSWERER_PROMPT, RESEARCH_DECISION_PROMPT, UNTRUSTED_NOTICE |
+| `findings.py` | TRIAGE_PROMPT, SPEC_DELTA_PROMPT |
 | `vendored/` | Prompt text borrowed from `anthropics/claude-plugins-official`'s `pr-review-toolkit` under Apache-2.0 — `reviewer_blocks.py` holds the blocks, `SOURCES.json` pins each one by blob SHA, `LICENSE` sits beside them. Never edit a block to fit a local house rule; `scripts/check_vendored_prompts.py` re-fetches every pin and reports drift, and it is a **run-it-before-a-release** script wired to nothing. |
 
 ## Testing
