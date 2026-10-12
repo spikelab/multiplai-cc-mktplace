@@ -133,9 +133,19 @@ calling checkout:
 - **The worktree survives the run.** The pipeline never removes a worktree —
   including its own — never merges, and never force-pushes. Deleting it is the
   calling session's decision, made from the workspace root.
-- PUBLISH pushes the branch and opens a **draft** PR (`gh pr create`). Push/PR
-  failure is non-fatal: the branch and worktree stay intact and the exact manual
-  commands land in `build-progress.md`.
+- PUBLISH pushes the branch and opens a **draft** PR through the pr skill
+  (`/multiplai-dev:pr`, run as `pr_pipeline open --no-push`), so the PR's
+  description follows the repo's PR template, or the skill's standard one when
+  the repo has none. Push/PR failure is non-fatal: the branch and worktree stay
+  intact and the exact manual commands land in `build-progress.md`.
+- One hook adds sections to the PR description without touching the pr skill:
+  `PRE_PUBLISH_CONTRIBUTORS` in `orchestrator.py`, run by
+  `_pre_publish_sections` after the last block and before publish. Each
+  contributor writes a file under `<change dir>/pr-sections/` (never committed)
+  whose first line is a Markdown heading, and the file is passed as
+  `--section`. A contributor that fails is logged and skipped. The list is
+  empty today; its first intended user is the walkthrough step that lists
+  stale walkthroughs.
 
 Commits you will see on the branch, per block: `test(block-N)`, `impl(block-N)`,
 and — when the block's refactor pass survives verification — `refactor(block-N)`.
@@ -184,7 +194,8 @@ branch, and pushing / opening the PR is yours to do.
 Parse and relay, from stdout: `WORKTREE:<path>`, `BRANCH:<name>`, `PUSHED:<branch>`,
 `PR:<url>`. Always report the worktree path and that it was left in place
 deliberately, plus the PR URL (or, on `PUBLISH_DIAGNOSIS:<reason>`, the manual
-push/PR commands from `build-progress.md`).
+push/PR commands from `build-progress.md`). The PR's description comes from the
+pr skill and follows the repo's PR template; these lines are unchanged by it.
 
 ## Tuning model and effort (multiplai.conf)
 
@@ -373,7 +384,9 @@ Parse pipeline stdout for progress lines:
 - `BLOCK:<n>/<total>:<name>:COMPLETE` — block progress
 - `BOARD:<change>:<Column>` — kanban column transitions (see
   [`docs/dark-factory-board.md`](docs/dark-factory-board.md))
-- `WORKTREE:<path>` / `BRANCH:<name>` / `PUSHED:<branch>` / `PR:<url>` — git lifecycle
+- `WORKTREE:<path>` / `BRANCH:<name>` / `PUSHED:<branch>` / `PR:<url>` — git lifecycle.
+  PUBLISH opens the PR with the pr skill, from the repo's PR template; these
+  lines and `PUBLISH_DIAGNOSIS:` are the same as before it did
 - `DOCS_WARNING:<reason>` — source changed, the project keeps a changelog, and
   the documentation phase updated nothing (a warning, never a failure)
 - `PUBLISH_DIAGNOSIS:<reason>` — push/PR could not finish; manual commands are in
