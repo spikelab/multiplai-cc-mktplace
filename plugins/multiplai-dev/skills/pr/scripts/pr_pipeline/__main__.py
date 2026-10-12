@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,13 +56,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    from multiplai_core.env import load_env
-    from multiplai_core.log_utils import setup_logging
+    try:
+        from multiplai_core.env import load_env
+        from multiplai_core.log_utils import setup_logging
 
-    load_env()
-    setup_logging("pr-pipeline", propagate_loggers=("pr_pipeline", "multiplai_core"))
+        load_env()
+        setup_logging("pr-pipeline", propagate_loggers=("pr_pipeline", "multiplai_core"))
 
-    from . import commands
+        from . import commands
+    except Exception as e:  # before commands.run's handler exists: exit 2, never Python's 1, which means a gate
+        traceback.print_exc()
+        print(f"PR_DIAGNOSIS:pr {args.command} failed to start: {type(e).__name__}: {e}", flush=True)
+        return 2
 
     return commands.run(args)
 

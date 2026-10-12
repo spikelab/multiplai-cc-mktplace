@@ -226,3 +226,17 @@ def test_an_unexpected_error_exits_2_not_1(tmp_path, monkeypatch, capsys, logged
     assert run(["render", "--repo", str(repo), "--change-dir", str(change)]) == 2
     assert "PR_DIAGNOSIS:pr render failed: UnicodeDecodeError" in capsys.readouterr().out
     assert logged[-1][1] == "failed"
+
+
+def test_an_error_while_starting_up_exits_2_not_1(tmp_path, monkeypatch, capsys):
+    import multiplai_core.env
+
+    from pr_pipeline import __main__ as cli
+
+    def boom(*a, **k):
+        raise PermissionError("cannot read .env")
+
+    monkeypatch.setattr(multiplai_core.env, "load_env", boom)
+    repo, change = _setup(tmp_path)
+    assert cli.main(["render", "--repo", str(repo), "--change-dir", str(change)]) == 2
+    assert "PR_DIAGNOSIS:pr render failed to start: PermissionError: cannot read .env" in capsys.readouterr().out
