@@ -80,7 +80,8 @@ Re-read the plan as if you were a fresh session with no conversation history:
   by a numbered work item.
 - Each "Done means" criterion is checkable by a command or observation.
 - Every step that writes state has a row in "Stop and resume states" for
-  each point where it can stop, plus the four perturbation rows.
+  each point where it can stop, plus each of the four perturbation rows
+  that applies to it.
 - Done means names the test that stops at each row and lists the rows it
   covers, or says in one line why the plan needs none.
 
@@ -142,7 +143,8 @@ the rows for this plan's own work items as an executor runs them
   may not have. Never let the agent improvise past a gate.
 - Implementers and fixers add no resume behaviour the Stop and resume
   states table does not ask for: no extra refusal, fast-forward, retry,
-  saved field or ref name.
+  saved field or ref name. Saved state the table does not list yet is
+  added only as the next bullet says.
 - A change that saves new state (a field, a ref name, a state file, a
   lock, a ledger line) first adds a row for it to the table in this plan
   file, and a test case for that row.
