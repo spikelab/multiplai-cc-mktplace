@@ -15,6 +15,7 @@ Subcommands (see --help for all):
 from __future__ import annotations
 import argparse
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -396,6 +397,12 @@ def cmd_music_sample(args: argparse.Namespace) -> int:
         music_stage.write_synth(args.preset, args.seconds, out)
     except ValueError as e:
         print(f"✗ {e}", file=sys.stderr)
+        return 1
+    except FileNotFoundError:
+        print("✗ ffmpeg not found on PATH. Install it (brew install ffmpeg, or apt install ffmpeg) and try again.", file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as e:
+        print(f"✗ ffmpeg could not write the sample (exit {e.returncode})", file=sys.stderr)
         return 1
     print(f"SAMPLE: {out}")
     return 0

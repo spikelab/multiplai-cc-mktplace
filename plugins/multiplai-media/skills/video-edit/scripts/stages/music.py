@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib
+import math
 import os
 import shutil
 import subprocess
@@ -57,8 +58,8 @@ def write_synth(preset: str, seconds: float, dst: Path) -> Path:
     """
     if preset not in SYNTH_PRESETS:
         raise ValueError(f"unknown synth preset {preset!r}; choices: {list(SYNTH_PRESETS)}")
-    if not seconds > 0:
-        raise ValueError("seconds must be positive")
+    if not (math.isfinite(seconds) and seconds > 0):
+        raise ValueError("seconds must be positive and finite")
     dst.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",

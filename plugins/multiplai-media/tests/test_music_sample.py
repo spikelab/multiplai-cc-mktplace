@@ -47,8 +47,25 @@ def test_seconds_must_be_positive_and_the_preset_known(tmp_path: Path) -> None:
     path = f"{tmp_path / 'bin'}:{os.environ['PATH']}"
     proc = _run(["calm", "--out", str(tmp_path / "x.wav"), "--seconds", "0"], path)
     assert proc.returncode == 1 and "seconds must be positive" in proc.stderr
+    proc = _run(["calm", "--out", str(tmp_path / "x.wav"), "--seconds", "inf"], path)
+    assert proc.returncode == 1 and "seconds must be positive and finite" in proc.stderr
     proc = _run(["jazz", "--out", str(tmp_path / "x.wav")], path)
     assert proc.returncode == 2 and "invalid choice" in proc.stderr
+
+
+def test_a_missing_or_failing_ffmpeg_is_one_line_and_exit_1(tmp_path: Path) -> None:
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    proc = _run(["calm", "--out", str(tmp_path / "x.wav")], str(empty))
+    assert proc.returncode == 1 and "Traceback" not in proc.stderr
+    assert proc.stderr.strip() == "✗ ffmpeg not found on PATH. Install it (brew install ffmpeg, or apt install ffmpeg) and try again."
+    failing = tmp_path / "failing"
+    failing.mkdir()
+    (failing / "ffmpeg").write_text("#!/bin/sh\nexit 3\n")
+    (failing / "ffmpeg").chmod(0o755)
+    proc = _run(["calm", "--out", str(tmp_path / "x.wav")], f"{failing}:{os.environ['PATH']}")
+    assert proc.returncode == 1 and "Traceback" not in proc.stderr
+    assert proc.stderr.strip() == "✗ ffmpeg could not write the sample (exit 3)"
 
 
 def test_a_render_still_synthesizes_its_bed_five_seconds_long(tmp_path: Path, monkeypatch) -> None:
