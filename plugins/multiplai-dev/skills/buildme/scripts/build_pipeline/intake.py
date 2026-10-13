@@ -197,7 +197,7 @@ def config_yaml_off_ref(project_dir: Path, ref: str) -> bool:
     for rev in ("HEAD", ref):
         try:
             res = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{rev}:./specs/config.yaml"],
-                                 cwd=str(project_dir), capture_output=True, text=True, timeout=30)
+                                 cwd=str(project_dir), capture_output=True, text=True, timeout=30, check=False)
         except (OSError, subprocess.SubprocessError):
             return False
         blobs.append(res.stdout.strip() if res.returncode == 0 else None)

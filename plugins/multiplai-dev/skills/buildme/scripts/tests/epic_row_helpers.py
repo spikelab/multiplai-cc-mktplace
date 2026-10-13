@@ -444,10 +444,8 @@ def approve(config: BuildConfig, answer: EpicSplitAnswer, log: CallLog) -> None:
     """Split *config*'s build with *answer* and approve it, without running the coordinator."""
     from unittest.mock import AsyncMock, patch
 
-    from build_pipeline.epic import coordinator
+    from build_pipeline.epic import coordinator, lock
     from build_pipeline.epic import split as split_mod
-
-    from build_pipeline.epic import lock
 
     with patch.object(split_mod, "epic_split", FakeSplit(log, answer)):
         assert run_build(config, args_for(config)) == 3
@@ -498,7 +496,7 @@ def run_signalled(fn: Callable[[], int], ready: Callable[[], bool], sig: int) ->
 
 def alive(pid: int) -> bool:
     """True while *pid* runs (a zombie counts as gone)."""
-    ps = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    ps = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False)
     return bool(ps.stdout.strip()) and not ps.stdout.strip().startswith("Z")
 
 
