@@ -312,6 +312,43 @@ class TestPreCodebaseAnalysisCheckpointResume:
         assert json.loads(out.read_text())["spec_gen"]["codebase_analysis_path"] is None
 
 
+class TestPreEpicSplitCheckpoint:
+    """A .build-state.json written before BuildPhase.EPIC_SPLIT existed, at
+    CODEBASE_ANALYSIS: it loads, its epic directory is unset, and EPIC_SPLIT
+    is still ahead of it rather than silently skipped."""
+
+    FIXTURE = "build-state-pre-epic-split.json"
+
+    def test_fixture_predates_the_change(self):
+        raw = (FIXTURES / self.FIXTURE).read_text()
+        assert "epic_dir" not in raw, f"{self.FIXTURE} is no longer a pre-change fixture"
+
+    def test_loads_and_resumes_with_epic_split_still_ahead(self):
+        s = BuildState.load(FIXTURES / self.FIXTURE)
+
+        assert s.phase == BuildPhase.CODEBASE_ANALYSIS
+        assert s.epic_dir is None
+        assert s.is_phase_complete(BuildPhase.RESEARCH)
+        assert not s.is_phase_complete(BuildPhase.EPIC_SPLIT)
+        assert not s.is_phase_complete(BuildPhase.SPEC_GENERATION)
+
+    def test_epic_split_is_ordered_between_codebase_analysis_and_spec_generation(self):
+        order = list(BuildPhase)
+        assert order.index(BuildPhase.CODEBASE_ANALYSIS) + 1 == order.index(BuildPhase.EPIC_SPLIT)
+        assert order.index(BuildPhase.EPIC_SPLIT) + 1 == order.index(BuildPhase.SPEC_GENERATION)
+
+    def test_a_checkpoint_past_spec_generation_does_not_rewind_for_the_split(self):
+        s = BuildState.load(FIXTURES / self.FIXTURE)
+        s.phase = BuildPhase.SPEC_GENERATION
+        assert s.is_phase_complete(BuildPhase.EPIC_SPLIT)
+
+    def test_roundtrip_rewrites_with_the_new_field(self, tmp_path):
+        s = BuildState.load(FIXTURES / self.FIXTURE)
+        out = tmp_path / "state.json"
+        s.checkpoint(out)
+        assert json.loads(out.read_text())["epic_dir"] is None
+
+
 class TestRespecPhaseAndNotes:
     """BuildPhase.RESPEC sits between TDD_BUILD and COMPLETE, and the notes an
     agent reported survive a checkpoint/resume round trip."""
