@@ -9,21 +9,19 @@
   let panel, notice, body, list, player, playerLabel, sendBtn, sendHint;
   let candidates = [], sentences = [], sentencesFor = null;
   const words = new Map();          // candidate id → {win, list}: the words fetched for a window
-  let decisions = {};               // candidate id → {decision, start, end, note}; this viewer's draft
+  let decisions = {};               // candidate id → {decision, start, end, note, for}; this viewer's draft
+  let draftKey = null;              // where the drafts are stored: one key per source recording
   let playUntil = null;
 
-  const saveDecisions = () => App.store.set("picks", decisions);
+  const saveDecisions = () => { if (draftKey) App.store.set(draftKey, decisions); };
 
   function sentPicks() {
     return L.latestBy(L.rowsOfKind(App.state.rows, "pick"), "candidate");
   }
 
+  // A draft made for an earlier span of this id is replaced (L.clipDraft).
   function decisionFor(c) {
-    if (!decisions[c.id]) {
-      const last = sentPicks().get(c.id);
-      decisions[c.id] = last ? { decision: last.decision, start: last.start, end: last.end, note: last.text || "" }
-        : { decision: null, start: c.start, end: c.end, note: "" };
-    }
+    decisions[c.id] = L.clipDraft(c, decisions[c.id], sentPicks().get(c.id));
     return decisions[c.id];
   }
 
@@ -258,6 +256,10 @@
     App.notice(notice, n);
     body.hidden = !!n;
     if (n) return;
+    // Drafts are stored per source recording, so a later job served on the same port
+    // does not inherit this one's decisions and edges.
+    const key = `picks:${s.job.data.source}`;
+    if (key !== draftKey) { draftKey = key; decisions = App.store.get(key, {}); }
     if (changed.job || sentencesFor !== s.job.data.sentences) {
       sentencesFor = s.job.data.sentences;
       try { sentences = (await App.api("/api/sentences")).sentences; } catch (e) { sentences = []; }
@@ -279,7 +281,6 @@
     panel = p;
     notice = panel.querySelector(".notice");
     body = panel.querySelector(".body");
-    decisions = App.store.get("picks", {});
     body.innerHTML = "";
     const top = el("div", "clips-player");
     player = el("video");

@@ -9,7 +9,8 @@ const L = require(path.join(__dirname, "..", "skills", "video-edit", "scripts", 
 
 const JOB = { status: "ok", data: { kind: "reels" } };
 const DEMO = { status: "ok", data: { kind: "demo" } };
-const CANDS = { status: "ok", data: [{ id: "c1" }, { id: "c2" }] };
+const CANDS = { status: "ok", data: [{ id: "c1", start: 10, end: 40 }, { id: "c2", start: 100, end: 140 }] };
+const pick = (candidate, start, end, extra = {}) => ({ kind: "pick", candidate, decision: "accept", start, end, ...extra });
 
 test("fmt shows minutes, seconds and tenths", () => {
   assert.equal(L.fmt(75.25), "1:15.3");
@@ -41,9 +42,10 @@ test("rowsOfKind treats a row without a kind as a point", () => {
 
 test("clipsOpen until every candidate has a pick row", () => {
   assert.equal(L.clipsOpen({ job: JOB, candidates: CANDS, rows: [] }), true);
-  assert.equal(L.clipsOpen({ job: JOB, candidates: CANDS, rows: [{ kind: "pick", candidate: "c1" }] }), true);
-  assert.equal(L.clipsOpen({ job: JOB, candidates: CANDS,
-    rows: [{ kind: "pick", candidate: "c1" }, { kind: "pick", candidate: "c2" }] }), false);
+  assert.equal(L.clipsOpen({ job: JOB, candidates: CANDS, rows: [pick("c1", 10, 40)] }), true);
+  assert.equal(L.clipsOpen({ job: JOB, candidates: CANDS, rows: [pick("c1", 9.5, 41), pick("c2", 100, 140)] }), false);
+  // c2's pick was for another span: candidates.json reused the id, so c2 is open again.
+  assert.equal(L.clipsOpen({ job: JOB, candidates: CANDS, rows: [pick("c1", 10, 40), pick("c2", 500, 540)] }), true);
   assert.equal(L.clipsOpen({ job: JOB, candidates: { status: "missing" }, rows: [] }), false);
   assert.equal(L.clipsOpen({ job: DEMO, candidates: CANDS, rows: [] }), false);
 });
@@ -227,4 +229,39 @@ test("oneAtATime: a failed run still lets the queued run go", async () => {
   const second = call();
   await assert.rejects(first, /down/);
   assert.equal(await second, 2);
+});
+
+// --- clip drafts --------------------------------------------------------------------------
+
+test("pickFits: a pick belongs to a candidate while their spans overlap", () => {
+  const c = { id: "c3", start: 100, end: 140 };
+  assert.equal(L.pickFits(pick("c3", 99, 141), c), true);       // snapped edges
+  assert.equal(L.pickFits(pick("c3", 500, 540), c), false);     // the id now names another span
+  assert.equal(L.pickFits(pick("c3", 140, 150), c), false);     // touching is not overlapping
+  assert.equal(L.pickFits(undefined, c), false);
+});
+
+test("clipDraft keeps a draft made for the candidate's current span", () => {
+  const c = { id: "c3", start: 100, end: 140 };
+  const draft = { decision: "accept", start: 102, end: 138, note: "tight", for: [100, 140] };
+  assert.equal(L.clipDraft(c, draft, undefined), draft);
+});
+
+test("clipDraft drops a draft made for another span, so its old edges are never sent", () => {
+  const moved = { id: "c3", start: 500, end: 540 };
+  const old = { decision: "accept", start: 100, end: 140, note: "", for: [100, 140] };
+  assert.deepEqual(L.clipDraft(moved, old, undefined),
+    { decision: null, start: 500, end: 540, note: "", for: [500, 540] });
+  // ...and a draft from before drafts recorded their span counts as another span.
+  assert.equal(L.clipDraft(moved, { decision: "reject", start: 500, end: 540, note: "" }, undefined).decision, null);
+  // Nothing to send for it until the user decides again.
+  const decisions = { c3: L.clipDraft(moved, old, undefined) };
+  assert.deepEqual(L.unsentPicks(decisions, new Map()), []);
+});
+
+test("clipDraft starts from the newest sent pick only while it fits the candidate", () => {
+  const c = { id: "c3", start: 100, end: 140 };
+  assert.deepEqual(L.clipDraft(c, null, pick("c3", 101, 139, { text: "keep" })),
+    { decision: "accept", start: 101, end: 139, note: "keep", for: [100, 140] });
+  assert.equal(L.clipDraft({ ...c, start: 500, end: 540 }, null, pick("c3", 101, 139)).decision, null);
 });

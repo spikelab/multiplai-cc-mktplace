@@ -45,11 +45,18 @@
     return (rows || []).filter((r) => (r.kind || "point") === kind);
   }
 
-  /* Clips is open while a valid candidate has no pick row yet. */
+  /* Whether a pick row still belongs to candidate `c`: its span overlaps c's.
+   * The session may snap a picked clip's edges, but a candidates.json that
+   * reuses an id for another part of the recording makes that a new candidate. */
+  function pickFits(row, c) {
+    return !!row && row.start < c.end && row.end > c.start;
+  }
+
+  /* Clips is open while a valid candidate has no pick row that fits it yet. */
   function clipsOpen(s) {
     if (!isReels(s.job) || !s.candidates || s.candidates.status !== "ok") return false;
     const picked = latestBy(rowsOfKind(s.rows, "pick"), "candidate");
-    return s.candidates.data.some((c) => !picked.has(c.id));
+    return s.candidates.data.some((c) => !pickFits(picked.get(c.id), c));
   }
 
   /* Speakers is open until a panels row has been sent. */
@@ -145,6 +152,19 @@
     return null;
   }
 
+  /* This viewer's decision on candidate `c`: `draft` itself when it was made for
+   * c's current span (`draft.for`, [start, end]), else the newest sent pick
+   * when it fits c, else undecided at c's own edges. */
+  function clipDraft(c, draft, lastSent) {
+    const f = draft && draft.for;
+    if (Array.isArray(f) && Math.abs(f[0] - c.start) < 0.001 && Math.abs(f[1] - c.end) < 0.001) return draft;
+    const span = [c.start, c.end];
+    if (pickFits(lastSent, c)) {
+      return { decision: lastSent.decision, start: lastSent.start, end: lastSent.end, note: lastSent.text || "", for: span };
+    }
+    return { decision: null, start: c.start, end: c.end, note: "", for: span };
+  }
+
   /* Pick rows for the candidates decided here whose decision, edges or note
    * differ from the newest pick row already sent for them. */
   function unsentPicks(decisions, sent) {
@@ -229,7 +249,7 @@
     TABS, INPUT_FILES, fmt, inputNotice, isReels, latestBy, rowsOfKind, clipsOpen, speakersOpen, firstOpenTab,
     oneAtATime,
     SCORE_KEYS, totalScore, sortCandidates, timelineWindow, toFrac, fromFrac, snapTargets, snapEdge, stepEdge,
-    itemAt, unsentPicks,
+    itemAt, pickFits, clipDraft, unsentPicks,
     normRect, clampRect, moveRect, resizeRect, roundRect, nextBoxName, panelsProblem, panelsRow,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
