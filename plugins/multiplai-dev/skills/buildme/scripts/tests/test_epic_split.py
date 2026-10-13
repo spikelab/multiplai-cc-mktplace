@@ -232,6 +232,30 @@ class TestSeveralChildren:
             run_build(config, args_for(config))
         assert seen[0] == [] and any("cycle" in e for e in seen[1])
 
+    def test_a_split_saved_by_another_build_while_deciding_is_kept(self, env):
+        """Another build of the same change saved its split, and the user edited
+        one of its plans, while this build was still deciding: under the lock
+        this build takes that epic.json, and writes over no file (A.S4, A.S8)."""
+        root, data, project, log = env
+        config = make_build(project)
+        epic = _epic_dir(data)
+        theirs = store.Epic(name="e", reason="Two parts.", children=[child("x"), child("y", ("x",))])
+        edited = PLAN.format(title="Edited while waiting")
+
+        async def another_build_saves_meanwhile(config, inputs, errors=(), *, call=None):
+            store.save_epic(epic, theirs)
+            store.write_files(epic, theirs)
+            (epic / "plans" / "x.md").write_text(edited)
+            return THREE
+
+        with _split(another_build_saves_meanwhile):
+            assert run_build(config, args_for(config)) == 3
+        assert [c["id"] for c in json.loads((epic / "epic.json").read_text())["children"]] == ["x", "y"]
+        assert sorted(p.name for p in (epic / "plans").iterdir()) == ["x.md", "y.md"]
+        assert (epic / "plans" / "x.md").read_text() == edited
+        assert [c.id for c in store.parse_split((epic / "split.md").read_text())] == ["x", "y"]
+        assert load_state(config).epic_dir == str(epic)
+
     @pytest.mark.parametrize("lost_state", [False, True])
     def test_an_unparsable_epic_json_exits_1_and_is_kept(self, env, lost_state):
         root, data, project, log = env
@@ -331,6 +355,94 @@ class TestApproval:
         capsys.readouterr()
         assert run_build(config, args_for(config)) == 0
         assert "EPIC:APPROVED:" in capsys.readouterr().out
+
+    def test_the_repo_column_round_trips(self):
+        children = [EpicChild(id="api", title="API | server", repo="org/other"),
+                    EpicChild(id="ui", title="UI", depends_on=["api"])]
+        parsed = store.parse_split(store.render_split(store.Epic(name="e", children=children)))
+        assert parsed == children
+
+    def test_a_repo_in_the_table_is_saved(self, env):
+        config, epic = self._proposed(env)
+        split_md = epic / "split.md"
+        text = split_md.read_text()
+        assert "| api | Child api | — | — |" in text
+        split_md.write_text(text.replace("| api | Child api | — | — |", "| api | Child api | — | org/other |"))
+        assert run_build(config, args_for(config, approve_split=True)) == 0
+        saved = json.loads((epic / "epic.json").read_text())
+        assert [c["repo"] for c in saved["children"]] == ["org/other", None, None]
+
+    @pytest.mark.parametrize("damage", ["one row", "no table", "missing"])
+    def test_a_split_md_that_is_not_an_epic_fails_approval_and_saves_nothing(self, env, capsys, damage):
+        config, epic = self._proposed(env)
+        split_md = epic / "split.md"
+        if damage == "one row":
+            split_md.write_text("".join(line for line in split_md.read_text().splitlines(keepends=True)
+                                        if not line.startswith(("| ui |", "| docs |"))))
+        elif damage == "no table":
+            split_md.write_text("# Epic split: e\n")
+        else:
+            split_md.unlink()
+        before = (epic / "epic.json").read_bytes()
+        capsys.readouterr()
+        assert run_build(config, args_for(config, approve_split=True)) == 1
+        assert "split.md" in capsys.readouterr().err
+        assert (epic / "epic.json").read_bytes() == before
+
+    def test_an_approved_plan_deleted_exits_2_naming_it(self, env, capsys):
+        config, epic = self._proposed(env)
+        assert run_build(config, args_for(config, approve_split=True)) == 0
+        (epic / "plans" / "docs.md").unlink()
+        capsys.readouterr()
+        assert run_build(config, args_for(config)) == 2
+        assert "plans/docs.md" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("edit", ["plan", "depends_on", "repo", "title", "child dropped",
+                                      "hashes emptied", "hash dropped"])
+    def test_an_epic_json_edited_after_approval_exits_2_naming_it(self, env, capsys, edit):
+        """A.S8: epic.json is what B1's coordinator builds from, so after approval
+        its children must still be the approved split.md and plans."""
+        config, epic = self._proposed(env)
+        assert run_build(config, args_for(config, approve_split=True)) == 0
+        path = epic / "epic.json"
+        saved = json.loads(path.read_text())
+        if edit == "plan":
+            saved["children"][0]["plan"] = PLAN.format(title="Not the approved plan")
+        elif edit == "depends_on":
+            saved["children"][2]["depends_on"] = []
+        elif edit == "repo":
+            saved["children"][1]["repo"] = "org/other"
+        elif edit == "title":
+            saved["children"][1]["title"] = "Another title"
+        elif edit == "child dropped":
+            saved["children"].pop()
+        else:
+            if edit == "hashes emptied":
+                saved["hashes"] = {}
+            else:
+                del saved["hashes"]["plans/api.md"]
+            (epic / "plans" / "api.md").write_text(PLAN.format(title="Changed later"))
+        path.write_text(json.dumps(saved))
+        edited = path.read_bytes()
+        capsys.readouterr()
+        assert run_build(config, args_for(config)) == 2
+        assert "epic.json" in capsys.readouterr().err
+        assert path.read_bytes() == edited
+
+    def test_an_epic_json_set_to_approved_by_hand_is_refused(self, env, capsys):
+        """Hand-setting `approved` skips neither `--approve-split` nor item 4's checks."""
+        config, epic = self._proposed(env)
+        path = epic / "epic.json"
+        saved = json.loads(path.read_text())
+        saved["state"] = "approved"
+        path.write_text(json.dumps(saved))
+        (epic / "plans" / "ui.md").write_text("no plan heading at all\n")
+        edited = path.read_bytes()
+        for flags in ({}, {"approve_split": True}):
+            capsys.readouterr()
+            assert run_build(config, args_for(config, **flags)) == 2
+            assert "epic.json" in capsys.readouterr().err
+            assert path.read_bytes() == edited
 
     def test_an_unparsable_epic_json_exits_1_and_is_never_rewritten(self, env):
         config, epic = self._proposed(env)

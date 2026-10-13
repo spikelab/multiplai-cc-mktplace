@@ -210,6 +210,19 @@ def test_A_S8_user_edits_are_used_before_approval_and_refused_after(tmp_path, mo
     after = epic_snapshot(stopped.epic, stopped.root)
     assert after["epic.json"] == before["epic.json"]
 
+    # After approval: an edited epic.json (a child's plan and its dependencies)
+    # exits 2 naming it, and is not rewritten.
+    epic_json = clean.epic / "epic.json"
+    saved = json.loads(epic_json.read_text())
+    saved["children"][0]["plan"] = PLAN.format(title="Not the approved plan")
+    saved["children"][2]["depends_on"] = []
+    epic_json.write_text(json.dumps(saved))
+    edited = epic_json.read_bytes()
+    capsys.readouterr()
+    assert clean.build(monkeypatch) == 2
+    assert "epic.json" in capsys.readouterr().err
+    assert epic_json.read_bytes() == edited
+
     # Unparsable epic.json: exit 1, never rewritten.
     broken, _ = _roots(tmp_path / "broken", monkeypatch, THREE)
     assert broken.build(monkeypatch) == 3
