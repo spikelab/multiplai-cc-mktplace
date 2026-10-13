@@ -232,3 +232,14 @@ def test_an_edl_without_captions_has_no_caption_events(job) -> None:
 def test_the_server_and_the_renderer_agree_on_the_sidecar_name() -> None:
     assert review_server.EDL_SIDECAR == render_sidecar.SUFFIX
     assert render_sidecar.path_for(Path("/x/clip-01.v2.mp4")) == Path("/x/clip-01.v2.edl.json")
+
+
+def test_a_title_card_crossfades_into_segment_0_and_logo_and_brand_paths_are_absolute(job, tmp_path: Path) -> None:
+    edl = EDL.load(_edl(tmp_path, title={"line1": "Ship small", "duration": 2.0},
+                        logo={"path": "brand/logo.png"}, brand="brand/brand.json"))
+    snap = render_sidecar.snapshot(edl)
+    assert snap["logo"]["path"] == str(tmp_path / "brand" / "logo.png")
+    assert snap["brand"] == str(tmp_path / "brand" / "brand.json")
+    segs = render_sidecar.segments(edl)
+    assert segs[0]["xfade_in"] == edl.xfade_before(0) > 0           # the card fades into the first segment
+    assert segs[0]["out_start"] > 0
