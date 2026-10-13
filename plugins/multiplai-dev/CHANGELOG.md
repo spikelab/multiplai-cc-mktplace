@@ -36,7 +36,11 @@ time, not derived from a tag.
   `.gitattributes` export rules say. A link that is absolute or leads out of
   the tree is left out and named, instead of failing the run.
 - A `--dir` run refuses any `--out` that would put its run folder inside the
-  source, including the source's parent.
+  source, including the source's parent. Its import commits every copied file,
+  including those the source's `.gitignore` names.
+- `--pr` reads the PR from `origin`'s repository, the one `--fetch` fetches
+  from and the run folder is named after, also in a fork clone with an
+  `upstream` remote.
 
 ## [0.51.0] - 2026-10-13
 

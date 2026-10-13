@@ -345,7 +345,7 @@ def test_pr_asks_gh_about_origins_repository(tmp_path, root, monkeypatch, origin
 def test_pr_of_another_repository_than_origin_is_refused(tmp_path, root, monkeypatch, capsys):
     """origin is not on github.com, so gh chooses the repository; a PR of another one than
     origin is refused rather than fetched from and filed under origin."""
-    repo, fork, head, base_tip = _pr_repo(tmp_path)
+    repo, _, head, base_tip = _pr_repo(tmp_path)
     git(repo, "remote", "set-url", "origin", "https://git.example.com/acme/widgets.git")
     argv_file = _fake_gh(tmp_path, monkeypatch, json.dumps(
         {"headRefOid": head, "baseRefOid": base_tip, "url": "https://git.example.com/other/widgets/pull/7"}))

@@ -29,8 +29,8 @@ folder, not the user's checkout.
 | Target | Reads |
 |---|---|
 | `--tree <commit> [--path <dir>]` | the commit, or one directory of it, in `--repo` |
-| `--pr <n>` | the PR's head commit, in `--repo`; needs `gh` |
-| `--dir <dir>` | a directory that is not under git: copied into `<run>/source/` and committed there, never written to |
+| `--pr <n>` | the PR's head commit, in `--repo`; needs `gh`. The PR is read from `origin`'s repository, which is also where `--fetch` fetches from |
+| `--dir <dir>` | a directory that is not under git: copied into `<run>/source/` and committed there, including files its `.gitignore` names; never written to |
 
 | Option | Does |
 |---|---|

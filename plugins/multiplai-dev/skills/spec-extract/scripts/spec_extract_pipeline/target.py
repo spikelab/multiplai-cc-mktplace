@@ -195,19 +195,36 @@ def hashed_object_name(target: Target) -> str:
 
 # --- resolve ------------------------------------------------------------------------
 
-PR_VIEW_FIELDS = "headRefOid,baseRefOid,headRefName,baseRefName"
+PR_VIEW_FIELDS = "headRefOid,baseRefOid,headRefName,baseRefName,url"
+
+
+def github_owner_repo(url: str | None) -> tuple[str, str] | None:
+    """`(owner, repo)` for a github.com remote URL (review's `github_web_base` forms), else None."""
+    m = re.match(r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
+                 r"([^/]+)/([^/]+?)(?:\.git)?/?$", url or "")
+    return (m.group(1), m.group(2)) if m else None
 
 
 def _pr_view(repo: Path, number: int) -> dict:
-    """`gh pr view <n>`'s head and base commits. The seam tests replace."""
+    """`gh pr view <n>`'s head and base commits, from origin's repository. The seam tests replace.
+
+    The fetch, the refusal hints and the run folder all name `origin`, so gh is
+    told origin's repository when origin is on github.com (in a fork clone gh
+    would otherwise prefer `upstream`). For another host gh chooses, and a PR of
+    another repository than origin's is refused.
+    """
     gh = shutil.which("gh")
     if gh is None:
         raise TargetError("--pr needs the GitHub CLI (`gh`), which is not installed. Install it "
                           "from https://cli.github.com and run `gh auth login`, or pass "
                           "--tree <head sha>.")
-    proc = subprocess.run([gh, "pr", "view", str(number), "--json", PR_VIEW_FIELDS], cwd=repo,
-                          capture_output=True, text=True, stdin=subprocess.DEVNULL, shell=False,
-                          check=False)
+    origin = remote_url(repo)
+    argv = [gh, "pr", "view", str(number), "--json", PR_VIEW_FIELDS]
+    on_github = github_owner_repo(origin)
+    if on_github:
+        argv += ["--repo", "/".join(on_github)]
+    proc = subprocess.run(argv, cwd=repo, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                          shell=False, check=False)
     if proc.returncode != 0:
         raise TargetError(f"gh pr view {number} failed: {proc.stderr.strip()}")
     try:
@@ -216,6 +233,12 @@ def _pr_view(repo: Path, number: int) -> dict:
         raise TargetError(f"gh pr view {number} returned no JSON: {e}") from e
     if not isinstance(info, dict):
         raise TargetError(f"gh pr view {number} returned no JSON object")
+    here = origin_owner_repo(origin)
+    m = re.match(r"^https?://[^/]+/([^/]+)/([^/]+)/pull/\d+/?$", str(info.get("url") or ""))
+    if here and m and not _same_remote(f"{m.group(1)}/{m.group(2)}", here):
+        raise TargetError(f"gh pr view {number} read PR #{number} of {m.group(1)}/{m.group(2)}, but "
+                          f"origin is {here[0]}/{here[1]}; run spec-extract in a clone whose origin "
+                          f"is {m.group(1)}/{m.group(2)}")
     return info
 
 
@@ -477,7 +500,10 @@ def import_dir(target: Target, run_dir: Path, now: datetime, saved_head: str | N
             raise TargetError(f"cannot copy {src} into {dest}: {e}") from e
         env = _import_env(now)
         _import_git(dest, "init", "-q", "-b", "main", env=env)
-        _import_git(dest, "add", "-A", env=env)
+        # -f: a `.gitignore` copied from the source (GitHub's Python one ignores `lib/`)
+        # must not keep copied code out of the commit; IMPORT_EXCLUDES already left out
+        # what is not the project's.
+        _import_git(dest, "add", "-A", "-f", env=env)
         _import_git(dest, "commit", "-q", "--allow-empty", "-m", f"Import {src.name} for spec-extract",
                     env=env)
         head = rev_parse(dest, "HEAD")
