@@ -47,13 +47,14 @@ def _release_locks():
 
 
 class Epic:
-    def __init__(self, root: Path, monkeypatch, answer=TWO, steps=None, reviews=None, rounds=6):
+    def __init__(self, root: Path, monkeypatch, answer=TWO, steps=None, reviews=None, rounds=6,
+                 parallel=2, max_usd=None):
         self.root = root
         self.data = use_workspace(monkeypatch, root)
         self.project = make_project(root)
         self.fakes = Fakes(root, monkeypatch, steps, reviews)
         self.config = make_build(self.project)
-        self.config.epic = EpicSettings(max_parallel=2, max_review_rounds=rounds)
+        self.config.epic = EpicSettings(max_parallel=parallel, max_review_rounds=rounds, max_usd=max_usd)
         approve(self.config, answer, CallLog(root / "split.log"))
         self.dir = self.data / "buildme" / "epics" / "o-r--e"
         self.ledger = self.data / "reviews" / "ledger.jsonl"
@@ -249,6 +250,16 @@ def test_the_summary_counts_the_review_rounds(tmp_path, monkeypatch):
     assert e.run() == 0
     summary = json.loads((e.dir / "runs" / "01" / "summary.json").read_text())
     assert {c["id"]: c["rounds"] for c in summary["children"]} == {"a": 1, "b": 1}
+
+
+def test_a_review_is_a_launch_the_epic_budget_stops(tmp_path, monkeypatch, capsys):
+    """Item 19 (PR B2): once `epic.max_usd` is reached nothing more is
+    launched, a review included; the run exits 3 with `EPIC:BUDGET`."""
+    e = Epic(tmp_path, monkeypatch, steps={"a": [{"spend": 6.0}]}, parallel=1, max_usd=5.0)
+    assert e.run() == 3
+    assert "EPIC:BUDGET:6.00" in capsys.readouterr().out.splitlines()
+    assert e.launched() == [] and e.reviews("a") == []
+    assert e.child_status("a")["status"] == "built"
 
 
 # --- the pieces -------------------------------------------------------------------------

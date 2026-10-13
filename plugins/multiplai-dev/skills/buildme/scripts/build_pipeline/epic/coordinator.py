@@ -808,7 +808,7 @@ class Coordinator:
             ready = self._resolve()
             running = sum(c.status in ("running", "reviewing") for c in self.children.values())
             for c in self._review_due():        # a review before a new build: it unblocks dependants
-                if running >= self.settings.max_parallel:
+                if running >= self.settings.max_parallel or self._over_budget():
                     break
                 self._start_review(c)
                 running += 1
