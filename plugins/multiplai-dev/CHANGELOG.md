@@ -24,7 +24,8 @@ time, not derived from a tag.
   search the same function, its other branches, its callers and the rest of
   the PR's diff for the same mistake, fix each one, and end its report with a
   `SEARCHED:` section. The reply on the PR quotes where it searched (the
-  fixer's own section, not one a later review-fix agent wrote); the PR
+  fixer's own section, also from a long report the engine trimmed, and never
+  one a later review-fix or fix-on-pass agent wrote); the PR
   description's "Review rounds" section does not, to stay under the pr
   skill's word limit.
 - When the TDD engine finishes a round's blocks with nothing stopping after

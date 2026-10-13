@@ -162,22 +162,24 @@ def write_self_check(change_dir: Path, round_n: int, self_check: dict | None) ->
 _LATER_AGENT = re.compile(r"\n\[(review-fix (\d+)|fix on pass)\]\n")
 
 
-def searched_text(report: str) -> str:
+def searched_text(report: str, first_later: str | None = None) -> str:
     """The fixer's own `SEARCHED:` section (the last one before any later
     agent's part) of a block's implementer report, as one line
     (`gates.parse_searched`'s entries joined), or "" with a warning when it has
-    none. The engine keeps only the report's last `MAX_EVIDENCE_CHARS`: in a
-    report that long, when a later agent's part comes first and is not
-    `[review-fix 1]`, or no marker is left (a long later agent's output cut
-    its own away), the fixer's part may be gone, and "" is safer than another
-    agent's search. Recorded, never checked: code cannot tell whether a search
-    happened."""
+    none. *first_later* is the marker of the first later agent that ran on the
+    block (`review-fix 1`, or `fix on pass` with no review fix), None when none
+    ran. The engine keeps only the report's last `MAX_EVIDENCE_CHARS`: in a
+    report that long, unless the first marker left is *first_later*'s, a later
+    agent's output may have cut the fixer's part away, and "" is safer than
+    another agent's search. With no later agent, the trim kept the end of the
+    fixer's own output, where its section is. Recorded, never checked: code
+    cannot tell whether a search happened."""
     from ..tdd_engine import MAX_EVIDENCE_CHARS
 
     report = report or ""
     first = _LATER_AGENT.search(report)
-    lost = (len(report) >= MAX_EVIDENCE_CHARS
-            and (first is None or first.group(2) != "1"))
+    lost = (first_later is not None and len(report) >= MAX_EVIDENCE_CHARS
+            and (first is None or first.group(1) != first_later))
     entries = None if lost else parse_searched(report[:first.start()] if first else report)
     if entries is None:
         log.warning("the fixer's report has no SEARCHED: section")
@@ -196,9 +198,12 @@ def fixes_from_state(state_path: Path, blocks: dict[int, str]) -> dict[str, dict
     for b in (state.tdd.blocks if state.tdd else []):
         key = blocks.get(b.number)
         if key and b.impl_commit and b.status == BlockStatus.DONE:
+            # A review fix ran when a second review did.
+            first_later = ("review-fix 1" if b.review_iterations > 1
+                           else "fix on pass" if b.fix_on_pass_kept else None)
             out[key] = {"test": b.test_commit or "", "impl": b.impl_commit,
                         "status": b.status.value,
-                        "searched": searched_text(b.implementer_report)}
+                        "searched": searched_text(b.implementer_report, first_later)}
     return out
 
 
