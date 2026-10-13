@@ -21,6 +21,30 @@ a tag.
 
 Nothing yet.
 
+## [0.12.0] - 2026-10-13
+
+### Added
+
+- **Look tab: choose the look by seeing it.** Each overlay style Claude
+  offers plays a looping sample, the way the renderer plays it. Each brand
+  shows its colours and caption font, and each caption option draws over a
+  frame of your recording in the chosen brand's colours (an approximate
+  preview: the render burns captions in). Pick one of each and send it;
+  Claude uses it in every edit list and overlay page.
+- **Music tab: choose the music by hearing it.** Play every music bed and
+  sound effect, set the bed's level with a slider, and press "Play with
+  voice" to hear the bed under a stretch of the speech at that level. Send
+  your pick; Claude sets the music and picks sound effects only from the
+  set you chose.
+- `pipeline.py music-sample` writes a 15 s sample of a synth music bed, so
+  Claude can offer the synth beds on the Music tab.
+
+### Changed
+
+- `comments.jsonl` rows can now also be `look` and `music` rows.
+- Sample pages play in a sandboxed frame that cannot reach the page, its
+  access token or the network.
+
 ## [0.11.0] - 2026-10-13
 
 ### Added
