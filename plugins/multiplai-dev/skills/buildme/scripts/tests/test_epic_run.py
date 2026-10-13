@@ -162,6 +162,20 @@ def test_exit_0_without_a_pr_parks(tmp_path, monkeypatch):
     assert {c["id"]: c for c in e.summary(1)["children"]}["a"]["reason"] == "no PR opened"
 
 
+@pytest.mark.parametrize("key", ["worktree", "push"])
+def test_children_never_build_in_place(tmp_path, monkeypatch, capsys, key):
+    """A specs/config.yaml that turns off a child's own worktree or its push
+    is refused before anything is read, launched or written (B1.S23)."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
+    yaml_path = e.project / "specs" / "config.yaml"
+    yaml_path.write_text(f"git:\n  {key}: false\n")
+    assert e.run() == 2
+    assert f"git.{key}" in capsys.readouterr().err
+    assert e.launches() == [] and not (e.dir / "runs").exists()
+    yaml_path.write_text("git:\n  worktree: true\n")
+    assert e.run() == 0 and sorted(e.launches()) == ["a", "b", "c"]
+
+
 def test_a_failure_is_relaunched_once_per_invocation(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit": 1}]})
     assert e.run() == 1
@@ -175,6 +189,7 @@ def test_a_failure_is_relaunched_once_per_invocation(tmp_path, monkeypatch):
 def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
     (e.config.change_dir / "interview.md").write_text("# Interview\n")
+    (e.config.change_dir / "research.md").write_text("# Research\n\nNot needed.\n")
     assert e.run() == 0
     argv = records.attempts(e.dir)[0].started["argv"]
     assert argv[:6] == ["python", "-m", "build_pipeline", "--session-id", "s", "build"]
@@ -185,8 +200,10 @@ def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
     assert argv[argv.index("--plan-file") + 1] == str(e.dir / "plans" / "a.md")
     assert argv[argv.index("--project-dir") + 1] == str(e.project)
     assert argv[argv.index("--context-files") + 1] == str(e.config.change_dir / "interview.md")
+    # The parent's research decision stands: the child copies it, no second call.
+    assert argv[argv.index("--research-path") + 1] == str(e.config.change_dir / "research.md")
     for i, a in enumerate(argv):
-        if a in ("--plan-file", "--project-dir", "--context-files"):
+        if a in ("--plan-file", "--project-dir", "--context-files", "--research-path"):
             assert Path(argv[i + 1]).is_absolute()
 
 
@@ -291,6 +308,16 @@ def test_a_child_refuses_a_config_yaml_that_is_not_on_its_base_ref(tmp_path, mon
     assert state.worktree_path is None
     config.base_ref = _sha(project)
     assert not intake.config_yaml_off_ref(project, config.base_ref)
+    # Only behind origin, which changed the file after this checkout's version
+    # was pushed: nothing to push, the worktree gets origin's version.
+    subprocess.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=project, check=True)
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(tmp_path / "o" / "r.git"), str(other)], check=True)
+    (other / "specs" / "config.yaml").write_text("context: y\n")
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qam", "config y"], cwd=other, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=other, check=True)
+    subprocess.run(["git", "fetch", "-q", "origin"], cwd=project, check=True)
+    assert not intake.config_yaml_off_ref(project, _sha(project, "origin/main"))
 
 
 # --- waiting for a dependency's merge ----------------------------------------------
@@ -307,6 +334,33 @@ def test_a_closed_dependency_parks_its_dependant(tmp_path, monkeypatch, capsys):
     reasons = {c["id"]: c["reason"] for c in e.summary(2)["children"]}
     assert reasons["api"] == "PR closed without a merge"
     assert len(e.launches()) == 2
+
+
+def test_a_failed_pr_read_is_not_an_open_pr(tmp_path, monkeypatch, capsys):
+    """`gh pr view` fails for the PRs docs waits on: no EPIC:MERGE_WAITING for
+    PRs that may have merged; they are `unknown`, docs is not launched, exit 1."""
+    e = Epic(tmp_path, monkeypatch)
+    assert e.run() == 3
+    capsys.readouterr()
+    (tmp_path / "gh-fails").write_text("")
+    assert e.run() == 1
+    out = capsys.readouterr()
+    assert "EPIC:MERGE_WAITING" not in out.out and "api" in out.err
+    assert e.status() == {"api": "unknown", "ui": "unknown", "docs": "pending"}
+    (tmp_path / "gh-fails").unlink()
+    e.fakes.set_pr(pr_url("e-api"), "MERGED")
+    e.fakes.set_pr(pr_url("e-ui"), "MERGED")
+    assert e.run() == 0 and sorted(e.launches()) == ["api", "docs", "ui"]
+
+
+def test_a_failed_child_shows_beside_merge_waiting(tmp_path, monkeypatch, capsys):
+    """ui fails twice while docs waits on api's open PR: exit 3 (item 15a),
+    and the failure is named on stderr, not only in the summary."""
+    e = Epic(tmp_path, monkeypatch, steps={"ui": [{"exit": 1}, {"exit": 1}]})
+    assert e.run() == 3
+    out = capsys.readouterr()
+    assert f"EPIC:MERGE_WAITING:{pr_url('e-api')}" in out.out
+    assert "ui failed" in out.err
 
 
 def test_a_merge_while_running_launches_the_dependant(tmp_path, monkeypatch):
