@@ -106,6 +106,13 @@ def _add_git_lifecycle_flags(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _positive_int(value: str) -> int:
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or more, not {value}")
+    return n
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="build_pipeline",
@@ -179,7 +186,10 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Change name (default: from the PR's buildme/<name> branch)")
     findings.add_argument("--project-dir", default=".", help="Project directory")
     findings.add_argument("--auto", action="store_true",
-                          help="Unattended: post each re-review's findings without the viewer")
+                          help="Unattended: post each re-review's Code findings, and its Tests "
+                               "findings on source files, without the viewer")
+    findings.add_argument("--max-rounds", type=_positive_int, default=None,
+                          help="Fix rounds before the loop stops (overrides findings.max_rounds)")
     _add_trust_repo_flag(findings)
 
     # --- archive ---

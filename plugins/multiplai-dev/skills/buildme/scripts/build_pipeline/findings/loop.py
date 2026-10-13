@@ -17,11 +17,16 @@ finished steps and restarts the first unfinished one:
   record when it stopped, or, for a step that discards, a commit made since
   it stopped; and a state file written for another PR, repo or branch;
 - code re-enters `run_tdd_engine`, which resumes from its own checkpoint.
+  Once the blocks pass, one read-only agent checks the round's fix commits
+  (`code_base..HEAD`); its answer is saved before anything is written, so it
+  never runs twice, and a problem it lists becomes one more block;
   What the engine's stopped attempt left (a timed-out agent's edits, which
   may be anywhere in the tree, and the stopped block's commits) is first
   kept under `refs/buildme/wip/<change>/r<N>-code-block<k>-stopped` and
   discarded back to where that block started, so the block runs again;
-- publish records each reply before sending the next.
+- publish records each reply before sending the next;
+- under `--auto`, review writes `buildme-decisions.json` in the review's own
+  folder (`decisions.write_decisions`) and posts only what it accepts.
 
 The loop stops when a fetch finds no new comment to act on
 (`FINDINGS:DONE:<rounds>`) or after `findings.max_rounds` rounds
@@ -43,6 +48,7 @@ from ..config import BuildConfig
 from ..models import BlockStatus, BuildPhase
 from ..state import BuildState, FindingsRound, FindingsState
 from . import code, fetch, publish, spec, triage
+from .decisions import write_decisions
 from .models import TriageRecord
 
 log = logging.getLogger(__name__)
@@ -80,7 +86,8 @@ class ReviewOutcome:
 
 
 ReviewRunner = Callable[["FindingsRun", FindingsRound], ReviewOutcome]
-ReviewPoster = Callable[["FindingsRun", str], tuple[bool, str]]
+ReviewPoster = Callable[["FindingsRun", str, Path], tuple[bool, str]]
+SelfCheck = Callable[[BuildConfig, str], Awaitable[str]]
 
 
 @dataclass
@@ -92,6 +99,8 @@ class Seams:
     engine: Callable[..., Awaitable[int]] | None = None
     review: ReviewRunner | None = None
     post: ReviewPoster | None = None
+    self_check: SelfCheck | None = None
+    decisions: Callable[[str], Path] | None = None
 
 
 @dataclass
@@ -369,11 +378,12 @@ def run_review(run: FindingsRun, rnd: FindingsRound) -> ReviewOutcome:
     return ReviewOutcome(run_dir, True)
 
 
-def post_review(run: FindingsRun, run_dir: str) -> tuple[bool, str]:
-    """Unattended (`--auto`): post what the review lists by its section rule.
-    `post` skips any finding already marked on the PR, so a re-run is safe."""
+def post_review(run: FindingsRun, run_dir: str, decisions: Path) -> tuple[bool, str]:
+    """Unattended (`--auto`): post the findings *decisions* accepts
+    (`write_decisions`). `post` skips any finding already marked on the PR,
+    so a re-run is safe."""
     argv = ["uv", "run", "--directory", str(_review_skill_dir()),
-            "python", "-m", "review_pipeline", "post", run_dir]
+            "python", "-m", "review_pipeline", "post", run_dir, "--decisions", str(decisions)]
     res = git_ops._run_review_skill(argv, cwd=run.project_dir)
     return res.ok, " ".join((res.stderr or res.stdout or "").split())[-400:]
 
@@ -405,31 +415,75 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             rnd.delta_path = str(spec.delta_path(run.change_dir, n))
         _write_findings_file(run, fs, rnd)
 
+    async def check_own_commits(records: list[TriageRecord], engine_state: Path) -> bool:
+        """The self-check: one read-only agent over `code_base..HEAD`. Its
+        answer is saved in one checkpoint before anything is written, so it
+        never runs twice. True when it listed a problem, which is then
+        block `k`: the report and the tasks file are committed together and
+        `k` is added to the engine's checkpoint. Block `k` skips the
+        whole-change refactor and mutation testing: the checkpoint's
+        `refactor_all_done` and `mutation_done` are already set. An empty
+        range (every fix block failed and was discarded) is saved as no
+        problem, with no call."""
+        head = git_ops.rev_parse_head(run.project_dir)
+        diff = git_ops.diff_range(run.project_dir, rnd.code_base or head or "HEAD", head or "HEAD",
+                                  exclude=_change_dir_in_project(run))
+        if diff is None:
+            raise StepFailed("code", "git could not show the round's fix commits to check them")
+        report = ((await (seams.self_check or code.run_self_check)(run.config, diff)).strip()
+                  if diff.strip() else "")
+        k = max(rnd.blocks) + 1 if report else None
+        rnd.self_check = {"head": head, "report": report, "block": k}
+        save()
+        if k is None:
+            return False
+        report_path = code.write_self_check(run.change_dir, n, rnd.self_check)
+        tasks, rnd.blocks = code.write_tasks(run.change_dir, n, records, rnd.self_check)
+        if code.commit_round_files(run.project_dir, n, [report_path, tasks]) is None:
+            left = git_ops.status_of(run.project_dir, [report_path, tasks])
+            if left is None or left.strip():
+                raise StepFailed("code", "could not commit the self-check records")
+        code.add_block(engine_state, tasks, k)
+        return True
+
     async def do_code() -> None:
         records = publish.records_of(rnd)
         findings_file = _write_findings_file(run, fs, rnd)
         paths = [findings_file]
+        report_path = code.write_self_check(run.change_dir, n, rnd.self_check)
+        if report_path is not None:
+            paths.append(report_path)
         if code.code_fixes(records):
-            tasks, blocks = code.write_tasks(run.change_dir, n, records)
+            tasks, blocks = code.write_tasks(run.change_dir, n, records, rnd.self_check)
             rnd.tasks_path, rnd.blocks = str(tasks), blocks
             rnd.engine_state_path = str(Path(run.change_dir) / code.engine_state_name(n))
             save()
             paths.append(tasks)
         code.commit_round_files(run.project_dir, n, paths)
+        if rnd.code_base is None:
+            rnd.code_base = git_ops.rev_parse_head(run.project_dir)
+            save()
         if not rnd.blocks:
             return
         engine_state = Path(rnd.engine_state_path)
+        check_block = (rnd.self_check or {}).get("block")
+        if check_block:
+            code.add_block(engine_state, Path(rnd.tasks_path), check_block)
         # A block the engine fails is answered "not fixed" and the round goes
         # on with the next block, so one wrong triage cannot hold back every
         # reply. Anything else that stops the engine stays a resumable failure.
-        for _ in range(len(rnd.blocks) + 1):
+        # One engine run per block that may fail and one that finishes, and
+        # two more for a block the self-check adds.
+        for _ in range(len(rnd.blocks) + 3):
             result = await code.run_code_step(run.config, run.change_dir, n, records,
                                               blocks=rnd.blocks, engine=seams.engine)
             failed = {k: v for k, v in rnd.fixes.items() if v.get("failed")}
             rnd.fixes = {**failed, **result.fixes}
             save()
             if result.exit_code == 0:
-                return
+                if rnd.self_check is not None or not await check_own_commits(records, engine_state):
+                    return
+                continue
             # A step the engine runs after its blocks (the whole-change
             # refactor's budget stop, mutation testing) fails the same way on
             # every re-run. Every fix has passed its block's gates and is
@@ -477,7 +531,11 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             rnd.review_run_dir = outcome.run_dir
             save()
         if run.auto:
-            ok, detail = (seams.post or post_review)(run, rnd.review_run_dir)
+            try:
+                decisions = (seams.decisions or write_decisions)(rnd.review_run_dir)
+            except (FileNotFoundError, ValueError) as e:
+                raise StepFailed("review", f"cannot choose what to post: {e}") from e
+            ok, detail = (seams.post or post_review)(run, rnd.review_run_dir, decisions)
             if not ok:
                 raise StepFailed("review", f"review post failed: {detail}")
         elif not rnd.review_waiting:
