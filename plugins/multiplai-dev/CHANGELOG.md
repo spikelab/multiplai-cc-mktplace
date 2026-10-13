@@ -10,12 +10,41 @@ Version numbers are this plugin's version in the marketplace manifest
 
 Recorded history starts at **0.1.1**; anything earlier is in `git log` only.
 
-Of the 25 versions recorded here, `0.1.1` and `0.5.0`–`0.5.3` carry a git tag;
+Of the versions recorded here, `0.1.1` and `0.5.0`–`0.5.3` carry a git tag;
 tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
 ## [Unreleased]
+
+## [0.53.0] - 2026-10-13
+
+### Added
+- `/multiplai-dev:spec-extract`, second part: after resolving its target, a
+  run lists the Python files and their public functions, classes and methods,
+  then asks one read-only agent per slice of code (at most 6,000 lines) what
+  the code does. It keeps only facts whose cited lines are at the commit, and
+  writes `facts.json`, `report.md` (files left out, files not analysed, with
+  reasons) and `plan.txt`. It prints `SPEC_EXTRACT:EXPLORED <answered>/<units>`.
+  Writing the specs comes in a later version.
+- `--trust-repo` (or `SPEC_EXTRACT_TRUST_REPO=1`) is required before the first
+  model call, since the code is sent to a model; without it the run exits 4,
+  and the skill tells the agent to ask the user before re-running with it.
+- `--max-usd` (default 80) caps the spend of a run folder across every run
+  that resumes it; reaching it exits 3 with everything paid for saved, and a
+  higher cap continues. `--max-units` (default 20) refuses a target too large
+  to explore in one run. `--plan-only` prints the units and call counts and
+  stops before any model call.
+- A resumed run asks only the slices with no answer, asks a slice at most
+  twice in all, and a `--pr` run keeps the base and file list it started with
+  even after the base branch moves or the PR merges. It can resume from
+  another checkout of the same repository, even when the first one is gone.
+  A re-run after explore writes `facts.json` with the same bytes, its
+  `generated_at` included.
+- A model setting no call can run with (an unknown provider in
+  `spec_extract_explore_model`, `claude-agent-sdk` missing, or for a `pi:`
+  model the `pi` binary missing or failing to start) exits 1 and counts no
+  attempt, so the same command works once it is fixed.
 
 ## [0.52.0] - 2026-10-13
 

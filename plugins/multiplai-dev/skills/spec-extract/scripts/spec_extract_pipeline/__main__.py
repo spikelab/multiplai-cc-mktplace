@@ -2,29 +2,36 @@
 
     python -m spec_extract_pipeline run (--tree [COMMIT] [--path DIR] | --pr N | --dir PATH)
         [--repo DIR] [--out ROOT] [--fetch] [--restart]
+        [--max-usd USD] [--max-units N] [--plan-only] [--trust-repo]
 
 Running the same command again resumes the run in the same folder. Exit codes:
-0 done, 1 failed, 2 refused, 5 another run holds the lock. This version stops
-after the resolve step and prints `SPEC_EXTRACT:RESOLVED <run>`.
+0 done, 1 failed, 2 refused, 3 the run folder's spend reached --max-usd,
+4 the repository is not trusted, 5 another run holds the lock. This version
+resolves, scopes and explores, then prints `SPEC_EXTRACT:EXPLORED <answered>/<units>`.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import logging
+import os
 import sys
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import runlock
+from . import explore, runlock, sdk
+from . import report as report_mod
+from . import scope as scope_mod
 from . import state as state_mod
 from . import target
 
 log = logging.getLogger("spec_extract_pipeline")
 
-EXIT_DONE, EXIT_FAILED, EXIT_REFUSED, EXIT_LOCKED = 0, 1, 2, 5
+EXIT_DONE, EXIT_FAILED, EXIT_REFUSED, EXIT_BUDGET, EXIT_UNTRUSTED, EXIT_LOCKED = 0, 1, 2, 3, 4, 5
+PLAN_FILE = "plan.txt"
 
 
 def default_out() -> Path:
@@ -52,10 +59,23 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--fetch", action="store_true", help="With --pr: fetch origin and the PR's head first")
     run.add_argument("--restart", action="store_true",
                      help="Rename the run folder to <object>.old-<timestamp> (never deleted) and start again")
+    run.add_argument("--max-usd", type=float, default=sdk.DEFAULT_MAX_USD,
+                     help="Spend cap for this run folder, counted across every run that resumes it "
+                          f"(default {sdk.DEFAULT_MAX_USD:g})")
+    run.add_argument("--max-units", type=int, default=scope_mod.DEFAULT_MAX_UNITS,
+                     help=f"Refuse a target that splits into more explore units (default {scope_mod.DEFAULT_MAX_UNITS})")
+    run.add_argument("--plan-only", action="store_true",
+                     help="Resolve and scope, print the units and the number of calls, write plan.txt, "
+                          "and stop before any model call")
+    run.add_argument("--trust-repo", action="store_true",
+                     help="Confirm you trust the repository: its contents are sent to a model, which reads "
+                          f"the tree (equivalent to {sdk.TRUST_ENV}=1)")
     return parser
 
 
 def _run(args: argparse.Namespace, now: Callable[[], datetime]) -> int:
+    if args.trust_repo:
+        os.environ[sdk.TRUST_ENV] = "1"
     root = (args.out or default_out()).expanduser().resolve()
     fresh = target.resolve(args.repo, tree=args.tree, path=args.path, pr=args.pr, dir=args.dir,
                            fetch=args.fetch)
@@ -82,6 +102,32 @@ def _run(args: argparse.Namespace, now: Callable[[], datetime]) -> int:
             state.steps_done.append("resolve")
             state_mod.save(state, run_dir)
         print(f"SPEC_EXTRACT:RESOLVED {run_dir}", flush=True)
+        # The saved target, read through this run's checkout. The run folder is shared by
+        # every checkout of the remote (Decided 14), and the one the run started in may be
+        # gone (row R30). Every other field, base_sha included, is the saved one (R26).
+        git_target = state.target.model_copy(update={"repo": fresh.repo})
+
+        # Scope: computed once from the saved target, then read from state on every
+        # later step and every resume, never recomputed (R26).
+        if state.scope is None:
+            computed = scope_mod.compute(git_target)
+            scope_mod.check(computed, args.max_units)
+            state.scope = computed
+            state.steps_done.append("scope")
+            state_mod.save(state, run_dir)
+        plan = scope_mod.plan_text(state.target, state.scope, report_mod.describe(state.target))
+        report_mod.write_output(run_dir, PLAN_FILE, plan)
+        if args.plan_only:
+            print(plan, end="")
+            print(f"SPEC_EXTRACT:PLAN {run_dir / PLAN_FILE}", flush=True)
+            return EXIT_DONE
+
+        ledger = sdk.start_budget(args.max_usd, state.budget)
+        if "explore" not in state.steps_done:
+            asyncio.run(explore.run(state, run_dir, call=sdk.agent_call_structured, ledger=ledger,
+                                    model=sdk.model_for("explore")))
+        answered, units = explore.finish(state, run_dir, now(), git_target)
+        print(f"SPEC_EXTRACT:EXPLORED {answered}/{units}", flush=True)
     return EXIT_DONE
 
 
@@ -97,6 +143,23 @@ def main(argv: Sequence[str] | None = None, *, now: Callable[[], datetime] | Non
     except target.TargetError as e:
         print(f"spec-extract: {e}", file=sys.stderr)
         return EXIT_REFUSED
+    except scope_mod.ScopeRefused as e:
+        if e.line:
+            print(e.line, flush=True)
+        print(f"spec-extract: {e}", file=sys.stderr)
+        return EXIT_REFUSED
+    except explore.BudgetStopped as e:
+        print(f"spec-extract: {e}. Everything paid for is saved; re-run with a higher --max-usd "
+              "to continue.", file=sys.stderr)
+        return EXIT_BUDGET
+    except sdk.BackendUnavailable as e:
+        print(f"spec-extract: {e}. Nothing was counted; fix the model setting "
+              "(spec_extract_explore_model in multiplai.conf) or install claude-agent-sdk, "
+              "then run the same command again.", file=sys.stderr)
+        return EXIT_FAILED
+    except sdk.RepoTrustError as e:
+        print(e, file=sys.stderr)
+        return EXIT_UNTRUSTED
     except runlock.Locked as e:
         print(f"spec-extract: {e}", file=sys.stderr)
         return EXIT_LOCKED
