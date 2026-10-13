@@ -30,6 +30,7 @@ from .epic_row_helpers import (
     child,
     make_build,
     make_project,
+    merge_waiting,
     pr_number,
     pr_url,
     run_coordinator,
@@ -95,7 +96,7 @@ class Epic:
 
 def test_each_built_child_is_reviewed_and_the_result_recorded(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert sorted(e.launched()) == ["review", "review"]
     [a] = e.reviews("a")
     assert a.started["argv"][:6] == ["uv", "run", "--directory", str(review.review_skill_dir()),
@@ -119,7 +120,7 @@ def test_a_head_already_in_the_ledger_starts_no_review(tmp_path, monkeypatch):
     e.add_ledger({"event": "finished", "slug": f"o-r--pr-{N}", "pr": N, "target_dir": str(e.target()),
                   "head_sha": e.head(), "base_sha": "c" * 40, "round": "03", "stopped": None,
                   "run": {"cost_usd": 2.0}})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     assert e.launched() == ["review"]                       # b's only
     [a] = e.reviews("a")
     assert a.started["argv"][6:8] == ["review_pipeline", "review"]
@@ -234,18 +235,18 @@ def test_a_stopped_review_of_another_head_does_not_count(tmp_path, monkeypatch):
     e.add_ledger({"event": "finished", "slug": f"o-r--pr-{N + 1}", "pr": N + 1, "head_sha": "a" * 40,
                   "stopped": None})
     e.add_ledger({"event": "finished", "slug": f"x-y--pr-{N}", "pr": N, "head_sha": "9" * 40, "stopped": None})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert e.reviews("a")[-1].result["pr_round"] == 3
 
 
 def test_a_new_head_is_a_new_round_and_the_round_count_survives_a_resume(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     e.fakes.set_head("e-a", "c" * 40)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert e.launched().count("review") == 3
     assert e.reviews("a")[-1].result["pr_round"] == 2 and e.child_status("a")["pr_round"] == 2
-    assert e.run() == 0                                       # same head: nothing new
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]                                       # same head: nothing new
     assert e.launched().count("review") == 3 and len(e.reviews("a")) == 2
     assert e.child_status("a")["pr_round"] == 2
 
@@ -273,7 +274,7 @@ def test_a_head_that_moves_as_the_review_starts_is_reviewed_not_parked(tmp_path,
     e = Epic(tmp_path, monkeypatch, reviews={str(N): [{"findings": [high()]}]})
     old = e.head()
     _push_once_reviewing(e, monkeypatch, moved)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     assert sorted(e.launched()) == ["review", "review"]
     first, pair = e.reviews("a")
     assert first.started["head_sha"] == old
@@ -285,7 +286,7 @@ def test_a_head_that_moves_as_the_review_starts_is_reviewed_not_parked(tmp_path,
     assert [b.split()[:2] for b in r["blocking"]] == [["HIGH", "f1"]]
     st = e.child_status("a")
     assert (st["status"], st["reason"], st["pr_round"]) == ("built", "", 1)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     assert sorted(e.launched()) == ["review", "review"] and len(e.reviews("a")) == 2
     assert e.child_status("a")["status"] == "built"
 
@@ -366,7 +367,7 @@ def test_an_interrupted_review_is_resumed(tmp_path, monkeypatch):
     (e.target() / "review-state.json").write_text(json.dumps({"head": e.head()}))
     e.add_ledger({"event": "started", "slug": f"o-r--pr-{N}", "target_dir": str(e.target()),
                   "head_sha": e.head()})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     kinds = [(a.kind, a.result["exit_code"], a.result["interrupted"]) for a in e.reviews("a")]
     assert kinds == [("review", 4, False), ("resume", 0, False)]
     resume = e.reviews("a")[1]
@@ -452,7 +453,7 @@ def test_blockers_are_listed_and_only_code_high_or_medium_block(tmp_path, monkey
                 high("f4", topic="tests"), high("f5", topic="docs"),
                 {**high("f6"), "status": "refuted"}]
     e = Epic(tmp_path, monkeypatch, reviews={str(N): [{"findings": findings}]})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     blocking = e.reviews("a")[0].result["blocking"]
     assert [b.split()[:2] for b in blocking] == [["HIGH", "f1"], ["MEDIUM", "f2"]]
     assert e.child_status("a")["status"] == "built"           # below the cap: blockers go to D2
@@ -500,13 +501,13 @@ def test_a_review_that_cannot_read_git_or_github_leaves_the_child_unknown(tmp_pa
     as the coordinator's own: the child is `unknown`, the run exits 1, nothing
     is parked, and the next run reviews the head."""
     e = Epic(tmp_path, monkeypatch, reviews={str(N): [{"exit": 2, "stderr": stderr}, {"findings": [high()]}]})
-    assert e.run() == 1
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     st = e.child_status("a")
     assert st["status"] == "unknown" and stderr.splitlines()[0] in st["reason"]
     assert "EPIC: child a unknown: " in capsys.readouterr().err
     [a] = e.reviews("a")
     assert a.result["exit_code"] == 2 and "parked" not in a.result and "blocking" not in a.result
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     first, second = e.reviews("a")
     assert first.result == a.result
     assert (second.result["exit_code"], second.result["reused"], second.result["pr_round"]) == (0, False, 1)
@@ -539,7 +540,7 @@ def test_a_child_whose_worktree_is_gone_is_reviewed_from_the_source_repo(tmp_pat
         return await real(self, c)
 
     monkeypatch.setattr(coordinator.Coordinator, "_review", review_)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     [a] = e.reviews("a")
     argv = a.started["argv"]
     assert argv[argv.index("--repo") + 1] == str(e.project)
@@ -548,13 +549,13 @@ def test_a_child_whose_worktree_is_gone_is_reviewed_from_the_source_repo(tmp_pat
 
 def test_a_merged_pr_is_not_reviewed(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=CHAIN, steps={"a": [{"pr": {"state": "MERGED"}}]})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     assert e.reviews("a") == [] and e.child_status("a")["status"] == "merged"
 
 
 def test_the_summary_counts_the_review_rounds(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     summary = json.loads((e.dir / "runs" / "01" / "summary.json").read_text())
     assert {c["id"]: c["rounds"] for c in summary["children"]} == {"a": 1, "b": 1}
 

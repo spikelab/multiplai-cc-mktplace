@@ -35,8 +35,10 @@ from .epic_row_helpers import (
     last_summary,
     make_build,
     make_project,
+    merge_waiting,
     name_commits,
     pr_number,
+    pr_url,
     records_snapshot,
     run_coordinator,
     run_killed,
@@ -158,8 +160,8 @@ def test_D2_S3_stopped_after_the_post_runs_the_fixer_not_a_review(tmp_path, monk
 
     stopped.killed(setup)
     assert [a.result["exit_code"] for a in stopped.tries("post")] == [0] and stopped.tries("fix") == []
-    assert stopped.run() == 0
-    assert clean.run() == 0
+    assert stopped.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+    assert clean.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     _assert_same(stopped, clean)
     assert len(stopped.fakes.post_launches()) == 1
     assert [x["kind"] for x in stopped.fakes.review_launches()] == ["review", "review"]   # a's first, b's
@@ -199,14 +201,14 @@ def test_D2_S4_coordinator_killed_with_the_fixer_alive_waits_for_it(tmp_path, mo
                         break
                     time.sleep(0.02)
 
-    assert stopped.run(tick) == 0
+    assert stopped.run(tick) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert len(looks) == 5
 
     def release(coord):
         if clean.fakes.fix_launches():
             clean.fakes.release_fix("e-a")
 
-    assert clean.run(release) == 0
+    assert clean.run(release) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     _assert_same(stopped, clean, extra_fixes=1)
     assert len(stopped.fakes.post_launches()) == 1
 
@@ -232,8 +234,8 @@ def test_D2_S7_fixer_ended_with_its_result_unrecorded_reuses_its_last_review(tmp
     stopped.killed(setup)
     [fix] = stopped.tries("fix")
     assert fix.result is None
-    assert stopped.run() == 0
-    assert clean.run() == 0
+    assert stopped.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+    assert clean.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     _assert_same(stopped, clean, extra_fixes=1)
     assert [x["kind"] for x in stopped.fakes.review_launches()] == ["review", "review"]   # a's first, b's
     status = json.loads((stopped.dir / "epic.json").read_text())["child_status"]["a"]

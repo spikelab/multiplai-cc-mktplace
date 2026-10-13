@@ -40,6 +40,7 @@ from .epic_row_helpers import (
     die_at,
     make_build,
     make_project,
+    merge_waiting,
     move_origin,
     pr_url,
     run_coordinator,
@@ -106,14 +107,14 @@ def test_children_launch_in_dependency_order_and_wait_for_a_merge(tmp_path, monk
     assert e.run() == 3                       # ui is still open
     assert sorted(e.launches()) == ["api", "ui"]
     e.fakes.set_pr(pr_url("e-ui"), "MERGED")
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-docs")]
     assert e.launches()[-1] == "docs" and len(e.launches()) == 3
     assert e.status() == {"api": "merged", "ui": "merged", "docs": "built"}
 
 
 def test_a_merged_child_launches_nothing(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b"), pr_url("e-c")]
     for c in "abc":
         e.fakes.set_pr(pr_url(f"e-{c}"), "MERGED")
     assert e.run() == 0
@@ -133,7 +134,7 @@ def test_the_parallel_limit_holds(tmp_path, monkeypatch):
             e.fakes.release(a.child)
 
     monkeypatch.setattr(coordinator, "_tick", tick)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b"), pr_url("e-c")]
     assert max(seen) == 2 and sorted(e.launches()) == ["a", "b", "c"]
 
 
@@ -150,23 +151,23 @@ def test_one_start_at_a_time(tmp_path, monkeypatch):
         return real(argv, log_path)
 
     monkeypatch.setattr(coordinator, "_spawn", spawn)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b"), pr_url("e-c")]
     assert len(starts) == 3
 
 
 def test_a_parked_child_skips_its_dependants(tmp_path, monkeypatch, capsys):
     e = Epic(tmp_path, monkeypatch, steps={"api": [{"marker": "SPLIT:REQUIRED:/x/plan.md"}]})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-ui")]
     assert e.status() == {"api": "parked", "ui": "built", "docs": "skipped"}
     assert e.reasons()["api"].startswith("SPLIT:REQUIRED")
     assert "api" in e.reasons()["docs"]
-    assert e.run() == 0                       # stays parked: nothing relaunched
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-ui")]                       # stays parked: nothing relaunched
     assert sorted(e.launches()) == ["api", "ui"]
 
 
 def test_exit_0_without_a_pr_parks(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"no_pr": True}]})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b"), pr_url("e-c")]
     assert e.status()["a"] == "parked"
     assert e.reasons()["a"] == "no PR opened"
 
@@ -182,14 +183,14 @@ def test_children_never_build_in_place(tmp_path, monkeypatch, capsys, key):
     assert f"git.{key}" in capsys.readouterr().err
     assert e.launches() == [] and not (e.dir / "agents").exists() and not (e.dir / "runs").exists()
     yaml_path.write_text("git:\n  worktree: true\n")
-    assert e.run() == 0 and sorted(e.launches()) == ["a", "b", "c"]
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b"), pr_url("e-c")] and sorted(e.launches()) == ["a", "b", "c"]
 
 
 def test_a_failure_is_relaunched_once_per_invocation(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit": 1}]})
-    assert e.run() == 1
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b"), pr_url("e-c")]
     assert e.launches().count("a") == 2 and e.status()["a"] == "failed"
-    assert e.run() == 1
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b"), pr_url("e-c")]
     assert e.launches().count("a") == 3
 
 
@@ -233,7 +234,7 @@ def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
     (e.config.change_dir / "interview.md").write_text("# Interview\n")
     (e.config.change_dir / "research.md").write_text("# Research\n\nNot needed.\n")
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b"), pr_url("e-c")]
     argv = records.attempts(e.dir)[0].started["argv"]
     assert argv[:6] == ["python", "-m", "build_pipeline", "--session-id", "s", "build"]
     for flag in ("--auto", "--trust-repo", "--no-epic-split", "--pr-ready"):
@@ -257,7 +258,7 @@ def test_a_parent_that_skipped_research_skips_it_in_each_child(tmp_path, monkeyp
     with RESEARCH:NEEDED."""
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
     assert not (e.config.change_dir / "research.md").exists()
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b"), pr_url("e-c")]
     for a in [a for a in records.attempts(e.dir) if a.kind == "build"]:
         argv = a.started["argv"]
         assert "--skip-research" in argv and "--research-path" not in argv
@@ -276,7 +277,7 @@ def test_base_ref_reaches_a_new_child_and_a_relaunch_keeps_its_own(tmp_path, mon
         return proc
 
     monkeypatch.setattr(coordinator, "_spawn", spawn)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b"), pr_url("e-c")]
     first, again = [a.started["argv"] for a in records.attempts(e.dir) if a.child == "a" and a.kind == "build"]
     assert first[first.index("--base-ref") + 1] == old
     assert again == first                      # the relaunch is the same command
@@ -434,7 +435,7 @@ def test_a_config_yaml_not_on_origin_launches_nothing_until_pushed(tmp_path, mon
     assert "Push it, or pull" in e.reasons()["a"]
     assert "Push it, or pull" in capsys.readouterr().err
     subprocess.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=e.project, check=True)
-    assert e.run() == 0 and sorted(e.launches()) == ["a", "b", "c"]
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b"), pr_url("e-c")] and sorted(e.launches()) == ["a", "b", "c"]
     pushed = _sha(e.project)
     for a in [a for a in records.attempts(e.dir) if a.kind == "build"]:
         assert a.started["argv"][a.started["argv"].index("--base-ref") + 1] == pushed == a.started["head_sha"]
@@ -466,7 +467,7 @@ def test_a_failed_fetch_launches_no_dependant(tmp_path, monkeypatch):
     assert e.status()["docs"] == "unknown" and "git fetch origin" in e.reasons()["docs"]
     assert [a.child for a in records.attempts(e.dir) if a.child == "docs"] == []
     monkeypatch.setenv("PATH", path)
-    assert e.run() == 0 and e.launches()[-1] == "docs"
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-docs")] and e.launches()[-1] == "docs"
     docs = [a for a in records.attempts(e.dir) if a.child == "docs" and a.kind == "build"]
     assert len(docs) == 1 and docs[0].started["head_sha"] == moved
     assert (tmp_path / "bases" / "docs").read_text() == moved
@@ -558,7 +559,7 @@ def test_sighup_leaves_the_children_running_and_writes_the_summary(tmp_path, mon
 
 
 @pytest.mark.parametrize("sig", [signal.SIGHUP, signal.SIGTERM], ids=["SIGHUP", "SIGTERM"])
-def test_an_ignored_signal_stays_ignored(tmp_path, monkeypatch, sig):
+def test_an_ignored_signal_stays_ignored(tmp_path, monkeypatch, capfd, sig):
     """Under `nohup` SIGHUP is ignored, and the coordinator leaves it so: a
     closed terminal does not stop the run (B2.S13 is only for a SIGHUP that is
     not ignored). The same for an ignored SIGTERM. The signal arrives while a
@@ -586,7 +587,8 @@ def test_an_ignored_signal_stays_ignored(tmp_path, monkeypatch, sig):
 
     try:
         rc = run_signalled(under_nohup, ready, sig)
-        assert rc == 0      # no dependant waits on a merge: the run that got no signal ends so too
+        waiting = ",".join(pr_url(f"e-{c}") for c in "abc")      # all three wait for a human merge
+        assert rc == 3 and f"EPIC:MERGE_WAITING:{waiting}\n" in capfd.readouterr().out
         assert sorted(e.launches()) == ["a", "b", "c"]
         assert e.status() == {"a": "built", "b": "built", "c": "built"}
     finally:
@@ -685,7 +687,7 @@ def test_a_merge_while_running_launches_the_dependant(tmp_path, monkeypatch):
             e.fakes.release("slow")
 
     monkeypatch.setattr(coordinator, "_tick", tick)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-slow"), pr_url("e-docs")]
     assert e.launches()[-1] == "docs" and len(e.launches()) == 3
 
 
@@ -697,7 +699,7 @@ def test_killed_after_one_of_three_the_rerun_launches_the_other_two(tmp_path, mo
     run_killed(lambda: e.run(), die_at(records, "finish", after=True))
     assert e.launches() == ["a"]
     capsys.readouterr()
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b"), pr_url("e-c")]
     assert e.launches() == ["a", "b", "c"]
     summary = e.summary(2)
     assert [c["id"] for c in summary["children"]] == ["a", "b", "c"]
@@ -708,7 +710,7 @@ def test_killed_after_one_of_three_the_rerun_launches_the_other_two(tmp_path, mo
 
 def test_the_summary_holds_each_childs_pr_and_park_reason(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"marker": "SPLIT:REQUIRED"}]})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b"), pr_url("e-c")]
     summary = e.summary(1)
     got = {c["id"]: (c["status"], c["pr"], c["reason"]) for c in summary["children"]}
     assert got == {"a": ("parked", None, "SPLIT:REQUIRED"),

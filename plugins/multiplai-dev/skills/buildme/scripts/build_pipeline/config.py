@@ -470,6 +470,7 @@ STEP_STAGES: dict[str, str] = {
     "review_fix": "agent",
     "docs_update": "agent",
     "prototype": "agent",
+    "merge": "agent",
     "review": "review",
     "adjudication": "review",
     "test_quality_audit": "review",

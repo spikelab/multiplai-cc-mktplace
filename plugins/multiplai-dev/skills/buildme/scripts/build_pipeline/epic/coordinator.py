@@ -27,6 +27,15 @@ the review step reads the PR again and reuses the fixer's last review. A
 fixer an earlier run left is waited for, then run again (`_fix_pending`).
 Its stop and resume rows are PR D2's table.
 
+A child whose review left no blocker is merged (PR E, items 35-42;
+`_merge`, `merge.py`). Under `epic.merge: auto` the merge step merges
+`origin/<default>` into the child's branch in its worktree, has an agent
+resolve version, CHANGELOG and lockfile conflicts, runs the tests, pushes,
+waits for the required checks and runs `gh pr merge --merge`, one merge per
+repo at a time. Under `manual` (the default) nothing is merged: the PR is
+waited on, and the run exits 3 with `EPIC:MERGE_WAITING` while it is open.
+Its stop and resume rows are PR E's table.
+
 Spend (PR B2): before each launch, when `epic.max_usd` is set and the epic's
 spend (`spend.py`: the records' `spend` plus the review ledger) has reached
 it, nothing more is launched; the run waits for the running children and
@@ -42,6 +51,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -51,10 +61,10 @@ from pathlib import Path
 
 import yaml
 
-from .. import git_ops, intake
+from .. import budget, git_ops, intake, stop_record
 from ..config import git_toggles
 from ..findings.decisions import write_decisions
-from . import fix, records, review, spend, store
+from . import fix, merge, records, review, spend, store
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +73,8 @@ POLL = 1.0           # seconds between looks at a running child
 TICK = 30.0          # seconds between reads of the waited-on PRs
 STOP_WAIT = 30.0     # seconds the children get to exit on SIGINT or SIGTERM
 FETCH_TIMEOUT = 300  # seconds `git fetch origin` gets before a launch
+CHECKS_WAIT = 30.0   # seconds between reads of a PR's required checks (40.5)
+TESTS_TIMEOUT = 300  # seconds the merge tests get, as `gates.run_test_suite` gives (40.4)
 
 MARKER_SUMMARY = "EPIC:SUMMARY"
 MARKER_MERGE_WAITING = "EPIC:MERGE_WAITING"
@@ -95,6 +107,11 @@ def _tick(coord: "Coordinator") -> None:
     """Called on every look at the running children. A seam for the row tests."""
 
 
+def _merge_point(coord: "Coordinator", c: "Child", point: str) -> None:
+    """Called at each named point of the merge step (`start`, `merged`,
+    `push`, `checks`). A seam for the row tests."""
+
+
 def _spawn(argv: list[str], log_path: Path) -> subprocess.Popen:
     """Start one child in its own process group, its output in *log_path*."""
     with log_path.open("ab") as out:
@@ -102,12 +119,12 @@ def _spawn(argv: list[str], log_path: Path) -> subprocess.Popen:
                                 stderr=subprocess.STDOUT, start_new_session=True)
 
 
-def _spawn_review(argv: list[str], log_path: Path, cwd: Path) -> subprocess.Popen:
+def _spawn_review(argv: list[str], log_path: Path, cwd: Path, env: dict | None = None) -> subprocess.Popen:
     """Start one review or resume in its own process group, its output in
     *log_path*, so it outlives a killed coordinator (C.S2)."""
     with log_path.open("ab") as out:
         return subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=out,
-                                stderr=subprocess.STDOUT, start_new_session=True)
+                                stderr=subprocess.STDOUT, start_new_session=True, env=env)
 
 
 # --- where a child builds -------------------------------------------------------
@@ -304,6 +321,8 @@ class Child:
     task: asyncio.Task | None = None     # the review step, while it runs
     rproc: subprocess.Popen | None = None        # the review or resume process
     rattempt: records.Attempt | None = None
+    merge_stop: stop_record.StepStop | None = None   # PR E, item 39
+    merge_park: str = ""                 # why the merge step parked it; it stays parked
 
 
 @dataclass
@@ -317,6 +336,7 @@ class Coordinator:
     signal_sent: int | None = None
     budget_stop: float | None = None     # the spend that stopped launches, once reached
     _repo_slug: str | None = None
+    merge_locks: dict[str, asyncio.Lock] = field(default_factory=dict)   # item 35, per repo root
 
     def __post_init__(self) -> None:
         self.repo = _source_repo(self.config, self.state)
@@ -328,6 +348,7 @@ class Coordinator:
             cached = self.epic.child_status.get(c.id)
             if cached is not None:
                 self.children[c.id].pr_round, self.children[c.id].conflicts = cached.pr_round, cached.conflicts
+                self.children[c.id].merge_stop, self.children[c.id].merge_park = cached.merge_stop, cached.merge_park
 
     # -- argv -----------------------------------------------------------------
 
@@ -446,16 +467,21 @@ class Coordinator:
             c = self.children.get(a.child)
             if c is not None and a.kind in (*REVIEW_KINDS, *FIX_KINDS) and (a.result or {}).get("parked"):
                 c.status, c.reason = "parked", a.result["parked"]
+        for c in self.children.values():             # and a merge step's (PR E)
+            if c.merge_park:
+                c.status, c.reason = "parked", c.merge_park
 
     # -- dependencies and merges -------------------------------------------------
 
     def _waited_on(self) -> list[Child]:
-        """Children with a PR that a child not yet done depends on: open, or
-        `unknown` because the last read of it failed."""
+        """Children with a PR that a child not yet done depends on, or under
+        `manual` that passed review (item 41): open, or `unknown` because the
+        last read of it failed."""
         deps = {d for c in self.children.values() if c.status in ("pending", "waiting", "failed")
                 for d in c.depends_on}
         return [c for c in self.children.values()
-                if c.id in deps and (c.status == "built" or (c.status == "unknown" and c.pr))]
+                if (c.id in deps or (self.settings.merge == "manual" and self._clean_head(c)))
+                and (c.status == "built" or (c.status == "unknown" and c.pr))]
 
     def _read_prs(self, which: list[Child]) -> None:
         """`gh pr view` each PR. A failed read is not "still open": the child is
@@ -665,6 +691,9 @@ class Coordinator:
                     if pending:
                         continue
                     return
+                if self._merge_head(c, head):     # E.S8, E.S13: its own pushed merge, not reviewed again
+                    await self._merge(c, number)
+                    return
                 lines = review.ledger_lines()
                 running = review.running_dir(lines, self.slug, head)
                 if running is not None:
@@ -680,6 +709,7 @@ class Coordinator:
                     self._reuse(c, line, head, number)
                     if await self._fix(c, head, number):
                         continue
+                    await self._after_review(c, number, head)
                     return
                 if self._over_budget():           # Decided 6: before each launch
                     c.status, c.reason = "built", ""
@@ -712,6 +742,7 @@ class Coordinator:
                     self._reviewed(c, fields)
                     if await self._fix(c, head, number):
                         continue
+                    await self._after_review(c, number, head)
                     return
                 if code == 0 and found:
                     # The review reads the PR's head itself, after its fetch: a
@@ -761,14 +792,26 @@ class Coordinator:
         c.status, c.reason = "parked", why
         log.warning("EPIC child %s: parked: %s", c.id, why)
 
-    async def _run_step(self, c: Child, attempt: records.Attempt, cwd: Path) -> tuple[int, str]:
-        """Run a started `post` or `fix` to its end, in its own session with its
-        output in the attempt's log, as `_run_review` runs a review; its exit
-        code and output."""
+    async def _run_step(self, c: Child, attempt: records.Attempt, cwd: Path, *, env: dict | None = None,
+                        timeout: float | None = None) -> tuple[int | None, str]:
+        """Run a started `post`, `fix` or `merge-tests` to its end, in its own
+        session with its output in the attempt's log, as `_run_review` runs a
+        review; its exit code and output. None when it could not start, or ran
+        past *timeout* seconds and was killed."""
         c.rattempt = attempt
         self._save()
-        c.rproc = _spawn_review(attempt.started["argv"], attempt.log, cwd)
+        try:
+            c.rproc = _spawn_review(attempt.started["argv"], attempt.log, cwd, env)
+        except OSError as e:
+            return None, str(e)
+        until = None if timeout is None else CLOCK.now() + timeout
         while c.rproc.poll() is None:
+            if until is not None and CLOCK.now() >= until:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(c.rproc.pid, signal.SIGKILL)
+                c.rproc.wait()
+                c.rproc = None
+                return None, f"timed out after {timeout:.0f}s"
             await CLOCK.sleep(POLL)
         code, c.rproc = c.rproc.returncode, None
         return code, review.log_text(attempt.log)
@@ -931,9 +974,261 @@ class Coordinator:
             return False
         return await self._run_fix(c, head, number, rounds)
 
+    # -- merging a reviewed PR (PR E) ---------------------------------------------
+
+    def _clean_head(self, c: Child) -> str | None:
+        """The head of *c*'s last recorded review when it left no blocker and
+        did not park the child: the last clean reviewed head."""
+        done = [a for a in records.attempts(self.epic_dir) if a.child == c.id and a.kind in REVIEW_KINDS
+                and a.result is not None and "blocking" in a.result]
+        if not done or done[-1].result["blocking"] or done[-1].result.get("parked"):
+            return None
+        return done[-1].started.get("head_sha")
+
+    def _merge_worktree(self, c: Child) -> Path | None:
+        """`<W>`: the child's last `WORKTREE:` path, when it is still there."""
+        w = self._worktree(c)
+        return None if w == self.repo else w.absolute()
+
+    def _merge_head(self, c: Child, head: str) -> bool:
+        """Under `auto`: *head* is the last clean reviewed head with only the
+        merge step's merges of `origin/<default>` on top."""
+        reviewed, w = self._clean_head(c), self._merge_worktree(c)
+        return (self.settings.merge == "auto" and reviewed is not None and w is not None
+                and head != reviewed and merge.merges_onto(w, head, reviewed, git_ops.default_branch(w)))
+
+    async def _after_review(self, c: Child, number: int, head: str) -> None:
+        """Item 40: under `auto`, a PR whose review at *head* left no blocker is merged."""
+        if self.settings.merge == "auto" and c.status == "built" and self._clean_head(c) == head:
+            await self._merge(c, number)
+
+    def _merge_park(self, c: Child, why: str) -> None:
+        c.merge_park = why
+        self._park(c, why)
+        self._save()
+
+    async def _merge(self, c: Child, number: int) -> None:
+        """Items 35-40 under `auto`: merge *c*'s PR, one merge per repo at a
+        time. Every git command, check and stop record runs on `<W>` (item 36).
+        A stop by an exception or a signal first saves `merge_stop` (item 39)."""
+        w = self._merge_worktree(c)
+        if w is None:
+            self._merge_park(c, "its worktree is gone, so the merge step has nowhere to merge")
+            return
+        c.status = "reviewing"
+        async with self.merge_locks.setdefault(str(self.repo.resolve()), asyncio.Lock()):
+            try:
+                await self._merge_steps(c, number, w)
+            except BaseException:
+                c.merge_stop = stop_record.record(w)
+                self._save()
+                raise
+
+    async def _merge_steps(self, c: Child, number: int, w: Path) -> None:
+        reviewed, name = self._clean_head(c), merge.branch(w)
+        if name is None:
+            return self._merge_park(c, f"cannot read the branch checked out in {w}")
+        default, origin_ref = git_ops.default_branch(w), f"refs/remotes/origin/{name}"
+        _merge_point(self, c, "start")
+        pushed = False
+        if not merge.merging(w) and merge.unpushed_merge(w, reviewed, name, default):     # item 37
+            head = git_ops.rev_parse_head(w)
+            why = stop_record.others_work(w, None, head=head)
+            if why:
+                return self._merge_park(c, why)
+            if not await self._merge_tests(c, w, head, hint="") or not self._push(c, w, name):
+                return
+            pushed = True
+        elif merge.merging(w) and not self._abort(c, w, reviewed, origin_ref):      # item 38
+            return
+        refused = None
+        while True:
+            if not pushed:
+                done = await self._merge_default(c, w, reviewed, name, default, origin_ref)
+                if done is None:
+                    return
+                if done == "up to date" and refused:      # never retry a refused merge with nothing new
+                    return self._merge_park(c, refused)
+            pushed = False
+            if not await self._wait_checks(c, number):
+                return
+            refused = self._gh_merge(c, number)
+            if refused is None:
+                return
+
+    def _abort(self, c: Child, w: Path, reviewed: str | None, origin_ref: str) -> bool:
+        """Item 38: a merge left in progress is aborted only when the shared
+        check finds nothing in `<W>` its stop did not leave; with no
+        `merge_stop` (a kill), any change parks. A refused abort parks with
+        git's own words and changes nothing else."""
+        why = stop_record.others_work(w, c.merge_stop, head=reviewed, origin_ref=origin_ref)
+        if why:
+            self._merge_park(c, f"{why}; {merge.abort_hint(w)}")
+            return False
+        res = merge.git(w, "merge", "--abort")
+        if res.ok:
+            return True
+        files = " ".join(shlex.quote(f) for f in merge.abort_names(res.stderr))
+        self._merge_park(c, f"git merge --abort failed: {res.stderr.strip()[-400:]}; "
+                            f"git -C {w} checkout -- {files}, then git -C {w} merge --abort")
+        return False
+
+    async def _merge_default(self, c: Child, w: Path, reviewed: str | None, name: str, default: str,
+                             origin_ref: str) -> str | None:
+        """40.1-40.4: check, merge `origin/<default>`, resolve, test, commit and
+        push. "merged" or "up to date"; None when the child parked or is `unknown`."""
+        why = stop_record.others_work(w, None, head=reviewed, origin_ref=origin_ref)       # 40.1
+        if why:
+            return self._merge_park(c, why)
+        c.merge_stop = None                                                                 # 40.2
+        self._save()
+        failed = await _fetch_origin(w)
+        if failed is not None:
+            c.status, c.reason = "unknown", f"cannot merge: git fetch origin failed: {failed}"
+            return None
+        res = merge.git(w, "merge", "--no-ff", "--no-commit", f"origin/{default}")
+        if not merge.merging(w):
+            if res.ok:
+                return "up to date"
+            return self._merge_park(c, f"git merge origin/{default} failed: {review.tail(res.stderr)}")
+        _merge_point(self, c, "merged")
+        hint = f"; {merge.abort_hint(w)}"
+        files = merge.conflicted(w)
+        if files is None:
+            return self._merge_park(c, f"git cannot list the conflicts in {w}{hint}")
+        if files and not await self._resolve_conflicts(c, w, files, reviewed, name, default, hint):     # 40.3
+            return None
+        if not await self._merge_tests(c, w, reviewed, hint=hint):                           # 40.4
+            return None
+        res = merge.git(w, "commit", "--no-edit")
+        if not res.ok:
+            c.merge_stop = stop_record.record(w)
+            return self._merge_park(c, f"git commit failed: {review.tail(res.stderr)}{hint}")
+        return "merged" if self._push(c, w, name) else None
+
+    async def _resolve_conflicts(self, c: Child, w: Path, files: list[str], head: str | None, name: str,
+                       default: str, hint: str) -> bool:
+        """40.3: one agent call resolves version fields, CHANGELOGs and
+        lockfiles; any other conflicted file, or any other file it changed,
+        parks. The resolved files are staged for the commit."""
+        bad = [f for f in files if not merge.may_resolve(w, f)]
+        if bad:
+            c.merge_stop = stop_record.record(w)
+            self._merge_park(c, f"merging origin/{default} conflicts in {', '.join(bad)}, which the "
+                                f"merge step may not resolve{hint}")
+            return False
+        if self._over_budget():           # Decided 6: before each launch
+            c.merge_stop, c.status = stop_record.record(w), "built"
+            return False
+        attempt = records.start(self.epic_dir, "merge", c.id, ["merge", *files], head_sha=head,
+                                pr_round=c.pr_round)
+        self._save()
+        before = budget.process_spend().cost_usd
+        try:
+            result = await merge.run_merge_agent(self.config, w, files, name, default)
+        except BaseException:
+            records.finish(attempt, None, interrupted=True,
+                           extra={"spend": round(budget.process_spend().cost_usd - before, 6)})
+            raise
+        changed = merge.unstaged(w) if result.success else []
+        left = merge.unresolved(w, files) if result.success else []
+        others = None if changed is None else [p for p in changed if p not in files and not merge.is_lockfile(p)]
+        why = (f"the merge agent failed: {review.tail(result.error or result.output or '')}" if not result.success
+               else f"the merge agent left conflicts in {', '.join(left)}" if left
+               else f"git cannot list what the merge agent changed in {w}" if others is None
+               else f"the merge agent changed files it may not: {', '.join(others)}" if others else None)
+        records.finish(attempt, 0 if result.success else 1, interrupted=False,
+                       extra={"spend": round(budget.process_spend().cost_usd - before, 6)})
+        if why is None and not merge.git(w, "add", "--", *dict.fromkeys([*files, *changed])).ok:
+            why = f"git add failed in {w}"
+        if why:
+            c.merge_stop = stop_record.record(w)
+            self._merge_park(c, why + hint)
+            return False
+        return True
+
+    async def _merge_tests(self, c: Child, w: Path, head: str | None, *, hint: str) -> bool:
+        """40.4: the project's test command in `<P>`, with `BUILDME_TRUST_REPO=1`,
+        as a `merge-tests` pair. True when it passed or there is none."""
+        project = self._child_project(c)
+        command = merge.test_command(project)
+        if command is None:
+            log.info("EPIC child %s: merge tests skipped: no test command", c.id)
+            return True
+        try:
+            argv, bad = shlex.split(command), None
+        except ValueError as e:
+            argv, bad = [command], f"cannot split the test command: {e}"
+        attempt = records.start(self.epic_dir, "merge-tests", c.id, argv, head_sha=head, pr_round=c.pr_round)
+        code, out = (None, bad) if bad else await self._run_step(
+            c, attempt, project, env={**os.environ, "BUILDME_TRUST_REPO": "1"}, timeout=TESTS_TIMEOUT)
+        records.finish(attempt, code, interrupted=False)
+        if code == 0:
+            return True
+        c.merge_stop = stop_record.record(w)
+        first = (out.strip().splitlines() or ["no output"])[0]
+        why = (f"merge tests could not run: {first}" if code is None
+               else f"merge tests failed: {command} exited {code}, see {attempt.log}")
+        self._merge_park(c, why + hint)
+        return False
+
+    def _push(self, c: Child, w: Path, name: str) -> bool:
+        """`git push`, never forced. A rejected push parks naming where origin's branch is."""
+        _merge_point(self, c, "push")
+        res = git_ops.push_branch(w, name)
+        if res.ok:
+            return True
+        remote = merge.git(w, "ls-remote", "origin", f"refs/heads/{name}").stdout.split()
+        if remote and git_ops.rev_parse_head(w) and remote[0] != git_ops.rev_parse_head(w):
+            self._merge_park(c, f"push rejected: origin/{name} moved to {remote[0]}")
+        else:
+            self._merge_park(c, f"git push failed: {review.tail(res.stderr)}")
+        return False
+
+    async def _wait_checks(self, c: Child, number: int) -> bool:
+        """40.5: wait while a required check is pending; a failed one parks, naming it."""
+        while True:
+            _merge_point(self, c, "checks")
+            res = git_ops._run_gh(["gh", "pr", "checks", str(number), "--required", "--json", "name,bucket"],
+                                  cwd=self.repo, timeout=60)
+            try:
+                checks = json.loads(res.stdout) if res.stdout.strip() else None
+            except ValueError:
+                checks = None
+            if not isinstance(checks, list):
+                if re.search(r"no (?:required )?checks reported", res.stderr):
+                    return True
+                c.status, c.reason = "unknown", f"cannot read its PR's required checks: {review.tail(res.stderr)}"
+                return False
+            failed = [x.get("name") for x in checks if isinstance(x, dict) and x.get("bucket") in ("fail", "cancel")]
+            if failed:
+                self._merge_park(c, f"required check {failed[0]} failed")
+                return False
+            if not any(isinstance(x, dict) and x.get("bucket") == "pending" for x in checks):
+                return True
+            await CLOCK.sleep(CHECKS_WAIT)
+
+    def _gh_merge(self, c: Child, number: int) -> str | None:
+        """40.6: `gh pr merge --merge`. None when it merged or the child parked;
+        else (`BEHIND`) why it was refused, and the step starts again at 40.1."""
+        res = git_ops._run_gh(["gh", "pr", "merge", str(number), "--merge"], cwd=self.repo, timeout=120)
+        view = None if res.ok else _gh(self.repo, "pr", "view", str(number), "--json", "state,mergeStateStatus")
+        status = view.get("mergeStateStatus") if isinstance(view, dict) else None
+        if res.ok or (isinstance(view, dict) and view.get("state") == "MERGED"):
+            c.status, c.reason, c.merge_stop = "merged", "", None
+            log.info("EPIC child %s: merged %s", c.id, c.pr)
+            self._save()
+            return None
+        why = f"gh pr merge refused: {res.stderr.strip()[-400:]} (mergeStateStatus {status})"
+        if status == "BEHIND":
+            return why
+        self._merge_park(c, why)
+        return None
+
     def _save(self) -> None:
         self.epic.child_status = {cid: store.ChildStatus(status=c.status, pr=c.pr, reason=c.reason,
-                                                         pr_round=c.pr_round, conflicts=c.conflicts)
+                                                         pr_round=c.pr_round, conflicts=c.conflicts,
+                                                         merge_stop=c.merge_stop, merge_park=c.merge_park)
                                   for cid, c in self.children.items()}
         self.epic.spent_usd, self.epic.spend_complete = self.spent()
         store.save_epic(self.epic_dir, self.epic)

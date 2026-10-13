@@ -28,7 +28,9 @@ from .epic_row_helpers import (
     child,
     make_build,
     make_project,
+    merge_waiting,
     pr_number,
+    pr_url,
     run_coordinator,
     run_killed,
     run_signalled,
@@ -102,7 +104,7 @@ def test_blockers_lead_to_a_post_then_a_fix_and_round_counts_add_up(tmp_path, mo
     fixes = {str(N): [{"rounds": [{"findings": [high("f2")]}, {"findings": [high("f3", "MEDIUM")]}]},
                       {"rounds": [{}]}]}
     e = Epic(tmp_path, monkeypatch, fixes=fixes)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert e.kinds() == ["build", "review", "post", "fix", "review", "post", "fix", "review"]
     assert [x["kind"] for x in e.fakes.review_launches()] == ["review", "review"]      # a's first, b's
     first, second = (a.started["argv"] for a in e.fixes())
@@ -129,7 +131,7 @@ def test_blockers_lead_to_a_post_then_a_fix_and_round_counts_add_up(tmp_path, mo
 
 def test_a_clean_review_runs_no_post_and_no_fix(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, reviews={})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert e.kinds() == ["build", "review"]
     assert e.fakes.post_launches() == [] and e.fakes.fix_launches() == []
 
@@ -165,7 +167,7 @@ def test_findings_failed_parks_with_the_reason_and_stays_parked(tmp_path, monkey
 
 def test_a_fixer_that_fails_otherwise_parks_with_its_output_tail(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, fixes={str(N): [{"exit": 2, "stdout": "ERROR: PR 1 has no head branch"}]})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     st = e.status()
     assert st["status"] == "parked" and st["reason"].startswith("the fixer exited 2: ")
     assert "ERROR: PR 1 has no head branch" in st["reason"]
@@ -174,12 +176,12 @@ def test_a_fixer_that_fails_otherwise_parks_with_its_output_tail(tmp_path, monke
 def test_a_failed_post_parks_and_runs_no_fixer(tmp_path, monkeypatch):
     reviews = {**BLOCKED, "post": [{"exit": 1, "stderr": "ERROR: gh api failed: HTTP 502"}]}
     e = Epic(tmp_path, monkeypatch, reviews=reviews)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     st = e.status()
     assert st["status"] == "parked" and st["reason"].startswith("posting the review exited 1: ")
     assert "HTTP 502" in st["reason"]
     assert e.fakes.fix_launches() == []
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     assert len(e.fakes.post_launches()) == 1 and e.status()["status"] == "parked"
 
 
@@ -196,7 +198,7 @@ def test_a_review_folder_without_findings_parks_before_posting(tmp_path, monkeyp
         return await real(self, c, rec, head)
 
     monkeypatch.setattr(coordinator.Coordinator, "_post", post)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     st = e.status()
     assert st["status"] == "parked" and st["reason"].startswith("cannot choose what to post: no findings.json at ")
     assert e.fakes.post_launches() == [] and e.fakes.fix_launches() == []
@@ -247,11 +249,11 @@ def test_a_fixer_killed_alone_is_relaunched_by_the_next_run(tmp_path, monkeypatc
     result is `interrupted` and the child is not parked; the next run
     relaunches it, and `findings` resumes itself."""
     e = Epic(tmp_path, monkeypatch, fixes={str(N): [{"die": True}, {"rounds": [{}]}]})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     [fix] = e.fixes()
     assert (fix.result["exit_code"], fix.result["interrupted"]) == (-signal.SIGKILL, True)
     assert e.status()["status"] == "built"
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert e.kinds() == ["build", "review", "post", "fix", "fix", "review"]
     assert e.fixes()[1].result["exit_code"] == 0
     assert len(e.fakes.post_launches()) == 1
@@ -265,7 +267,7 @@ def test_a_signal_stops_the_fixer_and_the_next_run_relaunches_it(tmp_path, monke
     assert rc == 128 + signal.SIGTERM
     [fix] = e.fixes()
     assert fix.result["interrupted"] is True
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert [a.result["exit_code"] for a in e.fixes()][1:] == [0]
     assert e.kinds()[-1] == "review" and e.status()["status"] == "built"
 
@@ -311,9 +313,9 @@ def test_a_fixer_killed_part_way_through_a_round_is_relaunched_within_the_cap(tm
     2 and running on stops where a fixer that never stopped would."""
     fixes = {str(N): [{"rounds": [{"findings": [high("f2")]}, {"stop": "fetch"}]}, {"rounds": [{}]}]}
     e = Epic(tmp_path, monkeypatch, fixes=fixes)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     assert e.status()["status"] == "built" and e.fixes()[0].result["interrupted"] is True
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert [_rounds(a.started["argv"]) for a in e.fixes()] == [5, 5]
     st = e.status()
     assert (st["status"], st["pr_round"]) == ("built", 3)
@@ -374,12 +376,12 @@ def test_a_fixer_stopped_alone_by_sigterm_or_sighup_is_relaunched(tmp_path, monk
                 sent.append(pid)
 
     monkeypatch.setattr(coordinator, "_tick", tick)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     [fx] = e.fixes()
     assert (fx.result["exit_code"], fx.result["interrupted"]) == (128 + sig, True)
     assert e.status()["status"] == "built"
     monkeypatch.setattr(coordinator, "_tick", lambda coord: None)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert [a.result["exit_code"] for a in e.fixes()] == [128 + sig, 0]
     assert e.status()["status"] == "built"
 
@@ -426,7 +428,7 @@ def test_a_post_still_running_after_its_coordinator_died_is_waited_for(tmp_path,
                     time.sleep(0.02)
 
     monkeypatch.setattr(coordinator, "_tick", tick)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert len(looks) == 5
     posts = [a for a in e.tries() if a.kind == "post"]
     assert [(a.result["exit_code"], a.result["interrupted"]) for a in posts] == [(None, True), (0, False)]
@@ -437,11 +439,11 @@ def test_a_post_still_running_after_its_coordinator_died_is_waited_for(tmp_path,
 def test_a_post_killed_by_a_signal_is_posted_again_by_the_next_run(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, reviews={**BLOCKED, "post": [{"die": True}, {}]},
              fixes={str(N): [{"rounds": [{}]}]})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     [post] = [a for a in e.tries() if a.kind == "post"]
     assert (post.result["exit_code"], post.result["interrupted"]) == (-signal.SIGKILL, True)
     assert e.status()["status"] == "built" and e.fakes.fix_launches() == []
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert len(e.fakes.post_launches()) == 2 and len(e.fakes.fix_launches()) == 1
     assert e.status()["status"] == "built"
 
@@ -455,11 +457,11 @@ def test_a_post_that_uv_reports_stopped_by_a_signal_is_posted_again_by_the_next_
     next run posts again and runs the fixer."""
     e = Epic(tmp_path, monkeypatch, reviews={**BLOCKED, "post": [{"exit": code}, {}]},
              fixes={str(N): [{"rounds": [{}]}]})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     [post] = [a for a in e.tries() if a.kind == "post"]
     assert (post.result["exit_code"], post.result["interrupted"], post.result.get("parked")) == (code, True, None)
     assert e.status()["status"] == "built" and e.fakes.fix_launches() == []
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert len(e.fakes.post_launches()) == 2 and len(e.fakes.fix_launches()) == 1
     assert e.status()["status"] == "built"
 
@@ -472,11 +474,11 @@ def test_a_review_stopped_by_a_signal_is_not_parked_and_the_next_run_reviews_aga
     an `interrupted` result and the child stays `built`; the next run asks the
     review again, which resumes a killed run (exit 4 with the hint)."""
     e = Epic(tmp_path, monkeypatch, reviews={str(N): [step, {}]})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     [rv] = [a for a in e.tries() if a.kind == "review"]
     assert rv.result["interrupted"] is True and rv.result.get("parked") is None
     assert e.status()["status"] == "built"
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     want = ["review", "review", "resume"] if step.get("die") else ["review", "review"]
     assert [a.kind for a in e.tries() if a.kind in ("review", "resume")] == want
     assert e.status()["status"] == "built" and not e.status().get("reason")
@@ -549,7 +551,7 @@ def test_a_fixer_started_by_hand_on_the_pr_is_waited_for(tmp_path, monkeypatch):
 
     monkeypatch.setattr(coordinator, "_tick", tick)
     try:
-        assert e.run() == 0
+        assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     finally:
         hand.kill()
         hand.wait()
@@ -567,7 +569,7 @@ def test_a_decisions_file_that_cannot_be_written_parks_the_child(tmp_path, monke
 
     monkeypatch.setattr(coordinator, "write_decisions", refuse)
     e = Epic(tmp_path, monkeypatch)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     st = e.status()
     assert st["status"] == "parked" and st["reason"].startswith("cannot choose what to post: [Errno 13]")
     assert [a.result["parked"] for a in e.tries() if a.kind == "post"] == [st["reason"]]
@@ -594,10 +596,10 @@ def test_ps_failing_while_a_fixer_may_still_run_launches_nothing(tmp_path, monke
     """D2.S9 when `ps` cannot answer: a fixer with no result may still run, so
     the child is `unknown` and no second `findings` starts."""
     e = Epic(tmp_path, monkeypatch, fixes={str(N): [{"die": True}, {"rounds": [{}]}]})
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     e.fixes()[0].result_path.unlink()
     e.fakes.ps_fails(monkeypatch)
-    assert e.run() == 1
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     assert len(e.fakes.fix_launches()) == 1
     st = e.status()
     assert st["status"] == "unknown" and st["reason"].startswith("cannot tell whether its fixer is still running")
@@ -614,7 +616,7 @@ def test_an_unparsable_findings_file_parks_before_posting(tmp_path, monkeypatch)
         return await real(self, c, rec, head)
 
     monkeypatch.setattr(coordinator.Coordinator, "_post", post)
-    assert e.run() == 0
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     st = e.status()
     assert st["status"] == "parked" and st["reason"].startswith("cannot choose what to post: ")
     assert e.fakes.post_launches() == [] and e.fakes.fix_launches() == []

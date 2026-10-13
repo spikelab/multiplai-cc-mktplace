@@ -30,6 +30,7 @@ from multiplai_core import checkpoint
 from multiplai_core.paths import get_paths
 from pydantic import BaseModel, Field
 
+from ..stop_record import StepStop
 from .split import EpicChild, check_children, waves
 
 log = logging.getLogger(__name__)
@@ -52,13 +53,17 @@ class ChildStatus(BaseModel):
     `skipped` (a dependency parked), `failed` or `unknown` (a `gh`, `git` or
     `ps` read about a stopped child failed). `pr_round` (the PR's review
     rounds, item 23) and `conflicts` (its last mergeability read) are cached
-    here; the review ledger and `gh` are the truth."""
+    here; the review ledger and `gh` are the truth. PR E: `merge_stop`, the
+    tree of the child's worktree when its merge step last stopped (item 39),
+    and `merge_park`, why its merge step parked it, which keeps it parked."""
 
     status: str = "pending"
     pr: str | None = None
     reason: str = ""
     pr_round: int | None = None
     conflicts: bool | None = None
+    merge_stop: StepStop | None = None
+    merge_park: str = ""
 
 
 class Epic(BaseModel):

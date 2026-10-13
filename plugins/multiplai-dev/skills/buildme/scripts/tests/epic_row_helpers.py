@@ -752,20 +752,46 @@ def approve(config: BuildConfig, answer: EpicSplitAnswer, log: CallLog) -> None:
     lock.release_all()
 
 
+_OUT: list[str] = []      # what the last `run_coordinator` printed
+
+
+class _Tee:
+    def __init__(self, out):
+        self.out, self.text = out, []
+
+    def write(self, s: str) -> int:
+        self.text.append(s)
+        return self.out.write(s)
+
+    def flush(self) -> None:
+        self.out.flush()
+
+
 def run_coordinator(config: BuildConfig, **over) -> int:
     """One re-run of the approved build: the coordinator runs, with the fake
     clock. Like a new process, it takes the epic lock itself and drops it at
-    the end, so a child build holding the lock would make it exit 2."""
+    the end, so a child build holding the lock would make it exit 2. What it
+    prints is kept for `merge_waiting`."""
+    import contextlib
+    import sys
     from unittest.mock import patch
 
     from build_pipeline.epic import coordinator, lock
 
     lock.release_all()
+    tee = _Tee(sys.stdout)
     try:
-        with patch.object(coordinator, "CLOCK", FakeClock()):
+        with patch.object(coordinator, "CLOCK", FakeClock()), contextlib.redirect_stdout(tee):
             return run_build(config, args_for(config, **over), coordinator=True)
     finally:
         lock.release_all()
+        _OUT[:] = "".join(tee.text).splitlines()
+
+
+def merge_waiting() -> list[str] | None:
+    """The PRs the last `run_coordinator` named on `EPIC:MERGE_WAITING:`; None without that line."""
+    found = [line for line in _OUT if line.startswith("EPIC:MERGE_WAITING:")]
+    return found[-1][len("EPIC:MERGE_WAITING:"):].split(",") if found else None
 
 
 def run_signalled(fn: Callable[[], int], ready: Callable[[], bool], sig: int) -> int:
