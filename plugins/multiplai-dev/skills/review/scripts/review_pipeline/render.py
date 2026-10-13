@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .export import to_checks_file, to_findings_file
 from .models import CRITICAL_IMPACTS, SECTIONS, SEVERITIES, ReviewState, section_of
-from .target import github_web_base
+from .target import github_web_base, object_folders
 
 log = logging.getLogger(__name__)
 
@@ -532,10 +532,16 @@ def render_rollup(severity: str, files: list[dict]) -> str:
     return "\n".join(head + sections) + "\n"
 
 
+def _object_files(out_dir: Path, pattern: str) -> list[Path]:
+    """The files matching *pattern* in each `<out>/<repo>/<object>/` folder (`target.object_folders`)."""
+    return [p for folder in object_folders(out_dir) for p in folder.glob(pattern) if p.is_file()]
+
+
 def write_rollups(out_dir: Path, paths: list[Path] | None = None) -> list[Path]:
-    """`<SEV>-only.md` for each severity, from *paths* (default: `<out>/*/findings.json`, sorted)."""
+    """`<SEV>-only.md` for each severity, from *paths* (default: every review's latest round,
+    `<out>/<repo>/<object>/findings.json` and the 0.46 `<out>/<slug>/findings.json`, sorted)."""
     if paths is None:
-        paths = sorted(out_dir.glob("*/findings.json"))
+        paths = sorted([*out_dir.glob("*/findings.json"), *_object_files(out_dir, "findings.json")])
     files = load_findings_files(paths)
     written = []
     for severity in SEVERITIES:
@@ -556,16 +562,17 @@ def write_runs(out_dir: Path, paths: list[Path] | None = None) -> tuple[Path, in
     Each line holds the target's label, slug and head sha, `generated_at`,
     `producer` and the whole `run` object, so one `jq -s` answers questions
     across reviews. By default it reads each target's latest round
-    (`<out>/*/findings.json`) and every earlier round kept under
-    `<out>/*/rounds/*/`, so a target reviewed three times has three lines. A
+    (`<out>/<repo>/<object>/findings.json`, and the 0.46 `<out>/<slug>/findings.json`)
+    and every earlier round kept under its `rounds/*/`, so a target reviewed three times has three lines. A
     round read twice (kept, and still at the top) gets one line. Lines are
     sorted by `generated_at`. Returns (path, lines written, files skipped for
     having no `run`). Unreadable files are skipped with a warning and not
     counted.
     """
     if paths is None:
-        paths = sorted(out_dir.glob("*/findings.json")) + sorted(
-            p for p in out_dir.glob("*/rounds/*/findings.json") if not p.parent.name.startswith("."))
+        paths = sorted([*out_dir.glob("*/findings.json"), *_object_files(out_dir, "findings.json")]) + sorted(
+            p for p in [*out_dir.glob("*/rounds/*/findings.json"), *_object_files(out_dir, "rounds/*/findings.json")]
+            if not p.parent.name.startswith("."))
     rows, seen, skipped = [], set(), 0
     for data in load_findings_files(paths):
         if not data.get("run"):

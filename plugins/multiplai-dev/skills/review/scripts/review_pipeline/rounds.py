@@ -61,8 +61,40 @@ def _read_json(path: Path) -> dict | None:
 # persists across rounds where it is), head/base snapshots git rebuilds, and a
 # `--dir` review's imported checkout `source/` (its git keeps every commit an
 # earlier round names, and by the time a round is kept it holds the next import).
+# These are every directory the pipeline writes at the top of a target folder.
+# `keep_round` skips every other top-level directory too (a review an older
+# version nested inside this folder, with its own rounds), and the rollups such a
+# version wrote beside it (`ROLLUP_FILES`): a kept round holds this run's files only.
 NOT_KEPT = frozenset({ROUNDS_DIR, "viewer", "tree", "base-tree", "assess-tree", "source"})
+ROLLUP_FILES = frozenset({"HIGH-only.md", "MEDIUM-only.md", "LOW-only.md", "runs.jsonl"})
 PARTIAL_PREFIX = ".partial-"
+
+
+def folder_target(folder: Path) -> dict:
+    """The `target` object of *folder*'s `review-state.json`, else of its `findings.json`, else {}:
+    whose review the folder holds (`remote_url`, `ref`, `slug`)."""
+    for name in (STATE_FILE, "findings.json"):
+        t = (_read_json(folder / name) or {}).get("target")
+        if isinstance(t, dict):
+            return t
+    return {}
+
+
+def out_root(target_dir: Path, slug: str | None = None) -> Path:
+    """The `<out>` a review folder was written under.
+
+    A folder named by its own slug was written by multiplai-dev 0.46 or
+    earlier (`<out>/<slug>/`), and so is one whose slug cannot be read: its
+    parent. Any other folder is `<out>/<repo>/<object>/`: its grandparent. An
+    object name starts with its kind (`pr-`, `branch-`, ...) and a slug with
+    `<owner>-<repo>--`, so the two never meet. With *slug* None it is read
+    with `folder_target`.
+    """
+    if slug is None:
+        slug = str(folder_target(target_dir).get("slug") or "")
+    if not slug or slug == target_dir.name:
+        return target_dir.parent
+    return target_dir.parent.parent
 
 
 def _round_dirs(target_dir: Path) -> list[Path]:
@@ -198,7 +230,8 @@ def keep_round(target_dir: Path, slug: str, new_head_sha: str) -> Path | None:
     def skip(directory: str, names: list[str]) -> set[str]:
         if Path(directory) != target_dir:
             return set()
-        return {n for n in names if n in NOT_KEPT or any(fnmatch.fnmatchcase(n, p) for p in skip_files)}
+        return {n for n in names if n in NOT_KEPT or n in ROLLUP_FILES or (target_dir / n).is_dir()
+                or any(fnmatch.fnmatchcase(n, p) for p in skip_files)}
 
     shutil.copytree(target_dir, partial, symlinks=True, ignore=skip)
     round_dir = root / name

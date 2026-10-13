@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import shutil
 from dataclasses import dataclass, field
@@ -266,27 +267,33 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
     the stack: a review running in that directory now raises RunInProgress,
     so it is never read as interrupted and never written over.
 
-    A `--dir` target is first copied into `<out>/<slug>/source/` and committed
-    there (`import_dir`), then reviewed as a tree at that commit. With
-    *check_interrupted* (a review, not `--plan-only`) and no `spec.restart`, a
-    run of this directory and head that the ledger shows started and never
-    ended raises InterruptedRun before anything is written, when `resume`
-    can continue it (`_resumable`); otherwise this run starts over.
+    The directory is `<out>/<repo>/<object>/` (`_choose_folder`). A `--dir`
+    target is first copied into `<out>/<basename>/dir-<basename>-<6 hex>/source/`
+    and committed there (`import_dir`), then reviewed as a tree at that commit.
+    With *check_interrupted* (a review, not `--plan-only`) and no
+    `spec.restart`, a run of this directory and head that the ledger shows
+    started and never ended raises InterruptedRun before anything is
+    written, when `resume` can continue it (`_resumable`); otherwise this run
+    starts over. While the chosen directory has no saved state yet, the
+    directory multiplai-dev 0.46 used for this target (`<out>/<slug>/`) is
+    checked the same way, under its own lock.
     """
     repo, tree, name, src = spec.repo, spec.tree, None, None
     info = None
     needs: list = []
-    locked: Path | None = None
+    import_to: Path | None = None
     if lock is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
     try:
         if spec.dir:
             src = Path(spec.dir).expanduser().resolve()
             name = target_mod.dir_name(src)
-            import_to = out_dir / target_mod.sanitize_slug(f"{name}--tree")
+            repo_name, obj = target_mod.dir_object(src)
+            import_to = out_dir / repo_name / obj
             if lock is not None:
+                # hold() creates `.locks/` but not its parents: without this it runs unlocked.
+                import_to.parent.mkdir(parents=True, exist_ok=True)
                 _hold(lock, import_to)
-                locked = import_to
             repo = str(target_mod.import_dir(src, import_to))
             tree = "HEAD"
         resolved = target_mod.resolve(repo, branch=spec.branch, pr=spec.pr, range_=spec.range, tree=tree,
@@ -306,11 +313,17 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
         raise ReviewError(f"{spec.dir or spec.repo}: {gate.reason}")
     if info is None:
         info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in, needs=needs)
-    target_dir = out_dir / info.slug
-    if lock is not None and target_dir != locked:
-        _hold(lock, target_dir)
-    if check_interrupted and not spec.restart and _resumable(target_dir, info.head_sha):
-        raise InterruptedRun(target_dir)
+    target_dir = import_to if import_to is not None else _choose_folder(out_dir, resolved, lock)
+    if check_interrupted and not spec.restart:
+        if _resumable(target_dir, info.head_sha):
+            raise InterruptedRun(target_dir)
+        old = out_dir / info.slug
+        if old.is_dir() and old != target_dir and not (target_dir / STATE_FILE).exists():
+            with contextlib.ExitStack() as old_lock:
+                if lock is not None:  # a run still going there is running, not interrupted
+                    _hold(old_lock, old)
+                if _resumable(old, info.head_sha):
+                    raise InterruptedRun(old)
     # A directory an earlier round wrote: keep that round's findings before
     # this run writes over them, also when this run is on the same head (a rerun).
     kept = rounds.keep_round(target_dir, info.slug, info.head_sha)
@@ -318,6 +331,70 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
         log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
     return ReviewState(target=info, mode=spec.mode, needs=[gated_need(n) for n in needs]), target_dir
+
+
+def _same_remote(url: str | None, here: tuple[str, str] | None) -> bool:
+    """True when *url* names the repository *here* is (`(owner, repo)`), compared without case,
+    so the `https://` and `git@` forms of one repository are one remote."""
+    pair = target_mod.origin_owner_repo(url)
+    return (tuple(x.lower() for x in pair) if pair else None) == (tuple(x.lower() for x in here) if here else None)
+
+
+def _try_folder(folder: Path, lock: contextlib.ExitStack | None) -> tuple[contextlib.ExitStack, dict]:
+    """Take *folder*'s run lock in a stack of its own (with *lock*), then read whose it is."""
+    held = contextlib.ExitStack()
+    if lock is not None:
+        folder.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            _hold(held, folder)
+        except BaseException:
+            held.close()
+            raise
+    return held, rounds.folder_target(folder)
+
+
+def _choose_folder(out_dir: Path, resolved: target_mod.Resolved, lock: contextlib.ExitStack | None) -> Path:
+    """`<out>/<repo>/<object>/` for a PR, branch, range or tree, never a folder another
+    remote's or another ref's review wrote.
+
+    A folder whose `review-state.json` (else `findings.json`) names another remote
+    is left alone: the run tries `<repo>@<owner>/<object>/` (`@local` with no
+    origin). For a branch or range, a folder of this remote (or of none) that
+    names another raw ref (`feat/x` and `feat_x` clean to one name) gives way to
+    `<object>-<6 hex of the ref>/`. A folder that names no remote is used. At
+    most three folders are tried; with *lock*, each is locked before it is read,
+    and only the chosen one stays locked (on *lock*).
+    """
+    repo_name, owner = target_mod.checkout_repo_part(resolved.repo)
+    here = target_mod.origin_owner_repo(target_mod.remote_url(resolved.repo))
+    obj = target_mod.object_name(resolved)
+    hashed = resolved.kind in ("branch", "range")
+
+    def other_remote(t: dict) -> bool:
+        return bool(t.get("remote_url")) and not _same_remote(t.get("remote_url"), here)
+
+    def other_ref(t: dict) -> bool:
+        return hashed and bool(t.get("ref")) and str(t.get("ref")) != resolved.ref
+
+    folder = out_dir / repo_name / obj
+    held, t = _try_folder(folder, lock)
+    if other_remote(t):
+        held.close()
+        folder = out_dir / f"{repo_name.split('@')[0]}@{owner or 'local'}" / obj
+        held, t = _try_folder(folder, lock)
+    if not other_remote(t) and other_ref(t):
+        held.close()
+        folder = folder.parent / f"{obj}-{hashlib.sha256(resolved.ref.encode()).hexdigest()[:6]}"
+        held, t = _try_folder(folder, lock)
+    if other_remote(t) or other_ref(t):
+        held.close()
+        raise ReviewError(
+            f"{folder} holds a review of {t.get('remote_url') or 'no remote'} {t.get('ref') or ''}".rstrip()
+            + f", not of {target_mod.remote_url(resolved.repo) or resolved.repo} {resolved.ref}; "
+            "pass --out to write this review somewhere else")
+    if lock is not None:
+        lock.enter_context(held.pop_all())
+    return folder
 
 
 def _resumable(target_dir: Path, head_sha: str) -> bool:

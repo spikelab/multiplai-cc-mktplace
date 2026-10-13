@@ -559,6 +559,28 @@ def is_review_folder(path: Path) -> bool:
     return any((path / name).is_file() for name in REVIEW_FILES)
 
 
+def object_folders(out_dir: Path) -> list[Path]:
+    """Every `<out>/<repo>/<object>/` folder under *out_dir*, sorted.
+
+    Where a name sits decides what it is, not the name alone: a repo may be
+    called `tree` or `rounds`, and the whole-tree object is `tree`. The first
+    level skips `legacy/`, `.locks/` and partial copies, and any review folder
+    (a 0.46 `<out>/<slug>/`). Under a repo folder, every child folder is an
+    object except the `NOT_OBJECT_NAMES` and partial copies. A review an older
+    version nested inside an object folder is not listed.
+    """
+    found: list[Path] = []
+    if not out_dir.is_dir():
+        return found
+    for repo in sorted(out_dir.iterdir()):
+        if (not repo.is_dir() or repo.name in TAKEN_REPO_NAMES or repo.name.startswith(".partial-")
+                or is_review_folder(repo)):
+            continue
+        found.extend(obj for obj in sorted(repo.iterdir())
+                     if obj.is_dir() and obj.name not in NOT_OBJECT_NAMES and not obj.name.startswith(".partial-"))
+    return found
+
+
 def _import_git(dest: Path, src: Path, *args: str) -> subprocess.CompletedProcess:
     proc = subprocess.run([*GIT_ARGV, "-C", str(dest), *args], capture_output=True, text=True,
                           stdin=subprocess.DEVNULL, env=dict(git_env(), **_IMPORT_ENV), shell=False, check=False)

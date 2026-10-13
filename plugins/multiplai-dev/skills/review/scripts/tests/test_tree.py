@@ -114,7 +114,7 @@ def test_a_subdirectory_repo_is_read_from_the_top_and_reviews_that_subdirectory(
     repo = tree_repo(tmp_path)
     out = tmp_path / "out"
     assert main(["--out", str(out), "review", "--repo", str(repo / "pkg"), "--tree", "--plan-only"]) == 0
-    target_dir = out / "shop--tree-pkg"  # review-viewer's slug for `serve --tree --repo <repo>/pkg`
+    target_dir = out / "shop" / "tree-pkg"
     assert (target_dir / "files.txt").read_text().splitlines() == ["pkg/cart.py", "pkg/tax.py"]
 
     resolved, info = tree_info(repo / "pkg")
@@ -177,10 +177,11 @@ def test_dir_is_copied_and_committed_and_the_source_is_unchanged(tmp_path):
     assert _listing(src) == before  # nothing written to the source, no .git there
     copy = Path(state.target.repo_path)
     slug = f"{target.dir_name(src.resolve())}--tree"
-    assert copy == (tmp_path / "out" / slug / "source").resolve()
+    folder = tmp_path / "out" / "notes-app" / f"dir-{target.dir_name(src.resolve())}"
+    assert copy == (folder / "source").resolve()
     assert git(copy, "rev-list", "--count", "HEAD") == "1"
     assert state.target.files == [".gitignore", "app.py", "lib/util.py"]  # no node_modules, no ignored file
-    assert state.target.slug == slug and target_dir.name == slug and slug.startswith("notes-app-")
+    assert state.target.slug == slug and target_dir == folder and slug.startswith("notes-app-")
     assert state.target.label.startswith(f"{src}: whole tree at ")
 
 
@@ -190,7 +191,7 @@ def test_dir_inside_a_git_repository_exits_2(tmp_path, capsys):
     assert code == 2
     err = capsys.readouterr().err
     assert f"--repo {repo.resolve()} --tree --path pkg" in err
-    assert not (tmp_path / "out" / "pkg--tree").exists()
+    assert not (tmp_path / "out" / "pkg" / f"dir-{target.dir_name((repo / 'pkg').resolve())}").exists()
 
 
 # --- file groups -----------------------------------------------------------------
@@ -401,7 +402,7 @@ def test_plan_only_makes_no_agent_call_and_writes_plan_txt(tmp_path, monkeypatch
     assert main(["--out", str(out), "review", "--repo", str(repo), "--tree", "--plan-only"]) == 0
     stdout = capsys.readouterr().out
     assert "groups: 3  finder calls: 12  files skipped: 4" in stdout
-    target_dir = out / "shop--tree"
+    target_dir = out / "shop" / "tree"
     assert stdout.strip().splitlines()[-1] == f"plan: {target_dir / 'plan.txt'}"
     assert (target_dir / "plan.txt").read_text().splitlines()[-1] == "groups: 3  finder calls: 12  files skipped: 4"
     assert (target_dir / "skipped.txt").is_file()
@@ -428,13 +429,13 @@ def test_a_tree_review_writes_a_findings_file_that_validates(tmp_path, monkeypat
     monkeypatch.setattr(sdk, "agent_call_structured", agents)
     out = tmp_path / "out"
     assert main(["--out", str(out), "review", "--repo", str(repo), "--tree", "--trust-repo"]) == 0
-    data = json.loads((out / "shop--tree" / "findings.json").read_text())
+    data = json.loads((out / "shop" / "tree" / "findings.json").read_text())
     jsonschema.validate(data, json.loads(SCHEMA.read_text()))
     assert data["target"]["base_sha"] == target.EMPTY_TREE
     assert data["target"]["files_changed"] == [".gitattributes", "README.md", "lib/money.py", "pkg/cart.py",
                                                "pkg/tax.py"]
     assert [f["claim"] for f in data["findings"]] == ["total() ignores item quantity"]
-    summary = (out / "shop--tree" / "summary-shop--tree.md").read_text()
+    summary = (out / "shop" / "tree" / "summary-shop--tree.md").read_text()
     assert "5 files reviewed as they stand at" in summary and "4 skipped" in summary
 
 

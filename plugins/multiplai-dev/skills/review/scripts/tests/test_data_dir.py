@@ -78,7 +78,7 @@ def test_a_review_without_out_writes_under_the_data_dir(fixture_repo, tmp_path, 
     stdout = capsys.readouterr().out
     reviews = tmp_path / "data" / "reviews"
     assert stdout.splitlines()[0] == f"out: {reviews}"
-    assert (reviews / f"example-booking-engine--{base}..{head}" / "findings.json").is_file()
+    assert (reviews / "booking-engine" / f"range-{base}..{head}" / "findings.json").is_file()
 
 
 # --- 2. the slug comes from the origin remote --------------------------------------
@@ -154,7 +154,7 @@ def test_four_runs_on_two_heads_keep_three_numbered_rounds_in_full(branch_clone,
     repo, head1, head2 = branch_clone
     out = tmp_path / "out"
     args = ["--out", str(out), "review", "--repo", str(repo), "--branch", "feature/x", "--trust-repo"]
-    target_dir = out / f"{SLUG_REPO}--feature_x"
+    target_dir = out / "github-tests" / "branch-feature_x"
     agents()
     assert main(args) == 0
     (target_dir / "viewer").mkdir()
@@ -186,7 +186,7 @@ def test_a_run_stopped_before_export_is_kept_as_its_own_round(fixture_repo, tmp_
     """A budget stop writes no findings.json; the next run still keeps that run's files, not its own."""
     repo, base, head = fixture_repo
     out = tmp_path / "out"
-    target_dir = out / f"example-booking-engine--{base}..{head}"
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
     agents()
     assert main(_review_args(repo, base, head, out)) == 0  # round 01 finishes
     agents(budget_stop_at=2)
@@ -279,7 +279,7 @@ def test_the_marker_round_id_stays_the_head_sha_with_a_count(tmp_path):
 def test_two_runs_give_two_ledger_lines_and_a_deleted_target_dir_a_third(fixture_repo, tmp_path, agents):
     repo, base, head = fixture_repo
     out = tmp_path / "out"
-    target_dir = out / f"example-booking-engine--{base}..{head}"
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
     agents()
     assert main(_review_args(repo, base, head, out)) == 0
     assert main(_review_args(repo, base, head, out)) == 0
@@ -288,7 +288,7 @@ def test_two_runs_give_two_ledger_lines_and_a_deleted_target_dir_a_third(fixture
     first = finished[0]
     assert {k: first[k] for k in ("slug", "target_dir", "round", "head_sha", "base_sha", "kind", "pr", "stopped",
                                   "session_id")} == {
-        "slug": target_dir.name, "target_dir": str(target_dir), "round": "01", "head_sha": head, "base_sha": base,
+        "slug": f"example-booking-engine--{base}..{head}", "target_dir": str(target_dir), "round": "01", "head_sha": head, "base_sha": base,
         "kind": "range", "pr": None, "stopped": None, "session_id": "sess-test"}
     assert first["producer"].startswith("multiplai-dev:review ")
     assert "cost_usd" in first["run"] and first["generated_at"]
@@ -308,7 +308,7 @@ def test_a_budget_stop_and_its_resume_each_end_with_a_ledger_line(fixture_repo, 
     agents(budget_stop_at=3)
     assert main(_review_args(repo, base, head, out)) == 4
     assert _ledger_lines(tmp_path, "finished")[-1]["stopped"] == "budget"
-    target_dir = out / f"example-booking-engine--{base}..{head}"
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
     assert main(["resume", str(target_dir), "--trust-repo"]) == 0
     finished = _ledger_lines(tmp_path, "finished")
     assert len(finished) == 2 and finished[-1]["stopped"] is None and finished[-1]["round"] == "01"
@@ -329,7 +329,7 @@ def test_a_started_line_with_no_end_makes_a_plain_run_exit_4_and_restart_starts_
         fixture_repo, tmp_path, agents, capsys):
     repo, base, head = fixture_repo
     out = tmp_path / "out"
-    target_dir = out / f"example-booking-engine--{base}..{head}"
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
     agents()
     assert main(_review_args(repo, base, head, out)) == 0
     # A rerun on this head saved its state, wrote its `started` line, then died.
@@ -360,7 +360,7 @@ def test_a_started_line_with_no_saved_state_left_starts_a_fresh_run_that_closes_
     """`resume` could only fail there (no readable review-state.json), so a plain run starts over instead."""
     repo, base, head = fixture_repo
     out = tmp_path / "out"
-    target_dir = out / f"example-booking-engine--{base}..{head}"
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
     agents()
     assert main(_review_args(repo, base, head, out)) == 0
     ledger.started(slug=target_dir.name, target_dir=target_dir, head_sha=head, session_id="a run that died")
@@ -377,7 +377,7 @@ def test_a_started_line_for_a_head_the_saved_state_is_not_on_starts_a_fresh_run(
     repo, _, head2 = branch_clone
     out = tmp_path / "out"
     args = ["--out", str(out), "review", "--repo", str(repo), "--branch", "feature/x", "--trust-repo"]
-    target_dir = out / f"{SLUG_REPO}--feature_x"
+    target_dir = out / "github-tests" / "branch-feature_x"
     agents()
     assert main(args) == 0
     # A run on head2 died earlier; the directory now holds head1's finished run.
@@ -400,7 +400,7 @@ def test_a_review_running_now_is_not_read_as_interrupted_and_nothing_starts_a_se
 
     repo, base, head = fixture_repo
     out = tmp_path / "out"
-    target_dir = out / f"example-booking-engine--{base}..{head}"
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
     agents()
     assert main(_review_args(repo, base, head, out)) == 0
     # A rerun on this head has saved its state and written its `started` line, and is still going.
@@ -448,7 +448,7 @@ def test_a_run_stopped_by_the_user_or_the_process_writes_no_end_line(fixture_rep
 
     repo, base, head = fixture_repo
     out = tmp_path / "out"
-    target_dir = out / f"example-booking-engine--{base}..{head}"
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
 
     async def fake(prompt, schema, *, budget_label="", **kwargs):
         if budget_label == "find:diff-bugs":
@@ -470,7 +470,7 @@ def test_the_started_line_comes_after_the_runs_state_is_saved(fixture_repo, tmp_
 
     repo, base, head = fixture_repo
     out = tmp_path / "out"
-    target_dir = out / f"example-booking-engine--{base}..{head}"
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
     seen = []
 
     def started(**kwargs):
@@ -522,7 +522,7 @@ def test_a_run_killed_after_find_leaves_a_started_line_and_resume_skips_find(fix
     must still read as interrupted, not as a run that finished."""
     repo, base, head = fixture_repo
     out = tmp_path / "out"
-    target_dir = out / f"example-booking-engine--{base}..{head}"
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
     driver = tmp_path / "driver.py"
     driver.write_text(DRIVER)
     args = _review_args(repo, base, head, out)
@@ -818,3 +818,160 @@ def test_a_slug_with_no_origin_has_no_history_under_other_names(tmp_path, monkey
     state.target.remote_url = None
     ctx = RunContext(config=None, snapshot=None, diff="", target_dir=target_dir)
     assert earlier_findings(state, ctx) == []
+
+
+# --- the folder: <out>/<repo>/<object>/ ---------------------------------------------
+
+
+def _fake_pr(monkeypatch, base: str, head: str) -> None:
+    def fake_view(repo_path, number):
+        return {"headRefOid": head, "baseRefOid": base, "headRefName": "feature", "baseRefName": "main",
+                "title": "t", "body": ""}
+    monkeypatch.setattr(target, "_pr_view", fake_view)
+
+
+@pytest.fixture
+def layout_clone(fixture_repo, tmp_path, monkeypatch):
+    """A clone of github-tests with branches feat/x and feat_x, a src/ directory at its head, and PR 7."""
+    _, base, first = fixture_repo
+    repo = _clone(fixture_repo, tmp_path / "checkout")
+    fixture_git(repo, "checkout", "-q", "-b", "work", first)
+    (repo / "src").mkdir()
+    (repo / "src" / "a.py").write_text("A = 1\n")
+    fixture_git(repo, "add", "src/a.py")
+    fixture_git(repo, "commit", "-q", "-m", "src", date="2026-09-17T12:00:00Z")
+    head = fixture_git(repo, "rev-parse", "HEAD")
+    fixture_git(repo, "update-ref", "refs/remotes/origin/main", base)
+    for name in ("feat/x", "feat_x"):
+        fixture_git(repo, "update-ref", f"refs/remotes/origin/{name}", head)
+    _fake_pr(monkeypatch, base, head)
+    return repo, base, head
+
+
+def _plan(out: Path, *argv: str) -> Path:
+    """Run `review --plan-only` and return the folder its `plan:` line names."""
+    from review_pipeline import config, orchestrator
+    spec = orchestrator.TargetSpec(**{k: v for k, v in zip(argv[::2], argv[1::2])})
+    _, path = orchestrator.plan_only(spec, out, config.load_config(out))
+    return path.parent
+
+
+def _hex6(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(text.encode()).hexdigest()[:6]
+
+
+def test_each_kind_of_target_gets_its_own_object_folder_under_the_repo(layout_clone, tmp_path, agents):
+    """Done means 4. A folder records whose it is in its saved state, so feat/x is a full review."""
+    repo, base, head = layout_clone
+    out = tmp_path / "out"
+    r = str(repo)
+    assert _plan(out, "repo", r, "pr", 7) == out / "github-tests" / "pr-7"
+    agents()
+    assert main(["--out", str(out), "review", "--repo", r, "--branch", "feat/x", "--trust-repo"]) == 0
+    assert (out / "github-tests" / "branch-feat_x" / "findings.json").is_file()
+    assert _plan(out, "repo", r, "branch", "feat_x") == out / "github-tests" / f"branch-feat_x-{_hex6('feat_x')}"
+    assert _plan(out, "repo", r, "branch", "feat/x") == out / "github-tests" / "branch-feat_x"  # again: its own
+    assert _plan(out, "repo", r, "range", f"{base}..{head}") == out / "github-tests" / f"range-{base}..{head}"
+    assert _plan(out, "repo", r, "tree", "HEAD") == out / "github-tests" / "tree"
+    assert _plan(out, "repo", r, "tree", "HEAD", "path", "src") == out / "github-tests" / "tree-src"
+    for name, repo_name in (("proj", "proj"), ("legacy", "legacy@local")):
+        src = tmp_path / name
+        src.mkdir()
+        (src / "m.py").write_text("X = 1\n")
+        assert _plan(out, "repo", "", "dir", str(src)) == out / repo_name / f"dir-{name}-{_hex6(str(src))}"
+
+
+def _state_file(folder: Path, remote: str, ref: str, slug: str) -> None:
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "review-state.json").write_text(json.dumps(
+        {"target": {"remote_url": remote, "ref": ref, "slug": slug, "head_sha": "e" * 40}, "stage": "done"}))
+
+
+def test_a_folder_another_remote_wrote_is_left_alone_and_the_fork_gets_owner_folders(layout_clone, tmp_path):
+    """Done means 5."""
+    repo, _, _ = layout_clone
+    out = tmp_path / "out"
+    upstream = out / "github-tests" / "pr-7"
+    _state_file(upstream, ORIGIN, "7", f"{SLUG_REPO}--pr-7")
+    before = _snapshot(upstream)
+    fixture_git(repo, "remote", "set-url", "origin", "git@github.com:someone/github-tests.git")
+    assert _plan(out, "repo", str(repo), "pr", 7) == out / "github-tests@someone" / "pr-7"
+    assert _snapshot(upstream) == before
+
+    # spikelab's feat/x holds branch-feat_x; the fork's feat/x holds its own; the fork's feat_x gets a hash.
+    _state_file(out / "github-tests" / "branch-feat_x", ORIGIN, "feat/x", f"{SLUG_REPO}--feat_x")
+    fork = "https://github.com/someone/github-tests"
+    _state_file(out / "github-tests@someone" / "branch-feat_x", fork, "feat/x", "someone-github-tests--feat_x")
+    assert (_plan(out, "repo", str(repo), "branch", "feat_x")
+            == out / "github-tests@someone" / f"branch-feat_x-{_hex6('feat_x')}")
+    # The same remote in its other URL form and case is the same remote.
+    fixture_git(repo, "remote", "set-url", "origin", "https://github.com/SpikeLab/github-tests")
+    assert _plan(out, "repo", str(repo), "pr", 7) == upstream
+
+
+def test_a_folder_no_choice_can_use_is_an_error_that_suggests_out(layout_clone, tmp_path):
+    from review_pipeline import orchestrator
+    repo, _, _ = layout_clone
+    out = tmp_path / "out"
+    _state_file(out / "github-tests" / "pr-7", ORIGIN, "7", "x")
+    fixture_git(repo, "remote", "set-url", "origin", "https://github.com/someone/github-tests")
+    # Not a folder any run writes: only a hand-made one names a third owner under `@someone`.
+    _state_file(out / "github-tests@someone" / "pr-7", "https://github.com/third/github-tests", "7", "x")
+    with pytest.raises(orchestrator.ReviewError, match="--out"):
+        _plan(out, "repo", str(repo), "pr", 7)
+
+
+def test_a_dir_review_with_no_repo_folder_yet_runs_locked(tmp_path, agents, caplog):
+    """Done means 10."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "m.py").write_text("X = 1\n")
+    out = tmp_path / "out"
+    agents()
+    with caplog.at_level(logging.WARNING, logger="review_pipeline.runlock"):
+        assert main(["--out", str(out), "review", "--dir", str(src), "--trust-repo"]) == 0
+    assert not [r for r in caplog.records if "running unlocked" in r.getMessage()]
+    assert (out / "proj" / ".locks" / f"dir-proj-{_hex6(str(src))}.lock").is_file()
+    assert (out / "proj" / f"dir-proj-{_hex6(str(src))}" / "findings.json").is_file()
+
+
+def _layout_review(folder: Path, slug: str, remote: str, head: str = "a" * 40, rounds_kept: int = 0) -> Path:
+    """A finished review in *folder*, with *rounds_kept* kept rounds, as a run writes them."""
+    run = {"cost_usd": 1.0, "started_at": "1"}
+    t = {"slug": slug, "label": slug, "head_sha": head, "base_sha": "b" * 40, "remote_url": remote}
+    for i in range(rounds_kept):
+        _write_findings(folder / "rounds" / f"{i + 1:02d}-{head[:12]}", head, f"2026-01-0{i + 1}T00:00:00Z",
+                        run=dict(run, started_at=str(i)))
+        data = json.loads((folder / "rounds" / f"{i + 1:02d}-{head[:12]}" / "findings.json").read_text())
+        data["target"] = t
+        (folder / "rounds" / f"{i + 1:02d}-{head[:12]}" / "findings.json").write_text(json.dumps(data))
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "findings.json").write_text(json.dumps({
+        "schema_version": 1, "generated_at": "2026-01-09T00:00:00Z", "producer": "p", "target": t,
+        "findings": [], "run": dict(run, started_at="9")}))
+    (folder / "files.txt").write_text("")
+    return folder
+
+
+@pytest.mark.parametrize("repo_name", ["tree", "source", "viewer", "rounds", "github-tests"])
+def test_rollups_list_new_layout_reviews_whatever_the_repo_is_called(tmp_path, repo_name):
+    """Done means 9 (the pipeline's half): repos named like a snapshot, and a whole-tree review."""
+    out = tmp_path / "out"
+    remote = f"https://github.com/spikelab/{repo_name}.git"
+    new = _layout_review(out / repo_name / "pr-7", f"spikelab-{repo_name}--pr-7", remote, rounds_kept=1)
+    whole = _layout_review(out / repo_name / "tree", f"spikelab-{repo_name}--tree", remote, head="c" * 40)
+    flat = _layout_review(out / "spikelab-other--pr-1", "spikelab-other--pr-1", remote, head="d" * 40)
+    (out / repo_name / ".DS_Store").write_text("finder")
+    (out / ".DS_Store").write_text("finder")
+    # Never a review: legacy/, locks, partial copies, and a 0.42 review nested under a new-layout one.
+    _layout_review(out / "legacy" / "x" / "pr-1", "legacy-x--pr-1", remote, head="e" * 40)
+    _layout_review(out / repo_name / "pr-7" / "checkout--pr-7", "checkout--pr-7", remote, head="f" * 40)
+    (out / repo_name / ".locks").mkdir()
+    render.write_rollups(out)
+    _, lines, _ = render.write_runs(out)
+    high = (out / "HIGH-only.md").read_text()
+    assert "across 0 of 3 targets" in high, high
+    heads = sorted(json.loads(line)["target"]["head_sha"][0] for line in (out / "runs.jsonl").read_text().splitlines())
+    assert heads == ["a", "a", "c", "d"] and lines == 4
+    assert new.is_dir() and whole.is_dir() and flat.is_dir()

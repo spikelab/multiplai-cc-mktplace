@@ -179,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "trust_repo", False):
         os.environ["REVIEW_TRUST_REPO"] = "1"
 
-    from . import orchestrator, render, sdk, target
+    from . import orchestrator, render, rounds, sdk, target
     from .config import load_config
     from .post import PostError, post
     from .stages.verify import VerifyIncomplete
@@ -268,10 +268,11 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "resume":
             target_dir = Path(args.target_dir).expanduser().resolve()
-            path = asyncio.run(orchestrator.resume(target_dir, load_config(target_dir.parent, max_cost_usd=max_cost),
+            root = rounds.out_root(target_dir)
+            path = asyncio.run(orchestrator.resume(target_dir, load_config(root, max_cost_usd=max_cost),
                                                    session_id=args.session_id))
-            render.write_rollups(target_dir.parent)
-            render.write_runs(target_dir.parent)
+            render.write_rollups(root)
+            render.write_runs(root)
             print(f"findings: {path}")
             print(f"checks: {path.parent / 'checks.json'}")
             return 0
@@ -285,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 try:
                     result = asyncio.run(orchestrator.assess_only(
-                        target_dir, load_config(target_dir.parent, max_cost_usd=max_cost)))
+                        target_dir, load_config(rounds.out_root(target_dir), max_cost_usd=max_cost)))
                 except sdk.RepoTrustError:
                     raise
                 except orchestrator.budget.BudgetExceededError as e:
