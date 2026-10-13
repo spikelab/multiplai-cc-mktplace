@@ -233,6 +233,14 @@ def test_sample_page_gets_the_seek_shim_and_loop_listener_before_its_own_scripts
     assert html.startswith("<!doctype html>")
 
 
+def test_a_sample_page_that_is_not_utf8_is_refused_with_its_reason(server) -> None:
+    sample = server["media"] / "sample.html"
+    sample.write_bytes(b"<p>caf\xe9</p>")                 # Latin-1, not UTF-8
+    _looks(server)
+    res, data = _get(server, f"/media/sample?path={quote(str(sample))}")
+    assert res.status == 422 and data == {"error": "the sample page is not UTF-8 text"}
+
+
 def test_main_page_may_frame_only_its_own_server(server) -> None:
     res, _ = _req(server, "/")
     csp = [d.strip() for d in res.getheader("Content-Security-Policy").split(";")]
