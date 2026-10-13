@@ -244,6 +244,9 @@ def epic_snapshot(epic_dir: Path, root: Path) -> dict[str, Any] | None:
 
 
 def state_summary(config: BuildConfig, root: Path) -> dict[str, Any]:
-    """The checkpoint fields the epic step owns."""
+    """The checkpoint fields the epic step owns; None once a finished build removed it."""
+    if not config.state_file_path().exists():
+        return None
     s = load_state(config)
-    return {"phase": s.phase, "epic_dir": (s.epic_dir or "").replace(str(root), "<root>")}
+    return {"phase": s.phase, "epic_dir": (s.epic_dir or "").replace(str(root), "<root>"),
+            "epic_single": s.epic_single}

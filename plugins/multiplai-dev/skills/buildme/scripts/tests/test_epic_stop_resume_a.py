@@ -15,6 +15,9 @@ import os
 from pathlib import Path
 
 
+from unittest.mock import AsyncMock
+
+from build_pipeline import orchestrator
 from build_pipeline.epic import split as epic_split_mod
 from build_pipeline.epic import store
 from build_pipeline.models import BuildPhase
@@ -42,11 +45,11 @@ from .epic_row_helpers import (
 class Run:
     """One root: a project, its workspace, its call log and its fake."""
 
-    def __init__(self, root: Path, monkeypatch, first, retry=None):
+    def __init__(self, root: Path, monkeypatch, first, retry=None, mode="scratch"):
         self.root = root
         self.data = use_workspace(monkeypatch, root)
         self.project = make_project(root)
-        self.config = make_build(self.project)
+        self.config = make_build(self.project, mode=mode)
         self.log = CallLog(root / "calls.log")
         self.fake = FakeSplit(self.log, first, retry)
         self.epic = self.data / "buildme" / "epics" / "o-r--e"
@@ -55,14 +58,15 @@ class Run:
         """Make this root the current one (env and patched model call)."""
         use_workspace(monkeypatch, self.root)
         monkeypatch.setattr(epic_split_mod, "epic_split", self.fake)
+        monkeypatch.setattr(orchestrator, "_run_research_check", AsyncMock())   # `only` mode
 
-    def build(self, monkeypatch, **flags) -> int:
+    def build(self, monkeypatch, spec=None, **flags) -> int:
         self.use(monkeypatch)
-        return run_build(self.config, args_for(self.config, **flags))
+        return run_build(self.config, args_for(self.config, **flags), spec)
 
-    def killed(self, monkeypatch, setup=lambda: None, **flags) -> None:
+    def killed(self, monkeypatch, setup=lambda: None, spec=None, **flags) -> None:
         self.use(monkeypatch)
-        run_killed(lambda: run_build(self.config, args_for(self.config, **flags)), setup)
+        run_killed(lambda: run_build(self.config, args_for(self.config, **flags), spec), setup)
 
     def result(self) -> dict:
         return {"epic": epic_snapshot(self.epic, self.root),
@@ -72,9 +76,9 @@ class Run:
         return self.log.calls()
 
 
-def _roots(tmp_path: Path, monkeypatch, first, retry=None) -> tuple[Run, Run]:
-    return (Run(tmp_path / "stopped", monkeypatch, first, retry),
-            Run(tmp_path / "clean", monkeypatch, first, retry))
+def _roots(tmp_path: Path, monkeypatch, first, retry=None, mode="scratch") -> tuple[Run, Run]:
+    return (Run(tmp_path / "stopped", monkeypatch, first, retry, mode),
+            Run(tmp_path / "clean", monkeypatch, first, retry, mode))
 
 
 def _assert_same(stopped: Run, clean: Run, extra_calls: list[dict] = ()) -> None:
@@ -133,6 +137,24 @@ def test_A_S3_stopped_after_epic_json_renders_again_with_no_call(tmp_path, monke
     _assert_same(stopped, clean)
 
 
+def test_A_S3_entered_with_files_on_disk_keeps_them(tmp_path, monkeypatch):
+    """A.S3 entered with a checkpoint that lost `state.epic_dir` (or a new one)
+    and plans already written: no call, a file already on disk is kept (here
+    one edited by hand while the split waited, A.S8), only missing ones are rendered."""
+    stopped, clean = _roots(tmp_path, monkeypatch, THREE)
+    edited = PLAN.format(title="Edited while waiting")
+    for run in (stopped, clean):
+        assert run.build(monkeypatch) == 3
+        (run.epic / "plans" / "ui.md").write_text(edited)
+    (stopped.epic / "split.md").unlink()
+    fresh = load_state(stopped.config)
+    fresh.phase, fresh.epic_dir = BuildPhase.RESEARCH, None
+    fresh.checkpoint(stopped.config.state_file_path())
+    assert stopped.build(monkeypatch) == 3
+    assert (stopped.epic / "plans" / "ui.md").read_text() == edited
+    _assert_same(stopped, clean)
+
+
 def test_A_S4_waiting_repeats_the_line_and_keeps_edits(tmp_path, monkeypatch, capsys):
     """A.S4: without `--approve-split`, same line, exit 3, no call, edits kept."""
     stopped, clean = _roots(tmp_path, monkeypatch, THREE)
@@ -167,14 +189,40 @@ def _die_at_board(phase: BuildPhase):
 
 
 def test_A_S12_a_skipped_split_skips_again_or_goes_on(tmp_path, monkeypatch):
-    """A.S12: with `--no-epic-split` (or `only`), stopped before or after the
-    skip: skips again with no call, or goes on. No epic directory either way."""
-    for point, phase in (("before", BuildPhase.CODEBASE_ANALYSIS), ("after", BuildPhase.EPIC_SPLIT)):
-        stopped, clean = _roots(tmp_path / point, monkeypatch, SINGLE)
-        stopped.killed(monkeypatch, _die_at_board(phase), no_epic_split=True)
-        assert load_state(stopped.config).phase == phase
-        assert stopped.build(monkeypatch, no_epic_split=True) == 1
-        assert clean.build(monkeypatch, no_epic_split=True) == 1
-        assert stopped.launches() == [] and clean.launches() == []
+    """A.S12: with `--no-epic-split` or in `only` mode, stopped before or after
+    the skip: skips again with no call, or goes on. No epic directory either way."""
+    for how in ("flag", "only"):
+        mode, flag = ("only", False) if how == "only" else ("scratch", True)
+        for point, phase in (("before", BuildPhase.CODEBASE_ANALYSIS), ("after", BuildPhase.EPIC_SPLIT)):
+            stopped, clean = _roots(tmp_path / how / point, monkeypatch, THREE, mode=mode)
+            stopped.killed(monkeypatch, _die_at_board(phase), no_epic_split=flag)
+            assert load_state(stopped.config).phase == phase
+            rc = clean.build(monkeypatch, no_epic_split=flag)
+            assert stopped.build(monkeypatch, no_epic_split=flag) == rc
+            assert stopped.launches() == [] and clean.launches() == []
+            assert stopped.result()["epic"] is None
+            _assert_same(stopped, clean)
+
+
+async def _killed_spec(*a, **k):
+    os._exit(137)
+
+
+def test_A_S13_a_single_decision_is_not_asked_again(tmp_path, monkeypatch):
+    """A.S13: after a `single: true` answer, killed during spec generation
+    (pointer at EPIC_SPLIT) or after the build FAILED there (`epic_single`
+    saved), resume makes no second call. The fake answers several on any
+    second call, so a call would also turn the change into an epic."""
+    for point in ("killed", "failed"):
+        stopped, clean = _roots(tmp_path / point, monkeypatch, SINGLE, retry=THREE)
+        if point == "killed":
+            stopped.killed(monkeypatch, spec=_killed_spec)
+            assert load_state(stopped.config).phase == BuildPhase.EPIC_SPLIT
+        else:
+            assert stopped.build(monkeypatch) == 1
+            assert load_state(stopped.config).phase == BuildPhase.FAILED
+        stopped.fake.first = THREE
+        assert stopped.build(monkeypatch) == 1
+        assert clean.build(monkeypatch) == 1
         assert stopped.result()["epic"] is None
         _assert_same(stopped, clean)

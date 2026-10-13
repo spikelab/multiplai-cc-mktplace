@@ -29,7 +29,6 @@ from .epic_row_helpers import (
     make_build,
     make_project,
     run_build,
-    run_killed,
     use_workspace,
 )
 
@@ -80,11 +79,12 @@ class TestCheckAnswer:
         ans = EpicSplitAnswer(single=False, children=[child("a", ("a",)), child("b")])
         assert any("cycle" in e for e in check_answer(ans))
 
-    def test_each_plan_has_a_title_and_done_means(self):
-        bad = EpicChild(id="a", title="A", plan="# Plan: A\n\nno criteria\n")
-        ans = EpicSplitAnswer(single=False, children=[bad, child("b")])
-        errors = check_answer(ans)
-        assert any("## Done means" in e and "a" in e for e in errors)
+    @pytest.mark.parametrize("plan, missing", [("# Plan: A\n\nno criteria\n", "## Done means"),
+                                               ("## Done means\n1. x\n", "# Plan:")])
+    def test_each_plan_has_a_title_and_done_means(self, plan, missing):
+        bad = EpicChild(id="a", title="A", plan=plan)
+        errors = check_answer(EpicSplitAnswer(single=False, children=[bad, child("b")]))
+        assert errors == [f"child a: the plan has no `{missing}` " + ("line" if missing == "# Plan:" else "section")]
 
     def test_several_needs_two_children(self):
         ans = EpicSplitAnswer(single=False, children=[child("a")])
@@ -142,22 +142,6 @@ class TestSingleChange:
         assert len(log.calls()) == 1
         assert not (data / "buildme").exists()
         assert load_state(config).epic_dir is None
-
-    def test_a_resume_after_the_decision_makes_no_second_call(self, env):
-        """Killed during spec generation, with the pointer at EPIC_SPLIT."""
-        import os
-
-        root, data, project, log = env
-        config = make_build(project)
-
-        async def killed(*a, **k):
-            os._exit(137)
-
-        with _split(FakeSplit(log, SINGLE)):
-            run_killed(lambda: run_build(config, args_for(config), spec=killed))
-            assert load_state(config).phase == BuildPhase.EPIC_SPLIT
-            run_build(config, args_for(config))
-        assert len(log.calls()) == 1
 
 
 class TestSeveralChildren:
@@ -230,6 +214,46 @@ class TestSeveralChildren:
         with _split(fake):
             run_build(config, args_for(config))
         assert seen[0] == [] and any("cycle" in e for e in seen[1])
+
+    @pytest.mark.parametrize("lost_state", [False, True])
+    def test_an_unparsable_epic_json_exits_1_and_is_kept(self, env, lost_state):
+        root, data, project, log = env
+        config = make_build(project)
+        with _split(FakeSplit(log, THREE)):
+            run_build(config, args_for(config))
+            (_epic_dir(data) / "epic.json").write_text("{")
+            if lost_state:      # entered from the step itself (row A.S3's path)
+                fresh = load_state(config)
+                fresh.phase, fresh.epic_dir = BuildPhase.RESEARCH, None
+                fresh.checkpoint(config.state_file_path())
+            assert run_build(config, args_for(config)) == 1
+        assert (_epic_dir(data) / "epic.json").read_text() == "{"
+
+
+class TestPrompt:
+    """The real `epic_split` body, with a stub for the model call."""
+
+    def test_the_prompt_asks_for_every_mandatory_plan_section_and_the_retry_gets_the_errors(self, env):
+        import asyncio
+        import re
+
+        root, data, project, log = env
+        prompts = []
+
+        async def call(prompt, schema, **kw):
+            prompts.append(prompt)
+            return SINGLE
+
+        template = (Path(__file__).parents[3] / "plan" / "SKILL.md").read_text()
+        template = template.split("## Template (mandatory sections)", 1)[1].split("```", 2)[1]
+        sections = re.findall(r"^(#+ [^<\n]+|> File:|\*\*Objective\*\*)", template, re.M)
+        assert "## Stop and resume states" in sections and "## Verification" in sections
+        config = make_build(project)
+        asyncio.run(epic_split_mod.epic_split(config, "INPUTS", call=call))
+        asyncio.run(epic_split_mod.epic_split(config, "INPUTS", ["child a: no plan"], call=call))
+        assert all(s.strip() in prompts[0] for s in sections), sections
+        assert "INPUTS" in prompts[0] and "child a: no plan" not in prompts[0]
+        assert "- child a: no plan" in prompts[1]
 
 
 class TestSkip:
