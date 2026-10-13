@@ -21,6 +21,123 @@ a tag.
 
 Nothing yet.
 
+## [0.14.0] - 2026-10-13
+
+### Added
+
+- **Review tab: a style panel.** Under the timeline it shows the render's
+  caption values (size, height, words per line, characters per line,
+  highlight), its brand's four colours, and each overlay style's colours,
+  fonts, weights, corner radius and enter, exit and stagger timings. Change
+  any of them and send: Claude gets only what you changed, old and new, and
+  can save a changed brand or style as a new file in the job folder. Caption
+  edits show at once as a caption over the picture, labelled approximate:
+  the render burns captions in with ffmpeg, so the next version is the
+  exact one.
+- **Review tab: live overlays and click-to-restyle.** Turn on live overlays
+  and the render's overlay pages play over the picture, in step with it.
+  Pick an element (a number, a label, a card) and the page shows its colour,
+  background, font, size, weight, opacity and transform; change them and
+  the overlay changes at once. Send it and Claude edits that overlay's page.
+  The overlays run in a locked-down frame that cannot reach the page or the
+  server.
+
+### Changed
+
+- `comments.jsonl` rows can now also be `style` and `restyle` rows.
+
+## [0.13.0] - 2026-10-13
+
+### Added
+
+- **Review tab: draw on a paused frame.** Pick Pen, Arrow or Box and a
+  colour, and mark the frame: circle the logo that is cut off, point at the
+  caption that covers a mouth. Undo and Clear fix a slip. Claude gets the
+  frame at full size with your marks on it, with your note if you add one.
+  A drawing holds up to 100 shapes; when one is full the page says so, and
+  you add it and draw the rest as another.
+- **Review tab: a timeline under every render.** It shows the render's
+  segments (crossfades hatched), caption lines (hover for the text), the
+  headline, overlays (file and style) and sound effects, with a playhead
+  that follows the video; click a lane to jump there. Drag along the ruler
+  to comment on a stretch, and click a block to say which part you mean,
+  so "this card comes in too late" reaches Claude as that overlay and
+  those seconds.
+- `pipeline.py render` now writes `<name>.edl.json` beside each render:
+  which edit list it came from, with every path made absolute, where each
+  segment landed and the caption lines as they were burned in. The
+  timeline is drawn from it; a render made before this version plays
+  without a timeline.
+
+### Changed
+
+- `comments.jsonl` rows can now also be `drawing` rows (the marked frame
+  is saved under `review/marks/`) and `range` rows.
+- `pipeline.py render` refuses to start when the edit list it was given is
+  saved as `<name>.edl.json` beside the output, where it would be
+  overwritten.
+
+## [0.12.0] - 2026-10-13
+
+### Added
+
+- **Look tab: choose the look by seeing it.** Each overlay style Claude
+  offers plays a looping sample, the way the renderer plays it (a keyed
+  style shows its key colour, which the render removes). Each brand shows
+  its colours and caption font, or why its file cannot be used, and each
+  caption option draws over a frame of your recording in the chosen
+  brand's colours (an approximate preview: the render burns captions in).
+  Pick one of each and send it; Claude uses it in every edit list and
+  overlay page.
+- **Music tab: choose the music by hearing it.** Play every music bed and
+  sound effect, set the bed's level with a slider, and press "Play with
+  voice" to hear the bed under a stretch of the speech at that level. Send
+  your pick; Claude sets the music and picks sound effects only from the
+  set you chose.
+- `pipeline.py music-sample` writes a 15 s sample of a synth music bed, so
+  Claude can offer the synth beds on the Music tab.
+
+### Changed
+
+- `comments.jsonl` rows can now also be `look` and `music` rows.
+- Sample pages play in a sandboxed frame that cannot reach the page, its
+  access token or the network.
+
+## [0.11.0] - 2026-10-13
+
+### Added
+
+- **One local page for a whole reels job.** `pipeline.py review <outdir>`
+  now serves a job page with five tabs instead of a render-only page.
+  Claude writes `job.json` and `candidates.json` into the job's output
+  directory, and the page shows them as soon as they appear.
+- **Clips tab: pick clips without typing timestamps.** Each candidate is a
+  card with its hook line, scores, transcript and reasoning, best first.
+  Play it from the original recording, accept or reject it, drag its start
+  and end on a small timeline (they snap to sentence edges, or to words with
+  Alt), add a note, and send your picks. Claude snaps and renders only the
+  ones you accept.
+- **Speakers tab: draw the speaker boxes yourself.** Scrub to a frame, draw
+  a box around each person, name it, and say which transcript speaker is
+  which, with a few of their lines (click one to hear it). "Check late
+  frame" jumps to 85% of the recording so you can see the boxes still fit.
+  Send waits until every speaker has a box. Claude uses your boxes for the
+  9:16 crops.
+- **Look and Music tabs** list the styles, brands, caption options, music
+  beds and sound-effect sets Claude offers. Previewing and picking them in
+  the page comes in a later version; tell Claude your choice in chat for now.
+- The page opens on the first tab that still needs a decision from you, and
+  a dot marks every such tab. A file Claude wrote with a mistake shows its
+  error in its tab instead of a blank tab.
+
+### Changed
+
+- The review page is now the Review tab of the job page; it works as before.
+- Rows in `comments.jsonl` now carry a `kind` (`point` for a comment on a
+  render, `pick`, `panels`). A row without one still counts as a comment.
+- The page plays only files the job names (the recording, music beds,
+  sound effects, sample pages) and the renders; it refuses any other path.
+
 ## [0.10.0] - 2026-10-11
 
 ### Added

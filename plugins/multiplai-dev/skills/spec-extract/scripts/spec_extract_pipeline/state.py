@@ -6,19 +6,21 @@ mid-save leaves the previous state whole (row R25). This module never reads,
 renames or deletes a `.state-*.tmp`; the run's own temp files are named
 `<file>.tmp`.
 
-`steps_done` lists the steps whose outputs are whole, in order: `resolve` (this
-version), then `scope`, `explore`, `group`, `write`, `render`, `apply` as later
-versions add them. Each later version adds its own fields with defaults, so a
+`steps_done` lists the steps whose outputs are whole, in order: `resolve`,
+`scope`, `explore` (this version), then `group`, `write`, `render`, `apply` as
+later versions add them. Each later version adds its own fields with defaults, so a
 state an earlier version wrote still loads.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from multiplai_core import checkpoint
 from pydantic import BaseModel, ConfigDict
 
+from .scope import TargetScope
 from .target import STATE_FILE, Target
 
 
@@ -40,6 +42,18 @@ class State(BaseModel):
 
     target: Target
     steps_done: list[str] = []
+    # The scope step's result, saved once and never recomputed (R26).
+    scope: TargetScope | None = None
+    # {unit key: an explore answer, or {"error": ...}}, filled in return order.
+    # No reader uses this order: every reader orders it by `scope.units`.
+    explore_answers: dict[str, dict] = {}
+    # {unit key: calls started}. Counted and saved before each call (item 7).
+    explore_attempts: dict[str, int] = {}
+    # `ledger.to_state()`, saved with every answer: the spend of every call kept.
+    budget: dict | None = None
+    # facts.json's `generated_at`: the clock when explore first finished, saved before
+    # facts.json is first written, so every later rewrite is the same bytes (row R28).
+    facts_generated_at: datetime | None = None
 
 
 def load(run_dir: Path) -> State | None:

@@ -260,6 +260,30 @@ def layout_metrics(W: int, H: int, captions: Captions | None) -> dict:
     }
 
 
+def _caption_plan(words: list[dict], captions: Captions,
+                  brand: Brand) -> tuple[list[list[dict]], list[tuple[float, float, str]]]:
+    """The caption lines and the timed events build_ass burns in for them."""
+    groups = group_words(words, captions.words_per_line, captions.max_chars)
+    return groups, forward_only(caption_events(groups, captions.highlight, brand.accent, brand.primary))
+
+
+def caption_lines(words: list[dict], captions: Captions, brand: Brand) -> list[dict]:
+    """The caption lines build_ass burns in, one {start, end, text, words} each.
+
+    `start` and `end` are when the line is on screen (its first event's start
+    and its last event's end, after forward_only); `words` are the line's
+    words with their own times. All in output time, as `words` came in.
+    """
+    groups, events = _caption_plan(words, captions, brand)
+    lines, k = [], 0
+    for g in groups:
+        n = len(g) if captions.highlight else 1
+        mine, k = events[k:k + n], k + n
+        lines.append({"start": mine[0][0], "end": mine[-1][1], "text": " ".join(w["text"] for w in g),
+                      "words": [{"text": w["text"], "start": w["start"], "end": w["end"]} for w in g]})
+    return lines
+
+
 def build_ass(words: list[dict], captions: Captions | None, headline: Headline | None,
               W: int, H: int, font_name: str, brand: Brand) -> str:
     m = layout_metrics(W, H, captions)
@@ -290,8 +314,7 @@ def build_ass(words: list[dict], captions: Captions | None, headline: Headline |
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     if captions is not None:
-        groups = group_words(words, captions.words_per_line, captions.max_chars)
-        events = forward_only(caption_events(groups, captions.highlight, brand.accent, brand.primary))
+        _groups, events = _caption_plan(words, captions, brand)
         pos = f"{{\\an5\\pos({W // 2},{m['caption_y']})}}"
         for s, e, text in events:
             lines.append(f"Dialogue: 0,{_ts(s)},{_ts(e)},Caption,,0,0,0,,{pos}{text}")

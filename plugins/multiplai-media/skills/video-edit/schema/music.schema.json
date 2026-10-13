@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "video-edit/music.schema.json",
+  "title": "video-edit music on offer",
+  "description": "<outdir>/music.json, written by the session: the music beds and sound-effect sets the user picks from in the Music tab, and a span of the source to judge the level against. Every path is absolute; names are unique within each list.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "beds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "file"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 80},
+          "file": {"type": "string", "format": "absolute-path", "description": "An audio file (a synth bed is rendered to a sample first)."}
+        }
+      }
+    },
+    "sfx_sets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "files"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 80},
+          "files": {"type": "array", "minItems": 1, "items": {"type": "string", "format": "absolute-path"}}
+        }
+      }
+    },
+    "voice_sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "description": "Source seconds of speech to play under the bed; end after start.",
+      "properties": {
+        "start": {"type": "number", "minimum": 0},
+        "end": {"type": "number", "minimum": 0}
+      }
+    }
+  }
+}

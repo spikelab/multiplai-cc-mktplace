@@ -1,0 +1,264 @@
+"""Build a synthetic two-speaker reels job for the review page.
+
+    python tests/fixtures/make_job.py <dir> [--no-video] [--no-offers] [--render]
+
+Writes into <dir>:
+
+    source.mp4                ~40 s, 1280x720: the left half is SPEAKER_0, the
+                              right half SPEAKER_1, over a 440 Hz tone
+    cache/transcript.json     word timings with SPEAKER_0 / SPEAKER_1 labels
+    cache/sentences.json      built from those words by stages/clips.py, as prep does
+    job.json                  {source, transcript, sentences, kind: "reels"}
+    candidates.json           four candidates on sentence edges
+    looks.json                the two shipped styles, each with its Example page as
+                              the sample (looks/<style>.html), two brands
+                              (brands/*.json) and two caption options
+    music.json                two synth beds (samples/<preset>.wav, 15 s, made as
+                              `pipeline.py music-sample` makes them), two
+                              sound-effect sets (sfx/*.wav) and a voice sample
+
+`--no-video` (and `build(..., video=False)`, which the tests use) writes a
+few stand-in bytes instead of running ffmpeg, for the audio too.
+`--no-offers` (`offers=False`) leaves out looks.json and music.json.
+`--render` also writes edl-c2.json (candidate c2 as two segments with a
+crossfade, captions, a headline, the first brand, the first style's sample
+page as an alpha overlay and the second's as a keyed one, a sound effect and
+a music bed) and renders it with `pipeline.py render` to
+clip-01.mp4, which writes clip-01.edl.json beside it. The overlay needs
+Playwright's Chromium: run it with `uv run --no-project --with playwright`.
+Generated media goes wherever <dir> is; never into the repository.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+_SCRIPTS = Path(__file__).resolve().parents[2] / "skills" / "video-edit" / "scripts"
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+
+from stages import clips, music  # noqa: E402
+
+STYLES_DIR = _SCRIPTS.parent / "references" / "styles"
+BRANDS = {
+    "house": {"primary": "#FFFFFF", "accent": "#3DDC97", "background": "#0B1220", "caption_outline": "#000000"},
+    "warm": {"primary": "#FFF8EC", "accent": "#FF6B4A", "background": "#1F2A44", "caption_outline": "#1F2A44"},
+}
+CAPTION_OPTIONS = [
+    {"name": "Bold, 2 words", "values": {"size": 84, "position_y": 0.66, "words_per_line": 2, "highlight": True}},
+    {"name": "Classic, 5 words", "values": {"size": 64, "position_y": 0.68, "words_per_line": 5, "highlight": False}},
+]
+BEDS = ("calm", "bright")
+SAMPLE_S = 15.0
+# name → ffmpeg lavfi source and filter for a short sound effect
+SFX = {
+    "pop": ("sine=frequency=880:sample_rate=48000:duration=0.12", "afade=t=out:st=0.04:d=0.08"),
+    "whoosh": ("anoisesrc=color=pink:sample_rate=48000:duration=0.5:amplitude=0.6",
+               "highpass=f=700,afade=t=in:d=0.2,afade=t=out:st=0.25:d=0.25"),
+    "click": ("sine=frequency=2200:sample_rate=48000:duration=0.03", "afade=t=out:st=0.01:d=0.02"),
+}
+SFX_SETS = {"soft": ("pop", "whoosh"), "clicky": ("click",)}
+
+TURNS = [
+    ("SPEAKER_0", "Welcome back to the show. Today we talk about shipping small."),
+    ("SPEAKER_1", "Thanks for having me. Small releases changed how my team works."),
+    ("SPEAKER_0", "What was the biggest surprise?"),
+    ("SPEAKER_1", "We stopped fearing Fridays. Every change was tiny, so every rollback was easy."),
+    ("SPEAKER_0", "Did anything get worse?"),
+    ("SPEAKER_1", "Planning got harder at first. But our deploys doubled in three months."),
+    ("SPEAKER_0", "That is a strong claim. How did you measure it?"),
+    ("SPEAKER_1", "We counted deploys per week. It went from two to forty."),
+    ("SPEAKER_0", "Forty deploys a week sounds wild."),
+    ("SPEAKER_1", "It sounds wild until you try it. Then going back feels impossible."),
+]
+WORD_S, WORD_GAP_S, SENTENCE_GAP_S, TURN_GAP_S = 0.24, 0.05, 0.45, 0.8
+LEAD_IN_S, DURATION_S = 0.6, 40.0
+WIDTH, HEIGHT = 1280, 720
+
+
+def words() -> list[dict]:
+    out, t = [], LEAD_IN_S
+    for speaker, text in TURNS:
+        for i, w in enumerate(text.split()):
+            out.append({"text": w, "start": round(t, 3), "end": round(t + WORD_S, 3), "speaker": speaker})
+            t += WORD_S + (SENTENCE_GAP_S if w.endswith((".", "?")) else WORD_GAP_S)
+        t += TURN_GAP_S - SENTENCE_GAP_S
+    assert out[-1]["end"] < DURATION_S - 0.5, "the dialogue no longer fits the video"
+    return out
+
+
+def candidates(sentences: list[dict]) -> list[dict]:
+    """Four candidates, each a run of whole sentences (indexes into `sentences`)."""
+    def span(cid, first, last, scores, why):
+        ss = sentences[first:last + 1]
+        speakers = [s.get("speaker") for s in ss]
+        return {"id": cid, "start": ss[0]["start"], "end": ss[-1]["end"],
+                "speaker": max(set(speakers), key=speakers.count), "hook": ss[0]["text"],
+                "excerpt": " ".join(s["text"] for s in ss),
+                "scores": dict(zip(("hook", "payoff", "quotable", "standalone", "density"), scores)),
+                "why": why}
+    return [
+        span("c1", 4, 6, (3, 4, 3, 4, 4), "A concrete surprise with an easy payoff."),
+        span("c2", 9, 13, (5, 5, 4, 4, 5), "A number that grows tenfold; strong quote at the end."),
+        span("c3", 0, 1, (1, 1, 1, 2, 2), "The intro: no hook, needs context."),
+        span("c4", 14, 16, (4, 4, 5, 3, 4), "Quotable close, but leans on the earlier answer."),
+    ]
+
+
+def _video(path: Path) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise SystemExit("ffmpeg not found on PATH; pass --no-video for a stand-in source")
+    half = f"s={WIDTH // 2}x{HEIGHT}:d={DURATION_S}:r=25"
+    subprocess.run([
+        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", f"color=c=0xc0392b:{half}",
+        "-f", "lavfi", "-i", f"color=c=0x2471a3:{half}",
+        "-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:duration={DURATION_S}",
+        "-filter_complex", "[0:v][1:v]hstack=inputs=2,format=yuv420p[v]",
+        "-map", "[v]", "-map", "2:a", "-c:v", "libx264", "-preset", "ultrafast", "-g", "25",
+        "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-shortest", str(path),
+    ], check=True)
+
+
+def example_page(style_md: Path) -> str:
+    """The `## Example` page of a style file (references/styles/README.md)."""
+    text = style_md.read_text(encoding="utf-8")
+    body = text.split("## Example", 1)[1]
+    return body.split("```html", 1)[1].split("```", 1)[0].strip() + "\n"
+
+
+def _audio(path: Path, src: str, af: str, video: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not video:
+        path.write_bytes(b"RIFF\x00\x00\x00\x00WAVEstand-in")
+        return
+    subprocess.run([shutil.which("ffmpeg") or "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", src, "-af", af, "-ac", "1", str(path)], check=True)
+
+
+def looks(out: Path) -> dict:
+    styles = []
+    for md in sorted(STYLES_DIR.glob("*.md")):
+        if md.name == "README.md":
+            continue
+        page = out / "looks" / f"{md.stem}.html"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text(example_page(md), encoding="utf-8")
+        styles.append({"name": md.stem, "file": str(md), "sample_html": str(page)})
+    brands = []
+    for name, data in BRANDS.items():
+        f = out / "brands" / f"{name}.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data, indent=1) + "\n")
+        brands.append({"name": name, "file": str(f)})
+    return {"styles": styles, "brands": brands, "captions": CAPTION_OPTIONS}
+
+
+def music_offer(out: Path, voice: dict, video: bool) -> dict:
+    beds = []
+    for preset in BEDS:
+        f = out / "samples" / f"{preset}.wav"
+        if video:
+            music.write_synth(preset, SAMPLE_S, f)
+        else:
+            _audio(f, "", "", video=False)
+        beds.append({"name": preset, "file": str(f)})
+    files = {}
+    for name, (src, af) in SFX.items():
+        files[name] = out / "sfx" / f"{name}.wav"
+        _audio(files[name], src, af, video)
+    sets = [{"name": n, "files": [str(files[x]) for x in xs]} for n, xs in SFX_SETS.items()]
+    return {"beds": beds, "sfx_sets": sets, "voice_sample": voice}
+
+
+def edl_for(paths: dict[str, Path], cand: dict) -> dict:
+    """An EDL for one candidate that fills every timeline lane on the review page."""
+    looks_data = json.loads(paths["looks"].read_text())
+    music_data = json.loads(paths["music"].read_text())
+    style, keyed = looks_data["styles"][0], looks_data["styles"][1]
+    mid = round((cand["start"] + cand["end"]) / 2, 3)
+    return {
+        "source": str(paths["source"]), "transcript": str(paths["transcript"]),
+        "segments": [{"src_start": cand["start"], "src_end": mid},
+                     {"src_start": round(mid + 1.0, 3), "src_end": cand["end"]}],
+        "transitions": [{"after": 0, "kind": "fade", "duration": 0.4}],
+        "output": {"width": 720, "height": 1280, "fit": "blur", "crf": 28},
+        "captions": {"words_per_line": 3},
+        "headline": {"text": "Deploys went 2 to 40", "start": 0.0, "end": 2.5},
+        "brand": looks_data["brands"][0]["file"],
+        "overlays": [{"html": style["sample_html"], "start": 1.0, "end": 3.0, "mode": "alpha",
+                      "region": {"x": 40, "y": 860, "w": 640, "h": 200}, "style": style["name"]},
+                     {"html": keyed["sample_html"], "start": 4.0, "end": 6.0, "mode": "keyed",
+                      "region": {"x": 40, "y": 160, "w": 640, "h": 250}, "style": keyed["name"]}],
+        "sfx": [{"at": 1.0, "sound": music_data["sfx_sets"][0]["files"][0]}],
+        "music": {"file": music_data["beds"][0]["file"], "volume_db": -22},
+    }
+
+
+def render(paths: dict[str, Path], cand: dict) -> None:
+    """Write edl-c2.json and render it to clip-01.mp4 (and clip-01.edl.json)."""
+    edl = paths["dir"] / "edl-c2.json"
+    edl.write_text(json.dumps(edl_for(paths, cand), indent=1) + "\n")
+    subprocess.run([sys.executable, str(_SCRIPTS / "pipeline.py"), "render", str(edl),
+                    "--out", str(paths["dir"] / "clip-01.mp4")], check=True)
+    paths["edl"] = edl
+    paths["render"] = paths["dir"] / "clip-01.mp4"
+
+
+def build(out: Path, video: bool = True, offers: bool = True, render_clip: bool = False) -> dict[str, Path]:
+    out = out.resolve()
+    cache = out / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    source = out / "source.mp4"
+    if video:
+        _video(source)
+    else:
+        source.write_bytes(b"\x00\x00\x00\x18ftypmp42 stand-in")
+    ws = words()
+    transcript = cache / "transcript.json"
+    transcript.write_text(json.dumps({"language": "en", "engine": "fixture", "words": ws}, indent=1) + "\n")
+    sentences = clips.sentences_to_json(clips.build_sentences(ws))
+    sentences_path = cache / "sentences.json"
+    sentences_path.write_text(json.dumps(sentences, indent=1) + "\n")
+    job = out / "job.json"
+    job.write_text(json.dumps({"source": str(source), "transcript": str(transcript),
+                               "sentences": str(sentences_path), "kind": "reels"}, indent=1) + "\n")
+    cands = out / "candidates.json"
+    cand_list = candidates(sentences)
+    cands.write_text(json.dumps(cand_list, indent=1) + "\n")
+    paths = {"dir": out, "source": source, "transcript": transcript, "sentences": sentences_path,
+             "job": job, "candidates": cands}
+    if offers:
+        paths["looks"] = out / "looks.json"
+        paths["looks"].write_text(json.dumps(looks(out), indent=1) + "\n")
+        c2 = next(c for c in cand_list if c["id"] == "c2")
+        voice = {"start": c2["start"], "end": round(min(c2["end"], c2["start"] + 10), 3)}
+        paths["music"] = out / "music.json"
+        paths["music"].write_text(json.dumps(music_offer(out, voice, video), indent=1) + "\n")
+    if render_clip:
+        if not (video and offers):
+            raise ValueError("a render needs the real video and the offers (looks.json, music.json)")
+        render(paths, next(c for c in cand_list if c["id"] == "c2"))
+    return paths
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("dir", help="directory to build the job in (created)")
+    ap.add_argument("--no-video", action="store_true", help="write stand-in bytes instead of ffmpeg video and audio")
+    ap.add_argument("--no-offers", action="store_true", help="leave out looks.json and music.json")
+    ap.add_argument("--render", action="store_true",
+                    help="also write edl-c2.json and render it to clip-01.mp4 (needs Playwright's Chromium)")
+    args = ap.parse_args()
+    paths = build(Path(args.dir), video=not args.no_video, offers=not args.no_offers, render_clip=args.render)
+    print(f"JOB: {paths['dir']}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
