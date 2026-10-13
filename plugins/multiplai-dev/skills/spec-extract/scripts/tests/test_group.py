@@ -8,8 +8,8 @@ import pytest
 from code_facts import UNTRUSTED_RULES
 from pydantic import ValidationError
 
-from conftest import make_repo, read_state, run
-from spec_extract_pipeline import group, write
+from conftest import Killed, make_repo, read_state, run
+from spec_extract_pipeline import group, sdk, write
 from spec_extract_pipeline.scope import Symbol
 
 
@@ -121,3 +121,15 @@ def test_group_budget_stop_takes_the_attempt_back(tmp_path, fake_call):
     state = read_state(run_dir)
     assert state["group_attempts"] == 0 and state["group_answer"] is None
     assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
+
+
+def test_a_resumed_run_checks_trust_before_the_group_call(tmp_path, monkeypatch, fake_call):
+    repo = make_repo(tmp_path / "widgets")
+    argv = ("run", "--repo", repo, "--tree", "HEAD", "--out", tmp_path / "out")
+    fake_call.script["group"] = ["kill"]
+    with pytest.raises(BaseExceptionGroup) as e:  # the kill, raised through the TaskGroup
+        run(*argv)
+    assert e.group_contains(Killed)
+    monkeypatch.delenv(sdk.TRUST_ENV)
+    assert run(*argv) == 4
+    assert fake_call.calls["group"] == 1
