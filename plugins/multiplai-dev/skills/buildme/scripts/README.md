@@ -40,8 +40,9 @@ python -m build_pipeline findings --pr 42 --project-dir /path [--auto] [--max-ro
 look for the same mistake elsewhere (`SEARCHED:`), then, when the engine
 finishes with nothing stopped after the blocks, checks the round's own fix
 commits once with a read-only agent and fixes what it lists as one more
-block. Under `--auto` it posts the re-review's listed Code findings, and
-Tests findings on source files, through `buildme-decisions.json` in the review's
+block (which skips the whole-change refactor and mutation testing). Under
+`--auto` it posts the re-review's listed Code findings, and Tests findings
+on source files, through `buildme-decisions.json` in the review's
 folder (`build_pipeline/findings/README.md`).
 
 ## Model-Adaptive Behavior

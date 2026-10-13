@@ -35,7 +35,9 @@ time, not derived from a tag.
   a `PROBLEMS:` list, and the last of these decides, so narration before it
   is not read as a problem. A problem it finds is written to
   `findings-r<N>-self-check.md`, committed with the tasks file, and fixed as
-  one more block through the same TDD engine. Its model is the new
+  one more block through the same TDD engine; that block skips the
+  whole-change refactor and mutation testing, which already ran for the
+  round. Its model is the new
   `findings_self_check` step (`review` stage) under `models:`.
 - `findings --max-rounds <n>` overrides `findings.max_rounds` for one run.
 

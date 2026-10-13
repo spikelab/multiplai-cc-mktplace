@@ -82,7 +82,8 @@ never removed. A PR whose branch lives in a fork is refused.
    testing stops after the blocks is published unchecked, saying what
    failed, and a round with no fix commit left is not checked. A problem it lists is kept as
    `findings-r<N>-self-check.md`, committed with the tasks file, and fixed as
-   one more block through the same engine.
+   one more block through the same engine. That block skips the whole-change
+   refactor and mutation testing, which already ran for the round.
 5. **Publish.** Push, then the PR description's "Review rounds" section
    through `/multiplai-dev:pr edit`, then one reply per acted-on thread (the
    fixing commit, or why nothing changed) and one reply for the round's

@@ -420,8 +420,11 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         answer is saved in one checkpoint before anything is written, so it
         never runs twice. True when it listed a problem, which is then
         block `k`: the report and the tasks file are committed together and
-        `k` is added to the engine's checkpoint. An empty range (every fix
-        block failed and was discarded) is saved as no problem, with no call."""
+        `k` is added to the engine's checkpoint. Block `k` skips the
+        whole-change refactor and mutation testing: the checkpoint's
+        `refactor_all_done` and `mutation_done` are already set. An empty
+        range (every fix block failed and was discarded) is saved as no
+        problem, with no call."""
         head = git_ops.rev_parse_head(run.project_dir)
         diff = git_ops.diff_range(run.project_dir, rnd.code_base or head or "HEAD", head or "HEAD",
                                   exclude=_change_dir_in_project(run))

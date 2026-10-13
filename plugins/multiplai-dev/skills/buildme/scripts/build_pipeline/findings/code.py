@@ -166,16 +166,18 @@ def searched_text(report: str) -> str:
     """The fixer's own `SEARCHED:` section (the last one before any later
     agent's part) of a block's implementer report, as one line
     (`gates.parse_searched`'s entries joined), or "" with a warning when it has
-    none. The engine keeps only the report's last `MAX_EVIDENCE_CHARS`: when a
-    later agent's part comes first and is not `[review-fix 1]`, the fixer's
-    part may be gone, and "" is safer than another agent's search. Recorded,
-    never checked: code cannot tell whether a search happened."""
+    none. The engine keeps only the report's last `MAX_EVIDENCE_CHARS`: in a
+    report that long, when a later agent's part comes first and is not
+    `[review-fix 1]`, or no marker is left (a long later agent's output cut
+    its own away), the fixer's part may be gone, and "" is safer than another
+    agent's search. Recorded, never checked: code cannot tell whether a search
+    happened."""
     from ..tdd_engine import MAX_EVIDENCE_CHARS
 
     report = report or ""
     first = _LATER_AGENT.search(report)
-    lost = (first is not None and len(report) >= MAX_EVIDENCE_CHARS
-            and first.group(2) != "1")
+    lost = (len(report) >= MAX_EVIDENCE_CHARS
+            and (first is None or first.group(2) != "1"))
     entries = None if lost else parse_searched(report[:first.start()] if first else report)
     if entries is None:
         log.warning("the fixer's report has no SEARCHED: section")
@@ -253,24 +255,33 @@ def add_block(state_path: Path, tasks_path: Path, number: int) -> None:
 # The check's answer ends with one of two marker lines (`SELF_CHECK_PROMPT`):
 # `NO PROBLEMS` (any wording that starts so), or `PROBLEMS:` and the list.
 # Its output joins the text of every turn, so narration may come first: the
-# last marker decides.
-_CHECK_MARKER = re.compile(r"^[^\w\n]*(?:(?P<none>no problems?\b)|problems?\s*:)",
-                           re.IGNORECASE | re.MULTILINE)
+# last marker decides. A marker starts in a line's first column, with at most
+# a heading `#` or emphasis around it, so a list item ("- No problems are
+# handled for b=0", "- Problem: mul() overflows") or an item's indented
+# continuation is never one.
+_CHECK_MARKER = re.compile(
+    r"^(?:#+[ \t]*)?[*_`]*(?:(?P<none>no problems?\b)|problems[*_`]*[ \t]*:)",
+    re.IGNORECASE | re.MULTILINE)
 
-_NONE = re.compile(r"[^\w\n]*(none|nothing)\b[^\n]*", re.IGNORECASE)
+# A list that says only "none" or "nothing", with punctuation at most.
+_NONE = re.compile(r"[^\w\n]*(?:none|nothing)[^\w\n]*", re.IGNORECASE)
+
+_LIST_ITEM = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\S", re.MULTILINE)
 
 
 def _check_report(text: str) -> str:
     """The problems a check answer lists, or "" for none. An answer with no
-    marker is kept whole: the agent wrote something, and dropping it could
-    drop a problem."""
+    marker, or with list items after its `NO PROBLEMS`, is kept whole: the
+    agent wrote something, and dropping it could drop a problem."""
     last = None
     for last in _CHECK_MARKER.finditer(text):
         pass
     if last is None:
         return text
+    if last.group("none"):
+        return text if _LIST_ITEM.search(text, last.end()) else ""
     listed = text[last.end():].strip()
-    if last.group("none") or _NONE.fullmatch(listed):
+    if _NONE.fullmatch(listed):
         return ""
     return listed or text
 
