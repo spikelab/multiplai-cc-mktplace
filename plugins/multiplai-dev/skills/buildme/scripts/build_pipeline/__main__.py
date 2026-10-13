@@ -139,6 +139,9 @@ def build_parser() -> argparse.ArgumentParser:
                             "posted questions")
     build.add_argument("--accept-size", action="store_true",
                        help="Build a plan the size gate says should be split, as one PR")
+    build.add_argument("--approve-split", action="store_true",
+                       help="Approve the epic split this build printed as EPIC:SPLIT, "
+                            "as split.md and plans/ are on disk now")
     build.add_argument("--no-epic-split", action="store_true",
                        help="Build the input as one change: skip the EPIC_SPLIT decision "
                             "(an epic's child builds pass this)")
