@@ -27,14 +27,14 @@ the review step reads the PR again and reuses the fixer's last review. A
 fixer an earlier run left is waited for, then run again (`_fix_pending`).
 Its stop and resume rows are PR D2's table.
 
-A child whose review left no blocker is merged (PR E, items 35-42;
-`_merge`, `merge.py`). Under `epic.merge: auto` the merge step merges
+A child whose review left no blocker gets ready to merge (PR E1, items
+35-41; `_merge`, `merge.py`). Under `epic.merge: auto` the merge step merges
 `origin/<default>` into the child's branch in its worktree, has an agent
-resolve version, CHANGELOG and lockfile conflicts, runs the tests, pushes,
-waits for the required checks and runs `gh pr merge --merge`, one merge per
-repo at a time. Under `manual` (the default) nothing is merged: the PR is
-waited on, and the run exits 3 with `EPIC:MERGE_WAITING` while it is open.
-Its stop and resume rows are PR E's table.
+resolve version, CHANGELOG and lockfile conflicts, runs the tests and
+pushes, one merge per repo at a time. Under `manual` (the default) it does
+nothing. Either way the PR is then waited on, and the run exits 3 with
+`EPIC:MERGE_WAITING` while it is open: until PR E2 (items 40.5, 40.6) a
+human merges it. Its stop and resume rows are PR E's table.
 
 Spend (PR B2): before each launch, when `epic.max_usd` is set and the epic's
 spend (`spend.py`: the records' `spend` plus the review ledger) has reached
@@ -73,7 +73,6 @@ POLL = 1.0           # seconds between looks at a running child
 TICK = 30.0          # seconds between reads of the waited-on PRs
 STOP_WAIT = 30.0     # seconds the children get to exit on SIGINT or SIGTERM
 FETCH_TIMEOUT = 300  # seconds `git fetch origin` gets before a launch
-CHECKS_WAIT = 30.0   # seconds between reads of a PR's required checks (40.5)
 TESTS_TIMEOUT = 300  # seconds the merge tests get, as `gates.run_test_suite` gives (40.4)
 
 MARKER_SUMMARY = "EPIC:SUMMARY"
@@ -109,7 +108,7 @@ def _tick(coord: "Coordinator") -> None:
 
 def _merge_point(coord: "Coordinator", c: "Child", point: str) -> None:
     """Called at each named point of the merge step (`start`, `merged`,
-    `push`, `checks`). A seam for the row tests."""
+    `push`). A seam for the row tests."""
 
 
 def _spawn(argv: list[str], log_path: Path) -> subprocess.Popen:
@@ -474,13 +473,13 @@ class Coordinator:
     # -- dependencies and merges -------------------------------------------------
 
     def _waited_on(self) -> list[Child]:
-        """Children with a PR that a child not yet done depends on, or under
-        `manual` that passed review (item 41): open, or `unknown` because the
-        last read of it failed."""
+        """Children with a PR that a child not yet done depends on, or that
+        passed review (item 41; until PR E2 under `auto` too): open, or
+        `unknown` because the last read of it failed."""
         deps = {d for c in self.children.values() if c.status in ("pending", "waiting", "failed")
                 for d in c.depends_on}
         return [c for c in self.children.values()
-                if (c.id in deps or (self.settings.merge == "manual" and self._clean_head(c)))
+                if (c.id in deps or self._clean_head(c))
                 and (c.status == "built" or (c.status == "unknown" and c.pr))]
 
     def _read_prs(self, which: list[Child]) -> None:
@@ -692,7 +691,7 @@ class Coordinator:
                         continue
                     return
                 if self._merge_head(c, head):     # E.S8, E.S13: its own pushed merge, not reviewed again
-                    await self._merge(c, number)
+                    await self._merge(c)
                     return
                 lines = review.ledger_lines()
                 running = review.running_dir(lines, self.slug, head)
@@ -709,7 +708,7 @@ class Coordinator:
                     self._reuse(c, line, head, number)
                     if await self._fix(c, head, number):
                         continue
-                    await self._after_review(c, number, head)
+                    await self._after_review(c, head)
                     return
                 if self._over_budget():           # Decided 6: before each launch
                     c.status, c.reason = "built", ""
@@ -742,7 +741,7 @@ class Coordinator:
                     self._reviewed(c, fields)
                     if await self._fix(c, head, number):
                         continue
-                    await self._after_review(c, number, head)
+                    await self._after_review(c, head)
                     return
                 if code == 0 and found:
                     # The review reads the PR's head itself, after its fetch: a
@@ -997,19 +996,19 @@ class Coordinator:
         return (self.settings.merge == "auto" and reviewed is not None and w is not None
                 and head != reviewed and merge.merges_onto(w, head, reviewed, git_ops.default_branch(w)))
 
-    async def _after_review(self, c: Child, number: int, head: str) -> None:
+    async def _after_review(self, c: Child, head: str) -> None:
         """Item 40: under `auto`, a PR whose review at *head* left no blocker is merged."""
         if self.settings.merge == "auto" and c.status == "built" and self._clean_head(c) == head:
-            await self._merge(c, number)
+            await self._merge(c)
 
     def _merge_park(self, c: Child, why: str) -> None:
         c.merge_park = why
         self._park(c, why)
         self._save()
 
-    async def _merge(self, c: Child, number: int) -> None:
-        """Items 35-40 under `auto`: merge *c*'s PR, one merge per repo at a
-        time. Every git command, check and stop record runs on `<W>` (item 36).
+    async def _merge(self, c: Child) -> None:
+        """Items 35-40.4 under `auto`: merge `origin/<default>` into *c*'s
+        branch and push it, one merge per repo at a time. Every git command, check and stop record runs on `<W>` (item 36).
         A stop by an exception or a signal first saves `merge_stop` (item 39)."""
         w = self._merge_worktree(c)
         if w is None:
@@ -1018,43 +1017,32 @@ class Coordinator:
         c.status = "reviewing"
         async with self.merge_locks.setdefault(str(self.repo.resolve()), asyncio.Lock()):
             try:
-                await self._merge_steps(c, number, w)
+                await self._merge_steps(c, w)
             except BaseException:
                 c.merge_stop = stop_record.record(w)
                 self._save()
                 raise
+        if c.status == "reviewing":       # neither parked nor unknown: its PR is open
+            c.status = "built"
 
-    async def _merge_steps(self, c: Child, number: int, w: Path) -> None:
+    async def _merge_steps(self, c: Child, w: Path) -> None:
         reviewed, name = self._clean_head(c), merge.branch(w)
         if name is None:
             return self._merge_park(c, f"cannot read the branch checked out in {w}")
         default, origin_ref = git_ops.default_branch(w), f"refs/remotes/origin/{name}"
         _merge_point(self, c, "start")
-        pushed = False
         if not merge.merging(w) and merge.unpushed_merge(w, reviewed, name, default):     # item 37
             head = git_ops.rev_parse_head(w)
             why = stop_record.others_work(w, None, head=head)
             if why:
                 return self._merge_park(c, why)
-            if not await self._merge_tests(c, w, head, hint="") or not self._push(c, w, name):
-                return
-            pushed = True
-        elif merge.merging(w) and not self._abort(c, w, reviewed, origin_ref):      # item 38
+            if await self._merge_tests(c, w, head, hint=""):
+                self._push(c, w, name)
             return
-        refused = None
-        while True:
-            if not pushed:
-                done = await self._merge_default(c, w, reviewed, name, default, origin_ref)
-                if done is None:
-                    return
-                if done == "up to date" and refused:      # never retry a refused merge with nothing new
-                    return self._merge_park(c, refused)
-            pushed = False
-            if not await self._wait_checks(c, number):
-                return
-            refused = self._gh_merge(c, number)
-            if refused is None:
-                return
+        if merge.merging(w) and not self._abort(c, w, reviewed, origin_ref):      # item 38
+            return
+        await self._merge_default(c, w, reviewed, name, default, origin_ref)
+        # Until PR E2 (40.5, 40.6), the PR now waits for a human merge (item 41).
 
     def _abort(self, c: Child, w: Path, reviewed: str | None, origin_ref: str) -> bool:
         """Item 38: a merge left in progress is aborted only when the shared
@@ -1077,7 +1065,7 @@ class Coordinator:
                              origin_ref: str) -> str | None:
         """40.1-40.4: check, merge `origin/<default>`, resolve, test, commit and
         push. "merged" or "up to date"; None when the child parked or is `unknown`."""
-        why = stop_record.others_work(w, None, head=reviewed, origin_ref=origin_ref)       # 40.1
+        why = merge.ready(w, reviewed, origin_ref)                                          # 40.1
         if why:
             return self._merge_park(c, why)
         c.merge_stop = None                                                                 # 40.2
@@ -1184,46 +1172,6 @@ class Coordinator:
         else:
             self._merge_park(c, f"git push failed: {review.tail(res.stderr)}")
         return False
-
-    async def _wait_checks(self, c: Child, number: int) -> bool:
-        """40.5: wait while a required check is pending; a failed one parks, naming it."""
-        while True:
-            _merge_point(self, c, "checks")
-            res = git_ops._run_gh(["gh", "pr", "checks", str(number), "--required", "--json", "name,bucket"],
-                                  cwd=self.repo, timeout=60)
-            try:
-                checks = json.loads(res.stdout) if res.stdout.strip() else None
-            except ValueError:
-                checks = None
-            if not isinstance(checks, list):
-                if re.search(r"no (?:required )?checks reported", res.stderr):
-                    return True
-                c.status, c.reason = "unknown", f"cannot read its PR's required checks: {review.tail(res.stderr)}"
-                return False
-            failed = [x.get("name") for x in checks if isinstance(x, dict) and x.get("bucket") in ("fail", "cancel")]
-            if failed:
-                self._merge_park(c, f"required check {failed[0]} failed")
-                return False
-            if not any(isinstance(x, dict) and x.get("bucket") == "pending" for x in checks):
-                return True
-            await CLOCK.sleep(CHECKS_WAIT)
-
-    def _gh_merge(self, c: Child, number: int) -> str | None:
-        """40.6: `gh pr merge --merge`. None when it merged or the child parked;
-        else (`BEHIND`) why it was refused, and the step starts again at 40.1."""
-        res = git_ops._run_gh(["gh", "pr", "merge", str(number), "--merge"], cwd=self.repo, timeout=120)
-        view = None if res.ok else _gh(self.repo, "pr", "view", str(number), "--json", "state,mergeStateStatus")
-        status = view.get("mergeStateStatus") if isinstance(view, dict) else None
-        if res.ok or (isinstance(view, dict) and view.get("state") == "MERGED"):
-            c.status, c.reason, c.merge_stop = "merged", "", None
-            log.info("EPIC child %s: merged %s", c.id, c.pr)
-            self._save()
-            return None
-        why = f"gh pr merge refused: {res.stderr.strip()[-400:]} (mergeStateStatus {status})"
-        if status == "BEHIND":
-            return why
-        self._merge_park(c, why)
-        return None
 
     def _save(self) -> None:
         self.epic.child_status = {cid: store.ChildStatus(status=c.status, pr=c.pr, reason=c.reason,

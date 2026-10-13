@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from .. import git_ops
+from .. import git_ops, stop_record
 from ..config import discover_test_command
 from ..models import AgentResult
 from ..prompts.epic_merge import MERGE_PROMPT
@@ -92,6 +92,12 @@ def merges_onto(w: Path, head: str, reviewed: str, default: str) -> bool:
         if commit == reviewed:
             return True
     return False
+
+
+def ready(w: Path, reviewed: str | None, origin_ref: str) -> str | None:
+    """40.1: why `<W>` may not be merged into, or None. No `ignore`: ignoring
+    the change directory would let an abort run over a user's spec edit."""
+    return stop_record.others_work(w, None, head=reviewed, origin_ref=origin_ref)
 
 
 def conflicted(w: Path) -> list[str] | None:
