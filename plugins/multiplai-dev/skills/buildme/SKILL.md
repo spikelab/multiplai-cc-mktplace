@@ -704,8 +704,32 @@ stops a review this run started, with the children; a review an earlier run
 left running, or one another process runs (your own `/multiplai-dev:review`,
 say), is not signalled: it keeps running, and the next run uses what it
 finished. SIGHUP leaves a review running, and the next run uses what it
-finished. Fixing and merging the children's PRs come in
-later releases.
+finished.
+
+**Fixing the children's PRs.** A review that leaves blockers below
+`epic.max_review_rounds` runs the fix loop. First the review's findings are
+chosen as `--auto` chooses them (every Code finding, and every Tests finding
+on a non-test source file, in `buildme-decisions.json` next to the review's
+`findings.json`, outside the worktree) and posted with `python -m
+review_pipeline post <review dir> --decisions <that file>`, run in the child's
+project directory (`agents/<NNN>-post-<id>.*`). Then the fixer runs there:
+`python -m build_pipeline findings --pr <n> --change <epic>-<id> --project-dir
+<child project dir> --auto --trust-repo --max-rounds <M>`
+(`agents/<NNN>-fix-<id>.*`), where `<M>` is the rounds already in the change's
+`.findings-state.json` plus the review rounds the PR has left, so the fixer
+stops at the epic's cap. When it ends, the coordinator reads the PR again and
+reuses the fixer's last review (no new review launch): blockers on it start
+one more post and fix, and at the cap the child parks. A head with a fix
+after its review is not fixed again. `FINDINGS:FAILED:<step>:<reason>`, any
+other failing exit of the fixer, a failed post, or a review folder with no
+`findings.json` parks the child with the reason, and it stays parked. On a
+re-run, a head whose post succeeded runs the fixer, not a second post or a
+review; a fixer an earlier run left running is waited for (never two at once),
+then run again with `--max-rounds` recomputed, and `findings` resumes itself;
+a fixer that died of a signal is run again by the next run. The post and the
+fixer count against `epic.max_parallel` and `epic.max_usd` like a build, and
+Ctrl-C or SIGTERM stops a fixer this run started. Merging the children's PRs
+comes in a later release.
 
 ### The size gate (after plan review)
 
