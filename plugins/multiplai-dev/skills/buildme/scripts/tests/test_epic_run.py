@@ -184,6 +184,40 @@ def test_a_failure_is_relaunched_once_per_invocation(tmp_path, monkeypatch):
     assert e.launches().count("a") == 3
 
 
+def test_a_child_alive_after_the_stop_wait_keeps_no_result(tmp_path, monkeypatch):
+    """Ctrl-C, and a child ignores it past STOP_WAIT: no result, so the next
+    run adopts it instead of relaunching it. Then Ctrl-C while `ps` fails for
+    that adopted child: still no result."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, parallel=1,
+             steps={"a": [{"block": True, "ignore_signals": True}]})
+    monkeypatch.setattr(coordinator, "STOP_WAIT", 1.0)
+    real_pid = coordinator.build_pid
+
+    def ctrl_c(coord):
+        raise KeyboardInterrupt
+
+    def ps_fails_then_ctrl_c(coord):
+        def fail(plan):
+            raise coordinator.ReadFailed("ps failed")
+        monkeypatch.setattr(coordinator, "build_pid", fail)
+        raise KeyboardInterrupt
+
+    try:
+        monkeypatch.setattr(coordinator, "_tick", ctrl_c)
+        assert e.run() == 130
+        assert [a.result for a in records.attempts(e.dir)] == [None]
+        monkeypatch.setattr(coordinator, "_tick", ps_fails_then_ctrl_c)
+        assert e.run() == 130
+        assert [a.result for a in records.attempts(e.dir)] == [None] and e.launches() == ["a"]
+    finally:
+        e.fakes.release("a")
+        plan = e.dir / "plans" / "a.md"
+        for _ in range(500):
+            if real_pid(plan) is None:
+                break
+            time.sleep(0.02)
+
+
 # --- the argv ------------------------------------------------------------------
 
 def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
@@ -336,21 +370,21 @@ def test_a_closed_dependency_parks_its_dependant(tmp_path, monkeypatch, capsys):
     assert len(e.launches()) == 2
 
 
-def test_a_failed_pr_read_is_not_an_open_pr(tmp_path, monkeypatch, capsys):
-    """`gh pr view` fails for the PRs docs waits on: no EPIC:MERGE_WAITING for
-    PRs that may have merged; they are `unknown`, docs is not launched, exit 1."""
+def test_a_failed_pr_read_is_read_again(tmp_path, monkeypatch):
+    """A PR whose read failed is `unknown`, and the next read (the 30 s tick,
+    or the last one before exit) reads it again (B1.S24)."""
     e = Epic(tmp_path, monkeypatch)
     assert e.run() == 3
-    capsys.readouterr()
+    coord = coordinator.Coordinator(e.config, BuildState(change_name="e", mode="scratch", tier="advanced"),
+                                    None, e.dir, store.load_epic(e.dir))
+    coord._recover()
     (tmp_path / "gh-fails").write_text("")
-    assert e.run() == 1
-    out = capsys.readouterr()
-    assert "EPIC:MERGE_WAITING" not in out.out and "api" in out.err
-    assert e.status() == {"api": "unknown", "ui": "unknown", "docs": "pending"}
+    coord._read_prs(coord._waited_on())
+    assert [coord.children[c].status for c in ("api", "ui")] == ["unknown", "unknown"]
     (tmp_path / "gh-fails").unlink()
     e.fakes.set_pr(pr_url("e-api"), "MERGED")
-    e.fakes.set_pr(pr_url("e-ui"), "MERGED")
-    assert e.run() == 0 and sorted(e.launches()) == ["api", "docs", "ui"]
+    coord._read_prs(coord._waited_on())
+    assert {cid: c.status for cid, c in coord.children.items()} == {"api": "merged", "ui": "built", "docs": "pending"}
 
 
 def test_a_failed_child_shows_beside_merge_waiting(tmp_path, monkeypatch, capsys):

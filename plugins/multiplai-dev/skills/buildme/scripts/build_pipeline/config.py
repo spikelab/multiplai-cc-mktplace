@@ -405,6 +405,21 @@ class GitToggles:
     pr: Literal["draft", "ready", "none"] = "draft"
 
 
+def git_toggles(data: dict) -> GitToggles:
+    """Git lifecycle: `git: {worktree: true, push: true, pr: draft|ready|none}`
+    from a parsed specs/config.yaml, before any CLI flag."""
+    git_cfg = data.get("git", {}) or {}
+    pr_mode = str(git_cfg.get("pr", "draft")).lower()
+    if pr_mode not in ("draft", "ready", "none"):
+        log.warning("Invalid git.pr value %r in config.yaml — using 'draft'", pr_mode)
+        pr_mode = "draft"
+    return GitToggles(
+        worktree=bool(git_cfg.get("worktree", True)),
+        push=bool(git_cfg.get("push", True)),
+        pr=pr_mode,
+    )
+
+
 # Ticket providers buildme can take a ticket from (`intake.provider` in
 # specs/config.yaml). One table, mirrored in SKILL.md Step 0: each value says
 # how the *wrapper session* fetches a ticket, because the pipeline itself never
@@ -1107,17 +1122,7 @@ class BuildConfig:
         )
         self.mutation = _load_mutation_settings(data.get("mutation"))
 
-        # Git lifecycle: git: {worktree: true, push: true, pr: draft|ready|none}
-        git_cfg = data.get("git", {}) or {}
-        pr_mode = str(git_cfg.get("pr", "draft")).lower()
-        if pr_mode not in ("draft", "ready", "none"):
-            log.warning("Invalid git.pr value %r in config.yaml — using 'draft'", pr_mode)
-            pr_mode = "draft"
-        self.git = GitToggles(
-            worktree=bool(git_cfg.get("worktree", True)),
-            push=bool(git_cfg.get("push", True)),
-            pr=pr_mode,
-        )
+        self.git = git_toggles(data)
 
         self._load_intake_and_stage_settings(data)
         self._load_code_facts_settings(data)

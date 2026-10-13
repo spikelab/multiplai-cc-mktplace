@@ -25,10 +25,14 @@ import os
 import re
 import signal
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import yaml
+
 from .. import git_ops
+from ..config import git_toggles
 from . import records, store
 
 log = logging.getLogger(__name__)
@@ -115,7 +119,27 @@ def base_sha(repo: Path) -> str | None:
         log.warning("git fetch origin in %s failed: %s", repo, fetch.stderr.strip()[-400:])
     default = git_ops.default_branch(repo)
     sha = _git(repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{default}^{{commit}}")
-    return sha.stdout.strip() if sha.returncode == 0 and sha.stdout.strip() else None
+    if sha.returncode == 0 and sha.stdout.strip():
+        return sha.stdout.strip()
+    log.warning("no origin/%s in %s: the child branches from the source checkout's HEAD", default, repo)
+    return None
+
+
+def in_place_reason(project_dir: Path) -> str | None:
+    """Why a child would not build in its own worktree and open a PR: the
+    project's specs/config.yaml, which every child reads, turns off
+    `git.worktree` or `git.push` (B1.S23). None when neither is off."""
+    path = Path(project_dir) / "specs" / "config.yaml"
+    try:
+        data = yaml.safe_load(path.read_text()) if path.is_file() else {}
+    except (OSError, yaml.YAMLError):
+        data = {}
+    git = git_toggles(data if isinstance(data, dict) else {})
+    off = [f"git.{key}: false" for key in ("worktree", "push") if not getattr(git, key)]
+    if not off:
+        return None
+    return (f"{path} sets {' and '.join(off)}, so each child would build in place or open no PR; "
+            "an epic needs each child in its own worktree with a pushed PR. Remove the setting and re-run.")
 
 
 # --- is a stopped child still running --------------------------------------------
@@ -187,12 +211,15 @@ class Coordinator:
         change_dir = Path(self.config.change_dir).absolute()
         context = [str(change_dir / name) for name in ("interview.md", "research.md")
                    if (change_dir / name).is_file()]
+        research = change_dir / "research.md"
         argv = ["python", "-m", "build_pipeline", "--session-id",
                 getattr(self.args, "session_id", "") or "", "build",
                 "--mode", "brief", "--change", f"{self.epic.name}-{cid}",
                 "--plan-file", str(store.plan_path(self.epic_dir, cid).absolute())]
         if context:
             argv += ["--context-files", *context]
+        if research.is_file():      # the parent's research decision stands: no second one
+            argv += ["--research-path", str(research)]
         argv += ["--auto", "--trust-repo", "--no-epic-split", "--pr-ready",
                  "--project-dir", str(self.project_dir.absolute())]
         if base:
@@ -289,19 +316,27 @@ class Coordinator:
     # -- dependencies and merges -------------------------------------------------
 
     def _waited_on(self) -> list[Child]:
-        """Children with an open PR that a child not yet done depends on."""
+        """Children with a PR that a child not yet done depends on: open, or
+        `unknown` because the last read of it failed."""
         deps = {d for c in self.children.values() if c.status in ("pending", "waiting", "failed")
                 for d in c.depends_on}
-        return [c for c in self.children.values() if c.id in deps and c.status == "built"]
+        return [c for c in self.children.values()
+                if c.id in deps and (c.status == "built" or (c.status == "unknown" and c.pr))]
 
     def _read_prs(self, which: list[Child]) -> None:
+        """`gh pr view` each PR. A failed read is not "still open": the child is
+        `unknown` until a read answers (B1.S24)."""
         for c in which:
             got = _gh(self.repo, "pr", "view", c.pr, "--json", "state")
             state = got.get("state") if isinstance(got, dict) else None
             if state == "MERGED":
-                c.status = "merged"
+                c.status, c.reason = "merged", ""
             elif state == "CLOSED":
                 c.status, c.reason = "parked", PR_CLOSED
+            elif state is None:
+                c.status, c.reason = "unknown", "cannot read its PR's state: gh pr view failed"
+            else:
+                c.status, c.reason = "built", ""
 
     def _resolve(self) -> list[Child]:
         """Mark skipped and waiting children; return the ones ready to launch."""
@@ -412,6 +447,11 @@ class Coordinator:
     # -- the run ------------------------------------------------------------------
 
     async def run(self) -> int:
+        refused = in_place_reason(self.project_dir)
+        if refused:
+            log.error("EPIC %s", refused)
+            print(f"ERROR:{refused}", file=sys.stderr, flush=True)
+            return 2
         run_dir = _new_run_dir(self.epic_dir)
         self._recover()
         self._read_prs([c for c in self.children.values() if c.status == "built"])
@@ -442,11 +482,14 @@ class Coordinator:
             except (NotImplementedError, RuntimeError, ValueError):
                 pass
         self._summary(run_dir)
-        open_prs = [c.pr for c in self._waited_on()]
+        bad = [c for c in self.children.values() if c.status in ("failed", "unknown")]
+        for c in bad:       # beside EPIC:MERGE_WAITING too, not only in the summary
+            print(f"EPIC: child {c.id} {c.status}: {c.reason}", file=sys.stderr, flush=True)
+        open_prs = [c.pr for c in self._waited_on() if c.status == "built"]
         if open_prs:
             print(f"{MARKER_MERGE_WAITING}:{','.join(open_prs)}", flush=True)
             return 3
-        return 1 if any(c.status in ("failed", "unknown") for c in self.children.values()) else 0
+        return 1 if bad else 0
 
     async def _loop(self) -> int:
         last_read = CLOCK.now()

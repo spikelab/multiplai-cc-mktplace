@@ -323,6 +323,9 @@ if step.get("grandchild"):      # a process in the build's group, as a real buil
     kid = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
     (root / "grandchildren").mkdir(exist_ok=True)
     (root / "grandchildren" / f"{{cid}}.{{n}}").write_text(str(kid.pid))
+if step.get("ignore_signals"):
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 if step.get("block"):
     gate = root / "release" / cid
     while not gate.exists():
@@ -373,7 +376,7 @@ else:
 class Fakes:
     """The fake build and `gh` first on PATH, answering from `<root>/fakes.json`
     (per child, one step per attempt: `block`, `marker`, `exit`, `no_pr`,
-    `die_before_pr_line`, `grandchild`) and `<root>/prs.json`; launches go to
+    `die_before_pr_line`, `grandchild`, `ignore_signals`) and `<root>/prs.json`; launches go to
     `<root>/calls.log`. `<root>/gh-fails` makes every `gh` call fail; `ps_fails`
     puts a `ps` that exits 1 first on PATH."""
 

@@ -45,6 +45,7 @@ from .epic_row_helpers import (
     move_origin,
     name_commits,
     alive,
+    pr_url,
     records_snapshot,
     run_build,
     run_coordinator,
@@ -55,6 +56,7 @@ from .epic_row_helpers import (
 )
 
 TWO = EpicSplitAnswer(single=False, reason="Two parts.", children=[child("a"), child("b")])
+CHAIN = EpicSplitAnswer(single=False, reason="Two parts.", children=[child("a"), child("b", ("a",))])
 
 
 @pytest.fixture(autouse=True)
@@ -66,14 +68,14 @@ def _release_locks():
 class Root:
     """One root: project, workspace, fakes, an approved two-child epic."""
 
-    def __init__(self, root: Path, monkeypatch, steps: dict, parallel: int = 1):
+    def __init__(self, root: Path, monkeypatch, steps: dict, parallel: int = 1, answer=TWO):
         self.root, self.mp = root, monkeypatch
         self.data = use_workspace(monkeypatch, root)
         self.project = make_project(root)
         self.fakes = Fakes(root, monkeypatch, steps)
         self.config = make_build(self.project)
         self.config.epic = EpicSettings(max_parallel=parallel)
-        approve(self.config, TWO, CallLog(root / "split.log"))
+        approve(self.config, answer, CallLog(root / "split.log"))
         self.dir = self.data / "buildme" / "epics" / "o-r--e"
 
     def use(self) -> None:
@@ -121,9 +123,9 @@ class Root:
         return CallLog(self.root / "calls.log").calls()
 
 
-def _roots(tmp_path, monkeypatch, steps, parallel=1) -> tuple[Root, Root]:
-    return (Root(tmp_path / "stopped", monkeypatch, steps, parallel),
-            Root(tmp_path / "clean", monkeypatch, steps, parallel))
+def _roots(tmp_path, monkeypatch, steps, parallel=1, answer=TWO) -> tuple[Root, Root]:
+    return (Root(tmp_path / "stopped", monkeypatch, steps, parallel, answer),
+            Root(tmp_path / "clean", monkeypatch, steps, parallel, answer))
 
 
 def _release_all(root: Root):
@@ -351,6 +353,25 @@ def test_B1_S21_a_failing_ps_never_counts_a_live_child_as_gone(tmp_path, monkeyp
     assert stopped.run(_release_all(stopped)) == 0
     assert clean.run(_release_all(clean)) == 0
     _assert_same(stopped, clean, {"a": [("build", "<argv>", None, _built("a"), True)]})
+
+
+def test_B1_S24_a_failed_pr_read_is_not_an_open_pr(tmp_path, monkeypatch, capsys):
+    """B1.S24: `gh pr view` fails for the PR b waits on: a is `unknown`, no
+    EPIC:MERGE_WAITING for a PR that may have merged, nothing launched, exit 1.
+    Once `gh` answers: as B1.S17, with the records of a run that never failed."""
+    stopped, clean = _roots(tmp_path, monkeypatch, {}, answer=CHAIN)
+    assert stopped.run() == 3 and clean.run() == 3
+    capsys.readouterr()
+    (stopped.root / "gh-fails").write_text("")
+    assert stopped.run() == 1
+    out = capsys.readouterr()
+    assert "EPIC:MERGE_WAITING" not in out.out and "child a unknown" in out.err
+    assert stopped.status() == {"a": "unknown", "b": "pending"}
+    (stopped.root / "gh-fails").unlink()
+    for r in (stopped, clean):
+        r.fakes.set_pr(pr_url("e-a"), "MERGED")
+        assert r.run() == 0
+    _assert_same(stopped, clean)
 
 
 def _die_at_epic_split_skip() -> None:
