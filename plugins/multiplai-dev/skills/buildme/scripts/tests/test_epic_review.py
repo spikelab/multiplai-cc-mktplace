@@ -485,6 +485,67 @@ def test_a_review_that_fails_otherwise_parks_with_the_stderr_tail(tmp_path, monk
     assert e.run() == 0 and e.launched() == ["review"]       # stays parked
 
 
+READ_FAILURES = [
+    "ERROR: git fetch --quiet origin failed: error: cannot lock ref 'refs/remotes/origin/main': "
+    "is at 1111111 but expected 2222222",
+    f"ERROR: gh pr view {N} failed: HTTP 502: Bad Gateway (https://api.github.com/graphql)",
+    f"ERROR: /w/buildme-e-a: PR #{N} head cccccccccccc is not in this clone (pass --fetch)",
+]
+
+
+@pytest.mark.parametrize("stderr", READ_FAILURES, ids=["fetch", "gh-pr-view", "head-not-fetched"])
+def test_a_review_that_cannot_read_git_or_github_leaves_the_child_unknown(tmp_path, monkeypatch, capsys, stderr):
+    """C.S20: the review's own `git fetch` or `gh pr view` failed, or its fetch
+    missed a head pushed just before (exit 2 `ERROR:`). That is a failed read,
+    as the coordinator's own: the child is `unknown`, the run exits 1, nothing
+    is parked, and the next run reviews the head."""
+    e = Epic(tmp_path, monkeypatch, reviews={str(N): [{"exit": 2, "stderr": stderr}, {"findings": [high()]}]})
+    assert e.run() == 1
+    st = e.child_status("a")
+    assert st["status"] == "unknown" and stderr.splitlines()[0] in st["reason"]
+    assert "EPIC: child a unknown: " in capsys.readouterr().err
+    [a] = e.reviews("a")
+    assert a.result["exit_code"] == 2 and "parked" not in a.result and "blocking" not in a.result
+    assert e.run() == 0
+    first, second = e.reviews("a")
+    assert first.result == a.result
+    assert (second.result["exit_code"], second.result["reused"], second.result["pr_round"]) == (0, False, 1)
+    assert [b.split()[:2] for b in second.result["blocking"]] == [["HIGH", "f1"]]
+    assert e.child_status("a")["status"] == "built"
+
+
+def test_a_failed_read_in_the_review_skips_no_dependant(tmp_path, monkeypatch):
+    """C.S20 under a chain: b still waits on a's open PR, and is not skipped."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, reviews={str(N): [{"exit": 2, "stderr": READ_FAILURES[0]}, {}]})
+    assert e.run() == 3                                       # b waits for a's merge
+    assert e.child_status("b")["status"] == "waiting"
+    assert "parked" not in e.reviews("a")[0].result
+    assert e.run() == 3
+    assert [a.result["exit_code"] for a in e.reviews("a")] == [2, 0]
+    assert e.reviews("a")[1].result["blocking"] == []
+    assert e.child_status("b")["status"] == "waiting"
+
+
+def test_a_child_whose_worktree_is_gone_is_reviewed_from_the_source_repo(tmp_path, monkeypatch):
+    """The child's worktree was removed while its PR is open: the review runs
+    with `--repo` set to the source repo, as its working directory is."""
+    e = Epic(tmp_path, monkeypatch)
+    tree = e.root / "ws" / ".worktrees" / "buildme-e-a"
+    real = coordinator.Coordinator._review
+
+    async def review_(self, c):
+        if c.id == "a" and tree.exists():
+            subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=e.project, check=True)
+        return await real(self, c)
+
+    monkeypatch.setattr(coordinator.Coordinator, "_review", review_)
+    assert e.run() == 0
+    [a] = e.reviews("a")
+    argv = a.started["argv"]
+    assert argv[argv.index("--repo") + 1] == str(e.project)
+    assert a.result["exit_code"] == 0 and e.child_status("a")["status"] == "built"
+
+
 def test_a_merged_pr_is_not_reviewed(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=CHAIN, steps={"a": [{"pr": {"state": "MERGED"}}]})
     assert e.run() == 0
