@@ -609,6 +609,8 @@ class BlockInfo(BaseModel):
     notes: list[ImplementationNote] = Field(default_factory=list)
     # Set while the fix-on-pass runs (see FixOnPassState); None otherwise.
     fix_pass: FixOnPassState | None = None
+    # The fix on pass was kept, so `implementer_report` ends with its part.
+    fix_on_pass_kept: bool = False
 
 
 # --- Change artifacts ---

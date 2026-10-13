@@ -1879,6 +1879,7 @@ async def _run_fix_on_pass(
         sha = _git_commit_block_phase(config, "fix", block)
         review_rounds.amend_fix(fp.round_path, commit=sha, kept=True)
         block.review_scores = new_review
+        block.fix_on_pass_kept = True
         review_rounds.append_unfixed(
             config.change_dir, block, review_rounds.fixable_on_pass(new_review.findings),
             "not attempted (raised by the review after the kept fix; one fix pass per block)",
