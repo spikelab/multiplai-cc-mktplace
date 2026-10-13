@@ -11,7 +11,7 @@
             their labels with the decisions already recorded (writes a report;
             changes no review)
   migrate — copy review directories written elsewhere (INBOX/reviews before
-            multiplai-dev 0.45) into <out>/legacy/, with a ledger line per findings.json;
+            multiplai-dev 0.46) into <out>/legacy/, with a ledger line per findings.json;
             the source is never changed
 
 stdout contract: progress summary lines, a `summary: <path>` line per finished
@@ -204,6 +204,8 @@ def main(argv: list[str] | None = None) -> int:
         finished = f", finished {len(result.finished)} an earlier run stopped part way" if result.finished else ""
         print(f"migrate: copied {len(result.copied)}{finished}, skipped {len(result.skipped)} already copied, "
               f"{result.lines} ledger lines; into {result.dest}")
+        if result.config:
+            print(f"migrate: copied {Path(args.source) / 'review.yaml'} to {result.config}")
         return 0
 
     if args.command == "post":

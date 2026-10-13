@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import REAL_DATA_DIR, TESTS
+from conftest import REAL_DATA_DIR, REAL_LEGACY_REVIEWS_ROOT, TESTS
 from fixture_repo import _git as fixture_git
 from review_pipeline import ledger, render, rounds, sdk, target
 from review_pipeline.__main__ import default_out, main
@@ -180,6 +180,50 @@ def test_four_runs_on_two_heads_keep_three_numbered_rounds_in_full(branch_clone,
     assert len(set(logs)) == 3  # each round keeps its own run's progress, not the next one's
     # The ledger numbers the runs the same way.
     assert [e["round"] for e in _ledger_lines(tmp_path, "finished")] == ["01", "02", "03", "04"]
+
+
+def test_a_run_stopped_before_export_is_kept_as_its_own_round(fixture_repo, tmp_path, agents):
+    """A budget stop writes no findings.json; the next run still keeps that run's files, not its own."""
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / f"example-booking-engine--{base}..{head}"
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0  # round 01 finishes
+    agents(budget_stop_at=2)
+    assert main(_review_args(repo, base, head, out)) == 4  # round 02 stops before export
+    stopped_log = (target_dir / "progress.log").read_text()
+    stopped_state = (target_dir / "review-state.json").read_text()
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0  # round 03 must not write over round 02
+    names = sorted(p.name for p in (target_dir / "rounds").iterdir())
+    assert names == [f"01-{head[:12]}", f"02-{head[:12]}"]
+    second = target_dir / "rounds" / names[1]
+    assert (second / "progress.log").read_text() == stopped_log
+    assert (second / "review-state.json").read_text() == stopped_state
+    assert (second / "diff.patch").is_file()
+    # The stopped run exported nothing: round 01's findings are not copied in as round 02's.
+    assert not (second / "findings.json").exists() and not (second / "checks.json").exists()
+    assert not list(second.glob("review-*.md"))
+    # Its ledger number is the round it is kept as; the finished run after it is 03.
+    assert [e["round"] for e in _ledger_lines(tmp_path, "finished")] == ["01", "02", "03"]
+    # A fourth run keeps round 03 once, and round 02 is not copied again.
+    assert main(_review_args(repo, base, head, out)) == 0
+    names = sorted(p.name for p in (target_dir / "rounds").iterdir())
+    assert names == [f"01-{head[:12]}", f"02-{head[:12]}", f"03-{head[:12]}"]
+    assert (target_dir / "rounds" / names[2] / "findings.json").is_file()
+
+
+def test_keep_round_keeps_a_stopped_run_once(tmp_path):
+    """A stopped run (state, no findings.json of its own) is kept once, and not again on a second start."""
+    h = "e" * 40
+    state = {"target": {"head_sha": h, "slug": "t"}, "timings": {"run": [{"started_at": "2026-01-01T00:00:00.100Z"}]}}
+    (tmp_path / "review-state.json").write_text(json.dumps(state))
+    (tmp_path / "progress.log").write_text("stopped\n")
+    first = rounds.keep_round(tmp_path, "t", h)
+    assert first == tmp_path / "rounds" / f"01-{h[:12]}"
+    assert (first / "progress.log").read_text() == "stopped\n"
+    assert rounds.keep_round(tmp_path, "t", h) == first
+    assert len(list((tmp_path / "rounds").iterdir())) == 1
 
 
 def _write_findings(d: Path, head: str, generated_at: str, claim: str = "", run: dict | None = None) -> None:
@@ -665,3 +709,112 @@ def test_migrate_stopped_part_way_finishes_on_a_rerun_without_a_second_copy(tmp_
 
 def test_migrate_refuses_a_source_that_is_not_a_directory(tmp_path, capsys):
     assert main(["migrate", "--from", str(tmp_path / "missing")]) == 2
+
+
+# --- review.yaml written in the old default directory ------------------------------
+
+
+def _old_workspace(tmp_path: Path, monkeypatch, yaml_text: str = "effort: low\n") -> Path:
+    """A workspace whose INBOX/reviews (the default before 0.45) holds a review.yaml."""
+    ws = tmp_path / "ws"
+    old = ws / "INBOX" / "reviews"
+    old.mkdir(parents=True)
+    (old / "review.yaml").write_text(yaml_text)
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    (cfg / ".workspace").write_text(str(ws))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.setattr(ledger, "legacy_reviews_root", REAL_LEGACY_REVIEWS_ROOT)
+    return old
+
+
+def test_the_default_out_still_reads_a_review_yaml_left_in_the_old_default(tmp_path, monkeypatch, caplog):
+    from review_pipeline.config import load_config
+    old = _old_workspace(tmp_path, monkeypatch)
+    with caplog.at_level(logging.WARNING):
+        assert load_config(default_out()).effort == "low"
+    assert str(old / "review.yaml") in caplog.text
+    # One in the new place wins over the old one.
+    default_out().mkdir(parents=True, exist_ok=True)
+    (default_out() / "review.yaml").write_text("effort: high\n")
+    assert load_config(default_out()).effort == "high"
+
+
+def test_an_explicit_out_never_reads_the_old_default_review_yaml(tmp_path, monkeypatch):
+    from review_pipeline.config import load_config
+    _old_workspace(tmp_path, monkeypatch)
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    assert load_config(other).effort != "low"
+
+
+def test_migrate_copies_the_sources_review_yaml_but_never_over_one_already_there(tmp_path, monkeypatch, capsys):
+    old = _old_workspace(tmp_path, monkeypatch)
+    assert main(["migrate", "--from", str(old)]) == 0
+    assert (default_out() / "review.yaml").read_text() == "effort: low\n"
+    assert (old / "review.yaml").read_text() == "effort: low\n"  # the source is left as it was
+    (old / "review.yaml").write_text("effort: medium\n")
+    (default_out() / "review.yaml").write_text("effort: high\n")
+    assert main(["migrate", "--from", str(old)]) == 0
+    assert (default_out() / "review.yaml").read_text() == "effort: high\n"
+
+
+# --- the first review after the upgrade sees the PR's history under its old name ---
+
+
+def _old_round(d: Path, head: str, generated_at: str, finding_id: str, remote: str = ORIGIN,
+               slug: str = "checkout-x--pr-7") -> None:
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "findings.json").write_text(json.dumps({
+        "schema_version": 1, "generated_at": generated_at, "producer": "multiplai-dev:review 0.32.0",
+        "target": {"head_sha": head, "slug": slug, "label": slug, "remote_url": remote},
+        "findings": [{"id": finding_id, "status": "confirmed", "claim": f"claim {finding_id}"}]}))
+
+
+def _new_state(slug: str = f"{SLUG_REPO}--pr-7", head: str = "f" * 40):
+    from review_pipeline.models import ReviewState, TargetInfo
+    return ReviewState(target=TargetInfo(repo_path="/r", remote_url=ORIGIN, base_sha="0" * 40, head_sha=head,
+                                         slug=slug, kind="pr", ref="7", pr=7))
+
+
+def test_a_prs_first_review_in_the_data_dir_reads_its_rounds_and_rejections_under_the_old_name(
+        tmp_path, monkeypatch):
+    from review_pipeline.stages import RunContext
+    from review_pipeline.stages.repeats import earlier_findings
+    old = _old_workspace(tmp_path, monkeypatch)
+    a, b = "a" * 40, "b" * 40
+    # The old directory: one kept round and its last (top-level) round, and the person's rejection.
+    _old_round(old / "checkout-x--pr-7" / "rounds" / a[:12], a, "2026-01-01T00:00:00Z", "1111111111")
+    _old_round(old / "checkout-x--pr-7", b, "2026-01-02T00:00:00Z", "2222222222")
+    (old / "checkout-x--pr-7" / "viewer").mkdir()
+    (old / "checkout-x--pr-7" / "viewer" / "decisions.json").write_text(json.dumps(
+        {"2222222222": {"decision": "reject", "note": "by design", "ts": "2026-01-02T01:00:00Z"}}))
+    # Another worktree's name for the same PR; migrate's copy of the first (read once, not twice).
+    _old_round(old / "other-worktree--pr-7", a, "2026-01-01T12:00:00Z", "3333333333", slug="other-worktree--pr-7")
+    shutil.copytree(old / "checkout-x--pr-7", default_out() / "legacy" / "checkout-x--pr-7")
+    # Not this PR: another repository's PR 7, and this repository's PR 70.
+    _old_round(old / "elsewhere--pr-7", a, "2026-01-01T00:00:00Z", "4444444444",
+               remote="https://github.com/someone/else", slug="elsewhere--pr-7")
+    _old_round(old / "checkout-x--pr-70", a, "2026-01-01T00:00:00Z", "5555555555", slug="checkout-x--pr-70")
+
+    target_dir = default_out() / f"{SLUG_REPO}--pr-7"
+    target_dir.mkdir(parents=True)
+    ctx = RunContext(config=None, snapshot=None, diff="", target_dir=target_dir)
+    earlier = earlier_findings(_new_state(), ctx)
+    assert sorted(e.id for e in earlier) == ["1111111111", "2222222222", "3333333333"]
+    by_id = {e.id: e for e in earlier}
+    assert (by_id["2222222222"].decision, by_id["2222222222"].note) == ("reject", "by design")
+    assert by_id["2222222222"].head_sha == b
+
+
+def test_a_slug_with_no_origin_has_no_history_under_other_names(tmp_path, monkeypatch):
+    from review_pipeline.stages import RunContext
+    from review_pipeline.stages.repeats import earlier_findings
+    old = _old_workspace(tmp_path, monkeypatch)
+    _old_round(old / "checkout-x--pr-7", "a" * 40, "2026-01-01T00:00:00Z", "1111111111")
+    target_dir = default_out() / "checkout-y--pr-7"
+    target_dir.mkdir(parents=True)
+    state = _new_state(slug="checkout-y--pr-7")
+    state.target.remote_url = None
+    ctx = RunContext(config=None, snapshot=None, diff="", target_dir=target_dir)
+    assert earlier_findings(state, ctx) == []

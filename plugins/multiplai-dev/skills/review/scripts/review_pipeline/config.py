@@ -3,7 +3,8 @@
 Precedence, highest first (same order as buildme's config.py: the project's
 own file beats multiplai.conf, which beats the default):
 
-1. `review.yaml` in the output directory (`<out>/review.yaml`):
+1. `review.yaml` in the output directory (`<out>/review.yaml`; for the
+   default output directory, the old default's when the new one has none):
    `concurrency`, `finder_model`, `verifier_model`, `merger_model`, `effort`,
    `max_turns`, `explain`, `find_with_facts`.
 2. `multiplai.conf` keys `review_finder_model`, `review_verifier_model`,
@@ -26,6 +27,7 @@ from pathlib import Path
 from multiplai_core.env import load_multiplai_conf
 from multiplai_core.stage_config import check_effort, coerce_int, conf_value, read_yaml_mapping
 
+from . import ledger
 from .budget import DEFAULT_MAX_USD
 
 log = logging.getLogger(__name__)
@@ -65,6 +67,31 @@ def _flag(value, key: str, where) -> bool | None:
     return None
 
 
+CONFIG_FILE = "review.yaml"
+
+
+def _yaml_path(out_dir: Path | None) -> Path | None:
+    """`<out>/review.yaml`. When *out_dir* is the default output directory and
+    holds none, the one left in the default before multiplai-dev 0.46
+    (`ledger.legacy_reviews_root()`) is read instead, with a warning, until it
+    is copied over (`migrate` copies it)."""
+    if out_dir is None:
+        return None
+    path = out_dir / CONFIG_FILE
+    if path.is_file():
+        return path
+    try:
+        is_default = out_dir.resolve() == ledger.reviews_root().resolve()
+    except Exception:  # noqa: BLE001 — no data directory: nothing to fall back from
+        return path
+    old = ledger.legacy_reviews_root() / CONFIG_FILE
+    if is_default and old.is_file():
+        log.warning("reading %s: %s is now read from %s; copy it there, or run "
+                    "`python -m review_pipeline migrate --from %s`", old, CONFIG_FILE, path, old.parent)
+        return old
+    return path
+
+
 def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MAX_USD) -> ReviewConfig:
     cfg = ReviewConfig(max_cost_usd=max_cost_usd)
     try:
@@ -80,7 +107,7 @@ def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MA
     if explain is not None:
         cfg.explain = explain
 
-    yaml_path = (out_dir / "review.yaml") if out_dir else None
+    yaml_path = _yaml_path(out_dir)
     data = read_yaml_mapping(yaml_path)
     for key in ("finder_model", "verifier_model", "merger_model", "effort"):
         if data.get(key):

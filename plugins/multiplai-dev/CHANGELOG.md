@@ -36,7 +36,16 @@ time, not derived from a tag.
   (`source/`) is not copied into a round: its git already keeps the commit
   each round names. Rounds kept by earlier versions
   (`<sha>/`, `<sha>-2/`) are still read. The round id in posted PR markers
-  is unchanged.
+  is unchanged. A run that stopped before it wrote its findings (a budget
+  stop, a verify stop, a failure) is kept as its own round too, instead of
+  being written over by the next run.
+- The first review of a PR after the move still sees that PR's earlier
+  rounds and the rejections recorded on them, read from the old
+  `INBOX/reviews/<dirname>--pr-<n>/` directories (and `migrate`'s copies)
+  that name the same `origin`.
+- `review.yaml` left in the old `INBOX/reviews/` still applies to reviews
+  written to the default directory, with a warning, until one exists in the
+  new place; `migrate` copies it there.
 - `runs.jsonl` lists every run, earlier rounds included, sorted by time.
 - review-viewer looks for a review in the new directory, then in the old
   `INBOX/reviews/` and in the copies `migrate` made of it; a review found
@@ -57,7 +66,10 @@ time, not derived from a tag.
   over instead of pointing at a `resume` that would fail or continue the
   wrong head.
   buildme's findings stage resumes such a review of the PR head (one its
-  own timeout killed, say) instead of counting it as a failed review.
+  own timeout killed, say) instead of counting it as a failed review. When
+  buildme's timeout for the review, pr or walkthrough skill runs out, it now
+  kills the skill's whole process group, not only the `uv` launcher: before,
+  the skill ran on with its output closed, holding the review's lock.
   A review that is still running is not mistaken for one of these: each
   run holds a lock on its target directory until it ends, and while it
   does, a second `review`, `review --restart`, `--plan-only` or `resume` of

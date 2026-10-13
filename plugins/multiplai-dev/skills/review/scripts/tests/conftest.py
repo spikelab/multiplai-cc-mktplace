@@ -26,6 +26,10 @@ REAL_BRANCH_RULES = target.branch_rules
 # The real data directory lookup, for the test that exercises it; every other
 # test writes its reviews and ledger under its own tmp_path.
 REAL_DATA_DIR = ledger.data_dir
+# The real lookup of the default output directory before 0.45 (`INBOX/reviews`,
+# else `~/.multiplai/reviews`), for the tests that exercise it; every other
+# test gets an empty one, so reviews a real run left in the home directory are never read.
+REAL_LEGACY_REVIEWS_ROOT = ledger.legacy_reviews_root
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +47,7 @@ def _isolate(tmp_path, monkeypatch):
     """No real multiplai.conf, no inherited trust, a fresh unlimited ledger, no real data directory."""
     monkeypatch.setenv("CLAUDE_MULTIPLAI_HOME", str(tmp_path / "no-conf"))
     monkeypatch.setattr(ledger, "data_dir", lambda: tmp_path / "data")
+    monkeypatch.setattr(ledger, "legacy_reviews_root", lambda: tmp_path / "no-legacy-reviews")
     monkeypatch.delenv("REVIEW_TRUST_REPO", raising=False)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     budget.start(None)

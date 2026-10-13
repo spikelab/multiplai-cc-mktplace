@@ -42,7 +42,9 @@ def shown_findings(state: ReviewState) -> list[Finding]:
 def earlier_findings(state: ReviewState, ctx: RunContext) -> list[rounds.EarlierFinding]:
     if ctx.target_dir is None:
         return []
-    return rounds.load_rounds(ctx.target_dir, state.target.head_sha)
+    t = state.target
+    elsewhere = rounds.history_elsewhere(ctx.target_dir, t.slug, t.remote_url)
+    return rounds.load_rounds(ctx.target_dir, t.head_sha, elsewhere)
 
 
 def gate_matches(matches: list[RepeatMatch], shown_ids: set[str],

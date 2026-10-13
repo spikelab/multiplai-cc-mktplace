@@ -99,7 +99,7 @@ def default_reviews_dir() -> Path:
 
 
 def legacy_reviews_dir() -> Path:
-    """Where the review skill wrote before multiplai-dev 0.45: the workspace
+    """Where the review skill wrote before multiplai-dev 0.46: the workspace
     `INBOX/reviews`, else `~/.multiplai/reviews`. Still read when a review is
     not in `default_reviews_dir()`."""
     return output_root() / "reviews"
@@ -133,7 +133,7 @@ def find_review(target, dirs: list[Path], *, deep_dirs: list[Path] | None = None
     ("stale", path, findings) when one has the target's slug but other commits;
     ("none", None, None) otherwise. Newest file wins within each kind.
     *slugs* are the slugs that count as the target's (default: its own); a
-    review written before multiplai-dev 0.45 carries `legacy_slug(target)`.
+    review written before multiplai-dev 0.46 carries `legacy_slug(target)`.
 
     Every tree review has the empty tree as its base, so for a tree target the
     commits alone do not say which directory was reviewed: a match must also
@@ -218,7 +218,7 @@ def _load_resolved(args, resolved: Resolved):
     source_notice = None
     if kind != "match" and not args.reviews_dir:
         # Not in the data directory: look where the review skill wrote before
-        # multiplai-dev 0.45, and at the copies its `migrate` made of those.
+        # multiplai-dev 0.46, and at the copies its `migrate` made of those.
         # Those reviews name the checkout's directory in their slug.
         old_slug = legacy_slug(target)
         copies = migrated_reviews_dir()
@@ -229,7 +229,7 @@ def _load_resolved(args, resolved: Resolved):
             kind, path, review = old_kind, old_path, old_review
             if copies in path.parents:
                 source_notice = (f"This review was loaded from {path.parent}, a copy of a review written "
-                                 f"before multiplai-dev 0.45, not from {default_reviews_dir()}.")
+                                 f"before multiplai-dev 0.46, not from {default_reviews_dir()}.")
             else:
                 source_notice = (f"This review was loaded from the old location {path.parent}, "
                                  f"not from {default_reviews_dir()}.")

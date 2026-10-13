@@ -143,7 +143,7 @@ def test_a_review_migrate_copied_into_the_data_dir_is_found(env, fixture_repo, f
     m = meta[ff.target.slug]
     assert m["review"] == "findings: 3" and box == path.parent / "viewer"
     assert m["notice"] == (f"This review was loaded from {path.parent}, a copy of a review written before "
-                           f"multiplai-dev 0.45, not from {tmp_path / 'data' / 'reviews'}.")
+                           f"multiplai-dev 0.46, not from {tmp_path / 'data' / 'reviews'}.")
 
 
 def test_a_kept_round_in_a_migrated_copy_is_not_loaded_as_the_review(env, fixture_repo, findings_path, tmp_path):

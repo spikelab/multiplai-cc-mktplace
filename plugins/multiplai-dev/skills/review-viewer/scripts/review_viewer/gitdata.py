@@ -585,7 +585,7 @@ def slug_repo_name(repo: Path) -> str:
 
 
 def legacy_slug(target: Target) -> str | None:
-    """The slug a review written before multiplai-dev 0.45 gave *target*: the
+    """The slug a review written before multiplai-dev 0.46 gave *target*: the
     checkout's directory name where `slug_repo_name()` now puts
     `<owner>-<repo>`. None when the two are the same, or the slug does not
     start with the repo part (a range's)."""

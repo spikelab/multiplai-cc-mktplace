@@ -1,11 +1,13 @@
-"""`migrate --from <dir>`: copy reviews written before multiplai-dev 0.45 into the data directory.
+"""`migrate --from <dir>`: copy reviews written before multiplai-dev 0.46 into the data directory.
 
 Each directory directly under the source is copied whole to
 `<out>/legacy/<its name>/` (by default `<data_dir>/reviews/legacy/`), and one
 `migrated` line per `findings.json` found in it, at any depth (top level,
 `rounds/`, or an archive's own layout), goes to the review ledger with
 `migrated_from` naming the directory it was read from. Files directly under
-the source (rollups, `runs.jsonl`) are not reviews and are not copied.
+the source (rollups, `runs.jsonl`) are not reviews and are not copied, except
+`review.yaml`, the run configuration, which is copied to `<out>/review.yaml`
+when that does not exist yet (one already there is never replaced).
 
 The source is only read: nothing in it is moved, changed or deleted. Each
 source directory gets two lines in `<out>/legacy/sources.jsonl`: `copying`
@@ -32,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import ledger
+from .config import CONFIG_FILE
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +53,7 @@ class MigrateResult:
     skipped: list[str] = field(default_factory=list)
     finished: list[str] = field(default_factory=list)  # copied by a run that stopped before recording it
     lines: int = 0
+    config: Path | None = None  # the review.yaml copied to <out>, if one was
 
 
 def _ledger_line(findings: Path, source_dir: Path, copy_dir: Path, session_id: str) -> dict | None:
@@ -102,6 +106,19 @@ def _logged() -> set[tuple[str, str]]:
             if e.get("event") == "migrated"}
 
 
+def _copy_config(source: Path, out: Path) -> Path | None:
+    """Copy `<source>/review.yaml` to `<out>/review.yaml` when *out* has none; return the copy, or None."""
+    src, dest = source / CONFIG_FILE, out / CONFIG_FILE
+    if not src.is_file() or src.is_symlink() or dest.exists():
+        return None
+    out.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copy2(src, dest)
+    except OSError as e:
+        raise MigrateError(f"cannot copy {src} to {dest}: {e}") from e
+    return dest
+
+
 def migrate(source: Path, out: Path, *, session_id: str = "") -> MigrateResult:
     """Copy every directory under *source* to `<out>/legacy/`; see the module docstring."""
     source = source.expanduser().resolve()
@@ -114,6 +131,7 @@ def migrate(source: Path, out: Path, *, session_id: str = "") -> MigrateResult:
     sources = _sources(dest_root)
     claimed = {e["dest"] for e in sources.values()}
     logged = _logged()
+    result.config = _copy_config(source, out)
     for src in sorted(p for p in source.iterdir() if p.is_dir() and not p.is_symlink()):
         entry = sources.get(str(src))
         if entry and entry["done"]:

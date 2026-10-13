@@ -9,8 +9,9 @@ file and directory of that round (`findings.json`, the review, `checks.json`,
 on the same head (a rerun), so the repeat and assess stages have that run to
 compare with. `<NN>` is the two-digit round number, one more than the
 directories already in `rounds/`, so a second run on one head gets the next
-number. The copy is made under a hidden name and renamed when complete.
-Nothing there is ever deleted or overwritten. Rounds kept before multiplai-dev 0.45 are
+number. A run that stopped before export is kept the same way, without the
+earlier round's exported files. The copy is made under a hidden name and renamed when complete.
+Nothing there is ever deleted or overwritten. Rounds kept before multiplai-dev 0.46 are
 named `<sha12>/` and `<sha12>-2/`; they are still read, ordered by
 `generated_at`.
 
@@ -30,8 +31,10 @@ or round with no readable time is applied, as before 0.27.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -125,22 +128,65 @@ def round_name(target_dir: Path, findings_file: dict) -> str:
     return head[:12] if k == 1 else f"{head[:12]}-{k}"
 
 
+STATE_FILE = "review-state.json"
+# What a run writes only when it finishes (export and render). In the directory
+# of a run that stopped before export they are the earlier run's, kept already.
+EXPORTED = ("findings.json", "checks.json", "review-*.md", "summary-*.md", "checks-*.md")
+
+
+def _run_start(state: dict | None) -> str:
+    """When the run a saved review state belongs to started (its first `run` interval), or ""."""
+    runs = ((state or {}).get("timings") or {}).get("run") or []
+    first = runs[0] if runs and isinstance(runs[0], dict) else {}
+    return str(first.get("started_at") or "")
+
+
+def _state_kept_already(target_dir: Path) -> Path | None:
+    """The round directory whose `review-state.json` is the top-level one, byte for byte, if one is."""
+    try:
+        current = (target_dir / STATE_FILE).read_bytes()
+    except OSError:
+        return None
+    for d in _round_dirs(target_dir):
+        try:
+            if (d / STATE_FILE).read_bytes() == current:
+                return d
+        except OSError:
+            continue
+    return None
+
+
 def keep_round(target_dir: Path, slug: str, new_head_sha: str) -> Path | None:
-    """Copy the last round in full to `rounds/<NN>-<sha12>/` before a new run writes over it.
+    """Copy the last run in full to `rounds/<NN>-<sha12>/` before a new run writes over it.
 
     The new run may be on the same head (a rerun): that round is kept too.
-    Returns the round directory, or None when there was nothing to keep (no
-    findings.json). `resume` does not call this. A round already kept (same
-    `generated_at` and run start) is not copied again, so a run that started,
-    stopped and was started again keeps one copy.
+    The last run is the one `review-state.json` belongs to. When it finished,
+    `findings.json` is its own (the same run start) and the round is copied
+    whole; a round already kept (same `generated_at` and run start) is not
+    copied again, so a run that started, stopped and was started again keeps
+    one copy. When it stopped before export (a budget stop, a verify stop, a
+    failure, or a run killed and then restarted), its state, progress and diff
+    are kept without the earlier run's exported files (`EXPORTED`), named by
+    the state's head; a state already kept byte for byte is not copied again.
+    Returns the round directory, or None when there was nothing to keep.
+    `resume` does not call this.
     """
     data = _read_json(target_dir / "findings.json")
-    if data is None:
+    state = _read_json(target_dir / STATE_FILE)
+    skip_files: tuple[str, ...] = ()
+    if data is not None and (state is None or _run_start(state) == _round_key(data)[1]):
+        old_head = str((data.get("target") or {}).get("head_sha") or "")
+        if not old_head:
+            return None
+        kept = _kept_already(target_dir, data)
+    elif state is not None:
+        old_head = str((state.get("target") or {}).get("head_sha") or "")
+        if not old_head:
+            return None
+        kept = _state_kept_already(target_dir)
+        skip_files = EXPORTED
+    else:
         return None
-    old_head = str((data.get("target") or {}).get("head_sha") or "")
-    if not old_head:
-        return None
-    kept = _kept_already(target_dir, data)
     if kept is not None:
         return kept
     name = f"{round_number(target_dir):02d}-{old_head[:12]}"
@@ -150,7 +196,9 @@ def keep_round(target_dir: Path, slug: str, new_head_sha: str) -> Path | None:
     shutil.rmtree(partial, ignore_errors=True)  # a copy an earlier run did not finish
 
     def skip(directory: str, names: list[str]) -> set[str]:
-        return {n for n in names if n in NOT_KEPT} if Path(directory) == target_dir else set()
+        if Path(directory) != target_dir:
+            return set()
+        return {n for n in names if n in NOT_KEPT or any(fnmatch.fnmatchcase(n, p) for p in skip_files)}
 
     shutil.copytree(target_dir, partial, symlinks=True, ignore=skip)
     round_dir = root / name
@@ -200,7 +248,81 @@ def _carried(f: dict) -> dict:
     return {}
 
 
-def load_rounds(target_dir: Path, current_head: str = "") -> list[EarlierFinding]:
+# Not walked when looking for a target's history under other names: snapshots,
+# imported checkouts and git internals hold no findings.json of a round.
+_NOT_WALKED = frozenset({"viewer", "tree", "base-tree", "assess-tree", "source", ".git", ".locks"})
+
+
+def _history_roots(target_dir: Path) -> list[Path]:
+    """Where a target's rounds written under another directory name can be: beside
+    *target_dir*, migrate's copies (`<data_dir>/reviews/legacy/`) and the default
+    output directory before multiplai-dev 0.46 (`INBOX/reviews`)."""
+    from . import ledger
+
+    roots = [target_dir.parent]
+    for root in (lambda: ledger.reviews_root() / ledger.LEGACY_DIR, ledger.legacy_reviews_root):
+        try:
+            roots.append(root())
+        except Exception:  # noqa: BLE001 — no data directory or workspace: nothing there to read
+            log.debug("cannot resolve a review history root", exc_info=True)
+    seen, out = set(), []
+    for r in roots:
+        key = r.resolve()
+        if key not in seen and r.is_dir():
+            seen.add(key)
+            out.append(r)
+    return out
+
+
+def history_elsewhere(target_dir: Path, slug: str, remote_url: str | None) -> list[Path]:
+    """The `findings.json` of every round of this target written under another directory name.
+
+    Before multiplai-dev 0.46 a slug started with the local checkout's
+    directory name (`<dirname>--pr-<n>`); now it starts with `<owner>-<repo>`
+    from `origin`. A PR's earlier rounds, and the person's decisions on them,
+    are still in those old directories (or migrate's copies of them). A file
+    counts when its path holds this slug's part after the repository
+    (`--pr-283`, also inside `x--pr-283__rounds__<sha>`, never `--pr-2830`)
+    and the file itself names the same `origin` and a slug ending in that part.
+    Nothing is found for a slug that does not start with its origin's name
+    (no `origin`: the slug is the directory name, as before).
+    """
+    from .target import origin_name
+
+    origin = origin_name(remote_url)
+    if not origin or not slug.startswith(f"{origin}--"):
+        return []
+    suffix = slug[len(origin) + 2:]
+    in_path = re.compile(rf"--{re.escape(suffix)}(?![0-9A-Za-z])")
+    own = target_dir.resolve()
+    found: dict[Path, Path] = {}
+    for root in _history_roots(target_dir):
+        for dirpath, dirnames, filenames in os.walk(root):
+            here = Path(dirpath)
+            if here.resolve() == own:
+                dirnames[:] = []
+                continue
+            dirnames[:] = sorted(d for d in dirnames if d not in _NOT_WALKED and not d.startswith(PARTIAL_PREFIX))
+            if "findings.json" not in filenames or not in_path.search(str(here.relative_to(root))):
+                continue
+            path = here / "findings.json"
+            data = _read_json(path) or {}
+            t = data.get("target") or {}
+            if (origin_name(t.get("remote_url")) == origin and str(t.get("slug") or "").endswith(f"--{suffix}")
+                    and path.resolve() not in found):
+                found[path.resolve()] = path
+    if found:
+        log.info("%s: reading %d earlier round(s) kept under other directory names", slug, len(found))
+    return list(found.values())
+
+
+def _decisions_beside(findings: Path) -> dict[str, dict]:
+    """The decisions of the target directory a `findings.json` belongs to (its own, or a kept round's)."""
+    target_dir = findings.parent.parent.parent if findings.parent.parent.name == ROUNDS_DIR else findings.parent
+    return load_decisions(target_dir)
+
+
+def load_rounds(target_dir: Path, current_head: str = "", elsewhere: list[Path] | tuple = ()) -> list[EarlierFinding]:
     """Every finding in `rounds/*/findings.json`, the latest round's copy of each id.
 
     Rounds are ordered by `generated_at`; a round on *current_head* counts
@@ -210,14 +332,30 @@ def load_rounds(target_dir: Path, current_head: str = "") -> list[EarlierFinding
     and not itself a kept round (a finished review, as `assess-only` reads
     it), else no limit (a run that has not exported). A copy with no decision
     of its own takes the one its `repeat` assessment carried over.
+
+    *elsewhere* adds rounds of this target kept under other directory names
+    (`history_elsewhere`), with the decisions recorded beside them; a round
+    found twice (a migrated copy) counts once, and a decision recorded in
+    *target_dir* wins over one recorded there.
     """
     rounds = []
-    for path in (d / "findings.json" for d in _round_dirs(target_dir)):
+    seen = set()
+    own = [d / "findings.json" for d in _round_dirs(target_dir)]
+    decisions: dict[str, dict] = {}
+    for path in [*own, *elsewhere]:
         data = _read_json(path)
         if data is None:
             continue
         head = str((data.get("target") or {}).get("head_sha") or "")
+        key = (*_round_key(data), head)
+        if key in seen and path not in own:  # a copy of a round already read
+            continue
+        seen.add(key)
         rounds.append((str(data.get("generated_at") or ""), head, data.get("findings") or []))
+    for path in elsewhere:
+        for fid, d in _decisions_beside(path).items():
+            if str(d.get("ts") or "") >= str((decisions.get(fid) or {}).get("ts") or ""):
+                decisions[fid] = d
     rounds.sort(key=lambda r: r[0])
     current = _read_json(target_dir / "findings.json") or {}
     current_at = None
@@ -225,7 +363,7 @@ def load_rounds(target_dir: Path, current_head: str = "") -> list[EarlierFinding
             and str(current.get("generated_at") or "") not in {r[0] for r in rounds}):
         current_at = _when(current.get("generated_at") or "")
     ends = [_when(r[0]) for r in rounds[1:]] + [current_at]
-    decisions = load_decisions(target_dir)
+    decisions.update(load_decisions(target_dir))
     by_id: dict[str, EarlierFinding] = {}
     for (_, head, findings), until in zip(rounds, ends):
         for f in findings:

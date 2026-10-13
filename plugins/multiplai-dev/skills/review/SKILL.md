@@ -37,8 +37,15 @@ Python between them:
    `review-state.json`, `diff.patch`, ...) in
    `<out>/<slug>/rounds/<NN>-<head sha, 12 chars>/`, where `<NN>` is the
    round number (`01`, `02`, ...), also when the new run is on the same
-   commit (it gets the next number). Rounds kept before multiplai-dev 0.45 are named
-   `<sha>/` and `<sha>-2/` and are still read. Every finding is checked against the findings the user
+   commit (it gets the next number). Rounds kept before multiplai-dev 0.46 are named
+   `<sha>/` and `<sha>-2/` and are still read. A run that stopped before it
+   wrote its findings (a budget stop, a verify stop, a failure, a killed run
+   started over with `--restart`) is kept the same way, without the findings
+   and review of the round before it. Rounds of the same PR kept before
+   multiplai-dev 0.46 under a directory named after the local checkout
+   (`<dirname>--pr-<n>`, in the old `INBOX/reviews/`, in `migrate`'s copies or
+   beside the new directory) are read too, with the decisions recorded there,
+   when they name the same `origin`. Every finding is checked against the findings the user
    rejected in those rounds (`viewer/decisions.json`): the same id matches in
    Python, the rest go to one agent that says which describe the same defect,
    however they are worded. A match is labelled `repeat`, with the earlier
@@ -449,7 +456,7 @@ which GitHub does not render:
 
 `id` is the finding's id in `findings.json`. `round` names the round by its
 head: the head sha cut to 12 characters, with `-2`, `-3`, … for a later
-round on the same head. Since multiplai-dev 0.45 that is not the round's directory name
+round on the same head. Since multiplai-dev 0.46 that is not the round's directory name
 under `<out>/<slug>/rounds/` (`<NN>-<sha12>`), so markers already posted
 keep parsing with the regex below. Any tool
 can find review findings on a PR by fetching its review comments and review
@@ -499,7 +506,9 @@ jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd:
 
 ## Configuration
 
-`review.yaml` in the output directory sets `concurrency`, `finder_model`,
+`review.yaml` in the output directory (for the default one, the old
+default's `INBOX/reviews/review.yaml` until a `review.yaml` exists in the new
+place, with a warning) sets `concurrency`, `finder_model`,
 `verifier_model`, `merger_model` (default: the verifier's), `effort`,
 `max_turns`, `explain` and `find_with_facts`. `multiplai.conf` keys
 `review_finder_model`, `review_verifier_model`, `review_effort` and
@@ -555,4 +564,5 @@ stage runs on the session's model.
   only the ledger lines it had not written yet. A directory whose
   name another source already used (the same PR in `INBOX/reviews` and in an
   archive) is copied to `<name>~<6 hex>/`. Files directly under `<dir>`
-  (rollups) are not copied.
+  (rollups) are not copied, except `review.yaml`, which is copied to
+  `<out>/review.yaml` when there is none there yet.

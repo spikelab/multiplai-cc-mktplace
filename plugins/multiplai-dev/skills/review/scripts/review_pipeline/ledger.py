@@ -47,6 +47,21 @@ def reviews_root() -> Path:
     return data_dir() / REVIEWS_DIR
 
 
+def legacy_reviews_root() -> Path:
+    """The default output directory before multiplai-dev 0.46: the workspace's
+    `INBOX/reviews` (the workspace `$CLAUDE_CONFIG_DIR/.workspace` names), else
+    `~/.multiplai/reviews`. review-viewer's `legacy_reviews_dir()` makes the same choice."""
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if config_dir:
+        try:
+            workspace = Path((Path(config_dir) / ".workspace").read_text(encoding="utf-8").strip()).expanduser()
+        except OSError:
+            workspace = None
+        if workspace and (workspace / "INBOX").is_dir():
+            return workspace / "INBOX" / REVIEWS_DIR
+    return Path.home() / ".multiplai" / REVIEWS_DIR
+
+
 def ledger_path() -> Path:
     return reviews_root() / LEDGER_FILE
 
