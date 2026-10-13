@@ -152,52 +152,82 @@ platform requirements and exits 1 on any failure.
 
 Print the output path and total duration. If quality issues are visible (caption errors, wrong segment, etc.), iterate on the EDL and re-render — the cached prep means re-renders are fast (the bulk of time is the per-segment cut pass).
 
-### 6. Review loop: the user comments on the video itself
+### 6. The job page: picks, speaker boxes and review
 
-When the user wants to review renders (or the job has several clips), serve
-them a review page instead of asking for timestamps in chat. In the page they
-click the picture to pause and comment on that moment and spot, then send
-all comments in one batch.
+One local page carries the user's choices for the whole job, so they click
+instead of typing timestamps in chat. It has five tabs: **Clips** (pick from
+the candidates), **Speakers** (draw a box per speaker), **Look** and
+**Music** (list what the session offers; picking there comes later), and
+**Review** (comment on the renders). It opens on the earliest tab with a
+decision still open. Each choice comes back as a row in a mailbox file.
+
+**The page shows files the session writes into the job's output directory,
+and never edits them.** A tab whose file is missing says so; one that fails
+its schema shows the errors. The page polls, so a file written later appears
+without a restart. Every path inside is absolute. Schemas:
+`schema/<name>.schema.json`.
+
+| File | Shape | Tab |
+|---|---|---|
+| `job.json` | `{source, transcript, sentences, kind: "reels"\|"demo"}` | all; Clips and Speakers only for `reels` |
+| `candidates.json` | `[{id, start, end, speaker, hook, excerpt, scores: {hook, payoff, quotable, standalone, density}, why}]` | Clips |
+| `looks.json` | `{styles: [{name, file, sample_html}], brands: [{name, file}], captions: [{name, values}]}` | Look |
+| `music.json` | `{beds: [{name, file}], sfx_sets: [{name, files}], voice_sample: {start, end}}` | Music |
+
+The server plays only files those name (the source, beds, sound effects,
+sample pages) and the renders in the directory; it refuses every other path.
+`references/reels.md` §3–4 say when to write `job.json` and
+`candidates.json`.
 
 1. **Start the server in the background** (Bash with `run_in_background`),
-   pointing it at the directory holding the renders:
+   pointing it at the job's output directory, where the renders go too:
 
    ```bash
-   python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py review <dir>
+   python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py review <outdir>
    ```
 
-   It prints `URL:` lines, `OPEN:` and `MAILBOX:`. Give the user the `OPEN:`
-   path (`<dir>/review/open.html`): opening that file sends the browser to
-   the page with its access token. **Never print or read out the token**; it
-   is in `open.html` and `server.token` only, both deleted when the server
-   stops. Inside a container the server binds `0.0.0.0`; the first URL is
+   It prints `INPUTS:` (each input file's state), `URL:` lines, `OPEN:` and
+   `MAILBOX:`. Give the user the `OPEN:` path (`<outdir>/review/open.html`):
+   opening that file sends the browser to the page with its access token.
+   **Never print or read out the token**; it is in `open.html` and
+   `server.token` only, both deleted when the server stops. Inside a
+   container the server binds `0.0.0.0`; the first URL is
    `<hostname>.orb.local` under OrbStack, otherwise the container IP, and
    `open.html` links every URL in case the first does not load. Set
    `VIDEO_EDIT_REVIEW_URL_HOST` (e.g. `localhost` for a port published with
    `-p`) to put that host first.
 
-2. **Watch the mailbox** with the Monitor tool, one event per comment:
+2. **Watch the mailbox** with the Monitor tool, one event per row:
 
    ```bash
-   tail -n0 -F <dir>/review/comments.jsonl
+   tail -n0 -F <outdir>/review/comments.jsonl
    ```
 
-   Each line is `{id, video, version, t, x, y, text, created_at}`: `video` is
-   the clip name, `t` the time in that render in seconds, `x`/`y` the click
-   position as a fraction of the width and height (0,0 is top left). Without
-   the Monitor tool, read the file when the user says they sent comments.
+   Every row has `id`, `kind`, `text` (may be empty, except on a `point`
+   row) and `created_at`; rows about a render also have `video` (the clip
+   name) and `version`. A row with no `kind` (from an older page) is a
+   `point` row. The newest row wins when two say the same thing.
 
-3. **Wait for the batch to finish** (lines arriving within a few seconds of
-   each other belong to one Send all), then map each comment to the EDL:
-   `pipeline.py timeline <edl>` turns `t` back into source time; `y` near the
-   caption line or the headline points at those. Make every change the batch
-   asks for, then render the **next version** of that clip:
+   | `kind` | Extra fields | Do |
+   |---|---|---|
+   | `point` | `t`, `x`, `y`: the time in that render in seconds, and the click as a fraction of the width and height (0,0 is top left) | Change what the comment asks for at that moment and spot (step 3) |
+   | `pick` | `candidate`, `decision` (`accept`\|`reject`), `start`, `end` (source seconds, maybe moved by the user) | Snap each accepted clip with `pipeline.py snap`, follow its note, write one EDL each; drop the rejected (`references/reels.md` §4) |
+   | `panels` | `panels: {name: {x, y, w, h}}` (source pixels), `speakers: {label: name}` | Write them into every EDL's `layout` (`references/reels.md` §3) |
+
+   Without the Monitor tool, read the file when the user says they sent
+   something.
+
+3. **For `point` rows, wait for the batch to finish** (rows arriving within a
+   few seconds of each other belong to one Send), then map each comment to
+   the EDL: `pipeline.py timeline <edl>` turns `t` back into source time; `y`
+   near the caption line or the headline points at those. Make every change
+   the batch asks for, then render the **next version** of that clip:
 
    ```bash
    PIPE=${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py
-   python3 $PIPE review <dir> --next-version clip-01      # NEXT: <dir>/clip-01.v2.mp4
-   python3 $PIPE render <edl> --out <dir>/clip-01.v2.mp4
-   python3 $PIPE check <dir>/clip-01.v2.mp4 --preset reels --edl <edl>
+   python3 $PIPE review <outdir> --next-version clip-01      # NEXT: <outdir>/clip-01.v2.mp4
+   python3 $PIPE render <edl> --out <outdir>/clip-01.v2.mp4
+   python3 $PIPE check <outdir>/clip-01.v2.mp4 --preset reels --edl <edl>
    ```
 
    The page notices the new version within 5 s and offers it in its version

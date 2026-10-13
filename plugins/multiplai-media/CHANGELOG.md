@@ -21,6 +21,41 @@ a tag.
 
 Nothing yet.
 
+## [0.11.0] - 2026-10-13
+
+### Added
+
+- **One local page for a whole reels job.** `pipeline.py review <outdir>`
+  now serves a job page with five tabs instead of a render-only page.
+  Claude writes `job.json` and `candidates.json` into the job's output
+  directory, and the page shows them as soon as they appear.
+- **Clips tab: pick clips without typing timestamps.** Each candidate is a
+  card with its hook line, scores, transcript and reasoning, best first.
+  Play it from the original recording, accept or reject it, drag its start
+  and end on a small timeline (they snap to sentence edges, or to words with
+  Alt), add a note, and send your picks. Claude snaps and renders only the
+  ones you accept.
+- **Speakers tab: draw the speaker boxes yourself.** Scrub to a frame, draw
+  a box around each person, name it, and say which transcript speaker is
+  which, with a few of their lines (click one to hear it). "Check late
+  frame" jumps to 85% of the recording so you can see the boxes still fit.
+  Send waits until every speaker has a box. Claude uses your boxes for the
+  9:16 crops.
+- **Look and Music tabs** list the styles, brands, caption options, music
+  beds and sound-effect sets Claude offers. Previewing and picking them in
+  the page comes in a later version; tell Claude your choice in chat for now.
+- The page opens on the first tab that still needs a decision from you, and
+  a dot marks every such tab. A file Claude wrote with a mistake shows its
+  error in its tab instead of a blank tab.
+
+### Changed
+
+- The review page is now the Review tab of the job page; it works as before.
+- Rows in `comments.jsonl` now carry a `kind` (`point` for a comment on a
+  render, `pick`, `panels`). A row without one still counts as a comment.
+- The page plays only files the job names (the recording, music beds,
+  sound effects, sample pages) and the renders; it refuses any other path.
+
 ## [0.10.0] - 2026-10-11
 
 ### Added
