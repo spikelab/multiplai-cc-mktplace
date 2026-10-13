@@ -770,3 +770,112 @@ def test_R12_budget_reached_at_group_and_write(tmp_path, fake_call):
     run_dir, ref_dir = _folder(root), _folder(ref_root)
     assert_run_matches(run_dir, root, ref_dir, ref_root, dict(fake_call.calls), ref_calls)
     assert read_state(run_dir)["budget"]["cost_usd"] == read_state(ref_dir)["budget"]["cost_usd"] == 5.0
+
+
+# --- PR 3b: apply rows ------------------------------------------------------------------------
+# _apply_repo's registry holds charge.md with other bytes (left untouched) and notes.md, both
+# committed, so --apply copies one.md and two.md, in that order. The check runs for real.
+
+def _apply_repo(path: Path) -> Path:
+    repo = make_repo(path)
+    write(repo / "specs" / "registry" / "charge.md", "## ADDED Requirements\n\nwritten by hand\n")
+    write(repo / "specs" / "registry" / "notes.md", "notes\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "registry")
+    return repo
+
+
+def _registry(repo: Path) -> dict[str, bytes | None]:
+    return everything(repo / "specs" / "registry")
+
+
+def _status(repo: Path) -> str:
+    return git(repo, "status", "--porcelain", "--untracked-files=all")
+
+
+def _kill_at(monkeypatch, stop: str) -> None:
+    """Stop the apply step at one point of row R11, once. `temp<n>` and `copied<n>` count
+    the copies this invocation makes, so on a resume `1` is the first file still to copy."""
+    from spec_extract_pipeline import apply as apply_mod
+
+    if stop == "check":  # during the check, before the first copy
+        def check(registry, stop_record):
+            raise Killed("stopped during the uncommitted-work check")
+        monkeypatch.setattr(apply_mod, "uncommitted_work", check)
+    elif stop == "recorded":  # one.md's fingerprint saved, nothing written yet
+        _stop_after_save(monkeypatch, lambda st: st.apply_stop is not None and len(st.apply_stop.edits) == 1)
+    elif stop.startswith(("temp", "copied")):  # temp file written / moved into place, for copy n
+        n, real, seen = int(stop[-1]), apply_mod._put, []
+
+        def put(tmp, dest, data):
+            seen.append(dest)
+            if len(seen) < n:
+                return real(tmp, dest, data)
+            if stop.startswith("temp"):
+                tmp.write_bytes(data)
+            else:
+                real(tmp, dest, data)
+            raise Killed(f"stopped at {stop}")
+        monkeypatch.setattr(apply_mod, "_put", put)
+
+
+@pytest.mark.parametrize("stops", [["check"], ["recorded"], ["temp1"], ["copied1"], ["temp2"], ["copied2"],
+                                   ["temp1", "recorded"], ["copied1", "temp1", "check"]])
+def test_R11_apply_stopped_part_way(tmp_path, monkeypatch, capsys, fake_call, stops):
+    ref_repo, ref_root = _apply_repo(tmp_path / "ref" / "widgets"), tmp_path / "ref" / "out"
+    ref_calls = _caps_reference(fake_call, {}, ref_repo, ref_root)
+    assert _tree(ref_repo, ref_root, "--apply") == 0
+    ref_lines = [x for x in capsys.readouterr().out.splitlines() if x.startswith("SPEC_EXTRACT:")]
+
+    repo, root = _apply_repo(tmp_path / "mine" / "widgets"), tmp_path / "mine" / "out"
+    assert _tree(repo, root) == 0  # render; the stops below are all in apply
+    for stop in stops:
+        with monkeypatch.context() as m:
+            _kill_at(m, stop)
+            _stopped(lambda: _tree(repo, root, "--apply"))
+    capsys.readouterr()
+    assert _tree(repo, root, "--apply") == 0
+    lines = [x for x in capsys.readouterr().out.splitlines() if x.startswith("SPEC_EXTRACT:")]
+
+    run_dir, ref_dir = _folder(root), _folder(ref_root)
+    assert_run_matches(run_dir, root, ref_dir, ref_root, dict(fake_call.calls), ref_calls)
+    assert dict(fake_call.calls) == ref_calls  # apply makes no model call
+    mine, ref = read_state(run_dir), read_state(ref_dir)
+    assert (mine["apply_stop"], mine["steps_done"]) == (ref["apply_stop"], ref["steps_done"])
+    assert _registry(repo) == _registry(ref_repo)
+    assert _status(repo) == _status(ref_repo)
+    assert not (repo / "specs" / "registry" / ".spec-extract-tmp").exists()
+    assert not (ref_repo / "specs" / "registry" / ".spec-extract-tmp").exists()
+    assert [x.replace(str(root), "<root>") for x in lines[-2:]] == \
+           [x.replace(str(ref_root), "<root>") for x in ref_lines[-2:]]
+
+
+# --- R17: the user's uncommitted edits in <registry> -------------------------------------------
+
+@pytest.mark.parametrize("when", ["before", "partial-edit-copied", "partial-new-file"])
+def test_R17_user_edits_in_registry_are_refused(tmp_path, monkeypatch, capsys, when):
+    repo, root = _apply_repo(tmp_path / "widgets"), tmp_path / "out"
+    registry = repo / "specs" / "registry"
+    if when == "before":
+        assert _tree(repo, root) == 0
+        (registry / "notes.md").write_text("my notes, not committed\n")
+        (registry / "mine.md").write_text("mine\n")
+        names = ["mine.md", "notes.md"]
+    else:
+        with monkeypatch.context() as m:
+            _kill_at(m, "copied1")
+            _stopped(lambda: _tree(repo, root, "--apply"))
+        if when == "partial-edit-copied":
+            (registry / "one.md").write_text("edited after the partial apply\n")
+            names = ["one.md"]
+        else:
+            (registry / "mine.md").write_text("mine\n")
+            names = ["mine.md"]
+    before, state, status = _registry(repo), read_state(_folder(root)), _status(repo)
+    capsys.readouterr()
+
+    assert _tree(repo, root, "--apply") == 2
+    err = capsys.readouterr().err
+    assert all(n in err for n in names), err
+    assert _registry(repo) == before and _status(repo) == status  # nothing written
+    assert read_state(_folder(root)) == state
