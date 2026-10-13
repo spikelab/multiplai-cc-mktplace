@@ -35,6 +35,7 @@ from build_pipeline.state import BuildState
 
 DROP_KEYS = {"at", "since", "pid", "host"}          # and every key ending in "_at"
 NOT_COMPARED = {".lock", "progress.log"}            # the lock and the log: never compared
+NOT_COMPARED_DIRS = ("agents/", "runs/")            # compared as records_snapshot and last_summary
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "Row Test", "GIT_AUTHOR_EMAIL": "row@example.invalid",
@@ -111,16 +112,21 @@ def args_for(config: BuildConfig, **over) -> Any:
     return argparse.Namespace(**base)
 
 
-def run_build(config: BuildConfig, args, spec=None) -> int:
+def run_build(config: BuildConfig, args, spec=None, *, coordinator: bool = False) -> int:
     """One `build` invocation, in this process. The spec generator is a fake
     (*spec*, default: one that fails), so a build that goes on past the split
-    stops right there."""
+    stops right there. Unless *coordinator*, an approved epic's coordinator
+    (PR B1) is a stub that returns 0, so PR A's cases launch no child."""
+    from contextlib import ExitStack
     from unittest.mock import AsyncMock, patch
 
     from build_pipeline.orchestrator import run_orchestrator
 
     spec = spec or AsyncMock(return_value=1)
-    with patch("build_pipeline.spec_generator.run_spec_generator", spec):
+    with ExitStack() as stack:
+        stack.enter_context(patch("build_pipeline.spec_generator.run_spec_generator", spec))
+        if not coordinator:
+            stack.enter_context(patch("build_pipeline.epic.coordinator.run_epic", AsyncMock(return_value=0)))
         return asyncio.run(run_orchestrator(config, args))
 
 
@@ -233,7 +239,8 @@ def epic_snapshot(epic_dir: Path, root: Path) -> dict[str, Any] | None:
     out: dict[str, Any] = {}
     for p in sorted(epic_dir.rglob("*")):
         rel = p.relative_to(epic_dir).as_posix()
-        if not p.is_file() or rel in NOT_COMPARED or re.match(r".*\.tmp$", rel):
+        if not p.is_file() or rel in NOT_COMPARED or re.match(r".*\.tmp$", rel) \
+                or rel.startswith(NOT_COMPARED_DIRS):
             continue
         text = p.read_text()
         if p.suffix == ".json":
@@ -250,3 +257,227 @@ def state_summary(config: BuildConfig, root: Path) -> dict[str, Any]:
     s = load_state(config)
     return {"phase": s.phase, "epic_dir": (s.epic_dir or "").replace(str(root), "<root>"),
             "epic_single": s.epic_single}
+
+
+# --- PR B1: the coordinator's fakes, seams and records ---------------------------
+
+FAKE_BUILD = r'''#!{python}
+"""A fake `python -m build_pipeline ... build`: the real markers, a fake PR."""
+import json, os, pathlib, signal, subprocess, sys, time
+
+argv = sys.argv[1:]
+root = pathlib.Path(os.environ["EPIC_FAKE_ROOT"])
+
+
+def opt(name):
+    return argv[argv.index(name) + 1] if name in argv else None
+
+
+def git(*a, cwd):
+    return subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True)
+
+
+plan = opt("--plan-file")
+cid = pathlib.Path(plan).stem
+change = opt("--change")
+counts = root / "attempts"
+counts.mkdir(exist_ok=True)
+n = len(list(counts.glob(cid + ".*"))) + 1
+(counts / f"{{cid}}.{{n}}").write_text("")
+with (root / "calls.log").open("a") as f:
+    f.write(json.dumps({{"kind": "build", "argv": [a.replace(str(root), "<root>") for a in argv]}},
+                       sort_keys=True) + "\n")
+fx = json.loads((root / "fakes.json").read_text()) if (root / "fakes.json").exists() else {{}}
+steps = fx.get(cid, [])
+step = steps[n - 1] if n <= len(steps) else (steps[-1] if steps else {{}})
+
+project = pathlib.Path(opt("--project-dir"))
+top = git("rev-parse", "--show-toplevel", cwd=project).stdout.strip()
+if git("status", "--porcelain", "--untracked-files=no", cwd=top).stdout.strip():
+    print(f"ERROR:{{top}} has uncommitted changes in tracked files. Commit or stash them.",
+          file=sys.stderr, flush=True)
+    sys.exit(1)
+wt = pathlib.Path(os.environ["WORKSPACE"]) / ".worktrees" / f"buildme-{{change}}"
+branch = f"buildme/{{change}}"
+if wt.exists():
+    print(f"WORKTREE:{{wt}}", flush=True)
+else:
+    base = opt("--base-ref")
+    git("worktree", "add", "-b", branch, str(wt), *([base] if base else []), cwd=top)
+    print(f"WORKTREE:{{wt}}", flush=True)
+    print(f"BRANCH:{{branch}}", flush=True)
+    (root / "bases").mkdir(exist_ok=True)
+    (root / "bases" / cid).write_text(git("rev-parse", "HEAD", cwd=wt).stdout.strip())
+if step.get("block"):
+    gate = root / "release" / cid
+    while not gate.exists():
+        time.sleep(0.02)
+if step.get("marker"):
+    print(step["marker"], flush=True)
+    sys.exit(3)
+if step.get("exit"):
+    sys.exit(step["exit"])
+if step.get("no_pr"):
+    sys.exit(0)
+url = f"https://example.invalid/o/r/pull/{{change}}"
+prs_file = root / "prs.json"
+prs = json.loads(prs_file.read_text()) if prs_file.exists() else {{}}
+prs.setdefault(url, {{"branch": branch, "state": "OPEN"}})
+prs_file.write_text(json.dumps(prs))
+if step.get("die_before_pr_line"):
+    os.kill(os.getpid(), signal.SIGKILL)
+print(f"PR:{{url}}", flush=True)
+'''
+
+FAKE_GH = r'''#!{python}
+"""A fake `gh`: reads only, from `<root>/prs.json`."""
+import json, os, pathlib, sys
+
+root = pathlib.Path(os.environ["EPIC_FAKE_ROOT"])
+prs = json.loads((root / "prs.json").read_text()) if (root / "prs.json").exists() else {{}}
+a = sys.argv[1:]
+if a[:2] == ["pr", "view"]:
+    pr = prs.get(a[2])
+    if pr is None:
+        print("no pull request found", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({{"state": pr["state"]}}))
+elif a[:2] == ["pr", "list"]:
+    head = a[a.index("--head") + 1]
+    print(json.dumps([{{"url": u}} for u, p in prs.items() if p["branch"] == head]))
+else:
+    print("fake gh: unexpected " + " ".join(a), file=sys.stderr)
+    sys.exit(2)
+'''
+
+
+class Fakes:
+    """The fake build and `gh` first on PATH, answering from `<root>/fakes.json`
+    (per child, one step per attempt: `block`, `marker`, `exit`, `no_pr`,
+    `die_before_pr_line`) and `<root>/prs.json`; launches go to `<root>/calls.log`."""
+
+    def __init__(self, root: Path, monkeypatch, steps: dict[str, list[dict]] | None = None):
+        import sys
+
+        self.root = root
+        self.bin = root / "bin"
+        self.bin.mkdir(parents=True, exist_ok=True)
+        for name, text in (("python", FAKE_BUILD), ("gh", FAKE_GH)):
+            path = self.bin / name
+            path.write_text(text.format(python=sys.executable))
+            path.chmod(0o755)
+        (root / "release").mkdir(exist_ok=True)
+        (root / "fakes.json").write_text(json.dumps(steps or {}))
+        self.use(monkeypatch)
+
+    def use(self, monkeypatch) -> None:
+        path = [p for p in os.environ["PATH"].split(os.pathsep)
+                if not (Path(p).parent / "fakes.json").exists()]     # another root's fakes
+        monkeypatch.setenv("PATH", os.pathsep.join([str(self.bin), *path]))
+        monkeypatch.setenv("EPIC_FAKE_ROOT", str(self.root))
+
+    def release(self, cid: str) -> None:
+        (self.root / "release" / cid).write_text("")
+
+    def prs(self) -> dict:
+        p = self.root / "prs.json"
+        return json.loads(p.read_text()) if p.exists() else {}
+
+    def set_pr(self, url: str, state: str) -> None:
+        prs = self.prs()
+        prs[url]["state"] = state
+        (self.root / "prs.json").write_text(json.dumps(prs))
+
+    def attempts(self, cid: str) -> int:
+        return len(list((self.root / "attempts").glob(cid + ".*")))
+
+
+def pr_url(change: str) -> str:
+    return f"https://example.invalid/o/r/pull/{change}"
+
+
+class FakeClock:
+    """The coordinator's sleep-and-clock seam: time moves only when it sleeps,
+    with a short real pause so the fakes on PATH get to run."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def now(self) -> float:
+        return self.t
+
+    async def sleep(self, seconds: float) -> None:
+        self.t += seconds
+        await asyncio.sleep(0.01)
+
+
+def approve(config: BuildConfig, answer: EpicSplitAnswer, log: CallLog) -> None:
+    """Split *config*'s build with *answer* and approve it, without running the coordinator."""
+    from unittest.mock import AsyncMock, patch
+
+    from build_pipeline.epic import coordinator
+    from build_pipeline.epic import split as split_mod
+
+    with patch.object(split_mod, "epic_split", FakeSplit(log, answer)):
+        assert run_build(config, args_for(config)) == 3
+    with patch.object(coordinator, "run_epic", AsyncMock(return_value=0)):
+        assert run_build(config, args_for(config, approve_split=True)) == 0
+
+
+def run_coordinator(config: BuildConfig, **over) -> int:
+    """One re-run of the approved build: the coordinator runs, with the fake clock."""
+    from unittest.mock import patch
+
+    from build_pipeline.epic import coordinator
+
+    with patch.object(coordinator, "CLOCK", FakeClock()):
+        return run_build(config, args_for(config, **over), coordinator=True)
+
+
+def records_snapshot(epic_dir: Path, root: Path) -> dict[str, list[tuple]]:
+    """Per child, in order: (kind, argv, exit_code, markers, interrupted) of each
+    attempt; the numbering, times and log contents are left out."""
+    from build_pipeline.epic import records
+
+    out: dict[str, list[tuple]] = {}
+    for a in records.attempts(epic_dir):
+        r = a.result or {}
+        out.setdefault(a.child, []).append((
+            a.kind, [str(x).replace(str(root), "<root>") for x in a.started.get("argv", [])],
+            r.get("exit_code", "no result"),
+            [m.replace(str(root), "<root>") for m in r.get("markers", [])],
+            r.get("interrupted")))
+    return out
+
+
+def last_summary(epic_dir: Path, root: Path) -> dict | None:
+    runs = sorted((epic_dir / "runs").glob("*/summary.json"))
+    return _norm(json.loads(runs[-1].read_text()), root) if runs else None
+
+
+def commit_names(repos: list[Path]) -> dict[str, str]:
+    """sha -> `<repo k> <branch> <i>` for each commit on each branch's first-parent
+    line (repos in the order given, branches by name; the first name wins)."""
+    names: dict[str, str] = {}
+    for k, repo in enumerate(repos):
+        branches = _git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads").split()
+        for b in sorted(branches):
+            for i, sha in enumerate(_git(repo, "rev-list", "--first-parent", "--reverse", b).split()):
+                names.setdefault(sha, f"<repo {k}> {b} {i}")
+    return names
+
+
+def name_commits(value: Any, names: dict[str, str]) -> Any:
+    """Replace each 7-40 character hex string that prefixes exactly one named commit."""
+    if isinstance(value, dict):
+        return {k: name_commits(v, names) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(name_commits(v, names) for v in value)
+    if not isinstance(value, str):
+        return value
+
+    def sub(m: re.Match) -> str:
+        hits = [n for sha, n in names.items() if sha.startswith(m.group(0))]
+        return hits[0] if len(hits) == 1 else m.group(0)
+
+    return re.sub(r"\b[0-9a-f]{7,40}\b", sub, value)
