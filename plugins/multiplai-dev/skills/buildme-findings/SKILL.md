@@ -110,11 +110,13 @@ the step began, or to the newest commit pulled from origin since then.
 A re-run refuses (`FINDINGS:FAILED`), leaving the worktree as it is, when the
 state file was written for a different PR, repository or branch, and when it
 would resume a step over work that step did not leave: an uncommitted change
-outside the change directory that the stopped step did not record with the
-same content (any such change, after a killed process that recorded nothing),
-or, for triage, spec and code, a commit made on the branch since the step
-stopped that origin does not have. Stash such changes, or move such commits to
-another branch, and re-run.
+outside the change directory, inside the project directory, that the stopped
+step did not record with the same content (any such change, after a killed
+process that recorded nothing), or, for triage, spec and code, a commit made
+on the branch since the step stopped that origin does not have. Stash such
+changes, or move such commits to another branch, and re-run. When the project
+is a subdirectory of a larger repo, buildme neither checks nor touches changes
+outside the project.
 
 ## What this skill does on the machine
 

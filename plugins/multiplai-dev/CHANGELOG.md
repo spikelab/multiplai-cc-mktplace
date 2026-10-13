@@ -17,6 +17,14 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-10-13
+
+### Changed
+- The findings resume and the fix-on-pass resume share one check,
+  `stop_record.others_work`, for work a stopped step did not leave. What they
+  refuse is unchanged, except that a project inside a larger repo is checked
+  only inside the project directory.
+
 ## [0.49.0] - 2026-10-13
 
 ### Fixed
