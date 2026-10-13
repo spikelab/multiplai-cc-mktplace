@@ -229,9 +229,18 @@ def file_hashes(epic_dir: Path, children: list[EpicChild]) -> dict[str, str]:
 
 
 def changed_file(epic_dir: Path, epic: Epic) -> str | None:
-    """The first approved file whose content no longer matches its hash, or None."""
+    """The first approved file that changed, or None. `split.md` and the plans
+    are checked against their hashes, then `epic.json` itself: its hashes must
+    name split.md and every child's plan, and its children must be split.md's
+    table and the plans as on disk (from PR B1 the coordinator builds them)."""
+    epic_dir = Path(epic_dir)
     for rel, digest in epic.hashes.items():
-        path = Path(epic_dir) / rel
+        path = epic_dir / rel
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             return rel
+    if set(epic.hashes) != {SPLIT_FILE, *(f"{PLANS_DIR}/{c.id}.md" for c in epic.children)}:
+        return EPIC_FILE
+    children, errors = read_children(epic_dir)
+    if errors or children != epic.children:
+        return EPIC_FILE
     return None

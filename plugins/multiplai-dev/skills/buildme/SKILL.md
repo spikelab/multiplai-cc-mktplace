@@ -465,10 +465,12 @@ before the next build.
    - **`plane`** — invoke the `multiplai-pm:plane` skill: `get <ref>`, then
      `comments <ref>`. Its project allowlist applies: a `BLOCKED` refusal is a
      stop. Report the project to the user; never route around it.
-   - **`github`** — `gh issue view <n> --json title,body,comments,url`. If the
-     issue is an epic, also fetch its sub-issues,
-     `gh api repos/{owner}/{repo}/issues/<n>/sub_issues --jq '.[] | "- #\(.number) \(.title) (\(.state))"'`,
-     and add them to the ticket file under `## Sub-issues`. A task list in the
+   - **`github`** — `gh issue view <n> --json title,body,comments,url`. Then
+     fetch its sub-issues, for every issue (nothing in that output says whether
+     it has any; one without them prints nothing), with `--paginate` so a long
+     list is not cut at the first page,
+     `gh api --paginate repos/{owner}/{repo}/issues/<n>/sub_issues --jq '.[] | "- #\(.number) \(.title) (\(.state))"'`,
+     and add any to the ticket file under `## Sub-issues`. A task list in the
      body (`- [ ] …`) is already in the body; keep it as it is.
 
    Write what you fetched to a scratch Markdown file, starting with the
@@ -603,7 +605,8 @@ and every plan again (ids, dependencies, no cycle, `# Plan:` and
 `## Done means` in each) and records each file's hash. A failed check exits `1`
 naming the file. After approval, the build prints
 `EPIC:APPROVED:<epic.json>` and exits `0`; building the children comes in a
-later release. A file changed after approval exits `2` naming it. Pass
+later release. A file changed after approval exits `2` naming it, and so
+does an `epic.json` whose children no longer match the approved table and plans. Pass
 `--no-epic-split` to build the input as one change without asking; it applies
 only before the decision is made, so for a change that already split, start
 again under a new `--change` name.
@@ -728,7 +731,10 @@ Parse pipeline stdout for progress lines:
 - `EPIC:APPROVED:<epic.json>` — the epic split is approved (exit `0`); its children are not built yet
 - `ERROR:<message>` — failure
 
-**Exit codes.** `0` done, `1` failure, `2` usage error, `4` an agent timed out
+**Exit codes.** `0` done, `1` failure, `2` usage error or a refusal that wrote
+nothing (another process holds the epic's lock, or an approved epic file
+changed: the `ERROR:` line names the process or the file; report it, and never
+change the flags to get past it), `4` an agent timed out
 (a failure: report it like `1`), and `3` — **waiting on a human or on you**. Each `3` prints one marker. Handle it, then re-run the
 **same** `build --change <name>` command (plus the flag named below) to resume:
 

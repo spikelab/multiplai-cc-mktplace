@@ -104,7 +104,17 @@ async def run_epic_split_phase(config, state, state_path: Path, args, progress) 
     except epic_lock.EpicLocked as e:
         _error(str(e))
         return EXIT_REFUSED
-    if not (epic_dir / store.EPIC_FILE).exists():
+    if (epic_dir / store.EPIC_FILE).exists():
+        # Saved before the lock, by this build's earlier run or by another build
+        # of the same change while this one was deciding: that epic.json wins,
+        # read as it is now, and no file on disk is written over (A.S8).
+        try:
+            epic = store.load_epic(epic_dir)
+        except store.EpicFileError as e:
+            _error(str(e))
+            return EXIT_FAILED
+        resumed = True
+    else:
         store.save_epic(epic_dir, epic)
     if epic.state == "proposed":
         store.write_files(epic_dir, epic, keep_existing=resumed)
@@ -158,6 +168,10 @@ def continue_epic(config, state, args, *, just_split: bool = False) -> int:
         log.info("EPIC_SPLIT approved: %s", epic_json)
     else:
         changed = store.changed_file(epic_dir, epic)
+        if changed == store.EPIC_FILE:
+            _error(f"{changed} in {epic_dir} does not match the {store.SPLIT_FILE} and plans approved "
+                   "with --approve-split; put it back as it was, or start a new epic")
+            return EXIT_REFUSED
         if changed:
             _error(f"{changed} in {epic_dir} changed after the split was approved; "
                    "put it back as it was, or start a new epic")
