@@ -13,6 +13,10 @@ from multiplai_core.agent_runner import AgentRunError, AgentRunResult, AgentUsag
 from pr_pipeline import __main__ as cli
 from pr_pipeline import commands, fill
 
+# The real call, kept before conftest's guard replaces it; these tests stub
+# `run_agent` underneath it instead.
+_RUN_MODEL = fill._run_model
+
 
 @pytest.fixture(autouse=True)
 def _fresh_process(monkeypatch):
@@ -29,8 +33,8 @@ def test_each_model_call_adds_to_the_process_spend(monkeypatch):
         return _result(0.25, 100)
 
     monkeypatch.setattr(multiplai_core, "run_agent", run_agent)
-    assert asyncio.run(fill._run_model("p")) == "answer"
-    asyncio.run(fill._run_model("p"))
+    assert asyncio.run(_RUN_MODEL("p")) == "answer"
+    asyncio.run(_RUN_MODEL("p"))
     assert fill.spend_marker() == "SPEND:0.500000:200"
 
 
@@ -40,7 +44,7 @@ def test_a_failed_call_counts_what_it_spent(monkeypatch):
 
     monkeypatch.setattr(multiplai_core, "run_agent", run_agent)
     with pytest.raises(AgentRunError):
-        asyncio.run(fill._run_model("p"))
+        asyncio.run(_RUN_MODEL("p"))
     assert fill.spend_marker() == "SPEND:0.750000:30"
 
 

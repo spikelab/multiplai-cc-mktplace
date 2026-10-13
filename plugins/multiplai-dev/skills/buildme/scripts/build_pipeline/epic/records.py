@@ -126,6 +126,19 @@ def spend_of(found: list[str]) -> float | None:
     return None
 
 
+def spend_incomplete(found: list[str]) -> bool:
+    """True when the `SPEND:` marker `spend_of` reads ends `:incomplete`: a skill the
+    process ran printed no spend, so the USD on it is a lower bound."""
+    for value in reversed(marker(found, "SPEND")):
+        parts = value.split(":")
+        try:
+            float(parts[0])
+        except ValueError:
+            continue
+        return parts[2:3] == ["incomplete"]
+    return False
+
+
 def finish(attempt: Attempt, exit_code: int | None, *, interrupted: bool) -> dict:
     """Write the result record, markers, PR URL and spend read from the attempt's log."""
     found = markers(attempt.log)

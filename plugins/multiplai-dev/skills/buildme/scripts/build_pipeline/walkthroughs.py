@@ -83,7 +83,8 @@ def _argv(*args: str) -> list[str]:
 
 
 def _last_line(res: git_ops.GitResult) -> str:
-    lines = (res.stderr or res.stdout).strip().splitlines()
+    # A run prints `SPEND:` last (git_ops counts it); it says nothing about a failure.
+    lines = [line for line in (res.stderr or res.stdout).strip().splitlines() if not line.startswith("SPEND:")]
     return lines[-1][:300] if lines else "no output"
 
 

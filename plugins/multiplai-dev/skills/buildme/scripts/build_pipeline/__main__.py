@@ -15,8 +15,10 @@ or a refusal that wrote nothing (the epic's lock is held, or an approved epic
 file changed), 3 waiting on a human or the wrapper
 (stdout says which: INTERVIEW:WAITING, RESEARCH:NEEDED, SPLIT:REQUIRED, EPIC:SPLIT,
 EPIC:MERGE_WAITING, EPIC:BUDGET or FINDINGS:REVIEW_READY), 4 an agent timed out,
-130 or 143 an epic stopped by SIGINT or SIGTERM. `build` and `findings` print
-SPEND:<usd>:<tokens> last, on every exit path but a kill.
+130 or 143 an epic stopped by SIGINT or SIGTERM (129 or 143 for any `build` or
+`findings` stopped by SIGHUP or SIGTERM). `build` and `findings` print
+SPEND:<usd>:<tokens> last, on every exit path but a kill; `:incomplete` follows
+it when a skill they ran (the pr skill, a walkthrough run) printed no spend.
 """
 
 from __future__ import annotations
@@ -225,9 +227,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # Commands that print `SPEND:<usd>:<tokens>` (budget.spend_marker) on every
-# exit path, a raised exception and Ctrl-C included: what this process spent,
-# which an epic adds up across attempts (plan-buildme-epic-mode-2026-10-12.md,
-# item 18). A kill prints nothing; the epic then counts the attempt as unknown.
+# exit path, a raised exception, Ctrl-C, SIGTERM and SIGHUP included: what this
+# process spent, which an epic adds up across attempts
+# (plan-buildme-epic-mode-2026-10-12.md, item 18). SIGTERM and SIGHUP raise
+# SystemExit(128 + signal) for the whole run, as they already did during a
+# wait on a skill (`git_ops._exit_on_termination`); an epic's coordinator sends
+# SIGTERM to its children when it is stopped. Only a kill (SIGKILL) prints
+# nothing; the epic then counts the attempt as unknown.
 SPEND_COMMANDS = ("build", "findings")
 
 
@@ -236,8 +242,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command not in SPEND_COMMANDS:
         return _main(args)
+    from . import git_ops
+
     try:
-        return _main(args)
+        with git_ops._exit_on_termination(interrupt=False):
+            return _main(args)
     finally:
         from .budget import spend_marker
         print(spend_marker(), flush=True)

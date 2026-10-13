@@ -61,8 +61,11 @@ once, from origin's default branch (`--base-ref`). Records go to
 `agents/<NNN>-build-<id>.{started.json,result.json,log}` (`epic/records.py`)
 and each run ends with `runs/<NN>/summary.json` (`EPIC:SUMMARY:<path>`). A
 child waiting on an open PR exits 3 with `EPIC:MERGE_WAITING:<urls>`. `build`
-and `findings` print `SPEND:<usd>:<tokens>` last, from a process total that
-`budget.reset()` and `load_state` leave alone; each result record keeps it as
+and `findings` print `SPEND:<usd>:<tokens>` last (SIGTERM and SIGHUP raise
+`SystemExit` for the whole run, so those stops print it too), from a process
+total that `budget.reset()` and `load_state` leave alone and that
+`git_ops._run_skill` adds the pr skill's and a walkthrough run's own `SPEND:`
+line to (`:incomplete` when one printed none); each result record keeps it as
 `spend`, and `epic/spend.py` adds those to the review ledger's spend for the
 children's PRs. Once that reaches `epic.max_usd`, nothing more launches and
 the run exits 3 with `EPIC:BUDGET:<spent>`. A file

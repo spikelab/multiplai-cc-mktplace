@@ -7,12 +7,19 @@ Two sources, each read from disk on every look:
   Only the kinds whose process prints `SPEND:` count (`SPEND_KINDS`); a
   review's spend is in the review ledger, and posting a review or running a
   test command calls no model.
-- the review ledger, `<data_dir>/reviews/ledger.jsonl`, read as a file: per
-  `(target_dir, head_sha)`, the last `run.cost_usd` among the `finished` lines
-  of a child PR's review. A review resumed after its budget stop starts from
-  its saved spend, so its last line already holds the first run's spend.
-  A `started` line with no later `finished` for the same target and head (a
-  review killed, or still running) makes the total incomplete.
+- the review ledger, `<data_dir>/reviews/ledger.jsonl`, read as a file: the
+  `finished` lines of a child PR's reviews, per `(target_dir, head_sha)` and
+  per review run. A `resume` continues a run: it keeps the run's first start
+  (`run.started_at`) and starts from its saved spend, so the last line of
+  that run holds its whole spend, and only that line counts. A fresh
+  `review` of the same head is a new run (a new `run.started_at`) that starts
+  from no spend, so its last line is added. A `started` line with no later
+  `finished` for the same target and head (a review killed, or still
+  running), or a `finished` line with no readable cost, makes the total
+  incomplete.
+
+A `SPEND:` line ending `:incomplete` (`budget.spend_marker`: a skill the
+process ran printed no spend) counts its USD and makes the total incomplete.
 """
 
 from __future__ import annotations
@@ -40,6 +47,8 @@ def attempts_spend(tries: list[records.Attempt]) -> tuple[float, bool]:
         value = (a.result or {}).get("spend")
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             total += float(value)
+            if records.spend_incomplete(a.result.get("markers") or []):
+                complete = False
         else:
             complete = False
     return total, complete
@@ -82,9 +91,12 @@ def review_spend(ledger: Path, slugs: set[str]) -> tuple[float, bool]:
             last_event[key] = event
         elif event == "finished":
             last_event[key] = event
-            run = entry.get("run")
-            value = run.get("cost_usd") if isinstance(run, dict) else None
+            run = entry.get("run") if isinstance(entry.get("run"), dict) else {}
+            # One review run and its resumes share `run.started_at`; without
+            # it, the run's round number (which a resume keeps) tells them apart.
+            run_key = (*key, run.get("started_at") or entry.get("round"))
+            value = run.get("cost_usd")
             ok = isinstance(value, (int, float)) and not isinstance(value, bool)
-            cost[key] = float(value) if ok else None
+            cost[run_key] = float(value) if ok else None
     complete = all(e == "finished" for e in last_event.values()) and None not in cost.values()
     return sum(v for v in cost.values() if v is not None), complete

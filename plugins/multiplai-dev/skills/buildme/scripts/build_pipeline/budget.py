@@ -18,7 +18,10 @@ Design notes:
 - No budget configured → the tracker still accounts (so the run reports what
   it spent) but never stops anything.
 - Beside the build's tracker, a process total (`ProcessSpend`) adds up every
-  recorded call for the life of the process. Neither `reset()` (which
+  recorded call for the life of the process, and the `SPEND:` line of each
+  model-calling skill it runs (`add_process_spend`, from
+  `git_ops._count_skill_spend`; a skill that printed none makes it
+  incomplete). Neither `reset()` (which
   `findings` runs before each round's engine) nor `BuildBudget.load_state`
   (which a resumed engine runs) touches it, so `SPEND:<usd>:<tokens>`
   (`spend_marker`), printed by `build` and `findings` on exit, is what this
@@ -212,10 +215,13 @@ class BuildBudget:
 
 @dataclass
 class ProcessSpend:
-    """What this process has spent: every `record()` since it started."""
+    """What this process has spent: every `record()` since it started, plus the
+    `SPEND:` lines of the skills it ran (`add_process_spend`). `complete` is
+    False once a skill that calls a model ended with no such line."""
 
     cost_usd: float = 0.0
     tokens: int = 0
+    complete: bool = True
 
 
 _budget = BuildBudget()
@@ -228,8 +234,23 @@ def process_spend() -> ProcessSpend:
 
 
 def spend_marker() -> str:
-    """`SPEND:<usd>:<tokens>`, the line `build` and `findings` print on exit."""
-    return f"SPEND:{_process.cost_usd:.6f}:{_process.tokens}"
+    """`SPEND:<usd>:<tokens>`, the line `build` and `findings` print on exit,
+    with `:incomplete` after it when a skill's spend is unknown."""
+    tail = "" if _process.complete else ":incomplete"
+    return f"SPEND:{_process.cost_usd:.6f}:{_process.tokens}{tail}"
+
+
+def add_process_spend(cost_usd: float, tokens: int) -> None:
+    """Add what a skill subprocess spent (its own `SPEND:` line) to the process total.
+    It is not added to the build's tracker, whose ceiling covers buildme's own calls."""
+    _process.cost_usd += cost_usd
+    _process.tokens += tokens
+
+
+def process_spend_unknown(why: str) -> None:
+    """A skill that calls a model ended without saying what it spent."""
+    log.warning("Process spend is incomplete: %s", why)
+    _process.complete = False
 
 
 def get_budget() -> BuildBudget:

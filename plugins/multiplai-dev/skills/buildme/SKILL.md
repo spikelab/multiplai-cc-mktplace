@@ -653,13 +653,18 @@ started by an earlier run included, and exits `130` (`143`).
 default `manual`; under `manual` a human merges each child's PR) and
 `epic.max_usd` (one ceiling for the whole epic, default none; each child keeps
 its own `budget.max_usd` too). `build` and `findings` print
-`SPEND:<usd>:<tokens>` as their last line on every exit but a kill: what that
-process spent, so a resumed build reports only its own spend and a several-round
-`findings` reports every round. The epic's spend is each child attempt's
-`SPEND:` plus the reviews of the children's PRs in the review ledger
-(`<data_dir>/reviews/ledger.jsonl`); `epic.json` and each summary hold it as
-`spent_usd`, with `spend_complete: false` when an attempt was killed before it
-printed `SPEND:` or a review has not finished. Before each launch, once
+`SPEND:<usd>:<tokens>` as their last line on every exit but a kill (SIGTERM
+and SIGHUP included): what that process spent, the PR body's model calls and a
+walkthrough regeneration included (the pr skill and the walkthrough print
+their own `SPEND:` line, which the build adds), so a resumed build reports only
+its own spend and a several-round `findings` reports every round. When one of
+those skills printed none (killed or timed out), the line ends `:incomplete`.
+The epic's spend is each child attempt's `SPEND:` plus the reviews of the
+children's PRs in the review ledger (`<data_dir>/reviews/ledger.jsonl`: each
+review run once, its resumes in it, a fresh review of the same head added);
+`epic.json` and each summary hold it as `spent_usd`, with
+`spend_complete: false` when an attempt was killed before it printed `SPEND:`,
+its `SPEND:` ends `:incomplete`, or a review has not finished. Before each launch, once
 `epic.max_usd` is reached, nothing more is launched: the run waits for the
 children already running and exits `3` with `EPIC:BUDGET:<spent>`. Reviewing,
 fixing and merging the children's PRs come in later releases.
@@ -780,7 +785,7 @@ Parse pipeline stdout for progress lines:
 - `RESULT:SUCCESS` — build complete
 - `EPIC:APPROVED:<epic.json>` — the epic split is approved; the children build next
 - `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown`; `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
-- `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent
+- `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent, the pr skill and a walkthrough run included (`:incomplete` follows when one of them printed no spend)
 - `ERROR:<message>` — failure
 
 **Exit codes.** `0` done, `1` failure, `2` usage error or a refusal that wrote

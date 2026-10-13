@@ -5,7 +5,9 @@
   check   — re-check every `path:line` and snippet in a finished walkthrough
 
 stdout contract: one summary line per stage, then `walkthrough: <path>` for
-each file written, or `check: N checked, M failed`.
+each file written, or `check: N checked, M failed`. `run` and `resume` print
+`SPEND:<usd>:<tokens>` last, on every exit but a kill: what this process's
+model calls cost.
 
 Exit codes: 0 done; 1 error (bad input, untrusted repo, failed check, failed
 run); 2 the budget circuit breaker stopped the run with a checkpoint (resume
@@ -130,7 +132,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "check":
+        return _main(args)
+    try:
+        return _main(args)
+    finally:
+        from .budget import spend_marker
+        print(spend_marker(), flush=True)
 
+
+def _main(args: argparse.Namespace) -> int:
     from multiplai_core.env import load_env
     from multiplai_core.log_utils import setup_logging
 
