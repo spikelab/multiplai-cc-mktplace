@@ -560,8 +560,11 @@ class Coordinator:
         # SIGHUP (a closed terminal) ends only the coordinator: each child runs
         # in a session of its own, so it keeps running and the next run waits
         # for it (B1.S4). Handled here, not by the SystemExit `__main__.main`
-        # makes of it, which would cancel this task as if by Ctrl-C.
+        # makes of it, which would cancel this task as if by Ctrl-C. An ignored
+        # signal (SIGHUP under `nohup`) stays ignored, as `_exit_on_termination`
+        # leaves it: asyncio's handler would replace SIG_IGN.
         previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
+        previous = {sig: h for sig, h in previous.items() if h != signal.SIG_IGN}
         for sig in previous:
             try:
                 loop.add_signal_handler(sig, on_signal, sig)

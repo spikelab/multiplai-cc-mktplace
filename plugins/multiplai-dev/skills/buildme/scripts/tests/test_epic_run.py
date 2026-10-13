@@ -586,7 +586,7 @@ def test_an_ignored_signal_stays_ignored(tmp_path, monkeypatch, sig):
 
     try:
         rc = run_signalled(under_nohup, ready, sig)
-        assert rc == 3
+        assert rc == 0      # no dependant waits on a merge: the run that got no signal ends so too
         assert sorted(e.launches()) == ["a", "b", "c"]
         assert e.status() == {"a": "built", "b": "built", "c": "built"}
     finally:

@@ -648,7 +648,8 @@ child, or `gh pr view` fails for a PR another child waits on, that child is
 (`EPIC: child <id> <status>: <reason>`), beside `EPIC:MERGE_WAITING` too. Ctrl-C (or SIGTERM) stops every child, those
 started by an earlier run included, and exits `130` (`143`). SIGHUP (a closed
 terminal) ends only the run, with exit `129`: the children keep running, and
-the next run waits for them.
+the next run waits for them. An ignored SIGHUP or SIGTERM (SIGHUP under
+`nohup`) stays ignored, and the run goes on.
 
 `specs/config.yaml` takes an `epic:` block: `epic.max_parallel` (default `2`),
 `epic.max_review_rounds` (default `6`), `epic.merge` (`auto` or `manual`,
