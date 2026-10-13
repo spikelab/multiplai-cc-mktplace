@@ -682,3 +682,59 @@ class TestSaveWipRef:
 
         assert git_ops.save_wip_ref(repo, ref, "wip") == ref
         assert _git(repo, "rev-parse", ref).stdout.strip() == head
+
+
+# --- skill subprocesses: a timeout kills the whole process tree ----------------
+
+
+def _gone(pid: int, wait: float = 5.0) -> bool:
+    """True once *pid* no longer runs (gone, or a zombie nobody reaped yet)."""
+    import os
+    import time
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        try:
+            if Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] == "Z":
+                return True
+        except OSError:
+            pass
+        time.sleep(0.05)
+    return False
+
+
+# The pr skill's seam is refused by conftest; it is the same one-line call to `_run_skill`.
+@pytest.mark.parametrize("seam", ["_run_review_skill", "_run_walkthrough_skill", "_run_skill"])
+def test_a_skill_timeout_kills_the_launchers_child_too(tmp_path, seam):
+    """`uv run` starts the skill as its own child. A timeout that killed only
+    `uv` left the review running: it kept the target's run lock (the next
+    `review` exited 2, not 4) and later died on a closed pipe, recorded as a
+    failure, so the findings stage never resumed it."""
+    import os
+    import signal
+    pidfile = tmp_path / "child.pid"
+    # The launcher (sh) starts a child that outlives it unless it is killed.
+    script = f"sleep 60 & echo $! > {pidfile}; wait"
+    res = getattr(git_ops, seam)(["sh", "-c", script], tmp_path, 1)
+    assert res.returncode == 124 and "timed out" in res.stderr
+    pid = int(pidfile.read_text())
+    try:
+        assert _gone(pid), "the launcher's child was left running"
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def test_a_skill_run_returns_output_and_exit_code(tmp_path):
+    res = git_ops._run_review_skill(["sh", "-c", "echo out; echo err >&2; exit 3"], cwd=tmp_path)
+    assert (res.returncode, res.stdout, res.stderr) == (3, "out\n", "err\n")
+
+
+def test_a_missing_skill_launcher_is_exit_127(tmp_path):
+    res = git_ops._run_review_skill(["no-such-launcher-xyz"], cwd=tmp_path)
+    assert res.returncode == 127

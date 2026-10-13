@@ -30,6 +30,7 @@ import hashlib
 import logging
 import os
 import shlex
+import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,23 +96,64 @@ def _run_gh(argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_T
     return _run(argv, cwd=cwd, timeout=timeout)
 
 
+def _run_skill(argv: list[str], cwd: Path | str | None, timeout: int) -> GitResult:
+    """Run a skill launcher (`uv run ... python -m ...`) in a process group of its own.
+
+    `uv run` starts the skill as its own child. `subprocess.run` kills only
+    `uv` on a timeout, which left the skill running with its output pipes
+    closed: a review kept its target's run lock and later died on a closed
+    pipe, recorded as a failure instead of an interrupted run. So whatever
+    ends the wait (the timeout, a KeyboardInterrupt, a SystemExit) kills the
+    whole group, the way a killed review is meant to end.
+    """
+    try:
+        proc = subprocess.Popen(argv, cwd=str(cwd) if cwd else None, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, start_new_session=True)
+    except FileNotFoundError as e:
+        return GitResult(argv, 127, "", str(e))
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc)
+        return GitResult(argv, 124, "", f"timed out after {timeout}s")
+    except BaseException:
+        _kill_group(proc)
+        raise
+    return GitResult(argv, proc.returncode, out or "", err or "")
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    """SIGKILL *proc*'s process group, then reap *proc* and close its pipes."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        log.warning("pid %s did not exit after SIGKILL", proc.pid)
+    for pipe in (proc.stdout, proc.stderr):
+        if pipe is not None:
+            pipe.close()
+
+
 def _run_pr_skill(argv: list[str], cwd: Path | str | None = None,
                   timeout: int = _PR_SKILL_TIMEOUT) -> GitResult:
     """Separate seam for the pr skill's subprocess so tests can stub it."""
-    return _run(argv, cwd=cwd, timeout=timeout)
+    return _run_skill(argv, cwd, timeout)
 
 
 def _run_review_skill(argv: list[str], cwd: Path | str | None = None,
                       timeout: int = _REVIEW_SKILL_TIMEOUT) -> GitResult:
     """Separate seam for the review skill's subprocess (the findings stage)."""
-    return _run(argv, cwd=cwd, timeout=timeout)
+    return _run_skill(argv, cwd, timeout)
 
 
 def _run_walkthrough_skill(argv: list[str], cwd: Path | str | None = None,
                            timeout: int = _WALKTHROUGH_SKILL_TIMEOUT) -> GitResult:
     """Separate seam for the codebase-walkthrough skill's subprocess
     (``walkthrough_pipeline check`` and ``run``, after the build)."""
-    return _run(argv, cwd=cwd, timeout=timeout)
+    return _run_skill(argv, cwd, timeout)
 
 
 # --- Inspection -----------------------------------------------------------
