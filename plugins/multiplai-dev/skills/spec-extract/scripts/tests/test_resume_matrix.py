@@ -403,6 +403,7 @@ def test_R5_unit_stopped_twice_is_not_asked_again(tmp_path, fake_call):
 
 # --- R6: every answer saved, before `explore` is in steps_done -----------------------------
 
+@pytest.mark.usefixtures("stops_after_explore")  # an explore row: the run ends there
 @pytest.mark.parametrize("left", ["absent", "old", "tmp"])
 def test_R6_answers_saved_outputs_missing(tmp_path, monkeypatch, fake_call, left):
     repo = make_units_repo(tmp_path / "widgets", 2)
@@ -440,6 +441,7 @@ def test_R6_answers_saved_outputs_missing(tmp_path, monkeypatch, fake_call, left
 
 # --- R12: the budget is reached -------------------------------------------------------------
 
+@pytest.mark.usefixtures("stops_after_explore")  # an explore row: the run ends there
 def test_R12_budget_reached_then_raised(tmp_path, capsys, fake_call):
     repo = make_units_repo(tmp_path / "widgets", 4)
     ref_root = tmp_path / "ref"
@@ -561,6 +563,7 @@ def test_R30_resume_from_another_checkout(tmp_path, monkeypatch, fake_call, stop
 
 # --- R31: the budget is reached at the reformat of a paid answer ---------------------------
 
+@pytest.mark.usefixtures("stops_after_explore")  # an explore row: the run ends there
 def test_R31_budget_stop_at_the_reformat_counts_the_attempt(tmp_path, monkeypatch, fake_call):
     """The real wrapper over a fake `run_agent`: every explore run answers text that does not
     parse ($1 each), so every attempt needs a reformat. A budget stop at the reformat keeps the

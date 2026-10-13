@@ -40,7 +40,7 @@ def test_matches_golden(rendered, name):
     assert got == golden.read_text(encoding="utf-8")
 
 
-def test_render_is_recorded_and_the_snapshot_deleted(rendered, capsys):
+def test_render_is_recorded_and_the_snapshot_deleted(capsys, rendered):
     state = read_state(rendered)
     assert state["steps_done"] == ["resolve", "scope", "explore", "group", "write", "render"]
     assert not (rendered / "snapshot").exists()

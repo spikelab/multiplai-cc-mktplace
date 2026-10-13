@@ -1,0 +1,26 @@
+{
+  "target": "commit 67c292f930109212e9b3bcb4a2ba36683c1bf6d1",
+  "commit": "67c292f930109212e9b3bcb4a2ba36683c1bf6d1",
+  "capabilities": [
+    {
+      "name": "sample",
+      "summary": "Arithmetic on two numbers.",
+      "file": "registry/sample.md",
+      "requirements": 2,
+      "scenarios": 2,
+      "pinned_by_test": 1
+    }
+  ],
+  "dropped": [
+    "sample / Multiplies / multiplying: quote not at cited lines",
+    "sample / Multiplies: no scenario left"
+  ],
+  "not_specified": [
+    {
+      "symbol": "src/calc.py::mul",
+      "reason": "no kept scenario cites it"
+    }
+  ],
+  "not_grouped": [],
+  "not_written": []
+}

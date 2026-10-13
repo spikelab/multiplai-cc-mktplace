@@ -7,7 +7,8 @@
 Running the same command again resumes the run in the same folder. Exit codes:
 0 done, 1 failed, 2 refused, 3 the run folder's spend reached --max-usd,
 4 the repository is not trusted, 5 another run holds the lock. This version
-resolves, scopes and explores, then prints `SPEC_EXTRACT:EXPLORED <answered>/<units>`.
+resolves, scopes, explores, groups, writes and renders, then prints
+`SPEC_EXTRACT:RENDERED <files> <run>/registry`.
 """
 
 from __future__ import annotations
@@ -22,7 +23,8 @@ from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import explore, runlock, sdk
+from . import explore, gate, group, runlock, sdk, write
+from . import render as render_mod
 from . import report as report_mod
 from . import scope as scope_mod
 from . import state as state_mod
@@ -97,7 +99,10 @@ def _run(args: argparse.Namespace, now: Callable[[], datetime]) -> int:
             # started with, which later steps read from state.target. Re-resolving after
             # the base branch moved, or the PR merged, gives another merge-base (R26).
             state = saved
-        target.snapshot(fresh, run_dir)
+        # After render nothing reads the snapshot: it is deleted, never extracted again (R10).
+        rendered = "render" in state.steps_done
+        if not rendered:
+            target.snapshot(fresh, run_dir)
         if "resolve" not in state.steps_done:
             state.steps_done.append("resolve")
             state_mod.save(state, run_dir)
@@ -116,10 +121,16 @@ def _run(args: argparse.Namespace, now: Callable[[], datetime]) -> int:
             state.steps_done.append("scope")
             state_mod.save(state, run_dir)
         plan = scope_mod.plan_text(state.target, state.scope, report_mod.describe(state.target))
-        report_mod.write_output(run_dir, PLAN_FILE, plan)
+        if not rendered:  # after render the outputs are left alone (R24)
+            report_mod.write_output(run_dir, PLAN_FILE, plan)
         if args.plan_only:
             print(plan, end="")
             print(f"SPEC_EXTRACT:PLAN {run_dir / PLAN_FILE}", flush=True)
+            return EXIT_DONE
+        registry = run_dir / render_mod.REGISTRY_DIR
+        if rendered:  # R10: finish deleting the snapshot; never re-render
+            render_mod.drop_snapshot(run_dir)
+            print(f"SPEC_EXTRACT:RENDERED {len(list(registry.glob('*.md')))} {registry}", flush=True)
             return EXIT_DONE
 
         ledger = sdk.start_budget(args.max_usd, state.budget)
@@ -128,6 +139,33 @@ def _run(args: argparse.Namespace, now: Callable[[], datetime]) -> int:
                                     model=sdk.model_for("explore")))
         answered, units = explore.finish(state, run_dir, now(), git_target)
         print(f"SPEC_EXTRACT:EXPLORED {answered}/{units}", flush=True)
+        return _group_write_render(state, run_dir, git_target, ledger)
+
+
+def _group_write_render(state: state_mod.State, run_dir: Path, git_target: target.Target, ledger) -> int:
+    """Group, write, gate and render, each from state (plan, items 14-17)."""
+    scope = state.scope
+    assert scope is not None
+    gated = explore.gated_facts(git_target, scope, state.explore_answers, run_dir)
+    model = sdk.model_for("write")  # the group call uses the write model too (Decided 18)
+    asyncio.run(group.run(state, run_dir, gated, call=sdk.agent_call_structured, ledger=ledger, model=model))
+    grouping = group.finish(state, run_dir)
+    scope_sections = report_mod.scope_sections(scope, explore.not_answered_files(scope.units, state.explore_answers))
+    if grouping is None:
+        report_mod.write_report(run_dir, state.target, scope_sections + [group.NOT_GROUPED])
+        print("SPEC_EXTRACT:NOT_GROUPED", flush=True)
+        print(f"spec-extract: group gave no answer in 2 attempts; see {run_dir / report_mod.REPORT_FILE}",
+              file=sys.stderr)
+        return EXIT_FAILED
+    asyncio.run(write.run(state, run_dir, grouping.capabilities, gated, call=sdk.agent_call_structured,
+                          ledger=ledger, model=model))
+    if "write" not in state.steps_done:
+        state.steps_done.append("write")
+        state_mod.save(state, run_dir)
+    checked = gate.check(grouping.capabilities, state.write_answers, scope.symbols, git_target,
+                         run_dir / target.SNAPSHOT_DIR)
+    files = render_mod.render(state, run_dir, grouping, checked, scope_sections)
+    print(f"SPEC_EXTRACT:RENDERED {files} {run_dir / render_mod.REGISTRY_DIR}", flush=True)
     return EXIT_DONE
 
 

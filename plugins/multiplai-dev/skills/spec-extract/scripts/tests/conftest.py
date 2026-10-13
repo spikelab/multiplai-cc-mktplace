@@ -245,3 +245,10 @@ def fake_call(monkeypatch):
     monkeypatch.setattr(sdk, "model_for", lambda step: None)
     monkeypatch.setenv(sdk.TRUST_ENV, "1")
     return fake
+
+
+@pytest.fixture
+def stops_after_explore(monkeypatch):
+    """End the run where PR 1b ended it, after `SPEC_EXTRACT:EXPLORED`, with the snapshot
+    in place: for the tests of resolve, scope and explore, which look at that state."""
+    monkeypatch.setattr(cli, "_group_write_render", lambda *a, **k: cli.EXIT_DONE)
