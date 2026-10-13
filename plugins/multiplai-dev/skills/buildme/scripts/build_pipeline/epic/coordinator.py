@@ -1,0 +1,472 @@
+"""The coordinator: an approved epic builds its children
+(plan-buildme-epic-mode-2026-10-12.md, items 11-16a).
+
+`run_epic` runs in the approved build's process, under the epic lock that
+process already holds (item 6), and never takes it again. Each child is its own
+`python -m build_pipeline build` subprocess, in its own process group, with its
+stdout and stderr going to the attempt's log file (never a pipe), so a child
+outlives a killed coordinator. A child is ready once every child it depends on
+has merged; at most `epic.max_parallel` build at once, and one starts only
+after the last one printed `WORKTREE:` or exited.
+
+Every run starts from disk: the records under `agents/` (`records.py`) say
+what each child did, and a started record with no result is an attempt that
+was stopped; `_recover` writes its result once its process is gone, then
+looks for the PR it may have opened. What each stop does on resume is PR B1's
+table in the plan. Every wait goes through `CLOCK`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+import signal
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from .. import git_ops
+from . import records, store
+
+log = logging.getLogger(__name__)
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[2]
+POLL = 1.0           # seconds between looks at a running child
+TICK = 30.0          # seconds between reads of the waited-on PRs
+STOP_WAIT = 30.0     # seconds the children get to exit on SIGINT or SIGTERM
+
+MARKER_SUMMARY = "EPIC:SUMMARY"
+MARKER_MERGE_WAITING = "EPIC:MERGE_WAITING"
+PR_CLOSED = "PR closed without a merge"
+NO_PR = "no PR opened"
+
+
+class Clock:
+    """The one sleep-and-clock seam: every wait the coordinator makes."""
+
+    def now(self) -> float:
+        return asyncio.get_running_loop().time()
+
+    async def sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+
+
+CLOCK = Clock()
+
+
+def _tick(coord: "Coordinator") -> None:
+    """Called on every look at the running children. A seam for the row tests."""
+
+
+def _spawn(argv: list[str], log_path: Path) -> subprocess.Popen:
+    """Start one child in its own process group, its output in *log_path*."""
+    with log_path.open("ab") as out:
+        return subprocess.Popen(argv, cwd=SCRIPTS_DIR, stdin=subprocess.DEVNULL, stdout=out,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+
+
+# --- where a child builds -------------------------------------------------------
+
+def source_project_dir(config, state) -> Path:
+    """The parent's project directory in its source checkout: the repo root
+    plus the project's offset inside the parent's worktree, so a subdirectory
+    project's children build in that subdirectory."""
+    if state.source_repo and state.worktree_path:
+        from ..orchestrator import _project_offset
+        return Path(state.source_repo) / _project_offset(Path(config.project_dir), Path(state.worktree_path))
+    return Path(config.project_dir)
+
+
+def _source_repo(config, state) -> Path:
+    if state.source_repo:
+        return Path(state.source_repo)
+    return git_ops.repo_root(Path(config.project_dir)) or Path(config.project_dir)
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=False)
+
+
+def _gh(repo: Path, *args: str) -> object | None:
+    """A `gh` read, its JSON output; None when it fails."""
+    try:
+        proc = subprocess.run(["gh", *args], cwd=repo, capture_output=True, text=True,
+                              check=False, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.warning("gh %s failed: %s", " ".join(args), e)
+        return None
+    if proc.returncode != 0:
+        log.warning("gh %s failed: %s", " ".join(args), proc.stderr.strip()[-400:])
+        return None
+    try:
+        return json.loads(proc.stdout)
+    except ValueError:
+        return None
+
+
+def base_sha(repo: Path) -> str | None:
+    """`git fetch origin`, then origin's default branch's sha (item 12). A failed
+    fetch uses the remote ref as it is; no ref at all gives None."""
+    fetch = _git(repo, "fetch", "origin")
+    if fetch.returncode != 0:
+        log.warning("git fetch origin in %s failed: %s", repo, fetch.stderr.strip()[-400:])
+    default = git_ops.default_branch(repo)
+    sha = _git(repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{default}^{{commit}}")
+    return sha.stdout.strip() if sha.returncode == 0 and sha.stdout.strip() else None
+
+
+# --- is a stopped child still running --------------------------------------------
+
+def _has(line: str, text: str) -> bool:
+    return re.search(re.escape(text) + r"(?=\s|$)", line) is not None
+
+
+def build_pid(plan_path: Path) -> int | None:
+    """The pid of a live build of *plan_path*: one `ps` line holding both
+    `build_pipeline` and `--plan-file <plan>`, each followed by a space or the
+    line's end (item 14)."""
+    try:
+        ps = subprocess.run(["ps", "-ax", "-ww", "-o", "pid=,command="], capture_output=True,
+                            text=True, check=False, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in ps.stdout.splitlines():
+        if _has(line, "build_pipeline") and _has(line, f"--plan-file {plan_path}"):
+            pid, _, _ = line.strip().partition(" ")
+            if pid.isdigit():
+                return int(pid)
+    return None
+
+
+def _plan_of(argv: list[str]) -> Path | None:
+    return Path(argv[argv.index("--plan-file") + 1]) if "--plan-file" in argv[:-1] else None
+
+
+# --- the coordinator ---------------------------------------------------------------
+
+@dataclass
+class Child:
+    id: str
+    depends_on: list[str]
+    status: str = "pending"
+    pr: str | None = None
+    reason: str = ""
+    argv: list[str] | None = None        # the command to relaunch with, when set
+    proc: subprocess.Popen | None = None
+    attempt: records.Attempt | None = None
+    relaunched: bool = False             # a failure was relaunched in this invocation
+
+
+@dataclass
+class Coordinator:
+    config: object
+    state: object
+    args: object
+    epic_dir: Path
+    epic: store.Epic
+    children: dict[str, Child] = field(default_factory=dict)
+    signal_sent: int | None = None
+
+    def __post_init__(self) -> None:
+        self.repo = _source_repo(self.config, self.state)
+        self.project_dir = source_project_dir(self.config, self.state)
+        self.settings = self.config.epic
+        for c in self.epic.children:
+            self.children[c.id] = Child(c.id, list(c.depends_on))
+
+    # -- argv -----------------------------------------------------------------
+
+    def new_argv(self, cid: str, base: str | None) -> list[str]:
+        """Item 11's command for a first launch. All paths are absolute."""
+        change_dir = Path(self.config.change_dir).absolute()
+        context = [str(change_dir / name) for name in ("interview.md", "research.md")
+                   if (change_dir / name).is_file()]
+        argv = ["python", "-m", "build_pipeline", "--session-id",
+                getattr(self.args, "session_id", "") or "", "build",
+                "--mode", "brief", "--change", f"{self.epic.name}-{cid}",
+                "--plan-file", str(store.plan_path(self.epic_dir, cid).absolute())]
+        if context:
+            argv += ["--context-files", *context]
+        argv += ["--auto", "--trust-repo", "--no-epic-split", "--pr-ready",
+                 "--project-dir", str(self.project_dir.absolute())]
+        if base:
+            argv += ["--base-ref", base]
+        return argv
+
+    # -- reading the records ----------------------------------------------------
+
+    def _find_pr(self, tries: list[records.Attempt]) -> str | None:
+        """The PR any attempt opened: a `PR:` line in a log; else `gh pr list
+        --head` for every branch a `BRANCH:` line or `git worktree list` gives
+        for a `WORKTREE:` path; no `WORKTREE:` line anywhere means no PR."""
+        found = [m for a in tries for m in records.markers(a.log)]
+        prs = records.marker(found, "PR")
+        if prs:
+            return prs[-1]
+        worktrees = records.marker(found, "WORKTREE")
+        if not worktrees:
+            return None
+        branches = list(dict.fromkeys(records.marker(found, "BRANCH")))
+        porcelain = _git(self.repo, "worktree", "list", "--porcelain").stdout
+        for block in porcelain.split("\n\n"):
+            lines = block.splitlines()
+            path = next((ln[len("worktree "):] for ln in lines if ln.startswith("worktree ")), None)
+            ref = next((ln[len("branch refs/heads/"):] for ln in lines if ln.startswith("branch refs/heads/")), None)
+            if path in worktrees and ref and ref not in branches:
+                branches.append(ref)
+        for branch in branches:
+            listed = _gh(self.repo, "pr", "list", "--head", branch, "--state", "all", "--json", "url")
+            if isinstance(listed, list) and listed and isinstance(listed[0], dict) and listed[0].get("url"):
+                return listed[0]["url"]
+        return None
+
+    def _classify(self, c: Child, tries: list[records.Attempt]) -> None:
+        """A child's status from its finished attempts (item 15)."""
+        last = tries[-1].result or {}
+        c.argv = None
+        if last.get("interrupted"):
+            c.pr = self._find_pr(tries)
+            if c.pr:
+                c.status, c.reason = "built", ""
+            else:
+                c.status, c.argv = "pending", tries[-1].started.get("argv")
+            return
+        code = last.get("exit_code")
+        c.pr = last.get("pr")
+        if code == 0 and c.pr:
+            c.status, c.reason = "built", ""
+        elif code == 0:
+            c.status, c.reason = "parked", NO_PR
+        elif code == 3:
+            c.status, c.reason = "parked", records.wait_marker(last.get("markers", [])) or "exit 3"
+        else:
+            c.status, c.reason = "failed", f"exit {code}"
+            c.argv = tries[-1].started.get("argv")
+
+    def _recover(self) -> None:
+        """Rebuild every child's status from the records: a stopped attempt whose
+        process is alive is adopted (polled, never relaunched); one that is gone
+        gets its result written from its log first (`exit_code: null`)."""
+        by_child: dict[str, list[records.Attempt]] = {}
+        for a in records.attempts(self.epic_dir):
+            if a.kind == "build" and a.child in self.children:
+                by_child.setdefault(a.child, []).append(a)
+        for cid, tries in by_child.items():
+            c = self.children[cid]
+            for a in tries:
+                if a.result is not None:
+                    continue
+                plan = _plan_of(a.started.get("argv", []))
+                if a is tries[-1] and plan and build_pid(plan) is not None:
+                    c.status, c.attempt = "running", a
+                    log.info("EPIC child %s: its build from an earlier run is alive; waiting for it", cid)
+                    break
+                records.finish(a, None, interrupted=True)
+            else:
+                self._classify(c, tries)
+
+    # -- dependencies and merges -------------------------------------------------
+
+    def _waited_on(self) -> list[Child]:
+        """Children with an open PR that a child not yet done depends on."""
+        deps = {d for c in self.children.values() if c.status in ("pending", "waiting", "failed")
+                for d in c.depends_on}
+        return [c for c in self.children.values() if c.id in deps and c.status == "built"]
+
+    def _read_prs(self, which: list[Child]) -> None:
+        for c in which:
+            got = _gh(self.repo, "pr", "view", c.pr, "--json", "state")
+            state = got.get("state") if isinstance(got, dict) else None
+            if state == "MERGED":
+                c.status = "merged"
+            elif state == "CLOSED":
+                c.status, c.reason = "parked", PR_CLOSED
+
+    def _resolve(self) -> list[Child]:
+        """Mark skipped and waiting children; return the ones ready to launch."""
+        changed = True
+        while changed:
+            changed = False
+            for c in self.children.values():
+                if c.status not in ("pending", "waiting", "failed"):
+                    continue
+                stuck = [d for d in c.depends_on if self.children[d].status in ("parked", "skipped")]
+                if stuck:
+                    c.status, c.reason, changed = "skipped", f"dependency {stuck[0]} {self.children[stuck[0]].status}", True
+        ready = []
+        for c in self.children.values():
+            if c.status not in ("pending", "waiting", "failed"):
+                continue
+            deps = [self.children[d].status for d in c.depends_on]
+            if all(s == "merged" for s in deps):
+                if c.status == "waiting":
+                    c.status = "pending"
+                if c.status == "pending" or not c.relaunched:
+                    ready.append(c)
+            elif c.status == "pending" and "built" in deps:
+                c.status = "waiting"
+        return ready
+
+    # -- launching and watching -------------------------------------------------
+
+    async def _launch(self, c: Child) -> None:
+        if c.status == "failed":
+            c.relaunched = True
+        argv = c.argv or self.new_argv(c.id, base_sha(self.repo))
+        plan = _plan_of(argv)
+        head = argv[argv.index("--base-ref") + 1] if "--base-ref" in argv[:-1] else None
+        c.attempt = records.start(self.epic_dir, "build", c.id, argv, head_sha=head)
+        c.status, c.argv, c.reason = "running", argv, ""
+        self._save()
+        c.proc = _spawn(argv, c.attempt.log)
+        log.info("EPIC child %s: launched pid %d (plan %s)", c.id, c.proc.pid, plan)
+        # One start at a time: worktree creation in one repo is not run concurrently.
+        while c.proc.poll() is None and not records.marker(records.markers(c.attempt.log), "WORKTREE"):
+            await CLOCK.sleep(POLL)
+
+    def _done(self, c: Child, exit_code: int | None, *, interrupted: bool) -> None:
+        records.finish(c.attempt, exit_code, interrupted=interrupted)
+        tries = [a for a in records.attempts(self.epic_dir) if a.kind == "build" and a.child == c.id]
+        c.proc = None
+        self._classify(c, tries)
+        log.info("EPIC child %s: %s %s", c.id, c.status, c.pr or c.reason)
+        self._save()
+
+    def _poll(self) -> None:
+        for c in self.children.values():
+            if c.status != "running":
+                continue
+            if c.proc is not None:
+                code = c.proc.poll()
+                if code is not None:
+                    self._done(c, code, interrupted=False)
+            elif build_pid(_plan_of(c.attempt.started["argv"])) is None:
+                self._done(c, None, interrupted=True)
+
+    def _save(self) -> None:
+        self.epic.child_status = {cid: store.ChildStatus(status=c.status, pr=c.pr, reason=c.reason)
+                                  for cid, c in self.children.items()}
+        store.save_epic(self.epic_dir, self.epic)
+
+    async def _stop_children(self, sig: int) -> None:
+        """Signal every child this run started, give them STOP_WAIT seconds, and
+        write the results of those that exited with `interrupted: true`. One
+        still alive keeps no result, so the next run waits for it."""
+        own = [c for c in self.children.values() if c.status == "running" and c.proc is not None]
+        for c in own:
+            try:
+                os.killpg(c.proc.pid, sig)
+            except ProcessLookupError:
+                pass
+        until = CLOCK.now() + STOP_WAIT
+        while any(c.proc.poll() is None for c in own) and CLOCK.now() < until:
+            await CLOCK.sleep(0.5)
+        for c in own:
+            code = c.proc.poll()
+            if code is None:
+                log.warning("EPIC child %s is still running after %ss; the next run waits for it", c.id, STOP_WAIT)
+                continue
+            records.finish(c.attempt, code, interrupted=True)
+            c.status, c.argv, c.proc = "pending", c.attempt.started["argv"], None
+        self._save()
+
+    # -- the run ------------------------------------------------------------------
+
+    async def run(self) -> int:
+        run_dir = _new_run_dir(self.epic_dir)
+        self._recover()
+        self._read_prs([c for c in self.children.values() if c.status == "built"])
+        self._resolve()
+        self._save()
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+
+        def on_sigterm() -> None:
+            self.signal_sent = signal.SIGTERM
+            task.cancel()
+
+        try:
+            loop.add_signal_handler(signal.SIGTERM, on_sigterm)
+        except (NotImplementedError, RuntimeError, ValueError):
+            pass
+        try:
+            rc = await self._loop()
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            sig = self.signal_sent or signal.SIGINT
+            log.warning("EPIC stopped by %s: stopping the children", signal.Signals(sig).name)
+            await self._stop_children(sig)
+            self._summary(run_dir)
+            return 128 + sig
+        finally:
+            try:
+                loop.remove_signal_handler(signal.SIGTERM)
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass
+        self._summary(run_dir)
+        open_prs = [c.pr for c in self._waited_on()]
+        if open_prs:
+            print(f"{MARKER_MERGE_WAITING}:{','.join(open_prs)}", flush=True)
+            return 3
+        return 1 if any(c.status == "failed" for c in self.children.values()) else 0
+
+    async def _loop(self) -> int:
+        last_read = CLOCK.now()
+        while True:
+            ready = self._resolve()
+            running = sum(c.status == "running" for c in self.children.values())
+            for c in ready:
+                if running >= self.settings.max_parallel:
+                    break
+                await self._launch(c)
+                running += 1
+            if running:
+                await CLOCK.sleep(POLL)
+                _tick(self)
+                self._poll()
+                if CLOCK.now() - last_read >= TICK:
+                    self._read_prs(self._waited_on())
+                    last_read = CLOCK.now()
+                    self._save()
+                continue
+            if ready:
+                continue
+            # Nothing runs and nothing is ready: read once more (item 15a).
+            self._read_prs(self._waited_on())
+            if self._resolve():
+                continue
+            self._save()
+            return 0
+
+    def _summary(self, run_dir: Path) -> Path:
+        children = [{"id": cid, "status": c.status, "pr": c.pr, "rounds": 0, "reason": c.reason}
+                    for cid, c in self.children.items()]
+        totals: dict[str, int] = {}
+        for c in children:
+            totals[c["status"]] = totals.get(c["status"], 0) + 1
+        path = run_dir / "summary.json"
+        store._write_atomic(path, json.dumps({"children": children, "totals": totals}, indent=2) + "\n")
+        print(f"{MARKER_SUMMARY}:{path}", flush=True)
+        return path
+
+
+def _new_run_dir(epic_dir: Path) -> Path:
+    """`runs/<NN>/`, the next free number, made at the start of each invocation."""
+    runs = Path(epic_dir) / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    n = max((int(p.name) for p in runs.iterdir() if p.name.isdigit()), default=0) + 1
+    path = runs / f"{n:02d}"
+    path.mkdir()
+    return path
+
+
+async def run_epic(config, state, args, epic_dir: Path, epic: store.Epic) -> int:
+    """Build an approved epic's children (item 11). Returns 0 when nothing is
+    left to do, 1 when a child failed, 3 with `EPIC:MERGE_WAITING:<urls>` while a
+    child waits on an open PR, 128 + the signal when stopped."""
+    from . import lock as epic_lock
+
+    assert epic_lock.held(epic_dir), "the coordinator runs under the epic lock its build holds"
+    return await Coordinator(config, state, args, Path(epic_dir), epic).run()

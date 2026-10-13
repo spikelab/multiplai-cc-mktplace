@@ -201,9 +201,9 @@ def test_a_subdirectory_project_gets_that_subdirectory(tmp_path):
     for d in (repo / "sub", wt / "sub"):
         d.mkdir(parents=True)
     config = BuildConfig(project_dir=wt / "sub", change_name="e")
-    state = BuildState(change_name="e", source_repo=str(repo), worktree_path=str(wt))
+    state = BuildState(change_name="e", mode="brief", tier="advanced", source_repo=str(repo), worktree_path=str(wt))
     assert coordinator.source_project_dir(config, state) == repo / "sub"
-    state = BuildState(change_name="e")
+    state = BuildState(change_name="e", mode="brief", tier="advanced")
     assert coordinator.source_project_dir(config, state) == wt / "sub"
 
 
@@ -313,7 +313,7 @@ def test_the_build_branches_from_base_ref_and_counts_an_empty_branch_against_it(
 
     config = BuildConfig(project_dir=project, change_name="c")
     config.base_ref = base
-    state = BuildState(change_name="c")
+    state = BuildState(change_name="c", mode="brief", tier="advanced")
     orchestrator._setup_worktree(config, state)
     assert state.branch == "buildme/c-2"
     assert _sha(Path(state.worktree_path)) == base != _sha(project)

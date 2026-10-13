@@ -161,7 +161,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             board.record(config, state, BuildPhase.EPIC_SPLIT, progress=progress)
         if state.epic_dir:
             from .epic import phase as epic_phase
-            return epic_phase.continue_epic(config, state, args, just_split=just_split)
+            return await epic_phase.continue_epic(config, state, args, just_split=just_split)
 
         # Phase: Spec Generation
         if not state.is_phase_complete(BuildPhase.SPEC_GENERATION) and not config.mode == "only":
@@ -980,9 +980,12 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
 
     repo = git_ops.preflight(config.project_dir, worktree_requested=True)
     offset = _project_offset(config.project_dir, repo)
-    base = git_ops.default_branch(repo)
+    # With --base-ref (an epic's child), an empty branch left by an attempt
+    # killed before its first commit sits at that ref, which the local default
+    # branch may not have reached: count its commits against the ref.
+    base = config.base_ref or git_ops.default_branch(repo)
     branch, dest = git_ops.resolve_new_branch(repo, config.change_name, base)
-    git_ops.create_worktree(repo, branch, dest)
+    git_ops.create_worktree(repo, branch, dest, start_point=config.base_ref or None)
 
     state.source_repo = str(repo)
     state.branch = branch

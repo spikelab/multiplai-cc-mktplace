@@ -10,8 +10,8 @@ phase in one checkpoint.
 split: `proposed` prints `EPIC:SPLIT:<split.md>` and exits 3 until
 `--approve-split`, which re-checks the table and plans as on disk and saves
 `approved` with their hashes. An approved build checks the hashes (a changed
-file exits 2) and prints `EPIC:APPROVED:<epic.json>` (exit 0); from PR B1 it
-starts the coordinator instead.
+file exits 2), prints `EPIC:APPROVED:<epic.json>` and runs the children
+(`coordinator.run_epic`, PR B1).
 """
 
 from __future__ import annotations
@@ -125,7 +125,7 @@ async def run_epic_split_phase(config, state, state_path: Path, args, progress) 
     return None
 
 
-def continue_epic(config, state, args, *, just_split: bool = False) -> int:
+async def continue_epic(config, state, args, *, just_split: bool = False) -> int:
     """What a build that is an epic does (item 7). *just_split* is True in the
     run that wrote the split: it always waits, so an `--approve-split` given
     before anyone saw the split approves nothing."""
@@ -177,4 +177,6 @@ def continue_epic(config, state, args, *, just_split: bool = False) -> int:
                    "put it back as it was, or start a new epic")
             return EXIT_REFUSED
     print(f"{MARKER_EPIC_APPROVED}:{epic_json}", flush=True)
-    return 0
+    # The coordinator runs under the lock this process holds now (item 6).
+    from . import coordinator
+    return await coordinator.run_epic(config, state, args, epic_dir, epic)
