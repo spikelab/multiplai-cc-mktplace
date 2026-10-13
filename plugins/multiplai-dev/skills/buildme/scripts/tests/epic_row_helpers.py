@@ -278,6 +278,8 @@ import json, os, pathlib, signal, subprocess, sys, time
 
 argv = sys.argv[1:]
 root = pathlib.Path(os.environ["EPIC_FAKE_ROOT"])
+if "findings" in argv:      # `python -m build_pipeline findings ...`: the fake fixer, same pid
+    os.execv(sys.executable, [sys.executable, str(pathlib.Path(__file__).with_name("fake_findings.py")), *argv])
 
 
 def opt(name):
@@ -402,6 +404,27 @@ import hashlib, json, os, pathlib, signal, subprocess, sys, time
 argv = sys.argv[1:]
 root = pathlib.Path(os.environ["EPIC_FAKE_ROOT"])
 cmd = argv[argv.index("review_pipeline") + 1]
+if cmd == "post":       # PR D2: logged apart from the reviews; steps under the key `post`
+    with (root / "posts.log").open("a") as f:
+        f.write(json.dumps({{"kind": "post", "cwd": os.getcwd().replace(str(root), "<root>"),
+                            "argv": [a.replace(str(root), "<root>") for a in argv]}}, sort_keys=True) + "\n")
+    fx = json.loads((root / "reviews.json").read_text()) if (root / "reviews.json").exists() else {{}}
+    counts = root / "post-attempts"
+    counts.mkdir(exist_ok=True)
+    k = len(list(counts.glob("post.*"))) + 1
+    (counts / f"post.{{k}}").write_text("")
+    steps = fx.get("post", [])
+    step = steps[k - 1] if k <= len(steps) else (steps[-1] if steps else {{}})
+    decisions = pathlib.Path(argv[argv.index("--decisions") + 1])
+    (root / "posted").mkdir(exist_ok=True)
+    (root / "posted" / f"post.{{k}}.json").write_text(decisions.read_text())
+    if step.get("die"):
+        os.kill(os.getpid(), signal.SIGKILL)
+    if step.get("exit"):
+        print(step.get("stderr", "fake post: failed"), file=sys.stderr, flush=True)
+        sys.exit(step["exit"])
+    print("posted", flush=True)
+    sys.exit(0)
 with (root / "reviews.log").open("a") as f:
     f.write(json.dumps({{"kind": cmd, "argv": [a.replace(str(root), "<root>") for a in argv]}},
                        sort_keys=True) + "\n")
@@ -484,6 +507,72 @@ print(f"findings: {{target / 'findings.json'}}", flush=True)
 '''
 
 
+FAKE_FINDINGS = r'''#!{python}
+"""A fake `python -m build_pipeline findings --pr <n> --change <c> --project-dir <P> ...`
+(PR D2), answering from `<root>/fixes.json`: per PR number, one step per launch.
+`block` waits for `<root>/release/fix-<n>`; `die` is a SIGKILL; `exit` prints
+`stdout` (a `FINDINGS:FAILED:` line) and exits with it; each of `rounds` is one
+fix round: an empty commit on the PR branch, one more round in the change's
+`.findings-state.json`, and the fixer's own review of that head in the review
+ledger with the round's `findings`. `SPEND:<spend>:0` on every exit but a kill."""
+import atexit, json, os, pathlib, signal, subprocess, sys, time
+
+argv = sys.argv[1:]
+root = pathlib.Path(os.environ["EPIC_FAKE_ROOT"])
+
+
+def opt(name):
+    return argv[argv.index(name) + 1] if name in argv else None
+
+
+with (root / "calls.log").open("a") as f:
+    f.write(json.dumps({{"kind": "findings", "cwd": os.getcwd().replace(str(root), "<root>"),
+                        "argv": [a.replace(str(root), "<root>") for a in argv]}}, sort_keys=True) + "\n")
+n, change, project = int(opt("--pr")), opt("--change"), pathlib.Path(opt("--project-dir"))
+fx = json.loads((root / "fixes.json").read_text()) if (root / "fixes.json").exists() else {{}}
+counts = root / "fix-attempts"
+counts.mkdir(exist_ok=True)
+k = len(list(counts.glob(f"{{n}}.*"))) + 1
+(counts / f"{{n}}.{{k}}").write_text("")
+steps = fx.get(str(n), [])
+step = steps[k - 1] if k <= len(steps) else (steps[-1] if steps else {{}})
+atexit.register(lambda: print(f"SPEND:{{step.get('spend', 0.25)}}:0", flush=True))
+for _sig in (signal.SIGTERM, signal.SIGHUP):
+    signal.signal(_sig, lambda signum, _frame: sys.exit(128 + signum))
+if step.get("block"):
+    gate = root / "release" / f"fix-{{n}}"
+    while not gate.exists():
+        time.sleep(0.02)
+if step.get("die"):
+    os.kill(os.getpid(), signal.SIGKILL)
+if step.get("exit"):
+    print(step.get("stdout", ""), flush=True)
+    sys.exit(step["exit"])
+state = project / "specs" / "changes" / change / ".findings-state.json"
+doc = json.loads(state.read_text()) if state.exists() else {{"findings": {{"rounds": []}}}}
+reviews = pathlib.Path(os.environ["WORKSPACE"]) / ".multiplai" / "data" / "reviews"
+target = reviews / "o-r" / f"pr-{{n}}"
+for r in step.get("rounds", []):
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m",
+                    f"fix round {{len(doc['findings']['rounds']) + 1}}"], cwd=project, check=True)
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True,
+                          check=True).stdout.strip()
+    doc["findings"]["rounds"].append({{"number": len(doc["findings"]["rounds"]) + 1}})
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps(doc))
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "findings.json").write_text(json.dumps({{"mode": None, "findings": r.get("findings", [])}}))
+    with (reviews / "ledger.jsonl").open("a") as f:
+        for entry in ({{"event": "started", "slug": f"o-r--pr-{{n}}", "target_dir": str(target), "head_sha": head}},
+                      {{"event": "finished", "slug": f"o-r--pr-{{n}}", "target_dir": str(target), "head_sha": head,
+                       "base_sha": "b" * 40, "pr": n, "round": "01", "stopped": None,
+                       "run": {{"cost_usd": r.get("cost", 1.5)}}}}):
+            f.write(json.dumps(entry, sort_keys=True) + "\n")
+    print(f"FINDINGS:ROUND_DONE:{{len(doc['findings']['rounds'])}}", flush=True)
+print(f"FINDINGS:DONE:{{len(doc['findings']['rounds'])}}", flush=True)
+'''
+
+
 class Fakes:
     """The fake build and `gh` first on PATH, answering from `<root>/fakes.json`
     (per child, one step per attempt: `block`, `marker`, `exit`, `no_pr`,
@@ -495,17 +584,23 @@ class Fakes:
     launch: `block`, `die`, `exit` with `stderr`, `findings`, `cost`, `stopped`
     (the `finished` line's value); `resume`
     has its own key) and logs its launches to `<root>/reviews.log`; by
-    default each review is clean."""
+    default each review is clean. PR D2: `review_pipeline post` answers from
+    the key `post` of `<root>/reviews.json` (`die`, `exit` with `stderr`),
+    keeps a copy of each decisions file under `<root>/posted/` and logs to
+    `<root>/posts.log`; the fixer (`FAKE_FINDINGS`) answers from
+    `<root>/fixes.json` and logs to `<root>/calls.log` as kind `findings`."""
 
     def __init__(self, root: Path, monkeypatch, steps: dict[str, list[dict]] | None = None,
-                 reviews: dict[str, list[dict]] | None = None):
+                 reviews: dict[str, list[dict]] | None = None, fixes: dict[str, list[dict]] | None = None):
         import sys
 
         self.root = root
         self.bin = root / "bin"
         self.bin.mkdir(parents=True, exist_ok=True)
         (root / "reviews.json").write_text(json.dumps(reviews or {}))
-        for name, text in (("python", FAKE_BUILD), ("gh", FAKE_GH), ("uv", FAKE_UV)):
+        (root / "fixes.json").write_text(json.dumps(fixes or {}))
+        for name, text in (("python", FAKE_BUILD), ("gh", FAKE_GH), ("uv", FAKE_UV),
+                           ("fake_findings.py", FAKE_FINDINGS)):
             path = self.bin / name
             path.write_text(text.format(python=sys.executable))
             path.chmod(0o755)
@@ -566,6 +661,16 @@ class Fakes:
     def review_launches(self) -> list[dict]:
         p = self.root / "reviews.log"
         return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
+
+    def post_launches(self) -> list[dict]:
+        p = self.root / "posts.log"
+        return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
+
+    def fix_launches(self) -> list[dict]:
+        return [x for x in CallLog(self.root / "calls.log").calls() if x["kind"] == "findings"]
+
+    def release_fix(self, change: str) -> None:
+        (self.root / "release" / f"fix-{pr_number(change)}").write_text("")
 
 
 def pr_url(change: str) -> str:
