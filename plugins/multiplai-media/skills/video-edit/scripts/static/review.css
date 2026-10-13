@@ -241,7 +241,8 @@ ol.style-sent { margin-top: 8px; }
 ol.style-sent li p { margin: 2px 0 0; font-size: 12px; overflow-wrap: anywhere; }
 .live-caption { z-index: 4; }
 .approx.live-approx { position: absolute; z-index: 4; font-size: 11px; padding: 1px 6px; border-radius: 8px;
-                      background: rgba(0, 0, 0, .6); color: #fff; pointer-events: none; }
+                      background: rgba(0, 0, 0, .6); color: #fff; pointer-events: none;
+                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }
 #style-panel .send-bar { position: static; }
 
 /* --- Review: live overlays and click-to-restyle --------------------------------------------- */

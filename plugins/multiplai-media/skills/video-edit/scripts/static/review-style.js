@@ -213,6 +213,7 @@
     captionEl.style.webkitTextStroke = `${m.outlinePx * 2}px ${colours.caption_outline}`;
     approxEl.style.left = `${p.left - s.left + 6}px`;
     approxEl.style.top = `${p.top - s.top + 6}px`;
+    approxEl.style.maxWidth = `${Math.max(0, p.width - 12)}px`;   // one line, cut short on a narrow picture
     const line = L.captionAt(side.data.captions_events, video.currentTime, values, original);
     if (!line) return;
     line.words.forEach((w, i) => {
@@ -272,7 +273,7 @@
     captionEl = el("div", "caption-preview live-caption");
     captionEl.hidden = true;
     captionEl.setAttribute("aria-live", "polite");
-    approxEl = el("span", "approx live-approx", "Approximate caption preview: the render burns captions in with ffmpeg");
+    approxEl = el("span", "approx live-approx", "Approximate caption preview: the render is exact");
     approxEl.hidden = true;
     stage.append(captionEl, approxEl);
 
