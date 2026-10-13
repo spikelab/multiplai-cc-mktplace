@@ -75,15 +75,28 @@ def rounds_done(project: Path, change: str) -> int:
                and "review" in r["finished"])
 
 
-# `findings` turns SIGTERM and SIGHUP into SystemExit(128 + signal)
-# (`build_pipeline/__main__.py`): a stop, which the next run resumes.
-STOPPED_EXITS = frozenset(128 + s for s in (signal.SIGHUP, signal.SIGTERM))
+# A stop, which the next run resumes, not a failure: `findings` turns SIGTERM
+# and SIGHUP into SystemExit(128 + signal) (`build_pipeline/__main__.py`), and
+# `uv run`, which runs the review and the post, reports a child killed by
+# SIGKILL, SIGTERM or SIGHUP as 128 + signal.
+STOPPED_EXITS = frozenset(128 + s for s in (signal.SIGHUP, signal.SIGKILL, signal.SIGTERM))
+
+# What `findings` prints when it exits 0 (`findings/loop.py`): no new comment
+# to act on, or its own round cap reached.
+ENDED = re.compile(r"^FINDINGS:(?:DONE|MAX_ROUNDS):\d+$", re.MULTILINE)
 
 
 def stopped(code: int) -> bool:
-    """Whether exit *code* is a fixer stopped by a signal: killed (< 0) or
-    one of STOPPED_EXITS."""
+    """Whether exit *code* is a fixer, review or post stopped by a signal:
+    killed (< 0) or one of STOPPED_EXITS."""
     return code < 0 or code in STOPPED_EXITS
+
+
+def ended(text: str) -> str | None:
+    """The last `FINDINGS:DONE:<n>` or `FINDINGS:MAX_ROUNDS:<n>` line of a
+    fixer's output; None without one."""
+    hits = ENDED.findall(text)
+    return hits[-1] if hits else None
 
 
 def fix_argv(session_id: str, number: int, change: str, project: Path, max_rounds: int) -> list[str]:
