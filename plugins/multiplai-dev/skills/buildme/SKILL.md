@@ -669,8 +669,28 @@ review run once, its resumes in it, a fresh review of the same head added);
 `spend_complete: false` when an attempt was killed before it printed `SPEND:`,
 its `SPEND:` ends `:incomplete`, or a review has not finished. Before each launch, once
 `epic.max_usd` is reached, nothing more is launched: the run waits for the
-children already running and exits `3` with `EPIC:BUDGET:<spent>`. Reviewing,
-fixing and merging the children's PRs come in later releases.
+children already running and exits `3` with `EPIC:BUDGET:<spent>`.
+
+**Reviewing the children's PRs.** Each child's open PR is reviewed with
+`/multiplai-dev:review` (`python -m review_pipeline review --repo <child
+worktree> --pr <n> --trust-repo`, run as a subprocess), at most once per head:
+when the review ledger (`<data_dir>/reviews/ledger.jsonl`) already holds a
+complete review of the PR at its current head, no review starts and the
+record says `reused: true`. A review another process is running (exit `2`,
+`is running now`) is waited for, asking again every 60 s; an interrupted one
+(exit `4` with the resume hint) is continued with `review_pipeline resume`.
+Any other failure parks the child with the end of the review's output. Each
+review writes `agents/<NNN>-review-<id>.{started.json,result.json,log}`; the
+result holds `head_sha`, `base_sha`, `review_dir`, `cost_usd`, `pr_round` (the
+number of distinct heads of this PR the ledger holds a complete review of),
+`reused`, `conflicts` (from `gh pr view`; recorded, never blocking) and
+`blocking` (the open Code findings at HIGH or MEDIUM). At
+`epic.max_review_rounds` rounds with blockers left, the child parks and stays
+parked. A review counts against `epic.max_parallel` and `epic.max_usd` like a
+build, and the summary's `rounds` is each PR's `pr_round`. Ctrl-C or SIGTERM
+stops a running review with the children; SIGHUP leaves it running, and the
+next run uses what it finished. Fixing and merging the children's PRs come in
+later releases.
 
 ### The size gate (after plan review)
 
