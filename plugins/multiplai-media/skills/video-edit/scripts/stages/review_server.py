@@ -3,7 +3,7 @@
 The server is pointed at the job's output directory. The page shows what the
 session wrote there (job.json, candidates.json, looks.json, music.json; see
 stages/job_files.py) and plays every render in it. Each choice the user makes
-(a comment on a render, picked clips, speaker boxes, a look) is posted
+(a comment on a render, picked clips, speaker boxes, a look, music) is posted
 as a mailbox row, appended to `comments.jsonl` in the mailbox directory, which
 the session watches. The server never writes a job file.
 
@@ -370,11 +370,14 @@ ROW_KINDS: dict[str, dict] = {
     "pick": {"review": False, "fields": ("candidate", "decision", "start", "end"), "needs_text": False},
     "panels": {"review": False, "fields": ("panels", "speakers"), "needs_text": False},
     "look": {"review": False, "fields": ("style", "brand", "captions"), "needs_text": False},
+    "music": {"review": False, "fields": ("bed", "volume_db", "sfx_set"), "needs_text": False},
 }
 MAX_PANELS = 8
 MAX_NAME = 40
-# What the session offers, by the list a look row picks from.
-OFFERED_LISTS = {"styles": ("looks", "styles"), "brands": ("looks", "brands")}
+MIN_VOLUME_DB, MAX_VOLUME_DB = -60.0, 0.0
+# What the session offers, by the list a look or music row picks from.
+OFFERED_LISTS = {"styles": ("looks", "styles"), "brands": ("looks", "brands"),
+                 "beds": ("music", "beds"), "sfx_sets": ("music", "sfx_sets")}
 
 
 def _finite(c: dict, *keys: str) -> list[float]:
@@ -448,9 +451,21 @@ def _look(c: dict, offered: dict[str, set[str]]) -> dict:
     return row
 
 
+def _music(c: dict, offered: dict[str, set[str]]) -> dict:
+    (volume,) = _finite(c, "volume_db")
+    if not MIN_VOLUME_DB <= volume <= MAX_VOLUME_DB:
+        raise ValueError(f"volume_db must be within {MIN_VOLUME_DB:g}..{MAX_VOLUME_DB:g}")
+    row = {"bed": _chosen(c, "bed", offered.get("beds", set()), "music bed"),
+           "volume_db": round(volume, 1),
+           "sfx_set": _chosen(c, "sfx_set", offered.get("sfx_sets", set()), "sound-effect set")}
+    if row["bed"] is None and row["sfx_set"] is None:
+        raise ValueError("a music row must pick a bed or a sound-effect set")
+    return row
+
+
 def offered_names(outdir: Path) -> dict[str, set[str]]:
-    """The names in a valid looks.json, by list (OFFERED_LISTS)."""
-    files = {name: job_files.load(outdir, name) for name in ("looks",)}
+    """The names in a valid looks.json and music.json, by list (OFFERED_LISTS)."""
+    files = {name: job_files.load(outdir, name) for name in ("looks", "music")}
     return {key: ({x["name"] for x in files[f]["data"].get(lst, [])} if files[f]["status"] == "ok" else set())
             for key, (f, lst) in OFFERED_LISTS.items()}
 
@@ -461,7 +476,7 @@ def validate_comment(c: Any, known: set[tuple[str, int]],
     """One row from the page → a mailbox row, or ValueError.
 
     `known` is the (video, version) pairs on disk; `candidates` the ids in a
-    valid candidates.json; `offered` the names a look row may pick
+    valid candidates.json; `offered` the names a look or music row may pick
     (offered_names). Unknown kinds and fields are refused.
     """
     if not isinstance(c, dict):
@@ -497,6 +512,8 @@ def validate_comment(c: Any, known: set[tuple[str, int]],
         row.update(_panels(c))
     elif kind == "look":
         row.update(_look(c, offered or {}))
+    elif kind == "music":
+        row.update(_music(c, offered or {}))
     row.update(text=text.strip(), created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     return row
 

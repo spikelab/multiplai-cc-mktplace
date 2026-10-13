@@ -251,7 +251,7 @@
     return { kind: "panels", panels, speakers, text: (note || "").trim() };
   }
 
-  // --- Look: shared helpers ------------------------------------------------------------
+  // --- Look and Music: shared ----------------------------------------------------------
 
   /* Whether a valid input file offers anything in any of the lists `keys`. */
   function offersAny(file, keys) {
@@ -400,6 +400,55 @@
     return { width, height, duration: duration > 0 ? duration : SAMPLE_DEFAULT_S };
   }
 
+  // --- Music -----------------------------------------------------------------------------
+
+  const DEFAULT_VOLUME_DB = -10;        // stages/edl.py Music.volume_db
+  const SFX_VOLUME_DB = -14;            // stages/edl.py Sfx.volume_db
+  const MIN_VOLUME_DB = -40, MAX_VOLUME_DB = 0;
+
+  /* Music is open while music.json offers something and no music row has been sent. */
+  function musicOpen(s) {
+    return offersAny(s.music, ["beds", "sfx_sets"]) && rowsOfKind(s.rows, "music").length === 0;
+  }
+
+  /* Decibels → a Web Audio gain. */
+  function dbToGain(db) {
+    return Number.isFinite(db) ? Math.pow(10, db / 20) : 1;
+  }
+
+  function clampDb(db) {
+    return Number.isFinite(db) ? Math.min(MAX_VOLUME_DB, Math.max(MIN_VOLUME_DB, db)) : DEFAULT_VOLUME_DB;
+  }
+
+  /* This viewer's music choice ({bed, sfx_set, volume_db, note}): as lookDraft. */
+  function musicDraft(music, draft, last) {
+    const ok = (key, n) => n === null || (typeof n === "string" && namesIn(music, key).includes(n));
+    if (draft && ok("beds", draft.bed) && ok("sfx_sets", draft.sfx_set)) {
+      return { bed: draft.bed, sfx_set: draft.sfx_set, volume_db: clampDb(draft.volume_db), note: draft.note || "" };
+    }
+    if (last) {
+      return { bed: onOffer(music, "beds", last.bed), sfx_set: onOffer(music, "sfx_sets", last.sfx_set),
+               volume_db: clampDb(last.volume_db), note: last.text || "" };
+    }
+    return { bed: namesIn(music, "beds")[0] ?? null, sfx_set: null, volume_db: DEFAULT_VOLUME_DB, note: "" };
+  }
+
+  function musicRow(draft) {
+    return { kind: "music", bed: draft.bed, volume_db: Math.round(clampDb(draft.volume_db) * 10) / 10,
+             sfx_set: draft.sfx_set, text: (draft.note || "").trim() };
+  }
+
+  /* Why a music row cannot be sent, or null. */
+  function musicProblem(row) {
+    return row.bed === null && row.sfx_set === null ? "Pick a music bed or a sound-effect set." : null;
+  }
+
+  /* "−10 dB" */
+  function fmtDb(db) {
+    const v = Math.round(db * 10) / 10;
+    return `${v < 0 ? "−" : ""}${Math.abs(v)} dB`;
+  }
+
   const api = {
     TABS, INPUT_FILES, fmt, inputNotice, isReels, latestBy, rowsOfKind, clipsOpen, speakersOpen, firstOpenTab,
     oneAtATime,
@@ -409,6 +458,8 @@
     offersAny, canon, sameChoice, lastOfKind, namesIn,
     BRAND_DEFAULTS, lookOpen, outputSize, brandColours, captionMetrics, captionLine, lookDraft, lookRow,
     lookProblem, loopTime, fitScale, readyMessage,
+    DEFAULT_VOLUME_DB, SFX_VOLUME_DB, MIN_VOLUME_DB, MAX_VOLUME_DB, musicOpen, dbToGain, clampDb, musicDraft,
+    musicRow, musicProblem, fmtDb,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JobLogic = api;

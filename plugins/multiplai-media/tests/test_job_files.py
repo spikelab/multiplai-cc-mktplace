@@ -57,17 +57,22 @@ def test_fixture_job_and_candidates_are_valid(job) -> None:
     assert [c["id"] for c in jf.load(job["dir"], "candidates")["data"]] == ["c1", "c2", "c3", "c4"]
 
 
-def test_fixture_looks_are_valid(job) -> None:
-    looks = jf.load(job["dir"], "looks")
+def test_fixture_looks_and_music_are_valid(job) -> None:
+    looks, music = jf.load(job["dir"], "looks"), jf.load(job["dir"], "music")
     assert looks["status"] == "ok", looks.get("error")
+    assert music["status"] == "ok", music.get("error")
     assert [s["name"] for s in looks["data"]["styles"]] == ["clean-tech", "flat-vector"]
     for s in looks["data"]["styles"]:                       # each style's Example page is its sample
         assert Path(s["sample_html"]).read_text().startswith("<!doctype html>")
+    assert [b["name"] for b in music["data"]["beds"]] == ["calm", "bright"]
+    vs = music["data"]["voice_sample"]
+    assert 0 < vs["end"] - vs["start"] <= 10
 
 
-def test_fixture_without_offers_has_no_looks(tmp_path) -> None:
+def test_fixture_without_offers_has_no_looks_or_music(tmp_path) -> None:
     job = make_job.build(tmp_path / "bare", video=False, offers=False)
     assert jf.load(job["dir"], "looks")["status"] == "missing"
+    assert jf.load(job["dir"], "music")["status"] == "missing"
 
 
 def test_looks_and_music_valid(tmp_path, media) -> None:

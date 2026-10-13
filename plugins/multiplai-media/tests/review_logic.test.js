@@ -393,3 +393,39 @@ test("readyMessage accepts only a well-formed ready message from a sample page",
   }
 });
 
+// --- Music -----------------------------------------------------------------------------
+
+const MUSIC = { status: "ok", file: "/job/music.json", data: {
+  beds: [{ name: "calm" }, { name: "bright" }], sfx_sets: [{ name: "soft" }], voice_sample: { start: 10, end: 18 },
+} };
+
+test("musicOpen: open while music.json offers something and no music row was sent", () => {
+  assert.equal(L.musicOpen({ music: MUSIC, rows: [] }), true);
+  assert.equal(L.musicOpen({ music: MUSIC, rows: [{ kind: "music", bed: "calm", volume_db: -10, sfx_set: null }] }), false);
+  assert.equal(L.musicOpen({ music: { status: "ok", data: {} }, rows: [] }), false);
+  assert.equal(L.musicOpen({ music: { status: "invalid", error: "x" }, rows: [] }), false);
+});
+
+test("musicDraft starts at the first bed, no sounds and the EDL's default level", () => {
+  assert.deepEqual(L.musicDraft(MUSIC, null, null), { bed: "calm", sfx_set: null, volume_db: -10, note: "" });
+  const last = { kind: "music", bed: "bright", volume_db: -18, sfx_set: "soft", text: "ok" };
+  assert.deepEqual(L.musicDraft(MUSIC, null, last), { bed: "bright", sfx_set: "soft", volume_db: -18, note: "ok" });
+  assert.equal(L.musicDraft(MUSIC, { bed: "jazz", sfx_set: null, volume_db: -5 }, null).bed, "calm");
+  assert.equal(L.musicDraft(MUSIC, { bed: null, sfx_set: "soft", volume_db: -99 }, null).volume_db, L.MIN_VOLUME_DB);
+});
+
+test("musicRow rounds the level, and music must pick a bed or a sound set", () => {
+  assert.deepEqual(L.musicRow({ bed: "calm", sfx_set: null, volume_db: -12.04, note: " " }),
+    { kind: "music", bed: "calm", volume_db: -12, sfx_set: null, text: "" });
+  assert.equal(L.musicProblem(L.musicRow({ bed: null, sfx_set: "soft", volume_db: -10 })), null);
+  assert.match(L.musicProblem(L.musicRow({ bed: null, sfx_set: null, volume_db: -10 })), /Pick a music bed/);
+});
+
+test("dbToGain and fmtDb", () => {
+  assert.equal(L.dbToGain(0), 1);
+  assert.ok(Math.abs(L.dbToGain(-20) - 0.1) < 1e-12);
+  assert.ok(Math.abs(L.dbToGain(-6) - 0.501) < 1e-3);
+  assert.equal(L.dbToGain(NaN), 1);
+  assert.equal(L.fmtDb(-10), "−10 dB");
+  assert.equal(L.fmtDb(0), "0 dB");
+});

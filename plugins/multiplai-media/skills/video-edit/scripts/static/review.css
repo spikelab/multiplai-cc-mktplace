@@ -174,3 +174,10 @@ ol.brand-cards p { margin: 0; }
 ol.caption-options { margin-top: 8px; }
 ol.caption-options li { display: flex; flex-direction: column; gap: 2px; }
 
+/* --- Music ----------------------------------------------------------------------------- */
+ol.audio-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.audio-row .sounds { display: flex; flex-wrap: wrap; gap: 6px; }
+button.play-btn[aria-pressed="true"], #music-voice[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.level-row { align-items: center; flex-wrap: wrap; }
+#music-level { flex: 1; min-width: 140px; }
+.level-out { font-variant-numeric: tabular-nums; min-width: 4.5em; }
