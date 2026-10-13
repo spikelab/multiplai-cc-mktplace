@@ -357,7 +357,7 @@ def _panels(c: dict) -> dict:
     if not isinstance(speakers, dict):
         raise ValueError("speakers must map transcript labels to panel names")
     for label, name in speakers.items():
-        if not label or len(label) > 64 or name not in out:
+        if not label or len(label) > 64 or not isinstance(name, str) or name not in out:
             raise ValueError(f"speaker {label!r} must map to one of the panels")
     return {"panels": out, "speakers": dict(speakers)}
 

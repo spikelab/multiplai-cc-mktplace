@@ -117,6 +117,9 @@ def test_pick_needs_a_valid_candidates_file() -> None:
     {**PANELS, "panels": {" ": {"x": 0, "y": 0, "w": 10, "h": 10}}, "speakers": {}},
     {**PANELS, "speakers": {"SPEAKER_0": "Nobody"}},
     {**PANELS, "speakers": ["Host"]},
+    {**PANELS, "speakers": {"SPEAKER_0": ["Host"]}},
+    {**PANELS, "speakers": {"SPEAKER_0": {"Host": 1}}},
+    {**PANELS, "speakers": {"SPEAKER_0": 3}},
     {**PANELS, "panels": {f"P{i}": {"x": 0, "y": 0, "w": 1, "h": 1} for i in range(9)}, "speakers": {}},
 ])
 def test_panels_rejected(bad) -> None:
@@ -171,4 +174,11 @@ def test_rows_written_before_kinds_count_as_points(server) -> None:
 def test_a_pick_for_a_candidate_not_on_file_rejects_the_batch(server) -> None:
     res, data = _req(server, "POST", "/api/comments", {"comments": [PICK, {**PICK, "candidate": "c7"}]})
     assert res.status == 400 and "c7" in data["error"]
+    assert (server["box"] / "comments.jsonl").read_text() == ""
+
+
+def test_a_speaker_mapped_to_a_list_is_a_400_not_a_dropped_connection(server) -> None:
+    res, data = _req(server, "POST", "/api/comments",
+                     {"comments": [{**PANELS, "speakers": {"SPEAKER_0": ["Host"]}}]})
+    assert res.status == 400 and "SPEAKER_0" in data["error"]
     assert (server["box"] / "comments.jsonl").read_text() == ""
