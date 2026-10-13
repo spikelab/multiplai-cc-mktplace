@@ -30,7 +30,13 @@ time, not derived from a tag.
   candidate folder was renamed or deleted since. A second run of the same
   target while one is running exits 5 and writes nothing. `--restart` renames
   the run folder to `<object>.old-<timestamp>` and starts again; it never
-  deletes. An unreadable `state.json` exits 1 and names `--restart`.
+  deletes. An unreadable `state.json` exits 1 and names `--restart`, as does
+  a `--dir` run whose copied `source/` no longer holds its import.
+- `snapshot/` holds each file as git stores it, whatever the commit's
+  `.gitattributes` export rules say. A link that is absolute or leads out of
+  the tree is left out and named, instead of failing the run.
+- A `--dir` run refuses any `--out` that would put its run folder inside the
+  source, including the source's parent.
 
 ## [0.51.0] - 2026-10-13
 

@@ -239,6 +239,18 @@ def test_pr_without_gh_is_refused_with_the_install_hint(repo, root, monkeypatch,
     assert not root.exists()
 
 
+def test_unreadable_state_at_a_later_candidate_stops_the_run(repo, root, capsys):
+    """No readable state names this target and `widgets@acme/tree@…`'s cannot be read: it
+    may be this target's run, so the run exits 1 there (R23) and starts no folder."""
+    sha = git(repo, "rev-parse", "HEAD")
+    ours = root / "widgets@acme" / f"tree@{sha[:12]}"
+    ours.mkdir(parents=True)
+    (ours / "state.json").write_text("{not json", encoding="utf-8")
+    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 1
+    assert str(ours / "state.json") in capsys.readouterr().err
+    assert not (root / "widgets").exists()
+
+
 # --- --pr -----------------------------------------------------------------------
 
 def _pr_repo(tmp_path):
@@ -438,6 +450,8 @@ def test_snapshot_skips_links_out_of_the_tree(repo, root, capsys):
     os.symlink("/etc/hostname", repo / "src" / "abs_link")
     os.symlink("../../../outside", repo / "src" / "a" / "up_link")
     os.symlink("one.py", repo / "src" / "a" / "in_link")
+    os.symlink("..", repo / "src" / "d")  # the top: inside
+    os.symlink("d/..", repo / "src" / "c")  # through d, above the top
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "links")
     sha = git(repo, "rev-parse", "HEAD")
@@ -448,6 +462,8 @@ def test_snapshot_skips_links_out_of_the_tree(repo, root, capsys):
     assert not (snap / "src" / "abs_link").is_symlink()
     assert not (snap / "src" / "a" / "up_link").is_symlink()
     assert os.readlink(snap / "src" / "a" / "in_link") == "one.py"
+    assert os.readlink(snap / "src" / "d") == ".." and "src/c -> d/.." in err
+    assert not (snap / "src" / "c").is_symlink()
     assert (snap / ".spec-extract-head").read_text().strip() == sha
 
 

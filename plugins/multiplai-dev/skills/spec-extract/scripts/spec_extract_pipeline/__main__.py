@@ -67,7 +67,8 @@ def _run(args: argparse.Namespace, now: Callable[[], datetime]) -> int:
                 print(f"SPEC_EXTRACT:RESTARTED {run_dir} (the earlier run is in {old})")
         saved = state_mod.load(run_dir)  # an unreadable state.json stops here, writing nothing (R23)
         if fresh.kind == "dir":
-            fresh = target.import_dir(fresh, run_dir, now())
+            fresh = target.import_dir(fresh, run_dir, now(),
+                                      saved_head=saved.target.head_sha if saved else None)
         if saved is None:
             state = state_mod.State(target=fresh)
             state_mod.save(state, run_dir)
@@ -99,7 +100,7 @@ def main(argv: Sequence[str] | None = None, *, now: Callable[[], datetime] | Non
     except runlock.Locked as e:
         print(f"spec-extract: {e}", file=sys.stderr)
         return EXIT_LOCKED
-    except state_mod.Unreadable as e:
+    except (state_mod.Unreadable, target.ImportLost) as e:
         print(f"spec-extract: {e}", file=sys.stderr)
         return EXIT_FAILED
     except Exception as e:  # noqa: BLE001 — every other failure is exit 1 with its message

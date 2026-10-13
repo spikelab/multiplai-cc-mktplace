@@ -7,29 +7,28 @@ named by the rule review gave its folders, plus the commit (plan, Decided 14).
 Review's rule is restated here, not imported: skills do not import each other
 in an installed plugin. Each restated piece names review's function.
 
-Agents read a snapshot (`<run>/snapshot/`, extracted with `git archive`); gates
-read git (plan, Decided 15).
+Agents read a snapshot (`<run>/snapshot/`, the commit's blobs written out as git
+stores them); gates read git (plan, Decided 15).
 """
 
 from __future__ import annotations
 
 import contextlib
 import hashlib
-import io
 import json
 import os
 import posixpath
 import re
 import shutil
 import subprocess
-import tarfile
+import sys
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
 from multiplai_core.citations import GIT_ARGV, git_env
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from . import runlock
 
@@ -48,7 +47,21 @@ class TargetError(Exception):
     """The target or its folder was refused (exit 2). The message says why."""
 
 
+class ImportLost(Exception):
+    """A resumed `--dir` run's `source/` no longer holds the import its state names (exit 1,
+    row R27). The message names `--restart`."""
+
+    def __init__(self, dest: Path, head: str, src: str):
+        super().__init__(f"{dest} no longer holds the import commit {head[:12]} this run's "
+                         "state.json names; nothing was written. Run the same command with "
+                         "--restart to move this run folder aside (it is renamed, never "
+                         f"deleted) and import {src} again")
+
+
 class Target(BaseModel):
+    # As State: a field a newer version saved is refused (exit 1, R23), not dropped.
+    model_config = ConfigDict(extra="forbid")
+
     kind: Literal["tree", "pr", "dir"]
     repo: str  # the top of the checkout; for --dir, <run>/source once imported
     head_sha: str | None = None  # None only for a --dir target before its import
@@ -312,10 +325,17 @@ def _try_folder(folder: Path, passed_over: Callable[[dict], bool],
     return held, folder_target(folder)
 
 
-def check_out_dir(src: Path, root: Path) -> None:
-    """review's `check_out_dir`: a `--dir` run never writes inside its source."""
-    if root == src or src in root.parents:
-        raise TargetError(f"the output directory {root} is inside {src}; pass --out somewhere else")
+def check_out_dir(src: Path, folder: Path) -> None:
+    """review's `check_out_dir`, on the folder the run writes: a `--dir` run never writes
+    inside its source. The run writes `<root>/<repo>/` (its folder and `.locks/`), so
+    that must not be at or under the source (`--out` the source's parent with the
+    same basename is), and the source must not be under the run folder."""
+    repo_dir = folder.parent
+    if repo_dir == src or src in repo_dir.parents:
+        raise TargetError(f"the run folder {folder} and its lock would be inside {src}; "
+                          "pass --out somewhere else")
+    if folder in src.parents:
+        raise TargetError(f"{src} is inside the run folder {folder}; pass --out somewhere else")
 
 
 def run_folder(root: Path, target: Target, lock: contextlib.ExitStack) -> Path:
@@ -323,7 +343,8 @@ def run_folder(root: Path, target: Target, lock: contextlib.ExitStack) -> Path:
 
     First, this target's own folder: of the candidates the walk could reach,
     only those whose folder or lock file already exists are looked at, creating
-    nothing, and the first whose `state.json` names this target is taken (R19).
+    no folder, and the first whose readable `state.json` names this target is
+    taken (R19); with none, the first whose `state.json` cannot be read (R23).
     Otherwise the walk, in review's `_choose_folder` order: `<repo>/<object>`;
     `<base>@<owner>/<object>` when that names another remote; for `--tree
     --path`, the hashed name in the folder's repo folder when it names another
@@ -332,9 +353,9 @@ def run_folder(root: Path, target: Target, lock: contextlib.ExitStack) -> Path:
     """
     if target.kind == "dir":
         src = Path(target.source or "")
-        check_out_dir(src, root)
         repo_name, obj = dir_object(src)
         folder = root / repo_name / obj
+        check_out_dir(src, folder)
         held, _ = _try_folder(folder, lambda t: False, create=True)
         lock.enter_context(held.pop_all())
         return folder
@@ -359,13 +380,27 @@ def run_folder(root: Path, target: Target, lock: contextlib.ExitStack) -> Path:
     candidates = [first] + ([owned] if owned != first else [])
     if by_path:
         candidates += [c.parent / hashed_object_name(target) for c in list(candidates)]
+    unreadable = None
     for folder in candidates:
         if not (folder.exists() or runlock.lock_path(folder).exists()):
             continue
         held, t = _try_folder(folder, passed_over, create=False)
-        if t is not None and not passed_over(t):
+        # An unreadable state.json ({}) names no target: it may be another target's,
+        # so a later folder whose state names this target is taken before it.
+        if t and not passed_over(t):
             lock.enter_context(held.pop_all())
             return folder
+        if t == {} and unreadable is None:
+            unreadable = folder
+        held.close()
+    if unreadable is not None:
+        # No readable state names this target, and one candidate's cannot be read: it
+        # may be this target's, so the run stops there (R23, exit 1) rather than
+        # start a second folder.
+        held, t = _try_folder(unreadable, passed_over, create=False)
+        if t is not None and not passed_over(t):
+            lock.enter_context(held.pop_all())
+            return unreadable
         held.close()
 
     tried = [first]
@@ -413,18 +448,22 @@ def _import_git(dest: Path, *args: str, env: dict[str, str]) -> None:
         raise TargetError(f"git {args[0]} in {dest} failed: {proc.stderr.strip()}")
 
 
-def import_dir(target: Target, run_dir: Path, now: datetime) -> Target:
+def import_dir(target: Target, run_dir: Path, now: datetime, saved_head: str | None = None) -> Target:
     """Copy the `--dir` source into `<run>/source/` and commit it there; return the target
     with `repo` and `head_sha` set.
 
     A `source/` that already holds a commit is reused as it is, whatever the
-    source holds now (R14; `--restart` re-imports). One without a commit holds
-    nothing a run named, and is copied again (R1). Nothing is written to the
-    source.
+    source holds now (R14; `--restart` re-imports). With no saved state, one
+    without a commit holds nothing a run named, and is copied again (R1). With
+    *saved_head* (the saved state's import), `source/` must still be at it, or
+    ImportLost: a new import would contradict the state (R27). Nothing is
+    written to the source.
     """
     src = Path(target.source or "")
     dest = run_dir / SOURCE_DIR
     head = rev_parse(dest, "HEAD") if (dest / ".git").is_dir() else None
+    if saved_head is not None and head != saved_head:
+        raise ImportLost(dest, saved_head, str(src))
     if head is None:
         try:
             if dest.is_symlink() or dest.is_file():
@@ -447,13 +486,114 @@ def import_dir(target: Target, run_dir: Path, now: datetime) -> Target:
     return target.model_copy(update={"repo": str(dest), "head_sha": head})
 
 
-def snapshot(target: Target, run_dir: Path) -> Path:
-    """Extract the tree at `head_sha` into `<run>/snapshot/` for the agents to read.
+def _git_bytes(repo: str | Path, *args: str, stdin: bytes | None = None) -> bytes:
+    proc = subprocess.run([*GIT_ARGV, "-C", str(repo), *args], input=stdin, capture_output=True,
+                          env=git_env(), shell=False, check=False,
+                          **({} if stdin is not None else {"stdin": subprocess.DEVNULL}))
+    if proc.returncode != 0:
+        raise TargetError(f"git {args[0]} failed: {proc.stderr.decode(errors='replace').strip()}")
+    return proc.stdout
 
-    Reused when its marker names `head_sha`; otherwise (a snapshot stopped
-    part-way has no marker, R2) deleted and extracted again. The marker is
-    written last. `git archive` reads the object store and writes nothing to
-    the repository.
+
+def _tree_entries(repo: str | Path, sha: str) -> list[tuple[str, str, str, str]]:
+    """`(mode, type, oid, path)` for every entry of the tree at *sha*, recursively."""
+    out = []
+    for raw in _git_bytes(repo, "ls-tree", "-r", "-z", "--full-tree", sha).split(b"\0"):
+        if not raw:
+            continue
+        meta, _, path = raw.partition(b"\t")
+        mode, kind, oid = meta.decode().split()
+        out.append((mode, kind, oid, os.fsdecode(path)))
+    return out
+
+
+def _blob_bytes(repo: str | Path, oids: list[str]) -> dict[str, bytes]:
+    """Each blob's bytes as git stores them (`git cat-file --batch`): no filter, no eol
+    conversion, no export rule, as `git show <sha>:<path>` prints them for the gates."""
+    uniq = list(dict.fromkeys(oids))
+    if not uniq:
+        return {}
+    out = _git_bytes(repo, "cat-file", "--batch", stdin="".join(f"{o}\n" for o in uniq).encode())
+    blobs, pos = {}, 0
+    for oid in uniq:
+        nl = out.index(b"\n", pos)
+        header = out[pos:nl].split()
+        if len(header) != 3 or header[1] != b"blob":
+            raise TargetError(f"git cat-file: {oid} is not a blob in {repo}")
+        size = int(header[2])
+        blobs[oid] = out[nl + 1:nl + 1 + size]
+        pos = nl + 1 + size + 1
+    return blobs
+
+
+def _safe_rel(path: str) -> bool:
+    parts = path.split("/")
+    return not path.startswith("/") and all(p not in ("", ".", "..", ".git") for p in parts)
+
+
+def _inside(path: str, top: str) -> bool:
+    return path == top or path.startswith(top + os.sep)
+
+
+def _write_tree(repo: str | Path, sha: str, dest: Path) -> list[str]:
+    """Write the tree at *sha* into *dest*; return what was left out, with why.
+
+    Regular files get their blob's bytes and git's executable bit; a submodule is an
+    empty directory, as `git archive` makes it. A link is kept only while it resolves
+    inside *dest*: one that is absolute or leaves the tree is left out, and the
+    check is repeated over every kept link until none leaves, since one link can
+    lead through another.
+    """
+    entries = _tree_entries(repo, sha)
+    blobs = _blob_bytes(repo, [oid for _, kind, oid, _ in entries if kind == "blob"])
+    top = os.path.realpath(dest)
+    left_out: list[str] = []
+    links: list[tuple[Path, str]] = []
+    # Files and directories first, while *dest* holds no link a parent could pass through.
+    for phase in ("files", "links"):
+        for mode, kind, oid, rel in entries:
+            if (mode == "120000") != (phase == "links"):
+                continue
+            if not _safe_rel(rel):
+                left_out.append(f"{rel}: not a path inside the tree")
+                continue
+            out = dest / rel
+            if not _inside(os.path.realpath(out.parent), top):
+                left_out.append(f"{rel}: its directory leads outside the tree")
+                continue
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if kind == "commit":
+                out.mkdir(exist_ok=True)
+            elif mode == "120000":
+                to = os.fsdecode(blobs[oid])
+                if os.path.isabs(to):
+                    left_out.append(f"{rel} -> {to}: a link to an absolute path")
+                    continue
+                os.symlink(to, out)
+                links.append((out, to))
+            elif kind == "blob":
+                out.write_bytes(blobs[oid])
+                out.chmod(0o755 if mode == "100755" else 0o644)
+    changed = True
+    while changed:
+        changed = False
+        for out, to in links:
+            if out.is_symlink() and not _inside(os.path.realpath(out), top):
+                out.unlink()
+                left_out.append(f"{out.relative_to(dest).as_posix()} -> {to}: a link outside the tree")
+                changed = True
+    return left_out
+
+
+def snapshot(target: Target, run_dir: Path) -> Path:
+    """Write the tree at `head_sha` into `<run>/snapshot/` for the agents to read.
+
+    The files hold the bytes git stores, which the gates read with git: not
+    `git archive`, whose `.gitattributes` export rules leave files out and rewrite
+    others (plan, Decided 15). Links that leave the tree are left out and named on
+    stderr; the run goes on. Reused when its marker names `head_sha`; otherwise (a
+    snapshot stopped part-way has no marker, R2) deleted and written again. The
+    marker is written last. Nothing is written to the repository.
     """
     dest = run_dir / SNAPSHOT_DIR
     marker = dest / SNAPSHOT_MARKER
@@ -464,14 +604,8 @@ def snapshot(target: Target, run_dir: Path) -> Path:
     elif dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
-    proc = subprocess.run([*GIT_ARGV, "-C", target.repo, "archive", "--format=tar", str(target.head_sha)],
-                          capture_output=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False,
-                          check=False)
-    if proc.returncode != 0:
-        raise TargetError(f"git archive {str(target.head_sha)[:12]} failed: "
-                          f"{proc.stderr.decode(errors='replace').strip()}")
-    with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tar:
-        tar.extractall(dest, filter="data")
+    for why in _write_tree(target.repo, str(target.head_sha), dest):
+        print(f"spec-extract: snapshot: left out {why}", file=sys.stderr)
     marker.write_text(f"{target.head_sha}\n", encoding="utf-8")
     return dest
 
