@@ -1,29 +1,37 @@
-"""The EPIC_SPLIT step and what a build does once it is an epic (items 1-5, 7, 9).
+"""The EPIC_SPLIT step and what a build does once it is an epic (items 1-9).
 
 `run_epic_split_phase` decides one change or several. One change, or a skip
 (`--no-epic-split`, `only` mode), completes the phase and the build goes on.
-Several saves `epic.json` (`proposed`), renders `split.md` and
-`plans/<id>.md`, then saves `state.epic_dir` and completes the phase in one
-checkpoint.
+Several takes the epic lock, saves `epic.json` (`proposed`), renders
+`split.md` and `plans/<id>.md`, then saves `state.epic_dir` and completes the
+phase in one checkpoint.
 
 `continue_epic` runs on every later build of an epic, and right after the
-split: it prints `EPIC:SPLIT:<split.md>` and exits 3.
+split: `proposed` prints `EPIC:SPLIT:<split.md>` and exits 3 until
+`--approve-split`, which re-checks the table and plans as on disk and saves
+`approved` with their hashes. An approved build checks the hashes (a changed
+file exits 2) and prints `EPIC:APPROVED:<epic.json>` (exit 0); from PR B1 it
+starts the coordinator instead.
 """
 
 from __future__ import annotations
 
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ..intake import WAITING_EXIT
 from ..models import BuildPhase
+from . import lock as epic_lock
 from . import split, store
 
 log = logging.getLogger(__name__)
 
 MARKER_EPIC_SPLIT = "EPIC:SPLIT"
+MARKER_EPIC_APPROVED = "EPIC:APPROVED"
 EXIT_FAILED = 1
+EXIT_REFUSED = 2
 
 
 def _error(message: str) -> None:
@@ -90,8 +98,23 @@ async def run_epic_split_phase(config, state, state_path: Path, args, progress) 
         epic = store.Epic(name=name, reason=answer.reason, children=answer.children)
 
     # Only a split that passed the checks gets here, so one change never
-    # creates the directory.
-    if not resumed:
+    # creates the directory. The lock comes before the first write.
+    try:
+        epic_lock.hold(epic_dir, name)
+    except epic_lock.EpicLocked as e:
+        _error(str(e))
+        return EXIT_REFUSED
+    if (epic_dir / store.EPIC_FILE).exists():
+        # Saved before the lock, by this build's earlier run or by another build
+        # of the same change while this one was deciding: that epic.json wins,
+        # read as it is now, and no file on disk is written over (A.S8).
+        try:
+            epic = store.load_epic(epic_dir)
+        except store.EpicFileError as e:
+            _error(str(e))
+            return EXIT_FAILED
+        resumed = True
+    else:
         store.save_epic(epic_dir, epic)
     if epic.state == "proposed":
         store.write_files(epic_dir, epic, keep_existing=resumed)
@@ -102,16 +125,56 @@ async def run_epic_split_phase(config, state, state_path: Path, args, progress) 
     return None
 
 
-def continue_epic(config, state, args) -> int:
-    """What a build that is an epic does: wait for the split to be read
-    (`EPIC:SPLIT`, exit 3). An unreadable epic.json exits 1 and is left as it is."""
+def continue_epic(config, state, args, *, just_split: bool = False) -> int:
+    """What a build that is an epic does (item 7). *just_split* is True in the
+    run that wrote the split: it always waits, so an `--approve-split` given
+    before anyone saw the split approves nothing."""
     epic_dir = Path(state.epic_dir)
+    name = config.change_name
     split_md = epic_dir / store.SPLIT_FILE
     try:
-        store.load_epic(epic_dir)
+        epic = store.load_epic(epic_dir)
     except store.EpicFileError as e:
         _error(str(e))
         return EXIT_FAILED
-    log.info("EPIC_SPLIT waiting: %s", split_md)
-    print(f"{MARKER_EPIC_SPLIT}:{split_md}", flush=True)
-    return WAITING_EXIT
+
+    if epic.state == "proposed" and (just_split or not getattr(args, "approve_split", False)):
+        log.info("EPIC_SPLIT waiting for approval: %s", split_md)
+        print(f"{MARKER_EPIC_SPLIT}:{split_md}", flush=True)
+        return WAITING_EXIT
+
+    try:
+        epic_lock.hold(epic_dir, name)
+    except epic_lock.EpicLocked as e:
+        _error(str(e))
+        return EXIT_REFUSED
+    try:
+        epic = store.load_epic(epic_dir)       # as it is now, under the lock
+    except store.EpicFileError as e:
+        _error(str(e))
+        return EXIT_FAILED
+
+    epic_json = epic_dir / store.EPIC_FILE
+    if epic.state == "proposed":
+        children, errors = store.read_children(epic_dir)
+        if errors:
+            _error("the split cannot be approved: " + "; ".join(errors))
+            return EXIT_FAILED
+        epic.children = children
+        epic.hashes = store.file_hashes(epic_dir, children)
+        epic.state = "approved"
+        epic.approved_at = datetime.now(timezone.utc).isoformat()
+        store.save_epic(epic_dir, epic)
+        log.info("EPIC_SPLIT approved: %s", epic_json)
+    else:
+        changed = store.changed_file(epic_dir, epic)
+        if changed == store.EPIC_FILE:
+            _error(f"{changed} in {epic_dir} does not match the {store.SPLIT_FILE} and plans approved "
+                   "with --approve-split; put it back as it was, or start a new epic")
+            return EXIT_REFUSED
+        if changed:
+            _error(f"{changed} in {epic_dir} changed after the split was approved; "
+                   "put it back as it was, or start a new epic")
+            return EXIT_REFUSED
+    print(f"{MARKER_EPIC_APPROVED}:{epic_json}", flush=True)
+    return 0

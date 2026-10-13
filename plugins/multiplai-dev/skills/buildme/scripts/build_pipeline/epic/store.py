@@ -5,16 +5,18 @@ parent build's change name and `<owner>-<repo>` comes from the review skill's
 slug rule (`origin_owner_repo`, `slug_repo_name`, `sanitize_slug` in
 `review_pipeline/target.py`), copied here and pinned by `tests/test_epic_split.py`.
 
-- `epic.json` (`Epic`): the children with their plans, and `state`
-  (`proposed`). Saved with
+- `epic.json` (`Epic`): the children with their plans, `state` (`proposed`,
+  then `approved` with the sha256 of `split.md` and each plan). Saved with
   `multiplai_core.checkpoint.save_model`, so a kill leaves the old or the new
   file, never half of one.
 - `split.md`: the children, what each depends on, and which run in parallel.
-- `plans/<id>.md`: one plan per child.
+  Its table is what approval reads back, so a hand edit to it is used.
+- `plans/<id>.md`: one plan per child, also used as edited.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -28,7 +30,7 @@ from multiplai_core import checkpoint
 from multiplai_core.paths import get_paths
 from pydantic import BaseModel, Field
 
-from .split import EpicChild, waves
+from .split import EpicChild, check_children, waves
 
 log = logging.getLogger(__name__)
 
@@ -45,10 +47,13 @@ class EpicFileError(Exception):
 
 class Epic(BaseModel):
     name: str
-    state: Literal["proposed"] = "proposed"
+    state: Literal["proposed", "approved"] = "proposed"
     reason: str = ""
     children: list[EpicChild] = Field(default_factory=list)
+    # Approved: published path ("split.md", "plans/<id>.md") -> sha256.
+    hashes: dict[str, str] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    approved_at: str | None = None
 
 
 # --- the directory name (copied from review_pipeline/target.py) ---------------
@@ -130,8 +135,37 @@ def render_split(epic: Epic) -> str:
     for i, wave in enumerate(waves(epic.children), 1):
         how = "in parallel" if len(wave) > 1 else "alone"
         lines.append(f"{i}. {', '.join(wave)} ({how})")
-    lines += ["", f"Each child's plan is `{PLANS_DIR}/<id>.md`.", ""]
+    lines += ["", f"Each child's plan is `{PLANS_DIR}/<id>.md`. Edit the table or a plan before "
+              "approving: approval reads both as they are on disk.", ""]
     return "\n".join(lines)
+
+
+def _split_row(line: str) -> list[str]:
+    cells = re.split(r"(?<!\\)\|", line.strip())
+    return [c.strip().replace("\\|", "|") for c in cells[1:-1]]
+
+
+def parse_split(text: str) -> list[EpicChild]:
+    """The children in split.md's table (no plans). Raises EpicFileError when
+    there is no table with the expected header."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().startswith("|") and [c.lower() for c in _split_row(line)] == TABLE_HEADER:
+            break
+    else:
+        raise EpicFileError(f"{SPLIT_FILE} has no table with the columns {' | '.join(TABLE_HEADER)}")
+    children = []
+    for line in lines[i + 2:]:
+        if not line.strip().startswith("|"):
+            break
+        cells = _split_row(line)
+        if len(cells) != len(TABLE_HEADER):
+            raise EpicFileError(f"{SPLIT_FILE}: the row {line.strip()!r} does not have {len(TABLE_HEADER)} cells")
+        cid, title, deps, repo = cells
+        depends_on = [] if deps in ("", NONE, "-") else [d.strip() for d in deps.split(",") if d.strip()]
+        children.append(EpicChild(id=cid, title=title, depends_on=depends_on,
+                                  repo=None if repo in ("", NONE, "-") else repo))
+    return children
 
 
 def plan_path(epic_dir: Path, child_id: str) -> Path:
@@ -167,3 +201,46 @@ def write_files(epic_dir: Path, epic: Epic, *, keep_existing: bool = False) -> N
     for c in epic.children:
         if not (keep_existing and plan_path(epic_dir, c.id).exists()):
             write_plan(epic_dir, c)
+
+
+def read_children(epic_dir: Path) -> tuple[list[EpicChild], list[str]]:
+    """split.md's table and each `plans/<id>.md` as on disk, and item 4's
+    checks on them; every error names the file."""
+    epic_dir = Path(epic_dir)
+    try:
+        children = parse_split((epic_dir / SPLIT_FILE).read_text())
+    except FileNotFoundError:
+        return [], [f"{SPLIT_FILE} is missing"]
+    except EpicFileError as e:
+        return [], [str(e)]
+    if len(children) < 2:
+        return children, [f"{SPLIT_FILE}: the table lists {len(children)} children; an epic needs at least two"]
+    for c in children:
+        path = plan_path(epic_dir, c.id)
+        c.plan = path.read_text() if path.is_file() else ""
+    errors = check_children(children, plan_where=lambda c: f"{PLANS_DIR}/{c.id}.md")
+    return children, [e if e.startswith(f"{PLANS_DIR}/") else f"{SPLIT_FILE}: {e}" for e in errors]
+
+
+def file_hashes(epic_dir: Path, children: list[EpicChild]) -> dict[str, str]:
+    epic_dir = Path(epic_dir)
+    rels = [SPLIT_FILE] + [f"{PLANS_DIR}/{c.id}.md" for c in children]
+    return {rel: hashlib.sha256((epic_dir / rel).read_bytes()).hexdigest() for rel in rels}
+
+
+def changed_file(epic_dir: Path, epic: Epic) -> str | None:
+    """The first approved file that changed, or None. `split.md` and the plans
+    are checked against their hashes, then `epic.json` itself: its hashes must
+    name split.md and every child's plan, and its children must be split.md's
+    table and the plans as on disk (from PR B1 the coordinator builds them)."""
+    epic_dir = Path(epic_dir)
+    for rel, digest in epic.hashes.items():
+        path = epic_dir / rel
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            return rel
+    if set(epic.hashes) != {SPLIT_FILE, *(f"{PLANS_DIR}/{c.id}.md" for c in epic.children)}:
+        return EPIC_FILE
+    children, errors = read_children(epic_dir)
+    if errors or children != epic.children:
+        return EPIC_FILE
+    return None

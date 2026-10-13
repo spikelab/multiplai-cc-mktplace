@@ -17,6 +17,24 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-10-13
+
+### Added
+- An epic split can be approved. Edit `split.md`'s table or any
+  `plans/<id>.md`, then re-run the same build with `--approve-split`: buildme
+  checks them again as they are on disk and prints
+  `EPIC:APPROVED:<epic.json>`. A failed check exits 1 naming the file; a file
+  changed after approval exits 2 naming it, and so does an `epic.json` whose
+  children no longer match the approved table and plans. Building the
+  children comes in a later release.
+- Only one process at a time writes an epic's directory; a second exits 2
+  with the pid, host and start time of the one running. A split another
+  build of the same change saved while this one was deciding is kept, with
+  any edit made to it.
+- The wrapper fetches every GitHub issue's sub-issues (all pages) into the
+  ticket, and posts the split on the ticket as one comment, never twice for
+  the same split. Its exit-code list now says what exit 2 means for an epic.
+
 ## [0.55.0] - 2026-10-13
 
 ### Added

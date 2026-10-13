@@ -9,7 +9,9 @@ Subcommands for dev/debug use (only /buildme is user-facing):
   setup         — Write or merge specs/config.yaml (the wrapper asks the questions)
   config-get    — Print one resolved specs/config.yaml value (e.g. intake.provider)
 
-Exit codes: 0 done, 1 failure, 2 usage, 3 waiting on a human or the wrapper
+Exit codes: 0 done (an approved epic prints EPIC:APPROVED), 1 failure, 2 usage,
+or a refusal that wrote nothing (the epic's lock is held, or an approved epic
+file changed), 3 waiting on a human or the wrapper
 (stdout says which: INTERVIEW:WAITING, RESEARCH:NEEDED, SPLIT:REQUIRED, EPIC:SPLIT or
 FINDINGS:REVIEW_READY), 4 an agent timed out.
 """
@@ -146,6 +148,9 @@ def build_parser() -> argparse.ArgumentParser:
                             "posted questions")
     build.add_argument("--accept-size", action="store_true",
                        help="Build a plan the size gate says should be split, as one PR")
+    build.add_argument("--approve-split", action="store_true",
+                       help="Approve the epic split this build printed as EPIC:SPLIT, "
+                            "as split.md and plans/ are on disk now")
     build.add_argument("--no-epic-split", action="store_true",
                        help="Build the input as one change: skip the EPIC_SPLIT decision "
                             "(an epic's child builds pass this)")
