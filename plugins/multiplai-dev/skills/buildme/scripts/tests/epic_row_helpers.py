@@ -78,6 +78,17 @@ def make_project(root: Path, name: str = "r") -> Path:
     return project
 
 
+def move_origin(root: Path) -> str:
+    """Push one more commit to origin's main from another clone; its sha."""
+    other = root / "other"
+    _git(root, "clone", "-q", str(root / "o" / "r.git"), str(other))
+    (other / "y.txt").write_text("y\n")
+    _git(other, "add", "y.txt")
+    _git(other, "-c", "commit.gpgsign=false", "commit", "-qm", "moved")
+    _git(other, "push", "-q", "origin", "HEAD:main")
+    return _git(other, "rev-parse", "HEAD").strip()
+
+
 def make_build(project: Path, change: str = "e", *, mode: str = "scratch",
                phase: BuildPhase = BuildPhase.RESEARCH) -> BuildConfig:
     """A build of *change* whose shaping is done up to *phase*, with a ticket
@@ -308,6 +319,10 @@ else:
     print(f"BRANCH:{{branch}}", flush=True)
     (root / "bases").mkdir(exist_ok=True)
     (root / "bases" / cid).write_text(git("rev-parse", "HEAD", cwd=wt).stdout.strip())
+if step.get("grandchild"):      # a process in the build's group, as a real build's agents are
+    kid = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    (root / "grandchildren").mkdir(exist_ok=True)
+    (root / "grandchildren" / f"{{cid}}.{{n}}").write_text(str(kid.pid))
 if step.get("block"):
     gate = root / "release" / cid
     while not gate.exists():
@@ -336,6 +351,9 @@ import json, os, pathlib, sys
 root = pathlib.Path(os.environ["EPIC_FAKE_ROOT"])
 prs = json.loads((root / "prs.json").read_text()) if (root / "prs.json").exists() else {{}}
 a = sys.argv[1:]
+if (root / "gh-fails").exists():
+    print("fake gh: offline", file=sys.stderr)
+    sys.exit(1)
 if a[:2] == ["pr", "view"]:
     pr = prs.get(a[2])
     if pr is None:
@@ -354,7 +372,9 @@ else:
 class Fakes:
     """The fake build and `gh` first on PATH, answering from `<root>/fakes.json`
     (per child, one step per attempt: `block`, `marker`, `exit`, `no_pr`,
-    `die_before_pr_line`) and `<root>/prs.json`; launches go to `<root>/calls.log`."""
+    `die_before_pr_line`, `grandchild`) and `<root>/prs.json`; launches go to
+    `<root>/calls.log`. `<root>/gh-fails` makes every `gh` call fail; `ps_fails`
+    puts a `ps` that exits 1 first on PATH."""
 
     def __init__(self, root: Path, monkeypatch, steps: dict[str, list[dict]] | None = None):
         import sys
@@ -368,7 +388,16 @@ class Fakes:
             path.chmod(0o755)
         (root / "release").mkdir(exist_ok=True)
         (root / "fakes.json").write_text(json.dumps(steps or {}))
+        (root / "psfail").mkdir(exist_ok=True)
+        (root / "psfail" / "ps").write_text("#!/bin/sh\necho 'ps: failed' >&2\nexit 1\n")
+        (root / "psfail" / "ps").chmod(0o755)
         self.use(monkeypatch)
+
+    def ps_fails(self, monkeypatch) -> None:
+        monkeypatch.setenv("PATH", os.pathsep.join([str(self.root / "psfail"), os.environ["PATH"]]))
+
+    def grandchildren(self) -> list[int]:
+        return [int(p.read_text()) for p in sorted((self.root / "grandchildren").glob("*"))]
 
     def use(self, monkeypatch) -> None:
         path = [p for p in os.environ["PATH"].split(os.pathsep)
@@ -418,20 +447,59 @@ def approve(config: BuildConfig, answer: EpicSplitAnswer, log: CallLog) -> None:
     from build_pipeline.epic import coordinator
     from build_pipeline.epic import split as split_mod
 
+    from build_pipeline.epic import lock
+
     with patch.object(split_mod, "epic_split", FakeSplit(log, answer)):
         assert run_build(config, args_for(config)) == 3
     with patch.object(coordinator, "run_epic", AsyncMock(return_value=0)):
         assert run_build(config, args_for(config, approve_split=True)) == 0
+    lock.release_all()
 
 
 def run_coordinator(config: BuildConfig, **over) -> int:
-    """One re-run of the approved build: the coordinator runs, with the fake clock."""
+    """One re-run of the approved build: the coordinator runs, with the fake
+    clock. Like a new process, it takes the epic lock itself and drops it at
+    the end, so a child build holding the lock would make it exit 2."""
     from unittest.mock import patch
 
-    from build_pipeline.epic import coordinator
+    from build_pipeline.epic import coordinator, lock
 
-    with patch.object(coordinator, "CLOCK", FakeClock()):
-        return run_build(config, args_for(config, **over), coordinator=True)
+    lock.release_all()
+    try:
+        with patch.object(coordinator, "CLOCK", FakeClock()):
+            return run_build(config, args_for(config, **over), coordinator=True)
+    finally:
+        lock.release_all()
+
+
+def run_signalled(fn: Callable[[], int], ready: Callable[[], bool], sig: int) -> int:
+    """Run fn() in a forked child, send it *sig* once ready() is true, and
+    return the child's exit code (fn's return value)."""
+    import time
+
+    pid = os.fork()
+    if pid == 0:
+        rc = 1
+        try:
+            rc = fn()
+        finally:
+            os._exit(rc)
+    for _ in range(1000):
+        if ready():
+            break
+        time.sleep(0.02)
+    else:
+        os.kill(pid, 9)
+        raise AssertionError("never ready to signal")
+    os.kill(pid, sig)
+    _, status = os.waitpid(pid, 0)
+    return os.waitstatus_to_exitcode(status)
+
+
+def alive(pid: int) -> bool:
+    """True while *pid* runs (a zombie counts as gone)."""
+    ps = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return bool(ps.stdout.strip()) and not ps.stdout.strip().startswith("Z")
 
 
 def records_snapshot(epic_dir: Path, root: Path) -> dict[str, list[tuple]]:

@@ -6,15 +6,20 @@ items 11-17). The build is a fake first on PATH that prints the real markers;
 from __future__ import annotations
 
 import argparse
+import asyncio
+import copy
 import json
+import os
+import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
-from build_pipeline import git_ops, orchestrator
+from build_pipeline import git_ops, intake, orchestrator
 from build_pipeline.config import BuildConfig, EpicSettings
-from build_pipeline.epic import coordinator, records
+from build_pipeline.epic import coordinator, records, store
 from build_pipeline.epic import lock as epic_lock
 from build_pipeline.epic.split import EpicSplitAnswer
 from build_pipeline.state import BuildState
@@ -29,6 +34,7 @@ from .epic_row_helpers import (
     die_at,
     make_build,
     make_project,
+    move_origin,
     pr_url,
     run_coordinator,
     run_killed,
@@ -185,15 +191,51 @@ def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
 
 
 def test_base_ref_reaches_a_new_child_and_a_relaunch_keeps_its_own(tmp_path, monkeypatch):
+    """origin moves right after a's first launch: b, launched next, branches
+    from the new sha (B1.S14); a's relaunch reuses its first command (item 15)."""
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit": 1}, {}]})
-    origin = tmp_path / "o" / "r.git"
-    sha = subprocess.run(["git", "rev-parse", "main"], cwd=origin, capture_output=True,
-                         text=True, check=True).stdout.strip()
+    old = _sha(tmp_path / "o" / "r.git", "main")
+    real, moved = coordinator._spawn, []
+
+    def spawn(argv, log_path):
+        proc = real(argv, log_path)
+        moved.append(moved[0] if moved else move_origin(tmp_path))
+        return proc
+
+    monkeypatch.setattr(coordinator, "_spawn", spawn)
     assert e.run() == 0
     first, again = [a.started["argv"] for a in records.attempts(e.dir) if a.child == "a"]
-    assert first[first.index("--base-ref") + 1] == sha
+    assert first[first.index("--base-ref") + 1] == old
     assert again == first                      # the relaunch is the same command
-    assert (tmp_path / "bases" / "b").read_text() == sha
+    assert (tmp_path / "bases" / "b").read_text() == moved[0] != old
+
+
+def test_a_child_builds_in_the_source_checkout_when_the_parent_used_a_worktree(tmp_path, monkeypatch):
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
+    wt = tmp_path / "parent-wt"
+    (wt / "sub").mkdir(parents=True)
+    config = copy.copy(e.config)
+    config.project_dir = wt / "sub"
+    state = BuildState(change_name="e", mode="scratch", tier="advanced",
+                       source_repo=str(e.project), worktree_path=str(wt))
+    coord = coordinator.Coordinator(config, state, None, e.dir, store.load_epic(e.dir))
+    argv = coord.new_argv("a", None)
+    assert argv[argv.index("--project-dir") + 1] == str(e.project / "sub")
+
+
+def test_a_hung_fetch_times_out(tmp_path, monkeypatch):
+    """`git fetch` before a launch is bounded: a hung one gives origin's ref as it is."""
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    shim = tmp_path / "gitbin"
+    shim.mkdir()
+    (shim / "git").write_text(f'#!/bin/sh\n[ "$1" = fetch ] && exec sleep 30\nexec {shutil.which("git")} "$@"\n')
+    (shim / "git").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim}:{os.environ['PATH']}")
+    monkeypatch.setattr(coordinator, "FETCH_TIMEOUT", 1)
+    began = time.monotonic()
+    assert coordinator.base_sha(project) == _sha(project)
+    assert time.monotonic() - began < 10
 
 
 def test_a_subdirectory_project_gets_that_subdirectory(tmp_path):
@@ -205,6 +247,50 @@ def test_a_subdirectory_project_gets_that_subdirectory(tmp_path):
     assert coordinator.source_project_dir(config, state) == repo / "sub"
     state = BuildState(change_name="e", mode="brief", tier="advanced")
     assert coordinator.source_project_dir(config, state) == wt / "sub"
+
+
+def test_a_pr_is_found_through_the_worktree_list(tmp_path, monkeypatch):
+    """Logs with only `WORKTREE:` lines (killed before `BRANCH:`, then a re-bound
+    relaunch): the branch comes from `git worktree list --porcelain` (B1.S15)."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
+    wt = tmp_path / "ws" / ".worktrees" / "buildme-e-a"
+    subprocess.run(["git", "worktree", "add", "-q", "-b", "buildme/e-a", str(wt)], cwd=e.project, check=True)
+    (tmp_path / "prs.json").write_text(json.dumps({pr_url("e-a"): {"branch": "buildme/e-a", "state": "OPEN"}}))
+    tries = []
+    for _ in range(2):
+        a = records.start(e.dir, "build", "a", ["x"])
+        a.log.write_text(f"WORKTREE:{wt}\n")
+        records.finish(a, None, interrupted=True)
+        tries.append(a)
+    coord = coordinator.Coordinator(e.config, BuildState(change_name="e", mode="scratch", tier="advanced"),
+                                    None, e.dir, store.load_epic(e.dir))
+    assert coord._find_pr(tries) == pr_url("e-a")
+
+
+def test_record_names_keep_kind_and_child_apart(tmp_path):
+    records.start(tmp_path, "merge-tests", "api", ["x"])
+    records.start(tmp_path, "merge", "tests-api", ["y"])
+    assert [(a.kind, a.child) for a in records.attempts(tmp_path)] == [("merge-tests", "api"), ("merge", "tests-api")]
+
+
+def test_a_child_refuses_a_config_yaml_that_is_not_on_its_base_ref(tmp_path, monkeypatch):
+    """With --base-ref, a specs/config.yaml committed but not pushed would not
+    reach the worktree: the build refuses, as for an uncommitted one."""
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    base = _sha(project)
+    (project / "specs").mkdir()
+    (project / "specs" / "config.yaml").write_text("context: x\n")
+    subprocess.run(["git", "add", "specs"], cwd=project, check=True)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "config"], cwd=project, check=True)
+    config = BuildConfig(project_dir=project, change_name="c")
+    config.base_ref = base
+    state = BuildState(change_name="c", mode="brief", tier="advanced")
+    with pytest.raises(intake.ConfigNotCommittedError, match="not on"):
+        asyncio.run(orchestrator._run_bootstrap(config, state, None, None))
+    assert state.worktree_path is None
+    config.base_ref = _sha(project)
+    assert not intake.config_yaml_off_ref(project, config.base_ref)
 
 
 # --- waiting for a dependency's merge ----------------------------------------------
