@@ -44,15 +44,17 @@ class RequirementOut(_Model):
 
 
 class WriteOutput(_Model):
-    requirements: list[RequirementOut] = []
+    # Required, so an answer with another key does not parse (see group.GroupOutput). It may be
+    # empty: a capability with no behaviour a caller can observe gets no file.
+    requirements: list[RequirementOut]
 
 
-def capability_facts(cap: Capability, by_id: dict[str, Symbol], gated: Gated) -> list[Fact]:
-    paths = {by_id[sid].path for sid in cap.symbols}
+def capability_facts(cap: Capability, by_id: dict[str, list[Symbol]], gated: Gated) -> list[Fact]:
+    paths = {d.path for sid in cap.symbols for d in by_id[sid]}
     return [f for f in gated.facts if any(c.path in paths for c in f.citations)]
 
 
-def prompt(code: str, cap: Capability, by_id: dict[str, Symbol], gated: Gated, tests: list[str]) -> str:
+def prompt(code: str, cap: Capability, by_id: dict[str, list[Symbol]], gated: Gated, tests: list[str]) -> str:
     facts = [f"- {f.id}: {one_line(f.claim)} ({c.path}:{c.line_start}-{c.line_end})"
              for f in capability_facts(cap, by_id, gated) for c in f.citations[:1]]
     return f"""\
@@ -62,7 +64,7 @@ What it does: {cap.summary or "see the symbols below"}
 {UNTRUSTED_RULES}
 
 Read the code of these public symbols (paths are relative to your working directory):
-{chr(10).join(symbol_line(by_id[sid]) for sid in cap.symbols)}
+{chr(10).join(symbol_line(d) for sid in cap.symbols for d in by_id[sid])}
 
 Test files you may cite as evidence that a behaviour is pinned:
 {chr(10).join(f"- {t}" for t in tests) or "- none"}
@@ -91,7 +93,9 @@ async def run(state: State, run_dir: Path, caps: list[Capability], gated: Gated,
     if not calls.any_eligible([c.name for c in caps], answers, attempts):
         return
     sdk.require_trusted_repo()
-    by_id = {symbol_id(s): s for s in scope.symbols}
+    by_id: dict[str, list[Symbol]] = {}  # every def of the name: a property's getter and setter
+    for s in scope.symbols:
+        by_id.setdefault(symbol_id(s), []).append(s)
     tests = [f for f in scope.files if is_test_file(f)]
     code = label(state.target)
 

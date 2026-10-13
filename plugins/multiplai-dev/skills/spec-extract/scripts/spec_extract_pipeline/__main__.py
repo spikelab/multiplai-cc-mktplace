@@ -19,9 +19,10 @@ import contextlib
 import logging
 import os
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from . import explore, gate, group, runlock, sdk, write
 from . import render as render_mod
@@ -142,13 +143,23 @@ def _run(args: argparse.Namespace, now: Callable[[], datetime]) -> int:
         return _group_write_render(state, run_dir, git_target, ledger)
 
 
+def _ask_with_write_model(step: Coroutine[Any, Any, None]) -> None:
+    """Run the group or write step; a backend that cannot run names the setting it read."""
+    try:
+        asyncio.run(step)
+    except sdk.BackendUnavailable as e:
+        e.setting = "spec_extract_write_model"  # read by main's message
+        raise
+
+
 def _group_write_render(state: state_mod.State, run_dir: Path, git_target: target.Target, ledger) -> int:
     """Group, write, gate and render, each from state (plan, items 14-17)."""
     scope = state.scope
     assert scope is not None
     gated = explore.gated_facts(git_target, scope, state.explore_answers, run_dir)
     model = sdk.model_for("write")  # the group call uses the write model too (Decided 18)
-    asyncio.run(group.run(state, run_dir, gated, call=sdk.agent_call_structured, ledger=ledger, model=model))
+    _ask_with_write_model(group.run(state, run_dir, gated, call=sdk.agent_call_structured, ledger=ledger,
+                                    model=model))
     grouping = group.finish(state, run_dir)
     scope_sections = report_mod.scope_sections(scope, explore.not_answered_files(scope.units, state.explore_answers))
     if grouping is None:
@@ -157,8 +168,8 @@ def _group_write_render(state: state_mod.State, run_dir: Path, git_target: targe
         print(f"spec-extract: group gave no answer in 2 attempts; see {run_dir / report_mod.REPORT_FILE}",
               file=sys.stderr)
         return EXIT_FAILED
-    asyncio.run(write.run(state, run_dir, grouping.capabilities, gated, call=sdk.agent_call_structured,
-                          ledger=ledger, model=model))
+    _ask_with_write_model(write.run(state, run_dir, grouping.capabilities, gated,
+                                    call=sdk.agent_call_structured, ledger=ledger, model=model))
     if "write" not in state.steps_done:
         state.steps_done.append("write")
         state_mod.save(state, run_dir)
@@ -191,8 +202,9 @@ def main(argv: Sequence[str] | None = None, *, now: Callable[[], datetime] | Non
               "to continue.", file=sys.stderr)
         return EXIT_BUDGET
     except sdk.BackendUnavailable as e:
+        setting = getattr(e, "setting", "spec_extract_explore_model")
         print(f"spec-extract: {e}. Nothing was counted; fix the model setting "
-              "(spec_extract_explore_model in multiplai.conf) or install claude-agent-sdk, "
+              f"({setting} in multiplai.conf) or install claude-agent-sdk, "
               "then run the same command again.", file=sys.stderr)
         return EXIT_FAILED
     except sdk.RepoTrustError as e:

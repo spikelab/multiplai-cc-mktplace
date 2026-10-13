@@ -8,8 +8,8 @@ rule with key `group` (`calls.py`), with the write model (Decided 18).
 The **Python gate** is a pure function of the saved answer and the symbol list,
 so every run computes the same capabilities from the same state:
 
-- names are kebab-case (at most 60 characters) and unique (`-2`, `-3` … in
-  answer order);
+- names are kebab-case, cut to 60 characters before any suffix this gate
+  adds, and unique (`-2`, `-3` … in answer order);
 - every public symbol is in exactly one capability: a symbol the answer does
   not place goes to `unassigned`, last; one placed twice stays in the first;
   a name that is not a public symbol of this target is dropped, and so is a
@@ -31,7 +31,7 @@ from pathlib import Path, PurePosixPath
 
 from code_facts import UNTRUSTED_RULES, CallFn, Gated, schema_json
 from multiplai_core.budget import SpendLedger
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import calls, sdk
 from . import report as report_mod
@@ -61,7 +61,9 @@ class CapabilityOut(_Model):
 
 
 class GroupOutput(_Model):
-    capabilities: list[CapabilityOut] = []
+    # Required and non-empty: an answer without it does not parse, so the wrapper sends it
+    # back to be reformatted and then fails the attempt, instead of storing it as an answer.
+    capabilities: list[CapabilityOut] = Field(min_length=1)
 
 
 class Capability(BaseModel):
@@ -78,7 +80,7 @@ class Grouping:
 
 
 def one_line(text: str) -> str:
-    """Model text on one line, so it can never start a heading in a registry file."""
+    """Model text on one line (render also escapes its `#`, so it cannot start a heading)."""
     return " ".join(str(text).split())
 
 
@@ -118,7 +120,9 @@ def _split(cap: Capability, path_of: dict[str, str]) -> list[Capability]:
 
 def gate(answer: dict, symbols: list[Symbol]) -> Grouping:
     """The capabilities from a group answer: a pure function of the answer and the symbols."""
-    order = {symbol_id(s): i for i, s in enumerate(symbols)}
+    order: dict[str, int] = {}  # a name defined twice is one symbol, at its first def
+    for i, s in enumerate(symbols):
+        order.setdefault(symbol_id(s), i)
     path_of = {symbol_id(s): s.path for s in symbols}
     out = GroupOutput.model_validate(answer)
     g = Grouping()

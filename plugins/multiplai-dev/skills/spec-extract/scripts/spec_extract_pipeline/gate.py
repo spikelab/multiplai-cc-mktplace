@@ -10,8 +10,10 @@
 - A scenario is "pinned by test" when a passing citation is in a test file,
   else "read from code only".
 - A public symbol is specified when a kept citation in its file overlaps its
-  lines (`def` or `class` to its last line, from `ast` at the commit). The
-  others are "Not specified", with the reason.
+  lines (`def` or `class` to its last line, from `ast` at the commit). A name
+  defined more than once (a property's getter and setter, `@overload` stubs, a
+  redefined function) is one symbol, specified by a citation of any of its
+  defs. The others are "Not specified", once each, with the reason.
 """
 
 from __future__ import annotations
@@ -62,9 +64,13 @@ class Checked:
     not_written: list[str] = field(default_factory=list)
 
 
-def symbol_spans(target: Target, symbols: list[Symbol]) -> dict[str, tuple[int, int]]:
-    """{symbol id: (first line, last line)} at the commit; just the `def` line when `ast` cannot say."""
-    spans = {symbol_id(s): (s.line, s.line) for s in symbols}
+def symbol_spans(target: Target, symbols: list[Symbol]) -> dict[str, list[tuple[int, int]]]:
+    """{symbol id: (first line, last line) of each of its defs} at the commit, once per id in scope
+    order; just the `def` lines when `ast` cannot say."""
+    def_lines: dict[str, list[tuple[int, int]]] = {}
+    for s in symbols:
+        def_lines.setdefault(symbol_id(s), []).append((s.line, s.line))
+    spans: dict[str, list[tuple[int, int]]] = {}
     for path in dict.fromkeys(s.path for s in symbols):
         text = file_at(target.repo, str(target.head_sha), path)
         try:
@@ -75,12 +81,13 @@ def symbol_spans(target: Target, symbols: list[Symbol]) -> dict[str, tuple[int, 
             continue
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                spans[f"{path}::{node.name}"] = (node.lineno, node.end_lineno or node.lineno)
+                spans.setdefault(f"{path}::{node.name}", []).append((node.lineno, node.end_lineno or node.lineno))
             if isinstance(node, ast.ClassDef):
                 for item in node.body:
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        spans[f"{path}::{node.name}.{item.name}"] = (item.lineno, item.end_lineno or item.lineno)
-    return {sid: spans[sid] for sid in (symbol_id(s) for s in symbols)}
+                        spans.setdefault(f"{path}::{node.name}.{item.name}", []).append(
+                            (item.lineno, item.end_lineno or item.lineno))
+    return {sid: spans.get(sid) or lines for sid, lines in def_lines.items()}
 
 
 def check(caps: list[Capability], answers: dict[str, dict], symbols: list[Symbol], target: Target,
@@ -122,8 +129,8 @@ def check(caps: list[Capability], answers: dict[str, dict], symbols: list[Symbol
                 kept.append(Scenario(one_line(sc.name), one_line(sc.when), one_line(sc.then), good,
                                      pinned=any(is_test_file(c.path) for c in good)))
                 for c in good:
-                    cited.update(sid for sid, (lo, hi) in spans.items()
-                                 if path_of[sid] == c.path and c.line_start <= hi and c.line_end >= lo)
+                    cited.update(sid for sid, ranges in spans.items() if path_of[sid] == c.path
+                                 and any(c.line_start <= hi and c.line_end >= lo for lo, hi in ranges))
             if not kept:
                 out.dropped.append(f"{cap.name} / {name}: no scenario left")
                 continue
@@ -132,8 +139,7 @@ def check(caps: list[Capability], answers: dict[str, dict], symbols: list[Symbol
             out.specs.append(Spec(cap.name, cap.summary, reqs))
         else:
             out.dropped.append(f"{cap.name}: no requirement left, so no file")
-    for s in symbols:
-        sid = symbol_id(s)
+    for sid in spans:
         if sid not in cited:
             reason = "its capability was not written" if sid in unwritten else "no kept scenario cites it"
             out.not_specified.append((sid, reason))

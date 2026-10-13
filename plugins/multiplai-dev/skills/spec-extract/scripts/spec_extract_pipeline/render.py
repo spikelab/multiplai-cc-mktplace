@@ -5,7 +5,10 @@ line naming the run and the commit, `## ADDED Requirements`, then
 `### Requirement:` blocks with `#### Scenario:` and `- **WHEN**` /
 `- **THEN**` lines, each scenario followed by its `- **CITES**` lines and one
 `- **EVIDENCE**` line. buildme's readers parse only `### Requirement:` blocks,
-so the extra lines are safe.
+so the extra lines are safe. Every `#` in model text is written `\\#`: the
+text is on one line already (the gate), and this keeps it from starting a
+heading or holding a `### Requirement:` that buildme's `ChangeManager` finds
+anywhere in a line.
 
 Every file is rewritten from state, so a resume before `render` is in
 `steps_done` writes the same bytes (row R9). Then `render` is added, and
@@ -21,7 +24,7 @@ from pathlib import Path
 from . import report as report_mod
 from . import state as state_mod
 from .gate import Checked, Spec
-from .group import Grouping
+from .group import Grouping, symbol_id
 from .report import Section
 from .state import State
 from .target import SNAPSHOT_DIR, SNAPSHOT_MARKER
@@ -30,12 +33,17 @@ REGISTRY_DIR = "registry"
 SUMMARY_FILE = "summary.json"
 
 
+def md(text: str) -> str:
+    """Model text that cannot be read as a heading or a requirement."""
+    return text.replace("#", "\\#")
+
+
 def capability_md(run_label: str, sha12: str, spec: Spec) -> str:
     out = [f"<!-- spec-extract {run_label}; cited lines are at commit {sha12} -->", "", "## ADDED Requirements"]
     for r in spec.requirements:
-        out += ["", f"### Requirement: {r.name}"] + ([r.text] if r.text else [])
+        out += ["", f"### Requirement: {md(r.name)}"] + ([md(r.text)] if r.text else [])
         for sc in r.scenarios:
-            out += ["", f"#### Scenario: {sc.name}", f"- **WHEN** {sc.when}", f"- **THEN** {sc.then}"]
+            out += ["", f"#### Scenario: {md(sc.name)}", f"- **WHEN** {md(sc.when)}", f"- **THEN** {md(sc.then)}"]
             out += [f"- **CITES** `{c.path}:{c.line_start}-{c.line_end}`" for c in sc.cites]
             out.append(f"- **EVIDENCE** {'pinned by test' if sc.pinned else 'read from code only'}")
     return "\n".join(out) + "\n"
@@ -57,13 +65,15 @@ def sections(grouping: Grouping, checked: Checked, symbols: int) -> list[Section
         r, n, p = _counts(s)
         caps.append(f"- {s.name}: {r} requirement(s), {n} scenario(s), {p} pinned by test "
                     f"(`{REGISTRY_DIR}/{s.name}.md`)")
+    # The gate may rename the bucket (`unassigned-2`) or split it by module.
+    bucket = {sid: c.name for c in grouping.capabilities for sid in c.symbols}
     return [
         Section("Counts", counts),
         Section("Capabilities", caps),
         Section("Dropped", [f"- {d}" for d in grouping.dropped + checked.dropped]),
         Section("Not specified", [f"- `{sid}`: {why}" for sid, why in checked.not_specified]),
-        Section("Not grouped", [f"- `{sid}`: the group answer did not place it; it is in `unassigned`"
-                                for sid in grouping.unassigned]),
+        Section("Not grouped", [f"- `{sid}`: the group answer did not place it; it is in "
+                                f"`{REGISTRY_DIR}/{bucket[sid]}.md`" for sid in grouping.unassigned]),
         Section("Not written", [f"- {c}: not written: write gave no answer in 2 attempts"
                                 for c in checked.not_written]),
     ]
@@ -102,7 +112,8 @@ def render(state: State, run_dir: Path, grouping: Grouping, checked: Checked,
     for spec in checked.specs:
         report_mod.write_output(run_dir, f"{REGISTRY_DIR}/{spec.name}.md", capability_md(run_label, sha12, spec))
     report_mod.write_report(run_dir, state.target,
-                            scope_sections + sections(grouping, checked, len(state.scope.symbols)))
+                            scope_sections + sections(grouping, checked,
+                                                      len({symbol_id(s) for s in state.scope.symbols})))
     report_mod.write_output(run_dir, SUMMARY_FILE,
                             json.dumps(summary(state, grouping, checked), indent=2, ensure_ascii=False) + "\n")
     state.steps_done.append("render")

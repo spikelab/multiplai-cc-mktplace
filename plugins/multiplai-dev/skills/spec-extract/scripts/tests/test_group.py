@@ -67,6 +67,12 @@ def test_gate_splits_one_module_over_40_symbols_into_chunks():
     assert [(c.name, len(c.symbols)) for c in caps] == [("big-m-1", 40), ("big-m-2", 40), ("big-m-3", 10)]
 
 
+def test_gate_puts_a_name_defined_twice_where_its_first_def_is():
+    symbols = [sym("a.py", "C.x", 3), sym("a.py", "C.y", 5), sym("a.py", "C.x", 7)]
+    answer = {"capabilities": [{"name": "c", "symbols": ["a.py::C.y", "a.py::C.x"]}]}
+    assert ids(group.gate(answer, symbols).capabilities) == {"c": ["a.py::C.x", "a.py::C.y"]}
+
+
 def test_gate_orders_symbols_as_the_scope_lists_them():
     symbols = [sym("a.py", "x", 1), sym("a.py", "y", 5)]
     answer = {"capabilities": [{"name": "c", "summary": "", "symbols": ["a.py::y", "a.py::x"]}]}

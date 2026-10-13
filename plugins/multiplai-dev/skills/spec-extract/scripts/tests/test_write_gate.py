@@ -149,6 +149,8 @@ def test_a_name_defined_twice_is_one_symbol_and_any_of_its_defs_specifies_it(tmp
     report = (run_dir / "report.md").read_text()
     assert "- Public symbols specified: 2 of 3" in report
     assert "Public symbols to specify: 3." in (run_dir / "plan.txt").read_text()
+    prompt = fake_call.prompts["write:box"]  # the write agent is shown every def of the name
+    assert "- box.py::Box.size (method, line 3)\n- box.py::Box.size (method, line 7)\n" in prompt
     assert report.split("## Not specified\n\n")[1].split("\n\n")[0] == "- `box.py::area`: no kept scenario cites it"
     assert json.loads((run_dir / "summary.json").read_text())["not_specified"] == [
         {"symbol": "box.py::area", "reason": "no kept scenario cites it"}]
