@@ -22,7 +22,7 @@ const App = (() => {
   const tabs = new Map();
   // Everything the server tells us; tabs read it and never write it.
   const state = { job: null, candidates: null, looks: null, music: null, videos: [], rows: [] };
-  let current = null, chosenByUser = false, loaded = false;
+  let current = null, chosenByUser = false, loaded = false, pollError = null;
 
   function setStatus(text, isError) {
     $("status").textContent = text;
@@ -112,14 +112,17 @@ const App = (() => {
         if (!loaded || JSON.stringify(next[k]) !== JSON.stringify(state[k])) { changed[k] = true; state[k] = next[k]; }
       }
       loaded = true;
-      if ($("status").classList.contains("error")) setStatus("");
+      // Clear the poll's own error only; a send's "Not sent: …" stays until the next action.
+      if (pollError !== null && $("status").textContent === pollError) setStatus("");
+      pollError = null;
       if (Object.keys(changed).length) {
         for (const t of tabs.values()) if (t.update) t.update(state, changed);
         markOpenTabs();
       }
       if (!chosenByUser) showTab(L.firstOpenTab(Object.fromEntries(L.TABS.map((t) => [t, isOpen(t)]))));
     } catch (e) {
-      setStatus(`Cannot reach the review server: ${e.message}`, true);
+      pollError = `Cannot reach the review server: ${e.message}`;
+      setStatus(pollError, true);
     }
   }
 
