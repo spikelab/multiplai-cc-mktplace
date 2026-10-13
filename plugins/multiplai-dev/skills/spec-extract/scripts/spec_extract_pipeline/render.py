@@ -24,18 +24,13 @@ from pathlib import Path
 from . import report as report_mod
 from . import state as state_mod
 from .gate import Checked, Spec
-from .group import Grouping, symbol_id
+from .group import Grouping, md, symbol_id
 from .report import Section
 from .state import State
 from .target import SNAPSHOT_DIR, SNAPSHOT_MARKER
 
 REGISTRY_DIR = "registry"
 SUMMARY_FILE = "summary.json"
-
-
-def md(text: str) -> str:
-    """Model text that cannot be read as a heading or a requirement."""
-    return text.replace("#", "\\#")
 
 
 def capability_md(run_label: str, sha12: str, spec: Spec) -> str:

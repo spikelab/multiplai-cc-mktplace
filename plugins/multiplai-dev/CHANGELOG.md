@@ -27,8 +27,11 @@ time, not derived from a tag.
   read-only agent per capability writes requirements with WHEN/THEN
   scenarios; every scenario's cited lines are re-read at the commit, and a
   scenario whose citations all fail is dropped and listed with the reason.
-  The run writes `registry/<capability>.md` in buildme's `specs/registry/`
-  format, each scenario marked "pinned by test" or "read from code only",
+  So is a requirement whose name repeats a kept one in its capability, or is
+  a prefix of one, or has one as a prefix: buildme matches requirement names
+  by prefix when it removes or replaces them. The run writes
+  `registry/<capability>.md` in buildme's `specs/registry/` format, each
+  scenario marked "pinned by test" or "read from code only",
   plus `capabilities.json`, `summary.json`, and a `report.md` listing every
   dropped item and every public symbol no scenario specifies. It ends with
   `SPEC_EXTRACT:RENDERED <files> <run>/registry` and deletes `snapshot/`.

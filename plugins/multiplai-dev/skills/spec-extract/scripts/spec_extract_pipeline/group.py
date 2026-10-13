@@ -84,6 +84,11 @@ def one_line(text: str) -> str:
     return " ".join(str(text).split())
 
 
+def md(text: str) -> str:
+    """Model text that cannot be read as a heading or a requirement."""
+    return text.replace("#", "\\#")
+
+
 def symbol_id(s: Symbol) -> str:
     return f"{s.path}::{s.name}"
 

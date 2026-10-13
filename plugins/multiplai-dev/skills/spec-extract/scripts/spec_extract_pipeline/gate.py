@@ -6,7 +6,9 @@
   with no scenario is dropped and listed, and so is a capability left with no
   requirement (no file). A requirement whose name repeats one already kept in
   the same capability is dropped too: buildme merges deltas by requirement
-  name.
+  name. So is one whose name as written (`md`) is a prefix of a kept name, or
+  has a kept name as a prefix: buildme's `ChangeManager` finds a REMOVED or
+  MODIFIED name as a prefix, with no end-of-line anchor.
 - A scenario is "pinned by test" when a passing citation is in a test file,
   else "read from code only".
 - A public symbol is specified when a kept citation in its file overlaps its
@@ -27,7 +29,7 @@ from code_facts import Citation, check_citation, ws_path
 from multiplai_core.citations import file_at
 
 from .explore import resolver
-from .group import Capability, one_line, symbol_id
+from .group import Capability, md, one_line, symbol_id
 from .scope import Symbol, is_test_file
 from .target import Target
 from .write import WriteOutput
@@ -111,6 +113,14 @@ def check(caps: list[Capability], answers: dict[str, dict], symbols: list[Symbol
             if not name or name in {q.name for q in reqs}:
                 out.dropped.append(f"{cap.name} / {name or '(no name)'}: a requirement needs a name "
                                    "no other requirement in its capability has")
+                continue
+            # As written to the file, both ways round: the first kept name stays.
+            clash = next((q.name for q in reqs if md(q.name).startswith(md(name))
+                          or md(name).startswith(md(q.name))), None)
+            if clash is not None:
+                out.dropped.append(f"{cap.name} / {name}: the kept requirement `{clash}` is a prefix of its "
+                                   "name as written, or the other way round; buildme matches requirement "
+                                   "names by prefix")
                 continue
             kept = []
             for sc in r.scenarios:
