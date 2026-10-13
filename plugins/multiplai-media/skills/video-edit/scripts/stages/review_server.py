@@ -662,6 +662,8 @@ def _style_value(key: str, v: Any) -> Any:
     if key in ("fonts.display", "fonts.body"):
         return _css_text(key, v)
     lo, hi = next(b for prefix, b in STYLE_NUMBERS.items() if key.startswith(prefix))
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        raise ValueError(f"{key} must be a number, not {type(v).__name__}")
     (n,) = _finite({key: v}, key)
     if not lo <= n <= hi or (key.startswith("fonts.weights.") and not isinstance(v, int)):
         raise ValueError(f"{key} must be {'a whole number ' if key.startswith('fonts.') else ''}within {lo}..{hi}")
