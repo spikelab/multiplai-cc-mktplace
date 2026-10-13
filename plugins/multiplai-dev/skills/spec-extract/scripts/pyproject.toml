@@ -1,0 +1,50 @@
+[project]
+name = "spec-extract-pipeline"
+version = "0.1.0"
+description = "Writes BDD capability specs, in buildme's registry format, from the Python code of a commit, a directory or a PR"
+requires-python = ">=3.12"
+dependencies = [
+    # The [sdk] extra, not a bare pin: the explore and write calls go through
+    # multiplai_core.run_agent(), so core owns the SDK version floor.
+    "multiplai-core[sdk]",
+    "pydantic>=2",
+    # The shared "work out what this code does" step (see [tool.uv.sources]).
+    "code-facts",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+# The same as the `dev` extra, as a dependency group: `uv run` installs the
+# default group without being asked, so the bare
+# `uv run --directory <this dir> python -m pytest tests/` works too. CI uses
+# `--package spec-extract-pipeline --extra dev` like the other members.
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# multiplai-core is a git direct reference (not on PyPI)
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["spec_extract_pipeline"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+# Member-local source so this directory also resolves standalone — an
+# installed plugin is a copy of the plugin subtree only (no workspace root
+# above it), so without this the bare multiplai-core name would be looked
+# up on PyPI, where it does not exist. In-repo, uv still resolves through
+# the workspace root and the single uv.lock.
+[tool.uv.sources]
+multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }
+# The shared explore step. An editable path source, not `workspace = true`:
+# the installed plugin is plugins/multiplai-dev/ alone, and lib/ sits inside
+# that copy. code_facts is not a workspace member, because uv rejects a member
+# that is also reached through a path source.
+code-facts = { path = "../../../lib/code_facts", editable = true }

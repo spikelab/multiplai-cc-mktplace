@@ -17,6 +17,31 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-10-13
+
+### Added
+- `/multiplai-dev:spec-extract`, first part: it resolves a commit
+  (`--tree [<commit>] [--path <dir>]`), a PR's head (`--pr <n>`) or a directory
+  not under git (`--dir`), chooses its run folder
+  `<data_dir>/spec-extract/<repo>/<object>/` (or `--out`), and extracts the
+  commit for later steps. It prints `SPEC_EXTRACT:RESOLVED <run>` and makes no
+  model call yet; writing the specs comes in later versions.
+- Running the same command again resumes the same folder, also when an earlier
+  candidate folder was renamed or deleted since. A second run of the same
+  target while one is running exits 5 and writes nothing. `--restart` renames
+  the run folder to `<object>.old-<timestamp>` and starts again; it never
+  deletes. An unreadable `state.json` exits 1 and names `--restart`, as does
+  a `--dir` run whose copied `source/` no longer holds its import.
+- `snapshot/` holds each file as git stores it, whatever the commit's
+  `.gitattributes` export rules say. A link that is absolute or leads out of
+  the tree is left out and named, instead of failing the run.
+- A `--dir` run refuses any `--out` that would put its run folder inside the
+  source, including the source's parent. Its import commits every copied file,
+  including those the source's `.gitignore` names.
+- `--pr` reads the PR from `origin`'s repository, the one `--fetch` fetches
+  from and the run folder is named after, also in a fork clone with an
+  `upstream` remote.
+
 ## [0.51.0] - 2026-10-13
 
 ### Added
