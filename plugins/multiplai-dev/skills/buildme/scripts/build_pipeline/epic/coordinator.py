@@ -642,6 +642,18 @@ class Coordinator:
                     records.finish(c.rattempt, code, interrupted=False, extra=fields)
                     self._reviewed(c, fields)
                     return
+                if code == 0 and found:
+                    # The review reads the PR's head itself, after its fetch: a
+                    # commit pushed since the read above makes it review and
+                    # record that newer head (C.S8, C.S19). Read the PR again.
+                    again = _gh(self.repo, "pr", "view", c.pr, "--json", PR_FIELDS)
+                    if not isinstance(again, dict) or not again.get("headRefOid"):
+                        records.finish(c.rattempt, code, interrupted=False)
+                        c.status, c.reason = "unknown", "cannot read its PR: gh pr view failed"
+                        return
+                    if again["headRefOid"] != head:
+                        records.finish(c.rattempt, code, interrupted=False)
+                        continue
                 why = (f"review exited {code}: {review.tail(out)}" if code != 0 else
                        f"review exited 0 without a findings line and a finished ledger line: {review.tail(out)}")
                 records.finish(c.rattempt, code, interrupted=False, extra={"parked": why})

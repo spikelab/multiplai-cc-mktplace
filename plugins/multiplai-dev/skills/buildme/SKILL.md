@@ -683,7 +683,9 @@ coordinator looks again every 60 s and then uses what it finished. A review
 of the PR another process is running that the ledger does not show yet
 (exit `2`, `is running now`) is waited for, asking again every 60 s; an
 interrupted one (exit `4` with the resume hint) is continued with
-`review_pipeline resume`. The epic's budget is checked before each of these
+`review_pipeline resume`. The review reads the PR's head itself, so a commit
+pushed as it starts is the head it reviews; the coordinator then reads the PR
+again and uses that review. The epic's budget is checked before each of these
 launches.
 Any other failure parks the child with the end of the review's output. Each
 review writes `agents/<NNN>-review-<id>.{started.json,result.json,log}`; the
@@ -694,8 +696,11 @@ number of distinct heads of this PR the ledger holds a complete review of),
 `epic.max_review_rounds` rounds with blockers left, the child parks and stays
 parked. A review counts against `epic.max_parallel` and `epic.max_usd` like a
 build, and the summary's `rounds` is each PR's `pr_round`. Ctrl-C or SIGTERM
-stops a running review with the children; SIGHUP leaves it running, and the
-next run uses what it finished. Fixing and merging the children's PRs come in
+stops a review this run started, with the children; a review an earlier run
+left running, or one another process runs (your own `/multiplai-dev:review`,
+say), is not signalled: it keeps running, and the next run uses what it
+finished. SIGHUP leaves a review running, and the next run uses what it
+finished. Fixing and merging the children's PRs come in
 later releases.
 
 ### The size gate (after plan review)

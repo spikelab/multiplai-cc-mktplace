@@ -35,7 +35,11 @@ time, not derived from a tag.
   (`--fetch`), so a base moved by a sibling's merge does not park the child.
   While a review of the head holds the review skill's run lock, nothing is
   launched; the coordinator waits and reads the ledger once the lock is free,
-  so a review that ends meanwhile is never run twice.
+  so a review that ends meanwhile is never run twice. A commit pushed as a
+  review starts no longer parks the child: the review reviews the new head,
+  and the coordinator reads the PR again and uses that review. Ctrl-C or
+  SIGTERM stops a review this run started; a review an earlier run left
+  running, or one another process runs, is not signalled and keeps running.
 
 ### Changed
 - Five assertions in the epic B1 tests now look only at build records, and the
