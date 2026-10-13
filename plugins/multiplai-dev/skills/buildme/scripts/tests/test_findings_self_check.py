@@ -119,17 +119,20 @@ def block_stubs(repo: Path, log: Path | None = None, *, searched: str = "calc.py
 
 class FakeCheck:
     """The self-check agent: answers *reports* in turn ("" = no problem),
-    logging each call and the diff it was given."""
+    logging each call and keeping the diff it was given."""
 
-    def __init__(self, reports: list[str], log: Path | None = None, stop=None):
+    def __init__(self, reports: list[str], log: Path | None = None, stop=None,
+                 diffs_log: Path | None = None):
         self.reports = list(reports)
         self.diffs: list[str] = []
         self.log = log
         self.stop = stop
+        self.diffs_log = diffs_log      # each diff, for a run killed in a forked child
 
     async def __call__(self, config, diff):
         self.diffs.append(diff)
         _log(self.log, "check", "")
+        _log(self.diffs_log, diff)
         if self.stop is not None:
             self.stop()
         return self.reports.pop(0) if self.reports else ""
@@ -169,10 +172,35 @@ class TestSameMistake:
         assert "SEARCHED:" in task
         assert "change nothing else" in task.lower()
 
-    def test_the_last_searched_section_is_read(self):
-        report = ("did it\n\nSEARCHED: calc.py only\n\n[review-fix 1]\nfixed the review\n\n"
+    def test_the_fixer_s_last_searched_section_is_read(self):
+        report = ("did it\n\nSEARCHED: calc.py only\n\nthen more\n\n"
                   "SEARCHED: calc.py add() and sub(), and main.py; sub() fixed too")
         assert code.searched_text(report) == "calc.py add() and sub(), and main.py; sub() fixed too"
+
+    @pytest.mark.parametrize("marker", ["[review-fix 1]", "[fix on pass]"])
+    def test_a_later_agent_s_searched_section_is_not_the_fixer_s(self, marker):
+        """A review-fix or fix-on-pass agent also ends with `SEARCHED:`, about
+        the block reviewer's findings; the reply quotes the fixer's own."""
+        report = ("Implemented the fix.\nSEARCHED:\n- finding ab12: add() and its callers in "
+                  f"calc.py; also fixed sub()\n\n{marker}\nRenamed a variable.\nSEARCHED:\n"
+                  "- naming nit: the rest of calc.py, nothing else\n")
+        assert code.searched_text(report) == \
+            "finding ab12: add() and its callers in calc.py; also fixed sub()"
+
+    def test_a_trimmed_report_that_lost_the_fixer_s_part_gives_empty(self, caplog):
+        """The engine keeps only the report's last `MAX_EVIDENCE_CHARS`: when
+        that starts inside a later agent's output, the fixer's section is gone."""
+        from build_pipeline.tdd_engine import MAX_EVIDENCE_CHARS
+        tail = "\n\n[review-fix 2]\nmore\nSEARCHED: the reviewer's finding\n"
+        head = "x" * (MAX_EVIDENCE_CHARS - len(tail) - 40) + "\nSEARCHED: review-fix 1's search"
+        report = (head + tail)[-MAX_EVIDENCE_CHARS:]
+        with caplog.at_level(logging.WARNING):
+            assert code.searched_text(report) == ""
+
+    def test_a_trimmed_report_with_no_later_agent_is_the_fixer_s(self):
+        from build_pipeline.tdd_engine import MAX_EVIDENCE_CHARS
+        report = ("x" * MAX_EVIDENCE_CHARS + "\nSEARCHED: calc.py")[-MAX_EVIDENCE_CHARS:]
+        assert code.searched_text(report) == "calc.py"
 
     def test_a_searched_section_stops_at_a_later_review_fix(self):
         report = "did it\nSEARCHED: calc.py\n\n[review-fix 1]\nfixed the review"
@@ -208,6 +236,20 @@ class TestSameMistake:
 
     def test_no_searched_sentence_when_empty(self):
         assert "Searched" not in self._outcome("")
+
+    def test_the_pr_body_s_section_leaves_the_searched_sentence_out(self):
+        """The body is under the pr skill's word limit and lists every round;
+        the search is quoted in the thread's reply only."""
+        from build_pipeline.state import FindingsState
+        r = _fix_record()
+        rnd = FindingsRound(number=1, comments=[r.comment], triaged={r.comment.id: r.triage},
+                            fixes={r.comment.key: {"test": "a" * 40, "impl": "b" * 40,
+                                                   "status": "done", "searched": "calc.py all"}})
+        section = publish.render_section(FindingsState(pr=PR, repo=REPO, branch="buildme/calc",
+                                                       change_dir="c", rounds=[rnd]))
+        assert "Fixed in" in section and "Searched" not in section
+        assert "Searched for the same mistake: calc.py all" in publish.reply_body(
+            rnd, publish.records_of(rnd)[0])
 
 
 # --- item 27: check the round's own commits once ---------------------------------
@@ -319,6 +361,80 @@ class TestSelfCheck:
         assert _state(change).findings.rounds[0].self_check is None
 
 
+    @pytest.mark.asyncio
+    async def test_an_empty_diff_is_not_checked(self, built, fake_pr):
+        """Every fix block failed and was discarded: there is nothing to check,
+        and no agent is paid to invent a problem."""
+        repo, change, config = built
+        stubs = block_stubs(repo)
+        writer = next(p for p in stubs if p.attribute == "run_test_writer")
+
+        async def blocked(*a, **kw):
+            return AgentResult(success=True, output="Cannot.\n\nSTATUS: BLOCKED\n")
+
+        writer.kwargs["side_effect"] = blocked
+        check = FakeCheck([PROBLEM])
+        exit_code, lines = await _one_round(built, fake_pr, check, stubs=stubs)
+        assert exit_code == 0, lines
+        assert check.diffs == []
+        rnd = _state(change).findings.rounds[0]
+        assert rnd.self_check["report"] == "" and rnd.self_check["block"] is None
+        assert not (change / code.self_check_file_name(1)).exists()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_block_k_is_answered_and_the_check_runs_once(self, built, fake_pr):
+        repo, change, config = built
+        stubs = block_stubs(repo)
+        writer = next(p for p in stubs if p.attribute == "run_test_writer")
+        real = writer.kwargs["side_effect"]
+
+        async def test_writer(*a, **kw):
+            if kw.get("block_name", "").startswith("Fix what the check"):
+                return AgentResult(success=True, output="Cannot.\n\nSTATUS: BLOCKED\n")
+            return await real(*a, **kw)
+
+        writer.kwargs["side_effect"] = test_writer
+        check = FakeCheck([PROBLEM, PROBLEM])
+        exit_code, lines = await _one_round(built, fake_pr, check, stubs=stubs)
+        assert exit_code == 0, lines
+        assert lines[-1] == "FINDINGS:DONE:1", lines
+        assert len(check.diffs) == 1
+        assert "FINDINGS:BLOCK_FAILED:2:block:2" in lines
+        rnd = _state(change).findings.rounds[0]
+        assert "could not complete block 2" in rnd.fixes["block:2"]["failed"]
+        assert rnd.fixes["finding:ab12"]["impl"]
+        assert not [s for s in _subjects(repo) if "block-2" in s]
+
+    @pytest.mark.asyncio
+    async def test_git_failing_to_show_the_diff_fails_the_step(self, built, fake_pr, monkeypatch):
+        repo, change, config = built
+        monkeypatch.setattr(git_ops, "diff_range", lambda *a, **k: None)
+        check = FakeCheck([PROBLEM])
+        exit_code, lines = await _one_round(built, fake_pr, check)
+        assert exit_code == 1
+        assert lines[-1] == ("FINDINGS:FAILED:code:git could not show the round's fix commits "
+                             "to check them"), lines
+        assert check.diffs == []
+        assert _state(change).findings.rounds[0].self_check is None
+
+    @pytest.mark.asyncio
+    async def test_a_records_commit_with_nothing_to_commit_goes_on(self, built, fake_pr,
+                                                                    monkeypatch):
+        """`commit_round_files` returns None when the records already match
+        HEAD; with both clean the step goes on."""
+        repo, change, config = built
+        real = git_ops.commit_paths
+
+        def commit_paths(worktree, message, paths):
+            sha = real(worktree, message, paths)
+            return None if any(code.self_check_file_name(1) in p for p in paths) else sha
+
+        monkeypatch.setattr(git_ops, "commit_paths", commit_paths)
+        exit_code, lines = await _one_round(built, fake_pr, FakeCheck([PROBLEM]))
+        assert exit_code == 0, lines
+        assert [b.number for b in _engine_blocks(change)] == [1, 2]
+
+
 class TestTheCheckAgent:
     @pytest.mark.asyncio
     async def test_read_only_tools_and_its_own_step(self, built):
@@ -343,6 +459,63 @@ class TestTheCheckAgent:
                    return_value=AgentResult(success=True, output=f"- {PROBLEM}\n")):
             assert await code.run_self_check(config, "d") == f"- {PROBLEM}"
 
+    @pytest.mark.parametrize("answer", [
+        "NO PROBLEMS",
+        "No problems found.",
+        "NO PROBLEMS — the fix is complete.",
+        "I opened calc.py and its callers.\n\nNO PROBLEMS",
+        "I listed one problem, then checked it again.\n\nPROBLEMS:\n- calc.py:2 x\n\nNO PROBLEMS",
+    ])
+    @pytest.mark.asyncio
+    async def test_no_problems_in_any_wording_or_after_narration(self, built, answer):
+        """The agent's output joins the text of every turn, so narration
+        before a tool call precedes the answer: the last marker decides."""
+        repo, change, config = built
+        with patch("build_pipeline.findings.code.agent_call", new_callable=AsyncMock,
+                   return_value=AgentResult(success=True, output=answer)):
+            assert await code.run_self_check(config, "d") == ""
+
+    @pytest.mark.asyncio
+    async def test_the_problems_section_after_narration_is_the_report(self, built):
+        repo, change, config = built
+        answer = (f"I opened calc.py. No problems in add() so far.\n\nPROBLEMS:\n- {PROBLEM}\n"
+                  "- calc.py:5 mul() too\n")
+        with patch("build_pipeline.findings.code.agent_call", new_callable=AsyncMock,
+                   return_value=AgentResult(success=True, output=answer)):
+            assert await code.run_self_check(config, "d") == f"- {PROBLEM}\n- calc.py:5 mul() too"
+
+    @pytest.mark.asyncio
+    async def test_the_brief_asks_for_a_marked_last_answer(self, built):
+        repo, change, config = built
+        seen = {}
+
+        async def agent_call(prompt, **kw):
+            seen["prompt"] = prompt
+            return AgentResult(success=True, output="NO PROBLEMS")
+
+        with patch("build_pipeline.findings.code.agent_call", side_effect=agent_call):
+            await code.run_self_check(config, "d")
+        assert "`PROBLEMS:`" in seen["prompt"] and "`NO PROBLEMS`" in seen["prompt"]
+
+    @pytest.mark.asyncio
+    async def test_a_long_diff_is_cut_at_the_limit(self, built):
+        repo, change, config = built
+        prompts = []
+
+        async def agent_call(prompt, **kw):
+            prompts.append(prompt)
+            return AgentResult(success=True, output="NO PROBLEMS")
+
+        limit = code.MAX_SELF_CHECK_DIFF_CHARS
+        long_diff = "a" * limit + "TAIL-NOT-SENT" + "b" * 1000
+        short_diff = "c" * (limit - 3) + "END"          # exactly the limit
+        with patch("build_pipeline.findings.code.agent_call", side_effect=agent_call):
+            await code.run_self_check(config, long_diff)
+            await code.run_self_check(config, short_diff)
+        assert "a" * limit + "\n... (diff truncated)" in prompts[0]
+        assert "TAIL-NOT-SENT" not in prompts[0]
+        assert short_diff in prompts[1] and "(diff truncated)" not in prompts[1]
+
     @pytest.mark.asyncio
     async def test_a_failed_agent_raises(self, built):
         repo, change, config = built
@@ -350,6 +523,22 @@ class TestTheCheckAgent:
                    return_value=AgentResult(success=False, error="timed out")):
             with pytest.raises(RuntimeError, match="self-check"):
                 await code.run_self_check(config, "d")
+
+
+class TestDiffRange:
+    def test_a_file_that_is_not_utf8_is_shown_not_raised(self, tmp_path):
+        """A fix commit touching a Latin-1 file must not fail every resume of
+        the code step with UnicodeDecodeError."""
+        repo = tmp_path / "r"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        _git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+        base = _git(repo, "rev-parse", "HEAD").strip()
+        (repo / "a.py").write_bytes(b'x = "caf\xe9"\n')
+        _git(repo, "add", "a.py")
+        _git(repo, "commit", "-q", "-m", "latin-1")
+        diff = git_ops.diff_range(repo, base, "HEAD", exclude="specs/changes/x")
+        assert diff is not None and "a.py" in diff and "caf" in diff
 
 
 class TestAddBlock:
@@ -399,6 +588,44 @@ class TestDecisions:
         assert json.loads(path.read_text()) == {
             "c1": {"decision": "accept"}, "c2": {"decision": "accept"},
             "t1": {"decision": "accept"}}
+
+    @pytest.mark.parametrize("mode", [None, "full", "critical"])
+    def test_what_the_review_hides_is_never_accepted(self, tmp_path, mode):
+        """`review_pipeline.render.listed`: a repeat of a finding the person
+        rejected, a low-value one, one not confirmed or unverifiable, and in
+        critical mode one not rated breaking, are not listed, so not posted."""
+        def f(fid, **kw):
+            return {"id": fid, "topic": "code", "file": "calc.py", "severity": "HIGH",
+                    "status": "confirmed", "impact": "breaks-users", **kw}
+
+        doc = {"findings": [
+            f("ok"), f("unverif", status="unverifiable"), f("refuted", status="refuted"),
+            f("rejected", status="gate-rejected"),
+            f("rep", assessment={"label": "repeat"}), f("lv", assessment={"label": "low-value"}),
+            f("useful", assessment={"label": "useful"}),
+            f("cosmetic", severity="LOW", impact="hygiene"), f("noimpact", impact=None),
+            {"id": "t1", "topic": "tests", "file": "calc.py", "severity": "MEDIUM",
+             "status": "confirmed", "impact": "correctness-only"},
+        ]}
+        if mode is not None:
+            doc["mode"] = mode
+        (tmp_path / "findings.json").write_text(json.dumps(doc))
+        got = set(json.loads(decisions.write_decisions(tmp_path).read_text()))
+        if mode == "critical":
+            assert got == {"ok", "unverif", "useful"}
+        else:
+            assert got == {"ok", "unverif", "useful", "cosmetic", "noimpact", "t1"}
+
+    @pytest.mark.parametrize("path", [
+        "pkg/calc_test.py", "pkg/calc_test.go", "src/calc.test.ts", "src/calc.spec.ts",
+        "test/calc.js", "src/__tests__/calc.js", "Sources/CalcTests.swift",
+        "src/test/java/CalcTest.java", "app/CalcTests.kt", "spec/calc_spec.rb", "conftest.py",
+    ])
+    def test_a_tests_finding_on_a_test_file_in_any_language_is_not_accepted(self, tmp_path, path):
+        (tmp_path / "findings.json").write_text(json.dumps({"findings": [
+            {"id": "t1", "topic": "tests", "file": path, "severity": "HIGH",
+             "status": "confirmed"}]}))
+        assert json.loads(decisions.write_decisions(tmp_path).read_text()) == {}
 
     def test_no_findings_json_raises_naming_it_and_writes_nothing(self, tmp_path):
         with pytest.raises(FileNotFoundError, match=re.escape(str(tmp_path / "findings.json"))):

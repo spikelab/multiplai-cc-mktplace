@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
@@ -63,6 +64,7 @@ class _Round:
     def __init__(self, base: Path, monkeypatch, report: str):
         self.repo, self.change, self.config = _make_built(base)
         self.log = base / "calls.log"
+        self.diffs = base / "diffs.log"
         self.report = report
         self.pr = _install_pr(monkeypatch)
         self.pr.add_thread("alice", "add subtracts", fid="ab12")
@@ -77,7 +79,8 @@ class _Round:
             return await triage(prompt, schema, **kw)
 
         run, lines = _run(self.config, self.change, triage_call=triage_call, review=self.review,
-                          self_check=FakeCheck([self.report], log=self.log, stop=check_stop))
+                          self_check=FakeCheck([self.report], log=self.log, stop=check_stop,
+                                               diffs_log=self.diffs))
         stubs = block_stubs(self.repo, self.log, stop_at=stop_at, stop=_die if stop_at else None)
         with _Stubs([*stubs, *patches]):
             exit_code = asyncio.run(loop.run_findings(run))
@@ -104,6 +107,13 @@ def _assert_like_unstopped(stopped: _Round, clean: _Round, extra_calls=()) -> No
 
 def _checks(r: _Round) -> int:
     return sum(1 for c in calls(r.log) if c[0] == "check")
+
+
+def _wip_refs(r: _Round) -> dict[str, str]:
+    out = subprocess.run(["git", "for-each-ref", "--format=%(refname) %(objectname)",
+                          "refs/buildme/wip/"], cwd=r.repo, check=True, capture_output=True,
+                         text=True).stdout
+    return dict(line.split() for line in out.splitlines())
 
 
 def _wip_lines(r: _Round) -> list[str]:
@@ -206,11 +216,13 @@ class TestD1Rows:
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
         clean = _unstopped(tmp_path, monkeypatch, PROBLEM)
         s = _Round(tmp_path / "stopped", monkeypatch, PROBLEM)
+        refs_after: list[dict[str, str]] = []
         for _ in range(2):
             if where == "check":
                 _killed(lambda: s.run(check_stop=_die))
             else:
                 _killed(lambda: s.run(stop_at=("implementer", CHECK_BLOCK)))
+            refs_after.append(_wip_refs(s))
         assert s.run() == 0, s.lines
         if where == "check":
             _assert_like_unstopped(s, clean, extra_calls=[("check", "")] * 2)
@@ -218,3 +230,26 @@ class TestD1Rows:
             assert _checks(s) == 1                     # never again once saved
             _assert_like_unstopped(s, clean, extra_calls=[("test_writer", CHECK_BLOCK),
                                                           ("implementer", CHECK_BLOCK)] * 2)
+            # The second keep writes `<ref>-2`; the first attempt's work stays
+            # where the first keep put it.
+            first = "refs/buildme/wip/calc/r1-code-block2-stopped"
+            assert refs_after[0] == {}
+            assert list(refs_after[1]) == [first]
+            refs = _wip_refs(s)
+            assert set(refs) == {first, f"{first}-2"}
+            assert refs[first] == refs_after[1][first]
+            assert refs[f"{first}-2"] != refs[first]
+            assert [ln.split(":")[2] for ln in _wip_lines(s)] == [f"{first}-2"]
+
+    def test_after_a_resumed_block_the_check_gets_the_unstopped_run_s_range(self, tmp_path,
+                                                                             monkeypatch):
+        """Item 31: a stop in a fix block and its resume must not move
+        `code_base`; the check reads the same diff as a run never stopped."""
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        clean = _unstopped(tmp_path, monkeypatch, "")
+        s = _Round(tmp_path / "stopped", monkeypatch, "")
+        _killed(lambda: s.run(stop_at=("implementer", FIX_BLOCK)))
+        assert calls(s.diffs) == []
+        assert s.run() == 0, s.lines
+        assert calls(s.diffs) == calls(clean.diffs)
+        assert len(calls(clean.diffs)) == 1 and "+    return a + b" in calls(clean.diffs)[0][0]
