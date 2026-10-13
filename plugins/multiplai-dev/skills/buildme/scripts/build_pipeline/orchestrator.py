@@ -147,6 +147,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # decision is made: re-entering would pay for the call again. So does
         # `state.epic_single`, which a FAILED build keeps. A build that split
         # (state.epic_dir set) never reaches spec generation.
+        just_split = False
         if state.epic_dir is None and not state.epic_single and not (
                 state.phase == BuildPhase.EPIC_SPLIT or state.is_phase_complete(BuildPhase.EPIC_SPLIT)):
             log.info("START phase=EPIC_SPLIT")
@@ -154,12 +155,13 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             rc = await epic_phase.run_epic_split_phase(config, state, state_path, args, progress)
             if rc is not None:
                 return rc
+            just_split = state.epic_dir is not None
             log.info("DONE phase=EPIC_SPLIT")
             print("PHASE:EPIC_SPLIT:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.EPIC_SPLIT, progress=progress)
         if state.epic_dir:
             from .epic import phase as epic_phase
-            return epic_phase.continue_epic(config, state, args)
+            return epic_phase.continue_epic(config, state, args, just_split=just_split)
 
         # Phase: Spec Generation
         if not state.is_phase_complete(BuildPhase.SPEC_GENERATION) and not config.mode == "only":
