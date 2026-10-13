@@ -26,11 +26,13 @@ Nothing yet.
 ### Added
 
 - **Look tab: choose the look by seeing it.** Each overlay style Claude
-  offers plays a looping sample, the way the renderer plays it. Each brand
-  shows its colours and caption font, and each caption option draws over a
-  frame of your recording in the chosen brand's colours (an approximate
-  preview: the render burns captions in). Pick one of each and send it;
-  Claude uses it in every edit list and overlay page.
+  offers plays a looping sample, the way the renderer plays it (a keyed
+  style shows its key colour, which the render removes). Each brand shows
+  its colours and caption font, or why its file cannot be used, and each
+  caption option draws over a frame of your recording in the chosen
+  brand's colours (an approximate preview: the render burns captions in).
+  Pick one of each and send it; Claude uses it in every edit list and
+  overlay page.
 - **Music tab: choose the music by hearing it.** Play every music bed and
   sound effect, set the bed's level with a slider, and press "Play with
   voice" to hear the bed under a stretch of the speech at that level. Send
