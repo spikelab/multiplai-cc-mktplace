@@ -338,7 +338,8 @@ url = f"https://example.invalid/o/r/pull/{{change}}"
 prs_file = root / "prs.json"
 prs = json.loads(prs_file.read_text()) if prs_file.exists() else {{}}
 prs.setdefault(url, {{"branch": branch, "state": "OPEN"}})
-prs_file.write_text(json.dumps(prs))
+(root / f"prs.{{os.getpid()}}.tmp").write_text(json.dumps(prs))
+os.replace(root / f"prs.{{os.getpid()}}.tmp", prs_file)     # readers never see half a file
 if step.get("die_before_pr_line"):
     os.kill(os.getpid(), signal.SIGKILL)
 print(f"PR:{{url}}", flush=True)
@@ -415,7 +416,8 @@ class Fakes:
     def set_pr(self, url: str, state: str) -> None:
         prs = self.prs()
         prs[url]["state"] = state
-        (self.root / "prs.json").write_text(json.dumps(prs))
+        (self.root / "prs.tmp").write_text(json.dumps(prs))
+        os.replace(self.root / "prs.tmp", self.root / "prs.json")
 
     def attempts(self, cid: str) -> int:
         return len(list((self.root / "attempts").glob(cid + ".*")))

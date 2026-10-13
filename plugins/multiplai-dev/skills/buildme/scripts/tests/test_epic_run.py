@@ -316,7 +316,7 @@ def test_a_merge_while_running_launches_the_dependant(tmp_path, monkeypatch):
         steps={"slow": [{"block": True}]})
 
     def tick(coord):
-        if pr_url("e-api") in e.fakes.prs():
+        if e.fakes.prs().get(pr_url("e-api"), {}).get("state") == "OPEN":
             e.fakes.set_pr(pr_url("e-api"), "MERGED")
         if "docs" in e.launches():
             e.fakes.release("slow")
