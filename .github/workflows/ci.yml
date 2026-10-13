@@ -183,7 +183,10 @@ jobs:
 
       # These tests shim the host tools they probe (ffmpeg, yt-dlp, uname), so
       # they need no real media toolchain — the point is the platform-detection
-      # branching and the fix-it messages, not transcoding.
+      # branching and the fix-it messages, not transcoding. The video-edit job
+      # page's logic tests (tests/review_logic.test.js) run under node, which
+      # the runner image ships; tests/test_review_logic_js.py fails rather than
+      # skips without it.
       - name: Run tests
         working-directory: plugins/multiplai-media
         run: uv run --no-project --with pytest python -m pytest tests/ -q

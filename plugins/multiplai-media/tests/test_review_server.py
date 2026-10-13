@@ -224,7 +224,7 @@ def test_same_origin_is_allowed(server) -> None:
 
 
 def test_page_and_assets_need_no_token_and_carry_csp(server) -> None:
-    for path in ("/", "/static/review.js", "/static/review.css"):
+    for path in ("/", "/static/app.js", "/static/logic.js", "/static/tab-clips.js", "/static/review.css"):
         res, _ = _req(server, "GET", path)
         assert res.status == 200, path
         assert "default-src 'none'" in (res.getheader("Content-Security-Policy") or "")
