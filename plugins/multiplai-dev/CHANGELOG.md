@@ -17,6 +17,21 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-10-13
+
+### Fixed
+- buildme in a project inside a larger repo (`--no-worktree` in a monorepo,
+  or `/multiplai-dev:buildme-findings` on a subpackage) no longer commits
+  files you staged outside the project, and its discards no longer revert
+  your edits or drop your commits outside it. Only the project directory is
+  committed, kept and discarded.
+- A discard whose commits change a file outside the project now refuses
+  instead of dropping them; buildme reports it as any refused discard.
+- At the repo root, a file you staged before a buildme commit, and that
+  buildme did not stage itself, now stays staged instead of going into
+  buildme's commit. A buildme commit made while a merge is in progress now
+  fails instead of concluding the merge.
+
 ## [0.48.0] - 2026-10-13
 
 ### Changed
