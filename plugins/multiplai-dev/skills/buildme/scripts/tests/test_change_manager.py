@@ -1,5 +1,7 @@
 """Tests for change_manager — the specs/ directory manager."""
 
+from pathlib import Path
+
 import pytest
 
 from build_pipeline.change_manager import (
@@ -410,3 +412,43 @@ class TestExtractGlobalConstraints:
         out = extract_global_constraints(design)
         assert "- A" in out
         assert "- B" not in out
+
+
+# --- spec-extract's registry files (spec-extract plan, PR 3a item 18) -----------------
+# spec-extract writes registry files with extra lines under each scenario (CITES,
+# EVIDENCE) and an HTML comment on the first line. Both readers must still work on them.
+
+SPEC_EXTRACT_SAMPLE = (Path(__file__).resolve().parents[3] / "spec-extract" / "scripts" / "tests"
+                       / "fixtures" / "golden" / "registry" / "sample.md")
+
+
+def test_merges_delta_into_spec_extract_registry_file(cm, specs_dir):
+    (specs_dir / "registry" / "sample.md").write_text(SPEC_EXTRACT_SAMPLE.read_text())
+    change = cm.create_change("calc-change")
+    (change / "requirements").mkdir(exist_ok=True)
+    (change / "requirements" / "sample.md").write_text(
+        "## MODIFIED Requirements\n\n"
+        "### Requirement: Adds two numbers\nadd SHALL return the sum as an int.\n\n"
+        "#### Scenario: adding ints\n- **WHEN** add(1, 2) is called\n- **THEN** it returns the int 3\n\n"
+        "## REMOVED Requirements\n\n### Requirement: Subtracts two numbers\n")
+    cm.archive_change(change)
+    merged = (specs_dir / "registry" / "sample.md").read_text()
+    assert merged.startswith("<!-- spec-extract widgets/tree@")
+    assert "add SHALL return the sum as an int." in merged
+    assert "add SHALL return the sum of its arguments." not in merged
+    assert "Subtracts two numbers" not in merged and "sub(3, 1)" not in merged
+    assert merged.count("### Requirement:") == 1
+
+
+def test_findings_edit_on_spec_extract_registry_file():
+    from build_pipeline.findings.spec import _edit_registry
+
+    text = SPEC_EXTRACT_SAMPLE.read_text()
+    block = ("### Requirement: Subtracts two numbers\nsub SHALL return a minus b, and raise on None.\n\n"
+             "#### Scenario: subtracting None\n- **WHEN** sub(None, 1) is called\n- **THEN** it raises TypeError")
+    edited, why = _edit_registry(text, "MODIFIED", "Subtracts two numbers", block)
+    assert why == ""
+    assert "and raise on None." in edited and "sub SHALL return a minus b.\n" not in edited
+    # The other requirement, with its CITES and EVIDENCE lines, is untouched.
+    adds = text.split("### Requirement: Subtracts two numbers")[0]
+    assert edited.startswith(adds)
