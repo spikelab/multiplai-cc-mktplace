@@ -340,7 +340,7 @@ if step.get("no_pr"):
 url = f"https://example.invalid/o/r/pull/{{change}}"
 prs_file = root / "prs.json"
 prs = json.loads(prs_file.read_text()) if prs_file.exists() else {{}}
-prs.setdefault(url, {{"branch": branch, "state": "OPEN"}})
+prs.setdefault(url, {{"branch": branch, "state": "OPEN", **step.get("pr", {{}})}})
 (root / f"prs.{{os.getpid()}}.tmp").write_text(json.dumps(prs))
 os.replace(root / f"prs.{{os.getpid()}}.tmp", prs_file)     # readers never see half a file
 if step.get("die_before_pr_line"):
@@ -350,7 +350,12 @@ print(f"PR:{{url}}", flush=True)
 
 FAKE_GH = r'''#!{python}
 """A fake `gh`: reads only, from `<root>/prs.json`."""
-import json, os, pathlib, sys
+import hashlib, json, os, pathlib, subprocess, sys
+
+
+def number(change):
+    return int(hashlib.sha1(change.encode()).hexdigest()[:4], 16) % 9000 + 1000
+
 
 root = pathlib.Path(os.environ["EPIC_FAKE_ROOT"])
 prs = json.loads((root / "prs.json").read_text()) if (root / "prs.json").exists() else {{}}
@@ -363,7 +368,13 @@ if a[:2] == ["pr", "view"]:
     if pr is None:
         print("no pull request found", file=sys.stderr)
         sys.exit(1)
-    print(json.dumps({{"state": pr["state"]}}))
+    change = a[2].rsplit("/", 1)[1]
+    head = pr.get("head") or subprocess.run(
+        ["git", "rev-parse", "refs/heads/" + pr["branch"]], cwd=root / "p",
+        capture_output=True, text=True).stdout.strip()
+    print(json.dumps({{"state": pr["state"], "number": number(change), "headRefOid": head,
+                      "mergeable": pr.get("mergeable", "MERGEABLE"),
+                      "mergeStateStatus": pr.get("merge_state", "CLEAN")}}))
 elif a[:2] == ["pr", "list"]:
     head = a[a.index("--head") + 1]
     print(json.dumps([{{"url": u}} for u, p in prs.items() if p["branch"] == head]))
@@ -373,20 +384,117 @@ else:
 '''
 
 
+FAKE_UV = r'''#!{python}
+"""A fake `uv run --directory <review scripts> python -m review_pipeline
+review|resume ...`: the review skill's ledger lines, run lock, findings.json
+and `findings: <path>` line, answering from `<root>/reviews.json` (per PR
+number, one step per `review` launch; `resume` uses the key `resume`)."""
+import hashlib, json, os, pathlib, signal, subprocess, sys, time
+
+argv = sys.argv[1:]
+root = pathlib.Path(os.environ["EPIC_FAKE_ROOT"])
+cmd = argv[argv.index("review_pipeline") + 1]
+with (root / "reviews.log").open("a") as f:
+    f.write(json.dumps({{"kind": cmd, "argv": [a.replace(str(root), "<root>") for a in argv]}},
+                       sort_keys=True) + "\n")
+
+
+def number(change):
+    return int(hashlib.sha1(change.encode()).hexdigest()[:4], 16) % 9000 + 1000
+
+
+def alive(pid):
+    ps = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return bool(ps.stdout.strip()) and not ps.stdout.strip().startswith("Z")
+
+
+data = pathlib.Path(os.environ["WORKSPACE"]) / ".multiplai" / "data" / "reviews"
+ledger = data / "ledger.jsonl"
+if cmd == "review":
+    n = int(argv[argv.index("--pr") + 1])
+    target = data / "o-r" / f"pr-{{n}}"
+else:
+    target = pathlib.Path(argv[argv.index("resume") + 1])
+    n = int(target.name[len("pr-"):])
+prs = json.loads((root / "prs.json").read_text())
+url, pr = next((u, p) for u, p in prs.items() if number(u.rsplit("/", 1)[1]) == n)
+head = pr.get("head") or subprocess.run(["git", "rev-parse", "refs/heads/" + pr["branch"]],
+                                        cwd=root / "p", capture_output=True, text=True).stdout.strip()
+fx = json.loads((root / "reviews.json").read_text()) if (root / "reviews.json").exists() else {{}}
+counts = root / "review-attempts"
+counts.mkdir(exist_ok=True)
+key = f"{{n}}.{{cmd}}"
+k = len(list(counts.glob(key + ".*"))) + 1
+(counts / f"{{key}}.{{k}}").write_text("")
+steps = fx.get("resume" if cmd == "resume" else str(n), [])
+step = steps[k - 1] if k <= len(steps) else (steps[-1] if steps else {{}})
+if step.get("exit"):
+    print(step.get("stderr", "fake review: failed"), file=sys.stderr, flush=True)
+    sys.exit(step["exit"])
+target.mkdir(parents=True, exist_ok=True)
+lock = target / ".lock"
+if lock.exists() and alive(int(lock.read_text() or 0)):
+    print(f"ERROR: a review of {{target}} is running now (pid {{lock.read_text()}}); wait for it",
+          file=sys.stderr, flush=True)
+    sys.exit(2)
+lock.write_text(str(os.getpid()))
+lines = [json.loads(x) for x in ledger.read_text().splitlines()] if ledger.exists() else []
+last = [x["event"] for x in lines if x.get("target_dir") == str(target) and x.get("head_sha") == head]
+state = target / "review-state.json"
+if cmd == "review" and last and last[-1] == "started" and state.exists() \
+        and json.loads(state.read_text()).get("head") == head:
+    lock.unlink()
+    print(f"STOPPED: interrupted run found; continue with: python -m review_pipeline resume {{target}}\n"
+          "To start over instead, pass --restart.", file=sys.stderr, flush=True)
+    sys.exit(4)
+slug = f"o-r--pr-{{n}}"
+data.mkdir(parents=True, exist_ok=True)
+
+
+def append(entry):
+    with ledger.open("a") as f:
+        f.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
+if cmd == "review":
+    state.write_text(json.dumps({{"head": head}}))
+    append({{"event": "started", "slug": slug, "target_dir": str(target), "head_sha": head}})
+if step.get("block"):
+    gate = root / "release" / f"review-{{n}}"
+    while not gate.exists():
+        time.sleep(0.02)
+if step.get("die"):
+    os.kill(os.getpid(), signal.SIGKILL)
+(target / "findings.json").write_text(json.dumps({{"mode": None, "findings": step.get("findings", [])}}))
+append({{"event": "finished", "slug": slug, "target_dir": str(target), "head_sha": head,
+        "base_sha": "b" * 40, "pr": n, "round": "01", "stopped": None,
+        "run": {{"cost_usd": step.get("cost", 1.5)}}}})
+lock.unlink()
+print(f"findings: {{target / 'findings.json'}}", flush=True)
+'''
+
+
 class Fakes:
     """The fake build and `gh` first on PATH, answering from `<root>/fakes.json`
     (per child, one step per attempt: `block`, `marker`, `exit`, `no_pr`,
-    `die_before_pr_line`, `grandchild`, `ignore_signals`) and `<root>/prs.json`; launches go to
+    `die_before_pr_line`, `grandchild`, `ignore_signals`, and `pr`: fields
+    the new PR starts with, such as `mergeable`) and `<root>/prs.json`; launches go to
     `<root>/calls.log`. `<root>/gh-fails` makes every `gh` call fail; `ps_fails`
-    puts a `ps` that exits 1 first on PATH."""
+    puts a `ps` that exits 1 first on PATH. The fake review (`uv`, PR C)
+    answers from `<root>/reviews.json` (per PR number, one step per `review`
+    launch: `block`, `die`, `exit` with `stderr`, `findings`, `cost`; `resume`
+    has its own key) and logs its launches to `<root>/reviews.log`; by
+    default each review is clean."""
 
-    def __init__(self, root: Path, monkeypatch, steps: dict[str, list[dict]] | None = None):
+    def __init__(self, root: Path, monkeypatch, steps: dict[str, list[dict]] | None = None,
+                 reviews: dict[str, list[dict]] | None = None):
         import sys
 
         self.root = root
         self.bin = root / "bin"
         self.bin.mkdir(parents=True, exist_ok=True)
-        for name, text in (("python", FAKE_BUILD), ("gh", FAKE_GH)):
+        (root / "reviews.json").write_text(json.dumps(reviews or {}))
+        for name, text in (("python", FAKE_BUILD), ("gh", FAKE_GH), ("uv", FAKE_UV)):
             path = self.bin / name
             path.write_text(text.format(python=sys.executable))
             path.chmod(0o755)
@@ -425,9 +533,29 @@ class Fakes:
     def attempts(self, cid: str) -> int:
         return len(list((self.root / "attempts").glob(cid + ".*")))
 
+    def release_review(self, change: str) -> None:
+        (self.root / "release" / f"review-{pr_number(change)}").write_text("")
+
+    def set_head(self, change: str, sha: str) -> None:
+        prs = self.prs()
+        prs[pr_url(change)]["head"] = sha
+        (self.root / "prs.tmp").write_text(json.dumps(prs))
+        os.replace(self.root / "prs.tmp", self.root / "prs.json")
+
+    def review_launches(self) -> list[dict]:
+        p = self.root / "reviews.log"
+        return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
+
 
 def pr_url(change: str) -> str:
     return f"https://example.invalid/o/r/pull/{change}"
+
+
+def pr_number(change: str) -> int:
+    """The fake PR's number, as the fake `gh` and review give it."""
+    import hashlib
+
+    return int(hashlib.sha1(change.encode()).hexdigest()[:4], 16) % 9000 + 1000
 
 
 class FakeClock:
