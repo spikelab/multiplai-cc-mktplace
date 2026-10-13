@@ -284,6 +284,8 @@
       if (last) {
         draft.boxes = Object.entries(last.panels).map(([name, r]) => ({ id: nextId++, name, ...r }));
         draft.mapping = { ...last.speakers };
+        draft.note = last.text || "";
+        noteEl.value = draft.note;
       }
     }
     renderBoxes();
