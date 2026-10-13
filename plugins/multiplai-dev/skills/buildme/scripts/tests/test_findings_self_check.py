@@ -197,9 +197,21 @@ class TestSameMistake:
         with caplog.at_level(logging.WARNING):
             assert code.searched_text(report) == ""
 
-    def test_a_trimmed_report_with_no_later_agent_is_the_fixer_s(self):
+    def test_a_trimmed_report_with_no_marker_left_gives_empty(self, caplog):
+        """A later agent's output longer than `MAX_EVIDENCE_CHARS` cuts away
+        its own `[review-fix n]` marker; a trimmed report with no marker cannot
+        be shown to be the fixer's, so its search is not quoted."""
         from build_pipeline.tdd_engine import MAX_EVIDENCE_CHARS
-        report = ("x" * MAX_EVIDENCE_CHARS + "\nSEARCHED: calc.py")[-MAX_EVIDENCE_CHARS:]
+        report = ("did it\nSEARCHED: calc.py\n\n[review-fix 1]\n" + "x" * MAX_EVIDENCE_CHARS
+                  + "\nSEARCHED:\n- naming nit: rest of calc.py\n")[-MAX_EVIDENCE_CHARS:]
+        assert "[review-fix" not in report
+        with caplog.at_level(logging.WARNING):
+            assert code.searched_text(report) == ""
+
+    def test_an_untrimmed_report_with_no_later_agent_is_the_fixer_s(self):
+        from build_pipeline.tdd_engine import MAX_EVIDENCE_CHARS
+        report = "x" * (MAX_EVIDENCE_CHARS - 100) + "\nSEARCHED: calc.py"
+        assert len(report) < MAX_EVIDENCE_CHARS
         assert code.searched_text(report) == "calc.py"
 
     def test_a_searched_section_stops_at_a_later_review_fix(self):
@@ -486,6 +498,48 @@ class TestTheCheckAgent:
                    return_value=AgentResult(success=True, output=answer)):
             assert await code.run_self_check(config, "d") == f"- {PROBLEM}\n- calc.py:5 mul() too"
 
+    @pytest.mark.parametrize("answer, report", [
+        # A single item that starts with "None" or "Nothing" is a problem.
+        ("PROBLEMS:\n- None of the callers of add() in main.py were updated (main.py:12)",
+         "- None of the callers of add() in main.py were updated (main.py:12)"),
+        ("PROBLEMS:\n- Nothing checks b=0 in div() (calc.py:9)",
+         "- Nothing checks b=0 in div() (calc.py:9)"),
+        # A list item that starts like a marker is not the answer's marker.
+        ("PROBLEMS:\n- calc.py:2 add() still wrong\n- No problems are handled for b=0 in div()",
+         "- calc.py:2 add() still wrong\n- No problems are handled for b=0 in div()"),
+        ("PROBLEMS:\n- calc.py:2 add() still wrong\n- Problem: mul() overflows",
+         "- calc.py:2 add() still wrong\n- Problem: mul() overflows"),
+        ("PROBLEMS:\n* calc.py:2 add() still wrong\n* No problems in sub() but div() is wrong",
+         "* calc.py:2 add() still wrong\n* No problems in sub() but div() is wrong"),
+        ("PROBLEMS:\n1. calc.py:2 add() still wrong\n2. Problems: mul() too",
+         "1. calc.py:2 add() still wrong\n2. Problems: mul() too"),
+        # Continuation lines of an item are indented.
+        ("PROBLEMS:\n- calc.py:2 div() divides by zero;\n  no problems are handled for b=0",
+         "- calc.py:2 div() divides by zero;\n  no problems are handled for b=0"),
+        # A NO PROBLEMS line followed by listed items is not a clean answer.
+        ("NO PROBLEMS in add().\n- calc.py:5 mul() overflows",
+         "NO PROBLEMS in add().\n- calc.py:5 mul() overflows"),
+    ])
+    @pytest.mark.asyncio
+    async def test_a_listed_problem_is_never_read_as_none(self, built, answer, report):
+        repo, change, config = built
+        with patch("build_pipeline.findings.code.agent_call", new_callable=AsyncMock,
+                   return_value=AgentResult(success=True, output=answer)):
+            assert await code.run_self_check(config, "d") == report
+
+    @pytest.mark.parametrize("answer", [
+        "**NO PROBLEMS**",
+        "## NO PROBLEMS",
+        "PROBLEMS:\n- none",
+        "PROBLEMS: Nothing.",
+    ])
+    @pytest.mark.asyncio
+    async def test_a_marked_none_is_none(self, built, answer):
+        repo, change, config = built
+        with patch("build_pipeline.findings.code.agent_call", new_callable=AsyncMock,
+                   return_value=AgentResult(success=True, output=answer)):
+            assert await code.run_self_check(config, "d") == ""
+
     @pytest.mark.asyncio
     async def test_the_brief_asks_for_a_marked_last_answer(self, built):
         repo, change, config = built
@@ -534,6 +588,8 @@ class TestDiffRange:
         repo = tmp_path / "r"
         repo.mkdir()
         _git(repo, "init", "-q")
+        _git(repo, "config", "user.email", "t@example.com")
+        _git(repo, "config", "user.name", "t")
         _git(repo, "commit", "-q", "--allow-empty", "-m", "base")
         base = _git(repo, "rev-parse", "HEAD").strip()
         (repo / "a.py").write_bytes(b'x = "caf\xe9"\n')
