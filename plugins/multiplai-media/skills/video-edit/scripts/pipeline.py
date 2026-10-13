@@ -345,7 +345,8 @@ def cmd_outdir(args: argparse.Namespace) -> int:
 
 
 def cmd_review(args: argparse.Namespace) -> int:
-    """Serve the review page for every render in a directory until stopped."""
+    """Serve the job page for a job's output directory until stopped."""
+    from stages import job_files
     from stages import review_server as rs
     video_dir = Path(args.dir)
     if args.next_version:
@@ -359,7 +360,14 @@ def cmd_review(args: argparse.Namespace) -> int:
         return 1
     box = rs.Mailbox(mailbox.resolve())
     # The token is in open.html only; never print it (stdout is the transcript).
-    print(f"REVIEW: serving {len(rs.list_videos(video_dir.resolve()))} clip(s) from {video_dir.resolve()}")
+    job = job_files.load(video_dir.resolve(), "job")
+    source = {Path(job["data"]["source"]).resolve()} if job["status"] == "ok" else set()
+    print(f"REVIEW: serving {len(rs.list_videos(video_dir.resolve(), source))} clip(s) from {video_dir.resolve()}")
+    states = {name: job_files.load(video_dir.resolve(), name) for name in job_files.INPUTS}
+    print("INPUTS: " + ", ".join(f"{job_files.INPUTS[n]} {st['status']}" for n, st in states.items()))
+    for n, st in states.items():
+        if st["status"] == "invalid":
+            print(f"✗ {job_files.INPUTS[n]}: " + st["error"].replace("\n", "; "))
     for u in urls:
         print(f"URL: {u}  (needs the token: open {box.open_html} or append ?t=<token from {box.token_file}>)")
     print(f"OPEN: {box.open_html}")
@@ -555,8 +563,9 @@ def main() -> int:
     od.add_argument("job", help="job name, e.g. the show and episode")
     od.set_defaults(func=cmd_outdir)
 
-    rv = sub.add_parser("review", help="serve a page to watch renders and comment on them by time and position")
-    rv.add_argument("dir", help="directory of rendered videos (clip.mp4, clip.v2.mp4, …)")
+    rv = sub.add_parser("review", help="serve the job page: pick clips, draw speaker boxes, comment on renders")
+    rv.add_argument("dir", help="the job's output directory: renders (clip.mp4, clip.v2.mp4, …) and the "
+                               "job.json, candidates.json, looks.json, music.json the session writes")
     rv.add_argument("--mailbox", default=None, help="where comments.jsonl goes (default: <dir>/review)")
     rv.add_argument("--port", type=int, default=8765, help="first port to try (20 tried)")
     rv.add_argument("--next-version", metavar="CLIP", default=None,

@@ -1,9 +1,11 @@
-"""A local review page for rendered videos, and the mailbox it writes to.
+"""A local page for a whole video-edit job, and the mailbox it writes to.
 
-The page plays every render in a directory. Clicking the picture pauses it
-and records the time and the click position with a comment; "Send all" posts
-the pending comments in one batch, appended to `comments.jsonl` in the
-mailbox directory, which the session watches.
+The server is pointed at the job's output directory. The page shows what the
+session wrote there (job.json, candidates.json, looks.json, music.json; see
+stages/job_files.py) and plays every render in it. Each choice the user makes
+(a comment on a render, picked clips, speaker boxes) is posted as a mailbox
+row, appended to `comments.jsonl` in the mailbox directory, which the session
+watches. The server never writes a job file.
 
 Standard library only, so the media test suite keeps running without the
 workspace environment.
@@ -15,6 +17,11 @@ Every /api and /media request needs it (header `X-Review-Token`, or `?t=` for
 media, which a <video> element cannot send headers for); a request whose
 Origin is not this server is refused. In a container the server binds
 0.0.0.0, because the browser is on the other side of a network boundary.
+
+Media is served only for files the job names: the source recording job.json
+names (`/media/source`), audio and sample pages named by a valid music.json or
+looks.json (`/media/audio?path=`, `/media/sample?path=`), and the renders in
+the directory (`/media/<name>`). Any other path is refused.
 
 Video versions: `clip-01.mp4` is version 1, `clip-01.v2.mp4` version 2, and so
 on. The page polls the list, so a re-render saved as the next version appears
@@ -40,6 +47,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from stages import job_files
+
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v"}
 VERSION_RE = re.compile(r"^(?P<clip>.+?)(?:\.v(?P<v>\d+))?$")
@@ -49,6 +58,13 @@ CHUNK = 1024 * 1024
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; "
        "img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
        "frame-ancestors 'none'")
+# A sample page is served on its own, never with the page's script rights: the
+# `sandbox` directive gives it an opaque origin even when opened directly.
+SAMPLE_CSP = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; "
+              "form-action 'none'; frame-ancestors 'none'; sandbox")
+SAMPLE_LINES = 5            # lines per speaker label for /api/transcript?speaker=
+SAMPLE_LINE_WORDS = 24
+MAX_WORDS_WINDOW_S = 900.0  # /api/transcript?start=&end= returns at most this span of words
 
 
 # --- where to bind (same rules as review-viewer's netinfo) -------------------
@@ -155,20 +171,90 @@ def parse_range(header: str | None, size: int) -> tuple[int, int] | None:
 
 # --- videos and comments ---------------------------------------------------------
 
-def list_videos(video_dir: Path) -> list[dict]:
+def list_videos(video_dir: Path, exclude: set[Path] | frozenset[Path] = frozenset()) -> list[dict]:
     """[{clip, versions: [{version, name}]}], clips by name, versions ascending.
 
     Hidden files are skipped: `pipeline.py render` writes to `.<name>.partial.mp4`
-    until ffmpeg finishes.
+    until ffmpeg finishes. So is any file in `exclude` (resolved paths): the
+    source recording, when it sits in the job directory, is not a render.
     """
     clips: dict[str, list[dict]] = {}
     for f in sorted(video_dir.iterdir()):
         if f.name.startswith(".") or f.suffix.lower() not in VIDEO_EXTS or not f.is_file():
             continue
+        if exclude and f.resolve() in exclude:
+            continue
         m = VERSION_RE.match(f.stem)
         assert m
         clips.setdefault(m["clip"], []).append({"version": int(m["v"] or 1), "name": f.name})
     return [{"clip": c, "versions": sorted(v, key=lambda x: x["version"])} for c, v in sorted(clips.items())]
+
+
+def speaker_lines(words: list[dict], per_speaker: int = SAMPLE_LINES,
+                  max_words: int = SAMPLE_LINE_WORDS) -> list[dict]:
+    """[{label, lines: [{start, end, text}]}] — sample lines to tell speakers apart.
+
+    Consecutive words with one label make a turn. Up to `per_speaker` turns per
+    label are picked, spread over the recording, preferring turns of four words
+    or more; a turn longer than `max_words` is cut with "…". Words with no
+    label are skipped, so a transcript without labels gives [].
+    """
+    turns: dict[str, list[list[dict]]] = {}
+    prev = None
+    for w in words:
+        label = w.get("speaker")
+        if not label:
+            prev = None
+            continue
+        if label != prev:
+            turns.setdefault(label, []).append([])
+        turns[label][-1].append(w)
+        prev = label
+    out = []
+    for label in sorted(turns):
+        ts = turns[label]
+        long = [t for t in ts if len(t) >= 4]
+        pool = long if len(long) >= per_speaker else ts
+        if len(pool) > per_speaker:
+            step = (len(pool) - 1) / (per_speaker - 1) if per_speaker > 1 else 0
+            pool = [pool[round(i * step)] for i in range(per_speaker)]
+        lines = []
+        for t in pool:
+            text = " ".join(str(w.get("text", "")) for w in t[:max_words])
+            lines.append({"start": t[0]["start"], "end": t[-1]["end"],
+                          "text": text + (" …" if len(t) > max_words else "")})
+        out.append({"label": label, "lines": lines})
+    return out
+
+
+def words_between(words: list[dict], start: float, end: float) -> list[dict]:
+    """The words that overlap [start, end], as {text, start, end}."""
+    return [{"text": w["text"], "start": w["start"], "end": w["end"]}
+            for w in words if w["end"] >= start and w["start"] <= end]
+
+
+class _JsonCache:
+    """Parsed JSON by (path, mtime, size), so polling a large transcript reads it once."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._items: dict[str, tuple[tuple[int, int], Any]] = {}
+
+    def get(self, path: Path) -> Any:
+        st = path.stat()
+        key = (st.st_mtime_ns, st.st_size)
+        with self._lock:
+            hit = self._items.get(str(path))
+            if hit and hit[0] == key:
+                return hit[1]
+        data = json.loads(path.read_text(encoding="utf-8"))
+        with self._lock:
+            self._items[str(path)] = (key, data)
+        return data
+
+
+def _number(x: Any) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
 
 
 def next_version_path(video_dir: Path, clip: str, ext: str = ".mp4") -> Path:
@@ -253,6 +339,16 @@ class ReviewHTTPServer(ThreadingHTTPServer):
 
 
 def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
+    cache = _JsonCache()
+
+    def job() -> dict | None:
+        got = job_files.load(video_dir, "job")
+        return got["data"] if got["status"] == "ok" else None
+
+    def videos() -> list[dict]:
+        j = job()
+        return list_videos(video_dir, {Path(j["source"]).resolve()} if j else frozenset())
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "video-edit-review"
         protocol_version = "HTTP/1.1"   # keep-alive: the browser seeks with many small Range requests
@@ -261,14 +357,15 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
         def log_message(self, format, *args):   # noqa: A002 — keep the token out of any log
             pass
 
-        def _headers(self, status: int, ctype: str, length: int, extra: dict | None = None) -> None:
+        def _headers(self, status: int, ctype: str, length: int, extra: dict | None = None,
+                     csp: str = CSP) -> None:
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(length))
             self.send_header("Cache-Control", "no-store")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", CSP)
+            self.send_header("Content-Security-Policy", csp)
             for k, v in (extra or {}).items():
                 self.send_header(k, v)
             self.end_headers()
@@ -305,15 +402,24 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                 self._check_origin()
                 if url.path.startswith(("/api/", "/media/")):
                     self._check_token(query)
-                if url.path == "/api/videos" and self.command in ("GET", "HEAD"):
-                    return self._json({"videos": list_videos(video_dir)})
+                get = self.command in ("GET", "HEAD")
+                if url.path == "/api/videos" and get:
+                    return self._json({"videos": videos()})
+                if url.path in ("/api/job", "/api/candidates", "/api/looks", "/api/music") and get:
+                    return self._json(job_files.load(video_dir, url.path[len("/api/"):]))
+                if url.path == "/api/sentences" and get:
+                    return self._json({"sentences": self._sentences()})
+                if url.path == "/api/transcript" and get:
+                    return self._transcript(query)
+                if url.path in ("/media/source", "/media/audio", "/media/sample") and get:
+                    return self._named(url.path[len("/media/"):], query)
                 if url.path == "/api/comments" and self.command == "POST":
                     return self._post_comments()
                 if url.path == "/api/comments" and self.command in ("GET", "HEAD"):
                     clip = query.get("video", [None])[0]
                     return self._json({"comments": [r for r in mailbox.read()
                                                     if clip is None or r.get("video") == clip]})
-                if url.path.startswith("/media/") and self.command in ("GET", "HEAD"):
+                if url.path.startswith("/media/") and get:
                     return self._media(unquote(url.path[len("/media/"):]))
                 if self.command in ("GET", "HEAD"):
                     return self._static(url.path)
@@ -338,16 +444,82 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             if self.command != "HEAD":
                 self.wfile.write(body)
 
+        def _job_file(self, key: str) -> Any:
+            j = job()
+            if j is None:
+                raise _Reject(404, "no valid job.json in the job directory")
+            try:
+                return cache.get(Path(j[key]))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+                raise _Reject(422, f"cannot read {key}: {e}") from None
+
+        def _sentences(self) -> list[dict]:
+            data = self._job_file("sentences")
+            if not isinstance(data, list) or not all(
+                    isinstance(s, dict) and _number(s.get("start")) and _number(s.get("end"))
+                    and isinstance(s.get("text"), str) for s in data):
+                raise _Reject(422, "sentences.json is not a list of {start, end, text}")
+            return data
+
+        def _words(self) -> list[dict]:
+            data = self._job_file("transcript")
+            words = data.get("words") if isinstance(data, dict) else None
+            if not isinstance(words, list) or not all(
+                    isinstance(w, dict) and _number(w.get("start")) and _number(w.get("end"))
+                    and isinstance(w.get("text"), str) for w in words):
+                raise _Reject(422, "transcript.json has no words list of {text, start, end}")
+            return words
+
+        def _transcript(self, query: dict) -> None:
+            words = self._words()
+            if "start" in query or "end" in query:
+                try:
+                    start, end = float(query["start"][0]), float(query["end"][0])
+                except (KeyError, ValueError):
+                    raise _Reject(400, "start and end must both be numbers") from None
+                if not (math.isfinite(start) and math.isfinite(end)) or end < start \
+                        or end - start > MAX_WORDS_WINDOW_S:
+                    raise _Reject(400, f"need start <= end, at most {MAX_WORDS_WINDOW_S:g} s apart")
+                return self._json({"words": words_between(words, start, end)})
+            speakers = speaker_lines(words)
+            label = query.get("speaker", [None])[0]
+            if label is not None:
+                speakers = [s for s in speakers if s["label"] == label]
+            return self._json({"speakers": speakers})
+
+        def _named(self, what: str, query: dict) -> None:
+            """A file a validated input file names; anything else is 404."""
+            allowed = job_files.named_files(video_dir)[what]
+            if what == "source":
+                path = next(iter(allowed), None)
+            else:
+                given = query.get("path", [""])[0]
+                path = Path(given).resolve() if given and Path(given).is_absolute() else None
+                path = path if path in allowed else None
+            if path is None or not path.is_file():
+                raise _Reject(404, "not found")
+            if what == "sample":
+                body = path.read_bytes()
+                self._headers(200, "text/html; charset=utf-8", len(body), csp=SAMPLE_CSP)
+                if self.command != "HEAD":
+                    self.wfile.write(body)
+                return
+            self._send_file(path, mimetypes.guess_type(path.name)[0]
+                            or ("video/mp4" if what == "source" else "application/octet-stream"))
+
         def _media(self, name: str) -> None:
             path = video_dir / name
             if "/" in name or name.startswith(".") or path.suffix.lower() not in VIDEO_EXTS or not path.is_file():
                 raise _Reject(404, "not found")
+            self._send_file(path, mimetypes.guess_type(name)[0] or "video/mp4")
+
+        def _send_file(self, path: Path, ctype: str) -> None:
+            """The file, or the one byte range the Range header asks for."""
             size = path.stat().st_size
             try:
                 rng = parse_range(self.headers.get("Range"), size)
             except RangeNotSatisfiable:
                 raise _Reject(416, "range not satisfiable", {"Content-Range": f"bytes */{size}"}) from None
-            ctype = mimetypes.guess_type(name)[0] or "video/mp4"
             first, last = rng if rng else (0, size - 1)
             extra = {"Accept-Ranges": "bytes"}
             if rng:
@@ -381,7 +553,7 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             comments = data.get("comments") if isinstance(data, dict) else None
             if not isinstance(comments, list) or not comments:
                 raise _Reject(400, "expected {comments: [...]}")
-            known = {(c["clip"], v["version"]) for c in list_videos(video_dir) for v in c["versions"]}
+            known = {(c["clip"], v["version"]) for c in videos() for v in c["versions"]}
             try:
                 rows = [validate_comment(c, known) for c in comments]
             except ValueError as e:
@@ -405,10 +577,14 @@ def open_page_html(urls: list[str], token: str) -> str:
 
 def serve(video_dir: Path, mailbox_dir: Path, host: str | None = None,
           port: int = 8765, span: int = 20) -> tuple[ReviewHTTPServer, str, list[str]]:
-    """Bind and publish; returns (server, token, urls). The caller runs serve_forever()."""
+    """Bind and publish; returns (server, token, urls). The caller runs serve_forever().
+
+    `video_dir` is the job's output directory: the renders, and the input files
+    the session writes (stages/job_files.py), all live in it.
+    """
     video_dir = video_dir.resolve()
     if not video_dir.is_dir():
-        raise FileNotFoundError(f"video directory not found: {video_dir}")
+        raise FileNotFoundError(f"job directory not found: {video_dir}")
     mailbox = Mailbox(mailbox_dir.resolve())
     mailbox.create()
     token = secrets.token_urlsafe(32)
