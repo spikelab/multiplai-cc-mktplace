@@ -168,6 +168,35 @@ def test_a_requirement_with_no_name_or_a_repeated_name_is_dropped(tmp_path, fake
     assert f"- calc / Adds two numbers: {why}" in report and f"- calc / (no name): {why}" in report
 
 
+def test_a_requirement_whose_name_starts_or_extends_a_kept_name_is_dropped(tmp_path, fake_call):
+    # buildme's ChangeManager removes or replaces `### Requirement:\s*<name>.*?` up to the next
+    # requirement, with no end-of-line anchor: a delta naming "Adds" would also take "Adds two".
+    repo = make_calc_repo(tmp_path / "widgets")
+
+    def req(name: str, start: int, quote: str) -> dict:
+        return {"name": name, "scenarios": [{"name": "s", "when": "w", "then": "t",
+                                             "citations": [cite("src/calc.py", start, start + 1, quote)]}]}
+
+    fake_call.answers["write:calc"] = {"requirements": [
+        req("Adds", 1, "return a + b"), req("Adds two numbers", 1, "return a + b"),  # extends a kept name
+        req("Subtracts two numbers", 5, "return a - b"), req("Subtracts", 5, "return a - b"),  # starts one
+        req("Multiplies \\", 9, "return a * b"), req("Multiplies #2", 9, "return a * b"),  # once rendered
+    ]}
+    assert go(repo, tmp_path / "out") == 0
+    run_dir = folder(tmp_path / "out")
+    spec = (run_dir / "registry" / "calc.md").read_text()
+    names = re.findall(r"### Requirement:\s*(.+)", spec)
+    assert names == ["Adds", "Subtracts two numbers", "Multiplies \\"]
+    for name in names:  # change_manager.py's REMOVED pattern takes exactly one requirement
+        pattern = re.compile(rf"### Requirement:\s*{re.escape(name.strip())}.*?(?=### Requirement:|\Z)", re.DOTALL)
+        assert len(pattern.findall(spec)) == 1, name
+    report = (run_dir / "report.md").read_text()
+    for dropped, kept in [("Adds two numbers", "Adds"), ("Subtracts", "Subtracts two numbers"),
+                          ("Multiplies #2", "Multiplies \\")]:
+        assert (f"- calc / {dropped}: the kept requirement `{kept}` is a prefix of its name as written, "
+                "or the other way round; buildme matches requirement names by prefix") in report
+
+
 def test_a_citation_by_absolute_path_under_the_snapshot_is_kept(tmp_path, fake_call):
     repo = make_calc_repo(tmp_path / "widgets")
     assert go(repo, tmp_path / "out", "--plan-only") == 0
