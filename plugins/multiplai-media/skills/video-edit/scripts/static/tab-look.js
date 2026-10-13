@@ -284,7 +284,8 @@
       renderBrands();
       renderCaptionOptions();
     }
-    if (changed.job && s.job && s.job.status === "ok" && !video.src) video.src = App.mediaUrl("/media/source");
+    // Whichever of job.json and looks.json came first: the source is set once both are valid.
+    if (s.job && s.job.status === "ok" && !video.src) video.src = App.mediaUrl("/media/source");
     renderChoices();
     renderCaption();
     renderSend();
