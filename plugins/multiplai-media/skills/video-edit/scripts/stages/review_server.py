@@ -588,8 +588,10 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                             or ("video/mp4" if what == "source" else "application/octet-stream"))
 
         def _media(self, name: str) -> None:
+            """A render the list names; the source recording is /media/source, not this."""
             path = video_dir / name
-            if "/" in name or name.startswith(".") or path.suffix.lower() not in VIDEO_EXTS or not path.is_file():
+            if "/" in name or name.startswith(".") or path.suffix.lower() not in VIDEO_EXTS or not path.is_file() \
+                    or name not in {v["name"] for c in videos() for v in c["versions"]}:
                 raise _Reject(404, "not found")
             self._send_file(path, mimetypes.guess_type(name)[0] or "video/mp4")
 

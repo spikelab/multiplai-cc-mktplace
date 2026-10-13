@@ -161,6 +161,13 @@ def test_source_streams_with_range(server) -> None:
     assert res.status == 200
 
 
+def test_renders_are_served_by_name_but_the_source_is_not_a_render(server) -> None:
+    res, data = _get(server, "/media/clip-01.mp4", Range="bytes=0-1")
+    assert res.status == 206 and data == b"re"
+    res, _ = _get(server, f"/media/{server['job']['source'].name}", Range="bytes=0-1")
+    assert res.status == 404
+
+
 def test_source_is_refused_without_a_valid_job(server) -> None:
     server["job"]["job"].write_text("{}")
     res, _ = _get(server, "/media/source")
