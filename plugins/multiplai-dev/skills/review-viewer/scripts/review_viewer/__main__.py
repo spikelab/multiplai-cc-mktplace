@@ -125,8 +125,10 @@ def _migrated_findings(root: Path) -> list[Path]:
 
 def find_review(target, dirs: list[Path], *, deep_dirs: list[Path] | None = None,
                 slugs: set[str] | None = None) -> tuple[str, Path | None, FindingsFile | None]:
-    """Look for a review of these commits under `<dir>/*/findings.json`, and
-    at any depth under each of *deep_dirs* (migrated copies; see
+    """Look for a review of these commits in each of *dirs*
+    (`gitdata.review_findings`: `<dir>/<repo>/<object>/`, the 0.46
+    `<dir>/<slug>/`, and 0.42 folders nested one level under a new-layout
+    one), and at any depth under each of *deep_dirs* (migrated copies; see
     `_migrated_findings`).
 
     ("match", path, findings) when one names the same base and head;
@@ -145,7 +147,7 @@ def find_review(target, dirs: list[Path], *, deep_dirs: list[Path] | None = None
     for d in deep_dirs or []:
         candidates.extend(_migrated_findings(Path(d)))
     for d in dirs:
-        candidates.extend(p for p in Path(d).glob("*/findings.json") if p.is_file())
+        candidates.extend(gitdata.review_findings(Path(d)))
     # Stable: on equal times (a copy keeps its original's), a migrated copy wins.
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     stale: tuple[Path, FindingsFile] | None = None
