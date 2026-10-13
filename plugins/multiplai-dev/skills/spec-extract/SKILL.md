@@ -1,6 +1,6 @@
 ---
 name: spec-extract
-description: Writes BDD capability specs, in the format of buildme's specs/registry/, from the Python code of a commit, a directory or a PR, with every scenario citing lines a gate re-read at that commit. This version resolves the target, chooses and locks its run folder, lists the Python files and their public symbols, and asks one read-only agent per slice of code what it does, keeping only facts whose cited lines are at the commit; then groups the symbols into capabilities, asks one agent per capability for its requirements and scenarios, drops every scenario whose citations fail, and writes one registry file per capability. Copying them into a repository (--apply) comes in a later version.
+description: Writes BDD capability specs, in the format of buildme's specs/registry/, from the Python code of a commit, a directory or a PR, with every scenario citing lines a gate re-read at that commit. This version resolves the target, chooses and locks its run folder, lists the Python files and their public symbols, and asks one read-only agent per slice of code what it does, keeping only facts whose cited lines are at the commit; then groups the symbols into capabilities, asks one agent per capability for its requirements and scenarios, drops every scenario whose citations fail, and writes one registry file per capability. With --apply it then copies each new file into the repository's specs/registry/, after checking that nobody else's uncommitted work is there, and commits nothing.
 when_to_use: 'Triggers: spec-extract, reverse-engineer specs, write specs from code, /multiplai-dev:spec-extract'
 model: sonnet
 effort: medium
@@ -9,8 +9,8 @@ effort: medium
 # spec-extract
 
 Reads the Python code of one target and writes one capability file per
-capability into a run folder. **This version writes the files into the run
-folder only; copying them into a repository comes later**:
+capability into a run folder, and with `--apply` copies the new ones into a
+repository's `specs/registry/`:
 
 1. **Resolve.** Resolves the target, chooses and locks the run folder, writes
    `state.json`, extracts the commit into `snapshot/`, and prints
@@ -54,6 +54,20 @@ folder only; copying them into a repository comes later**:
 7. **Render.** Writes `registry/<capability>.md` in buildme's
    `specs/registry/` format, `report.md` and `summary.json`, deletes
    `snapshot/`, and prints `SPEC_EXTRACT:RENDERED <files> <run>/registry`.
+8. **Apply** (only with `--apply`). Copies each `<run>/registry/<capability>.md`
+   into `<specs-dir>/registry/` (created when absent) and commits nothing. A
+   file already there with the same bytes counts as applied; one with other
+   bytes is left untouched, and the run prints
+   `SPEC_EXTRACT:SKIPPED_EXISTING <capability> <run>/registry/<capability>.md`.
+   First it runs buildme's uncommitted-work check on `<specs-dir>/registry/`:
+   any uncommitted change there (an edit, a deletion, a new file) is refused
+   with exit 2 naming the files, and nothing is written. On a re-run after a
+   stopped apply, the files that apply already wrote, unchanged since, are
+   not counted as changes. Prints `SPEC_EXTRACT:APPLIED <n>`, `n` counting
+   the files copied and those already there with the same bytes. The registry
+   files are copied as they are in `<run>/registry/`, so an edit made there
+   after render is copied too. Running `--apply` again on a finished run makes
+   no model call.
 
 **It sends the target's code to a model.** The repository's own files become
 part of what the model reads, so the run needs the user to say they trust it:
@@ -91,6 +105,8 @@ folder, not the user's checkout.
 | `--max-usd <usd>` | Spend cap for this run folder, default 80. It counts every run that resumes the folder, so re-running never gets a fresh cap. |
 | `--max-units <n>` | Refuse a target that splits into more than n explore units (default 20); narrow it with `--path`. |
 | `--plan-only` | Resolve and scope, print the units and how many calls a run would make, write `plan.txt`, and stop before any model call. |
+| `--apply` | After render, copy each new registry file into `<specs-dir>/registry/` (step 8). Commits nothing. |
+| `--specs-dir <dir>` | With `--apply`: the specs directory, as an absolute path. Default `<repo>/specs` for `--tree` and `--pr`; required with `--dir` (without it the run prints `SPEC_EXTRACT:APPLY_NEEDS_SPECS_DIR`, exits 2 and writes nothing). It must be in a git work tree and not inside the run folder, checked before any model call. |
 
 Running the same command again resumes the run in the same folder: it asks
 only the units with no answer, and pays for no call whose answer was saved.
@@ -120,7 +136,7 @@ Only one run may write a folder at a time: a run holds
 |---|---|
 | 0 | Done. |
 | 1 | Failed, including no group answer after two attempts (`SPEC_EXTRACT:NOT_GROUPED`; re-running makes no call and exits 1 again; `--restart` starts the run over), a model setting no call can run with (nothing is counted), a `state.json` that cannot be read, or a `--dir` run whose `<run>/source/` no longer holds its import commit (the message names `--restart`). |
-| 2 | Refused: a bad target, a commit not in the clone, a `--dir` run folder that would be inside its source (for example `--out` the source's parent), every candidate folder holds another target's run (pass `--out`), no Python file to read (`SPEC_EXTRACT:NO_PYTHON`), or more explore units than `--max-units`. |
+| 2 | Refused: a bad target, a commit not in the clone, a `--dir` run folder that would be inside its source (for example `--out` the source's parent), every candidate folder holds another target's run (pass `--out`), no Python file to read (`SPEC_EXTRACT:NO_PYTHON`), or more explore units than `--max-units`. With `--apply`: `--dir` without `--specs-dir`, a `--specs-dir` outside any git work tree or inside the run folder, uncommitted changes in `<specs-dir>/registry/` (the message names them; nothing is written), or an uncommitted-work check that could not run (`uv` missing, no answer within 300 seconds, or an answer that is not one JSON line; its last error lines are shown). A repository with no commit is refused too, since the check compares with `HEAD`. |
 | 3 | The run folder's spend reached `--max-usd`. Everything paid for is saved; re-run with a higher `--max-usd` to continue. |
 | 4 | The repository was not marked trusted. Ask the user whether they trust it, and re-run with `--trust-repo` only on a yes. |
 | 5 | Another process is running this target now. The message names its pid, host and start time. |
@@ -143,7 +159,10 @@ changes nothing. After that a re-run makes no call and leaves them as they are.
 
 ## What it writes outside its output
 
-Nothing. `--tree` and `--pr` read git objects with `git ls-tree`,
+Without `--apply`, nothing. With it, only the new files in
+`<specs-dir>/registry/` (through a temporary `<specs-dir>/registry/.spec-extract-tmp/`,
+deleted when the apply ends); it never changes an existing file there and
+never commits, and the check it runs first only reads. `--tree` and `--pr` read git objects with `git ls-tree`,
 `git cat-file` and `git show`; `--fetch` adds refs to the clone. `--dir` reads
 the directory only.
 

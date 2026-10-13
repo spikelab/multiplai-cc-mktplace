@@ -12,7 +12,9 @@ R6 resumes on a later clock, so its byte-equal facts.json also checks R28 (the
 saved `generated_at`). PR 3a's: R8, R20, R21, R22, and R12's group and write
 case, which compare every output a finished run writes (`capabilities.json`,
 `registry/`, `report.md`, `summary.json`) and the group and write answers.
-Later PRs add theirs here.
+PR 3b's: R11, which also compares every file under `<registry>` and
+`git status --porcelain` with a reference apply on an identical fixture repo,
+and R17, which asserts its own result (exit 2, `<registry>` unchanged).
 """
 
 from __future__ import annotations
