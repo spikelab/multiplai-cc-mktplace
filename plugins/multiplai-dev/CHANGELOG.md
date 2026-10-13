@@ -17,6 +17,16 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-10-13
+
+### Added
+- buildme's check for uncommitted work a stopped step did not leave can now
+  be run by another skill as a command:
+  `python -m build_pipeline.stop_record_cli` (from buildme's `scripts/`
+  directory) reads a JSON object on stdin naming the project directory and
+  the stop record, and prints `{"reason": null}` or `{"reason": "<why not>"}`.
+  It refuses exactly what buildme's own resumes refuse.
+
 ## [0.50.0] - 2026-10-13
 
 ### Changed
