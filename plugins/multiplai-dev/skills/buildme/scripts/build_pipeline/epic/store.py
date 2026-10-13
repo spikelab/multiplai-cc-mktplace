@@ -16,8 +16,10 @@ slug rule (`origin_owner_repo`, `slug_repo_name`, `sanitize_slug` in
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -136,18 +138,32 @@ def plan_path(epic_dir: Path, child_id: str) -> Path:
     return Path(epic_dir) / PLANS_DIR / f"{child_id}.md"
 
 
+def _write_atomic(path: Path, text: str) -> None:
+    """Write through a temp file and os.replace, so a stop never leaves half a file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 def write_split(epic_dir: Path, epic: Epic) -> None:
-    (Path(epic_dir) / SPLIT_FILE).write_text(render_split(epic))
+    _write_atomic(Path(epic_dir) / SPLIT_FILE, render_split(epic))
 
 
 def write_plan(epic_dir: Path, child: EpicChild) -> None:
-    path = plan_path(epic_dir, child.id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(child.plan)
+    _write_atomic(plan_path(epic_dir, child.id), child.plan)
 
 
-def write_files(epic_dir: Path, epic: Epic) -> None:
-    """Render split.md and every plan from *epic* (epic.json is saved first, by the caller)."""
-    write_split(epic_dir, epic)
+def write_files(epic_dir: Path, epic: Epic, *, keep_existing: bool = False) -> None:
+    """Render split.md and every plan from *epic* (epic.json is saved first, by
+    the caller). With *keep_existing*, a file already on disk is left as it is."""
+    if not (keep_existing and (Path(epic_dir) / SPLIT_FILE).exists()):
+        write_split(epic_dir, epic)
     for c in epic.children:
-        write_plan(epic_dir, c)
+        if not (keep_existing and plan_path(epic_dir, c.id).exists()):
+            write_plan(epic_dir, c)

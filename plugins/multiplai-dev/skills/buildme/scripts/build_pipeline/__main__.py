@@ -10,7 +10,7 @@ Subcommands for dev/debug use (only /buildme is user-facing):
   config-get    — Print one resolved specs/config.yaml value (e.g. intake.provider)
 
 Exit codes: 0 done, 1 failure, 2 usage, 3 waiting on a human or the wrapper
-(stdout says which: INTERVIEW:WAITING, RESEARCH:NEEDED, SPLIT:REQUIRED or
+(stdout says which: INTERVIEW:WAITING, RESEARCH:NEEDED, SPLIT:REQUIRED, EPIC:SPLIT or
 FINDINGS:REVIEW_READY), 4 an agent timed out.
 """
 

@@ -27,7 +27,8 @@ time, not derived from a tag.
   children each depends on, to
   `<data_dir>/buildme/epics/<owner>-<repo>--<change>/` and exits 3 with
   `EPIC:SPLIT:<split.md>`. A re-run prints the same line and makes no new
-  model call. Approving the split and building the children come in later
+  model call, and keeps any plan you edited meanwhile. A retry of a one-change
+  build that failed does not ask again. Approving the split and building the children come in later
   releases.
 - `--no-epic-split` builds the input as one change without asking.
 

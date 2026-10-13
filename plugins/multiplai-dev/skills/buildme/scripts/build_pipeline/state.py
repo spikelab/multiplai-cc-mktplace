@@ -193,6 +193,11 @@ class BuildState(BaseModel):
     # completes the phase. Set means the build is an epic: every later run
     # reads epic.json and never reaches spec generation. Default None.
     epic_dir: str | None = None
+    # EPIC_SPLIT answered one change. A retry of a FAILED build (which re-runs
+    # every phase) skips the step instead of asking again, since a second
+    # answer of several would turn a change already being built into an
+    # epic. Default False.
+    epic_single: bool = False
 
     # Git lifecycle — set when the pipeline creates its own worktree/branch.
     # Persisted so a resume RE-BINDS to the existing worktree instead of

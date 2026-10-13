@@ -144,10 +144,11 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
         # Phase: Epic split — one change, or several children with one plan
         # each. Unlike the phases above, a pointer AT EPIC_SPLIT means the
-        # decision is made: re-entering would pay for the call again. A build
-        # that split (state.epic_dir set) never reaches spec generation.
-        if state.epic_dir is None and not (state.phase == BuildPhase.EPIC_SPLIT
-                                           or state.is_phase_complete(BuildPhase.EPIC_SPLIT)):
+        # decision is made: re-entering would pay for the call again. So does
+        # `state.epic_single`, which a FAILED build keeps. A build that split
+        # (state.epic_dir set) never reaches spec generation.
+        if state.epic_dir is None and not state.epic_single and not (
+                state.phase == BuildPhase.EPIC_SPLIT or state.is_phase_complete(BuildPhase.EPIC_SPLIT)):
             log.info("START phase=EPIC_SPLIT")
             from .epic import phase as epic_phase
             rc = await epic_phase.run_epic_split_phase(config, state, state_path, args, progress)

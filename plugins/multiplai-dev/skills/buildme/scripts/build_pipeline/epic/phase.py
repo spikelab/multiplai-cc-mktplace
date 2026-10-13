@@ -57,9 +57,11 @@ async def run_epic_split_phase(config, state, state_path: Path, args, progress) 
 
     name = config.change_name
     epic_dir = store.epic_dir_for(_repo(config, state), name)
-    if (epic_dir / store.EPIC_FILE).exists():
-        # Stopped after epic.json, before the phase was saved (row A.S3): no
-        # call; render every file again, since nobody has seen them yet.
+    resumed = (epic_dir / store.EPIC_FILE).exists()
+    if resumed:
+        # Stopped after epic.json, before the phase was saved (row A.S3), or a
+        # checkpoint that lost state.epic_dir: no call; render only the files
+        # that are missing, since one on disk may hold the user's edit (A.S8).
         try:
             epic = store.load_epic(epic_dir)
         except store.EpicFileError as e:
@@ -81,16 +83,17 @@ async def run_epic_split_phase(config, state, state_path: Path, args, progress) 
         if answer.single:
             log.info("EPIC_SPLIT single change: %s", answer.reason)
             progress.log_phase("EPIC_SPLIT", f"One change: {answer.reason}")
+            state.epic_single = True
             state.advance_to(BuildPhase.EPIC_SPLIT, state_path)
             return None
         epic = store.Epic(name=name, reason=answer.reason, children=answer.children)
 
     # Only a split that passed the checks gets here, so one change never
     # creates the directory.
-    if not (epic_dir / store.EPIC_FILE).exists():
+    if not resumed:
         store.save_epic(epic_dir, epic)
     if epic.state == "proposed":
-        store.write_files(epic_dir, epic)
+        store.write_files(epic_dir, epic, keep_existing=resumed)
     state.epic_dir = str(epic_dir)
     state.advance_to(BuildPhase.EPIC_SPLIT, state_path)
     progress.log_phase("EPIC_SPLIT", f"Split into {len(epic.children)} children: {epic_dir / store.SPLIT_FILE}")

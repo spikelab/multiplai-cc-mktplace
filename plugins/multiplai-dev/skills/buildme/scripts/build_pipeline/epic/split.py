@@ -7,6 +7,7 @@ callers reach it as `split.epic_split`, never through a `from` import.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import re
 from pathlib import Path
@@ -67,7 +68,8 @@ async def epic_split(config, inputs: str, errors: list[str] | tuple[str, ...] = 
     plans. *errors* are the previous answer's check failures, for the retry."""
     call = call or llm_call_structured
     retry = EPIC_SPLIT_RETRY.format(errors="\n".join(f"- {e}" for e in errors)) if errors else ""
-    prompt = EPIC_SPLIT_PROMPT.format(notice=UNTRUSTED_NOTICE, inputs=inputs, errors=retry)
+    prompt = EPIC_SPLIT_PROMPT.format(notice=UNTRUSTED_NOTICE, inputs=inputs, errors=retry,
+                                      date=datetime.date.today().isoformat())
     return await call(
         prompt,
         EpicSplitAnswer,
