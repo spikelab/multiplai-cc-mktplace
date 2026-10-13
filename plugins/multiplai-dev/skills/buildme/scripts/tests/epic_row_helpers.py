@@ -643,9 +643,10 @@ print("fake tests ran", flush=True)
 sys.exit(step.get("exit", 0))
 '''
 
-# A `git` that logs only pushes (PR E's writing calls), then runs the real one.
+# A `git` that logs only pushes (PR E's writing calls) to `<root>/pushes.log`,
+# apart from `calls.log`, whose readers expect launches only; then runs the real one.
 GIT_SHIM = """#!/bin/sh
-if [ "$1" = push ]; then printf '{{"kind": "git-push", "argv": "%s"}}\\n' "$*" >> "$EPIC_FAKE_ROOT/calls.log"; fi
+if [ "$1" = push ]; then printf '{{"kind": "git-push", "argv": "%s"}}\\n' "$*" >> "$EPIC_FAKE_ROOT/pushes.log"; fi
 exec {git} "$@"
 """
 

@@ -65,7 +65,7 @@ def _snapshot(r: MergeRoot) -> dict:
 
 
 def _launches(r: MergeRoot) -> list[str]:
-    calls = [*r.calls("build"), *r.calls("merge-tests"), *r.calls("merge-agent"), *r.calls("git-push"),
+    calls = [*r.calls("build"), *r.calls("merge-tests"), *r.calls("merge-agent"), *r.pushes(),
              *r.fakes.review_launches(), *r.fakes.post_launches()]
     return sorted(json.dumps(x, sort_keys=True).replace(str(r.root), "<root>") for x in calls)
 

@@ -164,9 +164,13 @@ class MergeRoot:
     def calls(self, kind: str) -> list[dict]:
         return [x for x in CallLog(self.root / "calls.log").calls() if x["kind"] == kind]
 
+    def pushes(self) -> list[dict]:
+        """Every `git push` the `git` shim saw."""
+        return CallLog(self.root / "pushes.log").calls()
+
     def step_pushes(self) -> list[dict]:
         """`git push` calls but the fake build's own."""
-        return [x for x in self.calls("git-push") if not x["argv"].startswith("push -q -u")]
+        return [x for x in self.pushes() if not x["argv"].startswith("push -q -u")]
 
     def origin(self, rel: str, ref: str = "buildme/e-a") -> str:
         return git(self.root / "o" / "r.git", "show", f"{ref}:{rel}")
