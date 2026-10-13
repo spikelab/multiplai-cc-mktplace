@@ -22,7 +22,7 @@ const App = (() => {
   const tabs = new Map();
   // Everything the server tells us; tabs read it and never write it.
   const state = { job: null, candidates: null, looks: null, music: null, videos: [], rows: [] };
-  let current = null, chosenByUser = false, polling = false;
+  let current = null, chosenByUser = false, polling = false, again = false;
 
   function setStatus(text, isError) {
     $("status").textContent = text;
@@ -95,7 +95,8 @@ const App = (() => {
   }
 
   async function refresh() {
-    if (polling) return;
+    // One poll at a time; a refresh asked for meanwhile (after a send) runs right after it.
+    if (polling) { again = true; return; }
     polling = true;
     try {
       const [job, candidates, looks, music, videos, comments] = await Promise.all([
@@ -117,6 +118,7 @@ const App = (() => {
       setStatus(`Cannot reach the review server: ${e.message}`, true);
     } finally {
       polling = false;
+      if (again) { again = false; refresh(); }
     }
   }
 
