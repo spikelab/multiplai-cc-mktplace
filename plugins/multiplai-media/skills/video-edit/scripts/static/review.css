@@ -35,6 +35,43 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: v
          display: flex; justify-content: center; }
 video { display: block; max-width: 100%; max-height: 72vh; cursor: crosshair; }
 #markers { position: absolute; inset: 0; pointer-events: none; }
+#draw-layer { position: absolute; pointer-events: none; touch-action: none; }
+#draw-layer.active { pointer-events: auto; cursor: crosshair; }
+#draw-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+#draw-tools [aria-pressed="true"][data-tool] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+#draw-tools .colours { display: inline-flex; gap: 4px; margin-left: 6px; }
+#draw-tools button.colour { width: 26px; height: 26px; padding: 0; border-radius: 50%; background: var(--c);
+                            border: 2px solid var(--line); }
+#draw-tools button.colour[aria-pressed="true"] { border-color: var(--text); box-shadow: 0 0 0 2px var(--panel) inset; }
+#draw-custom { width: 30px; height: 28px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+img.thumb { display: block; max-width: 100%; border-radius: 4px; margin-bottom: 4px; }
+#timeline { margin-top: 10px; }
+#timeline .notice { margin: 0; font-size: 12px; }
+.tl-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 8px; margin-bottom: 3px; }
+.tl-label { font-size: 11px; color: var(--muted); text-align: right; }
+#timeline .tl-track { position: relative; height: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
+            overflow: hidden; cursor: pointer; }
+#timeline .tl-track.ruler { height: 20px; background: var(--bg); cursor: col-resize; touch-action: none; user-select: none; }
+.tl-tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line); padding-left: 2px; font-size: 10px;
+           line-height: 18px; color: var(--muted); pointer-events: none; }
+button.tl-block { position: absolute; top: 2px; bottom: 2px; min-width: 3px; padding: 0 4px; border: 0; border-radius: 3px;
+                  font-size: 11px; line-height: 16px; text-align: left; color: #fff; overflow: hidden; white-space: nowrap; }
+.tl-block.lane-segments { background: #4c6ef5; box-shadow: inset 1px 0 0 rgba(255, 255, 255, .6); }
+.tl-block.lane-segments:nth-of-type(even) { background: #364fc7; }
+.tl-block.lane-captions { background: #6c757d; box-shadow: inset 1px 0 0 rgba(255, 255, 255, .5); }
+.tl-block.lane-headline { background: #e8590c; }
+.tl-block.lane-overlays { background: #0ca678; }
+button.tl-block.tick { width: 4px; margin-left: -2px; padding: 0; background: #d6336c; }
+.tl-block[aria-pressed="true"] { outline: 2px solid var(--text); outline-offset: -2px; z-index: 1; }
+.tl-block .xf { position: absolute; left: 0; top: 0; bottom: 0; pointer-events: none;
+                background: repeating-linear-gradient(45deg, rgba(255, 255, 255, .5) 0 3px, transparent 3px 6px); }
+.tl-text { position: relative; display: block; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.tl-none { font-size: 11px; color: var(--muted); padding-left: 6px; line-height: 20px; pointer-events: none; }
+.tl-sel { position: absolute; top: 0; bottom: 0; z-index: 2; pointer-events: none;
+          background: color-mix(in srgb, var(--accent) 22%, transparent);
+          border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+.tl-ph { position: absolute; top: 0; bottom: 0; z-index: 3; width: 2px; margin-left: -1px; background: var(--accent);
+         pointer-events: none; }
 .marker { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%;
           border: 2px solid #000; background: var(--marker); font: 700 11px/18px system-ui;
           text-align: center; color: #000; }
@@ -91,7 +128,7 @@ li.card.rejected { opacity: .7; box-shadow: inset 4px 0 0 var(--muted); }
 button.decide[aria-pressed="true"].accept { background: #2f9e44; border-color: #2f9e44; color: #fff; }
 button.decide[aria-pressed="true"].reject { background: var(--muted); border-color: var(--muted); color: var(--panel); }
 .tl { margin-top: 8px; }
-.tl-track { position: relative; height: 34px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+.tl .tl-track { position: relative; height: 34px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
             touch-action: none; user-select: none; }
 .tl-word { position: absolute; top: 12px; height: 10px; background: var(--line); border-radius: 2px; }
 .tl-sentence-end { position: absolute; top: 3px; bottom: 3px; width: 2px; margin-left: -1px; background: var(--muted); }

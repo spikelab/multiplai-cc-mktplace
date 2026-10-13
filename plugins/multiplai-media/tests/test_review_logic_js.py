@@ -5,9 +5,11 @@ image ships node.
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -50,3 +52,18 @@ def test_each_tab_file_registers_the_tab_it_is_named_for() -> None:
     for tab in tabs:
         text = (STATIC / f"tab-{tab}.js").read_text()
         assert re.findall(r'App\.registerTab\("([^"]+)"', text) == [tab], tab
+
+
+def test_the_page_and_the_server_agree_on_the_drawing_and_body_limits() -> None:
+    """logic.js copies the server's limits; a drift would let the page build rows the server refuses."""
+    sys.path.insert(0, str(STATIC.parent))
+    from stages import review_server as rs
+
+    node = shutil.which("node")
+    assert node, "node is required for the page-logic tests"
+    names = ["MAX_SHAPES", "MAX_PEN_POINTS", "MAX_DRAWING_POINTS", "MAX_MARK_BYTES", "MAX_BODY_BYTES"]
+    script = (f"const L = require({json.dumps(str(STATIC / 'logic.js'))});"
+              f"console.log(JSON.stringify({json.dumps(names)}.map((n) => L[n])))")
+    proc = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert dict(zip(names, json.loads(proc.stdout))) == {n: getattr(rs, n) for n in names}

@@ -21,6 +21,37 @@ a tag.
 
 Nothing yet.
 
+## [0.13.0] - 2026-10-13
+
+### Added
+
+- **Review tab: draw on a paused frame.** Pick Pen, Arrow or Box and a
+  colour, and mark the frame: circle the logo that is cut off, point at the
+  caption that covers a mouth. Undo and Clear fix a slip. Claude gets the
+  frame at full size with your marks on it, with your note if you add one.
+  A drawing holds up to 100 shapes; when one is full the page says so, and
+  you add it and draw the rest as another.
+- **Review tab: a timeline under every render.** It shows the render's
+  segments (crossfades hatched), caption lines (hover for the text), the
+  headline, overlays (file and style) and sound effects, with a playhead
+  that follows the video; click a lane to jump there. Drag along the ruler
+  to comment on a stretch, and click a block to say which part you mean,
+  so "this card comes in too late" reaches Claude as that overlay and
+  those seconds.
+- `pipeline.py render` now writes `<name>.edl.json` beside each render:
+  which edit list it came from, with every path made absolute, where each
+  segment landed and the caption lines as they were burned in. The
+  timeline is drawn from it; a render made before this version plays
+  without a timeline.
+
+### Changed
+
+- `comments.jsonl` rows can now also be `drawing` rows (the marked frame
+  is saved under `review/marks/`) and `range` rows.
+- `pipeline.py render` refuses to start when the edit list it was given is
+  saved as `<name>.edl.json` beside the output, where it would be
+  overwritten.
+
 ## [0.12.0] - 2026-10-13
 
 ### Added

@@ -453,6 +453,236 @@
     return `${v < 0 ? "−" : ""}${Math.abs(v)} dB`;
   }
 
+  // --- Review: drawing on a paused frame -------------------------------------------------
+
+  const DRAW_TOOLS = ["pen", "arrow", "box"];
+  const DRAW_COLOURS = [["Yellow", "#FFD400"], ["Red", "#FF3B30"], ["Cyan", "#00C2FF"]];
+  // The server's limits (stages/review_server.py; tests/test_review_logic_js.py checks they agree).
+  const MAX_SHAPES = 100;
+  const MAX_PEN_POINTS = 2000;
+  const MAX_DRAWING_POINTS = 6000;        // all of one drawing's shapes together
+  const MAX_MARK_BYTES = 4 * 1024 * 1024;
+  const MAX_BODY_BYTES = 256 * 1024;      // one POST /api/comments
+  const MAX_EXPORT_SIDE = 3840;
+
+  const round4 = (v) => Math.round(v * 10000) / 10000;
+  const clamp01 = (v) => Math.min(1, Math.max(0, v));
+
+  function isColour(c) {
+    return typeof c === "string" && /^#[0-9a-fA-F]{6}$/.test(c);
+  }
+
+  /* A pointer position as [x, y] fractions of the picture (`rect` in the same
+   * coordinates as the pointer), clamped to the picture. */
+  function toPictureFrac(clientX, clientY, rect) {
+    if (!(rect.width > 0 && rect.height > 0)) return [0, 0];
+    return [round4(clamp01((clientX - rect.left) / rect.width)), round4(clamp01((clientY - rect.top) / rect.height))];
+  }
+
+  /* A pen stroke without the points closer than `minDist` to the one kept
+   * before them (the last point always stays), then thinned to at most
+   * `max` points by keeping evenly spaced ones. */
+  function simplifyStroke(points, minDist = 0.002, max = MAX_PEN_POINTS) {
+    if (points.length <= 2) return points.map((p) => [round4(p[0]), round4(p[1])]);
+    const kept = [points[0]];
+    for (let i = 1; i < points.length - 1; i++) {
+      const a = kept[kept.length - 1], b = points[i];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) >= minDist) kept.push(b);
+    }
+    kept.push(points[points.length - 1]);
+    let out = kept;
+    if (out.length > max) {
+      const step = (out.length - 1) / (max - 1);
+      out = Array.from({ length: max }, (_, i) => kept[Math.round(i * step)]);
+    }
+    return out.map((p) => [round4(p[0]), round4(p[1])]);
+  }
+
+  /* The shape a drag made, or null when it is too small to mean anything
+   * (an arrow or a box needs a drag; a pen click is a dot). A pen stroke is
+   * thinned to `maxPoints`; with fewer than 2 to spare there is no shape. */
+  function finishShape(tool, color, points, maxPoints = MAX_PEN_POINTS) {
+    if (!DRAW_TOOLS.includes(tool) || !isColour(color) || !points.length || !(maxPoints >= 2)) return null;
+    if (tool === "pen") return { tool, color, points: simplifyStroke(points, undefined, Math.min(MAX_PEN_POINTS, maxPoints)) };
+    const a = points[0], b = points[points.length - 1];
+    if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.01) return null;
+    return { tool, color, points: [[round4(a[0]), round4(a[1])], [round4(b[0]), round4(b[1])]] };
+  }
+
+  /* What one more shape may use in a drawing that has `shapes`: null when the
+   * drawing is full (MAX_SHAPES shapes, or under 2 of MAX_DRAWING_POINTS left),
+   * else the most points it may have. */
+  function drawingRoom(shapes) {
+    const used = shapes.reduce((n, s) => n + s.points.length, 0);
+    const left = MAX_DRAWING_POINTS - used;
+    return shapes.length >= MAX_SHAPES || left < 2 ? null : Math.min(MAX_PEN_POINTS, left);
+  }
+
+  /* Line width for a picture `w` pixels wide: 0.5% of it, at least 2 px. */
+  function strokeWidth(w) {
+    return Math.max(2, Math.round(w * 0.005));
+  }
+
+  /* The polylines that draw `shape` on a w×h picture, in pixels: a pen is its
+   * stroke (a dot for one point), a box its closed outline, an arrow its shaft
+   * and a two-line head at the second point. */
+  function shapePaths(shape, w, h) {
+    const px = shape.points.map(([x, y]) => [x * w, y * h]);
+    const width = strokeWidth(w);
+    if (shape.tool === "pen") return { color: shape.color, width, paths: [px.length === 1 ? [px[0], px[0]] : px] };
+    const [[x0, y0], [x1, y1]] = px;
+    if (shape.tool === "box") {
+      return { color: shape.color, width, paths: [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]] };
+    }
+    const ang = Math.atan2(y1 - y0, x1 - x0), size = Math.max(10, width * 5), spread = Math.PI / 7;
+    const head = [
+      [x1 - size * Math.cos(ang - spread), y1 - size * Math.sin(ang - spread)],
+      [x1, y1],
+      [x1 - size * Math.cos(ang + spread), y1 - size * Math.sin(ang + spread)],
+    ];
+    return { color: shape.color, width, paths: [[[x0, y0], [x1, y1]], head] };
+  }
+
+  /* The size to export a frame at: its native size, scaled down only when a
+   * side is longer than MAX_EXPORT_SIDE. */
+  function exportSize(vw, vh, maxSide = MAX_EXPORT_SIDE) {
+    if (!(vw > 0 && vh > 0)) return null;
+    const k = Math.min(1, maxSide / Math.max(vw, vh));
+    return { width: Math.round(vw * k), height: Math.round(vh * k) };
+  }
+
+  /* The mailbox row for a pending drawing (review_server: kind "drawing"). */
+  function drawingRow(d) {
+    return { kind: "drawing", video: d.video, version: d.version, t: Math.round(d.t * 1000) / 1000,
+             image: d.image, shapes: d.shapes.map((s) => ({ tool: s.tool, color: s.color, points: s.points })),
+             text: (d.text || "").trim() };
+  }
+
+  // --- Review: the timeline from a render's sidecar ----------------------------------------
+
+  const LANES = [["segments", "Segments"], ["captions", "Captions"], ["headline", "Headline"],
+                 ["overlays", "Overlays"], ["sfx", "Sounds"]];
+  const MIN_RANGE_S = 0.1;
+  const TICK_RANGE_S = 0.25;     // a sound effect's range: this long either side of it
+
+  const fileName = (p) => String(p || "").split(/[\\/]/).pop();
+  const r3 = (v) => Math.round(v * 1000) / 1000;
+
+  /* The Review timeline from a render's sidecar (stages/render_sidecar.py):
+   * {duration, lanes: [{id, label, blocks: [{start, end, label, title, target, xfade?, tick?}]}]}
+   * in output seconds; `duration` is the render's. `target` is what a range row names for that block. */
+  function timelineLanes(side) {
+    const e = (side && side.edl) || {};
+    const segs = [];
+    if (e.title) {
+      segs.push({ start: 0, end: Number(e.title.duration) || 0, label: "Title",
+                  title: [e.title.line1, e.title.line2].filter(Boolean).join(" / "), target: "title" });
+    }
+    for (const s of (side && side.segments) || []) {
+      const notes = [`source ${fmt(s.src_start)}–${fmt(s.src_end)}`];
+      if (s.speed !== 1) notes.push(`${s.speed}× speed`);
+      if (s.xfade_in > 0) notes.push(`${s.xfade_in} s crossfade in`);
+      if (s.muted) notes.push("muted");
+      segs.push({ start: s.out_start, end: s.out_end, xfade: s.xfade_in || 0, label: `seg ${s.index}`,
+                  title: `seg ${s.index}: ${notes.join(", ")}`, target: `segment:${s.index}` });
+    }
+    const caps = ((side && side.captions_events) || []).map((c) => (
+      { start: c.start, end: c.end, label: c.text, title: `${fmt(c.start)} ${c.text}`, target: "captions" }));
+    const head = e.headline ? [{ start: e.headline.start, end: e.headline.end, label: e.headline.text,
+                                 title: `Headline: ${e.headline.text}`, target: "headline" }] : [];
+    const overlays = (e.overlays || []).map((o, i) => {
+      const label = fileName(o.html) + (o.style ? ` · ${o.style}` : "");
+      return { start: o.start, end: o.end, label, title: `overlay ${i}: ${label} (${o.mode || "keyed"})`, target: `overlay:${i}` };
+    });
+    const sfx = (e.sfx || []).map((x, i) => (
+      { start: x.at, end: x.at, tick: true, label: fileName(x.sound), title: `${fmt(x.at)} ${fileName(x.sound)}`, target: `sfx:${i}` }));
+    const blocks = { segments: segs, captions: caps, headline: head, overlays, sfx };
+    // The render's length; a block past it (the last caption's hold can be) is cut off at
+    // the edge, as the render cuts it. Only a sidecar without a duration takes the blocks'.
+    const given = Number(side && side.duration);
+    const duration = given > 0 ? given : Math.max(0, ...Object.values(blocks).flat().map((b) => b.end));
+    return { duration, lanes: LANES.map(([id, label]) => ({ id, label, blocks: blocks[id] })) };
+  }
+
+  /* A block's left and width on a timeline `duration` long, in percent. */
+  function blockBox(b, duration) {
+    if (!(duration > 0)) return { left: 0, width: 0 };
+    const left = clamp01(b.start / duration), right = clamp01(b.end / duration);
+    return { left: round4(left * 100), width: round4(Math.max(0, right - left) * 100) };
+  }
+
+  /* The time at fraction `f` across a timeline `duration` long. */
+  function timeAtFrac(f, duration) {
+    return r3(clamp01(f) * (duration > 0 ? duration : 0));
+  }
+
+  /* A drag on the ruler from t0 to t1 → {t_start, t_end} in order and within
+   * the render, or null when it is shorter than `minLen` (a click). */
+  function rangeFromDrag(t0, t1, duration, minLen = MIN_RANGE_S) {
+    const hi = duration > 0 ? duration : Infinity;
+    const a = Math.min(hi, Math.max(0, Math.min(t0, t1))), b = Math.min(hi, Math.max(0, Math.max(t0, t1)));
+    return b - a >= minLen ? { t_start: r3(a), t_end: r3(b) } : null;
+  }
+
+  /* The range a click on a block marks: the block, or TICK_RANGE_S either side of a tick. */
+  function blockRange(b, duration) {
+    const hi = duration > 0 ? duration : Infinity;
+    if (b.end - b.start >= MIN_RANGE_S) return { t_start: r3(Math.max(0, b.start)), t_end: r3(Math.min(hi, b.end)) };
+    return { t_start: r3(Math.max(0, b.start - TICK_RANGE_S)), t_end: r3(Math.min(hi, b.start + TICK_RANGE_S)) };
+  }
+
+  /* "overlay:2" → "overlay 2"; null → "" */
+  function targetLabel(target) {
+    return target ? target.replace(":", " ") : "";
+  }
+
+  /* The mailbox row for a pending range comment (review_server: kind "range"). */
+  function rangeRow(d) {
+    return { kind: "range", video: d.video, version: d.version, t_start: r3(d.t_start), t_end: r3(d.t_end),
+             target: d.target || null, text: (d.text || "").trim() };
+  }
+
+  // --- Review: sending -----------------------------------------------------------------------
+
+  const REVIEW_KINDS = ["point", "drawing", "range"];
+  const kindOf = (c) => c.kind || "point";
+
+  /* The mailbox row for a pending Review comment of any kind. */
+  function reviewRow(c) {
+    if (kindOf(c) === "drawing") return drawingRow(c);
+    if (kindOf(c) === "range") return rangeRow(c);
+    const { video, version, t, x, y } = c;
+    return { kind: "point", video, version, t, x, y, text: (c.text || "").trim() };
+  }
+
+  /* Whether the pending comments can be sent: some, and each with text but a drawing. */
+  function canSendReview(pending) {
+    return pending.length > 0 && pending.every((c) => kindOf(c) === "drawing" || !!(c.text || "").trim());
+  }
+
+  /* The sent rows the Review tab lists for `clip`: its point, drawing and range rows. */
+  function reviewSent(rows, clip) {
+    return (rows || []).filter((r) => REVIEW_KINDS.includes(kindOf(r)) && r.video === clip);
+  }
+
+  /* `rows` split into POST /api/comments bodies of at most `maxBytes`, in order,
+   * as lists of indexes into `rows`. A row too big for any body goes alone (the
+   * server refuses it; the server's own limits keep a drawing under the cap). */
+  function sendBatches(rows, maxBytes = MAX_BODY_BYTES) {
+    const enc = new TextEncoder();
+    const empty = enc.encode(JSON.stringify({ comments: [] })).length;
+    const out = [];
+    let cur = [], size = empty;
+    rows.forEach((r, i) => {
+      const n = enc.encode(JSON.stringify(r)).length;
+      if (cur.length && size + 1 + n > maxBytes) { out.push(cur); cur = []; size = empty; }   // 1: the comma
+      size += n + (cur.length ? 1 : 0);
+      cur.push(i);
+    });
+    if (cur.length) out.push(cur);
+    return out;
+  }
+
   const api = {
     TABS, INPUT_FILES, fmt, inputNotice, isReels, latestBy, rowsOfKind, clipsOpen, speakersOpen, firstOpenTab,
     oneAtATime,
@@ -464,6 +694,10 @@
     lookProblem, loopTime, fitScale, readyMessage,
     DEFAULT_VOLUME_DB, SFX_VOLUME_DB, MIN_VOLUME_DB, MAX_VOLUME_DB, musicOpen, dbToGain, clampDb, musicDraft,
     musicRow, musicProblem, fmtDb,
+    DRAW_TOOLS, DRAW_COLOURS, MAX_SHAPES, MAX_PEN_POINTS, MAX_DRAWING_POINTS, MAX_MARK_BYTES, MAX_BODY_BYTES,
+    isColour, toPictureFrac, simplifyStroke, finishShape, drawingRoom, strokeWidth, shapePaths, exportSize, drawingRow,
+    LANES, MIN_RANGE_S, timelineLanes, blockBox, timeAtFrac, rangeFromDrag, blockRange, targetLabel, rangeRow,
+    reviewRow, canSendReview, reviewSent, sendBatches,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JobLogic = api;

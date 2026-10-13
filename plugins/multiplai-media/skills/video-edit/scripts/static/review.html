@@ -47,6 +47,7 @@
     <section id="player-col">
       <div id="stage">
         <video id="video" preload="metadata" playsinline></video>
+        <canvas id="draw-layer" aria-label="Drawing on the paused frame"></canvas>
         <div id="markers"></div>
       </div>
       <div id="controls">
@@ -55,15 +56,35 @@
         <span id="time">0:00.0 / 0:00.0</span>
         <select id="version" aria-label="Version"></select>
       </div>
+      <div id="draw-tools" role="toolbar" aria-label="Comment tools">
+        <button type="button" data-tool="point" aria-pressed="true" title="Click the picture to comment on a spot">● Point</button>
+        <button type="button" data-tool="pen" aria-pressed="false" title="Draw freehand">✎ Pen</button>
+        <button type="button" data-tool="arrow" aria-pressed="false" title="Drag an arrow">➚ Arrow</button>
+        <button type="button" data-tool="box" aria-pressed="false" title="Drag a box">▭ Box</button>
+        <span id="draw-colours" class="colours"></span>
+        <input type="color" id="draw-custom" value="#ffffff" aria-label="Custom colour" title="Custom colour">
+        <button type="button" id="draw-undo" disabled>Undo</button>
+        <button type="button" id="draw-clear" disabled>Clear</button>
+      </div>
+      <section id="timeline" aria-label="Timeline">
+        <p class="notice" id="timeline-notice" hidden></p>
+        <div id="tl-body" hidden>
+          <div class="tl-row">
+            <span class="tl-label">Time</span>
+            <div id="tl-ruler" class="tl-track ruler" title="Drag to mark a range to comment on"></div>
+          </div>
+          <div id="tl-lanes"></div>
+        </div>
+      </section>
       <form id="composer" hidden>
         <label for="composer-text" id="composer-label"></label>
         <textarea id="composer-text" rows="3" placeholder="What should change here?"></textarea>
         <div class="row">
-          <button type="submit">Add comment</button>
+          <button type="submit" id="composer-submit">Add comment</button>
           <button type="button" id="composer-cancel" class="ghost">Cancel</button>
         </div>
       </form>
-      <p class="hint">Click the picture to pause and comment on that spot. Space plays and pauses; ← and → step 1 s.</p>
+      <p class="hint">Click the picture to pause and comment on that spot, or pick Pen, Arrow or Box and draw on the paused frame. Drag along the timeline's ruler to comment on a stretch; click a block to say which part. Space plays and pauses; ← and → step 1 s.</p>
     </section>
     <aside id="comments">
       <h2>Pending <span id="pending-count"></span></h2>

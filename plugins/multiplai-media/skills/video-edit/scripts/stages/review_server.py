@@ -3,8 +3,8 @@
 The server is pointed at the job's output directory. The page shows what the
 session wrote there (job.json, candidates.json, looks.json, music.json; see
 stages/job_files.py) and plays every render in it. Each choice the user makes
-(a comment on a render, picked clips, speaker boxes, a look, music) is posted
-as a mailbox row, appended to `comments.jsonl` in the mailbox directory, which
+(a comment, a drawing or a range on a render, picked clips, speaker boxes, a
+look, music) is posted as a mailbox row, appended to `comments.jsonl` in the mailbox directory, which
 the session watches. The server never writes a job file.
 
 Standard library only, so the media test suite keeps running without the
@@ -28,7 +28,12 @@ carries a key for that one page (`&k=`, sample_key) instead of the token.
 
 Video versions: `clip-01.mp4` is version 1, `clip-01.v2.mp4` version 2, and so
 on. The page polls the list, so a re-render saved as the next version appears
-without a restart.
+without a restart. `pipeline.py render` writes `<stem>.edl.json` beside each
+render (stages/render_sidecar.py); `/api/edl` serves it, and the Review tab
+draws the render's timeline from it.
+
+A drawing on a paused frame comes in as a JPEG on `/api/marks`, saved as
+`<mailbox>/marks/<id>.jpg`; the `drawing` row that follows names it.
 """
 from __future__ import annotations
 
@@ -56,6 +61,10 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v"}
 VERSION_RE = re.compile(r"^(?P<clip>.+?)(?:\.v(?P<v>\d+))?$")
 MAX_BODY_BYTES = 256 * 1024
+MAX_MARK_BYTES = 4 * 1024 * 1024    # one drawn-on frame, JPEG
+JPEG_MAGIC = b"\xff\xd8\xff"
+MARK_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+EDL_SIDECAR = ".edl.json"           # stages/render_sidecar.SUFFIX: <stem>.edl.json beside a render
 MAX_TEXT = 4000
 CHUNK = 1024 * 1024
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; "
@@ -327,6 +336,7 @@ class Mailbox:
         self.comments = directory / "comments.jsonl"
         self.token_file = directory / "server.token"
         self.open_html = directory / "open.html"
+        self.marks = directory / "marks"
 
     def create(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -340,6 +350,17 @@ class Mailbox:
             os.write(fd, data)
         finally:
             os.close(fd)
+
+    def save_mark(self, jpeg: bytes) -> str:
+        """Save a drawn-on frame as marks/<id>.jpg (0600); returns the id."""
+        self.marks.mkdir(mode=0o700, exist_ok=True)
+        mark_id = uuid.uuid4().hex
+        fd = os.open(self.marks / f"{mark_id}.jpg", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, jpeg)
+        finally:
+            os.close(fd)
+        return mark_id
 
     def read(self) -> list[dict]:
         if not self.comments.exists():
@@ -362,16 +383,27 @@ def _write_private(path: Path, text: str) -> None:
 
 
 # Mailbox row kinds the page may post: whether the row is about one render
-# (`video` and `version`), its own fields (all required), and whether `text`
-# may be empty. A row with no `kind` is a `point` row: that is the shape the
-# page posted before rows had kinds.
+# (`video` and `version`), its own fields (required, then `optional` ones), and
+# whether `text` may be empty. A row with no `kind` is a `point` row: that is
+# the shape the page posted before rows had kinds.
 ROW_KINDS: dict[str, dict] = {
     "point": {"review": True, "fields": ("t", "x", "y"), "needs_text": True},
     "pick": {"review": False, "fields": ("candidate", "decision", "start", "end"), "needs_text": False},
     "panels": {"review": False, "fields": ("panels", "speakers"), "needs_text": False},
     "look": {"review": False, "fields": ("style", "brand", "captions"), "needs_text": False},
     "music": {"review": False, "fields": ("bed", "volume_db", "sfx_set"), "needs_text": False},
+    "drawing": {"review": True, "fields": ("t", "image", "shapes"), "needs_text": False},
+    "range": {"review": True, "fields": ("t_start", "t_end"), "optional": ("target",), "needs_text": True},
 }
+SHAPE_TOOLS = ("pen", "arrow", "box")
+MAX_SHAPES = 100
+MAX_PEN_POINTS = 2000
+# Points in one drawing row, all shapes together: at about 16 bytes a point as JSON, a full
+# drawing stays well inside MAX_BODY_BYTES, so the page can always send it.
+MAX_DRAWING_POINTS = 6000
+COLOUR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+# What a range row may point at on the timeline: a lane, or one block in it by index.
+TARGET_RE = re.compile(r"^(?:captions|headline|title|(?:segment|overlay|sfx):\d{1,4})$")
 MAX_PANELS = 8
 MAX_NAME = 40
 MIN_VOLUME_DB, MAX_VOLUME_DB = -60.0, 0.0
@@ -463,6 +495,57 @@ def _music(c: dict, offered: dict[str, set[str]]) -> dict:
     return row
 
 
+def _shapes(shapes: Any) -> list[dict]:
+    """Pen, arrow and box shapes with points as fractions of the picture (0..1)."""
+    if not isinstance(shapes, list) or not 1 <= len(shapes) <= MAX_SHAPES:
+        raise ValueError(f"shapes must be a list of 1..{MAX_SHAPES} shapes")
+    out = []
+    for i, sh in enumerate(shapes):
+        if not isinstance(sh, dict) or set(sh) != {"tool", "color", "points"}:
+            raise ValueError(f"shape {i} must be {{tool, color, points}}")
+        if sh["tool"] not in SHAPE_TOOLS:
+            raise ValueError(f"shape {i}: tool must be one of {', '.join(SHAPE_TOOLS)}")
+        if not isinstance(sh["color"], str) or not COLOUR_RE.match(sh["color"]):
+            raise ValueError(f"shape {i}: color must be #RRGGBB")
+        pts = sh["points"]
+        want = (1, MAX_PEN_POINTS) if sh["tool"] == "pen" else (2, 2)
+        if not isinstance(pts, list) or not want[0] <= len(pts) <= want[1]:
+            raise ValueError(f"shape {i}: a {sh['tool']} has {want[0]}..{want[1]} points")
+        clean = []
+        for pt in pts:
+            if not isinstance(pt, list) or len(pt) != 2:
+                raise ValueError(f"shape {i}: each point is [x, y]")
+            x, y = _finite({"x": pt[0], "y": pt[1]}, "x", "y")
+            if not (0 <= x <= 1 and 0 <= y <= 1):
+                raise ValueError(f"shape {i}: points are fractions of the picture, within 0..1")
+            clean.append([round(x, 4), round(y, 4)])
+        out.append({"tool": sh["tool"], "color": sh["color"].upper(), "points": clean})
+    if sum(len(sh["points"]) for sh in out) > MAX_DRAWING_POINTS:
+        raise ValueError(f"a drawing has at most {MAX_DRAWING_POINTS} points in all its shapes")
+    return out
+
+
+def _drawing(c: dict, marks_dir: Path | None) -> dict:
+    (t,) = _finite(c, "t")
+    if t < 0:
+        raise ValueError("t must be >= 0")
+    image = c["image"]
+    if not isinstance(image, str) or not MARK_ID_RE.match(image) or marks_dir is None \
+            or not (marks_dir / f"{image}.jpg").is_file():
+        raise ValueError(f"unknown image {image!r}: post the drawn frame to /api/marks first")
+    return {"t": round(t, 3), "image": image, "shapes": _shapes(c["shapes"])}
+
+
+def _range(c: dict) -> dict:
+    t_start, t_end = _finite(c, "t_start", "t_end")
+    if t_start < 0 or t_end <= t_start:
+        raise ValueError("need 0 <= t_start < t_end")
+    target = c.get("target")
+    if target is not None and (not isinstance(target, str) or not TARGET_RE.match(target)):
+        raise ValueError("target must be captions, headline, title, or segment:N, overlay:N or sfx:N")
+    return {"t_start": round(t_start, 3), "t_end": round(t_end, 3), "target": target}
+
+
 def offered_names(outdir: Path) -> dict[str, set[str]]:
     """The names in a valid looks.json and music.json, by list (OFFERED_LISTS)."""
     files = {name: job_files.load(outdir, name) for name in ("looks", "music")}
@@ -472,12 +555,14 @@ def offered_names(outdir: Path) -> dict[str, set[str]]:
 
 def validate_comment(c: Any, known: set[tuple[str, int]],
                      candidates: set[str] | frozenset[str] = frozenset(),
-                     offered: dict[str, set[str]] | None = None) -> dict:
+                     offered: dict[str, set[str]] | None = None,
+                     marks_dir: Path | None = None) -> dict:
     """One row from the page → a mailbox row, or ValueError.
 
     `known` is the (video, version) pairs on disk; `candidates` the ids in a
     valid candidates.json; `offered` the names a look or music row may pick
-    (offered_names). Unknown kinds and fields are refused.
+    (offered_names); `marks_dir` where the images drawing rows name are saved.
+    Unknown kinds and fields are refused.
     """
     if not isinstance(c, dict):
         raise ValueError("each comment must be an object")
@@ -485,7 +570,8 @@ def validate_comment(c: Any, known: set[tuple[str, int]],
     spec = ROW_KINDS.get(kind) if isinstance(kind, str) else None
     if spec is None:
         raise ValueError(f"unknown kind {kind!r}")
-    allowed = {"kind", "text", *spec["fields"], *(("video", "version") if spec["review"] else ())}
+    allowed = {"kind", "text", *spec["fields"], *spec.get("optional", ()),
+               *(("video", "version") if spec["review"] else ())}
     unknown = sorted(set(c) - allowed)
     if unknown:
         raise ValueError(f"{kind} rows have no field(s) {', '.join(map(repr, unknown))}")
@@ -514,6 +600,10 @@ def validate_comment(c: Any, known: set[tuple[str, int]],
         row.update(_look(c, offered or {}))
     elif kind == "music":
         row.update(_music(c, offered or {}))
+    elif kind == "drawing":
+        row.update(_drawing(c, marks_dir))
+    elif kind == "range":
+        row.update(_range(c))
     row.update(text=text.strip(), created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     return row
 
@@ -560,6 +650,8 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             self.send_header("Content-Security-Policy", csp)
             for k, v in (extra or {}).items():
                 self.send_header(k, v)
+            if self.close_connection:
+                self.send_header("Connection", "close")
             self.end_headers()
 
         def _json(self, obj, status: int = 200, extra: dict | None = None) -> None:
@@ -618,6 +710,10 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                     return self._named(url.path[len("/media/"):], query)
                 if url.path == "/api/comments" and self.command == "POST":
                     return self._post_comments()
+                if url.path == "/api/marks" and self.command == "POST":
+                    return self._post_mark()
+                if url.path == "/api/edl" and get:
+                    return self._edl(query)
                 if url.path == "/api/comments" and get:
                     clip, kind = query.get("video", [None])[0], query.get("kind", [None])[0]
                     return self._json({"comments": [
@@ -630,7 +726,15 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                     return self._static(url.path)
                 raise _Reject(405, "method not allowed")
             except _Reject as r:
-                self._json({"error": r.error}, r.status, r.headers)
+                # A refused POST's body may be unread (a check failed before the route read it),
+                # so the connection must not carry another request.
+                if self.command == "POST":
+                    self.close_connection = True
+                # A client refused mid-upload (a mark over the limit) may already be gone.
+                try:
+                    self._json({"error": r.error}, r.status, r.headers)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
@@ -708,6 +812,28 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                 speakers = [s for s in speakers if s["label"] == label]
             return self._json({"speakers": speakers})
 
+        def _edl(self, query: dict) -> None:
+            """The sidecar `pipeline.py render` wrote beside one render; 404 for a render without one."""
+            video = query.get("video", [""])[0]
+            try:
+                version = int(query.get("version", [""])[0])
+            except ValueError:
+                raise _Reject(400, "version must be a number") from None
+            name = next((v["name"] for c in videos() if c["clip"] == video
+                         for v in c["versions"] if v["version"] == version), None)
+            if name is None:
+                raise _Reject(404, f"no render {video!r} version {version}")
+            path = video_dir / (Path(name).stem + EDL_SIDECAR)
+            if not path.is_file():
+                raise _Reject(404, f"{name} has no {path.name}: it was rendered before render wrote one")
+            try:
+                data = cache.get(path)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+                raise _Reject(422, f"cannot read {path.name}: {e}") from None
+            if not isinstance(data, dict) or not isinstance(data.get("edl"), dict):
+                raise _Reject(422, f"{path.name} is not a render sidecar")
+            return self._json({"status": "ok", "data": data})
+
         def _named(self, what: str, query: dict) -> None:
             """A file a validated input file names; anything else is 404."""
             allowed = job_files.named_files(video_dir)[what]
@@ -765,6 +891,23 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                     self.wfile.write(chunk)
                     left -= len(chunk)
 
+        def _post_mark(self) -> None:
+            """A drawn-on frame: image/jpeg, at most MAX_MARK_BYTES, starting FF D8 FF."""
+            # A refused body is left unread, so the connection must not carry another request.
+            self.close_connection = True
+            if self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "image/jpeg":
+                raise _Reject(415, "a mark must be image/jpeg")
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                raise _Reject(400, "bad content length") from None
+            if length <= 0 or length > MAX_MARK_BYTES:
+                raise _Reject(413 if length > 0 else 400, f"a mark must be 1..{MAX_MARK_BYTES} bytes")
+            data = self.rfile.read(length)
+            if len(data) != length or not data.startswith(JPEG_MAGIC):
+                raise _Reject(400, "the body is not a JPEG")
+            self._json({"ok": True, "image": mailbox.save_mark(data)})
+
         def _post_comments(self) -> None:
             if self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json":
                 raise _Reject(415, "content type must be application/json")
@@ -786,7 +929,7 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             ids = {c["id"] for c in cands["data"]} if cands["status"] == "ok" else set()
             offered = offered_names(video_dir)
             try:
-                rows = [validate_comment(c, known, ids, offered) for c in comments]
+                rows = [validate_comment(c, known, ids, offered, mailbox.marks) for c in comments]
             except ValueError as e:
                 raise _Reject(400, str(e)) from None
             mailbox.append(rows)

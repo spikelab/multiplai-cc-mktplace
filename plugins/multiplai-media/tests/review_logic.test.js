@@ -437,3 +437,206 @@ test("dbToGain and fmtDb", () => {
   assert.equal(L.fmtDb(-10), "−10 dB");
   assert.equal(L.fmtDb(0), "0 dB");
 });
+
+// --- Review: drawing ---------------------------------------------------------------------
+
+test("toPictureFrac gives fractions of the picture, clamped to it", () => {
+  const rect = { left: 100, top: 50, width: 400, height: 200 };
+  assert.deepEqual(L.toPictureFrac(300, 150, rect), [0.5, 0.5]);
+  assert.deepEqual(L.toPictureFrac(50, 400, rect), [0, 1]);
+  assert.deepEqual(L.toPictureFrac(1, 1, { left: 0, top: 0, width: 0, height: 0 }), [0, 0]);
+});
+
+test("simplifyStroke drops points too close to the last kept one and keeps the ends", () => {
+  const pts = [[0, 0], [0.0005, 0], [0.001, 0], [0.01, 0], [0.0101, 0], [0.5, 0.5]];
+  assert.deepEqual(L.simplifyStroke(pts), [[0, 0], [0.01, 0], [0.5, 0.5]]);
+  assert.deepEqual(L.simplifyStroke([[0.123456, 0.5]]), [[0.1235, 0.5]]);
+});
+
+test("simplifyStroke thins a long stroke to the server's point limit", () => {
+  const pts = Array.from({ length: 5000 }, (_, i) => [i / 5000, (i % 2) * 0.5]);
+  const out = L.simplifyStroke(pts);
+  assert.equal(out.length, L.MAX_PEN_POINTS);
+  assert.deepEqual(out[0], [0, 0]);
+  assert.deepEqual(out[out.length - 1], [0.9998, 0.5]);
+});
+
+test("finishShape keeps a pen dot but drops an arrow or box without a drag", () => {
+  assert.deepEqual(L.finishShape("pen", "#FFD400", [[0.2, 0.2]]), { tool: "pen", color: "#FFD400", points: [[0.2, 0.2]] });
+  assert.equal(L.finishShape("arrow", "#FFD400", [[0.2, 0.2], [0.201, 0.2]]), null);
+  assert.equal(L.finishShape("box", "#FFD400", [[0.2, 0.2], [0.2, 0.2]]), null);
+  assert.deepEqual(L.finishShape("box", "#FF3B30", [[0.1, 0.1], [0.3, 0.4]]).points, [[0.1, 0.1], [0.3, 0.4]]);
+  assert.equal(L.finishShape("circle", "#FFD400", [[0.1, 0.1], [0.3, 0.4]]), null);
+  assert.equal(L.finishShape("pen", "red", [[0.1, 0.1]]), null);
+});
+
+test("shapePaths draws a box outline, an arrow with a head, and a pen dot, in pixels", () => {
+  const box = L.shapePaths({ tool: "box", color: "#FFD400", points: [[0.1, 0.2], [0.5, 0.6]] }, 1000, 500);
+  assert.deepEqual(box.paths, [[[100, 100], [500, 100], [500, 300], [100, 300], [100, 100]]]);
+  assert.equal(box.width, 5);
+  const arrow = L.shapePaths({ tool: "arrow", color: "#FFD400", points: [[0, 0.5], [0.5, 0.5]] }, 1000, 500);
+  assert.equal(arrow.paths.length, 2);
+  assert.deepEqual(arrow.paths[0], [[0, 250], [500, 250]]);
+  const [h1, tip, h2] = arrow.paths[1];
+  assert.deepEqual(tip, [500, 250]);
+  assert.ok(h1[0] < 500 && h2[0] < 500);                                 // both barbs point back,
+  assert.ok(Math.min(h1[1], h2[1]) < 250 && Math.max(h1[1], h2[1]) > 250);  // one on each side
+  const dot = L.shapePaths({ tool: "pen", color: "#FFD400", points: [[0.5, 0.5]] }, 200, 100);
+  assert.deepEqual(dot.paths, [[[100, 50], [100, 50]]]);
+  assert.equal(dot.width, 2);                                            // never thinner than 2 px
+});
+
+test("exportSize keeps the native size and only scales down a frame larger than 4K", () => {
+  assert.deepEqual(L.exportSize(1080, 1920), { width: 1080, height: 1920 });
+  assert.deepEqual(L.exportSize(7680, 4320), { width: 3840, height: 2160 });
+  assert.equal(L.exportSize(0, 0), null);
+});
+
+test("drawingRow is the server's drawing row", () => {
+  const shapes = [{ tool: "pen", color: "#FFD400", points: [[0.1, 0.1], [0.2, 0.2]] }];
+  const row = L.drawingRow({ key: "k", kind: "drawing", video: "clip-01", version: 2, t: 3.14159, image: "a".repeat(32),
+                             shapes, text: "  the logo  ", thumb: "data:image/jpeg;base64,xx" });
+  assert.deepEqual(row, { kind: "drawing", video: "clip-01", version: 2, t: 3.142, image: "a".repeat(32), shapes, text: "the logo" });
+});
+
+// --- Review: the timeline ----------------------------------------------------------------
+
+const SIDE = {
+  duration: 8.97,
+  edl: {
+    headline: { text: "Ship small", start: 0, end: 2.5 },
+    overlays: [{ html: "/jobs/x/looks/clean-tech.html", start: 1, end: 3, mode: "alpha", style: "clean-tech" },
+               { html: "C:\\jobs\\x\\card.html", start: 4, end: 6 }],
+    sfx: [{ at: 1, sound: "/jobs/x/sfx/pop.wav", volume_db: -14 }],
+  },
+  segments: [
+    { index: 0, src_start: 20.16, src_end: 25.345, speed: 1, out_start: 0, out_end: 5.185, muted: false, xfade_in: 0 },
+    { index: 1, src_start: 26.345, src_end: 30.53, speed: 1, out_start: 4.785, out_end: 8.97, muted: false, xfade_in: 0.4 },
+  ],
+  captions_events: [{ start: 0, end: 0.74, text: "But our deploys", words: [] }, { start: 0.79, end: 1.32, text: "doubled in", words: [] }],
+};
+
+test("timelineLanes has a lane per kind of block, each block naming its range target", () => {
+  const tl = L.timelineLanes(SIDE);
+  assert.equal(tl.duration, 8.97);
+  assert.deepEqual(tl.lanes.map((l) => l.id), ["segments", "captions", "headline", "overlays", "sfx"]);
+  const by = Object.fromEntries(tl.lanes.map((l) => [l.id, l.blocks]));
+  assert.deepEqual(by.segments.map((b) => [b.start, b.end, b.xfade, b.target]), [[0, 5.185, 0, "segment:0"], [4.785, 8.97, 0.4, "segment:1"]]);
+  assert.match(by.segments[1].title, /source 0:26\.3–0:30\.5, 0\.4 s crossfade in/);
+  assert.deepEqual(by.captions.map((b) => [b.label, b.target]), [["But our deploys", "captions"], ["doubled in", "captions"]]);
+  assert.deepEqual(by.headline.map((b) => [b.start, b.end, b.target]), [[0, 2.5, "headline"]]);
+  assert.deepEqual(by.overlays.map((b) => [b.label, b.target]), [["clean-tech.html · clean-tech", "overlay:0"], ["card.html", "overlay:1"]]);
+  assert.match(by.overlays[1].title, /\(keyed\)/);                           // an overlay without a mode is keyed
+  assert.deepEqual(by.sfx.map((b) => [b.start, b.end, b.tick, b.label, b.target]), [[1, 1, true, "pop.wav", "sfx:0"]]);
+});
+
+test("the timeline is as long as the render, even when the last caption is held past its end", () => {
+  const side = { ...SIDE, captions_events: [...SIDE.captions_events, { start: 8.5, end: 9.57, text: "impossible.", words: [] }] };
+  const tl = L.timelineLanes(side);
+  assert.equal(tl.duration, 8.97);
+  assert.equal(L.timeAtFrac(0.5, tl.duration), 4.485);
+  const last = tl.lanes[1].blocks[2];
+  assert.equal(L.blockBox(last, tl.duration).left + L.blockBox(last, tl.duration).width, 100);   // cut at the edge
+  assert.equal(L.timelineLanes({ ...side, duration: undefined }).duration, 9.57);                  // no duration: the blocks'
+});
+
+test("timelineLanes puts a title card first and survives a sidecar with nothing in it", () => {
+  const tl = L.timelineLanes({ duration: 5, edl: { title: { line1: "Hello", line2: "World", duration: 2 } }, segments: [] });
+  assert.deepEqual(tl.lanes[0].blocks.map((b) => [b.start, b.end, b.target, b.title]), [[0, 2, "title", "Hello / World"]]);
+  const empty = L.timelineLanes({ edl: {} });
+  assert.equal(empty.duration, 0);
+  assert.ok(empty.lanes.every((l) => l.blocks.length === 0));
+});
+
+test("blockBox places a block in percent and clamps it to the timeline", () => {
+  assert.deepEqual(L.blockBox({ start: 2, end: 4 }, 10), { left: 20, width: 20 });
+  assert.deepEqual(L.blockBox({ start: 8, end: 14 }, 10), { left: 80, width: 20 });
+  assert.deepEqual(L.blockBox({ start: 1, end: 2 }, 0), { left: 0, width: 0 });
+});
+
+test("rangeFromDrag orders the ends, keeps them in the render and ignores a click", () => {
+  assert.deepEqual(L.rangeFromDrag(5.2, 1.04449, 8.97), { t_start: 1.044, t_end: 5.2 });
+  assert.deepEqual(L.rangeFromDrag(-1, 20, 8.97), { t_start: 0, t_end: 8.97 });
+  assert.equal(L.rangeFromDrag(3, 3.05, 8.97), null);
+  assert.equal(L.timeAtFrac(0.5, 8.97), 4.485);
+  assert.equal(L.timeAtFrac(1.5, 8.97), 8.97);
+});
+
+test("blockRange is the block, or a short stretch around a sound tick", () => {
+  assert.deepEqual(L.blockRange({ start: 1, end: 3 }, 8.97), { t_start: 1, t_end: 3 });
+  assert.deepEqual(L.blockRange({ start: 1, end: 1, tick: true }, 8.97), { t_start: 0.75, t_end: 1.25 });
+  assert.deepEqual(L.blockRange({ start: 0.1, end: 0.1, tick: true }, 8.97), { t_start: 0, t_end: 0.35 });
+});
+
+test("rangeRow is the server's range row; no target is null", () => {
+  const d = { key: "k", kind: "range", video: "clip-01", version: 1, t: 1, t_start: 1.00049, t_end: 3, target: "overlay:0", text: " too slow " };
+  assert.deepEqual(L.rangeRow(d), { kind: "range", video: "clip-01", version: 1, t_start: 1, t_end: 3, target: "overlay:0", text: "too slow" });
+  assert.equal(L.rangeRow({ ...d, target: undefined }).target, null);
+  assert.equal(L.targetLabel("overlay:2"), "overlay 2");
+  assert.equal(L.targetLabel(null), "");
+});
+
+// --- Review: sending ---------------------------------------------------------------------
+
+test("finishShape thins a pen stroke to the room left in its drawing, and refuses one with no room", () => {
+  const pts = Array.from({ length: 500 }, (_, i) => [i / 500, 0.5]);
+  assert.equal(L.finishShape("pen", "#FFD400", pts, 50).points.length, 50);
+  assert.equal(L.finishShape("pen", "#FFD400", pts, 1), null);
+  assert.equal(L.finishShape("box", "#FFD400", [[0.1, 0.1], [0.3, 0.4]], null), null);
+});
+
+test("drawingRoom: the points one more shape may have, null when the drawing is full", () => {
+  const pen = (n) => ({ tool: "pen", color: "#FFD400", points: Array.from({ length: n }, () => [0.1, 0.1]) });
+  assert.equal(L.drawingRoom([]), L.MAX_PEN_POINTS);
+  assert.equal(L.drawingRoom([pen(2000), pen(2000), pen(1500)]), 500);
+  assert.equal(L.drawingRoom([pen(2000), pen(2000), pen(1999)]), null);
+  assert.equal(L.drawingRoom(Array.from({ length: L.MAX_SHAPES }, () => pen(1))), null);
+});
+
+const POINT = { key: "p", video: "clip-01", version: 1, t: 1.5, x: 0.2, y: 0.3, text: " too dark " };
+const DRAWING = { key: "d", kind: "drawing", video: "clip-01", version: 1, t: 2, image: "a".repeat(32),
+                  shapes: [{ tool: "box", color: "#FFD400", points: [[0.1, 0.1], [0.3, 0.4]] }], text: "" };
+const RANGE = { key: "r", kind: "range", video: "clip-01", version: 1, t: 3, t_start: 3, t_end: 5, target: "overlay:0", text: "late" };
+
+test("reviewRow sends each pending comment as its own kind of row", () => {
+  assert.deepEqual(L.reviewRow(POINT), { kind: "point", video: "clip-01", version: 1, t: 1.5, x: 0.2, y: 0.3, text: "too dark" });
+  assert.equal(L.reviewRow(DRAWING).kind, "drawing");
+  assert.deepEqual(L.reviewRow(DRAWING), L.drawingRow(DRAWING));
+  assert.deepEqual(L.reviewRow(RANGE), L.rangeRow(RANGE));
+  assert.ok(!("x" in L.reviewRow(RANGE)));
+});
+
+test("canSendReview: a drawing may go without text, a point or a range may not", () => {
+  assert.equal(L.canSendReview([]), false);
+  assert.equal(L.canSendReview([DRAWING]), true);
+  assert.equal(L.canSendReview([DRAWING, RANGE, POINT]), true);
+  assert.equal(L.canSendReview([DRAWING, { ...RANGE, text: "  " }]), false);
+  assert.equal(L.canSendReview([{ ...POINT, text: "" }]), false);
+});
+
+test("reviewSent lists this clip's point, drawing and range rows, and nothing else", () => {
+  const rows = [{ video: "clip-01", t: 1 }, { ...DRAWING }, { ...RANGE }, { ...RANGE, video: "clip-02" },
+                { kind: "pick", candidate: "c1" }, { kind: "look", video: "clip-01" }];
+  assert.deepEqual(L.reviewSent(rows, "clip-01").map((r) => r.kind || "point"), ["point", "drawing", "range"]);
+  assert.deepEqual(L.reviewSent(undefined, "clip-01"), []);
+});
+
+test("sendBatches keeps every body under the limit, in order, and a too-big row alone", () => {
+  const big = (n) => ({ kind: "point", text: "x".repeat(n) });
+  const rows = [big(100), big(100), big(100), big(500), big(10)];
+  const bytes = (idx) => Buffer.byteLength(JSON.stringify({ comments: idx.map((i) => rows[i]) }));
+  const batches = L.sendBatches(rows, 400);                              // a 100-char row is 126 bytes
+  assert.deepEqual(batches, [[0, 1, 2], [3], [4]]);
+  for (const b of batches.filter((b) => !b.includes(3))) assert.ok(bytes(b) <= 400, String(bytes(b)));
+  assert.deepEqual(L.sendBatches([]), []);
+  assert.deepEqual(L.sendBatches(rows), [[0, 1, 2, 3, 4]]);                // the server's limit
+  // a body exactly at the limit is one batch
+  assert.deepEqual(L.sendBatches(rows.slice(0, 2), bytes([0, 1])), [[0, 1]]);
+  assert.deepEqual(L.sendBatches(rows.slice(0, 2), bytes([0, 1]) - 1), [[0], [1]]);
+});
+
+test("sendBatches counts UTF-8 bytes, as the server does", () => {
+  const rows = [{ text: "é".repeat(100) }, { text: "é".repeat(100) }];
+  const one = Buffer.byteLength(JSON.stringify({ comments: [rows[0]] }));
+  assert.deepEqual(L.sendBatches(rows, one + 120), [[0], [1]]);           // 100 chars, but 200 bytes
+});

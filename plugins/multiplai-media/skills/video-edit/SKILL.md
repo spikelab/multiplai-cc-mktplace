@@ -141,6 +141,13 @@ uv run --project "${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts" python3 ${CLA
   --music-volume-db -22         # optional, default -18
 ```
 
+Beside the mp4, render writes `<out stem>.edl.json` (`clip-01.v2.mp4` →
+`clip-01.v2.edl.json`): the EDL file it read, that EDL with every path made
+absolute, where each segment landed in the output, and the caption lines in
+output time as they were burned in. The job page draws the render's timeline
+from it (§6). It is written after the mp4, so never save an EDL under that
+name beside the output; render refuses to start when one is there.
+
 ### 5. Quality check + report back
 
 Before declaring done, verify the render against the checks in the job's
@@ -158,7 +165,8 @@ One local page carries the user's choices for the whole job, so they click
 instead of typing timestamps in chat. It has five tabs: **Clips** (pick from
 the candidates), **Speakers** (draw a box per speaker), **Look** (pick an
 overlay style, a brand and a caption option), **Music** (pick a bed, its
-level and a sound-effect set), and **Review** (comment on the renders). It
+level and a sound-effect set), and **Review** (comment on a spot in a render,
+draw on a paused frame, or comment on a stretch of the render's timeline). It
 opens on the earliest tab with a decision still open. Each choice comes back
 as a row in a mailbox file.
 
@@ -177,6 +185,8 @@ without a restart. Every path inside is absolute. Schemas:
 
 The server plays only files those name (the source, beds, sound effects,
 sample pages) and the renders in the directory; it refuses every other path.
+It reads each render's `<stem>.edl.json` (§4) for the Review tab's timeline;
+a render without one plays without a timeline.
 `references/reels.md` §3–4 say when to write `job.json` and
 `candidates.json`.
 
@@ -234,8 +244,8 @@ anything is rendered:
    ```
 
    Every row has `id`, `kind`, `text` (may be empty, except on a `point`
-   row) and `created_at`; rows about a render also have `video` (the clip
-   name) and `version`. A row with no `kind` (from an older page) is a
+   or `range` row) and `created_at`; rows about a render (`point`,
+   `drawing`, `range`) also have `video` (the clip name) and `version`. A row with no `kind` (from an older page) is a
    `point` row. The newest row wins when two say the same thing.
 
    | `kind` | Extra fields | Do |
@@ -245,6 +255,8 @@ anything is rendered:
    | `panels` | `panels: {name: {x, y, w, h}}` (source pixels), `speakers: {label: name}` | Write them into every EDL's `layout` (`references/reels.md` §3) |
    | `look` | `style`, `brand` (names from `looks.json`, or `null` for none), `captions` (the chosen option's values, or `null`) | Use them in every EDL and overlay page you write (below) |
    | `music` | `bed`, `sfx_set` (names from `music.json`, or `null` for none), `volume_db` | Set every EDL's `music`, and take the sounds `sfx-suggest` proposes from that set (below) |
+   | `drawing` | `t`; `image`, the id of the marked frame; `shapes: [{tool, color, points}]` (`pen`\|`arrow`\|`box`, points as `[x, y]` fractions of the picture) | Read `<outdir>/review/marks/<image>.jpg`, the frame at `t` with the shapes drawn on it, and change what is marked (step 3) |
+   | `range` | `t_start`, `t_end` (seconds in that render); `target`, the block the user clicked on the timeline, or `null` | Cut, trim, retime or restyle that stretch (step 3) |
 
    Without the Monitor tool, read the file when the user says they sent
    something.
@@ -266,11 +278,22 @@ anything is rendered:
    - `music.sfx_set`: place sounds only from that set's files, at the moments
      `pipeline.py sfx-suggest` proposes; `null` means no `sfx`.
 
-3. **For `point` rows, wait for the batch to finish** (rows arriving within a
-   few seconds of each other belong to one Send), then map each comment to
-   the EDL: `pipeline.py timeline <edl>` turns `t` back into source time; `y`
-   near the caption line or the headline points at those. Make every change
-   the batch asks for, then render the **next version** of that clip:
+3. **For `point`, `drawing` and `range` rows, wait for the batch to finish**
+   (rows arriving within a few seconds of each other belong to one Send),
+   then map each comment to the EDL. The render's `<stem>.edl.json` names the
+   EDL it came from (`edl_file`). `pipeline.py timeline <edl>` turns a time
+   in the render back into source time.
+
+   - `point`: `y` near the caption line or the headline points at those.
+   - `drawing`: look at the marked frame; an arrow points at what to change,
+     a box frames it.
+   - `range`: `target` says which part of that stretch: `segment:N` and
+     `overlay:N` (the EDL's `segments[N]` and `overlays[N]`), `sfx:N`
+     (`sfx[N]`), `captions`, `headline` or `title`. Without a target, the
+     text says what to change in the whole stretch.
+
+   Make every change the batch asks for, then render the **next version** of
+   that clip:
 
    ```bash
    PIPE=${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py

@@ -314,7 +314,8 @@ def test_brands_need_the_token(server) -> None:
 
 
 @pytest.mark.parametrize("path", ["/api/job", "/api/candidates", "/api/looks", "/api/music", "/api/sentences",
-                                  "/api/transcript", "/media/source", "/media/audio", "/media/sample"])
+                                  "/api/transcript", "/media/source", "/media/audio", "/media/sample",
+                                  "/api/edl?video=clip-01&version=1"])
 def test_new_routes_need_the_token(server, path) -> None:
     res, _ = _req(server, path)
     assert res.status == 401
@@ -325,6 +326,50 @@ def test_new_routes_need_the_token(server, path) -> None:
 def test_new_routes_refuse_a_foreign_origin(server) -> None:
     res, _ = _get(server, "/api/candidates", Origin="https://evil.example")
     assert res.status == 403
+
+
+# --- render sidecars (<stem>.edl.json, stages/render_sidecar.py) ---------------------------------
+
+SIDECAR = {"format": 1, "video": "clip-01.mp4", "edl_file": "/jobs/x/edl-c2.json",
+           "edl": {"source": "/rec/x.mp4", "segments": []}, "duration": 12.5,
+           "segments": [], "captions_events": []}
+
+
+def test_edl_serves_the_sidecar_of_one_render(server) -> None:
+    d = server["job"]["dir"]
+    (d / "clip-01.edl.json").write_text(json.dumps(SIDECAR))
+    res, body = _get(server, "/api/edl?video=clip-01&version=1")
+    assert res.status == 200 and body == {"status": "ok", "data": SIDECAR}
+    # a second version reads its own sidecar, not the first one's
+    (d / "clip-01.v2.mp4").write_bytes(b"render 2")
+    (d / "clip-01.v2.edl.json").write_text(json.dumps({**SIDECAR, "video": "clip-01.v2.mp4"}))
+    _, body = _get(server, "/api/edl?video=clip-01&version=2")
+    assert body["data"]["video"] == "clip-01.v2.mp4"
+
+
+def test_edl_is_404_for_a_render_without_a_sidecar(server) -> None:
+    res, body = _get(server, "/api/edl?video=clip-01&version=1")
+    assert res.status == 404 and "clip-01.edl.json" in body["error"]
+
+
+@pytest.mark.parametrize("q", ["video=clip-02&version=1", "video=clip-01&version=7", "video=source&version=1",
+                               "video=..%2Fclip-01&version=1"])
+def test_edl_is_404_for_a_render_not_in_the_list(server, q) -> None:
+    (server["job"]["dir"] / "clip-01.edl.json").write_text(json.dumps(SIDECAR))
+    res, _ = _get(server, f"/api/edl?{q}")
+    assert res.status == 404
+
+
+def test_edl_needs_a_numeric_version(server) -> None:
+    res, _ = _get(server, "/api/edl?video=clip-01&version=one")
+    assert res.status == 400
+
+
+@pytest.mark.parametrize("text", ["{not json", "[1, 2]", '{"video": "clip-01.mp4"}'])
+def test_edl_reports_a_broken_sidecar(server, text) -> None:
+    (server["job"]["dir"] / "clip-01.edl.json").write_text(text)
+    res, body = _get(server, "/api/edl?video=clip-01&version=1")
+    assert res.status == 422 and "clip-01.edl.json" in body["error"]
 
 
 def test_the_json_cache_rereads_a_file_that_changed_on_disk(tmp_path: Path) -> None:
