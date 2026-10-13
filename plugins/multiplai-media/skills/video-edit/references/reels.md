@@ -371,6 +371,12 @@ into the EDL's `captions`; overlay pages are written in `style` and name it;
 files (§ Sound effects). `null` means none of that kind. Without the page,
 ask in chat.
 
+Once clips are rendered, the **Review** tab carries the rest: comments,
+drawings and ranges on a render, `style` rows from its style panel (caption
+values, brand colours, style values) and `restyle` rows from its live
+overlays. `SKILL.md` §6 has the table of all nine row kinds and what to do
+with each.
+
 ### Brand file
 
 `brand.json` sets the caption and headline font, the colours and a logo:

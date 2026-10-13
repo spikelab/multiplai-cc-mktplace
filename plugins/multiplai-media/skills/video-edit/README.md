@@ -82,7 +82,17 @@ buy houses. Use my brand file."*
      caption lines, the headline, overlays and sound effects. Drag along
      its ruler to comment on a stretch ("too slow here"), and click a block
      to say which part you mean ("this card comes in too late").
-   - Send all your comments together.
+   - Change the look directly: a style panel under the timeline shows the
+     render's caption size, height, words per line and highlight, the
+     brand's colours, and each overlay style's colours, fonts, corner
+     radius and timings. Caption edits show at once as an approximate
+     caption over the picture.
+   - Turn on live overlays to play the render's overlay pages over the
+     picture, then pick an element (a number, a label) and change its
+     colour, font, size, weight, opacity or transform; the change shows
+     at once.
+   - Send all your comments together; style changes and restyles are sent
+     with their own buttons.
    - Claude renders the next version, and the page offers it next to the
      old one.
 
@@ -124,7 +134,7 @@ Every command takes `--help`.
 | `proof <mp4> --edl <edl>` | One sheet of labelled frames of a reel |
 | `shots <cache> --from --to` | List the camera cuts in a span, with three frames of each |
 | `frame <video> --at <s> [--grid]` | One frame as a PNG, optionally with a pixel grid |
-| `review <outdir>` | The local job page: pick clips, draw speaker boxes, choose a look and music, comment on renders |
+| `review <outdir>` | The local job page: pick clips, draw speaker boxes, choose a look and music, comment on renders and restyle them |
 | `music-sample <preset> --out <wav>` | A 15 s sample of a synth music bed, to offer on the job page |
 | `contact-sheet <video-or-url>` | Frames of a reference video, for deriving a style |
 | `prefs show` / `prefs add` | Read or append your saved preferences |
