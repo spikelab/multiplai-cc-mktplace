@@ -646,7 +646,9 @@ child, or `gh pr view` fails for a PR another child waits on, that child is
 `unknown`: nothing is launched for it or its dependants, and the run exits
 `1`; re-run once they work. Each failed or `unknown` child is named on stderr
 (`EPIC: child <id> <status>: <reason>`), beside `EPIC:MERGE_WAITING` too. Ctrl-C (or SIGTERM) stops every child, those
-started by an earlier run included, and exits `130` (`143`).
+started by an earlier run included, and exits `130` (`143`). SIGHUP (a closed
+terminal) ends only the run, with exit `129`: the children keep running, and
+the next run waits for them.
 
 `specs/config.yaml` takes an `epic:` block: `epic.max_parallel` (default `2`),
 `epic.max_review_rounds` (default `6`), `epic.merge` (`auto` or `manual`,
@@ -792,7 +794,7 @@ Parse pipeline stdout for progress lines:
 nothing (another process holds the epic's lock, or an approved epic file
 changed: the `ERROR:` line names the process or the file; report it, and never
 change the flags to get past it), `4` an agent timed out
-(a failure: report it like `1`), `130` or `143` an epic run stopped by Ctrl-C or SIGTERM (re-run to continue), and `3` — **waiting on a human or on you**. Each `3` prints one marker. Handle it, then re-run the
+(a failure: report it like `1`), `130`, `143` or `129` an epic run stopped by Ctrl-C, SIGTERM or SIGHUP (re-run to continue), and `3` — **waiting on a human or on you**. Each `3` prints one marker. Handle it, then re-run the
 **same** `build --change <name>` command (plus the flag named below) to resume:
 
 | Marker | What happened | What you do |

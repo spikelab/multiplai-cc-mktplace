@@ -26,7 +26,9 @@ time, not derived from a tag.
   only what it spent itself, and `findings` with several rounds reports all
   of them. SIGTERM and SIGHUP now end `build` and `findings` the way Ctrl-C
   does (exit 143 or 129), so an epic stopped by SIGTERM, which passes the
-  signal on to its children, keeps what each child spent.
+  signal on to its children, keeps what each child spent. An epic stopped by
+  SIGHUP still leaves its children running for the next run to wait for, and
+  now writes its run summary and exits 129.
 - The pr skill's `open` and `edit`, and the codebase walkthrough's `run` and
   `resume`, print `SPEND:<usd>:<tokens>` last: what their own model calls
   cost. buildme adds that line to its own `SPEND:`, so the PR description's

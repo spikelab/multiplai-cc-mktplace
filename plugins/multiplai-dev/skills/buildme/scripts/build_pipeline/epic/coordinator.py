@@ -553,30 +553,41 @@ class Coordinator:
         loop = asyncio.get_running_loop()
         task = asyncio.current_task()
 
-        def on_sigterm() -> None:
-            self.signal_sent = signal.SIGTERM
+        def on_signal(sig: int) -> None:
+            self.signal_sent = sig
             task.cancel()
 
-        try:
-            loop.add_signal_handler(signal.SIGTERM, on_sigterm)
-        except (NotImplementedError, RuntimeError, ValueError):
-            pass
+        # SIGHUP (a closed terminal) ends only the coordinator: each child runs
+        # in a session of its own, so it keeps running and the next run waits
+        # for it (B1.S4). Handled here, not by the SystemExit `__main__.main`
+        # makes of it, which would cancel this task as if by Ctrl-C.
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
+        for sig in previous:
+            try:
+                loop.add_signal_handler(sig, on_signal, sig)
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass
         try:
             rc = await self._loop()
         except (KeyboardInterrupt, asyncio.CancelledError):
             sig = self.signal_sent or signal.SIGINT
-            log.warning("EPIC stopped by %s: stopping the children", signal.Signals(sig).name)
-            await self._stop_children(sig)
+            if sig == signal.SIGHUP:
+                log.warning("EPIC stopped by SIGHUP: leaving the children running; the next run waits for them")
+            else:
+                log.warning("EPIC stopped by %s: stopping the children", signal.Signals(sig).name)
+                await self._stop_children(sig)
             self._summary(run_dir)
             return 128 + sig
         except Exception:
             self._summary(run_dir)        # where each child stood when the run broke
             raise
         finally:
-            try:
-                loop.remove_signal_handler(signal.SIGTERM)
-            except (NotImplementedError, RuntimeError, ValueError):
-                pass
+            for sig, handler in previous.items():     # asyncio would leave SIG_DFL
+                try:
+                    if loop.remove_signal_handler(sig) and handler is not None:
+                        signal.signal(sig, handler)
+                except (NotImplementedError, RuntimeError, ValueError):
+                    pass
         self._summary(run_dir)
         bad = [c for c in self.children.values() if c.status in ("failed", "unknown")]
         for c in bad:       # beside EPIC:MERGE_WAITING too, not only in the summary
