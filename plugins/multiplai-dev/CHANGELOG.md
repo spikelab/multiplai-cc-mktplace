@@ -35,13 +35,17 @@ time, not derived from a tag.
   an earlier run is waited for, never started twice; a PR a stopped child
   opened is found (`gh pr list --head`) and kept; a child that exited 3 or
   without a PR stays parked and its dependants are skipped; a failed child is
-  relaunched once per run. Ctrl-C stops every child and exits 130.
+  relaunched once per run. When `gh` or `ps` fails while checking a stopped
+  child, nothing is launched for it and the run exits 1. Ctrl-C or SIGTERM
+  stops every child, one started by an earlier run included, and exits 130
+  or 143.
 - `specs/config.yaml` takes an `epic:` block: `max_parallel`,
   `max_review_rounds`, `merge` (`auto` or `manual`, default `manual`) and
-  `max_usd`. Reviewing, fixing and merging the children's PRs come in later
-  releases.
+  `max_usd`. `max_usd` is read but not enforced yet. Enforcing it, and
+  reviewing, fixing and merging the children's PRs, come in later releases.
 - `build --base-ref <sha>` branches a new worktree from that commit instead of
-  the source checkout's HEAD.
+  the source checkout's HEAD. It exits 1 when `specs/config.yaml` is committed
+  but not on that commit.
 
 ### Changed
 - An approved epic's build no longer exits 0 right after `EPIC:APPROVED`: it

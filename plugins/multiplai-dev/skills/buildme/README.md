@@ -699,6 +699,7 @@ CLI flags win over `config.yaml` in every case.
 | 2 | Usage error (e.g. an input file that does not exist), or a refusal that wrote nothing: another process holds the epic's lock, or an approved epic file changed (the `ERROR:` line names which) |
 | 3 | Waiting on a human or the wrapper — see SKILL.md Step 4 |
 | 4 | Agent timeout |
+| 130, 143 | An epic run stopped by Ctrl-C or SIGTERM; re-run the same command to continue |
 
 ### Progress Monitoring
 

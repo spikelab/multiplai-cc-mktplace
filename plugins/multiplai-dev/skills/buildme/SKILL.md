@@ -61,7 +61,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--accept-size` | Build a plan the size gate says should be split, as one PR. The build remembers it, so a later retry or resume does not stop on size again. |
 | `--approve-split` | Approve the epic split the build printed as `EPIC:SPLIT:<split.md>`, as `split.md` and `plans/` are on disk now. See [Epic mode](#epic-mode-one-input-several-changes). |
 | `--no-epic-split` | Build the input as one change: no `EPIC_SPLIT` decision, no model call. An epic's child builds pass it. |
-| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch; a build that re-binds to its worktree ignores it. |
+| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch; a build that re-binds to its worktree ignores it. Exits `1` when `specs/config.yaml` is committed but that commit does not hold it (push it first). |
 | `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. |
 
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: true}`,
@@ -629,13 +629,18 @@ skipped; a child that fails is relaunched once per run. While a child waits on
 an open PR, the build exits `3` with `EPIC:MERGE_WAITING:<urls>`. Re-running the
 same command continues from what is on disk: a child still running from an
 earlier run is waited for, never started twice, and a PR a stopped child
-opened is found and kept. Ctrl-C stops every child and exits `130`.
+opened is found and kept. When `gh` or `ps` fails while checking a stopped
+child, the child is `unknown`: nothing is launched for it and the run exits
+`1`; re-run once they work. Ctrl-C (or SIGTERM) stops every child, those
+started by an earlier run included, and exits `130` (`143`).
 
 `specs/config.yaml` takes an `epic:` block: `epic.max_parallel` (default `2`),
 `epic.max_review_rounds` (default `6`), `epic.merge` (`auto` or `manual`,
 default `manual`; under `manual` a human merges each child's PR) and
-`epic.max_usd` (one ceiling for the whole epic, default none). Reviewing, fixing and merging the
-children's PRs come in later releases.
+`epic.max_usd` (one ceiling for the whole epic, default none). This release
+reads `epic.max_usd` but does not enforce it yet: each child is bounded only by
+its own `budget.max_usd`. Enforcing it, and reviewing, fixing and merging the
+children's PRs, come in later releases.
 
 ### The size gate (after plan review)
 

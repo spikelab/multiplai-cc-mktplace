@@ -343,7 +343,7 @@ def test_B1_S20_a_failed_pr_lookup_launches_nothing(tmp_path, monkeypatch):
 def test_B1_S21_a_failing_ps_never_counts_a_live_child_as_gone(tmp_path, monkeypatch):
     """B1.S21: `ps` fails while a stopped child still runs: no result and no
     launch for it, status `unknown`, exit 1. The next run checks again: as B1.S4."""
-    stopped, clean = _roots(tmp_path, monkeypatch, {"a": [{"block": True}]})
+    stopped, clean = _roots(tmp_path, monkeypatch, {"a": [{"block": True}, {}]})
     stopped.killed(die_at(coordinator, "_tick"))
     assert stopped.run(ps_fails=True) == 1
     assert stopped.fakes.attempts("a") == 1 and stopped.status()["a"] == "unknown"
