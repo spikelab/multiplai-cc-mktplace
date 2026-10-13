@@ -506,8 +506,8 @@ def dir_name(src: Path) -> str:
 #
 # The slug (`build_target`) is unchanged and still names the review inside its
 # files; only the folder is built from these. `review_pipeline.orchestrator.prepare`
-# chooses the folder, and review-viewer's `gitdata` restates `REVIEW_FILES` and
-# `NOT_OBJECT_NAMES` (no import between the two packages).
+# chooses the folder, and review-viewer's `gitdata` restates `REVIEW_FILES`,
+# `NOT_OBJECT_NAMES` and `NOT_NESTED_NAMES` (no import between the two packages).
 
 # The names the review root itself uses (`legacy/` for migrate's copies, `.locks/`
 # for run locks): a repository with one of them is renamed `<name>@<owner>`.
@@ -518,6 +518,9 @@ REVIEW_FILES = ("findings.json", "review-state.json", "files.txt")
 # Children of a repo folder that are never object folders. `tree` is not here: it
 # is the whole-tree object's name.
 NOT_OBJECT_NAMES = frozenset({"rounds", "viewer", "base-tree", "assess-tree", "source", ".git", ".locks"})
+# A review folder's own children that never hold another review: its rounds,
+# viewer state and snapshots.
+NOT_NESTED_NAMES = NOT_OBJECT_NAMES | {"tree"}
 
 
 def object_name(resolved: Resolved) -> str:
@@ -559,22 +562,31 @@ def is_review_folder(path: Path) -> bool:
     return any((path / name).is_file() for name in REVIEW_FILES)
 
 
+def review_children(out_dir: Path) -> list[Path]:
+    """*out_dir*'s child folders that may hold a review, sorted. When *out_dir* is
+    itself a review folder (a new-layout folder a 0.42 run was given as `--out`),
+    its own `rounds/`, `viewer/` and snapshots (`NOT_NESTED_NAMES`) are left out."""
+    if not out_dir.is_dir():
+        return []
+    own = is_review_folder(out_dir)
+    return sorted(p for p in out_dir.iterdir() if p.is_dir() and not (own and p.name in NOT_NESTED_NAMES))
+
+
 def object_folders(out_dir: Path) -> list[Path]:
     """Every `<out>/<repo>/<object>/` folder under *out_dir*, sorted.
 
     Where a name sits decides what it is, not the name alone: a repo may be
     called `tree` or `rounds`, and the whole-tree object is `tree`. The first
     level skips `legacy/`, `.locks/` and partial copies, and any review folder
-    (a 0.46 `<out>/<its slug>/`). Under a repo folder, every child folder is an
-    object except the `NOT_OBJECT_NAMES` and partial copies. A review an older
-    version nested inside an object folder is not listed.
+    (a 0.46 `<out>/<its slug>/`), and, when *out_dir* is itself a review folder,
+    its own rounds, viewer state and snapshots (`review_children`). Under a repo
+    folder, every child folder is an object except the `NOT_OBJECT_NAMES` and
+    partial copies. A review an older version nested inside an object folder is
+    not listed.
     """
     found: list[Path] = []
-    if not out_dir.is_dir():
-        return found
-    for repo in sorted(out_dir.iterdir()):
-        if (not repo.is_dir() or repo.name in TAKEN_REPO_NAMES or repo.name.startswith(".partial-")
-                or is_review_folder(repo)):
+    for repo in review_children(out_dir):
+        if repo.name in TAKEN_REPO_NAMES or repo.name.startswith(".partial-") or is_review_folder(repo):
             continue
         found.extend(obj for obj in sorted(repo.iterdir())
                      if obj.is_dir() and obj.name not in NOT_OBJECT_NAMES and not obj.name.startswith(".partial-"))

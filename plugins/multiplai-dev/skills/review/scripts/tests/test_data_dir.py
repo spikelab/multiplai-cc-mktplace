@@ -1012,6 +1012,35 @@ def test_rollups_list_a_target_once_and_prefer_its_new_layout_folder_over_its_04
     assert _snapshot(old) == before
 
 
+def test_rollups_in_a_new_layout_folder_used_as_out_by_042_list_only_the_nested_review(tmp_path):
+    """U5: `resume`, `assess-only` or `rollup` of a 0.42 review nested in a new-layout folder
+    write the rollups to that folder (`out_root`). They list the nested review alone, as 0.42
+    did: the folder's own `rounds/`, `viewer/` and snapshots are never read as repos or reviews."""
+    out = tmp_path / "out"
+    remote = "https://github.com/spikelab/github-tests.git"
+    folder = _layout_review(out / "github-tests" / "pr-7", "spikelab-github-tests--pr-7", remote, rounds_kept=2)
+    for kept in (folder / "rounds").iterdir():
+        _with_high(kept, "finding of a kept new-layout round")
+    for snapshot in ("tree", "source", "viewer", "base-tree"):
+        # A reviewed repository may hold a findings.json of its own.
+        _layout_review(folder / snapshot, f"spikelab-{snapshot}--pr-1", remote, head="e" * 40)
+        _with_high(folder / snapshot, f"finding in the {snapshot} snapshot")
+    nested = _layout_review(folder / "checkout--pr-7", "checkout--pr-7", remote, head="f" * 40, rounds_kept=1)
+    _with_high(nested, "finding of the nested 0.42 review")
+    # A new-layout review given this folder as --out is still listed.
+    inner = _layout_review(folder / "github-tests" / "pr-1", "spikelab-github-tests--pr-1", remote, head="d" * 40)
+    _with_high(inner, "finding of a review written under this folder")
+    assert rounds.out_root(nested) == folder
+    render.write_rollups(rounds.out_root(nested))
+    high = (folder / "HIGH-only.md").read_text()
+    assert "# HIGH findings — 2 across 2 of 2 targets" in high, high
+    assert "finding of the nested 0.42 review" in high and "written under this folder" in high
+    assert "kept new-layout round" not in high and "snapshot" not in high, high
+    _, lines, _ = render.write_runs(folder)
+    heads = sorted(json.loads(line)["target"]["head_sha"][0] for line in (folder / "runs.jsonl").read_text().splitlines())
+    assert heads == ["d", "f", "f"] and lines == 3
+
+
 # --- history across layouts -------------------------------------------------------
 
 

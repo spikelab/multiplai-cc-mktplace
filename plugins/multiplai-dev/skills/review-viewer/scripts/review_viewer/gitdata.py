@@ -607,13 +607,17 @@ def review_findings(root: Path) -> list[Path]:
     layouts: `<root>/<slug>/` (multiplai-dev 0.46), `<root>/<repo>/<object>/`
     (now), and `<root>/<repo>/<object>/<slug>/` (0.42, run with `--out` set to
     a new-layout folder). Where a name sits decides what it is: a repo may be
-    called `tree` or `rounds`, and the whole-tree object is `tree`.
+    called `tree` or `rounds`, and the whole-tree object is `tree`. When *root*
+    is itself a review folder, its own rounds, viewer state and snapshots
+    (`NOT_NESTED_NAMES`) are not searched (`review_pipeline.target.review_children`).
     """
     found: list[Path] = []
     if not root.is_dir():
         return found
+    own = is_review_folder(root)
     for first in sorted(root.iterdir()):
-        if not first.is_dir() or first.name in TAKEN_REPO_NAMES or first.name.startswith(".partial-"):
+        if (not first.is_dir() or first.name in TAKEN_REPO_NAMES or first.name.startswith(".partial-")
+                or (own and first.name in NOT_NESTED_NAMES)):
             continue
         if (first / "findings.json").is_file():
             found.append(first / "findings.json")

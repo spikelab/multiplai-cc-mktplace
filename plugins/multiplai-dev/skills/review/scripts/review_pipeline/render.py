@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .export import to_checks_file, to_findings_file
 from .models import CRITICAL_IMPACTS, SECTIONS, SEVERITIES, ReviewState, section_of
-from .target import github_web_base, object_folders
+from .target import github_web_base, object_folders, review_children
 
 log = logging.getLogger(__name__)
 
@@ -537,12 +537,18 @@ def _object_files(out_dir: Path, pattern: str) -> list[Path]:
     return [p for folder in object_folders(out_dir) for p in folder.glob(pattern) if p.is_file()]
 
 
+def _child_files(out_dir: Path, pattern: str) -> list[Path]:
+    """The files matching *pattern* in each `<out>/<name>/` folder that may hold a review
+    (`target.review_children`): the 0.46 layout, and a 0.42 review nested in *out_dir*."""
+    return [p for folder in review_children(out_dir) for p in folder.glob(pattern) if p.is_file()]
+
+
 def _latest_rounds(out_dir: Path) -> list[dict]:
     """Each target's latest round once, sorted by path: every `<out>/<repo>/<object>/findings.json`,
     and a 0.46 `<out>/<its slug>/findings.json` only when no new-layout folder holds that slug:
     once one does, a review of the target writes there, and the 0.46 copy is an older round."""
     new = set(_object_files(out_dir, "findings.json"))
-    pairs = [(p, d) for p in sorted([*out_dir.glob("*/findings.json"), *new]) for d in load_findings_files([p])]
+    pairs = [(p, d) for p in sorted([*_child_files(out_dir, "findings.json"), *new]) for d in load_findings_files([p])]
     newer = {_slug(d) for p, d in pairs if p in new} - {None}
     return [d for p, d in pairs if p in new or _slug(d) not in newer]
 
@@ -583,8 +589,9 @@ def write_runs(out_dir: Path, paths: list[Path] | None = None) -> tuple[Path, in
     counted.
     """
     if paths is None:
-        paths = sorted([*out_dir.glob("*/findings.json"), *_object_files(out_dir, "findings.json")]) + sorted(
-            p for p in [*out_dir.glob("*/rounds/*/findings.json"), *_object_files(out_dir, "rounds/*/findings.json")]
+        kept = "rounds/*/findings.json"
+        paths = sorted([*_child_files(out_dir, "findings.json"), *_object_files(out_dir, "findings.json")]) + sorted(
+            p for p in [*_child_files(out_dir, kept), *_object_files(out_dir, kept)]
             if not p.parent.name.startswith("."))
     rows, seen, skipped = [], set(), 0
     for data in load_findings_files(paths):

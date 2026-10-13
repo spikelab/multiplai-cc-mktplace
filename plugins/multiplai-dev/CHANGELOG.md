@@ -44,7 +44,9 @@ time, not derived from a tag.
 - The `HIGH-only.md`, `MEDIUM-only.md` and `LOW-only.md` rollups list the
   new layout and the 0.46 one. A target reviewed in both is listed once,
   with the findings of its new directory; `runs.jsonl` keeps a line for
-  every run in both.
+  every run in both. Rollups written in a review directory that a 0.42 run
+  used as `--out` list the 0.42 review nested in it, never that
+  directory's own earlier rounds or snapshots.
 
 ## [0.47.0] - 2026-10-13
 

@@ -202,7 +202,7 @@ pipeline's `target.object_folders`): `<dir>/<slug>/` (multiplai-dev 0.46),
 run given a new-layout directory as `--out`). Where a name sits decides what
 it is: a repo may be called `tree` or `rounds`, `legacy/` and `.locks/` are
 never a repo, and a review folder's `rounds/`, `viewer/` and snapshots are
-never read as a review. With no `--reviews-dir`, a review not matched there is
+never read as a review, also when `--reviews-dir` is that review folder. With no `--reviews-dir`, a review not matched there is
 looked for in `legacy_reviews_dir()` (`<workspace INBOX or
 ~/.multiplai>/reviews`, where the skill wrote before multiplai-dev 0.46) and, at any
 depth but not in `rounds/`, in `migrated_reviews_dir()` (`<data_dir>/reviews/legacy`,

@@ -274,3 +274,21 @@ def test_find_review_never_reads_a_round_snapshot_or_copy_as_the_review(findings
     (reviews / "acme-fixture--pr-7" / "files.txt").write_text("")
     _review(reviews, findings_path, name=name)
     assert find_review(_target(findings_path), [reviews])[0] == "none"
+
+
+@pytest.mark.parametrize("name", [
+    "rounds/01-aaaaaaaaaaaa",                   # the folder's own kept round
+    "tree", "source", "base-tree",              # its snapshots, which may hold a findings.json
+    "viewer/x",
+], ids=["kept-round", "tree", "source", "base-tree", "viewer"])
+def test_find_review_in_a_review_folder_given_as_the_dir_reads_only_the_042_review_nested_in_it(
+        findings_path, tmp_path, name):
+    """`--reviews-dir` set to a new-layout folder a 0.42 run used as `--out`: the 0.42 review
+    nested in it is found, the folder's own rounds and snapshots never are."""
+    folder = tmp_path / "reviews" / "fixture" / "pr-7"
+    folder.mkdir(parents=True)
+    (folder / "files.txt").write_text("")
+    _review(folder, findings_path, name=name)
+    assert find_review(_target(findings_path), [folder])[0] == "none"
+    nested = _review(folder, findings_path, name="checkout--pr-7")
+    assert find_review(_target(findings_path), [folder])[:2] == ("match", nested)
