@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.58.0] - 2026-10-13
+## [0.59.0] - 2026-10-13
 
 ### Added
 - An approved epic builds its children. After `EPIC:APPROVED`, the same
@@ -51,6 +51,23 @@ time, not derived from a tag.
 - An approved epic's build no longer exits 0 right after `EPIC:APPROVED`: it
   runs the children, and exits 0 when none is left to build, 1 when a child
   failed, or 3 while one waits on a merge.
+
+## [0.58.0] - 2026-10-13
+
+### Added
+- `/multiplai-dev:spec-extract --apply [--specs-dir <dir>]`: after render, the
+  run copies each new capability file into `<specs-dir>/registry/` (default
+  `<repo>/specs`; `--dir` needs `--specs-dir`, and without it the run prints
+  `SPEC_EXTRACT:APPLY_NEEDS_SPECS_DIR` and exits 2 before writing anything).
+  It commits nothing. A file already in the registry is never changed: with
+  the same bytes it counts as applied, with other bytes it is left as it is
+  and the run prints `SPEC_EXTRACT:SKIPPED_EXISTING <capability> <file>`.
+  Before copying, it runs buildme's uncommitted-work check on the registry
+  directory: any uncommitted change there stops the apply with exit 2 naming
+  the files, and nothing is written. A stopped apply, re-run, finishes the
+  copy without counting its own earlier files as someone else's changes.
+  Prints `SPEC_EXTRACT:APPLIED <n>`. A `--specs-dir` outside any git work
+  tree, or inside the run folder, is refused before any model call.
 
 ## [0.57.0] - 2026-10-13
 
