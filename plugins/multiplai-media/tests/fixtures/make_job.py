@@ -21,8 +21,9 @@ Writes into <dir>:
 few stand-in bytes instead of running ffmpeg, for the audio too.
 `--no-offers` (`offers=False`) leaves out looks.json and music.json.
 `--render` also writes edl-c2.json (candidate c2 as two segments with a
-crossfade, captions, a headline, the first style's sample page as an overlay,
-a sound effect and a music bed) and renders it with `pipeline.py render` to
+crossfade, captions, a headline, the first brand, the first style's sample
+page as an alpha overlay and the second's as a keyed one, a sound effect and
+a music bed) and renders it with `pipeline.py render` to
 clip-01.mp4, which writes clip-01.edl.json beside it. The overlay needs
 Playwright's Chromium: run it with `uv run --no-project --with playwright`.
 Generated media goes wherever <dir> is; never into the repository.
@@ -179,7 +180,7 @@ def edl_for(paths: dict[str, Path], cand: dict) -> dict:
     """An EDL for one candidate that fills every timeline lane on the review page."""
     looks_data = json.loads(paths["looks"].read_text())
     music_data = json.loads(paths["music"].read_text())
-    style = looks_data["styles"][0]
+    style, keyed = looks_data["styles"][0], looks_data["styles"][1]
     mid = round((cand["start"] + cand["end"]) / 2, 3)
     return {
         "source": str(paths["source"]), "transcript": str(paths["transcript"]),
@@ -189,8 +190,11 @@ def edl_for(paths: dict[str, Path], cand: dict) -> dict:
         "output": {"width": 720, "height": 1280, "fit": "blur", "crf": 28},
         "captions": {"words_per_line": 3},
         "headline": {"text": "Deploys went 2 to 40", "start": 0.0, "end": 2.5},
+        "brand": looks_data["brands"][0]["file"],
         "overlays": [{"html": style["sample_html"], "start": 1.0, "end": 3.0, "mode": "alpha",
-                      "region": {"x": 40, "y": 860, "w": 640, "h": 200}, "style": style["name"]}],
+                      "region": {"x": 40, "y": 860, "w": 640, "h": 200}, "style": style["name"]},
+                     {"html": keyed["sample_html"], "start": 4.0, "end": 6.0, "mode": "keyed",
+                      "region": {"x": 40, "y": 160, "w": 640, "h": 250}, "style": keyed["name"]}],
         "sfx": [{"at": 1.0, "sound": music_data["sfx_sets"][0]["files"][0]}],
         "music": {"file": music_data["beds"][0]["file"], "volume_db": -22},
     }

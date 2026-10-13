@@ -783,3 +783,85 @@ test("the style panel's CSS value check matches the server's", () => {
   assert.equal(L.isCssValue("Georgia, 'Times New Roman', serif"), true);
   for (const bad of ["a;b", "a{", "<b>", "a\\b", "x/*", "URL (x)", "", "x".repeat(201), "a\nb"]) assert.equal(L.isCssValue(bad), false, bad);
 });
+
+// --- Review: live overlays and click-to-restyle ------------------------------------------------------
+
+const LIVE_SIDE = { edl: { output: { width: 720, height: 1280 }, overlays: [
+  { html: "/job/a.html", start: 1, end: 3, mode: "alpha", region: { x: 40, y: 860, w: 640, h: 200 }, style: "clean-tech" },
+  { html: "/job/b.html", start: 4, end: 6, mode: "panel", region: null },
+  { html: "/job/c.html", start: 6, end: 7 },                                   // no key: not played
+] } };
+const LIVE_KEYS = { "/job/a.html": "ka", "/job/b.html": "kb" };
+
+test("liveOverlays: the overlays with a key, their mode and region (the whole frame without one)", () => {
+  const live = L.liveOverlays(LIVE_SIDE, LIVE_KEYS);
+  assert.deepEqual(live.map((o) => [o.index, o.key, o.mode, o.transparent]), [[0, "ka", "alpha", true], [1, "kb", "panel", false]]);
+  assert.deepEqual(live[1].rect, { x: 0, y: 0, w: 720, h: 1280 });
+  assert.equal(L.liveOverlays({ edl: { overlays: [{ html: "/x.html", start: 0, end: 1 }] } }, { "/x.html": "k" })[0].mode, "keyed");
+  assert.equal(L.liveOverlays({ edl: { overlays: [{ html: "/x.html", start: 0, end: 1 }] } }, { "/x.html": "k" })[0].transparent, true);
+  assert.deepEqual(L.liveOverlays(null, LIVE_KEYS), []);
+  assert.deepEqual(L.liveOverlays(LIVE_SIDE, {}), []);
+});
+
+test("overlayTime is the overlay's own clock while it is on screen", () => {
+  const [o] = L.liveOverlays(LIVE_SIDE, LIVE_KEYS);
+  assert.equal(L.overlayTime(o, 0.99), null);
+  assert.equal(L.overlayTime(o, 1), 0);
+  assert.equal(L.overlayTime(o, 2.5004), 1.5);
+  assert.equal(L.overlayTime(o, 3), null);
+  assert.equal(L.overlayTime(o, NaN), null);
+});
+
+test("regionBox scales a region from output pixels to the picture", () => {
+  assert.deepEqual(L.regionBox({ x: 40, y: 860, w: 640, h: 200 }, { width: 720, height: 1280 }, { width: 360, height: 640 }),
+    { left: 20, top: 430, width: 320, height: 100, scale: 0.5 });
+  assert.equal(L.regionBox({ x: 1, y: 1, w: 1, h: 1 }, { width: 0 }, { width: 100 }).scale, 0);
+});
+
+const PICKED = { type: "picked", selector: "body > div.card > div.n:nth-of-type(2)", box: { x: 56, y: 76, w: 300, h: 150 },
+  styles: { color: "rgb(255, 255, 255)", "background-color": "rgba(0, 0, 0, 0)", "font-family": "Inter, sans-serif",
+            "font-size": "150px", "font-weight": "800", opacity: "1", transform: "none" }, text: "72%" };
+
+test("bridgeMessage accepts ready and picked messages and nothing else", () => {
+  assert.deepEqual(L.bridgeMessage({ type: "ready", width: 640, height: 200, seek: "default" }), { type: "ready", width: 640, height: 200 });
+  assert.equal(L.bridgeMessage({ type: "ready", width: 0, height: 200 }), null);
+  assert.deepEqual(L.bridgeMessage(PICKED), PICKED);
+  for (const bad of [null, "picked", { type: "seek", t: 1 }, { ...PICKED, selector: "" }, { ...PICKED, selector: "a\nb" },
+                     { ...PICKED, selector: "x".repeat(301) }, { ...PICKED, box: { x: 1, y: 1, w: -1, h: 1 } },
+                     { ...PICKED, box: null }, { ...PICKED, styles: { color: "red" } }, { ...PICKED, styles: { ...PICKED.styles, opacity: 1 } }]) {
+    assert.equal(L.bridgeMessage(bad), null, JSON.stringify(bad));
+  }
+  const long = L.bridgeMessage({ ...PICKED, text: "y".repeat(500), styles: { ...PICKED.styles, "font-family": "f".repeat(400) } });
+  assert.equal(long.text.length, 80);
+  assert.equal(long.styles["font-family"].length, 300);
+});
+
+test("cssColourToHex reads computed colours for the colour picker", () => {
+  assert.equal(L.cssColourToHex("rgb(255, 59, 48)"), "#FF3B30");
+  assert.equal(L.cssColourToHex("rgba(0, 0, 0, 1)"), "#000000");
+  assert.equal(L.cssColourToHex("#3ddc97"), "#3DDC97");
+  assert.equal(L.cssColourToHex("rgba(0, 0, 0, 0)"), null);              // transparent has no plain colour
+  assert.equal(L.cssColourToHex("red"), null);
+});
+
+test("restyleRow: only changed, valid properties, with the computed value as old", () => {
+  const [o] = L.liveOverlays(LIVE_SIDE, LIVE_KEYS);
+  const picked = L.bridgeMessage(PICKED);
+  const { row, problem } = L.restyleRow("clip-01", 1, 1.80049, o, picked,
+    { color: "#FF3B30", opacity: "1", "font-size": "  ", transform: "scale(1.1)" }, " redder ");
+  assert.equal(problem, null);
+  assert.deepEqual(row, { kind: "restyle", video: "clip-01", version: 1, t: 1.8, overlay: 0, html: "/job/a.html",
+    selector: PICKED.selector, changes: { color: ["rgb(255, 255, 255)", "#FF3B30"], transform: ["none", "scale(1.1)"] },
+    text: "redder" });
+  assert.deepEqual(L.restyleRow("clip-01", 1, 1.8, o, picked, { opacity: "1" }, ""), { row: null, problem: "Change a value to send it." });
+  assert.match(L.restyleRow("clip-01", 1, 1.8, o, picked, { color: "red; display:none" }, "").problem, /one CSS value/);
+  assert.match(L.restyleRow("clip-01", 1, 1.8, o, picked, { "background-color": "url(x)" }, "").problem, /url/);
+  assert.deepEqual(L.restyleRow("clip-01", 1, 1.8, o, picked, { width: "1px" }, "").row, null);   // not a restyle property
+});
+
+test("the page and the bridge agree on the restyle properties", () => {
+  const fs = require("node:fs");
+  const bridge = fs.readFileSync(path.join(__dirname, "..", "skills", "video-edit", "scripts", "static", "overlay-bridge.js"), "utf8");
+  const props = JSON.parse(/var PROPS = (\[[^\]]+\]);/.exec(bridge)[1]);
+  assert.deepEqual(props, L.RESTYLE_PROPS);
+});

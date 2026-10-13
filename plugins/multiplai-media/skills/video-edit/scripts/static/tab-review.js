@@ -737,6 +737,7 @@
     video: () => video,
     stage: () => stage,
     pictureRect,
+    setTool,
     render: () => (state.clip ? { clip: state.clip, version: state.version } : null),
     sidecar: () => state.sidecar,
   };

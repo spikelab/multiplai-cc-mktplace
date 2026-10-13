@@ -831,6 +831,96 @@
     return (rows || []).filter((r) => ["style", "restyle"].includes(r.kind) && r.video === clip);
   }
 
+  // --- Review: live overlays and click-to-restyle -----------------------------------------------
+
+  // What the overlay bridge reports for a picked element, and what a restyle row may change
+  // (stages/review_server.py RESTYLE_PROPS; static/overlay-bridge.js PROPS).
+  const RESTYLE_PROPS = ["color", "background-color", "font-family", "font-size", "font-weight", "opacity", "transform"];
+  const MAX_SELECTOR = 300, MAX_OLD_VALUE = 300, MAX_PICK_TEXT = 80;
+
+  /* The overlays of a render's sidecar the page can play live: those it has a key for
+   * (review_server overlay_keys), each with its place in output pixels.
+   * [{index, html, key, start, end, mode, transparent, rect: {x, y, w, h}, style}] */
+  function liveOverlays(side, keys) {
+    const e = (side && side.edl) || {};
+    const out = e.output || {};
+    const W = Number(out.width) || 1080, H = Number(out.height) || 1920;
+    return (e.overlays || []).map((o, index) => {
+      const key = keys && typeof o.html === "string" ? keys[o.html] : null;
+      if (!key) return null;
+      const r = o.region || { x: 0, y: 0, w: W, h: H };
+      const mode = o.mode || "keyed";
+      return { index, html: o.html, key, start: Number(o.start), end: Number(o.end), mode,
+               transparent: mode !== "panel", rect: { x: r.x, y: r.y, w: r.w, h: r.h }, style: o.style || null };
+    }).filter(Boolean);
+  }
+
+  /* The overlay's own clock at render time t (its page starts at 0), or null when it is not on screen. */
+  function overlayTime(o, t) {
+    return Number.isFinite(t) && t >= o.start && t < o.end ? r3(t - o.start) : null;
+  }
+
+  /* Where an overlay's frame goes over the picture: CSS pixels from the picture's top left,
+   * and the scale from output pixels. `out` is the render's size, `picture` the shown one. */
+  function regionBox(rect, out, picture) {
+    const scale = out && out.width > 0 ? picture.width / out.width : 0;
+    return { left: rect.x * scale, top: rect.y * scale, width: rect.w * scale, height: rect.h * scale, scale };
+  }
+
+  /* A message from an overlay frame (static/overlay-bridge.js), checked:
+   * {type: "ready", width, height} or {type: "picked", selector, box, styles, text}; null otherwise. */
+  function bridgeMessage(data) {
+    if (!data || typeof data !== "object") return null;
+    const num = (x, lo, hi) => typeof x === "number" && Number.isFinite(x) && x >= lo && x <= hi;
+    if (data.type === "ready") {
+      return num(data.width, 1, 4096) && num(data.height, 1, 4096) ? { type: "ready", width: data.width, height: data.height } : null;
+    }
+    if (data.type !== "picked") return null;
+    const { selector, box, styles, text } = data;
+    if (typeof selector !== "string" || !selector || selector.length > MAX_SELECTOR || /[\u0000-\u001f\u007f]/.test(selector)) return null;
+    if (!box || ![box.x, box.y].every((v) => num(v, -8192, 8192)) || ![box.w, box.h].every((v) => num(v, 0, 8192))) return null;
+    if (!styles || typeof styles !== "object") return null;
+    const clean = {};
+    for (const p of RESTYLE_PROPS) {
+      if (typeof styles[p] !== "string") return null;
+      clean[p] = styles[p].slice(0, MAX_OLD_VALUE);
+    }
+    return { type: "picked", selector, box: { x: box.x, y: box.y, w: box.w, h: box.h }, styles: clean,
+             text: typeof text === "string" ? text.slice(0, MAX_PICK_TEXT) : "" };
+  }
+
+  /* "rgb(61, 220, 151)" or "#3ddc97" → "#3DDC97" for a colour input; null when it is not a plain colour. */
+  function cssColourToHex(v) {
+    if (isColour(v)) return v.toUpperCase();
+    const m = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(String(v || "").trim());
+    if (!m || (m[4] !== undefined && Number(m[4]) !== 1)) return null;
+    const hex = m.slice(1, 4).map((x) => Math.min(255, Number(x)).toString(16).padStart(2, "0")).join("");
+    return `#${hex.toUpperCase()}`;
+  }
+
+  /* The changes a restyle makes ({prop: [computed, new]}) from the edits ({prop: raw}); a blank or
+   * unchanged edit is left out. {changes, problem}: problem names the first edit the server would refuse. */
+  function restyleChanges(picked, edits) {
+    const changes = {};
+    for (const p of RESTYLE_PROPS) {
+      if (!edits || typeof edits[p] !== "string") continue;
+      const v = edits[p].trim();
+      if (!v || v === picked.styles[p]) continue;
+      if (!isCssValue(v)) return { changes: {}, problem: `${p} must be one CSS value of 1–200 characters without ; { } < > \\ or url()` };
+      changes[p] = [picked.styles[p], v];
+    }
+    return { changes, problem: null };
+  }
+
+  /* The restyle row for a picked element of overlay `o` at render time t, or {problem}. */
+  function restyleRow(video, version, t, o, picked, edits, note) {
+    const { changes, problem } = restyleChanges(picked, edits);
+    if (problem) return { row: null, problem };
+    if (!Object.keys(changes).length) return { row: null, problem: "Change a value to send it." };
+    return { row: { kind: "restyle", video, version, t: r3(t), overlay: o.index, html: o.html,
+                    selector: picked.selector, changes, text: (note || "").trim() }, problem: null };
+  }
+
   // --- Review: sending -----------------------------------------------------------------------
 
   const REVIEW_KINDS = ["point", "drawing", "range"];
@@ -889,6 +979,8 @@
     reviewRow, canSendReview, reviewSent, sendBatches,
     CAPTION_FIELDS, BRAND_FIELDS, isCssValue, styleField, styleGroups, checkField, groupChanges, styleRows,
     editedValues, regroupWords, captionAt, groupEdited, changeSummary, styleSent,
+    RESTYLE_PROPS, MAX_SELECTOR, liveOverlays, overlayTime, regionBox, bridgeMessage, cssColourToHex,
+    restyleChanges, restyleRow,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JobLogic = api;

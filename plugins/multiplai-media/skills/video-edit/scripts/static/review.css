@@ -243,3 +243,20 @@ ol.style-sent li p { margin: 2px 0 0; font-size: 12px; overflow-wrap: anywhere; 
 .approx.live-approx { position: absolute; z-index: 4; font-size: 11px; padding: 1px 6px; border-radius: 8px;
                       background: rgba(0, 0, 0, .6); color: #fff; pointer-events: none; }
 #style-panel .send-bar { position: static; }
+
+/* --- Review: live overlays and click-to-restyle --------------------------------------------- */
+#live-panel { margin-top: 12px; }
+#live-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+iframe.live-frame { position: absolute; left: 0; top: 0; border: 0; transform-origin: 0 0; visibility: hidden;
+                    pointer-events: none; background: transparent; }
+iframe.live-frame.on { visibility: visible; }
+#stage.picking iframe.live-frame.on { pointer-events: auto; outline: 1px dashed var(--marker); }
+#pick-box { position: absolute; z-index: 5; pointer-events: none; border: 2px dashed var(--marker);
+            box-shadow: 0 0 0 1px #000; }
+.live-bar { align-items: center; flex-wrap: wrap; }
+#pick-toggle[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+#restyle-form { margin-top: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+.restyle-target { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.restyle-text { margin: 2px 0 6px; font-size: 12px; }
+.restyle-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 0 16px; }
+.restyle-fields .style-field input[type="text"] { width: 14em; }

@@ -37,8 +37,11 @@ A drawing on a paused frame comes in as a JPEG on `/api/marks`, saved as
 
 The Review tab's style panel reads `/api/style`: a render's caption values,
 its brand file's colours and each overlay style's values (stages/style_file.py).
-The changes the user makes there come back as `style` rows; the server never
-edits a style or brand file.
+Live overlays play the overlay pages a sidecar names (`/media/overlay?path=`)
+in sandboxed frames, injected with the seek shim and `overlay-bridge.js` under
+SAMPLE_CSP, each opened by its own key (overlay_key) as sample pages are.
+Changes the user makes there come back as `style` and `restyle` rows; the
+server never edits a style, brand or overlay file.
 """
 from __future__ import annotations
 
@@ -87,6 +90,10 @@ SAMPLE_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe
 # the renderer's clock (stages/overlay.py installs the same file), then the
 # listener that lets the Look tab loop the page over postMessage.
 SAMPLE_SCRIPTS = ("seek-shim.js", "sample-loop.js")
+# Injected into every overlay page the Review tab plays live: the same clock, then the
+# bridge that seeks it, makes a keyed or alpha page's background transparent, and
+# lets the user pick an element and restyle it (static/overlay-bridge.js).
+OVERLAY_SCRIPTS = ("seek-shim.js", "overlay-bridge.js")
 SAMPLE_LINES = 5            # lines per speaker label for /api/transcript?speaker=
 SAMPLE_LINE_WORDS = 24
 MAX_WORDS_WINDOW_S = 900.0  # /api/transcript?start=&end= returns at most this span of words
@@ -288,6 +295,11 @@ def sample_key(token: str, path: str) -> str:
     return hmac.new(token.encode("utf-8"), b"sample\0" + path.encode("utf-8"), "sha256").hexdigest()[:32]
 
 
+def overlay_key(token: str, path: str) -> str:
+    """The key that opens one overlay page a render's sidecar names; as sample_key, for /media/overlay."""
+    return hmac.new(token.encode("utf-8"), b"overlay\0" + path.encode("utf-8"), "sha256").hexdigest()[:32]
+
+
 def style_summary(name: str, outdir: Path) -> dict:
     """The values of the style an overlay names, for the style panel.
 
@@ -425,6 +437,7 @@ ROW_KINDS: dict[str, dict] = {
     "drawing": {"review": True, "fields": ("t", "image", "shapes"), "needs_text": False},
     "range": {"review": True, "fields": ("t_start", "t_end"), "optional": ("target",), "needs_text": True},
     "style": {"review": True, "fields": ("target", "changes"), "optional": ("save_as",), "needs_text": False},
+    "restyle": {"review": True, "fields": ("t", "overlay", "html", "selector", "changes"), "needs_text": False},
 }
 SHAPE_TOOLS = ("pen", "arrow", "box")
 MAX_SHAPES = 100
@@ -444,8 +457,11 @@ BRAND_KEYS = ("primary", "accent", "background", "caption_outline")
 STYLE_KEY_RE = re.compile(r"^(?:palette\.[A-Za-z][\w-]{0,39}|fonts\.(?:display|body)|fonts\.weights\.(?:display|body)"
                           r"|shape\.radius_px|motion\.(?:enter_s|exit_s|stagger_s))$")
 STYLE_NUMBERS = {"fonts.weights.": (100, 1000), "shape.radius_px": (0, 1000), "motion.": (0, 10)}
+# The computed styles the overlay bridge reports for a picked element, and the ones a restyle row may change.
+RESTYLE_PROPS = ("color", "background-color", "font-family", "font-size", "font-weight", "opacity", "transform")
 MAX_CHANGES = 40
 MAX_VALUE = 300
+MAX_SELECTOR = 300
 # A CSS value or font list the session copies into a page's CSS: one declaration's value, nothing more.
 CSS_VALUE_RE = re.compile(r"^[^;{}<>\\\x00-\x1f\x7f]{1,200}$")
 URL_RE = re.compile(r"url\s*\(", re.IGNORECASE)   # overlay pages load nothing (styles/README.md)
@@ -679,6 +695,31 @@ def _style(c: dict, record: dict | None) -> dict:
     return row
 
 
+def _restyle_value(key: str, v: Any) -> str:
+    if key not in RESTYLE_PROPS:
+        raise ValueError(f"a restyle changes only {', '.join(RESTYLE_PROPS)}")
+    return _css_text(key, v)
+
+
+def _restyle(c: dict, record: dict | None) -> dict:
+    (t,) = _finite(c, "t")
+    if t < 0:
+        raise ValueError("t must be >= 0")
+    if record is None:
+        raise ValueError("this render has no .edl.json, so its overlays are unknown")
+    overlays = record["edl"].get("overlays") or []
+    i = c["overlay"]
+    if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < len(overlays):
+        raise ValueError(f"overlay must be the index of one of this render's {len(overlays)} overlays")
+    if not isinstance(overlays[i], dict) or c["html"] != overlays[i].get("html"):
+        raise ValueError(f"html must be overlay {i}'s page as the render's .edl.json names it")
+    sel = c["selector"]
+    if not isinstance(sel, str) or not 1 <= len(sel) <= MAX_SELECTOR or re.search(r"[\x00-\x1f\x7f]", sel):
+        raise ValueError(f"selector must be 1..{MAX_SELECTOR} characters on one line")
+    return {"t": round(t, 3), "overlay": i, "html": c["html"], "selector": sel,
+            "changes": _changes(c["changes"], _restyle_value)}
+
+
 def offered_names(outdir: Path) -> dict[str, set[str]]:
     """The names in a valid looks.json and music.json, by list (OFFERED_LISTS)."""
     files = {name: job_files.load(outdir, name) for name in ("looks", "music")}
@@ -697,7 +738,7 @@ def validate_comment(c: Any, known: set[tuple[str, int]],
     valid candidates.json; `offered` the names a look or music row may pick
     (offered_names); `marks_dir` where the images drawing rows name are saved;
     `records` each render's sidecar (None for a render without one), by
-    (video, version), which style rows are checked against.
+    (video, version), which style and restyle rows are checked against.
     Unknown kinds and fields are refused.
     """
     if not isinstance(c, dict):
@@ -742,6 +783,8 @@ def validate_comment(c: Any, known: set[tuple[str, int]],
         row.update(_range(c))
     elif kind == "style":
         row.update(_style(c, (records or {}).get((row["video"], row["version"]))))
+    elif kind == "restyle":
+        row.update(_restyle(c, (records or {}).get((row["video"], row["version"]))))
     row.update(text=text.strip(), created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     return row
 
@@ -793,6 +836,21 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
         except _Reject:
             return None
 
+    def overlay_pages(data: dict) -> list[str]:
+        """The absolute overlay page paths a sidecar's EDL names, in its order."""
+        return [o["html"] for o in data["edl"].get("overlays") or []
+                if isinstance(o, dict) and isinstance(o.get("html"), str) and Path(o["html"]).is_absolute()]
+
+    def named_overlays() -> set[Path]:
+        """Every overlay page the sidecars of the listed renders name, resolved."""
+        out: set[Path] = set()
+        for c in videos():
+            for v in c["versions"]:
+                data = record(c["clip"], v["version"])
+                if data:
+                    out.update(Path(p).resolve() for p in overlay_pages(data))
+        return out
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "video-edit-review"
         protocol_version = "HTTP/1.1"   # keep-alive: the browser seeks with many small Range requests
@@ -832,9 +890,10 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             if not hmac.compare_digest(given.encode("utf-8"), token.encode("utf-8")):
                 raise _Reject(401, "unauthorized")
 
-        def _check_sample_key(self, query: dict) -> None:
+        def _check_page_key(self, route: str, query: dict) -> None:
             given, path = query.get("k", [""])[0], query.get("path", [""])[0]
-            if not hmac.compare_digest(given.encode("utf-8"), sample_key(token, path).encode("utf-8")):
+            want = (overlay_key if route == "/media/overlay" else sample_key)(token, path)
+            if not hmac.compare_digest(given.encode("utf-8"), want.encode("utf-8")):
                 raise _Reject(401, "unauthorized")
 
         def do_GET(self):
@@ -851,8 +910,8 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             query = parse_qs(url.query)
             try:
                 self._check_origin()
-                if url.path == "/media/sample" and "k" in query:
-                    self._check_sample_key(query)
+                if url.path in ("/media/sample", "/media/overlay") and "k" in query:
+                    self._check_page_key(url.path, query)
                 elif url.path.startswith(("/api/", "/media/")):
                     self._check_token(query)
                 get = self.command in ("GET", "HEAD")
@@ -868,7 +927,7 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                     return self._json({"sentences": self._sentences()})
                 if url.path == "/api/transcript" and get:
                     return self._transcript(query)
-                if url.path in ("/media/source", "/media/audio", "/media/sample") and get:
+                if url.path in ("/media/source", "/media/audio", "/media/sample", "/media/overlay") and get:
                     return self._named(url.path[len("/media/"):], query)
                 if url.path == "/api/comments" and self.command == "POST":
                     return self._post_comments()
@@ -985,8 +1044,10 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                 raise _Reject(400, "version must be a number") from None
 
         def _edl(self, query: dict) -> None:
-            """The sidecar `pipeline.py render` wrote beside one render; 404 for a render without one."""
-            return self._json({"status": "ok", "data": sidecar(*self._render(query))})
+            """The sidecar of one render, with a key per overlay page it names; 404 for a render without one."""
+            data = sidecar(*self._render(query))
+            return self._json({"status": "ok", "data": data,
+                               "overlay_keys": {p: overlay_key(token, p) for p in overlay_pages(data)}})
 
         def _style(self, query: dict) -> None:
             """What the style panel shows for one render: its caption values, brand colours and overlay styles."""
@@ -1006,7 +1067,7 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
 
         def _named(self, what: str, query: dict) -> None:
             """A file a validated input file names; anything else is 404."""
-            allowed = job_files.named_files(video_dir)[what]
+            allowed = named_overlays() if what == "overlay" else job_files.named_files(video_dir)[what]
             if what == "source":
                 path = next(iter(allowed), None)
             else:
@@ -1015,13 +1076,14 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                 path = path if path in allowed else None
             if path is None or not path.is_file():
                 raise _Reject(404, "not found")
-            if what == "sample":
+            if what in ("sample", "overlay"):
                 try:
                     html = path.read_text(encoding="utf-8")
                 except UnicodeDecodeError:
-                    raise _Reject(422, "the sample page is not UTF-8 text") from None
+                    raise _Reject(422, f"the {what} page is not UTF-8 text") from None
+                scripts = SAMPLE_SCRIPTS if what == "sample" else OVERLAY_SCRIPTS
                 body = inject_scripts(html, [(STATIC_DIR / n).read_text(encoding="utf-8")
-                                             for n in SAMPLE_SCRIPTS]).encode("utf-8")
+                                             for n in scripts]).encode("utf-8")
                 self._headers(200, "text/html; charset=utf-8", len(body), csp=SAMPLE_CSP)
                 if self.command != "HEAD":
                     self.wfile.write(body)
@@ -1098,9 +1160,9 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             cands = job_files.load(video_dir, "candidates")
             ids = {c["id"] for c in cands["data"]} if cands["status"] == "ok" else set()
             offered = offered_names(video_dir)
-            # The sidecars style rows are checked against, read once per render.
+            # The sidecars style and restyle rows are checked against, read once per render.
             records = {(c["video"], c["version"]): None for c in comments
-                       if isinstance(c, dict) and c.get("kind") == "style"
+                       if isinstance(c, dict) and c.get("kind") in ("style", "restyle")
                        and isinstance(c.get("video"), str) and isinstance(c.get("version"), int)
                        and (c["video"], c["version"]) in known}
             for video, version in records:
