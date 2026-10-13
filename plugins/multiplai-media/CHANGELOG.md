@@ -39,7 +39,8 @@ Nothing yet.
   a box around each person, name it, and say which transcript speaker is
   which, with a few of their lines (click one to hear it). "Check late
   frame" jumps to 85% of the recording so you can see the boxes still fit.
-  Claude uses your boxes for the 9:16 crops.
+  Send waits until every speaker has a box. Claude uses your boxes for the
+  9:16 crops.
 - **Look and Music tabs** list the styles, brands, caption options, music
   beds and sound-effect sets Claude offers. Previewing and picking them in
   the page comes in a later version; tell Claude your choice in chat for now.
