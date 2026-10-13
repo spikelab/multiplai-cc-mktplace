@@ -4,7 +4,7 @@ The server is pointed at the job's output directory. The page shows what the
 session wrote there (job.json, candidates.json, looks.json, music.json; see
 stages/job_files.py) and plays every render in it. Each choice the user makes
 (a comment, a drawing or a range on a render, picked clips, speaker boxes, a
-look, music) is posted as a mailbox row, appended to `comments.jsonl` in the mailbox directory, which
+look, music, a style or restyle change) is posted as a mailbox row, appended to `comments.jsonl` in the mailbox directory, which
 the session watches. The server never writes a job file.
 
 Standard library only, so the media test suite keeps running without the
@@ -20,7 +20,8 @@ Origin is not this server is refused. In a container the server binds
 
 Media is served only for files the job names: the source recording job.json
 names (`/media/source`), audio and sample pages named by a valid music.json or
-looks.json (`/media/audio?path=`, `/media/sample?path=`), and the renders in
+looks.json (`/media/audio?path=`, `/media/sample?path=`), the overlay pages a
+render's sidecar names (`/media/overlay?path=`, below), and the renders in
 the directory (`/media/<name>`). Any other path is refused. A sample page is
 an overlay page the session wrote; it plays in a sandboxed frame with the
 renderer's seek shim injected, under its own CSP (SAMPLE_CSP), and its address

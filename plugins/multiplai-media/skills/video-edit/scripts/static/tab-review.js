@@ -1,7 +1,7 @@
 // Review tab: play every render, click the picture to comment on that moment and spot,
 // draw on the paused frame (pen, arrow, box) and send the marked-up frame, or mark a
 // stretch on the render's timeline (from its .edl.json sidecar) and comment on it.
-// review-style.js adds the style panel and live overlays through App.review (below).
+// review-style.js (the style panel) and review-live.js (live overlays) build on App.review (below).
 "use strict";
 
 (() => {
@@ -14,7 +14,7 @@
     timeline: null, timelineKey: null, drag: null, sidecar: null,
   };
 
-  // review-style.js listens for "render" (the selected render or its sidecar changed),
+  // review-style.js and review-live.js listen for "render" (the selected render or its sidecar changed),
   // "time" (the picture moved), "resize" and "rows" (the mailbox rows changed).
   const listeners = { render: [], time: [], resize: [], rows: [] };
   const emit = (event) => { for (const fn of listeners[event]) fn(); };
@@ -730,7 +730,7 @@
     show() { renderMarkers(); emit("resize"); },
   });
 
-  // What review-style.js builds on: the selected render, its sidecar, the picture and events.
+  // What review-style.js and review-live.js build on: the selected render, its sidecar, the picture and events.
   App.review = {
     on(event, fn) { listeners[event].push(fn); },
     video: () => video,
