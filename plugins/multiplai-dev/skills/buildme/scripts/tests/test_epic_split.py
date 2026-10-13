@@ -1,16 +1,18 @@
 """Epic mode, PR A: the EPIC_SPLIT step decides one change or several, writes
-the child plans, and waits (plan-buildme-epic-mode-2026-10-12.md,
-work items 1-5, 7 and 9-10). The model call is always a fake."""
+the child plans, and waits for approval (plan-buildme-epic-mode-2026-10-12.md,
+work items 1-10). The model call is always a fake."""
 
 from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from build_pipeline.epic import lock as epic_lock
 from build_pipeline.epic import split as epic_split_mod
 from build_pipeline.epic import store
 from build_pipeline.epic.split import EpicChild, EpicSplitAnswer, check_answer
@@ -32,6 +34,12 @@ from .epic_row_helpers import (
     run_killed,
     use_workspace,
 )
+
+
+@pytest.fixture(autouse=True)
+def _release_locks():
+    yield
+    epic_lock.release_all()
 
 
 @pytest.fixture
@@ -180,6 +188,7 @@ class TestSeveralChildren:
         assert "in parallel" in split_md
         s = load_state(config)
         assert s.phase == BuildPhase.EPIC_SPLIT and s.epic_dir == str(epic)
+        assert (epic / ".lock").exists()
 
     def test_a_plan_is_written_as_the_answer_gave_it(self, env):
         root, data, project, log = env
@@ -198,6 +207,14 @@ class TestSeveralChildren:
         assert rc == 3
         assert "EPIC:SPLIT:" in capsys.readouterr().out
         assert len(log.calls()) == 1
+
+    def test_approval_in_the_run_that_wrote_the_split_is_not_taken(self, env):
+        root, data, project, log = env
+        config = make_build(project)
+        with _split(FakeSplit(log, THREE)):
+            rc = run_build(config, args_for(config, approve_split=True))
+        assert rc == 3
+        assert json.loads((_epic_dir(data) / "epic.json").read_text())["state"] == "proposed"
 
     def test_a_cycle_retries_once_then_exits_1(self, env, capsys):
         root, data, project, log = env
@@ -232,6 +249,72 @@ class TestSeveralChildren:
         assert seen[0] == [] and any("cycle" in e for e in seen[1])
 
 
+class TestApproval:
+    def _proposed(self, env):
+        root, data, project, log = env
+        config = make_build(project)
+        with _split(FakeSplit(log, THREE)):
+            assert run_build(config, args_for(config)) == 3
+        return config, _epic_dir(data)
+
+    def test_approve_saves_hashes_and_prints_approved(self, env, capsys):
+        config, epic = self._proposed(env)
+        capsys.readouterr()
+        rc = run_build(config, args_for(config, approve_split=True))
+        assert rc == 0
+        assert f"EPIC:APPROVED:{epic / 'epic.json'}" in capsys.readouterr().out
+        saved = json.loads((epic / "epic.json").read_text())
+        assert saved["state"] == "approved"
+        assert set(saved["hashes"]) == {"split.md", "plans/api.md", "plans/ui.md", "plans/docs.md"}
+
+    def test_a_hand_edited_plan_is_used(self, env):
+        config, epic = self._proposed(env)
+        edited = PLAN.format(title="Child api, edited")
+        (epic / "plans" / "api.md").write_text(edited)
+        assert run_build(config, args_for(config, approve_split=True)) == 0
+        saved = json.loads((epic / "epic.json").read_text())
+        assert saved["children"][0]["plan"] == edited
+
+    def test_a_hand_edited_table_is_used(self, env):
+        config, epic = self._proposed(env)
+        split_md = epic / "split.md"
+        split_md.write_text(split_md.read_text().replace("| api, ui |", "| api |"))
+        assert run_build(config, args_for(config, approve_split=True)) == 0
+        saved = json.loads((epic / "epic.json").read_text())
+        assert saved["children"][2]["depends_on"] == ["api"]
+
+    def test_a_broken_plan_fails_approval_naming_it_and_saves_nothing(self, env, capsys):
+        config, epic = self._proposed(env)
+        (epic / "plans" / "ui.md").write_text("# Plan: UI\n")
+        before = (epic / "epic.json").read_bytes()
+        rc = run_build(config, args_for(config, approve_split=True))
+        assert rc == 1
+        assert "plans/ui.md" in capsys.readouterr().err
+        assert (epic / "epic.json").read_bytes() == before
+
+    def test_a_plan_changed_after_approval_exits_2(self, env, capsys):
+        config, epic = self._proposed(env)
+        assert run_build(config, args_for(config, approve_split=True)) == 0
+        (epic / "plans" / "docs.md").write_text(PLAN.format(title="Changed later"))
+        capsys.readouterr()
+        rc = run_build(config, args_for(config))
+        assert rc == 2
+        assert "plans/docs.md" in capsys.readouterr().err
+
+    def test_an_approved_run_prints_approved_again(self, env, capsys):
+        config, epic = self._proposed(env)
+        assert run_build(config, args_for(config, approve_split=True)) == 0
+        capsys.readouterr()
+        assert run_build(config, args_for(config)) == 0
+        assert "EPIC:APPROVED:" in capsys.readouterr().out
+
+    def test_an_unparsable_epic_json_exits_1_and_is_never_rewritten(self, env):
+        config, epic = self._proposed(env)
+        (epic / "epic.json").write_text("{not json")
+        assert run_build(config, args_for(config, approve_split=True)) == 1
+        assert (epic / "epic.json").read_text() == "{not json"
+
+
 class TestSkip:
     def test_no_epic_split_makes_no_call(self, env, caplog):
         root, data, project, log = env
@@ -254,3 +337,61 @@ class TestSkip:
             run_build(config, args_for(config))
         assert log.calls() == []
         assert "SKIP phase=EPIC_SPLIT reason=only-mode" in caplog.text
+
+
+# --- item 6: the lock ----------------------------------------------------------
+
+HOLDER = r"""
+import fcntl, json, os, socket, sys
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644)
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+os.ftruncate(fd, 0)
+os.pwrite(fd, json.dumps({"pid": os.getpid(), "host": socket.gethostname(), "since": "then"}).encode(), 0)
+print("locked", flush=True)
+sys.stdin.read()
+"""
+
+
+def hold_in_other_process(lock_file: Path) -> subprocess.Popen:
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen([sys.executable, "-c", HOLDER, str(lock_file)],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert proc.stdout.readline().strip() == "locked"
+    return proc
+
+
+class TestLock:
+    def test_a_second_hold_in_the_same_process_is_a_no_op(self, tmp_path):
+        epic_lock.hold(tmp_path / "e", "e")
+        epic_lock.hold(tmp_path / "e", "e")
+        assert epic_lock.held(tmp_path / "e")
+
+    def test_the_holder_writes_its_pid(self, tmp_path):
+        import os
+
+        epic_lock.hold(tmp_path / "e", "e")
+        info = json.loads((tmp_path / "e" / ".lock").read_text())
+        assert info["pid"] == os.getpid() and info["host"] and info["since"]
+
+    def test_another_process_holding_it_is_refused_with_its_pid(self, tmp_path):
+        proc = hold_in_other_process(tmp_path / "e" / ".lock")
+        try:
+            with pytest.raises(epic_lock.EpicLocked) as err:
+                epic_lock.hold(tmp_path / "e", "e")
+            assert str(err.value).startswith(f"epic e is running now (pid {proc.pid} on ")
+        finally:
+            proc.communicate("")
+
+    def test_the_lock_is_not_inherited_by_a_child_process(self, tmp_path):
+        import os
+
+        epic_lock.hold(tmp_path / "e", "e")
+        assert not os.get_inheritable(epic_lock._held[tmp_path / "e"])
+        out = subprocess.run(
+            [sys.executable, "-c",
+             "import fcntl,os,sys\n"
+             "fd=os.open(sys.argv[1],os.O_RDWR)\n"
+             "try:\n fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);print('got')\n"
+             "except OSError:\n print('held')\n",
+             str(tmp_path / "e" / ".lock")], capture_output=True, text=True)
+        assert out.stdout.strip() == "held"

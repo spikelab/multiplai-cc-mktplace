@@ -6,7 +6,9 @@ SIGKILL would) or applies the row's perturbation, resumes, and compares with a
 run of the same scenario that never stopped, in a second temporary root: the
 epic directory (`epic_snapshot`), the checkpoint's phase and epic directory,
 and the launches (`CallLog`). The only differences allowed are the ones the
-row's "Resume does" names. """
+row's "Resume does" names. A refusal row checks the exit, the message and that
+nothing was written.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +16,9 @@ import json
 import os
 from pathlib import Path
 
+import pytest
 
+from build_pipeline.epic import lock as epic_lock
 from build_pipeline.epic import split as epic_split_mod
 from build_pipeline.epic import store
 from build_pipeline.models import BuildPhase
@@ -37,6 +41,13 @@ from .epic_row_helpers import (
     state_summary,
     use_workspace,
 )
+from .test_epic_split import hold_in_other_process
+
+
+@pytest.fixture(autouse=True)
+def _release_locks():
+    yield
+    epic_lock.release_all()
 
 
 class Run:
@@ -143,10 +154,85 @@ def test_A_S4_waiting_repeats_the_line_and_keeps_edits(tmp_path, monkeypatch, ca
     assert stopped.build(monkeypatch) == 3
     assert f"EPIC:SPLIT:{stopped.epic / 'split.md'}" in capsys.readouterr().out
     assert (stopped.epic / "plans" / "ui.md").read_text() == edited
+    assert stopped.build(monkeypatch, approve_split=True) == 0
 
     assert clean.build(monkeypatch) == 3
     (clean.epic / "plans" / "ui.md").write_text(edited)     # the same edit at the same seam
+    assert clean.build(monkeypatch, approve_split=True) == 0
     _assert_same(stopped, clean)
+
+
+def test_A_S8_user_edits_are_used_before_approval_and_refused_after(tmp_path, monkeypatch, capsys):
+    """A.S8 (seam: A.S4): before approval, edits are used after item 4's checks;
+    after approval, exit 2; an unparsable epic.json exits 1 and is never rewritten."""
+    stopped, clean = _roots(tmp_path / "before", monkeypatch, THREE)
+
+    def edit(run: Run) -> None:
+        split_md = run.epic / "split.md"
+        split_md.write_text(split_md.read_text().replace("| api, ui |", "| ui |"))
+        (run.epic / "plans" / "api.md").write_text(PLAN.format(title="API, edited"))
+
+    for run in (stopped, clean):
+        assert run.build(monkeypatch) == 3
+        edit(run)
+        assert run.build(monkeypatch, approve_split=True) == 0
+    _assert_same(stopped, clean)
+    assert stopped.result()["epic"]["epic.json"]["children"][2]["depends_on"] == ["ui"]
+
+    # After approval: a changed plan exits 2 naming it, and nothing is written.
+    before = epic_snapshot(stopped.epic, stopped.root)
+    (stopped.epic / "plans" / "ui.md").write_text(PLAN.format(title="Too late"))
+    capsys.readouterr()
+    assert stopped.build(monkeypatch) == 2
+    assert "plans/ui.md" in capsys.readouterr().err
+    after = epic_snapshot(stopped.epic, stopped.root)
+    assert after["epic.json"] == before["epic.json"]
+
+    # Unparsable epic.json: exit 1, never rewritten.
+    broken, _ = _roots(tmp_path / "broken", monkeypatch, THREE)
+    assert broken.build(monkeypatch) == 3
+    (broken.epic / "epic.json").write_text("{")
+    for flags in ({}, {"approve_split": True}):
+        assert broken.build(monkeypatch, **flags) == 1
+        assert (broken.epic / "epic.json").read_text() == "{"
+    assert len(broken.launches()) == 1
+
+
+def test_A_S11_another_process_holding_the_lock_exits_2_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    """A.S11: exit 2 with its pid; writes nothing. Checked at the approval, at
+    the re-run of an approved build, and at the split's first write."""
+    run = Run(tmp_path / "approve", monkeypatch, THREE)
+    assert run.build(monkeypatch) == 3
+    before, state_before = epic_snapshot(run.epic, run.root), run.config.state_file_path().read_bytes()
+    epic_lock.release_all()
+    holder = hold_in_other_process(run.epic / ".lock")
+    try:
+        capsys.readouterr()
+        assert run.build(monkeypatch, approve_split=True) == 2
+        assert f"epic e is running now (pid {holder.pid} on " in capsys.readouterr().err
+        assert epic_snapshot(run.epic, run.root) == before
+        assert run.config.state_file_path().read_bytes() == state_before
+    finally:
+        holder.communicate("")
+
+    assert run.build(monkeypatch, approve_split=True) == 0
+    approved = epic_snapshot(run.epic, run.root)
+    epic_lock.release_all()
+    holder = hold_in_other_process(run.epic / ".lock")
+    try:
+        assert run.build(monkeypatch) == 2
+        assert epic_snapshot(run.epic, run.root) == approved
+    finally:
+        holder.communicate("")
+
+    fresh = Run(tmp_path / "split", monkeypatch, THREE)
+    holder = hold_in_other_process(fresh.epic / ".lock")
+    try:
+        assert fresh.build(monkeypatch) == 2
+        assert sorted(p.name for p in fresh.epic.iterdir()) == [".lock"]
+        assert load_state(fresh.config).epic_dir is None
+    finally:
+        holder.communicate("")
 
 
 def _die_at_board(phase: BuildPhase):

@@ -106,7 +106,7 @@ def args_for(config: BuildConfig, **over) -> Any:
     base = dict(mode=config.mode, change=config.change_name, project_dir=str(config.project_dir),
                 auto=True, spec_only=True, skip_research=True, interview_summary="",
                 research_path="", context_files=[], session_id="s",
-                no_epic_split=False)
+                approve_split=False, no_epic_split=False)
     base.update(over)
     return argparse.Namespace(**base)
 
