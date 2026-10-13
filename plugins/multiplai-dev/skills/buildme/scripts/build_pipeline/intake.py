@@ -46,6 +46,12 @@ CONFIG_NOT_COMMITTED = (
     "Commit it first."
 )
 
+CONFIG_NOT_ON_BASE = (
+    "specs/config.yaml at HEAD is not on the commit the build branches from "
+    "(--base-ref, origin's default branch); the build's worktree would not see it. "
+    "Push it first."
+)
+
 
 class ConfigNotCommittedError(RuntimeError):
     """specs/config.yaml is untracked or modified, and the build would branch
@@ -178,6 +184,24 @@ def config_yaml_uncommitted(project_dir: Path) -> bool:
     reads as False: the worktree preflight owns that diagnosis.
     """
     return config_commit_state(project_dir) == "uncommitted"
+
+
+def config_yaml_off_ref(project_dir: Path, ref: str) -> bool:
+    """True when ``specs/config.yaml`` is committed at HEAD but *ref* holds
+    another version or none: a worktree branched from *ref* would not see it.
+    Untracked, or not a git repo, reads as False (`config_yaml_uncommitted`
+    and the worktree preflight own those)."""
+    if not (Path(project_dir) / "specs" / "config.yaml").exists():
+        return False
+    blobs = []
+    for rev in ("HEAD", ref):
+        try:
+            res = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{rev}:./specs/config.yaml"],
+                                 cwd=str(project_dir), capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        blobs.append(res.stdout.strip() if res.returncode == 0 else None)
+    return blobs[0] is not None and blobs[0] != blobs[1]
 
 
 def fenced(text: str, source: str) -> str:

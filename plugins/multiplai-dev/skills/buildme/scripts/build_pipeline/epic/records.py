@@ -22,7 +22,10 @@ from .store import _write_atomic
 AGENTS_DIR = "agents"
 KINDS = ("build", "review", "resume", "post", "fix", "merge", "merge-tests")
 NAMED_MARKERS = ("WORKTREE", "BRANCH", "PR", "SPEND")
-_NAME_RE = re.compile(r"^(\d{3})-(%s)-(.+)\.started\.json$" % "|".join(re.escape(k) for k in KINDS))
+# The kind and child come from the started record, which the name must match:
+# the name alone is ambiguous (`merge-tests-api` is `merge-tests` of `api` or
+# `merge` of `tests-api`).
+_NAME_RE = re.compile(r"^(\d{3})-(.+)\.started\.json$")
 # A marker line: `WORD:WORD...`, as buildme prints them (`SPLIT:REQUIRED:<path>`).
 _MARKER_RE = re.compile(r"^[A-Z][A-Z_]*:[A-Z][A-Z_]*(?::|$)")
 _NOT_MARKERS = ("PHASE:", "RESULT:", "BOARD:")
@@ -67,8 +70,11 @@ def attempts(epic_dir: Path) -> list[Attempt]:
         started = _read_json(p) if m else None
         if started is None:
             continue
+        kind, child = started.get("kind"), started.get("child")
+        if kind not in KINDS or not isinstance(child, str) or m.group(2) != f"{kind}-{child}":
+            continue
         base = p.with_name(p.name[:-len(".started.json")])
-        out.append(Attempt(int(m.group(1)), m.group(2), m.group(3), base, started,
+        out.append(Attempt(int(m.group(1)), kind, child, base, started,
                            _read_json(base.with_name(base.name + ".result.json"))))
     return out
 

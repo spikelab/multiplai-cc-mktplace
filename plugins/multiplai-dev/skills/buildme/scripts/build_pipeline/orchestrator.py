@@ -854,6 +854,11 @@ async def _run_bootstrap(
         if (not _inside_own_worktree(config, state)
                 and intake.config_yaml_uncommitted(config.project_dir)):
             raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_COMMITTED)
+        # With --base-ref (an epic's child) it branches from that commit
+        # instead, where a committed but unpushed config.yaml is missing too.
+        if (config.base_ref and not _inside_own_worktree(config, state)
+                and intake.config_yaml_off_ref(config.project_dir, config.base_ref)):
+            raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_ON_BASE)
         _setup_worktree(config, state)
         state_path = config.state_file_path()
         cm = ChangeManager(config.specs_dir)

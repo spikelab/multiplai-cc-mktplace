@@ -37,11 +37,16 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[2]
 POLL = 1.0           # seconds between looks at a running child
 TICK = 30.0          # seconds between reads of the waited-on PRs
 STOP_WAIT = 30.0     # seconds the children get to exit on SIGINT or SIGTERM
+FETCH_TIMEOUT = 300  # seconds `git fetch origin` gets before a launch
 
 MARKER_SUMMARY = "EPIC:SUMMARY"
 MARKER_MERGE_WAITING = "EPIC:MERGE_WAITING"
 PR_CLOSED = "PR closed without a merge"
 NO_PR = "no PR opened"
+
+
+class ReadFailed(Exception):
+    """A `git`, `gh` or `ps` read failed, so what it would have said is not known."""
 
 
 class Clock:
@@ -86,19 +91,14 @@ def _source_repo(config, state) -> Path:
     return git_ops.repo_root(Path(config.project_dir)) or Path(config.project_dir)
 
 
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=False)
+def _git(repo: Path, *args: str, timeout: int = git_ops._GIT_TIMEOUT) -> git_ops.GitResult:
+    return git_ops._run(["git", *args], cwd=repo, timeout=timeout)
 
 
 def _gh(repo: Path, *args: str) -> object | None:
     """A `gh` read, its JSON output; None when it fails."""
-    try:
-        proc = subprocess.run(["gh", *args], cwd=repo, capture_output=True, text=True,
-                              check=False, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        log.warning("gh %s failed: %s", " ".join(args), e)
-        return None
-    if proc.returncode != 0:
+    proc = git_ops._run_gh(["gh", *args], cwd=repo, timeout=60)
+    if not proc.ok:
         log.warning("gh %s failed: %s", " ".join(args), proc.stderr.strip()[-400:])
         return None
     try:
@@ -109,8 +109,8 @@ def _gh(repo: Path, *args: str) -> object | None:
 
 def base_sha(repo: Path) -> str | None:
     """`git fetch origin`, then origin's default branch's sha (item 12). A failed
-    fetch uses the remote ref as it is; no ref at all gives None."""
-    fetch = _git(repo, "fetch", "origin")
+    or timed-out fetch uses the remote ref as it is; no ref at all gives None."""
+    fetch = _git(repo, "fetch", "origin", timeout=FETCH_TIMEOUT)
     if fetch.returncode != 0:
         log.warning("git fetch origin in %s failed: %s", repo, fetch.stderr.strip()[-400:])
     default = git_ops.default_branch(repo)
@@ -127,12 +127,15 @@ def _has(line: str, text: str) -> bool:
 def build_pid(plan_path: Path) -> int | None:
     """The pid of a live build of *plan_path*: one `ps` line holding both
     `build_pipeline` and `--plan-file <plan>`, each followed by a space or the
-    line's end (item 14)."""
+    line's end (item 14). Raises ReadFailed when `ps` fails: a live child must
+    never be taken for a gone one."""
     try:
         ps = subprocess.run(["ps", "-ax", "-ww", "-o", "pid=,command="], capture_output=True,
                             text=True, check=False, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise ReadFailed(f"ps failed: {e}") from None
+    if ps.returncode != 0 or not ps.stdout.strip():
+        raise ReadFailed(f"ps failed: exit {ps.returncode} {ps.stderr.strip()[-200:]}".rstrip())
     for line in ps.stdout.splitlines():
         if _has(line, "build_pipeline") and _has(line, f"--plan-file {plan_path}"):
             pid, _, _ = line.strip().partition(" ")
@@ -201,7 +204,8 @@ class Coordinator:
     def _find_pr(self, tries: list[records.Attempt]) -> str | None:
         """The PR any attempt opened: a `PR:` line in a log; else `gh pr list
         --head` for every branch a `BRANCH:` line or `git worktree list` gives
-        for a `WORKTREE:` path; no `WORKTREE:` line anywhere means no PR."""
+        for a `WORKTREE:` path; no `WORKTREE:` line anywhere means no PR.
+        Raises ReadFailed when a `git` or `gh` read fails, which is not "no PR"."""
         found = [m for a in tries for m in records.markers(a.log)]
         prs = records.marker(found, "PR")
         if prs:
@@ -210,16 +214,21 @@ class Coordinator:
         if not worktrees:
             return None
         branches = list(dict.fromkeys(records.marker(found, "BRANCH")))
-        porcelain = _git(self.repo, "worktree", "list", "--porcelain").stdout
-        for block in porcelain.split("\n\n"):
+        porcelain = _git(self.repo, "worktree", "list", "--porcelain")
+        if not porcelain.ok:
+            raise ReadFailed(f"git worktree list failed: {porcelain.stderr.strip()[-200:]}")
+        wanted = {Path(w).resolve() for w in worktrees}
+        for block in porcelain.stdout.split("\n\n"):
             lines = block.splitlines()
             path = next((ln[len("worktree "):] for ln in lines if ln.startswith("worktree ")), None)
             ref = next((ln[len("branch refs/heads/"):] for ln in lines if ln.startswith("branch refs/heads/")), None)
-            if path in worktrees and ref and ref not in branches:
+            if path and Path(path).resolve() in wanted and ref and ref not in branches:
                 branches.append(ref)
         for branch in branches:
             listed = _gh(self.repo, "pr", "list", "--head", branch, "--state", "all", "--json", "url")
-            if isinstance(listed, list) and listed and isinstance(listed[0], dict) and listed[0].get("url"):
+            if not isinstance(listed, list):
+                raise ReadFailed(f"gh pr list --head {branch} failed")
+            if listed and isinstance(listed[0], dict) and listed[0].get("url"):
                 return listed[0]["url"]
         return None
 
@@ -228,7 +237,11 @@ class Coordinator:
         last = tries[-1].result or {}
         c.argv = None
         if last.get("interrupted"):
-            c.pr = self._find_pr(tries)
+            try:
+                c.pr = self._find_pr(tries)
+            except ReadFailed as e:       # B1.S20: no launch until a read answers
+                c.status, c.reason = "unknown", f"cannot tell whether it opened a PR: {e}"
+                return
             if c.pr:
                 c.status, c.reason = "built", ""
             else:
@@ -260,7 +273,12 @@ class Coordinator:
                 if a.result is not None:
                     continue
                 plan = _plan_of(a.started.get("argv", []))
-                if a is tries[-1] and plan and build_pid(plan) is not None:
+                try:
+                    live = a is tries[-1] and plan is not None and build_pid(plan) is not None
+                except ReadFailed as e:       # B1.S21: never relaunch what may still run
+                    c.status, c.reason = "unknown", f"cannot tell whether its build is still running: {e}"
+                    break
+                if live:
                     c.status, c.attempt = "running", a
                     log.info("EPIC child %s: its build from an earlier run is alive; waiting for it", cid)
                     break
@@ -343,8 +361,15 @@ class Coordinator:
                 code = c.proc.poll()
                 if code is not None:
                     self._done(c, code, interrupted=False)
-            elif build_pid(_plan_of(c.attempt.started["argv"])) is None:
-                self._done(c, None, interrupted=True)
+            else:
+                try:
+                    gone = build_pid(_plan_of(c.attempt.started["argv"])) is None
+                except ReadFailed as e:       # B1.S21
+                    c.status, c.reason, c.attempt = "unknown", f"cannot tell whether its build is still running: {e}", None
+                    self._save()
+                    continue
+                if gone:
+                    self._done(c, None, interrupted=True)
 
     def _save(self) -> None:
         self.epic.child_status = {cid: store.ChildStatus(status=c.status, pr=c.pr, reason=c.reason)
@@ -352,24 +377,35 @@ class Coordinator:
         store.save_epic(self.epic_dir, self.epic)
 
     async def _stop_children(self, sig: int) -> None:
-        """Signal every child this run started, give them STOP_WAIT seconds, and
-        write the results of those that exited with `interrupted: true`. One
-        still alive keeps no result, so the next run waits for it."""
-        own = [c for c in self.children.values() if c.status == "running" and c.proc is not None]
-        for c in own:
+        """Signal the group of every running child, the ones this run started
+        and the ones it adopted from an earlier run (a session leader, so its
+        pid is its group), give them STOP_WAIT seconds, and write the results of
+        those that exited with `interrupted: true`. One still alive, or one `ps`
+        cannot see, keeps no result, so the next run waits for it."""
+        running = [c for c in self.children.values() if c.status == "running"]
+
+        def alive(c: Child) -> int | None:
+            if c.proc is not None:
+                return c.proc.pid if c.proc.poll() is None else None
             try:
-                os.killpg(c.proc.pid, sig)
-            except ProcessLookupError:
+                return build_pid(_plan_of(c.attempt.started["argv"]))
+            except ReadFailed:
+                return -1
+        for c in running:
+            pid = alive(c)
+            try:
+                if pid and pid > 0:
+                    os.killpg(pid, sig)
+            except (ProcessLookupError, PermissionError):
                 pass
         until = CLOCK.now() + STOP_WAIT
-        while any(c.proc.poll() is None for c in own) and CLOCK.now() < until:
+        while any(alive(c) for c in running) and CLOCK.now() < until:
             await CLOCK.sleep(0.5)
-        for c in own:
-            code = c.proc.poll()
-            if code is None:
+        for c in running:
+            if alive(c):
                 log.warning("EPIC child %s is still running after %ss; the next run waits for it", c.id, STOP_WAIT)
                 continue
-            records.finish(c.attempt, code, interrupted=True)
+            records.finish(c.attempt, c.proc.poll() if c.proc is not None else None, interrupted=True)
             c.status, c.argv, c.proc = "pending", c.attempt.started["argv"], None
         self._save()
 
@@ -410,7 +446,7 @@ class Coordinator:
         if open_prs:
             print(f"{MARKER_MERGE_WAITING}:{','.join(open_prs)}", flush=True)
             return 3
-        return 1 if any(c.status == "failed" for c in self.children.values()) else 0
+        return 1 if any(c.status in ("failed", "unknown") for c in self.children.values()) else 0
 
     async def _loop(self) -> int:
         last_read = CLOCK.now()
@@ -464,7 +500,7 @@ def _new_run_dir(epic_dir: Path) -> Path:
 
 async def run_epic(config, state, args, epic_dir: Path, epic: store.Epic) -> int:
     """Build an approved epic's children (item 11). Returns 0 when nothing is
-    left to do, 1 when a child failed, 3 with `EPIC:MERGE_WAITING:<urls>` while a
+    left to do, 1 when a child failed or its state is unknown, 3 with `EPIC:MERGE_WAITING:<urls>` while a
     child waits on an open PR, 128 + the signal when stopped."""
     from . import lock as epic_lock
 
