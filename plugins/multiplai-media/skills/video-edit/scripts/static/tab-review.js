@@ -138,6 +138,7 @@
       const t = document.createElement("span");
       t.className = "tl-text";
       t.textContent = b.label;
+      if (el.firstChild) t.style.marginLeft = el.firstChild.style.width;   // the label starts past the crossfade
       el.append(t);
     }
     el.addEventListener("click", (ev) => {

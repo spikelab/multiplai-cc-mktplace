@@ -57,6 +57,7 @@ img.thumb { display: block; max-width: 100%; border-radius: 4px; margin-bottom: 
 button.tl-block { position: absolute; top: 2px; bottom: 2px; min-width: 3px; padding: 0 4px; border: 0; border-radius: 3px;
                   font-size: 11px; line-height: 16px; text-align: left; color: #fff; overflow: hidden; white-space: nowrap; }
 .tl-block.lane-segments { background: #4c6ef5; box-shadow: inset 1px 0 0 rgba(255, 255, 255, .6); }
+.tl-block.lane-segments:nth-of-type(even) { background: #364fc7; }
 .tl-block.lane-captions { background: #6c757d; box-shadow: inset 1px 0 0 rgba(255, 255, 255, .5); }
 .tl-block.lane-headline { background: #e8590c; }
 .tl-block.lane-overlays { background: #0ca678; }
