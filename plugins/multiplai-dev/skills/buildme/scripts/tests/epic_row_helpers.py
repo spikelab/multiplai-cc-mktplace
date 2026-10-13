@@ -304,6 +304,8 @@ step = steps[n - 1] if n <= len(steps) else (steps[-1] if steps else {{}})
 if "spend" in step:     # as the real build: SPEND on every exit path but a kill
     import atexit
     atexit.register(lambda: print(f"SPEND:{{step['spend']}}:0", flush=True))
+for _sig in (signal.SIGTERM, signal.SIGHUP):    # as the real build: these unwind, as Ctrl-C does
+    signal.signal(_sig, lambda signum, _frame: sys.exit(128 + signum))
 
 project = pathlib.Path(opt("--project-dir"))
 top = git("rev-parse", "--show-toplevel", cwd=project).stdout.strip()
@@ -340,7 +342,7 @@ if step.get("exit"):
     sys.exit(step["exit"])
 if step.get("no_pr"):
     sys.exit(0)
-url = f"https://example.invalid/o/r/pull/{{change}}"
+url = f"https://example.invalid/o/r/pull/{{step.get('pr_number', change)}}"
 prs_file = root / "prs.json"
 prs = json.loads(prs_file.read_text()) if prs_file.exists() else {{}}
 prs.setdefault(url, {{"branch": branch, "state": "OPEN"}})
@@ -379,7 +381,7 @@ else:
 class Fakes:
     """The fake build and `gh` first on PATH, answering from `<root>/fakes.json`
     (per child, one step per attempt: `block`, `marker`, `exit`, `no_pr`,
-    `die_before_pr_line`, `grandchild`, `ignore_signals`, `spend`) and `<root>/prs.json`; launches go to
+    `die_before_pr_line`, `grandchild`, `ignore_signals`, `spend`, `pr_number`) and `<root>/prs.json`; launches go to
     `<root>/calls.log`. `<root>/gh-fails` makes every `gh` call fail; `ps_fails`
     puts a `ps` that exits 1 first on PATH."""
 

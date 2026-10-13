@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from build_pipeline import __main__ as cli
-from build_pipeline import budget
+from build_pipeline import budget, git_ops
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import coordinator, records, spend
 from build_pipeline.epic import lock as epic_lock
@@ -209,9 +209,11 @@ def _started(slug, head, target="/r/pr-1"):
     return {"event": "started", "slug": slug, "target_dir": target, "head_sha": head}
 
 
-def _finished(slug, head, cost, target="/r/pr-1", stopped=None):
+def _finished(slug, head, cost, target="/r/pr-1", stopped=None, started_at="2026-10-13T10:00:00.000Z"):
+    """A `finished` line. `run.started_at` is the first start of the run a
+    `resume` continues; a fresh `review` gets a new one."""
     return {"event": "finished", "slug": slug, "target_dir": target, "head_sha": head,
-            "pr": 1, "stopped": stopped, "run": {"cost_usd": cost}}
+            "pr": 1, "stopped": stopped, "run": {"cost_usd": cost, "started_at": started_at}}
 
 
 class TestReviewSpend:
@@ -223,6 +225,32 @@ class TestReviewSpend:
                          _started("o-r--pr-1", "h1"), _finished("o-r--pr-1", "h1", 3.0, stopped="budget"),
                          _started("o-r--pr-1", "h1"), _finished("o-r--pr-1", "h1", 5.0))
         assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(5.0), True)
+
+    def test_a_fresh_review_of_a_reviewed_head_adds_its_spend(self, tmp_path):
+        """B2.S10: a `review` (not `resume`) of a head already reviewed starts
+        from no spend, with a new `run.started_at`; both runs count."""
+        ledger = _ledger(tmp_path / "ledger.jsonl",
+                         _started("o-r--pr-1", "h1"),
+                         _finished("o-r--pr-1", "h1", 3.0, stopped="budget", started_at="T1"),
+                         _started("o-r--pr-1", "h1"), _finished("o-r--pr-1", "h1", 2.0, started_at="T2"))
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(5.0), True)
+
+    def test_a_resumed_chain_and_a_fresh_rerun_on_one_head(self, tmp_path):
+        """The resume's line holds its chain's spend (3 + 2); the rerun adds its own."""
+        ledger = _ledger(tmp_path / "ledger.jsonl",
+                         _started("o-r--pr-1", "h1"),
+                         _finished("o-r--pr-1", "h1", 3.0, stopped="budget", started_at="T1"),
+                         _started("o-r--pr-1", "h1"), _finished("o-r--pr-1", "h1", 5.0, started_at="T1"),
+                         _started("o-r--pr-1", "h1"), _finished("o-r--pr-1", "h1", 1.5, started_at="T2"))
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(6.5), True)
+
+    @pytest.mark.parametrize("run", [None, {}, {"cost_usd": "x"}, {"cost_usd": True}],
+                             ids=["null", "no-cost", "text", "bool"])
+    def test_a_finished_line_with_no_cost_is_incomplete(self, tmp_path, run):
+        line = {"event": "finished", "slug": "o-r--pr-1", "target_dir": "/r/pr-1", "head_sha": "h1",
+                "round": "01", "stopped": None, "run": run}
+        ledger = _ledger(tmp_path / "ledger.jsonl", _finished("o-r--pr-1", "h0", 1.0), line)
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(1.0), False)
 
     def test_each_head_and_each_child_counts(self, tmp_path):
         ledger = _ledger(tmp_path / "ledger.jsonl",
@@ -259,14 +287,14 @@ class TestReviewSpend:
 # --- item 19: the cap -------------------------------------------------------------
 
 class Epic:
-    def __init__(self, root: Path, monkeypatch, steps, *, max_usd, parallel=1):
+    def __init__(self, root: Path, monkeypatch, steps, *, max_usd, parallel=1, answer=INDEPENDENT):
         self.root = root
         self.data = use_workspace(monkeypatch, root)
         self.project = make_project(root)
         self.fakes = Fakes(root, monkeypatch, steps)
         self.config = make_build(self.project)
         self.config.epic = EpicSettings(max_parallel=parallel, max_usd=max_usd)
-        approve(self.config, INDEPENDENT, CallLog(root / "split.log"))
+        approve(self.config, answer, CallLog(root / "split.log"))
         self.dir = self.data / "buildme" / "epics" / "o-r--e"
 
     def launches(self) -> list[str]:
@@ -326,3 +354,207 @@ def test_review_spend_in_the_ledger_counts_toward_the_cap(tmp_path, monkeypatch,
     assert run_coordinator(e.config) == 3
     assert e.launches() == ["a"]                 # 4.5 + 1 >= 5 before b
     assert "EPIC:BUDGET:5.50" in capsys.readouterr().out.splitlines()
+
+
+def test_the_coordinator_ties_ledger_lines_to_its_childrens_prs(tmp_path, monkeypatch, capsys):
+    """The review slugs come from the source repo's origin (`o/r.git`: `o-r`)
+    and each child's numbered PR URL; a review of another PR is left out."""
+    e = Epic(tmp_path, monkeypatch, {"a": [{"spend": 1.0, "pr_number": 12}],
+                                      "b": [{"spend": 1.0, "pr_number": 13}], "c": [{"spend": 1.0}]},
+             max_usd=5.0)
+    _ledger(e.data / "reviews" / "ledger.jsonl",
+            _finished("o-r--pr-12", "h1", 4.5, target="/r/pr-12"),
+            _finished("o-r--pr-99", "h1", 40.0, target="/r/pr-99"))
+    assert run_coordinator(e.config) == 3
+    assert e.launches() == ["a"]                 # 1 + 4.5 >= 5 before b
+    assert "EPIC:BUDGET:5.50" in capsys.readouterr().out.splitlines()
+
+
+DEPENDENT = EpicSplitAnswer(single=False, reason="Three parts.",
+                            children=[child("a"), child("b", ("a",)), child("c")])
+
+
+@pytest.mark.parametrize("steps,answer", [
+    ({"a": [{"spend": 6.0, "exit": 1}], "b": [{}], "c": [{}]}, INDEPENDENT),
+    ({"a": [{"spend": 6.0}], "b": [{}], "c": [{}]}, DEPENDENT),
+], ids=["a-child-failed", "a-pr-waits-to-merge"])
+def test_the_budget_stop_wins_over_the_other_exits(tmp_path, monkeypatch, capsys, steps, answer):
+    """Once spend reached epic.max_usd, the run ends with EPIC:BUDGET and exit 3,
+    not exit 1 for a failed child (which is not relaunched) and not
+    EPIC:MERGE_WAITING for a PR a child waits on."""
+    e = Epic(tmp_path, monkeypatch, steps, max_usd=5.0, answer=answer)
+    assert run_coordinator(e.config) == 3
+    out = capsys.readouterr().out
+    assert e.launches() == ["a"]
+    assert "EPIC:BUDGET:6.00" in out.splitlines()
+    assert "EPIC:MERGE_WAITING" not in out
+
+
+# --- SPEND on SIGTERM and SIGHUP: a stop the coordinator sends ---------------------
+
+_SIGNALLED = r"""
+import sys, time
+from types import SimpleNamespace
+from build_pipeline import __main__ as cli, budget, git_ops, orchestrator
+from build_pipeline.findings import cli as findings_cli
+
+pidfile = sys.argv[1]
+
+
+def body():
+    budget.record(SimpleNamespace(cost_usd=2.5, input_tokens=100, output_tokens=0,
+                                  cache_read_tokens=0, cache_creation_tokens=0))
+    print("WORKTREE:/w", flush=True)
+    if pidfile != "-":      # a wait on a skill, as when the build opens its PR
+        git_ops._run_skill(["sh", "-c", f"sleep 30 & echo $! > {pidfile}; wait"], None, 120)
+    time.sleep(60)
+    return 0
+
+
+async def fake_run_orchestrator(config, args):
+    return body()
+
+
+orchestrator.run_orchestrator = fake_run_orchestrator
+findings_cli.run_cli = lambda args: body()
+sys.exit(cli.main(sys.argv[2:]))
+"""
+
+
+def _signalled(tmp_path, workspace, argv, sig, *, skill=False):
+    """Run the real `main(argv)` with a body that spends $2.50, send *sig*
+    once it printed WORKTREE:, and return (exit code, stdout, the skill's pid)."""
+    import os
+    import subprocess
+    import sys
+    import time
+
+    scripts_dir = Path(cli.__file__).resolve().parent.parent
+    pidfile = tmp_path / "skill.pid"
+    proc = subprocess.Popen([sys.executable, "-c", _SIGNALLED, str(pidfile) if skill else "-", *argv],
+                            cwd=str(scripts_dir), env={**os.environ, "PYTHONPATH": str(scripts_dir)},
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    try:
+        for line in proc.stdout:
+            if line == "WORKTREE:/w\n":
+                break
+        else:
+            pytest.fail("the body never started")
+        if skill:
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline and not (pidfile.exists() and pidfile.read_text().strip()):
+                time.sleep(0.05)
+        time.sleep(0.3)
+        proc.send_signal(sig)
+        out = proc.stdout.read()
+        proc.wait(timeout=20)
+        return proc.returncode, out, int(pidfile.read_text()) if skill else None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+@pytest.mark.parametrize("command", ["build", "findings"])
+@pytest.mark.parametrize("signame", ["SIGTERM", "SIGHUP"])
+def test_spend_is_printed_when_a_signal_stops_the_process(tmp_path, workspace, command, signame):
+    """B2.S11: the coordinator passes its own SIGTERM on to every running child.
+    Before, Python's default action ended the child with no `finally`, so its
+    attempt's spend was lost for good; now the stop unwinds as Ctrl-C does."""
+    import signal
+
+    sig = getattr(signal, signame)
+    argv = (["build", "--change", "x"] if command == "build" else ["findings", "--pr", "7"])
+    code, out, _ = _signalled(tmp_path, workspace, [*argv, "--project-dir", str(workspace)], sig)
+    assert code == 128 + sig
+    assert out.splitlines()[-1] == "SPEND:2.500000:100"
+
+
+def test_a_sigterm_during_a_skill_wait_still_kills_the_skill(tmp_path, workspace):
+    """The handler `main` installs leaves `git_ops._exit_on_termination` working:
+    the skill's group is killed and SPEND is still printed."""
+    import signal
+
+    from .test_git_ops import _gone
+
+    code, out, skill = _signalled(tmp_path, workspace,
+                                  ["build", "--change", "x", "--project-dir", str(workspace)],
+                                  signal.SIGTERM, skill=True)
+    try:
+        assert code == 128 + signal.SIGTERM
+        assert out.splitlines()[-1] == "SPEND:2.500000:100"
+        assert _gone(skill)
+    finally:
+        try:
+            import os
+            os.kill(skill, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+@pytest.mark.parametrize("signame", ["SIGINT", "SIGTERM"])
+def test_children_stopped_with_the_epic_keep_their_spend(tmp_path, monkeypatch, signame):
+    """B2.S11 end to end: the epic is stopped while a and b run; each
+    interrupted result holds the spend its child printed as it stopped."""
+    import signal
+
+    from .epic_row_helpers import run_signalled
+
+    sig = getattr(signal, signame)
+    e = Epic(tmp_path, monkeypatch, {"a": [{"spend": 4.0, "block": True}], "b": [{"spend": 3.0, "block": True}],
+                                      "c": [{"spend": 1.0}]}, max_usd=None, parallel=2)
+    monkeypatch.setattr(coordinator, "STOP_WAIT", 3000.0)
+
+    def ready() -> bool:
+        logs = list((e.dir / "agents").glob("*.log")) if (e.dir / "agents").exists() else []
+        return len(logs) == 2 and all("WORKTREE:" in p.read_text() for p in logs)
+
+    assert run_signalled(lambda: run_coordinator(e.config), ready, sig) == 128 + sig
+    tries = records.attempts(e.dir)
+    assert sorted((a.child, a.result["interrupted"], a.result["spend"]) for a in tries) == [
+        ("a", True, 4.0), ("b", True, 3.0)]
+    assert spend.attempts_spend(tries) == (pytest.approx(7.0), True)
+
+
+# --- spend in the skills a build runs: the pr skill and the walkthrough -----------
+
+class TestSkillSpend:
+    """The pr skill (`open`, `edit`) and a walkthrough `run` or `resume` call a
+    model in a subprocess of their own; each prints its own `SPEND:` line,
+    which `_run_skill` adds to this process's total. The review skill's spend
+    is in its ledger and is not added here."""
+
+    def _run(self, *argv, out="", code=0):
+        import sys
+
+        script = f"import sys; sys.stdout.write({out!r}); sys.exit({code})"
+        return git_ops._run_skill([sys.executable, "-c", script, *argv], None, 60)
+
+    @pytest.mark.parametrize("argv", [("pr_pipeline", "open"), ("pr_pipeline", "edit", "7"),
+                                      ("walkthrough_pipeline", "run", "/m"),
+                                      ("walkthrough_pipeline", "resume", "/r")])
+    def test_a_skills_spend_line_is_added(self, argv):
+        budget.record(_usage(1.0, 10))
+        self._run(*argv, out="PR:u\nSPEND:0.250000:40\n")
+        assert budget.spend_marker() == "SPEND:1.250000:50"
+
+    def test_a_review_skills_line_is_not_added(self):
+        self._run("review_pipeline", "review", out="SPEND:9.0:9\n")
+        assert budget.spend_marker() == "SPEND:0.000000:0"
+
+    @pytest.mark.parametrize("argv", [("pr_pipeline", "open"), ("walkthrough_pipeline", "run", "/m")])
+    def test_no_spend_line_makes_the_total_incomplete(self, argv):
+        """Killed on a timeout, or by buildme's own stop: what it spent is unknown."""
+        budget.record(_usage(1.0, 10))
+        self._run(*argv, out="", code=-9 % 256)
+        assert budget.spend_marker() == "SPEND:1.000000:10:incomplete"
+
+    def test_a_walkthrough_check_calls_no_model(self):
+        self._run("walkthrough_pipeline", "check", "/w.md", out="check: 3 checked, 0 failed\n")
+        assert budget.spend_marker() == "SPEND:0.000000:0"
+
+    def test_a_marked_attempt_counts_its_known_spend_and_is_incomplete(self, tmp_path):
+        a = records.start(tmp_path, "build", "a", ["x"])
+        a.log.write_text("WORKTREE:/w\nSPEND:1.500000:10:incomplete\n")
+        assert records.finish(a, 0, interrupted=False)["spend"] == pytest.approx(1.5)
+        assert spend.attempts_spend(records.attempts(tmp_path)) == (pytest.approx(1.5), False)
