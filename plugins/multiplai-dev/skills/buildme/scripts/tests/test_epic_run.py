@@ -13,6 +13,7 @@ import os
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -554,6 +555,45 @@ def test_sighup_leaves_the_children_running_and_writes_the_summary(tmp_path, mon
                 os.killpg(os.getpgid(pid), signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+@pytest.mark.parametrize("sig", [signal.SIGHUP, signal.SIGTERM], ids=["SIGHUP", "SIGTERM"])
+def test_an_ignored_signal_stays_ignored(tmp_path, monkeypatch, sig):
+    """Under `nohup` SIGHUP is ignored, and the coordinator leaves it so: a
+    closed terminal does not stop the run (B2.S13 is only for a SIGHUP that is
+    not ignored). The same for an ignored SIGTERM. The signal arrives while a
+    and b run; they then finish, c is launched, and the run ends as one that
+    got no signal."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, parallel=2,
+             steps={"a": [{"block": True}], "b": [{"block": True}]})
+    released: list[threading.Timer] = []
+
+    def under_nohup() -> int:      # `nohup` sets SIG_IGN; `__main__.main` then holds the rest
+        signal.signal(sig, signal.SIG_IGN)
+        try:
+            with git_ops._exit_on_termination(interrupt=False):
+                return e.run()
+        except SystemExit as stop:
+            return stop.code
+
+    def ready() -> bool:
+        if sorted(e.launches()) != ["a", "b"]:
+            return False
+        timer = threading.Timer(1.0, lambda: [e.fakes.release(c) for c in ("a", "b")])
+        timer.start()
+        released.append(timer)
+        return True
+
+    try:
+        rc = run_signalled(under_nohup, ready, sig)
+        assert rc == 3
+        assert sorted(e.launches()) == ["a", "b", "c"]
+        assert e.status() == {"a": "built", "b": "built", "c": "built"}
+    finally:
+        for timer in released:
+            timer.join()
+        for c in ("a", "b"):
+            e.fakes.release(c)
 
 
 def test_the_coordinator_puts_back_the_signal_handlers_it_found(tmp_path, monkeypatch):
