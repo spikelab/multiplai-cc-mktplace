@@ -418,6 +418,14 @@ done
 rate, bitrate, file size, length, text inside the unsafe bands). Fix the EDL
 and re-render; prep is cached, so a re-render costs only the encode.
 
+Each render also leaves `$OUT/<name>.edl.json`, its record for the job
+page's timeline (`SKILL.md` §4). That is why the EDLs live in `edl/`: one
+saved as `$OUT/clip-01.edl.json` would sit where render writes, and render
+refuses it. In the page's **Review** tab the user comments on a spot, draws
+on a paused frame, or marks a stretch of the timeline and clicks the
+segment, caption line, overlay or sound it is about; each arrives as a
+`point`, `drawing` or `range` row (`SKILL.md` §6).
+
 ## 7. Proof every reel before reporting it
 
 `check` passing says nothing about whether the right person is on screen or

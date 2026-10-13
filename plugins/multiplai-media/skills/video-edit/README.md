@@ -76,6 +76,12 @@ buy houses. Use my brand file."*
    the renders:
    - Click on the picture to pause and comment on that moment and that spot
      ("caption covers his mouth", "cut here").
+   - Or pause and draw on the frame: a pen line, an arrow or a box, in a
+     colour you pick. Claude gets the frame with your marks on it.
+   - Under the video, a timeline shows the render's parts: segments,
+     caption lines, the headline, overlays and sound effects. Drag along
+     its ruler to comment on a stretch ("too slow here"), and click a block
+     to say which part you mean ("this card comes in too late").
    - Send all your comments together.
    - Claude renders the next version, and the page offers it next to the
      old one.
