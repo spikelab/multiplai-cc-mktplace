@@ -14,6 +14,10 @@ from pydantic import BaseModel
 from conftest import make_repo, make_units_repo, read_state, run
 from spec_extract_pipeline import sdk
 
+# These tests are about resolve, scope and explore: the run ends after explore, as it did
+# before the group and write steps existed.
+pytestmark = pytest.mark.usefixtures("stops_after_explore")
+
 _REAL_CALL = sdk.agent_call_structured  # before the autouse fixture replaces it
 _REAL_MODEL_FOR = sdk.model_for
 

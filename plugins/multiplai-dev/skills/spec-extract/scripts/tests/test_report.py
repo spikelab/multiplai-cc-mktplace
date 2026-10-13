@@ -3,10 +3,16 @@ no timestamp, written through a temp file."""
 
 from __future__ import annotations
 
+import pytest
+
 from conftest import FIXED, git, read_state, run, write
 from spec_extract_pipeline import report as report_mod
 from spec_extract_pipeline.scope import Skipped, TargetScope
 from spec_extract_pipeline.target import Target
+
+# These tests are about resolve, scope and explore: the run ends after explore, as it did
+# before the group and write steps existed.
+pytestmark = pytest.mark.usefixtures("stops_after_explore")
 
 SHA = "a" * 40
 

@@ -15,6 +15,10 @@ from conftest import (FIXED, Killed, commit_file, everything, fake_state, git, m
                       source_head, write)
 from spec_extract_pipeline import target as target_mod
 
+# These tests are about resolve, scope and explore: the run ends after explore, as it did
+# before the group and write steps existed.
+pytestmark = pytest.mark.usefixtures("stops_after_explore")
+
 OTHER = "https://github.com/other/widgets.git"
 
 

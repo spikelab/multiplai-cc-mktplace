@@ -39,7 +39,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from code_facts import (CallFn, ExploreOutput, Unit, ask, bounded, citation_keeper, explore_unit,
+from code_facts import (CallFn, ExploreOutput, Gated, Unit, ask, bounded, citation_keeper, explore_unit,
                         gate_answers, unit_key)
 from multiplai_core.budget import BudgetExceededError, SpendLedger
 
@@ -165,11 +165,16 @@ def resolver(target: Target) -> Callable[[str, str], tuple[str, str, str] | None
     return resolve
 
 
+def gated_facts(target: Target, scope: TargetScope, answers: dict[str, dict], run_dir: Path) -> Gated:
+    """The facts whose citations pass at the commit, rebuilt from the stored answers in unit order."""
+    keep = citation_keeper(resolver(target), root=run_dir / SNAPSHOT_DIR)
+    return gate_answers(ordered_answers(scope.units, answers), keep)
+
+
 def facts_document(target: Target, scope: TargetScope, answers: dict[str, dict], run_dir: Path,
                    generated_at: datetime) -> dict:
     """`facts.json` in review's format (`review/schema/facts.v1.schema.json`), kind `tree`."""
-    keep = citation_keeper(resolver(target), root=run_dir / SNAPSHOT_DIR)
-    g = gate_answers(ordered_answers(scope.units, answers), keep)
+    g = gated_facts(target, scope, answers, run_dir)
     by_id = {f.id: f for f in g.facts}
     files = []
     for path, purpose in g.purposes.items():
