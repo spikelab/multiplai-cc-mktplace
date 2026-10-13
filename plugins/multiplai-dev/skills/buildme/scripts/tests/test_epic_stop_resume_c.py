@@ -100,7 +100,7 @@ class Root:
 
     def review_pid(self) -> int:
         for _ in range(500):
-            lock = self.target / ".lock"
+            lock = self.fakes.review_lock()
             if lock.exists() and lock.read_text():
                 return int(lock.read_text())
             time.sleep(0.02)

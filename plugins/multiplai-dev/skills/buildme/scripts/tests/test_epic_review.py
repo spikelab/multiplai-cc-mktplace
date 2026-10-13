@@ -5,6 +5,7 @@ lines under `<root>/ws/.multiplai/data/reviews/`."""
 
 from __future__ import annotations
 
+import fcntl
 import json
 import signal
 import subprocess
@@ -22,6 +23,7 @@ from build_pipeline.epic.split import EpicSplitAnswer
 
 from .epic_row_helpers import (
     CallLog,
+    FakeClock,
     Fakes,
     alive,
     approve,
@@ -100,7 +102,7 @@ def test_each_built_child_is_reviewed_and_the_result_recorded(tmp_path, monkeypa
                                      "python", "-m"]
     assert a.started["argv"][6:] == ["review_pipeline", "review", "--repo",
                                      str(e.root / "ws" / ".worktrees" / "buildme-e-a"),
-                                     "--pr", str(N), "--trust-repo"]
+                                     "--pr", str(N), "--trust-repo", "--fetch"]
     assert a.started["head_sha"] == e.head() and a.started["pr_round"] == 0
     r = a.result
     assert (r["exit_code"], r["interrupted"], r["reused"], r["reused_pipeline_run"]) == (0, False, False, None)
@@ -112,6 +114,8 @@ def test_each_built_child_is_reviewed_and_the_result_recorded(tmp_path, monkeypa
 def test_a_head_already_in_the_ledger_starts_no_review(tmp_path, monkeypatch):
     """Done means 5: no review starts, and the record has `reused: true`."""
     e = Epic(tmp_path, monkeypatch)
+    e.target().mkdir(parents=True)
+    (e.target() / "findings.json").write_text(json.dumps({"mode": None, "findings": [high()]}))
     e.add_ledger({"event": "finished", "slug": f"o-r--pr-{N}", "pr": N, "target_dir": str(e.target()),
                   "head_sha": e.head(), "base_sha": "c" * 40, "round": "03", "stopped": None,
                   "run": {"cost_usd": 2.0}})
@@ -123,6 +127,103 @@ def test_a_head_already_in_the_ledger_starts_no_review(tmp_path, monkeypatch):
     assert (r["exit_code"], r["markers"], r["interrupted"], r["reused"]) == (0, [], False, True)
     assert r["reused_pipeline_run"] == {"target_dir": str(e.target()), "round": "03"}
     assert (r["base_sha"], r["cost_usd"], r["pr_round"]) == ("c" * 40, 2.0, 1)
+    assert [b.split()[:2] for b in r["blocking"]] == [["HIGH", "f1"]] and "parked" not in r
+    assert (e.child_status("a")["status"], e.child_status("a")["reason"]) == ("built", "")
+
+
+def test_a_head_reviewed_elsewhere_during_a_wait_gets_one_result_with_its_fields(tmp_path, monkeypatch):
+    """Item 24: another process holds the review lock (exit 2 `is running now`)
+    and reviews this head during the 60 s wait. The exit-2 pair holds no
+    review fields, so one more pair is written with them (`reused: true`,
+    the blockers); a later run writes nothing more."""
+    running = {"exit": 2, "stderr": "ERROR: a review of x is running now (pid 1); wait for it"}
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, reviews={str(N): [running, {"findings": [high()]}]})
+    real = FakeClock.sleep
+
+    async def sleep(clock, seconds):
+        if seconds == review.REVIEW_WAIT and not e.ledger.exists():   # the other process's review
+            subprocess.run(review.review_argv(e.project, N), check=True, capture_output=True)
+        await real(clock, seconds)
+
+    monkeypatch.setattr(FakeClock, "sleep", sleep)
+    assert e.run() == 3                                       # b waits for a's merge
+    first, second = e.reviews("a")
+    assert (first.result["exit_code"], "blocking" in first.result) == (2, False)
+    r = second.result
+    assert (r["exit_code"], r["interrupted"], r["reused"], r["pr_round"]) == (0, False, True, 1)
+    assert [b.split()[:2] for b in r["blocking"]] == [["HIGH", "f1"]]
+    assert e.child_status("a")["status"] == "built"
+    assert e.run() == 3 and len(e.reviews("a")) == 2
+
+
+def test_a_review_that_ends_just_after_the_ledger_read_is_not_run_again(tmp_path, monkeypatch):
+    """C.S2: a review of this head is running (its `started` line, its run
+    lock held) and ends right after the coordinator reads the ledger. The
+    coordinator reads the ledger again once the lock is free, so it reuses
+    that review and launches none."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN)
+    e.target().mkdir(parents=True)
+    e.add_ledger({"event": "started", "slug": f"o-r--pr-{N}", "target_dir": str(e.target()),
+                  "head_sha": e.head()})
+    lock_file = e.fakes.review_lock()
+    lock_file.parent.mkdir(parents=True)
+    held = lock_file.open("a")
+    fcntl.flock(held, fcntl.LOCK_EX)
+    real = review.ledger_lines
+
+    def ledger_lines():
+        lines = real()
+        if not held.closed:              # the review ends now: its findings, its line, its lock
+            (e.target() / "findings.json").write_text(json.dumps({"mode": None, "findings": []}))
+            e.add_ledger({"event": "finished", "slug": f"o-r--pr-{N}", "pr": N, "target_dir": str(e.target()),
+                          "head_sha": e.head(), "base_sha": "b" * 40, "round": "01", "stopped": None,
+                          "run": {"cost_usd": 1.5}})
+            held.close()
+        return lines
+
+    monkeypatch.setattr(review, "ledger_lines", ledger_lines)
+    try:
+        assert e.run() == 3
+    finally:
+        held.close()
+    assert e.launched() == []
+    [a] = e.reviews("a")
+    assert (a.result["exit_code"], a.result["reused"], a.result["pr_round"]) == (0, True, 1)
+
+
+def test_no_review_is_launched_while_the_review_lock_is_held(tmp_path, monkeypatch):
+    """C.S2: while a review of this head runs (its `started` line, its run
+    lock held), the coordinator waits and looks again; it launches nothing."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN)
+    e.target().mkdir(parents=True)
+    e.add_ledger({"event": "started", "slug": f"o-r--pr-{N}", "target_dir": str(e.target()),
+                  "head_sha": e.head()})
+    lock_file = e.fakes.review_lock()
+    lock_file.parent.mkdir(parents=True)
+    held = lock_file.open("a")
+    fcntl.flock(held, fcntl.LOCK_EX)
+    waits = []
+    real = FakeClock.sleep
+
+    async def sleep(clock, seconds):
+        if seconds == review.REVIEW_WAIT:
+            waits.append(seconds)
+            if len(waits) == 3:          # the review ends
+                (e.target() / "findings.json").write_text(json.dumps({"mode": None, "findings": []}))
+                e.add_ledger({"event": "finished", "slug": f"o-r--pr-{N}", "pr": N,
+                              "target_dir": str(e.target()), "head_sha": e.head(), "base_sha": "b" * 40,
+                              "round": "01", "stopped": None, "run": {"cost_usd": 1.5}})
+                held.close()
+        await real(clock, seconds)
+
+    monkeypatch.setattr(FakeClock, "sleep", sleep)
+    try:
+        assert e.run() == 3
+    finally:
+        held.close()
+    assert len(waits) == 3 and e.launched() == []
+    [a] = e.reviews("a")
+    assert (a.result["exit_code"], a.result["reused"]) == (0, True)
 
 
 def test_a_stopped_review_of_another_head_does_not_count(tmp_path, monkeypatch):
@@ -188,7 +289,7 @@ def test_sighup_leaves_a_running_review_running(tmp_path, monkeypatch):
     running and its record keeps no result; the next run reuses the review
     that process finished (C.S4) and launches none."""
     e = Epic(tmp_path, monkeypatch, answer=CHAIN, reviews={str(N): [{"block": True}]})
-    lock = e.target() / ".lock"
+    lock = e.fakes.review_lock()
 
     def as_main() -> int:      # what `__main__.main` holds around a `build`
         try:
@@ -300,7 +401,49 @@ def test_a_review_is_a_launch_the_epic_budget_stops(tmp_path, monkeypatch, capsy
     assert e.child_status("a")["status"] == "built"
 
 
+def _spend_after_first_review(e: Epic, monkeypatch) -> None:
+    """The epic's spend reaches $6 once a's first review attempt has a result."""
+    monkeypatch.setattr(coordinator.Coordinator, "spent",
+                        lambda self: (6.0 if any(a.result for a in e.reviews("a")) else 0.0, True))
+
+
+def test_a_resume_is_a_launch_the_epic_budget_stops(tmp_path, monkeypatch, capsys):
+    """Decided 6: the budget is checked before each launch, the `resume`
+    after an exit 4 with the hint included."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, max_usd=5.0)
+    hint = f"STOPPED: interrupted run found; continue with: python -m review_pipeline resume {e.target()}"
+    e.fakes.root.joinpath("reviews.json").write_text(json.dumps({str(N): [{"exit": 4, "stderr": hint}]}))
+    _spend_after_first_review(e, monkeypatch)
+    assert e.run() == 3
+    assert "EPIC:BUDGET:6.00" in capsys.readouterr().out.splitlines()
+    assert e.launched() == ["review"]
+    assert e.child_status("a")["status"] == "built"
+
+
+def test_asking_again_after_is_running_now_is_a_launch_the_epic_budget_stops(tmp_path, monkeypatch, capsys):
+    running = {"exit": 2, "stderr": "ERROR: a review of x is running now (pid 1); wait for it"}
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, max_usd=5.0, reviews={str(N): [running, {}]})
+    _spend_after_first_review(e, monkeypatch)
+    assert e.run() == 3
+    assert "EPIC:BUDGET:6.00" in capsys.readouterr().out.splitlines()
+    assert e.launched() == ["review"]
+    assert e.child_status("a")["status"] == "built"
+
+
 # --- the pieces -------------------------------------------------------------------------
+
+def test_records_past_999_are_seen_and_numbered_in_order(tmp_path):
+    agents = tmp_path / records.AGENTS_DIR
+    agents.mkdir()
+    for n in range(1, 1001):
+        (agents / f"{n:03d}-review-a.started.json").write_text(
+            json.dumps({"kind": "review", "child": "a", "argv": []}))
+    b = records.start(tmp_path, "build", "b", ["x"])
+    assert b.n == 1001
+    got = records.attempts(tmp_path)
+    assert [a.n for a in got] == list(range(1, 1002))
+    assert (got[-1].kind, got[-1].child) == ("build", "b")
+
 
 def test_conflicts_reads_mergeable_and_merge_state():
     assert review.conflicts({"mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY"}) is True

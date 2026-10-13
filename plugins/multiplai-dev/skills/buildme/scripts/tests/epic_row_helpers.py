@@ -344,10 +344,13 @@ if step.get("no_pr"):
     sys.exit(0)
 url = f"https://example.invalid/o/r/pull/{{step.get('pr_number', change)}}"
 prs_file = root / "prs.json"
-prs = json.loads(prs_file.read_text()) if prs_file.exists() else {{}}
-prs.setdefault(url, {{"branch": branch, "state": "OPEN", **step.get("pr", {{}})}})
-(root / f"prs.{{os.getpid()}}.tmp").write_text(json.dumps(prs))
-os.replace(root / f"prs.{{os.getpid()}}.tmp", prs_file)     # readers never see half a file
+import fcntl
+with (root / "prs.lock").open("a") as held:     # two builds ending at once both keep their PR
+    fcntl.flock(held, fcntl.LOCK_EX)
+    prs = json.loads(prs_file.read_text()) if prs_file.exists() else {{}}
+    prs.setdefault(url, {{"branch": branch, "state": "OPEN", **step.get("pr", {{}})}})
+    (root / f"prs.{{os.getpid()}}.tmp").write_text(json.dumps(prs))
+    os.replace(root / f"prs.{{os.getpid()}}.tmp", prs_file)     # readers never see half a file
 if step.get("die_before_pr_line"):
     os.kill(os.getpid(), signal.SIGKILL)
 print(f"PR:{{url}}", flush=True)
@@ -408,11 +411,6 @@ def number(change):
     return int(hashlib.sha1(change.encode()).hexdigest()[:4], 16) % 9000 + 1000
 
 
-def alive(pid):
-    ps = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
-    return bool(ps.stdout.strip()) and not ps.stdout.strip().startswith("Z")
-
-
 data = pathlib.Path(os.environ["WORKSPACE"]) / ".multiplai" / "data" / "reviews"
 ledger = data / "ledger.jsonl"
 if cmd == "review":
@@ -437,18 +435,26 @@ if step.get("exit"):
     print(step.get("stderr", "fake review: failed"), file=sys.stderr, flush=True)
     sys.exit(step["exit"])
 target.mkdir(parents=True, exist_ok=True)
-lock = target / ".lock"
-if lock.exists() and alive(int(lock.read_text() or 0)):
+# The review skill's run lock (review_pipeline/runlock.py): an flock on
+# `<out>/<repo>/.locks/<object>.lock`, held for the process's life; the file
+# keeps the holder's pid.
+import fcntl
+(target.parent / ".locks").mkdir(exist_ok=True)
+lock = target.parent / ".locks" / f"{{target.name}}.lock"
+fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
     print(f"ERROR: a review of {{target}} is running now (pid {{lock.read_text()}}); wait for it",
           file=sys.stderr, flush=True)
     sys.exit(2)
-lock.write_text(str(os.getpid()))
+os.ftruncate(fd, 0)
+os.pwrite(fd, str(os.getpid()).encode(), 0)
 lines = [json.loads(x) for x in ledger.read_text().splitlines()] if ledger.exists() else []
 last = [x["event"] for x in lines if x.get("target_dir") == str(target) and x.get("head_sha") == head]
 state = target / "review-state.json"
 if cmd == "review" and last and last[-1] == "started" and state.exists() \
         and json.loads(state.read_text()).get("head") == head:
-    lock.unlink()
     print(f"STOPPED: interrupted run found; continue with: python -m review_pipeline resume {{target}}\n"
           "To start over instead, pass --restart.", file=sys.stderr, flush=True)
     sys.exit(4)
@@ -474,7 +480,6 @@ if step.get("die"):
 append({{"event": "finished", "slug": slug, "target_dir": str(target), "head_sha": head,
         "base_sha": "b" * 40, "pr": n, "round": "01", "stopped": None,
         "run": {{"cost_usd": step.get("cost", 1.5)}}}})
-lock.unlink()
 print(f"findings: {{target / 'findings.json'}}", flush=True)
 '''
 
@@ -529,11 +534,19 @@ class Fakes:
         p = self.root / "prs.json"
         return json.loads(p.read_text()) if p.exists() else {}
 
+    def _update_prs(self, url: str, **fields) -> None:
+        """Change one PR in `prs.json` under the lock the fake build takes."""
+        import fcntl
+
+        with (self.root / "prs.lock").open("a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            prs = self.prs()
+            prs[url].update(fields)
+            (self.root / "prs.tmp").write_text(json.dumps(prs))
+            os.replace(self.root / "prs.tmp", self.root / "prs.json")
+
     def set_pr(self, url: str, state: str) -> None:
-        prs = self.prs()
-        prs[url]["state"] = state
-        (self.root / "prs.tmp").write_text(json.dumps(prs))
-        os.replace(self.root / "prs.tmp", self.root / "prs.json")
+        self._update_prs(url, state=state)
 
     def attempts(self, cid: str) -> int:
         return len(list((self.root / "attempts").glob(cid + ".*")))
@@ -542,10 +555,12 @@ class Fakes:
         (self.root / "release" / f"review-{pr_number(change)}").write_text("")
 
     def set_head(self, change: str, sha: str) -> None:
-        prs = self.prs()
-        prs[pr_url(change)]["head"] = sha
-        (self.root / "prs.tmp").write_text(json.dumps(prs))
-        os.replace(self.root / "prs.tmp", self.root / "prs.json")
+        self._update_prs(pr_url(change), head=sha)
+
+    def review_lock(self, change: str = "e-a") -> Path:
+        """The fake review's run lock for *change*'s PR, where the review skill keeps it."""
+        reviews = self.root / "ws" / ".multiplai" / "data" / "reviews" / "o-r"
+        return reviews / ".locks" / f"pr-{pr_number(change)}.lock"
 
     def review_launches(self) -> list[dict]:
         p = self.root / "reviews.log"
