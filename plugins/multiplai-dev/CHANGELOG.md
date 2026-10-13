@@ -17,6 +17,38 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-10-13
+
+### Added
+- `build` and `findings` print `SPEND:<usd>:<tokens>` as their last line on
+  every exit but a kill (success, failure, exit 3, an error, Ctrl-C, SIGTERM,
+  SIGHUP): what that process spent on model calls. A resumed build reports
+  only what it spent itself, and `findings` with several rounds reports all
+  of them. SIGTERM and SIGHUP now end `build` and `findings` the way Ctrl-C
+  does (exit 143 or 129), so an epic stopped by SIGTERM, which passes the
+  signal on to its children, keeps what each child spent. An epic stopped by
+  SIGHUP still leaves its children running for the next run to wait for, and
+  now writes its run summary and exits 129. Under `nohup`, where SIGHUP is
+  ignored, a closed terminal still does not stop the epic.
+- The pr skill's `open` and `edit`, and the codebase walkthrough's `run` and
+  `resume`, print `SPEND:<usd>:<tokens>` last: what their own model calls
+  cost. buildme adds that line to its own `SPEND:`, so the PR description's
+  model calls and a walkthrough regeneration count; when one of them printed
+  none (killed or timed out), buildme's line ends `:incomplete`.
+- `epic.max_usd` is enforced. An epic's spend is what each child build
+  printed on its `SPEND:` line plus the reviews of the children's PRs in the
+  review ledger: each review run once, so a review resumed after its own
+  budget stop counts once, and a fresh review of an already reviewed head is
+  added.
+  Before each launch, once the spend has reached `epic.max_usd`, nothing more
+  is launched: the build waits for the children already running and exits 3
+  with `EPIC:BUDGET:<spent>`. A re-run stops again until the ceiling is
+  raised.
+- `epic.json` and each `runs/<NN>/summary.json` hold the epic's
+  `spent_usd`, and `spend_complete: false` when a child was killed before it
+  printed `SPEND:`, its `SPEND:` line ends `:incomplete`, or a review of a
+  child's PR has not finished.
+
 ## [0.60.0] - 2026-10-13
 
 ### Added

@@ -320,14 +320,46 @@ def _ticket_text_without_link(src: Sources) -> str:
     return text
 
 
+@dataclass
+class ProcessSpend:
+    """What this process's model calls cost: `open` and `edit` print it as
+    `SPEND:<usd>:<tokens>` on exit, which buildme adds to its own spend."""
+
+    cost_usd: float = 0.0
+    tokens: int = 0
+
+    def add(self, cost_usd: float, tokens: int) -> None:
+        self.cost_usd += cost_usd
+        self.tokens += tokens
+
+    def add_usage(self, usage) -> None:
+        self.add(float(getattr(usage, "cost_usd", 0.0) or 0.0),
+                 sum(int(getattr(usage, name, 0) or 0) for name in (
+                     "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens")))
+
+
+_spent = ProcessSpend()
+
+
+def spend_marker() -> str:
+    """`SPEND:<usd>:<tokens>`, the line `open` and `edit` print last."""
+    return f"SPEND:{_spent.cost_usd:.6f}:{_spent.tokens}"
+
+
 async def _run_model(prompt: str) -> str:
     """One no-tools, one-turn call. The seam tests stub."""
-    from multiplai_core import run_agent
+    from multiplai_core import AgentRunError, run_agent
 
     # The model has no tools, so it cannot read the environment; blanking the
     # GitHub tokens for the child process is a second guard on top of that.
-    result = await run_agent(prompt, allowed_tools=None, max_turns=1, label="pr-fill", component="pr",
-                             env={"GH_TOKEN": "", "GITHUB_TOKEN": ""})
+    try:
+        result = await run_agent(prompt, allowed_tools=None, max_turns=1, label="pr-fill", component="pr",
+                                 env={"GH_TOKEN": "", "GITHUB_TOKEN": ""})
+    except AgentRunError as e:   # a failed call was still paid for, up to where it failed
+        if getattr(e, "partial", None) is not None:
+            _spent.add_usage(e.partial.usage)
+        raise
+    _spent.add_usage(result.usage)
     return result.text
 
 

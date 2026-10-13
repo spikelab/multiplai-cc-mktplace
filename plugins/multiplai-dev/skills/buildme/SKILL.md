@@ -646,15 +646,31 @@ child, or `gh pr view` fails for a PR another child waits on, that child is
 `unknown`: nothing is launched for it or its dependants, and the run exits
 `1`; re-run once they work. Each failed or `unknown` child is named on stderr
 (`EPIC: child <id> <status>: <reason>`), beside `EPIC:MERGE_WAITING` too. Ctrl-C (or SIGTERM) stops every child, those
-started by an earlier run included, and exits `130` (`143`).
+started by an earlier run included, and exits `130` (`143`). SIGHUP (a closed
+terminal) ends only the run, with exit `129`: the children keep running, and
+the next run waits for them. An ignored SIGHUP or SIGTERM (SIGHUP under
+`nohup`) stays ignored, and the run goes on.
 
 `specs/config.yaml` takes an `epic:` block: `epic.max_parallel` (default `2`),
 `epic.max_review_rounds` (default `6`), `epic.merge` (`auto` or `manual`,
 default `manual`; under `manual` a human merges each child's PR) and
-`epic.max_usd` (one ceiling for the whole epic, default none). This release
-reads `epic.max_usd` but does not enforce it yet: each child is bounded only by
-its own `budget.max_usd`. Enforcing it, and reviewing, fixing and merging the
-children's PRs, come in later releases.
+`epic.max_usd` (one ceiling for the whole epic, default none; each child keeps
+its own `budget.max_usd` too). `build` and `findings` print
+`SPEND:<usd>:<tokens>` as their last line on every exit but a kill (SIGTERM
+and SIGHUP included): what that process spent, the PR body's model calls and a
+walkthrough regeneration included (the pr skill and the walkthrough print
+their own `SPEND:` line, which the build adds), so a resumed build reports only
+its own spend and a several-round `findings` reports every round. When one of
+those skills printed none (killed or timed out), the line ends `:incomplete`.
+The epic's spend is each child attempt's `SPEND:` plus the reviews of the
+children's PRs in the review ledger (`<data_dir>/reviews/ledger.jsonl`: each
+review run once, its resumes in it, a fresh review of the same head added);
+`epic.json` and each summary hold it as `spent_usd`, with
+`spend_complete: false` when an attempt was killed before it printed `SPEND:`,
+its `SPEND:` ends `:incomplete`, or a review has not finished. Before each launch, once
+`epic.max_usd` is reached, nothing more is launched: the run waits for the
+children already running and exits `3` with `EPIC:BUDGET:<spent>`. Reviewing,
+fixing and merging the children's PRs come in later releases.
 
 ### The size gate (after plan review)
 
@@ -771,14 +787,15 @@ Parse pipeline stdout for progress lines:
   failed build
 - `RESULT:SUCCESS` — build complete
 - `EPIC:APPROVED:<epic.json>` — the epic split is approved; the children build next
-- `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown`; `3` with `EPIC:MERGE_WAITING`; `130`/`143` when stopped by a signal
+- `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown`; `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
+- `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent, the pr skill and a walkthrough run included (`:incomplete` follows when one of them printed no spend)
 - `ERROR:<message>` — failure
 
 **Exit codes.** `0` done, `1` failure, `2` usage error or a refusal that wrote
 nothing (another process holds the epic's lock, or an approved epic file
 changed: the `ERROR:` line names the process or the file; report it, and never
 change the flags to get past it), `4` an agent timed out
-(a failure: report it like `1`), `130` or `143` an epic run stopped by Ctrl-C or SIGTERM (re-run to continue), and `3` — **waiting on a human or on you**. Each `3` prints one marker. Handle it, then re-run the
+(a failure: report it like `1`), `130`, `143` or `129` an epic run stopped by Ctrl-C, SIGTERM or SIGHUP (re-run to continue; `143` and `129` also end any `build` or `findings` stopped by SIGTERM or SIGHUP), and `3` — **waiting on a human or on you**. Each `3` prints one marker. Handle it, then re-run the
 **same** `build --change <name>` command (plus the flag named below) to resume:
 
 | Marker | What happened | What you do |
@@ -787,6 +804,7 @@ change the flags to get past it), `4` an agent timed out
 | `RESEARCH:NEEDED:<path>` | the research decision asked for research; topics in `<path>` | Run `/deep-research` on them and re-run with `--research-path <output>` — or, without `multiplai-research`, say so and re-run with `--skip-research`. |
 | `SPLIT:REQUIRED:<path>` | the size gate wants the plan split; proposal in `<path>` | Post `<path>` on the ticket (plane `comment` / `gh issue comment --body-file`), or show it to the user for a prompt, and stop. Re-run with `--accept-size` only when the user chooses to build it as one PR. |
 | `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and stop. Re-run the same command once they are merged; a PR closed without a merge parks the children that wait on it. |
+| `EPIC:BUDGET:<spent>` | the epic's spend (USD) reached `epic.max_usd`; nothing more was launched | Tell the user what was spent and which children did not start (the `EPIC:SUMMARY` file), and stop. A re-run stops again until the user raises `epic.max_usd` in `specs/config.yaml`; never raise it yourself. |
 | `EPIC:SPLIT:<path>` | the input is several changes; the split is in `<path>` (`split.md`), one plan per child in `plans/` beside it | For a GitHub ticket, post **one** comment whose body is the line `<!-- buildme-epic-split:<sha256 of split.md> -->` (`shasum -a 256 <path>`) followed by the content of `<path>`, and only when no comment on the issue already starts with that line (`gh issue view <n> --json comments --jq '.comments[].body'`): a re-run prints the same line for the same `split.md`, so it never posts twice. For any other input, show `<path>` to the user. Then stop. Re-run with `--approve-split` only when the user approves the split. Never create, close or edit a ticket for a child. |
 
 `INTERVIEW:WAITING`, `SPLIT:REQUIRED` and `EPIC:SPLIT` are the only cases where you post on a ticket. The pipeline itself

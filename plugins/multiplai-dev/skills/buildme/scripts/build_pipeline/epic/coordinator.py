@@ -14,6 +14,12 @@ what each child did, and a started record with no result is an attempt that
 was stopped; `_recover` writes its result once its process is gone, then
 looks for the PR it may have opened. What each stop does on resume is PR B1's
 table in the plan. Every wait goes through `CLOCK`.
+
+Spend (PR B2): before each launch, when `epic.max_usd` is set and the epic's
+spend (`spend.py`: the records' `spend` plus the review ledger) has reached
+it, nothing more is launched; the run waits for the running children and
+exits 3 with `EPIC:BUDGET:<spent>`. `epic.json` and each summary hold
+`spent_usd` and `spend_complete`.
 """
 
 from __future__ import annotations
@@ -34,7 +40,7 @@ import yaml
 
 from .. import git_ops, intake
 from ..config import git_toggles
-from . import records, store
+from . import records, spend, store
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +52,7 @@ FETCH_TIMEOUT = 300  # seconds `git fetch origin` gets before a launch
 
 MARKER_SUMMARY = "EPIC:SUMMARY"
 MARKER_MERGE_WAITING = "EPIC:MERGE_WAITING"
+MARKER_BUDGET = "EPIC:BUDGET"
 PR_CLOSED = "PR closed without a merge"
 NO_PR = "no PR opened"
 
@@ -226,6 +233,8 @@ class Coordinator:
     epic: store.Epic
     children: dict[str, Child] = field(default_factory=dict)
     signal_sent: int | None = None
+    budget_stop: float | None = None     # the spend that stopped launches, once reached
+    _repo_slug: str | None = None
 
     def __post_init__(self) -> None:
         self.repo = _source_repo(self.config, self.state)
@@ -462,7 +471,38 @@ class Coordinator:
     def _save(self) -> None:
         self.epic.child_status = {cid: store.ChildStatus(status=c.status, pr=c.pr, reason=c.reason)
                                   for cid, c in self.children.items()}
+        self.epic.spent_usd, self.epic.spend_complete = self.spent()
         store.save_epic(self.epic_dir, self.epic)
+
+    # -- spend (PR B2) ---------------------------------------------------------------
+
+    def _review_slugs(self) -> set[str]:
+        if self._repo_slug is None:
+            self._repo_slug = store.slug_repo_name(self.repo)
+        return spend.review_slugs(self._repo_slug, [c.pr for c in self.children.values()])
+
+    def spent(self) -> tuple[float, bool]:
+        """(USD, complete): every record's spend plus the child PRs' reviews (item 19)."""
+        from multiplai_core.paths import get_paths
+
+        usd, complete = spend.attempts_spend(records.attempts(self.epic_dir))
+        reviews, reviews_complete = spend.review_spend(Path(get_paths().data_dir) / spend.LEDGER,
+                                                       self._review_slugs())
+        return round(usd + reviews, 6), complete and reviews_complete
+
+    def _over_budget(self) -> bool:
+        """True once `epic.max_usd` is set and reached; then for the rest of the run."""
+        if self.budget_stop is not None:
+            return True
+        ceiling = self.settings.max_usd
+        if ceiling is None:
+            return False
+        usd, _ = self.spent()
+        if usd < ceiling:
+            return False
+        self.budget_stop = usd
+        log.warning("EPIC spend $%.2f has reached epic.max_usd $%.2f: launching nothing more", usd, ceiling)
+        return True
 
     async def _stop_children(self, sig: int) -> None:
         """Signal the group of every running child, the ones this run started
@@ -513,34 +553,51 @@ class Coordinator:
         loop = asyncio.get_running_loop()
         task = asyncio.current_task()
 
-        def on_sigterm() -> None:
-            self.signal_sent = signal.SIGTERM
+        def on_signal(sig: int) -> None:
+            self.signal_sent = sig
             task.cancel()
 
-        try:
-            loop.add_signal_handler(signal.SIGTERM, on_sigterm)
-        except (NotImplementedError, RuntimeError, ValueError):
-            pass
+        # SIGHUP (a closed terminal) ends only the coordinator: each child runs
+        # in a session of its own, so it keeps running and the next run waits
+        # for it (B1.S4). Handled here, not by the SystemExit `__main__.main`
+        # makes of it, which would cancel this task as if by Ctrl-C. An ignored
+        # signal (SIGHUP under `nohup`) stays ignored, as `_exit_on_termination`
+        # leaves it: asyncio's handler would replace SIG_IGN.
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
+        previous = {sig: h for sig, h in previous.items() if h != signal.SIG_IGN}
+        for sig in previous:
+            try:
+                loop.add_signal_handler(sig, on_signal, sig)
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass
         try:
             rc = await self._loop()
         except (KeyboardInterrupt, asyncio.CancelledError):
             sig = self.signal_sent or signal.SIGINT
-            log.warning("EPIC stopped by %s: stopping the children", signal.Signals(sig).name)
-            await self._stop_children(sig)
+            if sig == signal.SIGHUP:
+                log.warning("EPIC stopped by SIGHUP: leaving the children running; the next run waits for them")
+            else:
+                log.warning("EPIC stopped by %s: stopping the children", signal.Signals(sig).name)
+                await self._stop_children(sig)
             self._summary(run_dir)
             return 128 + sig
         except Exception:
             self._summary(run_dir)        # where each child stood when the run broke
             raise
         finally:
-            try:
-                loop.remove_signal_handler(signal.SIGTERM)
-            except (NotImplementedError, RuntimeError, ValueError):
-                pass
+            for sig, handler in previous.items():     # asyncio would leave SIG_DFL
+                try:
+                    if loop.remove_signal_handler(sig) and handler is not None:
+                        signal.signal(sig, handler)
+                except (NotImplementedError, RuntimeError, ValueError):
+                    pass
         self._summary(run_dir)
         bad = [c for c in self.children.values() if c.status in ("failed", "unknown")]
         for c in bad:       # beside EPIC:MERGE_WAITING too, not only in the summary
             print(f"EPIC: child {c.id} {c.status}: {c.reason}", file=sys.stderr, flush=True)
+        if self.budget_stop is not None:      # the spend at exit, the running children's included
+            print(f"{MARKER_BUDGET}:{self.spent()[0]:.2f}", flush=True)
+            return 3
         open_prs = [c.pr for c in self._waited_on() if c.status == "built"]
         if open_prs:
             print(f"{MARKER_MERGE_WAITING}:{','.join(open_prs)}", flush=True)
@@ -553,7 +610,7 @@ class Coordinator:
             ready = self._resolve()
             running = sum(c.status == "running" for c in self.children.values())
             for c in ready:
-                if running >= self.settings.max_parallel:
+                if running >= self.settings.max_parallel or self._over_budget():
                     break
                 if await self._launch(c):
                     running += 1
@@ -566,6 +623,9 @@ class Coordinator:
                     last_read = CLOCK.now()
                     self._save()
                 continue
+            if self.budget_stop is not None:      # nothing runs: the budget stop ends the run
+                self._save()
+                return 0
             if ready:
                 continue
             # Nothing runs and nothing is ready: read once more (item 15a).
@@ -581,8 +641,10 @@ class Coordinator:
         totals: dict[str, int] = {}
         for c in children:
             totals[c["status"]] = totals.get(c["status"], 0) + 1
+        usd, complete = self.spent()
         path = run_dir / "summary.json"
-        store._write_atomic(path, json.dumps({"children": children, "totals": totals}, indent=2) + "\n")
+        store._write_atomic(path, json.dumps({"children": children, "totals": totals, "spent_usd": usd,
+                                              "spend_complete": complete}, indent=2) + "\n")
         print(f"{MARKER_SUMMARY}:{path}", flush=True)
         return path
 
@@ -600,7 +662,8 @@ def _new_run_dir(epic_dir: Path) -> Path:
 async def run_epic(config, state, args, epic_dir: Path, epic: store.Epic) -> int:
     """Build an approved epic's children (item 11). Returns 0 when nothing is
     left to do, 1 when a child failed or its state is unknown, 3 with `EPIC:MERGE_WAITING:<urls>` while a
-    child waits on an open PR, 128 + the signal when stopped."""
+    child waits on an open PR or with `EPIC:BUDGET:<spent>` once `epic.max_usd` is reached,
+    128 + the signal when stopped."""
     from . import lock as epic_lock
 
     assert epic_lock.held(epic_dir), "the coordinator runs under the epic lock its build holds"

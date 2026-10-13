@@ -131,7 +131,9 @@ only if the user raises the ceiling:
 
 ### 2. Report
 
-The run prints `walkthrough: <path>` for each file written. Read the
+The run prints `walkthrough: <path>` for each file written, and last, on
+every exit but a kill, `SPEND:<usd>:<tokens>`: what this run's model calls
+cost (a resume counts only its own calls). Read the
 `## Coverage` section of the Markdown file and paste its table into chat as it
 is, with the list of files that have no surviving fact. Then give the paths of
 the Markdown and `walkthrough.json` files.

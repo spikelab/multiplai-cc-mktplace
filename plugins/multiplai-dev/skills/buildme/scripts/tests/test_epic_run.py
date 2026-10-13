@@ -13,6 +13,7 @@ import os
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -511,6 +512,106 @@ def test_a_signal_during_a_slow_fetch_stops_the_children_and_writes_the_summary(
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+@pytest.mark.parametrize("where", ["waiting", "in_sync_code"])
+def test_sighup_leaves_the_children_running_and_writes_the_summary(tmp_path, monkeypatch, where):
+    """A SIGHUP (a closed terminal) ends only the coordinator, as it did before
+    `build` held SIGHUP for its whole run (`__main__.main`): exit 129, every
+    running child left running with no result, so the next run waits for it
+    (B1.S4). The run's summary is written. Both while the loop waits and while
+    synchronous coordinator code runs."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, parallel=2,
+             steps={"a": [{"block": True, "grandchild": True}], "b": [{"block": True, "grandchild": True}]})
+    in_sync = tmp_path / "in_sync"
+    if where == "in_sync_code":
+        def tick(coord):
+            if len(e.fakes.grandchildren()) == 2 and not in_sync.exists():
+                in_sync.write_text("")
+                time.sleep(3)
+        monkeypatch.setattr(coordinator, "_tick", tick)
+
+    def as_main() -> int:      # what `__main__.main` holds around a `build`
+        try:
+            with git_ops._exit_on_termination(interrupt=False):
+                return e.run()
+        except SystemExit as stop:
+            return stop.code
+
+    def ready() -> bool:
+        return len(e.fakes.grandchildren()) == 2 and (where == "waiting" or in_sync.exists())
+
+    try:
+        rc = run_signalled(as_main, ready, signal.SIGHUP)
+        assert rc == 128 + signal.SIGHUP
+        time.sleep(0.5)
+        assert all(alive(p) for p in e.fakes.grandchildren())
+        assert [(a.child, a.result) for a in records.attempts(e.dir)] == [("a", None), ("b", None)]
+        assert e.status()["a"] == e.status()["b"] == "running"
+        assert {c["id"]: c["status"] for c in e.summary(1)["children"]}["a"] == "running"
+    finally:
+        for pid in e.fakes.grandchildren():
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.parametrize("sig", [signal.SIGHUP, signal.SIGTERM], ids=["SIGHUP", "SIGTERM"])
+def test_an_ignored_signal_stays_ignored(tmp_path, monkeypatch, sig):
+    """Under `nohup` SIGHUP is ignored, and the coordinator leaves it so: a
+    closed terminal does not stop the run (B2.S13 is only for a SIGHUP that is
+    not ignored). The same for an ignored SIGTERM. The signal arrives while a
+    and b run; they then finish, c is launched, and the run ends as one that
+    got no signal."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, parallel=2,
+             steps={"a": [{"block": True}], "b": [{"block": True}]})
+    released: list[threading.Timer] = []
+
+    def under_nohup() -> int:      # `nohup` sets SIG_IGN; `__main__.main` then holds the rest
+        signal.signal(sig, signal.SIG_IGN)
+        try:
+            with git_ops._exit_on_termination(interrupt=False):
+                return e.run()
+        except SystemExit as stop:
+            return stop.code
+
+    def ready() -> bool:
+        if sorted(e.launches()) != ["a", "b"]:
+            return False
+        timer = threading.Timer(1.0, lambda: [e.fakes.release(c) for c in ("a", "b")])
+        timer.start()
+        released.append(timer)
+        return True
+
+    try:
+        rc = run_signalled(under_nohup, ready, sig)
+        assert rc == 0      # no dependant waits on a merge: the run that got no signal ends so too
+        assert sorted(e.launches()) == ["a", "b", "c"]
+        assert e.status() == {"a": "built", "b": "built", "c": "built"}
+    finally:
+        for timer in released:
+            timer.join()
+        for c in ("a", "b"):
+            e.fakes.release(c)
+
+
+def test_the_coordinator_puts_back_the_signal_handlers_it_found(tmp_path, monkeypatch):
+    """The coordinator's own SIGTERM and SIGHUP handling lasts only for its
+    loop. Afterwards the handlers `__main__.main` installed are back (asyncio
+    alone would leave SIG_DFL), so a stop later in the run still prints SPEND."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
+
+    def mine(_signum, _frame):
+        pass
+
+    before = {s: signal.signal(s, mine) for s in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        e.run()
+        assert signal.getsignal(signal.SIGTERM) is mine and signal.getsignal(signal.SIGHUP) is mine
+    finally:
+        for s, handler in before.items():
+            signal.signal(s, handler)
 
 
 def test_no_origin_default_branch_launches_without_base_ref(tmp_path, monkeypatch):
