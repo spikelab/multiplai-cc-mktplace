@@ -81,7 +81,41 @@ proof sheet (step 7) shows a caption that is wrong.
 ## 3. Measure the panels once per show
 
 Most interview recordings keep one layout for the whole show: each speaker in
-a fixed rectangle. Write one frame with a grid and read the rectangles off it:
+a fixed rectangle. The user draws the rectangles on the job page; chat is the
+fallback.
+
+**On the job page.** After prep, get the output directory (`P outdir
+<show-and-episode>`, §5) and write `<outdir>/job.json`, every path absolute
+(`context.md` lists the transcript and sentences files):
+
+```json
+{"source": "/path/to/recording.mp4",
+ "transcript": "/path/to/cache/transcript.json",
+ "sentences": "/path/to/cache/sentences.json",
+ "kind": "reels"}
+```
+
+Start the page in the background with `P review <outdir>` and watch its
+mailbox (`SKILL.md` §6). In the **Speakers** tab the user scrubs to a frame,
+draws a box around each speaker, names it, and maps each transcript speaker
+label to a box, with a few lines from each label to tell who is who. A
+button checks the boxes on a frame at 85% of the recording. Sending adds one
+`panels` row:
+
+```json
+{"kind": "panels", "panels": {"Host": {"x": 64, "y": 72, "w": 512, "h": 576},
+                              "Guest": {"x": 704, "y": 72, "w": 512, "h": 576}},
+ "speakers": {"SPEAKER_0": "Host", "SPEAKER_1": "Guest"}, "text": ""}
+```
+
+Copy `panels` into every EDL's `layout.panels` and `speakers` into
+`layout.speakers`, unchanged: both are in source pixels and use the user's
+box names, which a segment's `frame` then names too. The newest `panels` row
+wins. Check the boxes against the rules
+below; if one cuts a graphic in half, say so and ask.
+
+**In chat**, when the page cannot be opened: write one frame with a grid and
+read the rectangles off it:
 
 ```bash
 P frame <recording.mp4> --at 300 --grid --out <outdir>/grid.png
@@ -110,7 +144,8 @@ if the layout changes mid-show, split the clips by layout.
 
 Read the entire transcript in `context.md` before choosing anything — the
 best moment is often late. Then write `<outdir>/candidates.md` with **8–12
-candidates**. For each:
+candidates**, and the same candidates as `<outdir>/candidates.json` for the
+job page (schema: `schema/candidates.schema.json`). For each:
 
 - start and end (source seconds), and the duration;
 - which speaker carries it;
@@ -143,7 +178,33 @@ P snap <recording.mp4> <start> <end>
 `snap` widens the clip to whole sentences and moves each edge into the
 nearest pause, so no clip starts mid-word.
 
-**Present the candidates to the user and render only the ones they pick.**
+In `candidates.json` each candidate is one object; the five scores use the
+short keys `hook`, `payoff`, `quotable`, `standalone` and `density`, and
+`why` holds the reasoning:
+
+```json
+[{"id": "c1", "start": 812.34, "end": 851.96, "speaker": "SPEAKER_1",
+  "hook": "We stopped fearing Fridays.", "excerpt": "We stopped fearing Fridays. Every change …",
+  "scores": {"hook": 5, "payoff": 4, "quotable": 4, "standalone": 4, "density": 5},
+  "why": "Hook: a number in the first line. Payoff: …"}]
+```
+
+**Present the candidates on the job page and render only the ones the user
+picks.** The page polls the output directory, so `candidates.json` appears
+in the **Clips** tab without a restart. There the user plays each candidate
+from the source, accepts or rejects it, drags its edges (they snap to
+sentence edges, or to words with Alt) and adds a note. "Send picks" adds one
+`pick` row per decided candidate:
+
+```json
+{"kind": "pick", "candidate": "c1", "decision": "accept", "start": 812.34, "end": 840.10,
+ "text": "end on the laugh"}
+```
+
+The newest row per candidate wins. For every accepted one, run `P snap` on
+its `start` and `end` (the page snaps to sentences, not to pauses), follow its
+note, and write its EDL (§5). Drop the rejected ones. Without the page, show
+`candidates.md` in chat and wait for the user's choice there.
 
 ## 5. Write one EDL per chosen clip
 
