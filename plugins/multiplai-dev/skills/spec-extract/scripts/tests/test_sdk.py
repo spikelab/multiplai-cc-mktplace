@@ -90,11 +90,22 @@ def test_a_reformat_that_does_not_parse_raises_call_failed(monkeypatch):
     assert len(fake.calls) == 2 and fake.calls[1]["allowed_tools"] == []
 
 
+# The pi backend's failures that no call can get past (multiplai_core/pi/backend.py).
+PI_SETUP_ERRORS = [
+    AgentRunError("pi binary 'pi' not found", reason="pi binary not found"),
+    AgentRunError("pi failed to start (PermissionError)", reason="pi failed to start: PermissionError"),
+    AgentRunError("bad spec", reason="malformed pi model spec"),
+    AgentRunError("PI_GATE_EXT='/x' is not a file", reason="pi gating extension not found"),
+]
+PI_SETUP_IDS = ["pi-missing", "pi-spawn-failed", "pi-spec-malformed", "pi-gate-missing"]
+
+
 @pytest.mark.parametrize("err", [
     UnknownAgentBackendError("no agent backend for provider 'pi'", reason="unknown agent backend 'pi'"),
     AgentRunError("claude-agent-sdk is not available", reason="claude-agent-sdk not installed"),
     AgentRunError("rejected", reason="ClaudeAgentOptions rejected: unexpected keyword"),
-], ids=["unknown-backend", "sdk-missing", "options-rejected"])
+    *PI_SETUP_ERRORS,
+], ids=["unknown-backend", "sdk-missing", "options-rejected", *PI_SETUP_IDS])
 def test_a_backend_that_cannot_run_is_not_a_call_failure(monkeypatch, err):
     fake, go = _call(monkeypatch, err, _result('{"value": 1}'))
     with pytest.raises(sdk.BackendUnavailable) as e:
@@ -173,18 +184,22 @@ def test_a_unit_whose_runs_fail_makes_at_most_two_agent_runs(tmp_path, monkeypat
     assert read_state(folder)["explore_attempts"] == {"unit:u1": 2}
 
 
-def test_a_backend_that_cannot_run_counts_no_attempt(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("err", [
+    UnknownAgentBackendError("no agent backend for provider 'pi'", reason="unknown agent backend 'pi'"),
+    PI_SETUP_ERRORS[0],
+], ids=["unknown-backend", "pi-missing"])
+def test_a_backend_that_cannot_run_counts_no_attempt(tmp_path, monkeypatch, capsys, err):
     calls = []
 
     async def no_backend(prompt, **kwargs):
         calls.append(prompt)
-        raise UnknownAgentBackendError("no agent backend for provider 'pi'", reason="unknown agent backend 'pi'")
+        raise err
 
     _real_call_with(monkeypatch, no_backend)
     repo = make_repo(tmp_path / "widgets")
     root = tmp_path / "out"
     assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 1
-    assert "unknown agent backend 'pi'" in capsys.readouterr().err
+    assert err.reason in capsys.readouterr().err
     (folder,) = (root / "widgets").glob("tree@*")
     state = read_state(folder)
     assert len(calls) == 1

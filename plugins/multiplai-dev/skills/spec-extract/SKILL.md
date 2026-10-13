@@ -26,18 +26,21 @@ capability into a run folder. **This version stops after the explore step**:
    `Grep` on `snapshot/` only. A unit whose agent run fails is asked once
    more; one with no answer after two attempts is listed as not analysed. An
    answer that does not parse is sent back once to be reformatted (one turn,
-   no tools). A model setting no call can run with (an unknown provider, or
-   `claude-agent-sdk` missing) stops the run with exit 1 and counts no
-   attempt, so the same command works once the setting is fixed. Every fact
-   must cite lines a program re-reads at the commit with `git show`; the rest
-   are dropped. Writes `facts.json` and `report.md`, and prints
+   no tools). A model setting no call can run with (an unknown provider,
+   `claude-agent-sdk` missing, or for a `pi:` model the `pi` binary missing or
+   failing to start) stops the run with exit 1 and counts no attempt, so the
+   same command works once the setting is fixed. Every fact must cite lines
+   a program re-reads at the commit with `git show`; the rest are dropped.
+   Writes `facts.json` and `report.md`, and prints
    `SPEC_EXTRACT:EXPLORED <answered>/<units>`.
 
 **It sends the target's code to a model.** The repository's own files become
-part of what the model reads, so the run asks you to say you trust it:
+part of what the model reads, so the run needs the user to say they trust it:
 `--trust-repo`, or `SPEC_EXTRACT_TRUST_REPO=1`. Without it the run stops
-before its first model call with exit 4. `--plan-only` makes no model call
-and needs no trust.
+before its first model call with exit 4. Never pass `--trust-repo` on your
+own judgment: if the run exits 4, ask the user whether they trust the
+repository, and re-run with `--trust-repo` only on a yes. `--plan-only` makes
+no model call and needs no trust.
 
 ## Command
 
@@ -98,7 +101,7 @@ Only one run may write a folder at a time: a run holds
 | 1 | Failed, including a model setting no call can run with (nothing is counted), a `state.json` that cannot be read, or a `--dir` run whose `<run>/source/` no longer holds its import commit (the message names `--restart`). |
 | 2 | Refused: a bad target, a commit not in the clone, a `--dir` run folder that would be inside its source (for example `--out` the source's parent), every candidate folder holds another target's run (pass `--out`), no Python file to read (`SPEC_EXTRACT:NO_PYTHON`), or more explore units than `--max-units`. |
 | 3 | The run folder's spend reached `--max-usd`. Everything paid for is saved; re-run with a higher `--max-usd` to continue. |
-| 4 | The repository is not trusted: pass `--trust-repo`. |
+| 4 | The repository was not marked trusted. Ask the user whether they trust it, and re-run with `--trust-repo` only on a yes. |
 | 5 | Another process is running this target now. The message names its pid, host and start time. |
 
 ## What it writes in the run folder

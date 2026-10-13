@@ -28,7 +28,8 @@ time, not derived from a tag.
   reasons) and `plan.txt`. It prints `SPEC_EXTRACT:EXPLORED <answered>/<units>`.
   Writing the specs comes in a later version.
 - `--trust-repo` (or `SPEC_EXTRACT_TRUST_REPO=1`) is required before the first
-  model call, since the code is sent to a model; without it the run exits 4.
+  model call, since the code is sent to a model; without it the run exits 4,
+  and the skill tells the agent to ask the user before re-running with it.
 - `--max-usd` (default 80) caps the spend of a run folder across every run
   that resumes it; reaching it exits 3 with everything paid for saved, and a
   higher cap continues. `--max-units` (default 20) refuses a target too large
@@ -41,8 +42,9 @@ time, not derived from a tag.
   A re-run after explore writes `facts.json` with the same bytes, its
   `generated_at` included.
 - A model setting no call can run with (an unknown provider in
-  `spec_extract_explore_model`, or `claude-agent-sdk` missing) exits 1 and
-  counts no attempt, so the same command works once it is fixed.
+  `spec_extract_explore_model`, `claude-agent-sdk` missing, or for a `pi:`
+  model the `pi` binary missing or failing to start) exits 1 and counts no
+  attempt, so the same command works once it is fixed.
 
 ## [0.52.0] - 2026-10-13
 

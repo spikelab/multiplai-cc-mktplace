@@ -17,7 +17,9 @@ multiplai-core.
   dispatch rule stores as an error answer and asks once more (plan, item 7),
   so a unit makes at most two agent runs.
 - **A backend that cannot run** (an unknown provider, the Claude Agent SDK
-  missing or rejecting its options) raises `BackendUnavailable`, not
+  missing or rejecting its options, or for a `pi:` model the `pi` binary
+  missing or failing to start, a malformed spec, or a missing gating
+  extension) raises `BackendUnavailable`, not
   `CallFailed`: no call could get past it, so it counts no attempt and stops
   the run (exit 1) until the setting is fixed.
 - **Budget.** Every call is checked against the run folder's ledger first and
@@ -71,12 +73,17 @@ class CallFailed(Exception):
 
 
 class BackendUnavailable(Exception):
-    """No call can run: the model's backend is unknown, or the Claude Agent SDK is missing or
-    rejects its options. Not a `CallFailed`: the dispatch rule counts no attempt for it."""
+    """No call can run: the model's backend is unknown, the Claude Agent SDK is missing or
+    rejects its options, or the pi backend cannot start. Not a `CallFailed`: the dispatch
+    rule counts no attempt for it."""
 
 
-# `run_agent`'s reasons for a failure no call can get past (multiplai_core.agent_runner).
-_SETUP_REASONS = ("claude-agent-sdk not installed", "ClaudeAgentOptions rejected")
+# `run_agent`'s reasons for a failure no call can get past: the Claude backend's
+# (multiplai_core/agent_runner.py) and the pi backend's (multiplai_core/pi/backend.py).
+_SETUP_REASONS = (
+    "claude-agent-sdk not installed", "ClaudeAgentOptions rejected",
+    "pi binary not found", "pi failed to start", "malformed pi model spec", "pi gating extension not found",
+)
 
 
 class RepoTrustError(Exception):
