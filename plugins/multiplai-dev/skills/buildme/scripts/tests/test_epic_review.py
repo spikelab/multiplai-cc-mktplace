@@ -165,13 +165,14 @@ def test_the_coordinator_waits_for_the_review_subprocess(tmp_path, monkeypatch):
     seen = []
 
     def tick(coord):
-        seen.append(coord.children["a"].status)
-        if len(seen) == 5:
-            e.fakes.release_review("e-a")
+        if coord.children["a"].status == "reviewing":
+            seen.append(e.reviews("a")[0].result)
+            if len(seen) == 5:
+                e.fakes.release_review("e-a")
 
     monkeypatch.setattr(coordinator, "_tick", tick)
     assert e.run() == 3                                       # b waits for a's merge
-    assert seen[:5] == ["reviewing"] * 5
+    assert seen[:5] == [None] * 5                             # no result while the review runs
     assert e.reviews("a")[0].result["exit_code"] == 0
     assert e.child_status("b")["status"] == "waiting"
 

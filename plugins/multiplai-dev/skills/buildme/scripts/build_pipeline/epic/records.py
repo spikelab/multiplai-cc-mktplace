@@ -114,12 +114,13 @@ def marker(found: list[str], name: str) -> list[str]:
     return [m[len(name) + 1:] for m in found if m.startswith(name + ":")]
 
 
-def finish(attempt: Attempt, exit_code: int | None, *, interrupted: bool) -> dict:
-    """Write the result record, markers and PR URL read from the attempt's log."""
+def finish(attempt: Attempt, exit_code: int | None, *, interrupted: bool, extra: dict | None = None) -> dict:
+    """Write the result record, markers and PR URL read from the attempt's
+    log, plus *extra* (a review's fields, item 22)."""
     found = markers(attempt.log)
     prs = marker(found, "PR")
     result = {"exit_code": exit_code, "markers": found, "pr": prs[-1] if prs else None,
-              "interrupted": interrupted, "at": _now()}
+              "interrupted": interrupted, **(extra or {}), "at": _now()}
     _write_atomic(attempt.result_path, json.dumps(result, indent=2) + "\n")
     attempt.result = result
     return result
