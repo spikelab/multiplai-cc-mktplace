@@ -22,7 +22,7 @@ const App = (() => {
   const tabs = new Map();
   // Everything the server tells us; tabs read it and never write it.
   const state = { job: null, candidates: null, looks: null, music: null, videos: [], rows: [] };
-  let current = null, chosenByUser = false;
+  let current = null, chosenByUser = false, loaded = false;
 
   function setStatus(text, isError) {
     $("status").textContent = text;
@@ -105,10 +105,13 @@ const App = (() => {
         api("/api/videos"), api("/api/comments"),
       ]);
       const next = { job, candidates, looks, music, videos: videos.videos, rows: comments.comments };
+      // The first poll counts every key as changed, so each tab draws its first state even
+      // when it equals the initial one (no renders yet: Review says so instead of staying blank).
       const changed = {};
       for (const k of Object.keys(next)) {
-        if (JSON.stringify(next[k]) !== JSON.stringify(state[k])) { changed[k] = true; state[k] = next[k]; }
+        if (!loaded || JSON.stringify(next[k]) !== JSON.stringify(state[k])) { changed[k] = true; state[k] = next[k]; }
       }
+      loaded = true;
       if ($("status").classList.contains("error")) setStatus("");
       if (Object.keys(changed).length) {
         for (const t of tabs.values()) if (t.update) t.update(state, changed);
