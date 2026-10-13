@@ -46,6 +46,11 @@ def cmd_render(args: argparse.Namespace) -> int:
     if cli_music:
         edl.music = cli_music
     out = Path(args.out).resolve()
+    sidecar = render_sidecar.path_for(out)
+    if sidecar == Path(args.edl).resolve():
+        print(f"✗ the EDL is {sidecar}, where render writes its record of this render (the review page's "
+              "timeline) — move the EDL (e.g. into edl/) or pick another --out", file=sys.stderr)
+        return 2
     out.parent.mkdir(parents=True, exist_ok=True)
     print(f"→ rendering {len(edl.segments)} segments → {out}")
     if edl.music and edl.music.file:
@@ -64,7 +69,6 @@ def cmd_render(args: argparse.Namespace) -> int:
     # from. An old one is removed before the new mp4 takes its name, so a
     # render is never paired with another render's sidecar; the new one is
     # written after the mp4, and a render without one still counts.
-    sidecar = render_sidecar.path_for(out)
     try:
         record = render_sidecar.build(loaded, Path(args.edl), out.name)
     except Exception as e:  # noqa: BLE001 — the mp4 is good; only its timeline is lost

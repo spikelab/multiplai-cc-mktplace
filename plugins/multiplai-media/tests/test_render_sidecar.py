@@ -116,6 +116,18 @@ def test_a_sidecar_that_cannot_be_built_leaves_the_render_without_one(job, capsy
     assert "no clip-01.v2.edl.json" in capsys.readouterr().out
 
 
+def test_an_edl_where_the_sidecar_goes_is_refused_before_rendering(job, tmp_path: Path, monkeypatch, capsys) -> None:
+    out = tmp_path / "out" / "clip-01.mp4"
+    out.parent.mkdir()
+    edl = out.parent / "clip-01.edl.json"                     # the sidecar's name, beside the mp4
+    edl.write_text(job["edl"].read_text())
+    called = []
+    monkeypatch.setattr(pipeline.composite, "render", lambda *a, **k: called.append(a))
+    assert pipeline.cmd_render(_args(edl, out)) == 2
+    assert called == [] and edl.read_text() == job["edl"].read_text()
+    assert "move the EDL" in capsys.readouterr().err
+
+
 # --- what it holds -----------------------------------------------------------------------
 
 def test_the_sidecar_holds_the_edl_as_loaded_with_absolute_paths_and_cli_music(job, tmp_path: Path) -> None:
