@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from code_facts import UNTRUSTED_RULES
+from pydantic import ValidationError
 
 from conftest import make_repo, read_state, run
-from spec_extract_pipeline import group
+from spec_extract_pipeline import group, write
 from spec_extract_pipeline.scope import Symbol
 
 
@@ -17,6 +19,15 @@ def sym(path: str, name: str, line: int = 1) -> Symbol:
 
 def ids(caps) -> dict[str, list[str]]:
     return {c.name: c.symbols for c in caps}
+
+
+@pytest.mark.parametrize("schema, answer", [
+    (group.GroupOutput, {}), (group.GroupOutput, {"groups": [{"name": "b", "symbols": ["a.py::x"]}]}),
+    (group.GroupOutput, {"capabilities": []}), (write.WriteOutput, {"reqs": [{"name": "r"}]})])
+def test_an_answer_with_the_wrong_key_or_no_capability_does_not_parse(schema, answer):
+    # So the wrapper sends it back to be reformatted, then counts it as a failed attempt.
+    with pytest.raises(ValidationError):
+        schema.model_validate(answer)
 
 
 def test_gate_names_are_kebab_case_and_unique():

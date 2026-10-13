@@ -164,7 +164,9 @@ class FakeCall:
       as it returns, and answer;
     - "fail": record the spend, then raise `CallFailed`;
     - "kill": raise `Killed` before recording, like a process killed mid-call;
-    - "over": raise `BudgetExceededError`, as the real call's own check does.
+    - "over": raise `BudgetExceededError`, as the real call's own check does;
+    - "backend": raise `BackendUnavailable` before recording, as a model no
+      backend can run does.
     """
 
     def __init__(self) -> None:
@@ -186,6 +188,8 @@ class FakeCall:
             raise Killed(f"killed during the call for {unit}")
         if action == "over":
             raise BudgetExceededError("circuit breaker stopped the run (fake)")
+        if action == "backend":
+            raise sdk.BackendUnavailable("no model call can run: fake")
         core_budget.record(SimpleNamespace(cost_usd=self.cost, input_tokens=100, output_tokens=10),
                            label=budget_label)
         if action == "fail":
