@@ -381,12 +381,11 @@ project)" is pure spend), and non-fatal on failure (the design falls back to
 `SPEC_GENERATION`, which a split build never reaches. It is the one phase
 whose pointer counts as done: the orchestrator skips it when `state.phase` is
 `EPIC_SPLIT` or later, when `state.epic_dir` is set, or when
-`state.epic_single` is (saved with a one-change answer or a skip, so a
-FAILED build's retry does not ask again; `BuildState.load` also sets it on a
-checkpoint saved before epic mode that is FAILED or past the split), because
-re-entering would pay for the decision again. With `state.epic_dir` set,
-every run goes to `epic.phase.continue_epic` and returns. Old checkpoints load with it ahead
-(`tests/fixtures/build-state-pre-epic-split.json`). Its stop and resume rows
+`state.epic_single` is (saved with a one-change answer or a skip, so a FAILED build's
+retry does not ask again), because re-entering would pay for the decision
+again. With `state.epic_dir` set, every run goes to
+`epic.phase.continue_epic` and returns. Old checkpoints load with it ahead
+(`tests/fixtures/build-state-pre-epic-split.json`); FAILED or past it, with `state.epic_single` set (A.S14). Its stop and resume rows
 are PR A's table in the plan; `tests/test_epic_stop_resume_a.py` tests the
 ones where a resume could destroy work or pay twice.
 

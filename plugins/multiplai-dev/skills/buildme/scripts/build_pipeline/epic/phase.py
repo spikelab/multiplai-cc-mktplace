@@ -1,8 +1,7 @@
 """The EPIC_SPLIT step and what a build does once it is an epic (items 1-5, 7, 9).
 
 `run_epic_split_phase` decides one change or several. One change, or a skip
-(`--no-epic-split`, `only` mode), saves `state.epic_single`, completes the
-phase and the build goes on.
+(`--no-epic-split`, `only` mode), completes the phase and the build goes on.
 Several saves `epic.json` (`proposed`), renders `split.md` and
 `plans/<id>.md`, then saves `state.epic_dir` and completes the phase in one
 checkpoint.
@@ -53,9 +52,7 @@ async def run_epic_split_phase(config, state, state_path: Path, args, progress) 
     reason = skip_reason(config, args)
     if reason:
         log.info("SKIP phase=EPIC_SPLIT reason=%s", reason)
-        # Saved like a one-change answer, so a FAILED build's retry without
-        # the flag does not ask either (row A.S12).
-        state.epic_single = True
+        state.epic_single = True        # a retry without the flag skips too (A.S12)
         state.advance_to(BuildPhase.EPIC_SPLIT, state_path)
         return None
 

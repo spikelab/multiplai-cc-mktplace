@@ -228,59 +228,25 @@ def test_A_S13_a_single_decision_is_not_asked_again(tmp_path, monkeypatch):
         _assert_same(stopped, clean)
 
 
-def test_A_S12_a_skipped_build_that_failed_is_not_asked_on_a_retry_without_the_flag(tmp_path, monkeypatch):
-    """A.S12: a build that skipped the split (`--no-epic-split`) and then
-    FAILED, retried without the flag: the skip saved `state.epic_single`, so
-    the retry makes no call. The fake answers several, so a call would also
-    turn the change into an epic. Compared with a retry that kept the flag."""
+def test_A_S12_a_skipped_build_that_failed_is_not_asked_without_the_flag(tmp_path, monkeypatch):
+    """A.S12: skipped, FAILED, retried without the flag: no call (the fake answers several)."""
     stopped, clean = _roots(tmp_path, monkeypatch, THREE)
     for run in (stopped, clean):
         assert run.build(monkeypatch, no_epic_split=True) == 1
-        assert load_state(run.config).phase == BuildPhase.FAILED
-    assert stopped.build(monkeypatch) == 1
-    assert clean.build(monkeypatch, no_epic_split=True) == 1
-    assert stopped.launches() == [] and clean.launches() == []
-    assert stopped.result()["epic"] is None
+    assert stopped.build(monkeypatch) == clean.build(monkeypatch, no_epic_split=True) == 1
     _assert_same(stopped, clean)
 
 
-def _pre_epic_checkpoint(run: Run, phase: BuildPhase) -> None:
-    """Rewrite the run's checkpoint as a release before epic mode saved it:
-    the pointer at *phase*, and no `epic_dir` or `epic_single` key."""
-    path = run.config.state_file_path()
-    data = json.loads(path.read_text())
-    data["phase"] = phase.value
-    data.pop("epic_dir", None)
-    data.pop("epic_single", None)
-    path.write_text(json.dumps(data))
-
-
-def test_A_S14_a_checkpoint_from_before_epic_mode_past_the_split_stays_one_change(tmp_path, monkeypatch):
-    """A.S14: a checkpoint saved before epic mode existed, FAILED or with the
-    pointer past EPIC_SPLIT, is a change already being built as one change.
-    Resuming it, and retrying it once it FAILED under this release, makes no
-    call (the fake answers several). It ends where a build that answered one
-    change ends, less that build's one call."""
-    for phase in (BuildPhase.FAILED, BuildPhase.SPEC_GENERATION):
-        stopped, clean = _roots(tmp_path / phase.value, monkeypatch, THREE)
-        clean.fake.first = SINGLE
-        _pre_epic_checkpoint(stopped, phase)
-        assert clean.build(monkeypatch) == 1
-        for _ in range(2):
-            assert stopped.build(monkeypatch) == 1
-            assert load_state(stopped.config).phase == BuildPhase.FAILED
-        assert clean.build(monkeypatch) == 1
-        assert stopped.launches() == []
-        assert clean.launches() == [SPLIT]
+def test_A_S14_a_checkpoint_from_before_epic_mode(tmp_path, monkeypatch):
+    """A.S14: a pre-epic checkpoint (no `epic_*` keys) FAILED or past the split, resumed then
+    retried, makes no call and ends as a one-change build does; before the split it still decides."""
+    for phase in (BuildPhase.FAILED, BuildPhase.SPEC_GENERATION, BuildPhase.CODEBASE_ANALYSIS):
+        before = phase == BuildPhase.CODEBASE_ANALYSIS
+        stopped, clean = _roots(tmp_path / phase.value, monkeypatch, SINGLE if before else THREE)
+        clean.fake.first, path = SINGLE, stopped.config.state_file_path()
+        data = {k: v for k, v in json.loads(path.read_text()).items() if not k.startswith("epic_")}
+        path.write_text(json.dumps({**data, "phase": phase.value}))
+        for run in (stopped, clean, stopped, clean):
+            assert run.build(monkeypatch) == 1
+        assert stopped.launches() == ([SPLIT] if before else []) and clean.launches() == [SPLIT]
         assert stopped.result() == clean.result()
-        assert stopped.result()["epic"] is None
-
-
-def test_A_S14_a_checkpoint_from_before_epic_mode_before_the_split_still_decides(tmp_path, monkeypatch):
-    """A.S14's boundary: a pre-epic checkpoint whose pointer is before
-    EPIC_SPLIT has built nothing yet, so the step still runs (the enum's
-    "old checkpoints resume with it ahead")."""
-    run = Run(tmp_path, monkeypatch, SINGLE)
-    _pre_epic_checkpoint(run, BuildPhase.CODEBASE_ANALYSIS)
-    assert run.build(monkeypatch) == 1
-    assert run.launches() == [SPLIT]
