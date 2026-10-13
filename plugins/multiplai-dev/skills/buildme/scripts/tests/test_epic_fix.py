@@ -101,7 +101,8 @@ def test_blockers_lead_to_a_post_then_a_fix_and_round_counts_add_up(tmp_path, mo
     assert e.kinds() == ["build", "review", "post", "fix", "review", "post", "fix", "review"]
     assert [x["kind"] for x in e.fakes.review_launches()] == ["review", "review"]      # a's first, b's
     first, second = (a.started["argv"] for a in e.fixes())
-    assert first == ["python", "-m", "build_pipeline", "--session-id", "", "findings", "--pr", str(N),
+    session = e.tries()[0].started["argv"][4]           # the build's own --session-id
+    assert first == ["python", "-m", "build_pipeline", "--session-id", session, "findings", "--pr", str(N),
                      "--change", "e-a", "--project-dir", str(e.worktree), "--auto", "--trust-repo",
                      "--max-rounds", "5"]
     assert (_rounds(first), _rounds(second)) == (0 + 6 - 1, 2 + 6 - 3)
@@ -208,13 +209,18 @@ def test_a_fix_that_leaves_the_head_where_it_was_runs_once(tmp_path, monkeypatch
 
 
 def test_a_fix_is_a_launch_the_epic_budget_stops(tmp_path, monkeypatch, capsys):
-    """Decided 6: the review's $1.50 reaches `epic.max_usd`, so neither the
-    post nor the fixer starts."""
-    e = Epic(tmp_path, monkeypatch, max_usd=1.0)
+    """Decided 6: once a's review has a result the epic's spend is $6, past
+    `epic.max_usd`, so neither the post nor the fixer starts."""
+    from build_pipeline.epic import coordinator
+
+    e = Epic(tmp_path, monkeypatch, max_usd=5.0)
+    monkeypatch.setattr(coordinator.Coordinator, "spent",
+                        lambda self: (6.0 if any(a.result for a in e.tries() if a.kind == "review") else 0.0, True))
     assert e.run() == 3
-    assert "EPIC:BUDGET:" in capsys.readouterr().out
+    assert "EPIC:BUDGET:6.00" in capsys.readouterr().out.splitlines()
     assert e.kinds() == ["build", "review"]
     assert e.fakes.post_launches() == [] and e.fakes.fix_launches() == []
+    assert e.status()["status"] == "built"
 
 
 def test_a_fixer_killed_alone_is_relaunched_by_the_next_run(tmp_path, monkeypatch):
