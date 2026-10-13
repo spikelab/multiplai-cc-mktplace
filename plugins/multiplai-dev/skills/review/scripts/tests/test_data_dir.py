@@ -975,3 +975,99 @@ def test_rollups_list_new_layout_reviews_whatever_the_repo_is_called(tmp_path, r
     heads = sorted(json.loads(line)["target"]["head_sha"][0] for line in (out / "runs.jsonl").read_text().splitlines())
     assert heads == ["a", "a", "c", "d"] and lines == 4
     assert new.is_dir() and whole.is_dir() and flat.is_dir()
+
+
+# --- history across layouts -------------------------------------------------------
+
+
+def _decide(folder: Path, finding_id: str, decision: str = "reject", ts: str = "2026-01-01T06:00:00Z") -> None:
+    (folder / "viewer").mkdir(parents=True, exist_ok=True)
+    (folder / "viewer" / "decisions.json").write_text(json.dumps(
+        {finding_id: {"decision": decision, "note": f"note on {finding_id}", "ts": ts}}))
+
+
+def _three_old_layouts(out: Path) -> dict[str, Path]:
+    """A 0.46 folder with 2 kept rounds, a 0.42 folder nested in the new one, and a legacy/ copy:
+    each holds one finding the person rejected."""
+    flat = out / f"{SLUG_REPO}--pr-7"
+    for i, (name, fid) in enumerate((("01-aaaaaaaaaaaa", "1000000001"), ("02-aaaaaaaaaaaa", "1000000002"))):
+        _old_round(flat / "rounds" / name, "a" * 40, f"2026-01-0{i + 1}T00:00:00Z", fid, slug=f"{SLUG_REPO}--pr-7")
+    _old_round(flat, "a" * 40, "2026-01-03T00:00:00Z", "1000000003", slug=f"{SLUG_REPO}--pr-7")
+    _decide(flat, "1000000003")
+    nested = out / "github-tests" / "pr-7" / "checkout--pr-7"
+    _old_round(nested / "rounds" / "bbbbbbbbbbbb", "b" * 40, "2026-01-04T00:00:00Z", "2000000001",
+               slug="checkout--pr-7")
+    _old_round(nested, "b" * 40, "2026-01-05T00:00:00Z", "2000000002", slug="checkout--pr-7")
+    _decide(nested, "2000000002")
+    copy = out / "legacy" / "old-checkout--pr-7"
+    _old_round(copy, "c" * 40, "2026-01-06T00:00:00Z", "3000000001", slug="old-checkout--pr-7")
+    _decide(copy, "3000000001", ts="2026-01-06T06:00:00Z")
+    for name in ("HIGH-only.md", "MEDIUM-only.md", "LOW-only.md", "runs.jsonl"):
+        (out / "github-tests" / "pr-7" / name).write_text(f"0.42 {name}\n")
+    return {"flat": flat, "nested": nested, "copy": copy}
+
+
+def test_a_first_new_layout_review_reads_the_rounds_and_decisions_of_every_older_layout(tmp_path):
+    """Done means 6."""
+    from review_pipeline.stages import RunContext
+    from review_pipeline.stages.repeats import earlier_findings
+    out = default_out()
+    folders = _three_old_layouts(out)
+    before = {k: _snapshot(v) for k, v in folders.items()}
+    target_dir = out / "github-tests" / "pr-7"
+    ctx = RunContext(config=None, snapshot=None, diff="", target_dir=target_dir)
+    earlier = {e.id: e for e in earlier_findings(_new_state(), ctx)}
+    assert sorted(earlier) == ["1000000001", "1000000002", "1000000003", "2000000001", "2000000002", "3000000001"]
+    assert {i for i, e in earlier.items() if e.decision == "reject"} == {"1000000003", "2000000002", "3000000001"}
+    assert {k: _snapshot(v) for k, v in folders.items()} == before
+
+
+def test_out_is_the_parent_of_a_046_folder_and_the_grandparent_of_a_new_one(tmp_path, agents, fixture_repo):
+    """Done means 7."""
+    out = tmp_path / "work" / "out"
+    flat = out / f"{SLUG_REPO}--pr-7"
+    new = out / "github-tests" / "pr-7"
+    _old_round(flat, "a" * 40, "2026-01-01T00:00:00Z", "1000000001", slug=f"{SLUG_REPO}--pr-7")
+    assert rounds.out_root(flat) == out
+    assert rounds.out_root(new, f"{SLUG_REPO}--pr-7") == out
+    _state_file(new, ORIGIN, "7", f"{SLUG_REPO}--pr-7")
+    assert rounds.out_root(new) == out
+    assert rounds.out_root(tmp_path / "nothing-here") == tmp_path  # no readable slug: its parent
+    # A matching round one level above <out> is never read as this target's history.
+    above = tmp_path / "work" / "x--pr-7"
+    _old_round(above, "a" * 40, "2026-01-01T00:00:00Z", "9999999999", slug="x--pr-7")
+    for folder in (flat, new):
+        found = rounds.history_elsewhere(folder, f"{SLUG_REPO}--pr-7", ORIGIN)
+        assert above / "findings.json" not in found and not any("9999" in p.read_text() for p in found)
+
+
+def test_resume_of_a_new_layout_folder_writes_rollups_to_out_and_reads_its_review_yaml(
+        fixture_repo, tmp_path, agents, capsys):
+    """Done means 7: `resume` uses the `<out>` the review used, not `<out>/<repo>/`."""
+    from review_pipeline.models import ReviewState
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
+    agents(budget_stop_at=2)
+    assert main(_review_args(repo, base, head, out)) == 4
+    for name in ("HIGH-only.md", "runs.jsonl"):
+        (out / name).unlink(missing_ok=True)
+    (out / "review.yaml").write_text("verifier_model: claude-resume\n")
+    agents()
+    assert main(["resume", str(target_dir), "--trust-repo"]) == 0
+    assert (out / "HIGH-only.md").is_file() and (out / "runs.jsonl").is_file()
+    assert not (out / "booking-engine" / "HIGH-only.md").exists()
+    assert not (out / "booking-engine" / "runs.jsonl").exists()
+    state = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
+    assert state.run_config["stages"]["verify"]["model"] == "claude-resume"
+
+
+def test_history_finds_a_042_folder_nested_under_a_repo_called_tree(tmp_path):
+    """Done means 9 (history): `tree` is a repo here, not a snapshot to skip."""
+    out = tmp_path / "out"
+    remote = "https://github.com/spikelab/tree.git"
+    nested = out / "tree" / "pr-7" / "checkout--pr-7"
+    _old_round(nested, "a" * 40, "2026-01-01T00:00:00Z", "1000000001", remote=remote, slug="checkout--pr-7")
+    (out / "tree" / ".DS_Store").write_text("finder")
+    found = rounds.history_elsewhere(out / "tree" / "pr-7", "spikelab-tree--pr-7", remote)
+    assert found == [nested / "findings.json"]

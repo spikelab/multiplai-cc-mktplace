@@ -286,13 +286,34 @@ def _carried(f: dict) -> dict:
 _NOT_WALKED = frozenset({"viewer", "tree", "base-tree", "assess-tree", "source", ".git", ".locks"})
 
 
-def _history_roots(target_dir: Path) -> list[Path]:
-    """Where a target's rounds written under another directory name can be: beside
-    *target_dir*, migrate's copies (`<data_dir>/reviews/legacy/`) and the default
-    output directory before multiplai-dev 0.46 (`INBOX/reviews`)."""
+def _walked(here: Path, name: str, depth: int | None) -> bool:
+    """Whether the history walk enters *here*/*name*.
+
+    *depth* is *here*'s depth under `<out>`, or None under the other roots,
+    where every depth skips `_NOT_WALKED` and partial copies, as before 0.48.
+    Under `<out>`: `<out>` skips locks, git and partial copies (and
+    `_NOT_WALKED` when it is itself a review folder); a review folder one level
+    down skips `_NOT_WALKED`; a repo folder skips the names no object can have
+    (`tree` stays: it is the whole-tree object).
+    """
+    from .target import NOT_OBJECT_NAMES, is_review_folder
+
+    if name.startswith(PARTIAL_PREFIX):
+        return False
+    if depth == 0:
+        return name not in {".locks", ".git"} and not (name in _NOT_WALKED and is_review_folder(here))
+    if depth == 1 and not is_review_folder(here):
+        return name not in NOT_OBJECT_NAMES
+    return name not in _NOT_WALKED
+
+
+def _history_roots(target_dir: Path, slug: str) -> list[Path]:
+    """Where a target's rounds written under another directory name can be: the `<out>`
+    *target_dir* is in (`out_root`), migrate's copies (`<data_dir>/reviews/legacy/`) and
+    the default output directory before multiplai-dev 0.46 (`INBOX/reviews`)."""
     from . import ledger
 
-    roots = [target_dir.parent]
+    roots = [out_root(target_dir, slug)]
     for root in (lambda: ledger.reviews_root() / ledger.LEGACY_DIR, ledger.legacy_reviews_root):
         try:
             roots.append(root())
@@ -317,25 +338,39 @@ def history_elsewhere(target_dir: Path, slug: str, remote_url: str | None) -> li
     counts when its path holds this slug's part after the repository
     (`--pr-283`, also inside `x--pr-283__rounds__<sha>`, never `--pr-2830`)
     and the file itself names the same `origin` and a slug ending in that part.
-    Nothing is found for a slug that does not start with its origin's name
-    (no `origin`: the slug is the directory name, as before).
+    Nothing is found that way for a slug that does not start with its
+    origin's name (no `origin`: the slug is the directory name, as before).
+
+    Under `<out>`, what a folder is depends on where it is
+    (`_walked_children`), so a repo called `tree` and a whole-tree review
+    `<repo>/tree/` are read. The target's own folder is walked too, without
+    its own `findings.json` and `rounds/`, for a review an older version
+    nested in it. This target's 0.46 folder `<out>/<slug>/` is always read,
+    whatever its origin.
     """
     from .target import origin_name
 
-    origin = origin_name(remote_url)
-    if not origin or not slug.startswith(f"{origin}--"):
-        return []
-    suffix = slug[len(origin) + 2:]
-    in_path = re.compile(rf"--{re.escape(suffix)}(?![0-9A-Za-z])")
+    first = out_root(target_dir, slug)
     own = target_dir.resolve()
     found: dict[Path, Path] = {}
-    for root in _history_roots(target_dir):
+    flat = first / slug
+    if flat.is_dir() and flat.resolve() != own:
+        for path in [flat / "findings.json", *(d / "findings.json" for d in _round_dirs(flat))]:
+            if path.is_file():
+                found.setdefault(path.resolve(), path)
+    origin = origin_name(remote_url)
+    matching = bool(origin) and slug.startswith(f"{origin}--")
+    suffix = slug[len(origin) + 2:] if matching else ""
+    in_path = re.compile(rf"--{re.escape(suffix)}(?![0-9A-Za-z])")
+    for root in _history_roots(target_dir, slug) if matching else []:
+        positional = root.resolve() == first.resolve()
         for dirpath, dirnames, filenames in os.walk(root):
             here = Path(dirpath)
             if here.resolve() == own:
-                dirnames[:] = []
+                dirnames[:] = sorted(d for d in dirnames if d not in _NOT_WALKED and d != ROUNDS_DIR)
                 continue
-            dirnames[:] = sorted(d for d in dirnames if d not in _NOT_WALKED and not d.startswith(PARTIAL_PREFIX))
+            depth = len(here.relative_to(root).parts)
+            dirnames[:] = sorted(d for d in dirnames if _walked(here, d, depth if positional else None))
             if "findings.json" not in filenames or not in_path.search(str(here.relative_to(root))):
                 continue
             path = here / "findings.json"
