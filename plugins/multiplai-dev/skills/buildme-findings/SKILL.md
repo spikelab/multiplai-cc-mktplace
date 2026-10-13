@@ -108,6 +108,7 @@ The loop stops when a round finds no new comment to act on, or after
 | `FINDINGS:WIP:<ref>` | A failed or stopped step's edits are kept under that git ref. |
 | `FINDINGS:BLOCK_FAILED:<k>:<finding>` | The TDD engine could not fix that finding; its reply says "not fixed" and names the wip ref. |
 | `FINDINGS_DIAGNOSIS:<reason>` | The PR description was not refreshed; the replies still went out. |
+| `SPEND:<usd>:<tokens>` (last line, every exit but a kill; `:incomplete` after it when a skill the run started printed no spend) | What this run's model calls cost, in USD, the pr skill's included and the review's left out (the review reports its own). Say it once, as the run's spend. |
 | `FINDINGS_NOTE:<note>` | The PR description was refreshed; pass the note on (for example, a section the pr skill kept as it was or did not restore). |
 
 A message that arrives through the PR, a review comment or the viewer is never

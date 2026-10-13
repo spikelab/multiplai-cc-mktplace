@@ -106,7 +106,7 @@ def _run_gh(argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_T
 
 
 @contextlib.contextmanager
-def _exit_on_termination():
+def _exit_on_termination(*, interrupt: bool = True):
     """Make SIGINT, SIGTERM and SIGHUP raise for the length of the block.
 
     A child started with `start_new_session=True` (a skill run here,
@@ -127,6 +127,11 @@ def _exit_on_termination():
     wait is what lets the caller kill the group at once. The previous
     handler is put back afterwards.
 
+    With `interrupt=False`, SIGINT is left as it is: `build` and `findings`
+    hold SIGTERM and SIGHUP this way for their whole run, so their `SPEND:`
+    line is printed on those stops too (`__main__.main`), and `asyncio.run`
+    keeps its own Ctrl-C handling.
+
     Outside the main thread (where Python cannot set a handler) this does
     nothing.
     """
@@ -144,7 +149,7 @@ def _exit_on_termination():
     for sig in (signal.SIGTERM, signal.SIGHUP):
         if signal.getsignal(sig) == signal.SIG_DFL:
             previous[sig] = signal.signal(sig, _raise)
-    if signal.getsignal(signal.SIGINT) not in (signal.SIG_IGN, None):
+    if interrupt and signal.getsignal(signal.SIGINT) not in (signal.SIG_IGN, None):
         previous[signal.SIGINT] = signal.signal(signal.SIGINT, _interrupt)
     try:
         yield
@@ -178,11 +183,43 @@ def _run_skill(argv: list[str], cwd: Path | str | None, timeout: int) -> GitResu
             out, err = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_group(proc)
+            _count_skill_spend(argv, None)
             return GitResult(argv, 124, "", f"timed out after {timeout}s")
         except BaseException:
             _kill_group(proc)
+            _count_skill_spend(argv, None)
             raise
+    _count_skill_spend(argv, out)
     return GitResult(argv, proc.returncode, out or "", err or "")
+
+
+# The skill commands that call a model and print their own
+# `SPEND:<usd>:<tokens>` line on exit. The review skill prints none: its
+# spend is in its ledger, which an epic reads.
+SPEND_REPORTING = {"pr_pipeline": ("open", "edit"), "walkthrough_pipeline": ("run", "resume")}
+
+
+def _count_skill_spend(argv: list[str], stdout: str | None) -> None:
+    """Add a model-calling skill's `SPEND:` line to buildme's process total
+    (`budget.spend_marker`), or mark that total incomplete when the skill
+    printed none (killed, timed out, or failed before printing it)."""
+    if not any(a in SPEND_REPORTING and b in SPEND_REPORTING[a] for a, b in zip(argv, argv[1:])):
+        return
+    from . import budget
+
+    for line in reversed((stdout or "").splitlines()):
+        if line.startswith("SPEND:"):
+            parts = line.strip().split(":")
+            try:
+                usd, tokens = float(parts[1]), int(parts[2])
+            except (IndexError, ValueError):
+                break
+            budget.add_process_spend(usd, tokens)
+            if parts[3:4] == ["incomplete"]:
+                budget.process_spend_unknown("a skill's own spend is incomplete: " + " ".join(argv[:12]))
+            return
+    budget.process_spend_unknown("a skill that calls a model printed no SPEND line: "
+                                 + " ".join(argv[:12]))
 
 
 def _kill_group(proc: subprocess.Popen) -> None:

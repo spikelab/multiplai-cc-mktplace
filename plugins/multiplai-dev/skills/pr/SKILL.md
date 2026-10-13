@@ -148,7 +148,9 @@ comment.
 ## Output and exit codes
 
 Stdout lines: `PUSHED:<branch>`, `PR:<url>`, `PR_EDITED:<url>`,
-`DIFF:<files> files, +<added> -<removed>`, `PR_DIAGNOSIS:<reason>`.
+`DIFF:<files> files, +<added> -<removed>`, `PR_DIAGNOSIS:<reason>`, and last,
+from `open` and `edit`, `SPEND:<usd>:<tokens>`: what the run's model calls
+cost (buildme adds it to its own spend; nothing to relay).
 `render` prints only the description on stdout, with its `DIFF:` and
 `PR_DIAGNOSIS:` lines on stderr. Each `PR_DIAGNOSIS:` line holds its whole
 reason: a multi-line `gh` or `git` error is joined onto it with spaces.

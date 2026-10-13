@@ -1106,6 +1106,62 @@ class TestRoundBudget:
         r2 = BuildState.load(change / code.engine_state_name(2))
         assert r2.budget["cost_usd"] == pytest.approx(0.6)
 
+    @pytest.mark.asyncio
+    async def test_the_process_total_holds_both_rounds(self, built, fake_pr, monkeypatch):
+        """Epic mode B2 (item 18): each round's `budget.reset()` hides nothing from
+        the process total that `SPEND:` reports."""
+        from types import SimpleNamespace
+
+        from build_pipeline import budget
+        from build_pipeline.tdd_engine import run_tdd_engine
+
+        monkeypatch.setattr(budget, "_process", budget.ProcessSpend())
+        repo, change, config = built
+        config.findings.max_rounds = 2
+        fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+        review = FakeReview(fake_pr, new_threads_per_round=1)
+        verdicts = FakeTriage({"add subtracts": FIX, "round 1 finding": FIX})
+        spent: list[float] = []
+
+        def charge(usd, label):
+            spent.append(usd)
+            budget.record(SimpleNamespace(cost_usd=usd, input_tokens=10), label=label)
+
+        async def triage_call(prompt, schema, **kw):
+            charge(0.1, "findings_triage")
+            return await verdicts(prompt, schema, **kw)
+
+        calls = {"n": 0}
+
+        async def test_writer(*_a, **_kw):
+            calls["n"] += 1
+            (repo / "tests").mkdir(exist_ok=True)
+            (repo / "tests" / f"test_r{calls['n']}.py").write_text(
+                f"from calc import add\n\ndef test_r{calls['n']}():\n    assert add(2, 2) == 4\n")
+            return AgentResult(success=True, output="done")
+
+        async def implementer(*_a, **_kw):
+            charge(0.6, "implementer")
+            (repo / "calc.py").write_text(f"def add(a, b):\n    return a + b  # r{calls['n']}\n")
+            return AgentResult(success=True, output="done")
+
+        async def engine(rc, args, standalone):
+            return await run_tdd_engine(rc, args, standalone=standalone)
+
+        replaced = {"run_test_writer", "run_implementer"}
+        stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") not in replaced]
+        stubs += [patch("build_pipeline.tdd_engine.run_test_writer", side_effect=test_writer),
+                  patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer)]
+        run, lines = _run(config, change, triage_call=triage_call, review=review, engine=engine)
+        with _Stubs(stubs):
+            exit_code = await loop.run_findings(run)
+
+        assert exit_code == 0, lines
+        assert spent.count(0.6) == 2                     # one implementer per round
+        assert budget.get_budget().cost_usd < sum(spent)  # the last reset dropped round 1
+        assert budget.process_spend().cost_usd == pytest.approx(sum(spent))
+        assert budget.process_spend().tokens == 10 * len(spent)
+
 
 class TestStoppedAfterTheBlocks:
     """The engine runs whole-change steps after its blocks (refactor, mutation

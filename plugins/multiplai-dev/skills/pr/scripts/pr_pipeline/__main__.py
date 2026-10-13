@@ -5,8 +5,9 @@ Exit codes: 0 done; 1 a gate rejected the body (nothing written to GitHub);
 
 Stdout lines a caller can parse: `PUSHED:<branch>`, `PR:<url>`,
 `PR_EDITED:<url>`, `DIFF:<files> files, +<added> -<removed>`,
-`PR_DIAGNOSIS:<reason>`. `render` prints only the body on stdout; its
-`DIFF:` and `PR_DIAGNOSIS:` lines go to stderr.
+`PR_DIAGNOSIS:<reason>`, and last, from `open` and `edit`,
+`SPEND:<usd>:<tokens>` (what this run's model calls cost). `render` prints
+only the body on stdout; its `DIFF:` and `PR_DIAGNOSIS:` lines go to stderr.
 """
 
 from __future__ import annotations
@@ -59,9 +60,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# The commands that may call the model print `SPEND:<usd>:<tokens>` last, on
+# every exit but a kill: buildme adds it to its own spend.
+SPEND_COMMANDS = ("open", "edit")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command not in SPEND_COMMANDS:
+        return _main(args)
+    try:
+        return _main(args)
+    finally:
+        from .fill import spend_marker
+        print(spend_marker(), flush=True)
 
+
+def _main(args: argparse.Namespace) -> int:
     try:
         from multiplai_core.env import load_env
         from multiplai_core.log_utils import setup_logging
