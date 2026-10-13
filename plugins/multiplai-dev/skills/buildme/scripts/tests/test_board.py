@@ -39,6 +39,17 @@ from build_pipeline.state import BuildState
 from tests.test_git_ops import make_bare_origin, make_repo
 
 
+@pytest.fixture(autouse=True)
+def _epic_split_is_one_change(monkeypatch):
+    """Every build here is one change: EPIC_SPLIT's model call answers `single: true`."""
+    from unittest.mock import AsyncMock
+
+    from build_pipeline.epic import split as epic_split
+
+    answer = epic_split.EpicSplitAnswer(single=True, reason="one change")
+    monkeypatch.setattr(epic_split, "epic_split", AsyncMock(return_value=answer))
+
+
 # --- 1. The pure mapping --------------------------------------------------
 
 # Written out independently of board.py's own table: if the mapping changes,
@@ -49,6 +60,7 @@ EXPECTED_COLUMNS = {
     BuildPhase.INTERVIEW_DONE: BoardColumn.SHAPING,
     BuildPhase.RESEARCH: BoardColumn.SHAPING,
     BuildPhase.CODEBASE_ANALYSIS: BoardColumn.SHAPING,
+    BuildPhase.EPIC_SPLIT: BoardColumn.SHAPING,
     BuildPhase.SPEC_GENERATION: BoardColumn.SHAPING,
     BuildPhase.DESIGN_AUDIT: BoardColumn.PLANNING,
     BuildPhase.PLAN_REVIEW: BoardColumn.PLANNING,
