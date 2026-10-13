@@ -17,6 +17,13 @@ Design notes:
   the explicit `check()` call, at loop boundaries, can stop one.
 - No budget configured → the tracker still accounts (so the run reports what
   it spent) but never stops anything.
+- Beside the build's tracker, a process total (`ProcessSpend`) adds up every
+  recorded call for the life of the process. Neither `reset()` (which
+  `findings` runs before each round's engine) nor `BuildBudget.load_state`
+  (which a resumed engine runs) touches it, so `SPEND:<usd>:<tokens>`
+  (`spend_marker`), printed by `build` and `findings` on exit, is what this
+  process spent: an epic adds it up across attempts and rounds without
+  counting a resumed build's earlier spend twice.
 - This is not `multiplai_core.budget.SpendLedger`, which review and the
   walkthrough use: buildme's `by_label` counts tokens, not USD, its diagnosis
   ranks phases by tokens, and its saved state carries `total_tokens`. Moving
@@ -203,7 +210,26 @@ class BuildBudget:
         self.by_label = dict(data.get("by_label", {}) or {})
 
 
+@dataclass
+class ProcessSpend:
+    """What this process has spent: every `record()` since it started."""
+
+    cost_usd: float = 0.0
+    tokens: int = 0
+
+
 _budget = BuildBudget()
+_process = ProcessSpend()
+
+
+def process_spend() -> ProcessSpend:
+    """This process's total spend, which `reset()` and `load_state` leave alone."""
+    return _process
+
+
+def spend_marker() -> str:
+    """`SPEND:<usd>:<tokens>`, the line `build` and `findings` print on exit."""
+    return f"SPEND:{_process.cost_usd:.6f}:{_process.tokens}"
 
 
 def get_budget() -> BuildBudget:
@@ -235,8 +261,14 @@ def reset() -> BuildBudget:
 
 
 def record(usage, *, label: str = "") -> None:
-    """Record one SDK call's usage against the current build."""
+    """Record one SDK call's usage against the current build and the process total."""
     _budget.record(usage, label=label)
+    try:
+        _process.cost_usd += float(getattr(usage, "cost_usd", 0.0) or 0.0)
+        _process.tokens += sum(int(getattr(usage, name, 0) or 0) for name in (
+            "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"))
+    except Exception as e:  # pragma: no cover — accounting must never break a build
+        log.warning("Process spend accounting failed for a call (ignored): %s", e)
 
 
 def check(*, phase: str = "") -> None:

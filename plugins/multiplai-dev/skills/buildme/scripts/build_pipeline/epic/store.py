@@ -66,6 +66,10 @@ class Epic(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     approved_at: str | None = None
     child_status: dict[str, ChildStatus] = Field(default_factory=dict)
+    # PR B2: what the epic has spent, rebuilt from the records and the review
+    # ledger at each save; incomplete when a spend could not be read.
+    spent_usd: float = 0.0
+    spend_complete: bool = True
 
 
 # --- the directory name (copied from review_pipeline/target.py) ---------------

@@ -3,7 +3,9 @@ agent or subprocess it runs (plan-buildme-epic-mode-2026-10-12.md, item 14).
 
 `agents/<NNN>-<kind>-<child>.started.json` is written before the process
 starts (argv, `pr_round`, head sha, time), `<...>.result.json` after it ends
-(exit code, markers, PR URL, `interrupted`), and `<...>.log` holds its stdout
+(exit code, markers, PR URL, `interrupted`, and `spend`: the USD on the
+process's last `SPEND:<usd>:<tokens>` line, null without one, PR B2), and
+`<...>.log` holds its stdout
 and stderr. `NNN` is the next free number. A started record with no result
 is an interrupted attempt. Both files are written through a temp file and
 `os.replace`, so a kill leaves the old file or the new one.
@@ -114,12 +116,22 @@ def marker(found: list[str], name: str) -> list[str]:
     return [m[len(name) + 1:] for m in found if m.startswith(name + ":")]
 
 
+def spend_of(found: list[str]) -> float | None:
+    """The USD of the last `SPEND:<usd>:<tokens>` marker; None without a readable one."""
+    for value in reversed(marker(found, "SPEND")):
+        try:
+            return float(value.split(":", 1)[0])
+        except ValueError:
+            continue
+    return None
+
+
 def finish(attempt: Attempt, exit_code: int | None, *, interrupted: bool) -> dict:
-    """Write the result record, markers and PR URL read from the attempt's log."""
+    """Write the result record, markers, PR URL and spend read from the attempt's log."""
     found = markers(attempt.log)
     prs = marker(found, "PR")
     result = {"exit_code": exit_code, "markers": found, "pr": prs[-1] if prs else None,
-              "interrupted": interrupted, "at": _now()}
+              "interrupted": interrupted, "spend": spend_of(found), "at": _now()}
     _write_atomic(attempt.result_path, json.dumps(result, indent=2) + "\n")
     attempt.result = result
     return result
