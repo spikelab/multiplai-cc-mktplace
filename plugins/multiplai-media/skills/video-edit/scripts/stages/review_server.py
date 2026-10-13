@@ -721,7 +721,11 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                     return self._static(url.path)
                 raise _Reject(405, "method not allowed")
             except _Reject as r:
-                self._json({"error": r.error}, r.status, r.headers)
+                # A client refused mid-upload (a mark over the limit) may already be gone.
+                try:
+                    self._json({"error": r.error}, r.status, r.headers)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
