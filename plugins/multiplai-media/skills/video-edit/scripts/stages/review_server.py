@@ -34,6 +34,11 @@ draws the render's timeline from it.
 
 A drawing on a paused frame comes in as a JPEG on `/api/marks`, saved as
 `<mailbox>/marks/<id>.jpg`; the `drawing` row that follows names it.
+
+The Review tab's style panel reads `/api/style`: a render's caption values,
+its brand file's colours and each overlay style's values (stages/style_file.py).
+The changes the user makes there come back as `style` rows; the server never
+edits a style or brand file.
 """
 from __future__ import annotations
 
@@ -55,7 +60,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from stages import brand, job_files
+from stages import brand, job_files, style_file
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v"}
@@ -283,15 +288,40 @@ def sample_key(token: str, path: str) -> str:
     return hmac.new(token.encode("utf-8"), b"sample\0" + path.encode("utf-8"), "sha256").hexdigest()[:32]
 
 
-def brand_summary(path: str) -> dict:
+def style_summary(name: str, outdir: Path) -> dict:
+    """The values of the style an overlay names, for the style panel.
+
+    `name` is a style name or a style file's absolute path (stages/edl.py
+    Overlay.style). A name is looked up in a valid looks.json first, then
+    among the styles shipped in references/styles/. Returns
+    {name, status: "ok", file, values}, or {name, status: "missing"|"invalid", error}.
+    """
+    path: Path | None = None
+    if name.endswith(".md") and Path(name).is_absolute():
+        path = Path(name)
+    else:
+        looks = job_files.load(outdir, "looks")
+        if looks["status"] == "ok":
+            path = next((Path(s["file"]) for s in looks["data"].get("styles", []) if s["name"] == name), None)
+        path = path or style_file.shipped(name)
+    if path is None or not path.is_file():
+        return {"name": name, "status": "missing",
+                "error": f"no style file for {name!r}: not in looks.json, not shipped, not a path to a .md file"}
+    got = style_file.load(path)
+    if got["status"] != "ok":
+        return {"name": name, "status": "invalid", "file": str(path), "error": got["error"]}
+    return {"name": name, "status": "ok", "file": str(path), "values": got["values"]}
+
+
+def brand_summary(path: str | None) -> dict:
     """{status: "ok", colours, font} for a brand file, or {status: "invalid", error}.
 
     `colours` are the four the captions and headline use, defaults filled in;
     `font` is the caption font's file name without its extension, or None
-    for the default font.
+    for the default font. No path gives the defaults a render without a brand uses.
     """
     try:
-        b = brand.load(path)
+        b = brand.load(path) if path else brand.default()
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
         return {"status": "invalid", "error": str(e)}
     font = b.caption_font()
@@ -394,6 +424,7 @@ ROW_KINDS: dict[str, dict] = {
     "music": {"review": False, "fields": ("bed", "volume_db", "sfx_set"), "needs_text": False},
     "drawing": {"review": True, "fields": ("t", "image", "shapes"), "needs_text": False},
     "range": {"review": True, "fields": ("t_start", "t_end"), "optional": ("target",), "needs_text": True},
+    "style": {"review": True, "fields": ("target", "changes"), "optional": ("save_as",), "needs_text": False},
 }
 SHAPE_TOOLS = ("pen", "arrow", "box")
 MAX_SHAPES = 100
@@ -404,6 +435,20 @@ MAX_DRAWING_POINTS = 6000
 COLOUR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 # What a range row may point at on the timeline: a lane, or one block in it by index.
 TARGET_RE = re.compile(r"^(?:captions|headline|title|(?:segment|overlay|sfx):\d{1,4})$")
+# What a style row restyles: the render's captions, its brand, or one overlay style it uses.
+STYLE_TARGET_RE = re.compile(r"^(?:captions|brand|style:(?P<name>[^\x00-\x1f\x7f]{1,300}))$")
+# A new style or brand file the session saves in the job directory, by name (no path).
+SAVE_AS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$")
+BRAND_KEYS = ("primary", "accent", "background", "caption_outline")
+# The style values the panel edits (stages/style_file.py panel_values), and their bounds.
+STYLE_KEY_RE = re.compile(r"^(?:palette\.[A-Za-z][\w-]{0,39}|fonts\.(?:display|body)|fonts\.weights\.(?:display|body)"
+                          r"|shape\.radius_px|motion\.(?:enter_s|exit_s|stagger_s))$")
+STYLE_NUMBERS = {"fonts.weights.": (100, 1000), "shape.radius_px": (0, 1000), "motion.": (0, 10)}
+MAX_CHANGES = 40
+MAX_VALUE = 300
+# A CSS value or font list the session copies into a page's CSS: one declaration's value, nothing more.
+CSS_VALUE_RE = re.compile(r"^[^;{}<>\\\x00-\x1f\x7f]{1,200}$")
+URL_RE = re.compile(r"url\s*\(", re.IGNORECASE)   # overlay pages load nothing (styles/README.md)
 MAX_PANELS = 8
 MAX_NAME = 40
 MIN_VOLUME_DB, MAX_VOLUME_DB = -60.0, 0.0
@@ -546,6 +591,94 @@ def _range(c: dict) -> dict:
     return {"t_start": round(t_start, 3), "t_end": round(t_end, 3), "target": target}
 
 
+def _old(v: Any) -> bool:
+    """An old value as the page read it: null, a bool, a finite number or a short string."""
+    return v is None or isinstance(v, bool) or (_number(v)) or (isinstance(v, str) and len(v) <= MAX_VALUE)
+
+
+def _changes(changes: Any, check) -> dict:
+    """{key: [old, new]} with each new value checked by `check(key, new)`, which returns it cleaned."""
+    if not isinstance(changes, dict) or not 1 <= len(changes) <= MAX_CHANGES:
+        raise ValueError(f"changes must map 1..{MAX_CHANGES} keys to [old, new]")
+    out = {}
+    for key, pair in changes.items():
+        if not isinstance(pair, list) or len(pair) != 2 or not _old(pair[0]):
+            raise ValueError(f"changes[{key!r}] must be [old, new]")
+        new = check(key, pair[1])
+        if new == pair[0] and isinstance(new, bool) == isinstance(pair[0], bool):
+            raise ValueError(f"changes[{key!r}]: the new value is the old one")
+        out[key] = [pair[0], new]
+    return out
+
+
+def _css_text(key: str, v: Any) -> str:
+    """One CSS value: nothing that ends the declaration, opens a comment or loads a file."""
+    if not isinstance(v, str) or not CSS_VALUE_RE.match(v.strip()) or "/*" in v or URL_RE.search(v):
+        raise ValueError(f"{key} must be 1..200 characters of one CSS value (no ; {{ }} < > \\ or url())")
+    return v.strip()
+
+
+def _caption_value(key: str, v: Any) -> Any:
+    node = job_files.schema("looks")["properties"]["captions"]["items"]["properties"]["values"]
+    node = {**node, "properties": {**node["properties"],
+                                   "max_chars": {"type": "integer", "minimum": 8, "maximum": 80}}}
+    errors = job_files.check({key: v}, node, where="captions")
+    if errors:
+        raise ValueError(errors[0])
+    return v
+
+
+def _brand_value(key: str, v: Any) -> str:
+    if key not in BRAND_KEYS:
+        raise ValueError(f"brand has no {key!r}: change one of {', '.join(BRAND_KEYS)}")
+    if not isinstance(v, str) or not COLOUR_RE.match(v):
+        raise ValueError(f"brand {key} must be #RRGGBB")
+    return v.upper()
+
+
+def _style_value(key: str, v: Any) -> Any:
+    if not isinstance(key, str) or not STYLE_KEY_RE.match(key):
+        raise ValueError(f"a style has no {key!r} the panel edits")
+    if key.startswith("palette."):
+        if not isinstance(v, str) or not COLOUR_RE.match(v):
+            raise ValueError(f"{key} must be #RRGGBB")
+        return v.upper()
+    if key in ("fonts.display", "fonts.body"):
+        return _css_text(key, v)
+    lo, hi = next(b for prefix, b in STYLE_NUMBERS.items() if key.startswith(prefix))
+    (n,) = _finite({key: v}, key)
+    if not lo <= n <= hi or (key.startswith("fonts.weights.") and not isinstance(v, int)):
+        raise ValueError(f"{key} must be {'a whole number ' if key.startswith('fonts.') else ''}within {lo}..{hi}")
+    return v
+
+
+def _style(c: dict, record: dict | None) -> dict:
+    target = c["target"]
+    m = STYLE_TARGET_RE.match(target) if isinstance(target, str) else None
+    if not m:
+        raise ValueError("target must be captions, brand or style:<name>")
+    if record is None:
+        raise ValueError("this render has no .edl.json, so there is nothing to restyle against")
+    edl = record["edl"]
+    if m["name"] is not None:
+        if m["name"] not in {o.get("style") for o in edl.get("overlays") or [] if isinstance(o, dict)}:
+            raise ValueError(f"no overlay in this render uses style {m['name']!r}")
+        check = _style_value
+    elif target == "captions":
+        if not isinstance(edl.get("captions"), dict):
+            raise ValueError("this render has no captions")
+        check = _caption_value
+    else:
+        check = _brand_value
+    row = {"target": target, "changes": _changes(c["changes"], check), "save_as": c.get("save_as")}
+    if row["save_as"] is not None:
+        if target == "captions":
+            raise ValueError("save_as is for a brand or a style; caption values go into the EDL")
+        if not isinstance(row["save_as"], str) or not SAVE_AS_RE.match(row["save_as"]):
+            raise ValueError("save_as must be a file name of 1..63 letters, digits, - or _")
+    return row
+
+
 def offered_names(outdir: Path) -> dict[str, set[str]]:
     """The names in a valid looks.json and music.json, by list (OFFERED_LISTS)."""
     files = {name: job_files.load(outdir, name) for name in ("looks", "music")}
@@ -556,12 +689,15 @@ def offered_names(outdir: Path) -> dict[str, set[str]]:
 def validate_comment(c: Any, known: set[tuple[str, int]],
                      candidates: set[str] | frozenset[str] = frozenset(),
                      offered: dict[str, set[str]] | None = None,
-                     marks_dir: Path | None = None) -> dict:
+                     marks_dir: Path | None = None,
+                     records: dict[tuple[str, int], dict | None] | None = None) -> dict:
     """One row from the page → a mailbox row, or ValueError.
 
     `known` is the (video, version) pairs on disk; `candidates` the ids in a
     valid candidates.json; `offered` the names a look or music row may pick
-    (offered_names); `marks_dir` where the images drawing rows name are saved.
+    (offered_names); `marks_dir` where the images drawing rows name are saved;
+    `records` each render's sidecar (None for a render without one), by
+    (video, version), which style rows are checked against.
     Unknown kinds and fields are refused.
     """
     if not isinstance(c, dict):
@@ -604,6 +740,8 @@ def validate_comment(c: Any, known: set[tuple[str, int]],
         row.update(_drawing(c, marks_dir))
     elif kind == "range":
         row.update(_range(c))
+    elif kind == "style":
+        row.update(_style(c, (records or {}).get((row["video"], row["version"]))))
     row.update(text=text.strip(), created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     return row
 
@@ -630,6 +768,30 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
     def videos() -> list[dict]:
         j = job()
         return list_videos(video_dir, {Path(j["source"]).resolve()} if j else frozenset())
+
+    def sidecar(video: Any, version: int) -> dict:
+        """The sidecar `pipeline.py render` wrote beside one listed render; _Reject 404 or 422 without one."""
+        name = next((v["name"] for c in videos() if c["clip"] == video
+                     for v in c["versions"] if v["version"] == version), None)
+        if name is None:
+            raise _Reject(404, f"no render {video!r} version {version}")
+        path = video_dir / (Path(name).stem + EDL_SIDECAR)
+        if not path.is_file():
+            raise _Reject(404, f"{name} has no {path.name}: it was rendered before render wrote one")
+        try:
+            data = cache.get(path)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+            raise _Reject(422, f"cannot read {path.name}: {e}") from None
+        if not isinstance(data, dict) or not isinstance(data.get("edl"), dict):
+            raise _Reject(422, f"{path.name} is not a render sidecar")
+        return data
+
+    def record(video: Any, version: Any) -> dict | None:
+        """sidecar(), or None for a render without a usable one."""
+        try:
+            return sidecar(video, version)
+        except _Reject:
+            return None
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "video-edit-review"
@@ -714,6 +876,8 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                     return self._post_mark()
                 if url.path == "/api/edl" and get:
                     return self._edl(query)
+                if url.path == "/api/style" and get:
+                    return self._style(query)
                 if url.path == "/api/comments" and get:
                     clip, kind = query.get("video", [None])[0], query.get("kind", [None])[0]
                     return self._json({"comments": [
@@ -812,27 +976,33 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                 speakers = [s for s in speakers if s["label"] == label]
             return self._json({"speakers": speakers})
 
-        def _edl(self, query: dict) -> None:
-            """The sidecar `pipeline.py render` wrote beside one render; 404 for a render without one."""
+        @staticmethod
+        def _render(query: dict) -> tuple[str, int]:
             video = query.get("video", [""])[0]
             try:
-                version = int(query.get("version", [""])[0])
+                return video, int(query.get("version", [""])[0])
             except ValueError:
                 raise _Reject(400, "version must be a number") from None
-            name = next((v["name"] for c in videos() if c["clip"] == video
-                         for v in c["versions"] if v["version"] == version), None)
-            if name is None:
-                raise _Reject(404, f"no render {video!r} version {version}")
-            path = video_dir / (Path(name).stem + EDL_SIDECAR)
-            if not path.is_file():
-                raise _Reject(404, f"{name} has no {path.name}: it was rendered before render wrote one")
-            try:
-                data = cache.get(path)
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
-                raise _Reject(422, f"cannot read {path.name}: {e}") from None
-            if not isinstance(data, dict) or not isinstance(data.get("edl"), dict):
-                raise _Reject(422, f"{path.name} is not a render sidecar")
-            return self._json({"status": "ok", "data": data})
+
+        def _edl(self, query: dict) -> None:
+            """The sidecar `pipeline.py render` wrote beside one render; 404 for a render without one."""
+            return self._json({"status": "ok", "data": sidecar(*self._render(query))})
+
+        def _style(self, query: dict) -> None:
+            """What the style panel shows for one render: its caption values, brand colours and overlay styles."""
+            video, version = self._render(query)
+            edl = sidecar(video, version)["edl"]
+            path = edl.get("brand") if isinstance(edl.get("brand"), str) else None
+            names = dict.fromkeys(o["style"] for o in edl.get("overlays") or []
+                                  if isinstance(o, dict) and isinstance(o.get("style"), str) and o["style"])
+            out = edl.get("output") if isinstance(edl.get("output"), dict) else {}
+            return self._json({
+                "status": "ok", "video": video, "version": version,
+                "output": {"width": out.get("width"), "height": out.get("height")},
+                "captions": edl.get("captions") if isinstance(edl.get("captions"), dict) else None,
+                "brand": {"file": path, **brand_summary(path)},
+                "styles": [style_summary(n, video_dir) for n in names],
+            })
 
         def _named(self, what: str, query: dict) -> None:
             """A file a validated input file names; anything else is 404."""
@@ -928,8 +1098,15 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             cands = job_files.load(video_dir, "candidates")
             ids = {c["id"] for c in cands["data"]} if cands["status"] == "ok" else set()
             offered = offered_names(video_dir)
+            # The sidecars style rows are checked against, read once per render.
+            records = {(c["video"], c["version"]): None for c in comments
+                       if isinstance(c, dict) and c.get("kind") == "style"
+                       and isinstance(c.get("video"), str) and isinstance(c.get("version"), int)
+                       and (c["video"], c["version"]) in known}
+            for video, version in records:
+                records[(video, version)] = record(video, version)
             try:
-                rows = [validate_comment(c, known, ids, offered, mailbox.marks) for c in comments]
+                rows = [validate_comment(c, known, ids, offered, mailbox.marks, records) for c in comments]
             except ValueError as e:
                 raise _Reject(400, str(e)) from None
             mailbox.append(rows)

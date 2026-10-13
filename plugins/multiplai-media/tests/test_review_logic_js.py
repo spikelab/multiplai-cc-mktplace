@@ -38,7 +38,7 @@ def test_the_page_loads_logic_and_app_first_then_one_script_per_tab() -> None:
     html = (STATIC / "review.html").read_text()
     scripts = re.findall(r'<script src="/static/([^"]+)"></script>', html)
     assert scripts == ["logic.js", "app.js", "tab-clips.js", "tab-speakers.js", "tab-look.js",
-                       "tab-music.js", "tab-review.js"]
+                       "tab-music.js", "tab-review.js", "review-style.js"]
     assert all((STATIC / s).is_file() for s in scripts)
     assert "<script>" not in html                      # CSP: script-src 'self', no inline scripts
 

@@ -219,3 +219,27 @@ button.play-btn[aria-pressed="true"], #music-voice[aria-pressed="true"] { border
 .level-row { align-items: center; flex-wrap: wrap; }
 #music-level { flex: 1; min-width: 140px; }
 .level-out { font-variant-numeric: tabular-nums; min-width: 4.5em; }
+
+/* --- Review: style panel ----------------------------------------------------------------- */
+#style-panel { margin-top: 12px; }
+.style-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 10px; }
+fieldset.style-group { margin: 0; padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+                       min-width: 0; }
+fieldset.style-group legend { font-weight: 600; padding: 0 4px; overflow-wrap: anywhere; }
+.style-field { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 2px 6px; margin: 3px 0; }
+.style-field label { font-size: 12px; }
+.style-field input[type="text"], .style-field input[type="number"], .save-as input {
+  font: inherit; font-size: 12px; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 4px; padding: 2px 5px; width: 9.5em; }
+.style-field input[type="color"] { width: 26px; height: 22px; padding: 0; border: 1px solid var(--line); background: none; }
+.style-field .was { grid-column: 1 / -1; font-size: 11px; text-align: right; }
+.style-field .was:empty { display: none; }
+.style-field.changed label { font-weight: 700; color: var(--accent); }
+.save-as { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); }
+fieldset.style-group .row { align-items: flex-end; flex-wrap: wrap; }
+ol.style-sent { margin-top: 8px; }
+ol.style-sent li p { margin: 2px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.live-caption { z-index: 4; }
+.approx.live-approx { position: absolute; z-index: 4; font-size: 11px; padding: 1px 6px; border-radius: 8px;
+                      background: rgba(0, 0, 0, .6); color: #fff; pointer-events: none; }
+#style-panel .send-bar { position: static; }

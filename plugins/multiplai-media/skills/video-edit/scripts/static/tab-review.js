@@ -1,6 +1,7 @@
 // Review tab: play every render, click the picture to comment on that moment and spot,
 // draw on the paused frame (pen, arrow, box) and send the marked-up frame, or mark a
 // stretch on the render's timeline (from its .edl.json sidecar) and comment on it.
+// review-style.js adds the style panel and live overlays through App.review (below).
 "use strict";
 
 (() => {
@@ -10,8 +11,13 @@
   const state = {
     clips: [], clip: null, version: null, pending: [], sent: [], draft: null,
     tool: "point", colour: L.DRAW_COLOURS[0][1], stroke: null,
-    timeline: null, timelineKey: null, drag: null,
+    timeline: null, timelineKey: null, drag: null, sidecar: null,
   };
+
+  // review-style.js listens for "render" (the selected render or its sidecar changed),
+  // "time" (the picture moved), "resize" and "rows" (the mailbox rows changed).
+  const listeners = { render: [], time: [], resize: [], rows: [] };
+  const emit = (event) => { for (const fn of listeners[event]) fn(); };
 
   // --- pending comments survive a reload (per viewer, best effort) -------------
 
@@ -104,17 +110,21 @@
     clearTimeout(retryTimer);
     if (!retry) retries = 0;
     const key = `${state.clip}@${state.version}`;
-    if (state.timelineKey !== key) { state.timeline = null; renderTimeline(); }   // never another render's lanes
+    if (state.timelineKey !== key) { state.timeline = null; state.sidecar = null; renderTimeline(); emit("render"); }   // never another render's lanes
     state.timelineKey = key;
     try {
       const q = new URLSearchParams({ video: state.clip, version: String(state.version) });
       const res = await App.api(`/api/edl?${q}`);
       if (state.timelineKey !== key) return;
+      const changed = JSON.stringify(res) !== JSON.stringify(state.sidecar && state.sidecar.res);
       state.timeline = L.timelineLanes(res.data);
+      state.sidecar = { res, data: res.data, overlayKeys: res.overlay_keys || {} };
       App.notice($("timeline-notice"), null);
+      if (changed) emit("render");
     } catch (e) {
       if (state.timelineKey !== key) return;
       state.timeline = null;
+      if (state.sidecar) { state.sidecar = null; emit("render"); }
       App.notice($("timeline-notice"), { text: `No timeline for this render: ${e.message}` });
       if (retries++ < TIMELINE_RETRIES) retryTimer = setTimeout(() => { if (state.timelineKey === key) loadTimeline(true); }, 5000);
     }
@@ -603,11 +613,13 @@
     $("time").textContent = `${fmt(video.currentTime)} / ${fmt(video.duration || 0)}`;
     renderMarkers();
     renderTimelineState();
+    emit("time");
   }
 
   // The playhead follows every frame while playing (timeupdate fires only ~4 times a second).
   function followPlayhead() {
     renderTimelineState();
+    emit("time");
     if (!video.paused) requestAnimationFrame(followPlayhead);
   }
 
@@ -697,7 +709,7 @@
     });
     seek.addEventListener("input", () => { video.currentTime = Number(seek.value); });
     $("version").addEventListener("change", (ev) => selectClip(state.clip, Number(ev.target.value)));
-    window.addEventListener("resize", renderMarkers);
+    window.addEventListener("resize", () => { renderMarkers(); emit("resize"); });
     document.addEventListener("keydown", (ev) => {
       if (App.current() !== "review" || !state.clip) return;
       if (ev.target instanceof HTMLTextAreaElement || ev.target instanceof HTMLSelectElement
@@ -713,9 +725,19 @@
     isOpen: (s) => s.videos.length > 0,
     update(s, changed) {
       if (changed.videos) updateVideos(s.videos);
-      if (changed.rows && state.clip) refreshSent();
+      if (changed.rows && state.clip) { refreshSent(); emit("rows"); }
     },
     hide() { if (video && !video.paused) video.pause(); },
-    show() { renderMarkers(); },
+    show() { renderMarkers(); emit("resize"); },
   });
+
+  // What review-style.js builds on: the selected render, its sidecar, the picture and events.
+  App.review = {
+    on(event, fn) { listeners[event].push(fn); },
+    video: () => video,
+    stage: () => stage,
+    pictureRect,
+    render: () => (state.clip ? { clip: state.clip, version: state.version } : null),
+    sidecar: () => state.sidecar,
+  };
 })();
