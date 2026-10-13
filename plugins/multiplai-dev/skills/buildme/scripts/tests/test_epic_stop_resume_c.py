@@ -1,5 +1,6 @@
 """Row tests for PR C's "Stop and resume states" table
-(plan-buildme-epic-mode-2026-10-12.md, rows marked `Test: yes`: C.S2, C.S3, C.S4).
+(plan-buildme-epic-mode-2026-10-12.md, rows marked `Test: yes`: C.S2, C.S3, C.S4; and C.S19,
+which the PR adds).
 
 Each case stops the coordinator at the row's point (a forked child exiting
 137, as SIGKILL would), resumes, and compares with the same scenario run
@@ -240,3 +241,48 @@ def test_C_S4_finished_review_whose_result_was_not_recorded_is_reused(tmp_path, 
     keys = ("head_sha", "base_sha", "review_dir", "cost_usd", "blocking", "conflicts")
     assert {k: str(got[k]).replace(str(stopped.root), "<root>") for k in keys} == \
         {k: str(want[k]).replace(str(clean.root), "<root>") for k in keys}
+
+
+def test_C_S19_head_moved_while_reviewed_and_stopped_before_the_reuse(tmp_path, monkeypatch):
+    """C.S19: a commit lands after the coordinator read a's head and before the
+    review read it, so the review reviews the new head. Killed right after the
+    old head's record gets its plain result: the next run reads the PR again
+    and writes one pair for the new head from its review. No second review."""
+    moved = "c" * 40
+    stopped, clean = _roots(tmp_path, monkeypatch, {str(N): [{}]})
+    real_run = coordinator.Coordinator._run_review
+
+    def pushing(root: Root):
+        done = []
+
+        async def run_review(self, c, kind, argv, head):
+            if c.id == "a" and not done:
+                done.append(1)
+                root.fakes.set_head("e-a", moved)
+            return await real_run(self, c, kind, argv, head)
+        return run_review
+
+    def setup():
+        coordinator.Coordinator._run_review = pushing(stopped)
+        real = records.finish
+
+        def dying(attempt, code, *, interrupted, extra=None):
+            out = real(attempt, code, interrupted=interrupted, extra=extra)
+            if attempt.kind == "review" and code == 0 and not extra:
+                os._exit(137)
+            return out
+
+        records.finish = dying
+
+    stopped.killed(setup)
+    [first] = stopped.reviews()
+    assert first.started["head_sha"] != moved and first.result["exit_code"] == 0
+    assert stopped.run() == 0
+    monkeypatch.setattr(coordinator.Coordinator, "_run_review", pushing(clean))
+    assert clean.run() == 0
+    _assert_same(stopped, clean, ["<build>", ("review", None, 0, [], False), ("review", None, 0, [], False)], [])
+    got, want = _result(stopped, 1), _result(clean, 1)
+    assert (got["head_sha"], got["reused"], got["pr_round"]) == (moved, True, 1)
+    assert (want["head_sha"], want["reused"], want["pr_round"]) == (moved, True, 1)
+    status = json.loads((stopped.dir / "epic.json").read_text())["child_status"]["a"]
+    assert (status["status"], status["pr_round"]) == ("built", 1)

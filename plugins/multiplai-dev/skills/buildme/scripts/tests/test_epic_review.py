@@ -250,6 +250,113 @@ def test_a_new_head_is_a_new_round_and_the_round_count_survives_a_resume(tmp_pat
     assert e.child_status("a")["pr_round"] == 2
 
 
+def _push_once_reviewing(e: Epic, monkeypatch, sha: str) -> None:
+    """A commit lands on a's PR branch after the coordinator read its head and
+    before the review reads it: the review reviews *sha*."""
+    real, moved = coordinator.Coordinator._run_review, []
+
+    async def run_review(self, c, kind, argv, head):
+        if c.id == "a" and not moved:
+            moved.append(1)
+            e.fakes.set_head("e-a", sha)
+        return await real(self, c, kind, argv, head)
+
+    monkeypatch.setattr(coordinator.Coordinator, "_run_review", run_review)
+
+
+def test_a_head_that_moves_as_the_review_starts_is_reviewed_not_parked(tmp_path, monkeypatch):
+    """C.S8: the review exits 0 with its `finished` line for the new head. The
+    coordinator reads the PR again and uses that review: one launch, a's record
+    of the old head gets a plain result, and one pair holds the new head's
+    fields. A later run launches nothing."""
+    moved = "c" * 40
+    e = Epic(tmp_path, monkeypatch, reviews={str(N): [{"findings": [high()]}]})
+    old = e.head()
+    _push_once_reviewing(e, monkeypatch, moved)
+    assert e.run() == 0
+    assert sorted(e.launched()) == ["review", "review"]
+    first, pair = e.reviews("a")
+    assert first.started["head_sha"] == old
+    assert (first.result["exit_code"], first.result["interrupted"]) == (0, False)
+    assert "blocking" not in first.result and "parked" not in first.result
+    assert pair.started["head_sha"] == moved
+    r = pair.result
+    assert (r["head_sha"], r["review_dir"], r["pr_round"], r["reused"]) == (moved, str(e.target()), 1, True)
+    assert [b.split()[:2] for b in r["blocking"]] == [["HIGH", "f1"]]
+    st = e.child_status("a")
+    assert (st["status"], st["reason"], st["pr_round"]) == ("built", "", 1)
+    assert e.run() == 0
+    assert sorted(e.launched()) == ["review", "review"] and len(e.reviews("a")) == 2
+    assert e.child_status("a")["status"] == "built"
+
+
+def test_a_review_that_exits_0_without_a_complete_line_for_an_unmoved_head_parks(tmp_path, monkeypatch):
+    """The head did not move and the review's `finished` line is not complete
+    (`stopped` is set): the child parks, and stays parked."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, reviews={str(N): [{"stopped": "budget"}]})
+    assert e.run() == 0
+    st = e.child_status("a")
+    assert st["status"] == "parked" and "review exited 0 without a findings line" in st["reason"]
+    [a] = e.reviews("a")
+    assert a.result["exit_code"] == 0 and a.result["parked"] == st["reason"]
+    assert e.child_status("b")["status"] == "skipped"
+    assert e.run() == 0 and e.launched() == ["review"]
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM], ids=["SIGINT", "SIGTERM"])
+def test_a_signal_stops_the_review_this_run_started(tmp_path, monkeypatch, sig):
+    """Ctrl-C or SIGTERM signals the group of a review this run started and
+    writes its record's result with `interrupted: true`."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, reviews={str(N): [{"block": True}]})
+    lock = e.fakes.review_lock()
+    try:
+        rc = run_signalled(lambda: e.run(), lambda: lock.exists() and bool(lock.read_text()), sig)
+        assert rc == 128 + sig
+        pid = int(lock.read_text())
+        for _ in range(250):
+            if not alive(pid):
+                break
+            time.sleep(0.02)
+        assert not alive(pid)
+        [a] = e.reviews("a")
+        assert a.result is not None and a.result["interrupted"] is True
+    finally:
+        e.fakes.release_review("e-a")
+
+
+def test_a_signal_leaves_a_review_an_earlier_run_left_running(tmp_path, monkeypatch):
+    """A review this run did not start (left by a run a SIGHUP ended, waited for
+    through its run lock) is not signalled: it may be one the epic never
+    started. It keeps running, and its record keeps no result."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, reviews={str(N): [{"block": True}]})
+    lock = e.fakes.review_lock()
+
+    def as_main() -> int:
+        try:
+            with git_ops._exit_on_termination(interrupt=False):
+                return e.run()
+        except SystemExit as stop:
+            return stop.code
+
+    waiting, real = tmp_path / "waiting", FakeClock.sleep
+
+    async def sleep(clock, seconds):
+        if seconds == review.REVIEW_WAIT:      # the C.S2 wait for that review
+            waiting.write_text("")
+        await real(clock, seconds)
+
+    try:
+        assert run_signalled(as_main, lambda: lock.exists() and bool(lock.read_text()), signal.SIGHUP) == 129
+        pid = int(lock.read_text())
+        monkeypatch.setattr(FakeClock, "sleep", sleep)
+        assert run_signalled(lambda: e.run(), waiting.exists, signal.SIGTERM) == 128 + signal.SIGTERM
+        time.sleep(0.3)
+        assert alive(pid)
+        assert [a.result for a in e.reviews("a")] == [None]
+    finally:
+        e.fakes.release_review("e-a")
+
+
 def test_an_interrupted_review_is_resumed(tmp_path, monkeypatch):
     """A review of this head that started and never finished (its `started`
     ledger line and saved state, as a killed review leaves them): `review`

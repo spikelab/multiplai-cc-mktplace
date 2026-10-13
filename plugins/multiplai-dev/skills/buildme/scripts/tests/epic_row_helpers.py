@@ -478,7 +478,7 @@ if step.get("die"):
     os.kill(os.getpid(), signal.SIGKILL)
 (target / "findings.json").write_text(json.dumps({{"mode": None, "findings": step.get("findings", [])}}))
 append({{"event": "finished", "slug": slug, "target_dir": str(target), "head_sha": head,
-        "base_sha": "b" * 40, "pr": n, "round": "01", "stopped": None,
+        "base_sha": "b" * 40, "pr": n, "round": "01", "stopped": step.get("stopped"),
         "run": {{"cost_usd": step.get("cost", 1.5)}}}})
 print(f"findings: {{target / 'findings.json'}}", flush=True)
 '''
@@ -492,7 +492,8 @@ class Fakes:
     `<root>/calls.log`. `<root>/gh-fails` makes every `gh` call fail; `ps_fails`
     puts a `ps` that exits 1 first on PATH. The fake review (`uv`, PR C)
     answers from `<root>/reviews.json` (per PR number, one step per `review`
-    launch: `block`, `die`, `exit` with `stderr`, `findings`, `cost`; `resume`
+    launch: `block`, `die`, `exit` with `stderr`, `findings`, `cost`, `stopped`
+    (the `finished` line's value); `resume`
     has its own key) and logs its launches to `<root>/reviews.log`; by
     default each review is clean."""
 
