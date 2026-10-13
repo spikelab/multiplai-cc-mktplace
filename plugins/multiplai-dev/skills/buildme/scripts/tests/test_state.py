@@ -348,6 +348,22 @@ class TestPreEpicSplitCheckpoint:
         s.checkpoint(out)
         assert json.loads(out.read_text())["epic_dir"] is None
 
+    def test_one_failed_or_past_the_split_loads_as_one_change(self, tmp_path):
+        """Row A.S14: such a build is already being built as one change, so a
+        retry of it must not ask the split question (`state.epic_single`)."""
+        assert BuildState.load(FIXTURES / self.FIXTURE).epic_single is False
+        for phase in (BuildPhase.FAILED, BuildPhase.SPEC_GENERATION, BuildPhase.TDD_BUILD):
+            data = json.loads((FIXTURES / self.FIXTURE).read_text())
+            data["phase"] = phase.value
+            path = tmp_path / f"{phase.value}.json"
+            path.write_text(json.dumps(data))
+            assert BuildState.load(path).epic_single is True, phase
+        # Saved by this release (the key is there): a FAILED build that never
+        # answered stays undecided, so its retry still asks.
+        fresh = BuildState(change_name="c", mode="scratch", tier="advanced", phase=BuildPhase.FAILED)
+        fresh.checkpoint(tmp_path / "fresh.json")
+        assert BuildState.load(tmp_path / "fresh.json").epic_single is False
+
 
 class TestRespecPhaseAndNotes:
     """BuildPhase.RESPEC sits between TDD_BUILD and COMPLETE, and the notes an
