@@ -418,6 +418,10 @@ if cmd == "post":       # PR D2: logged apart from the reviews; steps under the 
     decisions = pathlib.Path(argv[argv.index("--decisions") + 1])
     (root / "posted").mkdir(exist_ok=True)
     (root / "posted" / f"post.{{k}}.json").write_text(decisions.read_text())
+    if step.get("block"):
+        gate = root / "release" / f"post-{{k}}"
+        while not gate.exists():
+            time.sleep(0.02)
     if step.get("die"):
         os.kill(os.getpid(), signal.SIGKILL)
     if step.get("exit"):
@@ -513,8 +517,13 @@ FAKE_FINDINGS = r'''#!{python}
 `block` waits for `<root>/release/fix-<n>`; `die` is a SIGKILL; `exit` prints
 `stdout` (a `FINDINGS:FAILED:` line) and exits with it; each of `rounds` is one
 fix round: an empty commit on the PR branch, one more round in the change's
-`.findings-state.json`, and the fixer's own review of that head in the review
-ledger with the round's `findings`. `SPEND:<spend>:0` on every exit but a kill."""
+`.findings-state.json` (its steps all `finished`), and the fixer's own review
+of that head in the review ledger with the round's `findings`. A round with
+`stop` is SIGKILLed part-way: `fetch` right after the round is added (no commit,
+no review), `review` after its review is in the ledger but before the round
+records it as finished. A launch that finds the last round unfinished
+finishes it with its first entry of `rounds`, as `findings` resumes a round.
+`SPEND:<spend>:0` on every exit but a kill."""
 import atexit, json, os, pathlib, signal, subprocess, sys, time
 
 argv = sys.argv[1:]
@@ -552,14 +561,32 @@ state = project / "specs" / "changes" / change / ".findings-state.json"
 doc = json.loads(state.read_text()) if state.exists() else {{"findings": {{"rounds": []}}}}
 reviews = pathlib.Path(os.environ["WORKSPACE"]) / ".multiplai" / "data" / "reviews"
 target = reviews / "o-r" / f"pr-{{n}}"
-for r in step.get("rounds", []):
-    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m",
-                    f"fix round {{len(doc['findings']['rounds']) + 1}}"], cwd=project, check=True)
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True,
-                          check=True).stdout.strip()
-    doc["findings"]["rounds"].append({{"number": len(doc["findings"]["rounds"]) + 1}})
+ALL = ["fetch", "triage", "spec", "code", "publish", "review"]
+rounds = doc["findings"]["rounds"]
+todo = list(step.get("rounds", []))
+resume = bool(rounds) and "review" not in rounds[-1].get("finished", ALL) and bool(todo)
+
+
+def save():
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text(json.dumps(doc))
+
+
+for i, r in enumerate(todo):
+    if i == 0 and resume:
+        rnd = rounds[-1]
+    else:
+        rnd = {{"number": len(rounds) + 1, "finished": ["fetch"]}}
+        rounds.append(rnd)
+        save()
+        if r.get("stop") == "fetch":
+            os.kill(os.getpid(), signal.SIGKILL)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m",
+                    f"fix round {{rnd['number']}}"], cwd=project, check=True)
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True,
+                          check=True).stdout.strip()
+    rnd["finished"] = ALL[:-1]
+    save()
     target.mkdir(parents=True, exist_ok=True)
     (target / "findings.json").write_text(json.dumps({{"mode": None, "findings": r.get("findings", [])}}))
     with (reviews / "ledger.jsonl").open("a") as f:
@@ -568,7 +595,11 @@ for r in step.get("rounds", []):
                        "base_sha": "b" * 40, "pr": n, "round": "01", "stopped": None,
                        "run": {{"cost_usd": r.get("cost", 1.5)}}}}):
             f.write(json.dumps(entry, sort_keys=True) + "\n")
-    print(f"FINDINGS:ROUND_DONE:{{len(doc['findings']['rounds'])}}", flush=True)
+    if r.get("stop") == "review":
+        os.kill(os.getpid(), signal.SIGKILL)
+    rnd["finished"] = ALL
+    save()
+    print(f"FINDINGS:ROUND_DONE:{{rnd['number']}}", flush=True)
 print(f"FINDINGS:DONE:{{len(doc['findings']['rounds'])}}", flush=True)
 '''
 
@@ -585,7 +616,8 @@ class Fakes:
     (the `finished` line's value); `resume`
     has its own key) and logs its launches to `<root>/reviews.log`; by
     default each review is clean. PR D2: `review_pipeline post` answers from
-    the key `post` of `<root>/reviews.json` (`die`, `exit` with `stderr`),
+    the key `post` of `<root>/reviews.json` (`block`, waiting for
+    `<root>/release/post-<k>` on its k-th launch; `die`; `exit` with `stderr`),
     keeps a copy of each decisions file under `<root>/posted/` and logs to
     `<root>/posts.log`; the fixer (`FAKE_FINDINGS`) answers from
     `<root>/fixes.json` and logs to `<root>/calls.log` as kind `findings`."""

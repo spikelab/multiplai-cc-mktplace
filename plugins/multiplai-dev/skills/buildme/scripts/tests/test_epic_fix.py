@@ -6,8 +6,10 @@ findings`) are fakes first on PATH (`epic_row_helpers.Fakes`)."""
 from __future__ import annotations
 
 import json
+import os
 import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -20,12 +22,14 @@ from build_pipeline.epic.split import EpicSplitAnswer
 from .epic_row_helpers import (
     CallLog,
     Fakes,
+    alive,
     approve,
     child,
     make_build,
     make_project,
     pr_number,
     run_coordinator,
+    run_killed,
     run_signalled,
     use_workspace,
 )
@@ -249,3 +253,242 @@ def test_a_signal_stops_the_fixer_and_the_next_run_relaunches_it(tmp_path, monke
     assert e.run() == 0
     assert [a.result["exit_code"] for a in e.fixes()][1:] == [0]
     assert e.kinds()[-1] == "review" and e.status()["status"] == "built"
+
+
+# --- resumes that must not repeat a paid step, and the round count -----------------
+
+def _state(project: Path, name: str, rounds: list[list[str]]) -> None:
+    path = project / "specs" / "changes" / name / ".findings-state.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"findings": {"rounds": [{"number": i + 1, "finished": f}
+                                                        for i, f in enumerate(rounds)]}}))
+
+
+ALL = ["fetch", "triage", "spec", "code", "publish", "review"]
+
+
+def test_rounds_done_counts_reviewed_rounds_under_the_name_findings_uses(tmp_path):
+    """`findings` keeps its state under the normalised change name, and a round
+    whose review has not finished is not yet in `pr_round`: it is not counted."""
+    from build_pipeline.epic import fix
+
+    _state(tmp_path, "spk-12-a", [ALL, ALL, ["fetch", "triage"]])
+    assert fix.rounds_done(tmp_path, "SPK_12-a") == 2
+    assert fix.rounds_done(tmp_path, "spk-12-a") == 2
+
+
+@pytest.mark.parametrize("text", ["[]", '{"findings": {"rounds": null}}', "{not json",
+                                  '{"findings": {"rounds": [1, null]}}'])
+def test_rounds_done_reads_a_malformed_state_as_no_rounds(tmp_path, text):
+    from build_pipeline.epic import fix
+
+    path = tmp_path / "specs" / "changes" / "e-a" / ".findings-state.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(text)
+    assert fix.rounds_done(tmp_path, "e-a") == 0
+    assert fix.rounds_done(tmp_path, "e-b") == 0          # no change directory
+
+
+def test_a_fixer_killed_part_way_through_a_round_is_relaunched_within_the_cap(tmp_path, monkeypatch):
+    """D2.S5/S11 with a round open: the killed fixer had finished round 1 and
+    started round 2, whose review is not in the ledger yet. The relaunch gets
+    the same `--max-rounds` as the first launch, so `findings` finishing round
+    2 and running on stops where a fixer that never stopped would."""
+    fixes = {str(N): [{"rounds": [{"findings": [high("f2")]}, {"stop": "fetch"}]}, {"rounds": [{}]}]}
+    e = Epic(tmp_path, monkeypatch, fixes=fixes)
+    assert e.run() == 0
+    assert e.status()["status"] == "built" and e.fixes()[0].result["interrupted"] is True
+    assert e.run() == 0
+    assert [_rounds(a.started["argv"]) for a in e.fixes()] == [5, 5]
+    st = e.status()
+    assert (st["status"], st["pr_round"]) == ("built", 3)
+
+
+def test_a_fixer_killed_after_its_last_allowed_review_is_not_relaunched(tmp_path, monkeypatch):
+    """The fixer's review of round 1 reached the cap, then it was killed before
+    the round recorded it. No review round is left, so no fixer runs again:
+    the review step reuses that review and parks at the cap."""
+    fixes = {str(N): [{"rounds": [{"findings": [high("f2")], "stop": "review"}]}]}
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, fixes=fixes, rounds=2)
+    assert e.run() == 3                                  # b waits for a's merge
+    assert [_rounds(a.started["argv"]) for a in e.fixes()] == [1]
+    assert e.status()["status"] == "built"
+    assert e.run() == 0
+    assert len(e.fakes.fix_launches()) == 1
+    st = e.status()
+    assert st["status"] == "parked" and "review round 2 of 2" in st["reason"] and "f2" in st["reason"]
+
+
+@pytest.mark.parametrize("left", ["no result", "interrupted"])
+def test_a_failed_fixer_whose_result_was_not_recorded_parks_on_resume(tmp_path, monkeypatch, left):
+    """D2.S6 after a stop: `findings` printed `FINDINGS:FAILED` and exited,
+    and the coordinator stopped before recording that (or recorded it as
+    interrupted). The resume parks with the reason from the log and does not
+    run `findings` again, which would repeat the failed step."""
+    failed = "FINDINGS:FAILED:code:block 2 failed"
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, fixes={str(N): [{"exit": 1, "stdout": failed}, {"rounds": [{}]}]})
+    assert e.run() == 0
+    [fx] = e.fixes()
+    if left == "no result":
+        fx.result_path.unlink()
+    else:
+        fx.result_path.write_text(json.dumps({**fx.result, "interrupted": True, "parked": None}))
+    assert e.run() == 0
+    assert len(e.fakes.fix_launches()) == 1
+    st = e.status()
+    assert (st["status"], st["reason"]) == ("parked", "the fixer failed at code: block 2 failed")
+    assert e.run() == 0
+    assert len(e.fakes.fix_launches()) == 1 and e.status()["status"] == "parked"
+
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGHUP])
+def test_a_fixer_stopped_alone_by_sigterm_or_sighup_is_relaunched(tmp_path, monkeypatch, sig):
+    """D2.S5: `findings` turns SIGTERM and SIGHUP into exit 128 + signal. That
+    is a stop, not a failure: the result is `interrupted`, the child stays
+    `built`, and the next run relaunches it."""
+    from build_pipeline.epic import coordinator
+
+    e = Epic(tmp_path, monkeypatch, fixes={str(N): [{"block": True}, {"rounds": [{}]}]})
+    sent = []
+
+    def tick(coord):
+        if not sent and e.fakes.fix_launches():
+            pid = coordinator.fix_pid("e-a", e.worktree)
+            if pid:
+                os.kill(pid, sig)
+                sent.append(pid)
+
+    monkeypatch.setattr(coordinator, "_tick", tick)
+    assert e.run() == 0
+    [fx] = e.fixes()
+    assert (fx.result["exit_code"], fx.result["interrupted"]) == (128 + sig, True)
+    assert e.status()["status"] == "built"
+    monkeypatch.setattr(coordinator, "_tick", lambda coord: None)
+    assert e.run() == 0
+    assert [a.result["exit_code"] for a in e.fixes()] == [128 + sig, 0]
+    assert e.status()["status"] == "built"
+
+
+def test_a_post_still_running_after_its_coordinator_died_is_waited_for(tmp_path, monkeypatch):
+    """D2.S2 with the post alive: the coordinator died while `post` ran in its
+    own session. The resume launches nothing while it lives, then writes its
+    result and posts again; two posts never run at once."""
+    from build_pipeline.epic import coordinator
+
+    e = Epic(tmp_path, monkeypatch, reviews={**BLOCKED, "post": [{"block": True}, {}]},
+             fixes={str(N): [{"rounds": [{}]}]})
+
+    def setup():
+        def die_while_posting(coord):
+            c = coord.children["a"]
+            if c.rattempt is not None and c.rattempt.kind == "post":
+                os._exit(137)
+
+        coordinator._tick = die_while_posting
+
+    run_killed(e.run, setup)
+    [post] = [a for a in e.tries() if a.kind == "post"]
+    assert post.result is None
+    target = str(e.target)
+    pid = None
+    for _ in range(500):
+        pid = coordinator.post_pid(target)
+        if pid:
+            break
+        time.sleep(0.02)
+    assert pid and alive(pid)
+    looks = []
+
+    def tick(coord):
+        if alive(pid):
+            looks.append(1)
+            assert len(e.fakes.post_launches()) == 1          # never a second post
+            if len(looks) == 5:
+                (e.root / "release" / "post-1").write_text("")
+                for _ in range(500):
+                    if not alive(pid):
+                        break
+                    time.sleep(0.02)
+
+    monkeypatch.setattr(coordinator, "_tick", tick)
+    assert e.run() == 0
+    assert len(looks) == 5
+    posts = [a for a in e.tries() if a.kind == "post"]
+    assert [(a.result["exit_code"], a.result["interrupted"]) for a in posts] == [(None, True), (0, False)]
+    assert len(e.fakes.post_launches()) == 2 and len(e.fakes.fix_launches()) == 1
+    assert e.status()["status"] == "built"
+
+
+def test_a_post_killed_by_a_signal_is_posted_again_by_the_next_run(tmp_path, monkeypatch):
+    e = Epic(tmp_path, monkeypatch, reviews={**BLOCKED, "post": [{"die": True}, {}]},
+             fixes={str(N): [{"rounds": [{}]}]})
+    assert e.run() == 0
+    [post] = [a for a in e.tries() if a.kind == "post"]
+    assert (post.result["exit_code"], post.result["interrupted"]) == (-signal.SIGKILL, True)
+    assert e.status()["status"] == "built" and e.fakes.fix_launches() == []
+    assert e.run() == 0
+    assert len(e.fakes.post_launches()) == 2 and len(e.fakes.fix_launches()) == 1
+    assert e.status()["status"] == "built"
+
+
+def test_a_decisions_file_that_cannot_be_written_parks_the_child(tmp_path, monkeypatch):
+    """28's rule for any OSError, not only a missing `findings.json`: the child
+    parks with the reason and the run goes on."""
+    from build_pipeline.epic import coordinator
+
+    def refuse(review_dir):
+        raise PermissionError(f"[Errno 13] Permission denied: '{review_dir}/buildme-decisions.json'")
+
+    monkeypatch.setattr(coordinator, "write_decisions", refuse)
+    e = Epic(tmp_path, monkeypatch)
+    assert e.run() == 0
+    st = e.status()
+    assert st["status"] == "parked" and st["reason"].startswith("cannot choose what to post: [Errno 13]")
+    assert [a.result["parked"] for a in e.tries() if a.kind == "post"] == [st["reason"]]
+    assert e.fakes.post_launches() == [] and e.fakes.fix_launches() == []
+
+
+def test_the_fixer_runs_in_the_worktree_joined_with_the_projects_offset(tmp_path):
+    """`<P>` (32.2): a project in a subdirectory of its repo is fixed in the
+    same subdirectory of the child's worktree."""
+    from types import SimpleNamespace
+
+    from build_pipeline.epic import coordinator
+
+    repo = tmp_path / "repo"
+    (repo / "services" / "api").mkdir(parents=True)
+    worktree = tmp_path / "wt"
+    me = SimpleNamespace(project_dir=repo / "services" / "api", repo=repo, _worktree=lambda c: worktree)
+    assert coordinator.Coordinator._child_project(me, None) == (worktree / "services" / "api").absolute()
+    me.project_dir = repo
+    assert coordinator.Coordinator._child_project(me, None) == worktree.absolute()
+
+
+def test_ps_failing_while_a_fixer_may_still_run_launches_nothing(tmp_path, monkeypatch):
+    """D2.S9 when `ps` cannot answer: a fixer with no result may still run, so
+    the child is `unknown` and no second `findings` starts."""
+    e = Epic(tmp_path, monkeypatch, fixes={str(N): [{"die": True}, {"rounds": [{}]}]})
+    assert e.run() == 0
+    e.fixes()[0].result_path.unlink()
+    e.fakes.ps_fails(monkeypatch)
+    assert e.run() == 1
+    assert len(e.fakes.fix_launches()) == 1
+    st = e.status()
+    assert st["status"] == "unknown" and st["reason"].startswith("cannot tell whether its fixer is still running")
+
+
+def test_an_unparsable_findings_file_parks_before_posting(tmp_path, monkeypatch):
+    e = Epic(tmp_path, monkeypatch)
+    from build_pipeline.epic import coordinator
+
+    real = coordinator.Coordinator._post
+
+    async def post(self, c, rec, head):
+        (Path(rec.result["review_dir"]) / "findings.json").write_text("{not json")
+        return await real(self, c, rec, head)
+
+    monkeypatch.setattr(coordinator.Coordinator, "_post", post)
+    assert e.run() == 0
+    st = e.status()
+    assert st["status"] == "parked" and st["reason"].startswith("cannot choose what to post: ")
+    assert e.fakes.post_launches() == [] and e.fakes.fix_launches() == []
