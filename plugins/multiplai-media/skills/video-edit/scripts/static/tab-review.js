@@ -78,10 +78,11 @@
   /* The selected render's sidecar, drawn as lanes; a render without one says why, and is
    * asked again every 5 s, three times (render writes the sidecar just after the mp4
    * appears; a render from before sidecars never gets one). */
-  async function loadTimeline() {
+  async function loadTimeline(retry = false) {
     clearTimeout(retryTimer);
+    if (!retry) retries = 0;
     const key = `${state.clip}@${state.version}`;
-    if (state.timelineKey !== key) { state.timeline = null; retries = 0; renderTimeline(); }   // never another render's lanes
+    if (state.timelineKey !== key) { state.timeline = null; renderTimeline(); }   // never another render's lanes
     state.timelineKey = key;
     try {
       const q = new URLSearchParams({ video: state.clip, version: String(state.version) });
@@ -93,7 +94,7 @@
       if (state.timelineKey !== key) return;
       state.timeline = null;
       App.notice($("timeline-notice"), { text: `No timeline for this render: ${e.message}` });
-      if (retries++ < TIMELINE_RETRIES) retryTimer = setTimeout(() => { if (state.timelineKey === key) loadTimeline(); }, 5000);
+      if (retries++ < TIMELINE_RETRIES) retryTimer = setTimeout(() => { if (state.timelineKey === key) loadTimeline(true); }, 5000);
     }
     renderTimeline();
   }
