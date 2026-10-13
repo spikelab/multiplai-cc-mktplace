@@ -563,6 +563,8 @@ class TestFixOnPass:
 # block run in a second project that never stopped (`assert_same_as_unstopped`);
 # a refusal must leave the repo exactly as it was (`repo_state`).
 
+import asyncio  # noqa: E402
+
 from tests.row_helpers import assert_same_as_unstopped, repo_state, run_killed_at  # noqa: E402
 
 OUTSIDE = "other/notes.txt"
@@ -625,6 +627,93 @@ class TestFixOnPassRows:
         assert (p.root / OUTSIDE).read_text() == "v2 user edit\n"
         assert (OUTSIDE in _git(p.root, "diff", "--cached", "--name-only").split()) is staged
         assert_same_as_unstopped(p.root, clean.root)
+
+
+    # Rows D6e and D7c: a fix-on-pass rollback stopped inside `discard_to`,
+    # after its soft reset (`restore`) or after its restore (`clean`). SIGKILL
+    # only: no handler on these paths catches BaseException, so a Ctrl-C there
+    # ends the same way.
+
+    EXTRA_ROUND = "specs/changes/test/reviews/block-01-round-3.json"
+
+    @staticmethod
+    def _fix_and_new_file(p):
+        return _fixer(p.dir, {"app.py": FIXED, "helper.py": "h = 1\n"})
+
+    def _stop_in_rollback(self, p, rollback: str, git_command: str):
+        """Stop a rollback at *git_command*. `resume`: the pass is stopped at
+        `review`, and the resume's rollback (`_resume_fix_on_pass`) is killed.
+        `not_kept`: the review after the fix fails, and the rollback of the
+        fix not kept is killed. Returns the reviews the next resume needs."""
+        if rollback == "resume":
+            stack, _, _ = _engine([_passing([_finding()]), Killed()], self._fix_and_new_file(p))
+            with stack, pytest.raises(Killed):
+                asyncio.run(_run_integration_and_review(p.block, p.config, p.state, p.progress))
+            run_killed_at(git_command, lambda: asyncio.run(TestFixOnPass._resume(p, [_passing()])))
+            return [_passing()]
+
+        async def not_kept():
+            stack, _, _ = _engine([_passing([_finding()]), _failing()], self._fix_and_new_file(p))
+            with stack:
+                await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+
+        run_killed_at(git_command, lambda: asyncio.run(not_kept()))
+        return [_failing()]
+
+    def _unstopped(self, base, rollback: str) -> tuple[int, Path]:
+        clean = _make_project(base)
+        second = _passing() if rollback == "resume" else _failing()
+        stack, _, _ = _engine([_passing([_finding()]), second], self._fix_and_new_file(clean))
+        with stack:
+            assert asyncio.run(_run_integration_and_review(
+                clean.block, clean.config, clean.state, clean.progress))
+        code, _ = asyncio.run(TestFixOnPass._resume(clean))
+        return code, clean.root
+
+    def _rerun_after_a_stop_in_rollback(self, p, base, rollback: str, git_command: str):
+        """Stop the rollback, run the same block unstopped under *base*, and
+        resume. Returns (stopped root, unstopped root, extra files)."""
+        reviews = self._stop_in_rollback(p, rollback, git_command)
+        clean_code, clean_root = self._unstopped(base, rollback)
+
+        code, fix = asyncio.run(TestFixOnPass._resume(p, reviews, self._fix_and_new_file(p)))
+
+        assert code == clean_code == EXIT_SUCCESS
+        assert fix.await_count == 1
+        # The rerun's review after a fix not kept writes one more round record.
+        extra = (self.EXTRA_ROUND,) if rollback == "not_kept" else ()
+        return p.root, clean_root, extra
+
+    @pytest.mark.parametrize("rollback", ["resume", "not_kept"])
+    def test_row_D6e_fix_pass_rollback_killed_mid_discard_reruns(self, project, tmp_path, rollback):
+        stopped, clean, extra = self._rerun_after_a_stop_in_rollback(
+            project, tmp_path / "unstopped", rollback, "restore")
+        assert_same_as_unstopped(stopped, clean, extra_files=extra)
+
+    @pytest.mark.parametrize("rollback", ["resume", "not_kept"])
+    def test_row_D7c_fix_pass_rollback_killed_before_clean_reruns(self, project, tmp_path, rollback):
+        stopped, clean, extra = self._rerun_after_a_stop_in_rollback(
+            project, tmp_path / "unstopped", rollback, "clean")
+        assert_same_as_unstopped(stopped, clean, extra_files=extra)
+
+    def test_row_D6e_fix_pass_with_an_agent_commit_refuses(self, project):
+        p = project
+
+        def committing_fixer(**kwargs):
+            (p.dir / "app.py").write_text(FIXED)
+            _git(p.dir, "commit", "-qam", "the fix agent's commit")
+            return AgentResult(success=True, output="fixed")
+
+        stack, _, _ = _engine([_passing([_finding()]), Killed()], committing_fixer)
+        with stack, pytest.raises(Killed):
+            asyncio.run(_run_integration_and_review(p.block, p.config, p.state, p.progress))
+        run_killed_at("restore", lambda: asyncio.run(TestFixOnPass._resume(p, [_passing()])))
+        head, before = _git(p.dir, "rev-parse", "HEAD"), repo_state(p.root)
+
+        code, fix = asyncio.run(TestFixOnPass._resume(p, [_passing()]))
+
+        TestFixOnPass()._assert_refused(p, code, fix, head)
+        assert repo_state(p.root) == before
 
 
 # --- Item 12: the fix agent looks for the same mistake ---------------------

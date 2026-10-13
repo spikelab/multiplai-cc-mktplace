@@ -1514,10 +1514,17 @@ class _Scenario:
             self.triage = FakeTriage({"add subtracts": FIX})
         self.spec_calls = 0
         self.stop_with: BaseException | None = None
+        self.commit_first = False
 
     async def spec_call(self, prompt, **kw):
+        """The spec model call. While `stop_with` is set it edits calc.py
+        (after committing a new file, with `commit_first`) and raises it."""
         self.spec_calls += 1
         if self.stop_with is not None:
+            if self.commit_first:
+                (self.repo / "extra.py").write_text("e = 1\n")
+                _git(self.repo, "add", "extra.py")
+                _git(self.repo, "commit", "-qm", "the spec step's own commit", "--", "extra.py")
             (self.repo / "calc.py").write_text("# the spec step's own edit\n")
             raise self.stop_with
         return SPEC_DELTA
@@ -1577,6 +1584,166 @@ class TestRowsInASubdirectory:
             _assert_kept_under(root, "refs/buildme/wip/calc/r1-code-block1-stopped",
                                "proj/calc.py", "half done")
         assert_same_as_unstopped(root, _root(c_repo))
+
+
+def _ctrl_c_at(git_command: str):
+    """Patch `git_ops._run` so the first git call whose argv[1] is
+    *git_command* raises KeyboardInterrupt, as a Ctrl-C there would."""
+    real = git_ops._run
+    fired: list = []
+
+    def run(argv, *a, **k):
+        if not fired and argv[1:2] == [git_command]:
+            fired.append(argv)
+            raise KeyboardInterrupt
+        return real(argv, *a, **k)
+
+    return patch.object(git_ops, "_run", run), fired
+
+
+class _Rows:
+    """Shared steps of the D6 and D7 row tests. Each runs synchronously so a
+    SIGKILL can be simulated in a forked child (`run_killed_at`)."""
+
+    @staticmethod
+    def failing_stubs(repo: Path):
+        """The engine's stubs with a suite that never goes red, so block 1
+        fails and `keep_failed_block` discards it (`TestCodeStepFailure`)."""
+        stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") != "run_test_suite"]
+        stubs.append(patch("build_pipeline.tdd_engine.run_test_suite",
+                           return_value=(0, "1 passed")))
+        return stubs
+
+    @staticmethod
+    def unstopped(base: Path, monkeypatch, step: str, stubs=None):
+        """The same round in a fresh repo under *base*, never stopped.
+        Returns (exit code, repo root)."""
+        repo, change, config = _make_built(base)
+        s = _Scenario(repo, change, config, _install_pr(monkeypatch), step)
+        code_ = asyncio.run(s.run(stubs(repo) if stubs else None))
+        return code_, repo
+
+    @staticmethod
+    def stop(s: "_Scenario", how: str, git_command: str, stubs=None) -> None:
+        """Run the round so it stops at the first *git_command*: `kill`
+        (SIGKILL in a child) or `ctrl_c` (KeyboardInterrupt in this process)."""
+        if how == "kill":
+            run_killed_at(git_command, lambda: asyncio.run(s.run(stubs)))
+            return
+        patcher, fired = _ctrl_c_at(git_command)
+        with patcher, pytest.raises(KeyboardInterrupt):
+            asyncio.run(s.run(stubs))
+        assert fired, f"the round never reached git {git_command}"
+
+    @staticmethod
+    def _assert_refused(s: "_Scenario", step: str, needle: str, stubs=None) -> None:
+        """Resume; the step refuses and the repo is exactly as it was."""
+        before = repo_state(s.repo)
+        assert asyncio.run(s.run(stubs)) == 1, s.lines
+        assert s.lines[-1].startswith(f"FINDINGS:FAILED:{step}:"), s.lines
+        assert needle in s.lines[-1], s.lines
+        assert repo_state(s.repo) == before
+
+
+class TestKilledInsideADiscard:
+    """Rows D6a-D6d and D7a-D7b: a stop inside `discard_to`, between its
+    soft reset and its restore (D6) or its restore and its clean (D7)."""
+
+    @pytest.mark.parametrize("how", ["kill", "ctrl_c"])
+    def test_row_D6a_failure_handler_stopped_mid_discard_refuses(self, built, monkeypatch, how):
+        repo, change, config = built
+        s = _Scenario(repo, change, config, _install_pr(monkeypatch), "spec")
+        s.stop_with = RuntimeError("model call failed")
+        _Rows.stop(s, how, "restore")
+        s.stop_with = None
+        assert "the spec step's own edit" in _git(repo, "show", ":calc.py")
+
+        _Rows._assert_refused(s, "spec", "uncommitted")
+
+    def test_row_D6b_failed_block_killed_mid_discard_refuses(self, built, monkeypatch):
+        repo, change, config = built
+        s = _Scenario(repo, change, config, _install_pr(monkeypatch), "code")
+        _Rows.stop(s, "kill", "restore", _Rows.failing_stubs(repo))
+
+        _Rows._assert_refused(s, "code", "uncommitted", _Rows.failing_stubs(repo))
+
+    def test_row_D6c_failed_block_ctrl_c_mid_discard_reruns(self, built, tmp_path, monkeypatch):
+        clean_exit, clean_repo = _Rows.unstopped(tmp_path / "unstopped", monkeypatch, "code",
+                                                 _Rows.failing_stubs)
+        repo, change, config = built
+        s = _Scenario(repo, change, config, _install_pr(monkeypatch), "code")
+        _Rows.stop(s, "ctrl_c", "restore", _Rows.failing_stubs(repo))
+
+        assert asyncio.run(s.run(_Rows.failing_stubs(repo))) == clean_exit, s.lines
+        _assert_kept_under(repo, "refs/buildme/wip/calc/r1-code-block1-stopped",
+                           "tests/test_calc.py", "def test_add")
+        assert_same_as_unstopped(repo, clean_repo)
+
+    @pytest.mark.parametrize("case", ["spec", "spec_with_a_commit", "code"])
+    def test_row_D6d_resumed_step_killed_mid_discard(self, built, tmp_path, monkeypatch, case):
+        step = "code" if case == "code" else "spec"
+        repo, change, config = built
+        s = _Scenario(repo, change, config, _install_pr(monkeypatch), step)
+        if step == "spec":
+            s.commit_first = case == "spec_with_a_commit"
+            s.stop_with = KeyboardInterrupt()
+            with pytest.raises(KeyboardInterrupt):
+                asyncio.run(s.run())
+            s.stop_with = None
+        else:
+            assert asyncio.run(s.run(s.timing_out_stubs())) == 4, s.lines
+        _Rows.stop(s, "kill", "restore")
+
+        if case != "spec":
+            _Rows._assert_refused(s, step, "uncommitted")
+            return
+        clean_exit, clean_repo = _Rows.unstopped(tmp_path / "unstopped", monkeypatch, step)
+        assert asyncio.run(s.run()) == clean_exit, s.lines
+        _assert_kept_under(repo, "refs/buildme/wip/calc/r1-spec", "calc.py",
+                           "the spec step's own edit")
+        assert_same_as_unstopped(repo, clean_repo)
+
+    @pytest.mark.parametrize("case", ["failure_handler", "failed_block"])
+    def test_row_D7a_killed_before_clean_with_no_record_reruns(
+            self, built, tmp_path, monkeypatch, case):
+        step = "spec" if case == "failure_handler" else "code"
+        stubs = _Rows.failing_stubs if case == "failed_block" else None
+        clean_exit, clean_repo = _Rows.unstopped(tmp_path / "unstopped", monkeypatch, step, stubs)
+        repo, change, config = built
+        s = _Scenario(repo, change, config, _install_pr(monkeypatch), step)
+        if step == "spec":
+            s.stop_with = RuntimeError("model call failed")
+        _Rows.stop(s, "kill", "clean", stubs(repo) if stubs else None)
+        s.stop_with = None
+
+        assert asyncio.run(s.run(stubs(repo) if stubs else None)) == clean_exit, s.lines
+        assert_same_as_unstopped(repo, clean_repo)
+
+    @pytest.mark.parametrize("case", ["spec", "failed_block_ctrl_c", "spec_with_a_commit", "code"])
+    def test_row_D7b_killed_before_clean_with_a_record(self, built, tmp_path, monkeypatch, case):
+        step = "spec" if case.startswith("spec") else "code"
+        stubs = _Rows.failing_stubs if case == "failed_block_ctrl_c" else None
+        repo, change, config = built
+        s = _Scenario(repo, change, config, _install_pr(monkeypatch), step)
+        if case == "failed_block_ctrl_c":
+            _Rows.stop(s, "ctrl_c", "clean", stubs(repo))
+        else:
+            if step == "spec":
+                s.commit_first = case == "spec_with_a_commit"
+                s.stop_with = KeyboardInterrupt()
+                with pytest.raises(KeyboardInterrupt):
+                    asyncio.run(s.run())
+                s.stop_with = None
+            else:
+                assert asyncio.run(s.run(s.timing_out_stubs())) == 4, s.lines
+            _Rows.stop(s, "kill", "clean")
+
+        if case in ("spec_with_a_commit", "code"):
+            _Rows._assert_refused(s, step, "commits were added")
+            return
+        clean_exit, clean_repo = _Rows.unstopped(tmp_path / "unstopped", monkeypatch, step, stubs)
+        assert asyncio.run(s.run(stubs(repo) if stubs else None)) == clean_exit, s.lines
+        assert_same_as_unstopped(repo, clean_repo)
 
 
 class TestSince:
