@@ -17,6 +17,30 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-10-13
+
+### Added
+- An epic's children branch from origin's default branch. Before each first
+  launch the build runs `git fetch origin` and passes that commit as
+  `build --base-ref <sha>`, so a child that starts after another child
+  merged builds on top of it. A relaunched child keeps the command it was
+  first started with. The fetch does not hold up Ctrl-C, SIGTERM or the
+  watching of running children, and is killed when the run stops. When it
+  fails, a child with dependencies is `unknown` and is not launched.
+- `build --base-ref <sha>` branches a new worktree from that commit instead of
+  the source checkout's HEAD; a build that re-binds to its worktree ignores
+  it. When the commit is not on the default branch, the PR targets the branch
+  that holds it (`--base`). It exits 1 when the `specs/config.yaml` committed
+  at HEAD is not the version at that commit, unpushed or behind origin, since
+  the build reads the checkout's file and its worktree holds the commit's.
+  An epic checks this before a child's first launch and records nothing for
+  it, so after a push or pull the next run fetches again and launches it.
+- Each epic run ends with `runs/<NN>/summary.json` in the epic directory (each
+  child's status, PR and park reason, and totals) and prints
+  `EPIC:SUMMARY:<path>`, on every exit past the `git.worktree`/`git.push`
+  refusal: done, a failed child, `EPIC:MERGE_WAITING`, a stop by Ctrl-C or
+  SIGTERM, and an unexpected error.
+
 ## [0.59.0] - 2026-10-13
 
 ### Added

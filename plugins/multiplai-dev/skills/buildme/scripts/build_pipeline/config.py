@@ -747,6 +747,9 @@ class BuildConfig:
     pr: PrSettings = field(default_factory=PrSettings)
     findings: FindingsSettings = field(default_factory=FindingsSettings)
     epic: EpicSettings = field(default_factory=EpicSettings)
+    # `build --base-ref`: the commit a new worktree branches from (an epic's
+    # coordinator passes origin's default branch). Empty: the source HEAD.
+    base_ref: str = ""
     # `models:` from specs/config.yaml: step, stage or `default` → a model spec
     # as written. `model_for` resolves it.
     model_specs: dict[str, str] = field(default_factory=dict)
@@ -1245,6 +1248,7 @@ class BuildConfig:
             self.git.pr = "none"
         if getattr(args, "pr_ready", False):
             self.git.pr = "ready"
+        self.base_ref = getattr(args, "base_ref", "") or ""
 
     def rebind_project_dir(self, new_project_dir: Path) -> None:
         """Point the whole config at a different checkout of the same project.

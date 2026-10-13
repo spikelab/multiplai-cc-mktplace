@@ -1,5 +1,5 @@
 """The coordinator: an approved epic builds its children
-(plan-buildme-epic-mode-2026-10-12.md, items 11, 13-15a and 16a).
+(plan-buildme-epic-mode-2026-10-12.md, items 11-16a).
 
 `run_epic` runs in the approved build's process, under the epic lock that
 process already holds (item 6), and never takes it again. Each child is its own
@@ -19,6 +19,7 @@ table in the plan. Every wait goes through `CLOCK`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -31,7 +32,7 @@ from pathlib import Path
 
 import yaml
 
-from .. import git_ops
+from .. import git_ops, intake
 from ..config import git_toggles
 from . import records, store
 
@@ -41,7 +42,9 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[2]
 POLL = 1.0           # seconds between looks at a running child
 TICK = 30.0          # seconds between reads of the waited-on PRs
 STOP_WAIT = 30.0     # seconds the children get to exit on SIGINT or SIGTERM
+FETCH_TIMEOUT = 300  # seconds `git fetch origin` gets before a launch
 
+MARKER_SUMMARY = "EPIC:SUMMARY"
 MARKER_MERGE_WAITING = "EPIC:MERGE_WAITING"
 PR_CLOSED = "PR closed without a merge"
 NO_PR = "no PR opened"
@@ -107,6 +110,49 @@ def _gh(repo: Path, *args: str) -> object | None:
         return json.loads(proc.stdout)
     except ValueError:
         return None
+
+
+async def _fetch_origin(repo: Path) -> str | None:
+    """`git fetch origin` as a subprocess the event loop awaits, so a signal or
+    a running child's exit is handled while it runs. It is killed after
+    FETCH_TIMEOUT seconds, or when the run is stopped. None when it worked,
+    else why not."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "fetch", "origin", cwd=str(repo),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+    except OSError as e:
+        return str(e)
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), FETCH_TIMEOUT)
+    except TimeoutError:
+        return f"timed out after {FETCH_TIMEOUT}s"
+    finally:
+        if proc.returncode is None:       # timed out, or the run was stopped
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+    if proc.returncode != 0:
+        return err.decode(errors="replace").strip()[-400:] or f"exit {proc.returncode}"
+    return None
+
+
+async def base_sha(repo: Path, *, need_fetch: bool) -> str | None:
+    """`git fetch origin`, then origin's default branch's sha (item 12). A
+    fetch that fails or times out raises ReadFailed when *need_fetch* (a child
+    with dependencies, whose base must hold their merges); otherwise the
+    remote ref is used as it is. No ref at all gives None."""
+    failed = await _fetch_origin(repo)
+    if failed is not None:
+        if need_fetch:
+            raise ReadFailed(f"git fetch origin failed: {failed}")
+        log.warning("git fetch origin in %s failed: %s", repo, failed)
+    default = git_ops.default_branch(repo)
+    sha = _git(repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{default}^{{commit}}")
+    if sha.returncode == 0 and sha.stdout.strip():
+        return sha.stdout.strip()
+    log.warning("no origin/%s in %s: the child branches from the source checkout's HEAD", default, repo)
+    return None
 
 
 def in_place_reason(project_dir: Path) -> str | None:
@@ -190,7 +236,7 @@ class Coordinator:
 
     # -- argv -----------------------------------------------------------------
 
-    def new_argv(self, cid: str) -> list[str]:
+    def new_argv(self, cid: str, base: str | None) -> list[str]:
         """Item 11's command for a first launch. All paths are absolute."""
         change_dir = Path(self.config.change_dir).absolute()
         context = [str(change_dir / name) for name in ("interview.md", "research.md")
@@ -211,6 +257,8 @@ class Coordinator:
             argv += ["--skip-research"]
         argv += ["--auto", "--trust-repo", "--no-epic-split", "--pr-ready",
                  "--project-dir", str(self.project_dir.absolute())]
+        if base:
+            argv += ["--base-ref", base]
         return argv
 
     # -- reading the records ----------------------------------------------------
@@ -352,12 +400,30 @@ class Coordinator:
 
     # -- launching and watching -------------------------------------------------
 
-    async def _launch(self, c: Child) -> None:
+    async def _launch(self, c: Child) -> bool:
+        """Start *c*. False when it was not started, with nothing written for
+        it but its status: a first launch whose base could not be fetched, or
+        whose specs/config.yaml is not the base's (B1.S22). The next run then
+        fetches again."""
         if c.status == "failed":
             c.relaunched = True
-        argv = c.argv or self.new_argv(c.id)
+        argv = c.argv
+        if argv is None:
+            try:
+                base = await base_sha(self.repo, need_fetch=bool(c.depends_on))
+            except ReadFailed as e:       # no launch until a fetch answers
+                c.status, c.reason = "unknown", f"cannot get a base that holds its dependencies' merges: {e}"
+                self._save()
+                return False
+            if base and intake.config_yaml_off_ref(self.project_dir, base):
+                c.status, c.relaunched = "failed", True
+                c.reason = f"in {self.project_dir}: {intake.CONFIG_NOT_ON_BASE}"
+                self._save()
+                return False
+            argv = self.new_argv(c.id, base)
         plan = _plan_of(argv)
-        c.attempt = records.start(self.epic_dir, "build", c.id, argv)
+        head = argv[argv.index("--base-ref") + 1] if "--base-ref" in argv[:-1] else None
+        c.attempt = records.start(self.epic_dir, "build", c.id, argv, head_sha=head)
         c.status, c.argv, c.reason = "running", argv, ""
         self._save()
         c.proc = _spawn(argv, c.attempt.log)
@@ -365,6 +431,7 @@ class Coordinator:
         # One start at a time: worktree creation in one repo is not run concurrently.
         while c.proc.poll() is None and not records.marker(records.markers(c.attempt.log), "WORKTREE"):
             await CLOCK.sleep(POLL)
+        return True
 
     def _done(self, c: Child, exit_code: int | None, *, interrupted: bool) -> None:
         records.finish(c.attempt, exit_code, interrupted=interrupted)
@@ -438,6 +505,7 @@ class Coordinator:
             log.error("EPIC %s", refused)
             print(f"ERROR:{refused}", file=sys.stderr, flush=True)
             return 2
+        run_dir = _new_run_dir(self.epic_dir)
         self._recover()
         self._read_prs([c for c in self.children.values() if c.status == "built"])
         self._resolve()
@@ -459,14 +527,19 @@ class Coordinator:
             sig = self.signal_sent or signal.SIGINT
             log.warning("EPIC stopped by %s: stopping the children", signal.Signals(sig).name)
             await self._stop_children(sig)
+            self._summary(run_dir)
             return 128 + sig
+        except Exception:
+            self._summary(run_dir)        # where each child stood when the run broke
+            raise
         finally:
             try:
                 loop.remove_signal_handler(signal.SIGTERM)
             except (NotImplementedError, RuntimeError, ValueError):
                 pass
+        self._summary(run_dir)
         bad = [c for c in self.children.values() if c.status in ("failed", "unknown")]
-        for c in bad:       # beside EPIC:MERGE_WAITING too
+        for c in bad:       # beside EPIC:MERGE_WAITING too, not only in the summary
             print(f"EPIC: child {c.id} {c.status}: {c.reason}", file=sys.stderr, flush=True)
         open_prs = [c.pr for c in self._waited_on() if c.status == "built"]
         if open_prs:
@@ -482,8 +555,8 @@ class Coordinator:
             for c in ready:
                 if running >= self.settings.max_parallel:
                     break
-                await self._launch(c)
-                running += 1
+                if await self._launch(c):
+                    running += 1
             if running:
                 await CLOCK.sleep(POLL)
                 _tick(self)
@@ -501,6 +574,27 @@ class Coordinator:
                 continue
             self._save()
             return 0
+
+    def _summary(self, run_dir: Path) -> Path:
+        children = [{"id": cid, "status": c.status, "pr": c.pr, "rounds": 0, "reason": c.reason}
+                    for cid, c in self.children.items()]
+        totals: dict[str, int] = {}
+        for c in children:
+            totals[c["status"]] = totals.get(c["status"], 0) + 1
+        path = run_dir / "summary.json"
+        store._write_atomic(path, json.dumps({"children": children, "totals": totals}, indent=2) + "\n")
+        print(f"{MARKER_SUMMARY}:{path}", flush=True)
+        return path
+
+
+def _new_run_dir(epic_dir: Path) -> Path:
+    """`runs/<NN>/`, the next free number, made at the start of each invocation."""
+    runs = Path(epic_dir) / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    n = max((int(p.name) for p in runs.iterdir() if p.name.isdigit()), default=0) + 1
+    path = runs / f"{n:02d}"
+    path.mkdir()
+    return path
 
 
 async def run_epic(config, state, args, epic_dir: Path, epic: store.Epic) -> int:

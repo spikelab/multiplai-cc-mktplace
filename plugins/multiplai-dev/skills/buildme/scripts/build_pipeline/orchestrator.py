@@ -854,6 +854,11 @@ async def _run_bootstrap(
         if (not _inside_own_worktree(config, state)
                 and intake.config_yaml_uncommitted(config.project_dir)):
             raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_COMMITTED)
+        # With --base-ref (an epic's child) it branches from that commit
+        # instead, where a committed but unpushed config.yaml is missing too.
+        if (config.base_ref and not _inside_own_worktree(config, state)
+                and intake.config_yaml_off_ref(config.project_dir, config.base_ref)):
+            raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_ON_BASE)
         _setup_worktree(config, state)
         state_path = config.state_file_path()
         cm = ChangeManager(config.specs_dir)
@@ -980,9 +985,12 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
 
     repo = git_ops.preflight(config.project_dir, worktree_requested=True)
     offset = _project_offset(config.project_dir, repo)
-    base = git_ops.default_branch(repo)
+    # With --base-ref (an epic's child), an empty branch left by an attempt
+    # killed before its first commit sits at that ref, which the local default
+    # branch may not have reached: count its commits against the ref.
+    base = config.base_ref or git_ops.default_branch(repo)
     branch, dest = git_ops.resolve_new_branch(repo, config.change_name, base)
-    git_ops.create_worktree(repo, branch, dest)
+    git_ops.create_worktree(repo, branch, dest, start_point=config.base_ref or None)
 
     state.source_repo = str(repo)
     state.branch = branch
@@ -1157,9 +1165,38 @@ def _pr_skill_dir() -> Path:
     return Path(__file__).resolve().parents[3] / "pr" / "scripts"
 
 
+def _pr_base_branch(repo: Path, base_ref: str) -> str | None:
+    """The branch the PR targets when the build branched from *base_ref*
+    (`build --base-ref`) and that commit is not on the default branch (item
+    12): the branch *base_ref* names, else the one origin branch holding it.
+    None when *base_ref* is empty or on the default branch, and None with a
+    warning when no single origin branch holds it (the PR then targets the
+    default branch)."""
+    if not base_ref:
+        return None
+    default = git_ops.default_branch(repo)
+    for tip in (f"refs/remotes/origin/{default}", f"refs/heads/{default}"):
+        if git_ops._run(["git", "merge-base", "--is-ancestor", base_ref, tip], cwd=repo).returncode == 0:
+            return None
+    named = git_ops._run(["git", "rev-parse", "--symbolic-full-name", base_ref], cwd=repo).stdout.strip()
+    for prefix in ("refs/remotes/origin/", "refs/heads/"):
+        if named.startswith(prefix):
+            return named[len(prefix):]
+    held = git_ops._run(["git", "for-each-ref", "--contains", base_ref, "--format=%(refname)",
+                         "refs/remotes/origin/"], cwd=repo)
+    branches = [r[len("refs/remotes/origin/"):] for r in held.stdout.split()
+                if r != "refs/remotes/origin/HEAD"]
+    if len(branches) == 1:
+        return branches[0]
+    log.warning("--base-ref %s is not on %s and %s origin branch holds it: the PR targets %s",
+                base_ref, default, "more than one" if branches else "no", default)
+    return None
+
+
 def _pr_open_argv(
     project_dir: Path, change_dir: Path, branch: str, title: str, *,
     draft: bool = True, sections: list[Path] | None = None, ticket_url: str | None = None,
+    base: str | None = None,
 ) -> list[str]:
     """``pr_pipeline open`` for a branch this pipeline already pushed.
 
@@ -1177,6 +1214,8 @@ def _pr_open_argv(
         "--repo", str(project_dir), "--change-dir", str(change_dir),
         "--head", branch, "--title", title, "--no-push",
     ]
+    if base:
+        argv += ["--base", base]
     # Always say which: git.pr is buildme's choice, and the skill's own
     # pr.draft setting must not override it.
     argv.append("--draft" if draft else "--ready")
@@ -1239,13 +1278,14 @@ def _run_publish(
 
     sections = [p for p in [_worktree_section(state, docs_dir)] if p is not None]
     sections += _pre_publish_sections(config, state, docs_dir)
+    base = _pr_base_branch(worktree, config.base_ref)
     pr_argv = _pr_open_argv(
         config.project_dir, docs_dir, state.branch, title, draft=draft, sections=sections,
-        ticket_url=state.ticket_url,
+        ticket_url=state.ticket_url, base=base,
     )
     manual = git_ops.manual_finish_commands(
         worktree, state.branch, title, include_pr=config.git.pr != "none", draft=draft,
-        pr_skill_argv=pr_argv,
+        pr_skill_argv=pr_argv, base=base,
     )
 
     log.info("START phase=PUBLISH branch=%s", state.branch)

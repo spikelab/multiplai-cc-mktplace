@@ -5,18 +5,27 @@ items 11-17). The build is a fake first on PATH that prints the real markers;
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import copy
 import json
+import os
+import shutil
+import signal
 import subprocess
 import time
 from pathlib import Path
 
 import pytest
 
+from build_pipeline import git_ops, intake, orchestrator
+from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig, EpicSettings
 from build_pipeline.epic import coordinator, records, store
 from build_pipeline.epic import lock as epic_lock
 from build_pipeline.epic.split import EpicSplitAnswer
+from build_pipeline.git_ops import GitResult
+from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState
 
 from .epic_row_helpers import (
@@ -24,12 +33,17 @@ from .epic_row_helpers import (
     CallLog,
     Fakes,
     FakeClock,
+    alive,
     approve,
     child,
+    die_at,
     make_build,
     make_project,
+    move_origin,
     pr_url,
     run_coordinator,
+    run_killed,
+    run_signalled,
     use_workspace,
 )
 
@@ -69,6 +83,9 @@ class Epic:
 
     def status(self) -> dict:
         return {k: v["status"] for k, v in json.loads((self.dir / "epic.json").read_text())["child_status"].items()}
+
+    def summary(self, n: int) -> dict:
+        return json.loads((self.dir / "runs" / f"{n:02d}" / "summary.json").read_text())
 
     def reasons(self) -> dict:
         return {k: v["reason"] for k, v in json.loads((self.dir / "epic.json").read_text())["child_status"].items()}
@@ -162,7 +179,7 @@ def test_children_never_build_in_place(tmp_path, monkeypatch, capsys, key):
     yaml_path.write_text(f"git:\n  {key}: false\n")
     assert e.run() == 2
     assert f"git.{key}" in capsys.readouterr().err
-    assert e.launches() == [] and not (e.dir / "agents").exists()
+    assert e.launches() == [] and not (e.dir / "agents").exists() and not (e.dir / "runs").exists()
     yaml_path.write_text("git:\n  worktree: true\n")
     assert e.run() == 0 and sorted(e.launches()) == ["a", "b", "c"]
 
@@ -245,6 +262,26 @@ def test_a_parent_that_skipped_research_skips_it_in_each_child(tmp_path, monkeyp
         assert "--skip-research" in argv and "--research-path" not in argv
 
 
+def test_base_ref_reaches_a_new_child_and_a_relaunch_keeps_its_own(tmp_path, monkeypatch):
+    """origin moves right after a's first launch: b, launched next, branches
+    from the new sha (B1.S14); a's relaunch reuses its first command (item 15)."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit": 1}, {}]})
+    old = _sha(tmp_path / "o" / "r.git", "main")
+    real, moved = coordinator._spawn, []
+
+    def spawn(argv, log_path):
+        proc = real(argv, log_path)
+        moved.append(moved[0] if moved else move_origin(tmp_path))
+        return proc
+
+    monkeypatch.setattr(coordinator, "_spawn", spawn)
+    assert e.run() == 0
+    first, again = [a.started["argv"] for a in records.attempts(e.dir) if a.child == "a"]
+    assert first[first.index("--base-ref") + 1] == old
+    assert again == first                      # the relaunch is the same command
+    assert (tmp_path / "bases" / "b").read_text() == moved[0] != old
+
+
 def test_a_child_builds_in_the_source_checkout_when_the_parent_used_a_worktree(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
     wt = tmp_path / "parent-wt"
@@ -254,8 +291,25 @@ def test_a_child_builds_in_the_source_checkout_when_the_parent_used_a_worktree(t
     state = BuildState(change_name="e", mode="scratch", tier="advanced",
                        source_repo=str(e.project), worktree_path=str(wt))
     coord = coordinator.Coordinator(config, state, None, e.dir, store.load_epic(e.dir))
-    argv = coord.new_argv("a")
+    argv = coord.new_argv("a", None)
     assert argv[argv.index("--project-dir") + 1] == str(e.project / "sub")
+
+
+def test_a_hung_fetch_times_out(tmp_path, monkeypatch):
+    """`git fetch` before a launch is bounded: a hung one gives origin's ref as it is."""
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    shim = tmp_path / "gitbin"
+    shim.mkdir()
+    (shim / "git").write_text(f'#!/bin/sh\n[ "$1" = fetch ] && exec sleep 30\nexec {shutil.which("git")} "$@"\n')
+    (shim / "git").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim}:{os.environ['PATH']}")
+    monkeypatch.setattr(coordinator, "FETCH_TIMEOUT", 1)
+    began = time.monotonic()
+    assert asyncio.run(coordinator.base_sha(project, need_fetch=False)) == _sha(project)
+    assert time.monotonic() - began < 10
+    with pytest.raises(coordinator.ReadFailed, match="timed out"):
+        asyncio.run(coordinator.base_sha(project, need_fetch=True))
 
 
 def test_a_subdirectory_project_gets_that_subdirectory(tmp_path):
@@ -291,6 +345,188 @@ def test_record_names_keep_kind_and_child_apart(tmp_path):
     records.start(tmp_path, "merge-tests", "api", ["x"])
     records.start(tmp_path, "merge", "tests-api", ["y"])
     assert [(a.kind, a.child) for a in records.attempts(tmp_path)] == [("merge-tests", "api"), ("merge", "tests-api")]
+
+
+def test_a_child_refuses_a_config_yaml_that_is_not_on_its_base_ref(tmp_path, monkeypatch):
+    """With --base-ref, the worktree holds the base's specs/config.yaml while the
+    build reads the checkout's: a version committed but not pushed, or one
+    origin has since changed, is refused, as an uncommitted one is."""
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    base = _sha(project)
+    (project / "specs").mkdir()
+    (project / "specs" / "config.yaml").write_text("context: x\n")
+    subprocess.run(["git", "add", "specs"], cwd=project, check=True)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "config"], cwd=project, check=True)
+    config = BuildConfig(project_dir=project, change_name="c")
+    config.base_ref = base
+    state = BuildState(change_name="c", mode="brief", tier="advanced")
+    with pytest.raises(intake.ConfigNotCommittedError, match="Push it, or pull"):
+        asyncio.run(orchestrator._run_bootstrap(config, state, None, None))
+    assert state.worktree_path is None
+    config.base_ref = _sha(project)
+    assert not intake.config_yaml_off_ref(project, config.base_ref)
+    # Behind origin, which changed the file after this checkout's version was
+    # pushed: the build would read the old version and its worktree the new one.
+    subprocess.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=project, check=True)
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(tmp_path / "o" / "r.git"), str(other)], check=True)
+    (other / "specs" / "config.yaml").write_text("context: y\n")
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qam", "config y"], cwd=other, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=other, check=True)
+    subprocess.run(["git", "fetch", "-q", "origin"], cwd=project, check=True)
+    assert intake.config_yaml_off_ref(project, _sha(project, "origin/main"))
+    subprocess.run(["git", "merge", "-q", "--ff-only", "origin/main"], cwd=project, check=True)
+    assert not intake.config_yaml_off_ref(project, _sha(project, "origin/main"))
+    # No config.yaml at HEAD, as when a child's PR added bootstrap's stub on
+    # origin: the build reads no file, so there is nothing to refuse.
+    subprocess.run(["git", "checkout", "-q", base], cwd=project, check=True)
+    assert not intake.config_yaml_off_ref(project, _sha(project, "origin/main"))
+
+
+def test_a_build_inside_its_own_worktree_is_not_refused_on_its_base_ref(tmp_path, monkeypatch):
+    """A relaunch re-binds to its own worktree with the same --base-ref; a
+    config.yaml the build committed there is its own, not the user's."""
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    base = _sha(project)
+    (project / "specs").mkdir()
+    (project / "specs" / "config.yaml").write_text("context: changed by the build\n")
+    subprocess.run(["git", "add", "specs"], cwd=project, check=True)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "config"], cwd=project, check=True)
+    assert intake.config_yaml_off_ref(project, base)
+
+    class Reached(Exception):
+        pass
+
+    def setup(config, state):
+        raise Reached
+
+    monkeypatch.setattr(orchestrator, "_setup_worktree", setup)
+    config = BuildConfig(project_dir=project, change_name="c")
+    config.base_ref = base
+    rebound = BuildState(change_name="c", mode="brief", tier="advanced", worktree_path=str(project))
+    with pytest.raises(Reached):
+        asyncio.run(orchestrator._run_bootstrap(config, rebound, None, None))
+    with pytest.raises(intake.ConfigNotCommittedError):
+        asyncio.run(orchestrator._run_bootstrap(config, BuildState(change_name="c", mode="brief",
+                                                                    tier="advanced"), None, None))
+
+
+def _commit(repo: Path, rel: str, text: str, msg: str) -> str:
+    (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo / rel).write_text(text)
+    subprocess.run(["git", "add", rel], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", msg], cwd=repo, check=True)
+    return _sha(repo)
+
+
+def test_a_config_yaml_not_on_origin_launches_nothing_until_pushed(tmp_path, monkeypatch, capsys):
+    """B1.S22: a specs/config.yaml committed but not pushed is refused before
+    the first launch, so no started record keeps the old base. Once pushed,
+    the next run fetches again and launches every child on the new sha."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
+    _commit(e.project, "specs/config.yaml", "context: local\n", "config")
+    assert e.run() == 1
+    assert e.launches() == [] and records.attempts(e.dir) == []
+    assert set(e.status().values()) == {"failed"}
+    assert "Push it, or pull" in e.reasons()["a"]
+    assert "Push it, or pull" in capsys.readouterr().err
+    subprocess.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=e.project, check=True)
+    assert e.run() == 0 and sorted(e.launches()) == ["a", "b", "c"]
+    pushed = _sha(e.project)
+    for a in records.attempts(e.dir):
+        assert a.started["argv"][a.started["argv"].index("--base-ref") + 1] == pushed == a.started["head_sha"]
+
+
+def _git_shim(root: Path, on_fetch: str) -> Path:
+    """A `git` first on PATH that runs *on_fetch* (sh) for `git fetch`, then the real git."""
+    d = root / "gitshim" / "bin"
+    d.mkdir(parents=True)
+    (d / "git").write_text(f'#!/bin/sh\nif [ "$1" = fetch ]; then\n{on_fetch}\nfi\n'
+                           f'exec {shutil.which("git")} "$@"\n')
+    (d / "git").chmod(0o755)
+    return d
+
+
+def test_a_failed_fetch_launches_no_dependant(tmp_path, monkeypatch):
+    """A dependant needs a base that holds its dependencies' merges: when `git
+    fetch` fails, it is `unknown` and gets no record; the next run fetches."""
+    e = Epic(tmp_path, monkeypatch)
+    assert e.run() == 3
+    for cid in ("api", "ui"):
+        e.fakes.set_pr(pr_url(f"e-{cid}"), "MERGED")
+    path = os.environ["PATH"]
+    shim = _git_shim(tmp_path, "echo 'fatal: unable to access origin' >&2; exit 1")
+    monkeypatch.setenv("PATH", f"{shim}:{path}")
+    moved = move_origin(tmp_path)
+    assert e.run() == 1
+    assert sorted(e.launches()) == ["api", "ui"]
+    assert e.status()["docs"] == "unknown" and "git fetch origin" in e.reasons()["docs"]
+    assert [a.child for a in records.attempts(e.dir) if a.child == "docs"] == []
+    monkeypatch.setenv("PATH", path)
+    assert e.run() == 0 and e.launches()[-1] == "docs"
+    docs = [a for a in records.attempts(e.dir) if a.child == "docs"]
+    assert len(docs) == 1 and docs[0].started["head_sha"] == moved
+    assert (tmp_path / "bases" / "docs").read_text() == moved
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM], ids=["SIGINT", "SIGTERM"])
+def test_a_signal_during_a_slow_fetch_stops_the_children_and_writes_the_summary(tmp_path, monkeypatch, sig):
+    """B1.S1: a runs while the fetch before b's launch hangs. The signal is
+    handled at once: a's group is stopped, the fetch is killed, b gets no
+    record (nothing new on disk), and the run's summary is written."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, parallel=2,
+             steps={"a": [{"block": True, "grandchild": True}]})
+    marker, fetching = tmp_path / "fetched", tmp_path / "fetching"
+    shim = _git_shim(tmp_path, f'if [ -e {marker} ]; then echo $$ > {fetching}.tmp; '
+                               f'mv {fetching}.tmp {fetching}; exec sleep 60; fi\ntouch {marker}')
+    monkeypatch.setenv("PATH", f"{shim}:{os.environ['PATH']}")
+    monkeypatch.setattr(coordinator, "STOP_WAIT", 3000.0)
+    began: list[float] = []
+
+    def ready() -> bool:
+        if fetching.exists() and len(e.fakes.grandchildren()) == 1:
+            began.append(time.monotonic())
+            return True
+        return False
+
+    try:
+        rc = run_signalled(lambda: e.run(), ready, sig)
+        assert rc == 128 + sig
+        assert time.monotonic() - began[0] < 20
+        fetch_pid = int(fetching.read_text())
+        for _ in range(250):
+            if not alive(fetch_pid) and not any(alive(p) for p in e.fakes.grandchildren()):
+                break
+            time.sleep(0.02)
+        assert not alive(fetch_pid)
+        assert not any(alive(p) for p in e.fakes.grandchildren())
+        tries = records.attempts(e.dir)
+        assert [a.child for a in tries] == ["a"] and tries[0].result["interrupted"] is True
+        assert [c["id"] for c in e.summary(1)["children"]] == ["a", "b", "c"]
+    finally:
+        for pid in e.fakes.grandchildren() + ([int(fetching.read_text())] if fetching.exists() else []):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_no_origin_default_branch_launches_without_base_ref(tmp_path, monkeypatch):
+    """origin has no default-branch ref: no --base-ref, so the child branches
+    from the source checkout's HEAD."""
+    use_workspace(monkeypatch, tmp_path)
+    repo = tmp_path / "solo"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    _commit(repo, "README.md", "x\n", "init")
+    subprocess.run(["git", "init", "-q", "--bare", str(tmp_path / "empty.git")], check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(tmp_path / "empty.git")], cwd=repo, check=True)
+    assert asyncio.run(coordinator.base_sha(repo, need_fetch=True)) is None
+    e = Epic(tmp_path / "e", monkeypatch, answer=INDEPENDENT)
+    coord = coordinator.Coordinator(e.config, BuildState(change_name="e", mode="scratch", tier="advanced"),
+                                    None, e.dir, store.load_epic(e.dir))
+    assert "--base-ref" not in coord.new_argv("a", None)
 
 
 # --- waiting for a dependency's merge ----------------------------------------------
@@ -352,6 +588,44 @@ def test_a_merge_while_running_launches_the_dependant(tmp_path, monkeypatch):
     assert e.launches()[-1] == "docs" and len(e.launches()) == 3
 
 
+# --- summary ---------------------------------------------------------------------
+
+def test_killed_after_one_of_three_the_rerun_launches_the_other_two(tmp_path, monkeypatch, capsys):
+    """Done means 4."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, parallel=1)
+    run_killed(lambda: e.run(), die_at(records, "finish", after=True))
+    assert e.launches() == ["a"]
+    capsys.readouterr()
+    assert e.run() == 0
+    assert e.launches() == ["a", "b", "c"]
+    summary = e.summary(2)
+    assert [c["id"] for c in summary["children"]] == ["a", "b", "c"]
+    assert all(c["status"] == "built" for c in summary["children"])
+    assert summary["totals"] == {"built": 3}
+    assert f"EPIC:SUMMARY:{e.dir / 'runs' / '02' / 'summary.json'}" in capsys.readouterr().out
+
+
+def test_the_summary_holds_each_childs_pr_and_park_reason(tmp_path, monkeypatch):
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"marker": "SPLIT:REQUIRED"}]})
+    assert e.run() == 0
+    summary = e.summary(1)
+    got = {c["id"]: (c["status"], c["pr"], c["reason"]) for c in summary["children"]}
+    assert got == {"a": ("parked", None, "SPLIT:REQUIRED"),
+                   "b": ("built", pr_url("e-b"), ""), "c": ("built", pr_url("e-c"), "")}
+    assert summary["totals"] == {"parked": 1, "built": 2}
+
+
+def test_an_unexpected_error_still_writes_the_summary(tmp_path, monkeypatch):
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
+
+    def spawn(argv, log_path):
+        raise FileNotFoundError("python")
+
+    monkeypatch.setattr(coordinator, "_spawn", spawn)
+    assert e.run() == 1
+    assert [c["id"] for c in e.summary(1)["children"]] == ["a", "b", "c"]
+
+
 # --- config ----------------------------------------------------------------------
 
 @pytest.mark.parametrize("yaml_text, want", [
@@ -371,3 +645,95 @@ def test_epic_keys_defaults_and_fallbacks(tmp_path, yaml_text, want):
     assert config.epic == want
     assert EpicSettings() == EpicSettings(max_parallel=2, max_review_rounds=6, merge="manual", max_usd=None)
 
+
+# --- --base-ref in the build itself -------------------------------------------------
+
+def _sha(repo: Path, ref: str = "HEAD") -> str:
+    return subprocess.run(["git", "rev-parse", ref], cwd=repo, capture_output=True, text=True,
+                          check=True).stdout.strip()
+
+
+def test_create_worktree_takes_a_start_point(tmp_path, monkeypatch):
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    start = _sha(project)
+    (project / "x.txt").write_text("x\n")
+    subprocess.run(["git", "add", "x.txt"], cwd=project, check=True)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "local"], cwd=project, check=True)
+    dest = tmp_path / "wt"
+    git_ops.create_worktree(project, "b", dest, start_point=start)
+    assert _sha(dest) == start != _sha(project)
+
+
+def test_the_build_branches_from_base_ref_and_counts_an_empty_branch_against_it(tmp_path, monkeypatch):
+    """A first attempt killed before its first commit left `buildme/c` at the base
+    ref, which local main has not reached: the next attempt makes `buildme/c-2`."""
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(tmp_path / "o" / "r.git"), str(other)], check=True)
+    (other / "y.txt").write_text("y\n")
+    subprocess.run(["git", "add", "y.txt"], cwd=other, check=True)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "moved"], cwd=other, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=other, check=True)
+    subprocess.run(["git", "fetch", "-q", "origin"], cwd=project, check=True)
+    base = _sha(project, "origin/main")
+    subprocess.run(["git", "branch", "buildme/c", base], cwd=project, check=True)
+
+    config = BuildConfig(project_dir=project, change_name="c")
+    config.base_ref = base
+    state = BuildState(change_name="c", mode="brief", tier="advanced")
+    orchestrator._setup_worktree(config, state)
+    assert state.branch == "buildme/c-2"
+    assert _sha(Path(state.worktree_path)) == base != _sha(project)
+
+
+def test_base_ref_is_a_build_flag(tmp_path):
+    from build_pipeline.__main__ import build_parser
+
+    args = build_parser().parse_args(["build", "--project-dir", str(tmp_path), "--base-ref", "abc123"])
+    config = BuildConfig(project_dir=tmp_path)
+    config._apply_git_cli_overrides(args)
+    assert config.base_ref == "abc123"
+    config = BuildConfig(project_dir=tmp_path)
+    config._apply_git_cli_overrides(argparse.Namespace())
+    assert config.base_ref == ""
+
+
+@pytest.mark.parametrize("on_main", [True, False], ids=["on-main", "on-a-feature-branch"])
+def test_the_pr_targets_the_branch_its_base_ref_is_on(tmp_path, monkeypatch, on_main):
+    """Item 12: `_pr_open_argv` passes `--base` when the build's --base-ref is
+    not on the default branch, and the manual fallback names it too."""
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    if on_main:
+        base = _sha(project)
+    else:
+        subprocess.run(["git", "checkout", "-qb", "feature"], cwd=project, check=True)
+        base = _commit(project, "f.txt", "f\n", "feature")
+        subprocess.run(["git", "push", "-q", "origin", "feature"], cwd=project, check=True)
+        subprocess.run(["git", "checkout", "-q", "main"], cwd=project, check=True)
+    config = BuildConfig(project_dir=project, change_name="c")
+    config.specs_dir = project / "specs"
+    config.base_ref = base
+    state = BuildState(change_name="c", mode="brief", tier="advanced",
+                       state_file=str(config.state_file_path()))
+    asyncio.run(orchestrator._run_bootstrap(config, state, ChangeManager(config.specs_dir),
+                                            config.state_file_path()))
+    seen: dict = {}
+
+    def fake_pr(argv, cwd=None, timeout=None):
+        seen["argv"] = argv
+        return GitResult(argv, 0, "PR:https://github.com/o/r/pull/9\n", "")
+
+    monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
+    assert orchestrator._run_publish(config, state, ProgressWriter(config.progress_file_path())) is True
+    argv = seen["argv"]
+    if on_main:
+        assert "--base" not in argv
+    else:
+        assert argv[argv.index("--base") + 1] == "feature"
+    assert orchestrator._pr_base_branch(project, "origin/feature" if not on_main else "origin/main") == (
+        None if on_main else "feature")
+    text = git_ops.manual_finish_commands(tmp_path, "b", "t", base="feature")
+    assert "gh pr create --title t --body-file - --base feature --draft" in text

@@ -427,11 +427,12 @@ def preflight(repo_path: Path, *, worktree_requested: bool) -> Path:
     return root
 
 
-def create_worktree(repo: Path, branch: str, dest: Path) -> GitResult:
-    """``git worktree add -b <branch> <dest>``. Never forces, never reuses."""
+def create_worktree(repo: Path, branch: str, dest: Path, start_point: str | None = None) -> GitResult:
+    """``git worktree add -b <branch> <dest> [<start_point>]``. Never forces,
+    never reuses. Without a start point the branch starts at the repo's HEAD."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     res = _run(
-        ["git", "worktree", "add", "-b", branch, str(dest)],
+        ["git", "worktree", "add", "-b", branch, str(dest), *([start_point] if start_point else [])],
         cwd=repo,
         timeout=_GIT_TIMEOUT,
     )
@@ -944,12 +945,13 @@ def open_pr_with_skill(worktree: Path, argv: list[str]) -> tuple[str | None, lis
 
 def manual_finish_commands(
     worktree: Path, branch: str, title: str, *, include_pr: bool = True, draft: bool = True,
-    pr_skill_argv: list[str] | None = None,
+    pr_skill_argv: list[str] | None = None, base: str | None = None,
 ) -> str:
     """The exact commands a human runs to finish by hand after a push/PR
     failure. Printed into build-progress.md — never executed. With
     ``pr_skill_argv``, the PR is opened by the pr skill from the repo's PR
-    template, and ``gh pr create`` is listed after it as the fallback."""
+    template, and ``gh pr create`` is listed after it as the fallback.
+    ``base`` is the PR's base branch when it is not the default branch."""
     lines = [
         f"cd {shlex.quote(str(worktree))}",
         f"git push -u origin {shlex.quote(branch)}",
@@ -959,6 +961,8 @@ def manual_finish_commands(
         lines.append("# or, without the repo's PR template:")
     if include_pr:
         pr = f"gh pr create --title {shlex.quote(title)} --body-file -"
+        if base:
+            pr += f" --base {shlex.quote(base)}"
         if draft:
             pr += " --draft"
         lines.append(pr)

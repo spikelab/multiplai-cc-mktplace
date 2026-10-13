@@ -57,8 +57,9 @@ saves `state: approved` with each file's sha256, and prints
 `EPIC:APPROVED:<epic.json>`, then runs the children (`epic/coordinator.py`):
 each is its own `python -m build_pipeline build` subprocess in its own process
 group, launched once its dependencies merged, at most `epic.max_parallel` at
-once, from the source checkout's HEAD. Records go to
-`agents/<NNN>-build-<id>.{started.json,result.json,log}` (`epic/records.py`). A
+once, from origin's default branch (`--base-ref`). Records go to
+`agents/<NNN>-build-<id>.{started.json,result.json,log}` (`epic/records.py`)
+and each run ends with `runs/<NN>/summary.json` (`EPIC:SUMMARY:<path>`). A
 child waiting on an open PR exits 3 with `EPIC:MERGE_WAITING:<urls>`. A file
 changed after approval, another process holding the epic's lock, or a
 `specs/config.yaml` turning off `git.worktree` or `git.push`, exits 2.
