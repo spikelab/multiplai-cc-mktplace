@@ -10,23 +10,34 @@ per-block review), pointed at the round's own files through three
 `tasks.md` and `.build-state.json` are never read or written.
 
 The block text comes from the triage agent's answer, never from the comment
-body, and is defanged and flattened to one line per task.
+body, and is defanged and flattened to one line per task. Each fix block asks
+the fixer to look for the same mistake elsewhere and to say where it looked
+in a `SEARCHED:` section, which the reply quotes (`searched_text`).
+
+Once the blocks pass, one read-only agent checks the round's own commits
+(`run_self_check`). A problem it lists becomes one more block, after the last
+fix, and its report is kept as `findings-r<N>-self-check.md`.
 """
 
 from __future__ import annotations
 
 import copy
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Awaitable, Callable
 
-from multiplai_core.untrusted import defang
+from multiplai_core.untrusted import defang, fence
 
 from .. import budget, git_ops
 from ..config import BuildConfig
+from ..gates import parse_searched
+from ..llm_steps.spec_steps import AUDITOR_MAX_TURNS, AUDITOR_TOOLS
 from ..models import BlockInfo, BlockStatus
+from ..prompts.findings import SELF_CHECK_PROMPT
+from ..sdk import agent_call
 from ..state import BuildState
 from .models import TriageRecord, Verdict
 
@@ -41,6 +52,10 @@ def tasks_file_name(round_n: int) -> str:
 
 def engine_state_name(round_n: int) -> str:
     return f".findings-r{round_n}-state.json"
+
+
+def self_check_file_name(round_n: int) -> str:
+    return f"findings-r{round_n}-self-check.md"
 
 
 def code_fixes(records: list[TriageRecord]) -> list[TriageRecord]:
@@ -58,8 +73,11 @@ def block_ident(record: TriageRecord) -> str:
     return f"finding {c.finding_id}" if c.finding_id else c.label
 
 
-def render_tasks(round_n: int, records: list[TriageRecord]) -> tuple[str, dict[int, str]]:
-    """(`findings-r<N>-tasks.md` text, block number → the finding's row key)."""
+def render_tasks(round_n: int, records: list[TriageRecord],
+                 self_check: dict | None = None) -> tuple[str, dict[int, str]]:
+    """(`findings-r<N>-tasks.md` text, block number → the finding's row key).
+    When *self_check* (`FindingsRound.self_check`) names a block, the check's
+    report is that block, after the last fix, keyed `block:<k>`."""
     out = [
         f"# Review findings, round {round_n}: code fixes",
         "",
@@ -78,8 +96,23 @@ def render_tasks(round_n: int, records: list[TriageRecord]) -> tuple[str, dict[i
             f"## {i}. Fix {block_ident(r)}",
             "",
             f"- [ ] {i}.1 Write a failing test that shows the defect: {failing}",
-            f"- [ ] {i}.2 Change the code so that test passes, and nothing else. "
+            f"- [ ] {i}.2 Change the code so that test passes. "
             f"Why it is a defect: {_line(t.reason)} Code involved: {where}",
+            f"- [ ] {i}.3 Search the same function, its other branches, its callers and the "
+            "rest of the PR's diff for the same mistake, and fix each one you find; change "
+            "nothing else. End your report with a `SEARCHED:` section: one line per finding "
+            "saying where you looked and what you found.",
+            "",
+        ]
+    k = (self_check or {}).get("block")
+    if k:
+        report = _line(self_check.get("report", ""), 4000)
+        blocks[k] = f"block:{k}"
+        out += [
+            f"## {k}. Fix what the check of this round's fixes found",
+            "",
+            f"- [ ] {k}.1 Write a failing test that shows each problem the check found: {report}",
+            f"- [ ] {k}.2 Change the code so those tests pass, and nothing else.",
             "",
         ]
     return "\n".join(out), blocks
@@ -101,11 +134,43 @@ def round_config(config: BuildConfig, change_dir: Path, round_n: int) -> BuildCo
     return rc
 
 
-def write_tasks(change_dir: Path, round_n: int, records: list[TriageRecord]) -> tuple[Path, dict[int, str]]:
-    text, blocks = render_tasks(round_n, records)
+def write_tasks(change_dir: Path, round_n: int, records: list[TriageRecord],
+                self_check: dict | None = None) -> tuple[Path, dict[int, str]]:
+    text, blocks = render_tasks(round_n, records, self_check)
     path = Path(change_dir) / tasks_file_name(round_n)
     path.write_text(text)
     return path, blocks
+
+
+def write_self_check(change_dir: Path, round_n: int, self_check: dict | None) -> Path | None:
+    """`findings-r<N>-self-check.md` from the saved check, or None (nothing
+    written) when the check found no problem or has not run."""
+    report = (self_check or {}).get("report") or ""
+    if not report:
+        return None
+    path = Path(change_dir) / self_check_file_name(round_n)
+    path.write_text(f"# Check of round {round_n}'s fixes\n\n"
+                    f"Commits checked: up to `{self_check.get('head') or ''}`\n\n"
+                    f"{report.strip()}\n")
+    return path
+
+
+# The engine appends each review-fix agent's report to the implementer's
+# (`tdd_engine`, `[review-fix <n>]`); a section must not run into the next.
+_REVIEW_FIX_SPLIT = re.compile(r"\n\[review-fix \d+\]\n")
+
+
+def searched_text(report: str) -> str:
+    """The last `SEARCHED:` section of a block's implementer report, as one
+    line (`gates.parse_searched`'s entries joined), or "" with a warning when
+    the report has none. Recorded, never checked: code cannot tell whether a
+    search happened."""
+    for part in reversed(_REVIEW_FIX_SPLIT.split(report or "")):
+        entries = parse_searched(part)
+        if entries is not None:
+            return "; ".join(entries)
+    log.warning("the fixer's report has no SEARCHED: section")
+    return ""
 
 
 def fixes_from_state(state_path: Path, blocks: dict[int, str]) -> dict[str, dict[str, str]]:
@@ -120,7 +185,8 @@ def fixes_from_state(state_path: Path, blocks: dict[int, str]) -> dict[str, dict
         key = blocks.get(b.number)
         if key and b.impl_commit and b.status == BlockStatus.DONE:
             out[key] = {"test": b.test_commit or "", "impl": b.impl_commit,
-                        "status": b.status.value}
+                        "status": b.status.value,
+                        "searched": searched_text(b.implementer_report)}
     return out
 
 
@@ -153,6 +219,55 @@ async def run_code_step(config: BuildConfig, change_dir: Path, round_n: int,
     fixes = fixes_from_state(rc.state_file_path(), blocks)
     log.info("DONE findings_code round=%d exit=%d fixed=%d", round_n, code, len(fixes))
     return CodeResult(exit_code=code, blocks=blocks, fixes=fixes)
+
+
+def add_block(state_path: Path, tasks_path: Path, number: int) -> None:
+    """Append block *number* of the tasks file to the round's engine
+    checkpoint as not started, unless it is there: the engine reads the tasks
+    file only when its checkpoint has no blocks. Keeps the checkpoint's spend,
+    as `restart_block` does. Does nothing before the engine has a checkpoint
+    (its first run reads the whole tasks file)."""
+    if not Path(state_path).exists():
+        return
+    state = BuildState.load(state_path)
+    if state.tdd is None or any(b.number == number for b in state.tdd.blocks):
+        return
+    from ..tdd_engine import parse_blocks
+    block = next((b for b in parse_blocks(Path(tasks_path)) if b.number == number), None)
+    if block is None:
+        raise ValueError(f"block {number} is not in {tasks_path}")
+    state.tdd.blocks.append(block)
+    state.checkpoint(state_path, keep_budget=True)
+
+
+_NO_PROBLEMS = re.compile(r"\W*no problems?\W*", re.IGNORECASE)
+
+# Enough of the round's diff to judge; the agent opens the rest with Read.
+MAX_SELF_CHECK_DIFF_CHARS = 150_000
+
+
+async def run_self_check(config: BuildConfig, diff: str) -> str:
+    """One read-only agent (`AUDITOR_TOOLS`) over the round's fix commits.
+    Returns the problems it lists, or "" when it found none. Raises when the
+    agent failed, so the code step stops and a resume asks again."""
+    if len(diff) > MAX_SELF_CHECK_DIFF_CHARS:
+        diff = diff[:MAX_SELF_CHECK_DIFF_CHARS] + "\n... (diff truncated)"
+    prompt = SELF_CHECK_PROMPT.format(
+        change_name=config.change_name,
+        fenced_diff="\n".join(fence(diff, "git diff of this round's fix commits")) or "(empty diff)",
+    )
+    result = await agent_call(
+        prompt,
+        allowed_tools=AUDITOR_TOOLS,
+        model=config.model_for('findings_self_check'),
+        max_turns=AUDITOR_MAX_TURNS,
+        cwd=str(config.project_dir),
+        budget_label="findings_self_check",
+    )
+    if not result.success:
+        raise RuntimeError(f"the self-check agent failed: {' '.join((result.error or '').split())[:300]}")
+    text = (result.output or "").strip()
+    return "" if not text or _NO_PROBLEMS.fullmatch(text) else text
 
 
 def failed_block(state_path: Path) -> BlockInfo | None:

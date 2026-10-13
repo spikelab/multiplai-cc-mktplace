@@ -460,6 +460,7 @@ STEP_STAGES: dict[str, str] = {
     "plan_review": "review",
     "integration_fix_escalated": "review",
     "findings_triage": "review",
+    "findings_self_check": "review",
 }
 
 # The keys `models:` accepts: a step, a stage, or `default`.

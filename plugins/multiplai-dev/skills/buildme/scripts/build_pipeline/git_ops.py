@@ -712,6 +712,30 @@ def merge_base(repo: Path | str, a: str, b: str) -> str | None:
     return res.stdout.strip() or None
 
 
+def diff_range(repo: Path | str, base: str, head: str, exclude: Path | str | None = None) -> str | None:
+    """`git diff <base>..<head>` over the project directory, leaving out
+    *exclude* (a directory relative to *repo*). None when git could not be asked."""
+    spec = ["--", "."]
+    if exclude is not None:
+        spec.append(f":(exclude,literal){Path(exclude).as_posix()}")
+    res = _run(["git", "diff", f"{base}..{head}", *spec], cwd=repo)
+    if not res.ok:
+        log.warning("git diff %s..%s failed: %s", base[:12], head[:12], res.stderr.strip())
+        return None
+    return res.stdout
+
+
+def status_of(repo: Path | str, paths: list[Path | str]) -> str | None:
+    """`git status --porcelain -- <paths>`: what git lists for exactly those
+    paths, "" when nothing. None when git could not be asked."""
+    res = _run(["git", "status", "--porcelain", "--untracked-files=all", "--",
+                *(str(p) for p in paths)], cwd=repo)
+    if not res.ok:
+        log.warning("git status failed: %s", res.stderr.strip())
+        return None
+    return res.stdout
+
+
 def is_ancestor_of_head(repo: Path | str, sha: str) -> bool:
     """Whether *sha* is reachable from HEAD (or is HEAD itself).
 

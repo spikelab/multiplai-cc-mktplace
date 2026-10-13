@@ -230,6 +230,8 @@ class TestTier:
 # step(s) that source names). Sites whose model is a parameter or a local
 # name the step that fills it.
 CALL_SITES = {
+    ("findings/code.py", "run_self_check", "agent_call"):
+        ("config.model_for('findings_self_check')", ("findings_self_check",)),
     ("findings/spec.py", "write_delta", "call"):
         ("config.model_for('findings_spec')", ("findings_spec",)),
     ("findings/triage.py", "triage_comment", "call"):

@@ -81,6 +81,8 @@ def outcome(rnd: FindingsRound, record: TriageRecord) -> str:
         if fix and fix.get("impl"):
             test = f" (failing test first in `{_short(fix.get('test'))}`)" if fix.get("test") else ""
             parts.append(f"Fixed in `{_short(fix['impl'])}`{test}.")
+            if fix.get("searched"):
+                parts.append(f"Searched for the same mistake: {_line(fix['searched'], 600)}")
             if rnd.code_check_failed:
                 parts.append(f"After the fixes, {_line(rnd.code_check_failed, 300)}.")
         elif fix and fix.get("failed"):

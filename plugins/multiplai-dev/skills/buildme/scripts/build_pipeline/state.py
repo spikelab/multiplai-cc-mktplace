@@ -120,6 +120,14 @@ class FindingsRound(BaseModel):
     # after the blocks failed); the fixes are still published. None in
     # checkpoints written before the field existed.
     code_check_failed: str | None = None
+    # HEAD right after the code step's records commit, before any fix: the
+    # base of the diff the self-check reads. Set once, never overwritten.
+    code_base: str | None = None
+    # The self-check of the round's fix commits, saved once it answered:
+    # {"head": HEAD it read up to, "report": the problems ("" for none),
+    # "block": the block number the report became (None for none)}. A saved
+    # check never runs again. None until then, and in older checkpoints.
+    self_check: dict | None = None
     pushed_head: str | None = None
     body_updated: bool = False
     replies_sent: list[str] = Field(default_factory=list)     # reply keys, in order sent
