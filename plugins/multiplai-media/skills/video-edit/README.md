@@ -43,11 +43,20 @@ buy houses. Use my brand file."*
    applies `corrections.json` with `correct`. Check names and jargon here,
    before any reel is rendered.
 3. **Candidates.** Claude proposes 15–90 s clips with a hook in the first
-   seconds, and you pick which to make.
+   seconds, and you pick which to make on a local job page: play each one
+   from the recording, accept or reject it, drag its start and end (they
+   snap to sentence edges), and send your picks.
+   On the same page you choose the look and the music: each overlay style
+   plays a looping sample, each brand shows its colours and font, each
+   caption option draws over a frame of your recording, and each music bed
+   and sound effect plays, with a level slider and a button that plays the
+   bed under a stretch of the speech.
 4. **Edit lists and render.** Each clip becomes an edit list (EDL, a small
    JSON file) and then an MP4:
-   - **Video call:** Claude marks each person's window once, keeping it clear
-     of name tags and watermarks, and frames whoever is talking.
+   - **Video call:** you draw a box around each person's window on the job
+     page and say which transcript speaker is which (Claude can mark them
+     instead), keeping clear of name tags and watermarks; Claude frames
+     whoever is talking.
    - **Keynote or TV feed:** it splits at camera cuts, shows slides whole
      over a blurred copy, and follows the speaker with a moving crop.
 5. **Checks.** Every reel must pass two checks before you see it:
@@ -63,11 +72,27 @@ buy houses. Use my brand file."*
      - Is all slide text visible?
 
    You get the reels, the check results and those answers.
-6. **Review in the browser.** Ask to review the renders, and Claude serves
-   a local page:
+6. **Review in the browser.** The Review tab of the same job page plays
+   the renders:
    - Click on the picture to pause and comment on that moment and that spot
      ("caption covers his mouth", "cut here").
-   - Send all your comments together.
+   - Or pause and draw on the frame: a pen line, an arrow or a box, in a
+     colour you pick. Claude gets the frame with your marks on it.
+   - Under the video, a timeline shows the render's parts: segments,
+     caption lines, the headline, overlays and sound effects. Drag along
+     its ruler to comment on a stretch ("too slow here"), and click a block
+     to say which part you mean ("this card comes in too late").
+   - Change the look directly: a style panel under the timeline shows the
+     render's caption size, height, words per line and highlight, the
+     brand's colours, and each overlay style's colours, fonts, corner
+     radius and timings. Caption edits show at once as an approximate
+     caption over the picture.
+   - Turn on live overlays to play the render's overlay pages over the
+     picture, then pick an element (a number, a label) and change its
+     colour, font, size, weight, opacity or transform; the change shows
+     at once.
+   - Send all your comments together; style changes and restyles are sent
+     with their own buttons.
    - Claude renders the next version, and the page offers it next to the
      old one.
 
@@ -109,7 +134,8 @@ Every command takes `--help`.
 | `proof <mp4> --edl <edl>` | One sheet of labelled frames of a reel |
 | `shots <cache> --from --to` | List the camera cuts in a span, with three frames of each |
 | `frame <video> --at <s> [--grid]` | One frame as a PNG, optionally with a pixel grid |
-| `review <dir>` | The local review page |
+| `review <outdir>` | The local job page: pick clips, draw speaker boxes, choose a look and music, comment on renders and restyle them |
+| `music-sample <preset> --out <wav>` | A 15 s sample of a synth music bed, to offer on the job page |
 | `contact-sheet <video-or-url>` | Frames of a reference video, for deriving a style |
 | `prefs show` / `prefs add` | Read or append your saved preferences |
 | `outdir`, `make` | Create a job's output folder; print the whole workflow |

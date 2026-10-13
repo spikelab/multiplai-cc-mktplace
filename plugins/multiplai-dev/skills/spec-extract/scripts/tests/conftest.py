@@ -1,17 +1,24 @@
 """Shared fixtures: real git repositories in temporary directories, a fixed clock,
-and a stand-in for `gh pr view`. No test calls `gh` or a model."""
+a stand-in for `gh pr view`, and a fake model call. No test calls `gh` or a model."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from code_facts import ExploreOutput
+from multiplai_core import budget as core_budget
+from multiplai_core.budget import BudgetExceededError
 
 from spec_extract_pipeline import __main__ as cli
+from spec_extract_pipeline import sdk
 from spec_extract_pipeline import target as target_mod
 
 FIXED = datetime(2026, 10, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -51,6 +58,23 @@ def make_repo(path: Path, origin: str | None = "https://github.com/acme/widgets.
     git(path, "commit", "-q", "-m", "initial")
     if origin:
         git(path, "remote", "add", "origin", origin)
+    return path
+
+
+def unit_file(i: int, version: int = 1) -> str:
+    """A module of 3,502 lines: each file in its own directory is its own explore unit."""
+    return f"def f{i}():\n    return {i * 10 + version}\n" + "".join(f"x{n} = {n}\n" for n in range(3500))
+
+
+def make_units_repo(path: Path, n: int = 3) -> Path:
+    """A repository whose whole-tree scope splits into *n* units: `d<i>/mod.py`, in unit order."""
+    path.mkdir(parents=True)
+    git(path, "init", "-q", "-b", "main")
+    for i in range(n):
+        write(path / f"d{i}" / "mod.py", unit_file(i))
+    git(path, "add", "-A")
+    git(path, "commit", "-q", "-m", "units")
+    git(path, "remote", "add", "origin", "https://github.com/acme/widgets.git")
     return path
 
 
@@ -116,3 +140,70 @@ def pr_view(monkeypatch):
 
     monkeypatch.setattr(target_mod, "_pr_view", fake)
     return view
+
+
+# --- the fake model call --------------------------------------------------------------
+
+_LISTED = re.compile(r"^- (\S.*) \((\d+) lines\)$", re.M)
+
+
+class FakeCall:
+    """Stands in for `sdk.agent_call_structured`, the `CallFn` explore calls.
+
+    It answers an explore prompt with one fact and one file purpose per listed
+    file, each citing the file's first non-blank line, read from the snapshot
+    (`cwd`), so the gate keeps them. A unit is named by its first listed file.
+    `script[file]` lists what the unit's next calls do, one action per call,
+    then "ok" for every call after:
+
+    - "ok": record `cost` dollars into the run's ledger, as the real call does
+      as it returns, and answer;
+    - "fail": record the spend, then raise `CallFailed`;
+    - "kill": raise `Killed` before recording, like a process killed mid-call;
+    - "over": raise `BudgetExceededError`, as the real call's own check does.
+    """
+
+    def __init__(self) -> None:
+        self.calls: Counter[str] = Counter()
+        self.script: defaultdict[str, list[str]] = defaultdict(list)
+        self.cost = 1.0
+        self.kwargs: list[dict] = []
+
+    async def __call__(self, prompt, schema, *, budget_label="", cwd=None, **kwargs):
+        files = [m.group(1) for m in _LISTED.finditer(prompt)]
+        unit = files[0]
+        self.calls[unit] += 1
+        self.kwargs.append(dict(kwargs, cwd=cwd, budget_label=budget_label))
+        action = self.script[unit].pop(0) if self.script[unit] else "ok"
+        if action == "kill":
+            raise Killed(f"killed during the call for {unit}")
+        if action == "over":
+            raise BudgetExceededError("circuit breaker stopped the run (fake)")
+        core_budget.record(SimpleNamespace(cost_usd=self.cost, input_tokens=100, output_tokens=10),
+                           label=budget_label)
+        if action == "fail":
+            raise sdk.CallFailed(f"fake failure for {unit}")
+        return schema.model_validate(answer_for(files, Path(cwd)))
+
+
+def answer_for(files: list[str], snapshot: Path) -> dict:
+    facts, purposes = [], []
+    for f in files:
+        lines = (snapshot / f).read_text(encoding="utf-8").splitlines()
+        n = next((i for i, line in enumerate(lines, 1) if line.strip()), None)
+        if n is None:
+            continue
+        cite = {"path": f, "line_start": n, "line_end": n, "quote": lines[n - 1].strip()}
+        facts.append({"claim": f"{f} starts with {lines[n - 1].strip()!r}", "citations": [cite]})
+        purposes.append({"path": f, "purpose": f"holds {Path(f).stem}", "citation": cite})
+    return ExploreOutput.model_validate({"facts": facts, "files": purposes}).model_dump()
+
+
+@pytest.fixture(autouse=True)
+def fake_call(monkeypatch):
+    """Every test runs trusted, with the fake call, and with no model key from multiplai.conf."""
+    fake = FakeCall()
+    monkeypatch.setattr(sdk, "agent_call_structured", fake)
+    monkeypatch.setattr(sdk, "model_for", lambda step: None)
+    monkeypatch.setenv(sdk.TRUST_ENV, "1")
+    return fake

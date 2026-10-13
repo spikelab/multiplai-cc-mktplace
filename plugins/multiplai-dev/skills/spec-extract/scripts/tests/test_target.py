@@ -43,7 +43,7 @@ def test_whole_tree(repo, root, capsys):
     folder = root / "widgets" / f"tree@{head12(repo)}"
     assert f"SPEC_EXTRACT:RESOLVED {folder}" in capsys.readouterr().out
     state = read_state(folder)
-    assert state["steps_done"] == ["resolve"]
+    assert state["steps_done"] == ["resolve", "scope", "explore"]
     assert state["target"]["kind"] == "tree"
     assert state["target"]["head_sha"] == git(repo, "rev-parse", "HEAD")
     assert state["target"]["remote_url"] == "https://github.com/acme/widgets.git"
@@ -102,8 +102,9 @@ def test_exactly_one_target(repo, root, capsys):
 # --- folders another run wrote ----------------------------------------------------
 
 def test_pr_folder_of_another_remote_moves_to_owner(repo, root, pr_view):
-    head = git(repo, "rev-parse", "HEAD")
-    pr_view.info[12] = {"headRefOid": head, "baseRefOid": head}
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit_file(repo, "src/billing/charge.py", "def charge(amount):\n    return amount * 2\n")
+    pr_view.info[12] = {"headRefOid": head, "baseRefOid": base}
     theirs = root / "widgets" / f"pr-12@{head[:12]}"
     fake_state(theirs, kind="pr", remote_url=OTHER)
     before = (theirs / "state.json").read_bytes()
@@ -121,7 +122,7 @@ def test_same_remote_in_another_url_form_is_this_remote(repo, root):
                remote_url="git@github.com:ACME/widgets.git")
     assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
     state = read_state(folder)  # this target's folder: its state is resumed
-    assert state["steps_done"] == ["resolve"]
+    assert state["steps_done"] == ["resolve", "scope", "explore"]
     assert state["target"]["remote_url"] == "git@github.com:ACME/widgets.git"
     assert not (root / "widgets@acme").exists()
 
@@ -131,7 +132,7 @@ def test_folder_naming_no_remote_is_used(repo, root):
     folder = root / "widgets" / f"tree@{sha[:12]}"
     fake_state(folder, kind="tree", repo=str(repo), head_sha=sha, path="")
     assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
-    assert read_state(folder)["steps_done"] == ["resolve"]
+    assert read_state(folder)["steps_done"] == ["resolve", "scope", "explore"]
     assert not (root / "widgets@acme").exists()
 
 
@@ -191,7 +192,7 @@ def test_this_targets_folder_found_at_a_later_candidate(repo, root):
     fake_state(ours, kind="tree", repo=str(repo), head_sha=sha, path="",
                remote_url="https://github.com/acme/widgets.git")
     assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
-    assert read_state(ours)["steps_done"] == ["resolve"]
+    assert read_state(ours)["steps_done"] == ["resolve", "scope", "explore"]
     assert not (root / "widgets").exists()
 
 
@@ -208,7 +209,7 @@ def test_another_targets_held_folder_is_skipped(repo, root):
         assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
     finally:
         _release(holder)
-    assert read_state(root / "widgets@acme" / f"tree@{sha[:12]}")["steps_done"] == ["resolve"]
+    assert read_state(root / "widgets@acme" / f"tree@{sha[:12]}")["steps_done"] == ["resolve", "scope", "explore"]
 
 
 def test_absolute_path_with_a_subdirectory_repo(repo, root):
@@ -585,7 +586,7 @@ def test_restart_renames_and_never_deletes(repo, root):
     stamp = FIXED.strftime("%Y%m%d%H%M%S")
     old = folder.parent / f"{folder.name}.old-{stamp}"
     assert (old / "mine.txt").read_text() == "1"
-    assert read_state(folder)["steps_done"] == ["resolve"]
+    assert read_state(folder)["steps_done"] == ["resolve", "scope", "explore"]
     assert not (folder / "mine.txt").exists()
     assert run("run", "--repo", repo, "--tree", "HEAD", "--restart", "--out", root) == 0
     assert (folder.parent / f"{folder.name}.old-{stamp}-2" / "state.json").is_file()
