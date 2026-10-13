@@ -188,6 +188,11 @@ class BuildState(BaseModel):
     # (a resume, or a FAILED build re-running every phase) keeps the
     # acceptance instead of stopping again. Default False.
     size_accepted: bool = False
+    # Epic mode: the epic directory EPIC_SPLIT wrote (`<data_dir>/buildme/
+    # epics/<owner>-<repo>--<change>/`), saved in the same checkpoint that
+    # completes the phase. Set means the build is an epic: every later run
+    # reads epic.json and never reaches spec generation. Default None.
+    epic_dir: str | None = None
 
     # Git lifecycle — set when the pipeline creates its own worktree/branch.
     # Persisted so a resume RE-BINDS to the existing worktree instead of

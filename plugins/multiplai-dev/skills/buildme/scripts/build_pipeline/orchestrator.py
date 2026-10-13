@@ -142,6 +142,24 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             print("PHASE:CODEBASE_ANALYSIS:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.CODEBASE_ANALYSIS, progress=progress)
 
+        # Phase: Epic split — one change, or several children with one plan
+        # each. Unlike the phases above, a pointer AT EPIC_SPLIT means the
+        # decision is made: re-entering would pay for the call again. A build
+        # that split (state.epic_dir set) never reaches spec generation.
+        if state.epic_dir is None and not (state.phase == BuildPhase.EPIC_SPLIT
+                                           or state.is_phase_complete(BuildPhase.EPIC_SPLIT)):
+            log.info("START phase=EPIC_SPLIT")
+            from .epic import phase as epic_phase
+            rc = await epic_phase.run_epic_split_phase(config, state, state_path, args, progress)
+            if rc is not None:
+                return rc
+            log.info("DONE phase=EPIC_SPLIT")
+            print("PHASE:EPIC_SPLIT:COMPLETE", flush=True)
+            board.record(config, state, BuildPhase.EPIC_SPLIT, progress=progress)
+        if state.epic_dir:
+            from .epic import phase as epic_phase
+            return epic_phase.continue_epic(config, state, args)
+
         # Phase: Spec Generation
         if not state.is_phase_complete(BuildPhase.SPEC_GENERATION) and not config.mode == "only":
             log.info("START phase=SPEC_GENERATION")
