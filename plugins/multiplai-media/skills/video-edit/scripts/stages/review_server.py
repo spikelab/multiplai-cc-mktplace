@@ -303,27 +303,105 @@ def _write_private(path: Path, text: str) -> None:
         f.write(text)
 
 
-def validate_comment(c: Any, known: set[tuple[str, int]]) -> dict:
-    """One comment from the page → a mailbox row, or ValueError."""
-    if not isinstance(c, dict):
-        raise ValueError("each comment must be an object")
-    video, version = c.get("video"), c.get("version")
-    if not isinstance(video, str) or not isinstance(version, int) or (video, version) not in known:
-        raise ValueError(f"unknown video {video!r} version {version!r}")
+# Mailbox row kinds the page may post: whether the row is about one render
+# (`video` and `version`), its own fields (all required), and whether `text`
+# may be empty. A row with no `kind` is a `point` row: that is the shape the
+# page posted before rows had kinds.
+ROW_KINDS: dict[str, dict] = {
+    "point": {"review": True, "fields": ("t", "x", "y"), "needs_text": True},
+    "pick": {"review": False, "fields": ("candidate", "decision", "start", "end"), "needs_text": False},
+    "panels": {"review": False, "fields": ("panels", "speakers"), "needs_text": False},
+}
+MAX_PANELS = 8
+MAX_NAME = 40
+
+
+def _finite(c: dict, *keys: str) -> list[float]:
+    """The values under `keys` as finite floats, or ValueError naming them."""
     try:
-        t, x, y = float(c["t"]), float(c["x"]), float(c["y"])
+        vals = [float(c[k]) for k in keys]
     except (KeyError, TypeError, ValueError):
-        raise ValueError("t, x and y must be numbers") from None
+        raise ValueError(f"{', '.join(keys)} must be numbers") from None
     # float() takes "nan" and "inf", and json.loads takes bare NaN and Infinity;
     # every comparison with NaN is false, so test finiteness first.
-    if not all(map(math.isfinite, (t, x, y))) or t < 0 or not (0 <= x <= 1 and 0 <= y <= 1):
-        raise ValueError("t must be a finite number >= 0 and x, y within 0..1")
-    text = c.get("text")
-    if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
-        raise ValueError(f"text must be 1..{MAX_TEXT} characters")
-    return {"id": f"c-{uuid.uuid4().hex[:12]}", "video": video, "version": version,
-            "t": round(t, 3), "x": round(x, 4), "y": round(y, 4), "text": text.strip(),
-            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if any(isinstance(c[k], bool) for k in keys) or not all(map(math.isfinite, vals)):
+        raise ValueError(f"{', '.join(keys)} must be finite numbers")
+    return vals
+
+
+def _pick(c: dict, candidates: set[str] | frozenset[str]) -> dict:
+    if not isinstance(c["candidate"], str) or c["candidate"] not in candidates:
+        raise ValueError(f"unknown candidate {c['candidate']!r}")
+    if c["decision"] not in ("accept", "reject"):
+        raise ValueError("decision must be accept or reject")
+    start, end = _finite(c, "start", "end")
+    if start < 0 or end <= start:
+        raise ValueError("need 0 <= start < end")
+    return {"candidate": c["candidate"], "decision": c["decision"], "start": round(start, 3), "end": round(end, 3)}
+
+
+def _panels(c: dict) -> dict:
+    panels, speakers = c["panels"], c["speakers"]
+    if not isinstance(panels, dict) or not 1 <= len(panels) <= MAX_PANELS:
+        raise ValueError(f"panels must name 1..{MAX_PANELS} boxes")
+    out: dict[str, dict] = {}
+    for name, rect in panels.items():
+        if not name.strip() or len(name) > MAX_NAME:
+            raise ValueError(f"a panel name must be 1..{MAX_NAME} characters")
+        if not isinstance(rect, dict) or set(rect) != {"x", "y", "w", "h"}:
+            raise ValueError(f"panel {name!r} must be {{x, y, w, h}}")
+        x, y, w, h = _finite(rect, "x", "y", "w", "h")
+        if x < 0 or y < 0 or w < 1 or h < 1:
+            raise ValueError(f"panel {name!r} must have x, y >= 0 and w, h >= 1 (source pixels)")
+        out[name] = {"x": round(x), "y": round(y), "w": round(w), "h": round(h)}
+    if not isinstance(speakers, dict):
+        raise ValueError("speakers must map transcript labels to panel names")
+    for label, name in speakers.items():
+        if not label or len(label) > 64 or name not in out:
+            raise ValueError(f"speaker {label!r} must map to one of the panels")
+    return {"panels": out, "speakers": dict(speakers)}
+
+
+def validate_comment(c: Any, known: set[tuple[str, int]],
+                     candidates: set[str] | frozenset[str] = frozenset()) -> dict:
+    """One row from the page → a mailbox row, or ValueError.
+
+    `known` is the (video, version) pairs on disk; `candidates` the ids in a
+    valid candidates.json. Unknown kinds and fields are refused.
+    """
+    if not isinstance(c, dict):
+        raise ValueError("each comment must be an object")
+    kind = c.get("kind", "point")
+    spec = ROW_KINDS.get(kind) if isinstance(kind, str) else None
+    if spec is None:
+        raise ValueError(f"unknown kind {kind!r}")
+    allowed = {"kind", "text", *spec["fields"], *(("video", "version") if spec["review"] else ())}
+    unknown = sorted(set(c) - allowed)
+    if unknown:
+        raise ValueError(f"{kind} rows have no field(s) {', '.join(map(repr, unknown))}")
+    missing = [f for f in spec["fields"] if f not in c]
+    if missing:
+        raise ValueError(f"{kind} rows need {', '.join(missing)}")
+    text = c.get("text", "")
+    if not isinstance(text, str) or len(text) > MAX_TEXT or (spec["needs_text"] and not text.strip()):
+        raise ValueError(f"text must be {1 if spec['needs_text'] else 0}..{MAX_TEXT} characters")
+    row: dict[str, Any] = {"id": f"c-{uuid.uuid4().hex[:12]}", "kind": kind}
+    if spec["review"]:
+        video, version = c.get("video"), c.get("version")
+        if not isinstance(video, str) or not isinstance(version, int) or (video, version) not in known:
+            raise ValueError(f"unknown video {video!r} version {version!r}")
+        row.update(video=video, version=version)
+    if kind == "point":
+        t, x, y = _finite(c, "t", "x", "y")
+        if t < 0 or not (0 <= x <= 1 and 0 <= y <= 1):
+            raise ValueError("t must be a finite number >= 0 and x, y within 0..1")
+        row.update(t=round(t, 3), x=round(x, 4), y=round(y, 4))
+    elif kind == "pick":
+        row.update(_pick(c, candidates))
+    elif kind == "panels":
+        row.update(_panels(c))
+    row.update(text=text.strip(), created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    return row
 
 
 # --- server -------------------------------------------------------------------------
@@ -415,10 +493,12 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                     return self._named(url.path[len("/media/"):], query)
                 if url.path == "/api/comments" and self.command == "POST":
                     return self._post_comments()
-                if url.path == "/api/comments" and self.command in ("GET", "HEAD"):
-                    clip = query.get("video", [None])[0]
-                    return self._json({"comments": [r for r in mailbox.read()
-                                                    if clip is None or r.get("video") == clip]})
+                if url.path == "/api/comments" and get:
+                    clip, kind = query.get("video", [None])[0], query.get("kind", [None])[0]
+                    return self._json({"comments": [
+                        r for r in mailbox.read()
+                        if (clip is None or r.get("video") == clip)
+                        and (kind is None or r.get("kind", "point") == kind)]})
                 if url.path.startswith("/media/") and get:
                     return self._media(unquote(url.path[len("/media/"):]))
                 if self.command in ("GET", "HEAD"):
@@ -554,8 +634,10 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             if not isinstance(comments, list) or not comments:
                 raise _Reject(400, "expected {comments: [...]}")
             known = {(c["clip"], v["version"]) for c in videos() for v in c["versions"]}
+            cands = job_files.load(video_dir, "candidates")
+            ids = {c["id"] for c in cands["data"]} if cands["status"] == "ok" else set()
             try:
-                rows = [validate_comment(c, known) for c in comments]
+                rows = [validate_comment(c, known, ids) for c in comments]
             except ValueError as e:
                 raise _Reject(400, str(e)) from None
             mailbox.append(rows)

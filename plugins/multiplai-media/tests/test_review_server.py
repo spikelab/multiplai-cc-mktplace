@@ -164,7 +164,8 @@ def test_comment_round_trip_through_the_mailbox(server) -> None:
     ids = json.loads(data)["ids"]
     rows = [json.loads(line) for line in (server["box"] / "comments.jsonl").read_text().splitlines()]
     assert [r["id"] for r in rows] == ids
-    assert set(rows[0]) == {"id", "video", "version", "t", "x", "y", "text", "created_at"}
+    assert set(rows[0]) == {"id", "kind", "video", "version", "t", "x", "y", "text", "created_at"}
+    assert rows[0]["kind"] == "point"
     assert (rows[0]["video"], rows[0]["version"], rows[0]["t"], rows[0]["text"]) == ("clip-01", 2, 3.25, "caption too low")
     res, data = _req(server, "GET", "/api/comments?video=clip-01", _auth(server))
     assert [c["id"] for c in json.loads(data)["comments"]] == ids
