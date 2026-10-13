@@ -103,6 +103,20 @@ def test_apply_style_wins_over_the_animation_and_clear_takes_it_back(page) -> No
     assert page.evaluate(style, sel)[:2] == ["rgb(31, 42, 68)", "1"]
 
 
+def test_clear_style_gives_back_the_elements_own_inline_declarations(page) -> None:
+    sel = "body > div.card > div.t:nth-of-type(2)"
+    page.evaluate("""(s) => { const e = document.querySelector(s);
+        e.style.setProperty('color', 'rgb(1, 2, 3)', 'important'); e.style.setProperty('font-size', '22px'); }""", sel)
+    _send(page, {"type": "applyStyle", "selector": sel, "changes": {"color": "#FF3B30", "font-size": "30px"}})
+    _send(page, {"type": "applyStyle", "selector": sel, "changes": {"color": "#00AA00"}})   # a second edit, same property
+    inline = """(s) => { const st = document.querySelector(s).style;
+        return [st.getPropertyValue('color'), st.getPropertyPriority('color'),
+                st.getPropertyValue('font-size'), st.getPropertyPriority('font-size')]; }"""
+    assert page.evaluate(inline, sel) == ["rgb(0, 170, 0)", "important", "30px", "important"]
+    _send(page, {"type": "clearStyle"})
+    assert page.evaluate(inline, sel) == ["rgb(1, 2, 3)", "important", "22px", ""]
+
+
 def test_messages_from_anything_but_the_parent_are_ignored(page) -> None:
     page.evaluate("""() => new Promise((ok) => {
         const f = document.createElement('iframe'); document.body.append(f);
