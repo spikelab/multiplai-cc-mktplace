@@ -12,6 +12,7 @@ SKILL.md (thin wrapper — handles interview, plan review)
         ├── tdd_engine.py      — per-block TDD with agent spawning
         ├── apply.py           — manual single-agent implementation
         ├── change_manager.py  — manages specs/ directory
+        ├── epic/              — EPIC_SPLIT: one change, or several child plans
         └── shared: config, state, models, gates, sdk, logging, env, progress
 ```
 
@@ -32,6 +33,14 @@ python -m build_pipeline tdd --change my-feature --project-dir /path
 # Archive a completed change (merge delta specs → main registry)
 python -m build_pipeline archive --change my-feature --project-dir /path
 ```
+
+### Epic mode
+
+After the codebase analysis, `build` decides whether the input is one change or
+several (`BuildPhase.EPIC_SPLIT`, one structured call). Several writes
+`<data_dir>/buildme/epics/<owner>-<repo>--<change>/` — `epic.json`, `split.md`,
+`plans/<id>.md` — prints `EPIC:SPLIT:<split.md>` and exits 3, on this run and
+every re-run. `--no-epic-split` skips the decision.
 
 ## Model-Adaptive Behavior
 
