@@ -693,7 +693,7 @@ genuinely invisible; `--spec-only` runs include the prototype stage.
 
 Parse pipeline stdout for progress lines:
 - `PHASE:<name>:COMPLETE` — phase transitions (now includes
-  `CODEBASE_ANALYSIS`, `PLAN_REVIEW`, `PROTOTYPE`, `DOCS_UPDATE`, `RESPEC`,
+  `CODEBASE_ANALYSIS`, `EPIC_SPLIT`, `PLAN_REVIEW`, `PROTOTYPE`, `DOCS_UPDATE`, `RESPEC`,
   `PUBLISH`)
 - `REFERENCES:<doc names>` — the stack/framework reference docs the specs were
   generated against, or `(none)`. Emitted once per run

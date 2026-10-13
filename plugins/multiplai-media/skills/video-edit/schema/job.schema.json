@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "video-edit/job.schema.json",
+  "title": "video-edit job",
+  "description": "<outdir>/job.json, written by the session after prep. Names the source recording and its prep outputs, so the review page can play the source and show its words. Every path is absolute.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "transcript", "sentences", "kind"],
+  "properties": {
+    "source": {"type": "string", "format": "absolute-path", "description": "The original recording (never the prep proxy)."},
+    "transcript": {"type": "string", "format": "absolute-path", "description": "transcript.json from prep: {words: [{text, start, end, speaker?}]}."},
+    "sentences": {"type": "string", "format": "absolute-path", "description": "sentences.json from prep, beside transcript.json: [{start, end, text, speaker?}]."},
+    "kind": {"enum": ["reels", "demo"], "description": "reels: clips from a long recording (Clips and Speakers tabs apply). demo: a screencast (those two tabs do not)."}
+  }
+}

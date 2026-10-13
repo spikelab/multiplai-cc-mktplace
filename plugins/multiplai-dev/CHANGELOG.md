@@ -10,14 +10,14 @@ Version numbers are this plugin's version in the marketplace manifest
 
 Recorded history starts at **0.1.1**; anything earlier is in `git log` only.
 
-Of the 25 versions recorded here, `0.1.1` and `0.5.0`–`0.5.3` carry a git tag;
+Of the versions recorded here, `0.1.1` and `0.5.0`–`0.5.3` carry a git tag;
 tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.53.0] - 2026-10-13
+## [0.55.0] - 2026-10-13
 
 ### Added
 - An epic split can be approved. Edit `split.md`'s table or any
@@ -31,7 +31,7 @@ time, not derived from a tag.
 - The wrapper fetches a GitHub epic's sub-issues into the ticket, and posts the
   split on the ticket as one comment, never twice for the same split.
 
-## [0.52.0] - 2026-10-13
+## [0.54.0] - 2026-10-13
 
 ### Added
 - buildme decides, after the codebase analysis, whether its input is one
@@ -41,9 +41,64 @@ time, not derived from a tag.
   children each depends on, to
   `<data_dir>/buildme/epics/<owner>-<repo>--<change>/` and exits 3 with
   `EPIC:SPLIT:<split.md>`. A re-run prints the same line and makes no new
-  model call. Approving the split and building the children come in later
+  model call, and keeps any plan you edited meanwhile. A retry of a one-change
+  build that failed does not ask again, nor does one that skipped the question or predates it. Approving the split and building the children come in later
   releases.
 - `--no-epic-split` builds the input as one change without asking.
+
+## [0.53.0] - 2026-10-13
+
+### Added
+- `/multiplai-dev:spec-extract`, second part: after resolving its target, a
+  run lists the Python files and their public functions, classes and methods,
+  then asks one read-only agent per slice of code (at most 6,000 lines) what
+  the code does. It keeps only facts whose cited lines are at the commit, and
+  writes `facts.json`, `report.md` (files left out, files not analysed, with
+  reasons) and `plan.txt`. It prints `SPEC_EXTRACT:EXPLORED <answered>/<units>`.
+  Writing the specs comes in a later version.
+- `--trust-repo` (or `SPEC_EXTRACT_TRUST_REPO=1`) is required before the first
+  model call, since the code is sent to a model; without it the run exits 4,
+  and the skill tells the agent to ask the user before re-running with it.
+- `--max-usd` (default 80) caps the spend of a run folder across every run
+  that resumes it; reaching it exits 3 with everything paid for saved, and a
+  higher cap continues. `--max-units` (default 20) refuses a target too large
+  to explore in one run. `--plan-only` prints the units and call counts and
+  stops before any model call.
+- A resumed run asks only the slices with no answer, asks a slice at most
+  twice in all, and a `--pr` run keeps the base and file list it started with
+  even after the base branch moves or the PR merges. It can resume from
+  another checkout of the same repository, even when the first one is gone.
+  A re-run after explore writes `facts.json` with the same bytes, its
+  `generated_at` included.
+- A model setting no call can run with (an unknown provider in
+  `spec_extract_explore_model`, `claude-agent-sdk` missing, or for a `pi:`
+  model the `pi` binary missing or failing to start) exits 1 and counts no
+  attempt, so the same command works once it is fixed.
+
+## [0.52.0] - 2026-10-13
+
+### Added
+- `/multiplai-dev:spec-extract`, first part: it resolves a commit
+  (`--tree [<commit>] [--path <dir>]`), a PR's head (`--pr <n>`) or a directory
+  not under git (`--dir`), chooses its run folder
+  `<data_dir>/spec-extract/<repo>/<object>/` (or `--out`), and extracts the
+  commit for later steps. It prints `SPEC_EXTRACT:RESOLVED <run>` and makes no
+  model call yet; writing the specs comes in later versions.
+- Running the same command again resumes the same folder, also when an earlier
+  candidate folder was renamed or deleted since. A second run of the same
+  target while one is running exits 5 and writes nothing. `--restart` renames
+  the run folder to `<object>.old-<timestamp>` and starts again; it never
+  deletes. An unreadable `state.json` exits 1 and names `--restart`, as does
+  a `--dir` run whose copied `source/` no longer holds its import.
+- `snapshot/` holds each file as git stores it, whatever the commit's
+  `.gitattributes` export rules say. A link that is absolute or leads out of
+  the tree is left out and named, instead of failing the run.
+- A `--dir` run refuses any `--out` that would put its run folder inside the
+  source, including the source's parent. Its import commits every copied file,
+  including those the source's `.gitignore` names.
+- `--pr` reads the PR from `origin`'s repository, the one `--fetch` fetches
+  from and the run folder is named after, also in a fork clone with an
+  `upstream` remote.
 
 ## [0.51.0] - 2026-10-13
 

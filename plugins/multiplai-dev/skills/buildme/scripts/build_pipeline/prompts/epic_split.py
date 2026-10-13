@@ -23,12 +23,18 @@ For several, give each child:
   can start. Leave it empty when the child can start at once. No cycles.
 - `repo`: leave it out unless the child belongs in a different repository,
   then name it `owner/name`.
-- `plan`: a complete implementation plan in Markdown, in this format:
-  `# Plan: <title>`, a one-sentence **Objective**, then `## Context`,
-  `## Outcome`, `## Work items` (numbered, with file-level specifics),
-  `## Constraints / out of scope`, and `## Done means` (numbered criteria,
-  each checkable by a command or an observation). The plan is all the child's
-  build sees, so state there anything it needs from the inputs above.
+- `plan`: a complete implementation plan in Markdown, in the
+  `/multiplai-dev:plan` format, with every one of these sections (short is
+  fine, missing is not): `# Plan: <title>`, the line
+  `> File: <id>.md · Date: {date}`, a one-sentence **Objective**, then
+  `## Context`, `## Outcome`, `## Work items` (numbered, with file-level
+  specifics), `## Stop and resume states` (a table with columns
+  `# | Step | Stops at | On disk | Resume does`, one row per step that writes
+  state and each point it can stop at, or one sentence saying the change
+  writes no state), `## Constraints / out of scope`, `## Done means`
+  (numbered criteria, each checkable by a command or an observation) and
+  `## Verification` (how to check each criterion). The plan is all the
+  child's build sees, so state there anything it needs from the inputs above.
 {errors}
 Return ONLY JSON matching this schema:
 {{"single": true|false, "reason": "<one or two sentences>",

@@ -183,7 +183,10 @@ jobs:
 
       # These tests shim the host tools they probe (ffmpeg, yt-dlp, uname), so
       # they need no real media toolchain — the point is the platform-detection
-      # branching and the fix-it messages, not transcoding.
+      # branching and the fix-it messages, not transcoding. The video-edit job
+      # page's logic tests (tests/review_logic.test.js) run under node, which
+      # the runner image ships; tests/test_review_logic_js.py fails rather than
+      # skips without it.
       - name: Run tests
         working-directory: plugins/multiplai-media
         run: uv run --no-project --with pytest python -m pytest tests/ -q
@@ -309,6 +312,23 @@ jobs:
         working-directory: plugins/multiplai-dev/skills/pr/scripts
         run: |
           uv run --project ../../../../.. --package pr-pipeline \
+            --extra dev python -m pytest tests/ -q
+
+  spec-extract-tests:
+    name: spec-extract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # The tests build temporary git repositories; git is on the runner
+      # image. No test calls a model or `gh`.
+      - name: Run tests
+        working-directory: plugins/multiplai-dev/skills/spec-extract/scripts
+        run: |
+          uv run --project ../../../../.. --package spec-extract-pipeline \
             --extra dev python -m pytest tests/ -q
 
   review-viewer-tests:

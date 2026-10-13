@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "video-edit/looks.schema.json",
+  "title": "video-edit looks on offer",
+  "description": "<outdir>/looks.json, written by the session: the overlay styles, brand files and caption options the user picks from in the Look tab. Every path is absolute; names are unique within each list.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "styles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "file", "sample_html"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 80},
+          "file": {"type": "string", "format": "absolute-path", "description": "The style's .md file (references/styles/)."},
+          "sample_html": {"type": "string", "format": "absolute-path", "description": "An overlay page in that style, played as its preview."}
+        }
+      }
+    },
+    "brands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "file"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 80},
+          "file": {"type": "string", "format": "absolute-path", "description": "A brand.json (stages/brand.py)."}
+        }
+      }
+    },
+    "captions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "values"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 80},
+          "values": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "EDL captions fields (stages/edl.py Captions); a missing one keeps its default.",
+            "properties": {
+              "size": {"type": "integer", "minimum": 8, "maximum": 400, "description": "Font size in output pixels."},
+              "position_y": {"type": "number", "minimum": 0, "maximum": 1, "description": "Vertical centre of the caption line, fraction of output height."},
+              "words_per_line": {"type": "integer", "minimum": 1, "maximum": 20},
+              "highlight": {"type": "boolean", "description": "Colour the word being spoken."}
+            }
+          }
+        }
+      }
+    }
+  }
+}
