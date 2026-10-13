@@ -6,11 +6,14 @@ lines under `<root>/ws/.multiplai/data/reviews/`."""
 from __future__ import annotations
 
 import json
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
+from build_pipeline import git_ops
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import coordinator, records
 from build_pipeline.epic import lock as epic_lock
@@ -20,6 +23,7 @@ from build_pipeline.epic.split import EpicSplitAnswer
 from .epic_row_helpers import (
     CallLog,
     Fakes,
+    alive,
     approve,
     child,
     make_build,
@@ -27,6 +31,7 @@ from .epic_row_helpers import (
     pr_number,
     pr_url,
     run_coordinator,
+    run_signalled,
     use_workspace,
 )
 
@@ -176,6 +181,39 @@ def test_the_coordinator_waits_for_the_review_subprocess(tmp_path, monkeypatch):
     assert seen[:5] == [None] * 5                             # no result while the review runs
     assert e.reviews("a")[0].result["exit_code"] == 0
     assert e.child_status("b")["status"] == "waiting"
+
+
+def test_sighup_leaves_a_running_review_running(tmp_path, monkeypatch):
+    """A SIGHUP ends only the coordinator (PR B2): the review it started keeps
+    running and its record keeps no result; the next run reuses the review
+    that process finished (C.S4) and launches none."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, reviews={str(N): [{"block": True}]})
+    lock = e.target() / ".lock"
+
+    def as_main() -> int:      # what `__main__.main` holds around a `build`
+        try:
+            with git_ops._exit_on_termination(interrupt=False):
+                return e.run()
+        except SystemExit as stop:
+            return stop.code
+
+    try:
+        rc = run_signalled(as_main, lambda: lock.exists() and bool(lock.read_text()), signal.SIGHUP)
+        assert rc == 128 + signal.SIGHUP
+        pid = int(lock.read_text())
+        time.sleep(0.3)
+        assert alive(pid)
+        assert [a.result for a in e.reviews("a")] == [None]
+    finally:
+        e.fakes.release_review("e-a")
+    for _ in range(250):
+        if not alive(pid):
+            break
+        time.sleep(0.02)
+    assert e.run() == 3                                       # b waits for a's merge
+    assert e.launched() == ["review"]
+    [a] = e.reviews("a")
+    assert (a.result["reused"], a.result["interrupted"], a.result["pr_round"]) == (True, True, 1)
 
 
 # --- what blocks, and what does not ---------------------------------------------------
