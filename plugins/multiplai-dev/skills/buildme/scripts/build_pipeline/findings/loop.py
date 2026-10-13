@@ -461,9 +461,9 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         if not rnd.blocks:
             return
         engine_state = Path(rnd.engine_state_path)
-        k = (rnd.self_check or {}).get("block")
-        if k:
-            code.add_block(engine_state, Path(rnd.tasks_path), k)
+        check_block = (rnd.self_check or {}).get("block")
+        if check_block:
+            code.add_block(engine_state, Path(rnd.tasks_path), check_block)
         # A block the engine fails is answered "not fixed" and the round goes
         # on with the next block, so one wrong triage cannot hold back every
         # reply. Anything else that stops the engine stays a resumable failure.
