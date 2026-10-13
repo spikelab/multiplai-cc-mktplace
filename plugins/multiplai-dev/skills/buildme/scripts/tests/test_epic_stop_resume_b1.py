@@ -138,8 +138,9 @@ def _release_all(root: Root):
 def _assert_same(stopped: Root, clean: Root, records: dict | None = None,
                  extra_launches: list[str] = ()) -> None:
     """Same epic files and summary; records equal except the children named in
-    *records* (stopped-run records given whole, with "<argv>" for the child's
-    one argv); launches equal plus one per child id in *extra_launches*."""
+    *records* (stopped-run build records given whole, with "<argv>" for the
+    child's one argv, then the never-stopped run's review records); launches
+    equal plus one per child id in *extra_launches*."""
     s, c = stopped.snapshot(), clean.snapshot()
     assert s["epic"] == c["epic"]
     assert s["summary"] == c["summary"]
@@ -147,6 +148,7 @@ def _assert_same(stopped: Root, clean: Root, records: dict | None = None,
         if records and cid in records:
             argv = c["records"][cid][0][1]
             want = [(k, argv if a == "<argv>" else a, e, m, i) for k, a, e, m, i in records[cid]]
+            want += [r for r in c["records"][cid] if r[0] != "build"]      # PR C's review pair
             assert got == want, cid
         else:
             assert got == c["records"][cid], cid
@@ -298,7 +300,7 @@ def test_B1_S13_user_edit_in_a_stopped_childs_worktree_is_left_alone(tmp_path, m
     for root in (stopped, clean):
         assert (wt(root) / "notes.txt").read_bytes() == edit
         assert (wt(root) / "README.md").read_text() == "# r, edited\n"
-    argvs = [a.started["argv"] for a in records.attempts(stopped.dir) if a.child == "a"]
+    argvs = [a.started["argv"] for a in records.attempts(stopped.dir) if a.child == "a" and a.kind == "build"]
     assert len(argvs) == 2 and argvs[0] == argvs[1]
     assert moved not in argvs[1] and (stopped.root / "bases" / "b").read_text() == moved
     _assert_same(stopped, clean, {"a": [

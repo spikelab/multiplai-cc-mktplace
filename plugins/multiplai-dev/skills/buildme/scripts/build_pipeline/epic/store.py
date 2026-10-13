@@ -47,13 +47,18 @@ class EpicFileError(Exception):
 
 class ChildStatus(BaseModel):
     """A child's status, rebuilt from the records at each start (PR B1):
-    `pending`, `running`, `built` (PR open), `waiting` (a dependency's PR is
-    open), `merged`, `parked`, `skipped` (a dependency parked), `failed` or
-    `unknown` (a `gh`, `git` or `ps` read about a stopped child failed)."""
+    `pending`, `running`, `built` (PR open), `reviewing` (its PR's review
+    runs, PR C), `waiting` (a dependency's PR is open), `merged`, `parked`,
+    `skipped` (a dependency parked), `failed` or `unknown` (a `gh`, `git` or
+    `ps` read about a stopped child failed). `pr_round` (the PR's review
+    rounds, item 23) and `conflicts` (its last mergeability read) are cached
+    here; the review ledger and `gh` are the truth."""
 
     status: str = "pending"
     pr: str | None = None
     reason: str = ""
+    pr_round: int | None = None
+    conflicts: bool | None = None
 
 
 class Epic(BaseModel):

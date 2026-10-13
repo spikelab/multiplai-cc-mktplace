@@ -12,7 +12,7 @@ SKILL.md (thin wrapper — handles interview, plan review)
         ├── tdd_engine.py      — per-block TDD with agent spawning
         ├── apply.py           — manual single-agent implementation
         ├── change_manager.py  — manages specs/ directory
-        ├── epic/              — EPIC_SPLIT: one change or several child plans, the approval, running the children
+        ├── epic/              — EPIC_SPLIT: one change or several child plans, the approval, running and reviewing the children
         └── shared: config, state, models, gates, sdk, logging, env, progress
 ```
 
@@ -68,7 +68,23 @@ total that `budget.reset()` and `load_state` leave alone and that
 line to (`:incomplete` when one printed none); each result record keeps it as
 `spend`, and `epic/spend.py` adds those to the review ledger's spend for the
 children's PRs. Once that reaches `epic.max_usd`, nothing more launches and
-the run exits 3 with `EPIC:BUDGET:<spent>`. A file
+the run exits 3 with `EPIC:BUDGET:<spent>`. Each child's open PR is reviewed
+by the review skill as a subprocess (`uv run --directory <review scripts>
+python -m review_pipeline review --repo <worktree> --pr <n> --trust-repo --fetch`;
+`epic/review.py`, `Coordinator._review`), at most once per head: a head the
+review ledger already holds a complete review of is reused, a review of the
+head still running (its `started` line and its run lock held) is waited for
+without a launch, one the ledger does not show yet (exit 2 `is running now`)
+is waited for by asking again, and an interrupted one
+(exit 4 with the hint) is continued with `resume`. A review that exits 2
+because its `git fetch` or `gh pr view` failed, or a PR commit is not in the
+clone after its fetch, leaves the child `unknown`, and the next run asks
+again. Its `review` record holds
+the head, the base, the review directory, the cost, `pr_round`, `reused`,
+`conflicts` (never blocks) and `blocking` (open Code HIGH/MEDIUM findings); at
+`epic.max_review_rounds` with blockers, or on any other failure, the child
+parks. A review counts against `epic.max_parallel` and `epic.max_usd` like a
+build. A file
 changed after approval, another process holding the epic's lock, or a
 `specs/config.yaml` turning off `git.worktree` or `git.push`, exits 2.
 `--no-epic-split` skips the decision.

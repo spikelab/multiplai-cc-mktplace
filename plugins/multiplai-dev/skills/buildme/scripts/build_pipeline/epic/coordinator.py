@@ -15,6 +15,11 @@ was stopped; `_recover` writes its result once its process is gone, then
 looks for the PR it may have opened. What each stop does on resume is PR B1's
 table in the plan. Every wait goes through `CLOCK`.
 
+Each child whose PR is open is reviewed by the review skill (PR C, items
+21-24; `_review`), at most once per head: a head the review ledger already
+holds a complete review of is never reviewed again. A review counts against
+`epic.max_parallel` like a build. Its stop and resume rows are PR C's table.
+
 Spend (PR B2): before each launch, when `epic.max_usd` is set and the epic's
 spend (`spend.py`: the records' `spend` plus the review ledger) has reached
 it, nothing more is launched; the run waits for the running children and
@@ -40,7 +45,7 @@ import yaml
 
 from .. import git_ops, intake
 from ..config import git_toggles
-from . import records, spend, store
+from . import records, review, spend, store
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +60,8 @@ MARKER_MERGE_WAITING = "EPIC:MERGE_WAITING"
 MARKER_BUDGET = "EPIC:BUDGET"
 PR_CLOSED = "PR closed without a merge"
 NO_PR = "no PR opened"
+REVIEW_KINDS = ("review", "resume")
+PR_FIELDS = "number,state,headRefOid,mergeable,mergeStateStatus"
 
 
 class ReadFailed(Exception):
@@ -82,6 +89,14 @@ def _spawn(argv: list[str], log_path: Path) -> subprocess.Popen:
     """Start one child in its own process group, its output in *log_path*."""
     with log_path.open("ab") as out:
         return subprocess.Popen(argv, cwd=SCRIPTS_DIR, stdin=subprocess.DEVNULL, stdout=out,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def _spawn_review(argv: list[str], log_path: Path, cwd: Path) -> subprocess.Popen:
+    """Start one review or resume in its own process group, its output in
+    *log_path*, so it outlives a killed coordinator (C.S2)."""
+    with log_path.open("ab") as out:
+        return subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=out,
                                 stderr=subprocess.STDOUT, start_new_session=True)
 
 
@@ -222,6 +237,12 @@ class Child:
     proc: subprocess.Popen | None = None
     attempt: records.Attempt | None = None
     relaunched: bool = False             # a failure was relaunched in this invocation
+    pr_round: int | None = None          # item 23, cached in epic.json
+    conflicts: bool | None = None
+    reviewed: bool = False               # its review step ran in this invocation
+    task: asyncio.Task | None = None     # the review step, while it runs
+    rproc: subprocess.Popen | None = None        # the review or resume process
+    rattempt: records.Attempt | None = None
 
 
 @dataclass
@@ -240,8 +261,12 @@ class Coordinator:
         self.repo = _source_repo(self.config, self.state)
         self.project_dir = source_project_dir(self.config, self.state)
         self.settings = self.config.epic
+        self.slug = store.slug_repo_name(self.repo)
         for c in self.epic.children:
             self.children[c.id] = Child(c.id, list(c.depends_on))
+            cached = self.epic.child_status.get(c.id)
+            if cached is not None:
+                self.children[c.id].pr_round, self.children[c.id].conflicts = cached.pr_round, cached.conflicts
 
     # -- argv -----------------------------------------------------------------
 
@@ -356,6 +381,10 @@ class Coordinator:
                 records.finish(a, None, interrupted=True)
             else:
                 self._classify(c, tries)
+        for a in records.attempts(self.epic_dir):    # a review's park stays (C.S6, C.S12)
+            c = self.children.get(a.child)
+            if c is not None and a.kind in REVIEW_KINDS and (a.result or {}).get("parked"):
+                c.status, c.reason = "parked", a.result["parked"]
 
     # -- dependencies and merges -------------------------------------------------
 
@@ -403,7 +432,7 @@ class Coordinator:
                     c.status = "pending"
                 if c.status == "pending" or not c.relaunched:
                     ready.append(c)
-            elif c.status == "pending" and "built" in deps:
+            elif c.status == "pending" and ("built" in deps or "reviewing" in deps):
                 c.status = "waiting"
         return ready
 
@@ -468,8 +497,183 @@ class Coordinator:
                 if gone:
                     self._done(c, None, interrupted=True)
 
+    # -- reviewing a child's PR (PR C) ----------------------------------------------
+
+    def _review_due(self) -> list[Child]:
+        """Children with an open PR whose review step has not run in this invocation."""
+        return [c for c in self.children.values() if c.status == "built" and not c.reviewed]
+
+    def _start_review(self, c: Child) -> None:
+        c.status, c.reviewed = "reviewing", True
+        c.task = asyncio.create_task(self._review(c))
+        self._save()
+
+    def _reap_reviews(self) -> None:
+        """Collect finished review steps; an unexpected error in one is raised here."""
+        for c in self.children.values():
+            if c.task is not None and c.task.done():
+                task, c.task = c.task, None
+                task.result()
+
+    def _worktree(self, c: Child) -> Path:
+        """The child's worktree: the last `WORKTREE:` line of its builds; the
+        source repo when there is none or it is gone (removed by hand)."""
+        found = [m for a in records.attempts(self.epic_dir) if a.kind == "build" and a.child == c.id
+                 for m in records.markers(a.log)]
+        trees = records.marker(found, "WORKTREE")
+        return Path(trees[-1]) if trees and Path(trees[-1]).is_dir() else self.repo
+
+    async def _run_review(self, c: Child, kind: str, argv: list[str], head: str) -> tuple[int, str]:
+        """Run one `review` or `resume` to its end, as a pair of records; its
+        exit code and output. The process is in its own group with its output
+        in the attempt's log, so it outlives a killed coordinator (C.S2)."""
+        c.rattempt = records.start(self.epic_dir, kind, c.id, argv, head_sha=head, pr_round=c.pr_round)
+        self._save()
+        c.rproc = _spawn_review(argv, c.rattempt.log, self._worktree(c))
+        while c.rproc.poll() is None:
+            await CLOCK.sleep(POLL)
+        code, c.rproc = c.rproc.returncode, None
+        return code, review.log_text(c.rattempt.log)
+
+    def _fields(self, c: Child, line: dict, review_dir: str, number: int, *, reused: bool) -> dict:
+        """Item 22's fields of a review result, from its ledger line; with
+        `parked` when the PR is at the round cap with blockers (item 23) or its
+        findings cannot be read."""
+        c.pr_round = review.pr_round(review.ledger_lines(), self.slug, number)
+        blocking = review.blockers(review_dir)
+        fields = {"head_sha": line.get("head_sha"), "base_sha": line.get("base_sha"), "review_dir": review_dir,
+                  "cost_usd": (line.get("run") or {}).get("cost_usd"), "pr_round": c.pr_round,
+                  "reused": reused, "conflicts": c.conflicts, "blocking": blocking or [],
+                  "reused_pipeline_run": ({"target_dir": line.get("target_dir"), "round": line.get("round")}
+                                          if reused else None)}
+        cap = self.settings.max_review_rounds
+        if blocking is None:
+            fields["parked"] = f"cannot read the review's findings in {review_dir}"
+        elif blocking and c.pr_round >= cap:
+            fields["parked"] = (f"review round {c.pr_round} of {cap} left {len(blocking)} blocker(s): "
+                                + "; ".join(blocking))
+        return fields
+
+    def _reviewed(self, c: Child, fields: dict) -> None:
+        if fields.get("parked"):
+            c.status, c.reason = "parked", fields["parked"]
+        else:
+            c.status, c.reason = "built", ""
+        log.info("EPIC child %s: reviewed at %s, round %s, %d blocker(s)%s", c.id, fields.get("head_sha"),
+                 fields.get("pr_round"), len(fields.get("blocking") or []),
+                 f"; parked: {c.reason}" if c.status == "parked" else "")
+
+    def _reuse(self, c: Child, line: dict, head: str, number: int) -> None:
+        """Item 24, found: no review. A started record for this head with no
+        result gets its result now (C.S2, C.S4); when no record of this head
+        holds a review's fields (none at all, or only the exit-2 `is running
+        now` asks), one pair is written; a head whose review is recorded
+        writes nothing."""
+        tries = [a for a in records.attempts(self.epic_dir) if a.child == c.id and a.kind in REVIEW_KINDS
+                 and a.started.get("head_sha") == head]
+        fields = self._fields(c, line, str(line.get("target_dir")), number, reused=True)
+        open_ = [a for a in tries if a.result is None]
+        for a in open_[:-1]:
+            records.finish(a, None, interrupted=True)
+        if open_:
+            records.finish(open_[-1], None, interrupted=True, extra=fields)
+        elif not any("blocking" in a.result for a in tries):
+            argv = review.review_argv(self._worktree(c), number)
+            a = records.start(self.epic_dir, "review", c.id, argv, head_sha=head, pr_round=c.pr_round)
+            records.finish(a, 0, interrupted=False, extra=fields)
+        self._reviewed(c, fields)
+
+    async def _review(self, c: Child) -> None:
+        """Review *c*'s PR at its current head (items 21-24) and set its status:
+        `built` (reviewed; blockers go to the fixer, PR D2), `parked`,
+        `merged`, or `unknown` when its PR cannot be read, here or by the
+        review itself (C.S20)."""
+        try:
+            while True:
+                view = _gh(self.repo, "pr", "view", c.pr, "--json", PR_FIELDS)
+                if not isinstance(view, dict) or not view.get("headRefOid") or not isinstance(view.get("number"), int):
+                    c.status, c.reason = "unknown", "cannot read its PR: gh pr view failed"
+                    return
+                if view.get("state") in ("MERGED", "CLOSED"):
+                    c.status, c.reason = ("merged", "") if view["state"] == "MERGED" else ("parked", PR_CLOSED)
+                    return
+                number, head = view["number"], view["headRefOid"]
+                c.conflicts = review.conflicts(view)
+                lines = review.ledger_lines()
+                running = review.running_dir(lines, self.slug, head)
+                if running is not None:
+                    if review.lock_held(running):     # C.S2: it runs now; never two at once
+                        await CLOCK.sleep(review.REVIEW_WAIT)
+                        continue
+                    # Its lock is free, so it ended: read again, as its `finished`
+                    # line may have come after the read above.
+                    lines = review.ledger_lines()
+                c.pr_round = review.pr_round(lines, self.slug, number)
+                line = review.finished_line(lines, self.slug, number, head)
+                if line is not None:
+                    self._reuse(c, line, head, number)
+                    return
+                if self._over_budget():           # Decided 6: before each launch
+                    c.status, c.reason = "built", ""
+                    return
+                stale = [a for a in records.attempts(self.epic_dir)
+                         if a.child == c.id and a.kind in REVIEW_KINDS and a.result is None]
+                code, out = await self._run_review(c, "review", review.review_argv(self._worktree(c), number), head)
+                if code == 2 and review.RUNNING_NOW in out:       # C.S2: never two at once
+                    records.finish(c.rattempt, code, interrupted=False)
+                    await CLOCK.sleep(review.REVIEW_WAIT)
+                    continue
+                for a in stale:           # `review` answered, so an earlier one is gone
+                    records.finish(a, None, interrupted=True)
+                hint = review.INTERRUPTED.search(out) if code == 4 else None
+                if hint:                  # C.S3
+                    records.finish(c.rattempt, code, interrupted=False)
+                    if self._over_budget():
+                        c.status, c.reason = "built", ""
+                        return
+                    code, out = await self._run_review(c, "resume", review.resume_argv(hint.group(1).strip()), head)
+                    if code == 2 and review.RUNNING_NOW in out:
+                        records.finish(c.rattempt, code, interrupted=False)
+                        await CLOCK.sleep(review.REVIEW_WAIT)
+                        continue
+                found = review.findings_path(out)
+                line = review.finished_line(review.ledger_lines(), self.slug, number, head)
+                if code == 0 and found and line is not None:
+                    fields = self._fields(c, line, str(Path(found).parent), number, reused=False)
+                    records.finish(c.rattempt, code, interrupted=False, extra=fields)
+                    self._reviewed(c, fields)
+                    return
+                if code == 0 and found:
+                    # The review reads the PR's head itself, after its fetch: a
+                    # commit pushed since the read above makes it review and
+                    # record that newer head (C.S8, C.S19). Read the PR again.
+                    again = _gh(self.repo, "pr", "view", c.pr, "--json", PR_FIELDS)
+                    if not isinstance(again, dict) or not again.get("headRefOid"):
+                        records.finish(c.rattempt, code, interrupted=False)
+                        c.status, c.reason = "unknown", "cannot read its PR: gh pr view failed"
+                        return
+                    if again["headRefOid"] != head:
+                        records.finish(c.rattempt, code, interrupted=False)
+                        continue
+                if code == 2 and review.READ_FAILED.search(out):     # C.S20: a failed read, not a park
+                    records.finish(c.rattempt, code, interrupted=False)
+                    c.status, c.reason = "unknown", f"its review could not read git or GitHub: {review.tail(out)}"
+                    log.warning("EPIC child %s: %s", c.id, c.reason)
+                    return
+                why = (f"review exited {code}: {review.tail(out)}" if code != 0 else
+                       f"review exited 0 without a findings line and a finished ledger line: {review.tail(out)}")
+                records.finish(c.rattempt, code, interrupted=False, extra={"parked": why})
+                c.status, c.reason = "parked", why
+                log.warning("EPIC child %s: parked: %s", c.id, why)
+                return
+        finally:
+            if c.rproc is None:
+                c.rattempt = None
+            self._save()
+
     def _save(self) -> None:
-        self.epic.child_status = {cid: store.ChildStatus(status=c.status, pr=c.pr, reason=c.reason)
+        self.epic.child_status = {cid: store.ChildStatus(status=c.status, pr=c.pr, reason=c.reason,
+                                                         pr_round=c.pr_round, conflicts=c.conflicts)
                                   for cid, c in self.children.items()}
         self.epic.spent_usd, self.epic.spend_complete = self.spent()
         store.save_epic(self.epic_dir, self.epic)
@@ -511,6 +715,7 @@ class Coordinator:
         those that exited with `interrupted: true`. One still alive, or one `ps`
         cannot see, keeps no result, so the next run waits for it."""
         running = [c for c in self.children.values() if c.status == "running"]
+        reviewing = [c for c in self.children.values() if c.rproc is not None]
 
         def alive(c: Child) -> int | None:
             if c.proc is not None:
@@ -526,9 +731,23 @@ class Coordinator:
                     os.killpg(pid, sig)
             except (ProcessLookupError, PermissionError):
                 pass
+        for c in reviewing:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                if c.rproc.poll() is None:
+                    os.killpg(c.rproc.pid, sig)
         until = CLOCK.now() + STOP_WAIT
-        while any(alive(c) for c in running) and CLOCK.now() < until:
+        while (any(alive(c) for c in running) or any(c.rproc.poll() is None for c in reviewing)) \
+                and CLOCK.now() < until:
             await CLOCK.sleep(0.5)
+        for c in reviewing:       # a review still running keeps no result: the next run asks it
+            if c.rproc.poll() is None:
+                log.warning("EPIC child %s: its review is still running after %ss", c.id, STOP_WAIT)
+                continue
+            records.finish(c.rattempt, c.rproc.poll(), interrupted=True)
+            c.rproc = c.rattempt = None
+        for c in self.children.values():
+            if c.status == "reviewing":
+                c.status = "built"
         for c in running:
             if alive(c):
                 log.warning("EPIC child %s is still running after %ss; the next run waits for it", c.id, STOP_WAIT)
@@ -536,6 +755,16 @@ class Coordinator:
             records.finish(c.attempt, c.proc.poll() if c.proc is not None else None, interrupted=True)
             c.status, c.argv, c.proc = "pending", c.attempt.started["argv"], None
         self._save()
+
+    async def _cancel_reviews(self) -> None:
+        """Stop every review step; a review process it started keeps running
+        until `_stop_children` signals it."""
+        tasks = [c.task for c in self.children.values() if c.task is not None]
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for c in self.children.values():
+            c.task = None
 
     # -- the run ------------------------------------------------------------------
 
@@ -574,6 +803,7 @@ class Coordinator:
             rc = await self._loop()
         except (KeyboardInterrupt, asyncio.CancelledError):
             sig = self.signal_sent or signal.SIGINT
+            await self._cancel_reviews()
             if sig == signal.SIGHUP:
                 log.warning("EPIC stopped by SIGHUP: leaving the children running; the next run waits for them")
             else:
@@ -582,6 +812,7 @@ class Coordinator:
             self._summary(run_dir)
             return 128 + sig
         except Exception:
+            await self._cancel_reviews()
             self._summary(run_dir)        # where each child stood when the run broke
             raise
         finally:
@@ -607,8 +838,14 @@ class Coordinator:
     async def _loop(self) -> int:
         last_read = CLOCK.now()
         while True:
+            self._reap_reviews()
             ready = self._resolve()
-            running = sum(c.status == "running" for c in self.children.values())
+            running = sum(c.status in ("running", "reviewing") for c in self.children.values())
+            for c in self._review_due():        # a review before a new build: it unblocks dependants
+                if running >= self.settings.max_parallel or self._over_budget():
+                    break
+                self._start_review(c)
+                running += 1
             for c in ready:
                 if running >= self.settings.max_parallel or self._over_budget():
                     break
@@ -630,13 +867,13 @@ class Coordinator:
                 continue
             # Nothing runs and nothing is ready: read once more (item 15a).
             self._read_prs(self._waited_on())
-            if self._resolve():
+            if self._resolve() or self._review_due():
                 continue
             self._save()
             return 0
 
     def _summary(self, run_dir: Path) -> Path:
-        children = [{"id": cid, "status": c.status, "pr": c.pr, "rounds": 0, "reason": c.reason}
+        children = [{"id": cid, "status": c.status, "pr": c.pr, "rounds": c.pr_round or 0, "reason": c.reason}
                     for cid, c in self.children.items()]
         totals: dict[str, int] = {}
         for c in children:

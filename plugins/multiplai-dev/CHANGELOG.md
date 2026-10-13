@@ -17,6 +17,44 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-10-13
+
+### Added
+- Epic mode reviews each child's PR with `/multiplai-dev:review`, run as a
+  subprocess, at most once per head. A head the review ledger already holds a
+  complete review of is not reviewed again (the record says `reused: true`); a
+  review another process is running is waited for, asking every 60 s; an
+  interrupted one is continued with `review_pipeline resume`. Each review's
+  record holds the head, base, review directory, cost, `pr_round`, `reused`,
+  `conflicts` (recorded, never blocking) and `blocking` (open Code HIGH and
+  MEDIUM findings). At `epic.max_review_rounds` with blockers, or when the
+  review fails any other way, the child parks with the reason and stays
+  parked. A review counts against `epic.max_parallel` and `epic.max_usd`, and
+  the summary's `rounds` is each PR's review round count. SIGHUP leaves a
+  running review running, as it leaves the children. The review fetches
+  (`--fetch`), so a base moved by a sibling's merge does not park the child.
+  While a review of the head holds the review skill's run lock, nothing is
+  launched; the coordinator waits and reads the ledger once the lock is free,
+  so a review that ends meanwhile is never run twice. A commit pushed as a
+  review starts no longer parks the child: the review reviews the new head,
+  and the coordinator reads the PR again and uses that review. Ctrl-C or
+  SIGTERM stops a review this run started; a review an earlier run left
+  running, or one another process runs, is not signalled and keeps running.
+  A review that cannot fetch, or cannot read the PR from GitHub, does not park
+  the child: the child is `unknown` (the run exits 1) and the next run asks
+  again. A child whose worktree was removed is reviewed from the source repo
+  instead of parking.
+
+### Changed
+- Five assertions in the epic B1 tests now look only at build records, and the
+  B1 stop-and-resume tests expect each child's review records after its builds.
+  What they check for builds is unchanged.
+- The epic tests' fake build adds its PR to the shared PR file under a lock,
+  so two builds ending at once both keep their PR.
+
+### Fixed
+- Epic records past number 999 are seen, in number order.
+
 ## [0.61.0] - 2026-10-13
 
 ### Added

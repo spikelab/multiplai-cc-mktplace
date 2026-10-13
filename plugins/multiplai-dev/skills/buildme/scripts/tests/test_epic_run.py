@@ -258,7 +258,7 @@ def test_a_parent_that_skipped_research_skips_it_in_each_child(tmp_path, monkeyp
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
     assert not (e.config.change_dir / "research.md").exists()
     assert e.run() == 0
-    for a in records.attempts(e.dir):
+    for a in [a for a in records.attempts(e.dir) if a.kind == "build"]:
         argv = a.started["argv"]
         assert "--skip-research" in argv and "--research-path" not in argv
 
@@ -277,7 +277,7 @@ def test_base_ref_reaches_a_new_child_and_a_relaunch_keeps_its_own(tmp_path, mon
 
     monkeypatch.setattr(coordinator, "_spawn", spawn)
     assert e.run() == 0
-    first, again = [a.started["argv"] for a in records.attempts(e.dir) if a.child == "a"]
+    first, again = [a.started["argv"] for a in records.attempts(e.dir) if a.child == "a" and a.kind == "build"]
     assert first[first.index("--base-ref") + 1] == old
     assert again == first                      # the relaunch is the same command
     assert (tmp_path / "bases" / "b").read_text() == moved[0] != old
@@ -436,7 +436,7 @@ def test_a_config_yaml_not_on_origin_launches_nothing_until_pushed(tmp_path, mon
     subprocess.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=e.project, check=True)
     assert e.run() == 0 and sorted(e.launches()) == ["a", "b", "c"]
     pushed = _sha(e.project)
-    for a in records.attempts(e.dir):
+    for a in [a for a in records.attempts(e.dir) if a.kind == "build"]:
         assert a.started["argv"][a.started["argv"].index("--base-ref") + 1] == pushed == a.started["head_sha"]
 
 
@@ -467,7 +467,7 @@ def test_a_failed_fetch_launches_no_dependant(tmp_path, monkeypatch):
     assert [a.child for a in records.attempts(e.dir) if a.child == "docs"] == []
     monkeypatch.setenv("PATH", path)
     assert e.run() == 0 and e.launches()[-1] == "docs"
-    docs = [a for a in records.attempts(e.dir) if a.child == "docs"]
+    docs = [a for a in records.attempts(e.dir) if a.child == "docs" and a.kind == "build"]
     assert len(docs) == 1 and docs[0].started["head_sha"] == moved
     assert (tmp_path / "bases" / "docs").read_text() == moved
 
