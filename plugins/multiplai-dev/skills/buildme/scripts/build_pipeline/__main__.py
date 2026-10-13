@@ -9,8 +9,8 @@ Subcommands for dev/debug use (only /buildme is user-facing):
   setup         — Write or merge specs/config.yaml (the wrapper asks the questions)
   config-get    — Print one resolved specs/config.yaml value (e.g. intake.provider)
 
-Exit codes: 0 done (an approved epic prints EPIC:APPROVED and runs its
-children), 1 failure (for an epic: a child failed), 2 usage,
+Exit codes: 0 done (an approved epic prints EPIC:APPROVED, runs its children and
+prints EPIC:SUMMARY), 1 failure (for an epic: a child failed), 2 usage,
 or a refusal that wrote nothing (the epic's lock is held, or an approved epic
 file changed), 3 waiting on a human or the wrapper
 (stdout says which: INTERVIEW:WAITING, RESEARCH:NEEDED, SPLIT:REQUIRED, EPIC:SPLIT,
@@ -156,6 +156,9 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--no-epic-split", action="store_true",
                        help="Build the input as one change: skip the EPIC_SPLIT decision "
                             "(an epic's child builds pass this)")
+    build.add_argument("--base-ref", default="",
+                       help="The commit a new worktree branches from (default: the source "
+                            "checkout's HEAD); a build that re-binds to its worktree ignores it")
     _add_trust_repo_flag(build)
     _add_lenient_review_flag(build)
     _add_skip_explainers_flag(build)

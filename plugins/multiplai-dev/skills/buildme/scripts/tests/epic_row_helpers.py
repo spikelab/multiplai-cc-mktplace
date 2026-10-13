@@ -35,7 +35,7 @@ from build_pipeline.state import BuildState
 
 DROP_KEYS = {"at", "since", "pid", "host"}          # and every key ending in "_at"
 NOT_COMPARED = {".lock", "progress.log"}            # the lock and the log: never compared
-NOT_COMPARED_DIRS = ("agents/",)                    # compared as records_snapshot
+NOT_COMPARED_DIRS = ("agents/", "runs/")            # compared as records_snapshot and last_summary
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "Row Test", "GIT_AUTHOR_EMAIL": "row@example.invalid",
@@ -76,6 +76,17 @@ def make_project(root: Path, name: str = "r") -> Path:
     _git(project, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "init")
     _git(project, "push", "-q", "origin", "HEAD:main")
     return project
+
+
+def move_origin(root: Path) -> str:
+    """Push one more commit to origin's main from another clone; its sha."""
+    other = root / "other"
+    _git(root, "clone", "-q", str(root / "o" / "r.git"), str(other))
+    (other / "y.txt").write_text("y\n")
+    _git(other, "add", "y.txt")
+    _git(other, "-c", "commit.gpgsign=false", "commit", "-qm", "moved")
+    _git(other, "push", "-q", "origin", "HEAD:main")
+    return _git(other, "rev-parse", "HEAD").strip()
 
 
 def make_build(project: Path, change: str = "e", *, mode: str = "scratch",
@@ -302,9 +313,12 @@ branch = f"buildme/{{change}}"
 if wt.exists():
     print(f"WORKTREE:{{wt}}", flush=True)
 else:
-    git("worktree", "add", "-b", branch, str(wt), cwd=top)
+    base = opt("--base-ref")
+    git("worktree", "add", "-b", branch, str(wt), *([base] if base else []), cwd=top)
     print(f"WORKTREE:{{wt}}", flush=True)
     print(f"BRANCH:{{branch}}", flush=True)
+    (root / "bases").mkdir(exist_ok=True)
+    (root / "bases" / cid).write_text(git("rev-parse", "HEAD", cwd=wt).stdout.strip())
 if step.get("grandchild"):      # a process in the build's group, as a real build's agents are
     kid = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
     (root / "grandchildren").mkdir(exist_ok=True)
@@ -505,6 +519,11 @@ def records_snapshot(epic_dir: Path, root: Path) -> dict[str, list[tuple]]:
             [m.replace(str(root), "<root>") for m in r.get("markers", [])],
             r.get("interrupted")))
     return out
+
+
+def last_summary(epic_dir: Path, root: Path) -> dict | None:
+    runs = sorted((epic_dir / "runs").glob("*/summary.json"))
+    return _norm(json.loads(runs[-1].read_text()), root) if runs else None
 
 
 def commit_names(repos: list[Path]) -> dict[str, str]:

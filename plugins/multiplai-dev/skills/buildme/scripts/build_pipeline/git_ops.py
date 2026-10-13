@@ -427,11 +427,12 @@ def preflight(repo_path: Path, *, worktree_requested: bool) -> Path:
     return root
 
 
-def create_worktree(repo: Path, branch: str, dest: Path) -> GitResult:
-    """``git worktree add -b <branch> <dest>``. Never forces, never reuses."""
+def create_worktree(repo: Path, branch: str, dest: Path, start_point: str | None = None) -> GitResult:
+    """``git worktree add -b <branch> <dest> [<start_point>]``. Never forces,
+    never reuses. Without a start point the branch starts at the repo's HEAD."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     res = _run(
-        ["git", "worktree", "add", "-b", branch, str(dest)],
+        ["git", "worktree", "add", "-b", branch, str(dest), *([start_point] if start_point else [])],
         cwd=repo,
         timeout=_GIT_TIMEOUT,
     )

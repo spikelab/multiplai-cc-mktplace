@@ -46,6 +46,12 @@ CONFIG_NOT_COMMITTED = (
     "Commit it first."
 )
 
+CONFIG_NOT_ON_BASE = (
+    "specs/config.yaml at HEAD is not on the commit the build branches from "
+    "(--base-ref, origin's default branch); the build's worktree would not see it. "
+    "Push it first."
+)
+
 
 class ConfigNotCommittedError(RuntimeError):
     """specs/config.yaml is untracked or modified, and the build would branch
@@ -178,6 +184,41 @@ def config_yaml_uncommitted(project_dir: Path) -> bool:
     reads as False: the worktree preflight owns that diagnosis.
     """
     return config_commit_state(project_dir) == "uncommitted"
+
+
+def config_yaml_off_ref(project_dir: Path, ref: str) -> bool:
+    """True when the ``specs/config.yaml`` committed at HEAD was never pushed
+    to *ref*: *ref* holds another version or none, and the commit that last
+    changed the file at HEAD is not on *ref*. A worktree branched from *ref*
+    would not see it. A checkout only behind *ref*, whose version *ref*
+    already holds and has since changed, reads as False: the worktree gets
+    *ref*'s version. Untracked, or not a git repo, reads as False
+    (`config_yaml_uncommitted` and the worktree preflight own those)."""
+    if not (Path(project_dir) / "specs" / "config.yaml").exists():
+        return False
+
+    def git(*args: str) -> subprocess.CompletedProcess | None:
+        try:
+            return subprocess.run(["git", *args], cwd=str(project_dir), capture_output=True,
+                                  text=True, timeout=30, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    blobs = []
+    for rev in ("HEAD", ref):
+        res = git("rev-parse", "--verify", "--quiet", f"{rev}:./specs/config.yaml")
+        if res is None:
+            return False
+        blobs.append(res.stdout.strip() if res.returncode == 0 else None)
+    if blobs[0] is None or blobs[0] == blobs[1]:
+        return False
+    last = git("log", "-1", "--format=%H", "HEAD", "--", "specs/config.yaml")
+    if last is None:
+        return False
+    if last.returncode != 0 or not last.stdout.strip():
+        return True
+    on_ref = git("merge-base", "--is-ancestor", last.stdout.strip(), ref)
+    return on_ref is not None and on_ref.returncode != 0
 
 
 def fenced(text: str, source: str) -> str:
