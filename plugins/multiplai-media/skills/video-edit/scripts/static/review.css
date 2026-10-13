@@ -142,7 +142,8 @@ label.choice { display: inline-flex; align-items: center; gap: 6px; cursor: poin
 label.choice input:disabled + span { opacity: .5; }
 .error-text { color: var(--accent); margin: 4px 0 0; white-space: pre-wrap; }
 .file { font-size: 12px; margin: 2px 0 0; overflow-wrap: anywhere; }
-.send-bar textarea { flex: 1; min-width: 0; margin: 0; }
+.send-bar:has(textarea) { flex-wrap: wrap; }
+.send-bar textarea { flex: 1 1 16em; min-width: 0; margin: 0; }
 
 /* --- Look ------------------------------------------------------------------------------ */
 .look-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 360px); gap: 16px; }
