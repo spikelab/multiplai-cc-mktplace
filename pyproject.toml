@@ -38,6 +38,7 @@ members = [
     "plugins/multiplai-dev/skills/review-viewer/scripts",
     "plugins/multiplai-dev/skills/review/scripts",
     "plugins/multiplai-dev/skills/skill-creator/scripts",
+    "plugins/multiplai-dev/skills/spec-extract/scripts",
     "plugins/multiplai-media/skills/video-edit/scripts",
     "plugins/multiplai-messaging/skills/gmail/scripts",
     "plugins/multiplai-messaging/skills/slack/scripts",
