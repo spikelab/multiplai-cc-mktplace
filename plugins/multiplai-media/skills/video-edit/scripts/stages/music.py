@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib
+import math
 import os
 import shutil
 import subprocess
@@ -46,9 +47,23 @@ def _synthesize_bed(preset: str, duration: float) -> Path:
     if dst.exists():
         return dst
     print(f"→ music: synthesizing {preset} bed, {duration:.1f}s (ffmpeg, no model)")
+    write_synth(preset, duration + 5, dst)
+    return dst
+
+
+def write_synth(preset: str, seconds: float, dst: Path) -> Path:
+    """Write `seconds` of the `preset` bed to `dst` (a .wav), as a render synthesizes it.
+
+    The job page's Music tab plays a short one of these as a synth bed's sample.
+    """
+    if preset not in SYNTH_PRESETS:
+        raise ValueError(f"unknown synth preset {preset!r}; choices: {list(SYNTH_PRESETS)}")
+    if not (math.isfinite(seconds) and seconds > 0):
+        raise ValueError("seconds must be positive and finite")
+    dst.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi", "-i", f"anoisesrc=color=pink:duration={duration + 5:.2f}:amplitude=0.35",
+        "-f", "lavfi", "-i", f"anoisesrc=color=pink:duration={seconds:.2f}:amplitude=0.35",
         "-af", SYNTH_PRESETS[preset],
         str(dst),
     ], check=True)

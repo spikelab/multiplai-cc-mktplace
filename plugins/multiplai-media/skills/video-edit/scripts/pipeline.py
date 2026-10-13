@@ -14,14 +14,16 @@ Subcommands (see --help for all):
 """
 from __future__ import annotations
 import argparse
+import copy
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from stages.edl import EDL, Music  # noqa: E402
-from stages import composite, prep as prep_stage, music as music_stage  # noqa: E402
+from stages import composite, prep as prep_stage, music as music_stage, render_sidecar  # noqa: E402
 
 
 def _resolve_music_arg(file: str | None, url: str | None, synth: str | None,
@@ -44,6 +46,12 @@ def cmd_render(args: argparse.Namespace) -> int:
     if cli_music:
         edl.music = cli_music
     out = Path(args.out).resolve()
+    sidecar = render_sidecar.path_for(out)
+    # samefile, not ==: on a case-insensitive disk (macOS) Clip-01.edl.json is clip-01.edl.json.
+    if sidecar == Path(args.edl).resolve() or (sidecar.exists() and sidecar.samefile(args.edl)):
+        print(f"✗ the EDL is {sidecar}, where render writes its record of this render (the review page's "
+              "timeline) — move the EDL (e.g. into edl/) or pick another --out", file=sys.stderr)
+        return 2
     out.parent.mkdir(parents=True, exist_ok=True)
     print(f"→ rendering {len(edl.segments)} segments → {out}")
     if edl.music and edl.music.file:
@@ -52,13 +60,32 @@ def cmd_render(args: argparse.Namespace) -> int:
     # finishes, so a review page watching the folder never offers a
     # half-written render.
     part = out.with_name(f".{out.stem}.partial{out.suffix}")
+    loaded = copy.deepcopy(edl)     # render fills in parts of the EDL; the sidecar records it as loaded
     try:
         composite.render(edl, part, work_dir=Path(args.work_dir) if args.work_dir else None)
     except BaseException:
         part.unlink(missing_ok=True)
         raise
+    # The sidecar (<stem>.edl.json) is what the review page draws the timeline
+    # from. An old one is removed before the new mp4 takes its name, so a
+    # render is never paired with another render's sidecar; the new one is
+    # written after the mp4, and a render without one still counts.
+    try:
+        record = render_sidecar.build(loaded, Path(args.edl), out.name)
+    except Exception as e:  # noqa: BLE001 — the mp4 is good; only its timeline is lost
+        record = None
+        print(f"⚠ no {sidecar.name}: {e} (the review page shows no timeline for this render)")
+    try:
+        sidecar.unlink(missing_ok=True)
+    except OSError as e:
+        print(f"⚠ could not remove the old {sidecar.name}: {e} (it describes an earlier render; delete it)")
     part.replace(out)
     print(f"✓ wrote {out} ({out.stat().st_size/1e6:.1f} MB)")
+    if record is not None:
+        try:
+            render_sidecar.write(out, record)
+        except OSError as e:
+            print(f"⚠ could not write {sidecar.name}: {e} (the review page shows no timeline for this render)")
     return 0
 
 
@@ -345,7 +372,8 @@ def cmd_outdir(args: argparse.Namespace) -> int:
 
 
 def cmd_review(args: argparse.Namespace) -> int:
-    """Serve the review page for every render in a directory until stopped."""
+    """Serve the job page for a job's output directory until stopped."""
+    from stages import job_files
     from stages import review_server as rs
     video_dir = Path(args.dir)
     if args.next_version:
@@ -359,7 +387,14 @@ def cmd_review(args: argparse.Namespace) -> int:
         return 1
     box = rs.Mailbox(mailbox.resolve())
     # The token is in open.html only; never print it (stdout is the transcript).
-    print(f"REVIEW: serving {len(rs.list_videos(video_dir.resolve()))} clip(s) from {video_dir.resolve()}")
+    job = job_files.load(video_dir.resolve(), "job")
+    source = {Path(job["data"]["source"]).resolve()} if job["status"] == "ok" else set()
+    print(f"REVIEW: serving {len(rs.list_videos(video_dir.resolve(), source))} clip(s) from {video_dir.resolve()}")
+    states = {name: job_files.load(video_dir.resolve(), name) for name in job_files.INPUTS}
+    print("INPUTS: " + ", ".join(f"{job_files.INPUTS[n]} {st['status']}" for n, st in states.items()))
+    for n, st in states.items():
+        if st["status"] == "invalid":
+            print(f"✗ {job_files.INPUTS[n]}: " + st["error"].replace("\n", "; "))
     for u in urls:
         print(f"URL: {u}  (needs the token: open {box.open_html} or append ?t=<token from {box.token_file}>)")
     print(f"OPEN: {box.open_html}")
@@ -378,6 +413,24 @@ def cmd_review(args: argparse.Namespace) -> int:
     finally:
         httpd.server_close()
         rs.unpublish(mailbox.resolve())
+    return 0
+
+
+def cmd_music_sample(args: argparse.Namespace) -> int:
+    """Write a short sample of a synth bed, for the job page's Music tab."""
+    out = Path(args.out).resolve()
+    try:
+        music_stage.write_synth(args.preset, args.seconds, out)
+    except ValueError as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    except FileNotFoundError:
+        print("✗ ffmpeg not found on PATH. Install it (brew install ffmpeg, or apt install ffmpeg) and try again.", file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as e:
+        print(f"✗ ffmpeg could not write the sample (exit {e.returncode})", file=sys.stderr)
+        return 1
+    print(f"SAMPLE: {out}")
     return 0
 
 
@@ -438,7 +491,8 @@ def main() -> int:
 
     r = sub.add_parser("render", help="render a hand-written EDL to mp4")
     r.add_argument("edl", help="path to EDL JSON")
-    r.add_argument("--out", default="reel.mp4", help="output mp4 path")
+    r.add_argument("--out", default="reel.mp4",
+                   help="output mp4 path; <stem>.edl.json beside it records the EDL for the review page")
     r.add_argument("--work-dir", default=None, help="scratch directory for intermediate files")
     r.add_argument("--music-file", default=None, help="audio file to use as background bed")
     r.add_argument("--music-url", default=None, help="audio URL (yt-dlp): YouTube Audio Library, Pixabay Music, etc.")
@@ -555,13 +609,21 @@ def main() -> int:
     od.add_argument("job", help="job name, e.g. the show and episode")
     od.set_defaults(func=cmd_outdir)
 
-    rv = sub.add_parser("review", help="serve a page to watch renders and comment on them by time and position")
-    rv.add_argument("dir", help="directory of rendered videos (clip.mp4, clip.v2.mp4, …)")
+    rv = sub.add_parser("review", help="serve the job page: pick clips, draw speaker boxes, choose a look and music, "
+                                         "comment on renders and restyle them")
+    rv.add_argument("dir", help="the job's output directory: renders (clip.mp4, clip.v2.mp4, …) and the "
+                               "job.json, candidates.json, looks.json, music.json the session writes")
     rv.add_argument("--mailbox", default=None, help="where comments.jsonl goes (default: <dir>/review)")
     rv.add_argument("--port", type=int, default=8765, help="first port to try (20 tried)")
     rv.add_argument("--next-version", metavar="CLIP", default=None,
                     help="print the path for CLIP's next version and exit")
     rv.set_defaults(func=cmd_review)
+
+    ms = sub.add_parser("music-sample", help="write a short sample of a synth music bed (for music.json)")
+    ms.add_argument("preset", choices=sorted(music_stage.SYNTH_PRESETS), help="the synth bed: what EDL music.synth names")
+    ms.add_argument("--out", required=True, help="the .wav to write, e.g. <outdir>/samples/calm.wav")
+    ms.add_argument("--seconds", type=float, default=15.0, help="sample length (default 15)")
+    ms.set_defaults(func=cmd_music_sample)
 
     cs = sub.add_parser("contact-sheet", help="tile a reference video's frames into 4x4 sheets")
     cs.add_argument("source", help="video file or URL (fetched with yt-dlp)")

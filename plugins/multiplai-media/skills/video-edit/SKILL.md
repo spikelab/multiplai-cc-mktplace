@@ -141,6 +141,13 @@ uv run --project "${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts" python3 ${CLA
   --music-volume-db -22         # optional, default -18
 ```
 
+Beside the mp4, render writes `<out stem>.edl.json` (`clip-01.v2.mp4` →
+`clip-01.v2.edl.json`): the EDL file it read, that EDL with every path made
+absolute, where each segment landed in the output, and the caption lines in
+output time as they were burned in. The job page draws the render's timeline
+from it (§6). It is written after the mp4, so never save an EDL under that
+name beside the output; render refuses to start when one is there.
+
 ### 5. Quality check + report back
 
 Before declaring done, verify the render against the checks in the job's
@@ -152,52 +159,194 @@ platform requirements and exits 1 on any failure.
 
 Print the output path and total duration. If quality issues are visible (caption errors, wrong segment, etc.), iterate on the EDL and re-render — the cached prep means re-renders are fast (the bulk of time is the per-segment cut pass).
 
-### 6. Review loop: the user comments on the video itself
+### 6. The job page: picks, speaker boxes, look, music and review
 
-When the user wants to review renders (or the job has several clips), serve
-them a review page instead of asking for timestamps in chat. In the page they
-click the picture to pause and comment on that moment and spot, then send
-all comments in one batch.
+One local page carries the user's choices for the whole job, so they click
+instead of typing timestamps in chat. It has five tabs: **Clips** (pick from
+the candidates), **Speakers** (draw a box per speaker), **Look** (pick an
+overlay style, a brand and a caption option), **Music** (pick a bed, its
+level and a sound-effect set), and **Review** (comment on a spot in a render,
+draw on a paused frame, comment on a stretch of the render's timeline, edit
+the render's caption, brand and style values in a style panel, or play its
+overlays live and restyle an element of one). It opens on the earliest tab
+with a decision still open. Each choice comes back as a row in a mailbox
+file.
+
+The flow, tab by tab: **Clips** → `pick` rows (reels only); **Speakers** →
+one `panels` row (reels only; a demo job shows "not used for demos" on
+both); **Look** → one `look` row; **Music** → one `music` row; then, for
+every render, **Review** → `point`, `drawing` and `range` rows from the
+comment tools, `style` rows from the style panel and `restyle` rows from
+the live overlays.
+
+**The page shows files the session writes into the job's output directory,
+and never edits them.** A tab whose file is missing says so; one that fails
+its schema shows the errors. The page polls, so a file written later appears
+without a restart. Every path inside is absolute. Schemas:
+`schema/<name>.schema.json`.
+
+| File | Shape | Tab |
+|---|---|---|
+| `job.json` | `{source, transcript, sentences, kind: "reels"\|"demo"}` | all; Clips and Speakers only for `reels` |
+| `candidates.json` | `[{id, start, end, speaker, hook, excerpt, scores: {hook, payoff, quotable, standalone, density}, why}]` | Clips |
+| `looks.json` | `{styles: [{name, file, sample_html}], brands: [{name, file}], captions: [{name, values}]}` | Look |
+| `music.json` | `{beds: [{name, file}], sfx_sets: [{name, files}], voice_sample: {start, end}}` | Music |
+
+The server plays only files those name (the source, beds, sound effects,
+sample pages) and the renders in the directory; it refuses every other path.
+It reads each render's `<stem>.edl.json` (§4) for the Review tab's timeline,
+style panel and live overlays; a render without one plays without them. The
+style panel reads the render's brand file and the frontmatter of each style
+its overlays name (the style's file in `looks.json`, else the shipped
+`references/styles/<name>.md`, else the path the overlay names). Live
+overlays play the overlay pages the sidecar names, in sandboxed frames with
+the renderer's seek shim. Caption edits preview as HTML drawn from the
+sidecar's `captions_events`, labelled approximate: the render is exact.
+`references/reels.md` §3–4 say when to write `job.json` and
+`candidates.json`.
+
+**`looks.json` and `music.json`: write them for every job, reels or demo,
+before the first EDL**, so the user picks the look and the music before
+anything is rendered:
+
+- `styles`: each style the user might want (`references/styles/*.md`, or a
+  style derived for this job), with `sample_html` an overlay page in that
+  style: the style's `## Example` page saved to `<outdir>/looks/<name>.html`
+  will do. The Look tab loops it in a sandboxed frame, seeked as the
+  renderer seeks it. A page that follows the page rules plays there as it
+  is; one that loads anything from the network does not.
+- `brands`: the user's brand files. The tab shows each one's colours and
+  caption font, or its error.
+- `captions`: two or three caption options as `values` (`size`,
+  `position_y`, `words_per_line`, `highlight`; a missing key keeps the
+  default). The tab draws each over a frame of the source in the chosen
+  brand's colours, labelled approximate.
+- `beds`: audio files. **For a synth bed, render a 15 s sample first** and
+  list that, named after the preset:
+
+  ```bash
+  python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py music-sample calm --out <outdir>/samples/calm.wav
+  ```
+
+- `sfx_sets`: named sets of the sound files the user supplied (§ Sound
+  effects in `references/reels.md`).
+- `voice_sample`: `{start, end}` in source seconds, 5–10 s of clear speech.
+  "Play with voice" plays it with the chosen bed under it at the chosen
+  level.
 
 1. **Start the server in the background** (Bash with `run_in_background`),
-   pointing it at the directory holding the renders:
+   pointing it at the job's output directory, where the renders go too:
 
    ```bash
-   python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py review <dir>
+   python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py review <outdir>
    ```
 
-   It prints `URL:` lines, `OPEN:` and `MAILBOX:`. Give the user the `OPEN:`
-   path (`<dir>/review/open.html`): opening that file sends the browser to
-   the page with its access token. **Never print or read out the token**; it
-   is in `open.html` and `server.token` only, both deleted when the server
-   stops. Inside a container the server binds `0.0.0.0`; the first URL is
+   It prints `INPUTS:` (each input file's state), `URL:` lines, `OPEN:` and
+   `MAILBOX:`. Give the user the `OPEN:` path (`<outdir>/review/open.html`):
+   opening that file sends the browser to the page with its access token.
+   **Never print or read out the token**; it is in `open.html` and
+   `server.token` only, both deleted when the server stops. Inside a
+   container the server binds `0.0.0.0`; the first URL is
    `<hostname>.orb.local` under OrbStack, otherwise the container IP, and
    `open.html` links every URL in case the first does not load. Set
    `VIDEO_EDIT_REVIEW_URL_HOST` (e.g. `localhost` for a port published with
    `-p`) to put that host first.
 
-2. **Watch the mailbox** with the Monitor tool, one event per comment:
+2. **Watch the mailbox** with the Monitor tool, one event per row:
 
    ```bash
-   tail -n0 -F <dir>/review/comments.jsonl
+   tail -n0 -F <outdir>/review/comments.jsonl
    ```
 
-   Each line is `{id, video, version, t, x, y, text, created_at}`: `video` is
-   the clip name, `t` the time in that render in seconds, `x`/`y` the click
-   position as a fraction of the width and height (0,0 is top left). Without
-   the Monitor tool, read the file when the user says they sent comments.
+   Every row has `id`, `kind`, `text` (may be empty, except on a `point`
+   or `range` row) and `created_at`; rows about a render (`point`,
+   `drawing`, `range`, `style`, `restyle`) also have `video` (the clip
+   name) and `version`. A row with no `kind` (from an older page) is a
+   `point` row. The newest row wins when two say the same thing.
 
-3. **Wait for the batch to finish** (lines arriving within a few seconds of
-   each other belong to one Send all), then map each comment to the EDL:
-   `pipeline.py timeline <edl>` turns `t` back into source time; `y` near the
-   caption line or the headline points at those. Make every change the batch
-   asks for, then render the **next version** of that clip:
+   | `kind` | Extra fields | Do |
+   |---|---|---|
+   | `point` | `t`, `x`, `y`: the time in that render in seconds, and the click as a fraction of the width and height (0,0 is top left) | Change what the comment asks for at that moment and spot (step 3) |
+   | `pick` | `candidate`, `decision` (`accept`\|`reject`), `start`, `end` (source seconds, maybe moved by the user) | Snap each accepted clip with `pipeline.py snap`, follow its note, write one EDL each; drop the rejected (`references/reels.md` §4) |
+   | `panels` | `panels: {name: {x, y, w, h}}` (source pixels), `speakers: {label: name}` | Write them into every EDL's `layout` (`references/reels.md` §3) |
+   | `look` | `style`, `brand` (names from `looks.json`, or `null` for none), `captions` (the chosen option's values, or `null`) | Use them in every EDL and overlay page you write (below) |
+   | `music` | `bed`, `sfx_set` (names from `music.json`, or `null` for none), `volume_db` | Set every EDL's `music`, and take the sounds `sfx-suggest` proposes from that set (below) |
+   | `drawing` | `t`; `image`, the id of the marked frame; `shapes: [{tool, color, points}]` (`pen`\|`arrow`\|`box`, points as `[x, y]` fractions of the picture) | Read `<outdir>/review/marks/<image>.jpg`, the frame at `t` with the shapes drawn on it, and change what is marked (step 3) |
+   | `range` | `t_start`, `t_end` (seconds in that render); `target`, the block the user clicked on the timeline, or `null` | Cut, trim, retime or restyle that stretch (step 3) |
+   | `style` | `target` (`captions`, `brand` or `style:<name>`, the name as the EDL's overlay names it); `changes: {key: [old, new]}`, only the keys the user changed; `save_as`, a file name for a new brand or style file, or `null` | Edit the EDL's `captions`, the brand file, or a copy of the style file in the job dir (step 3) |
+   | `restyle` | `t` (seconds in that render); `overlay`, the EDL's `overlays[]` index; `html`, that overlay's page; `selector`, a CSS selector for the element; `changes: {property: [computed, new]}` | Edit that overlay page's CSS; re-run `lint-overlay` (step 3) |
+
+   Without the Monitor tool, read the file when the user says they sent
+   something.
+
+   **Apply the newest `look` and `music` rows to every EDL you write**, and
+   to EDLs already written before the next render:
+
+   - `look.style`: write every overlay page in that style and set each
+     overlay's `style` to its name; `null` means the user wants no
+     overlays styled from the offer, so ask before adding any.
+   - `look.brand`: set `brand` to that brand's `file`; `null` means no
+     brand file.
+   - `look.captions`: copy each key into the EDL's `captions`, keeping the
+     keys it does not name; `null` leaves `captions` as it is.
+   - `music.bed`: set `music` to `{"file": <the bed's file>, "volume_db":
+     <volume_db>}`. For a synth bed's sample, set `{"synth": <preset>,
+     "volume_db": …}` instead: the sample is 15 s, a render synthesizes the
+     full length. `null` means no `music`.
+   - `music.sfx_set`: place sounds only from that set's files, at the moments
+     `pipeline.py sfx-suggest` proposes; `null` means no `sfx`.
+
+3. **For `point`, `drawing`, `range`, `style` and `restyle` rows, wait for the batch to finish**
+   (rows arriving within a few seconds of each other belong to one Send),
+   then map each comment to the EDL. The render's `<stem>.edl.json` names the
+   EDL it came from (`edl_file`). `pipeline.py timeline <edl>` turns a time
+   in the render back into source time.
+
+   - `point`: `y` near the caption line or the headline points at those.
+   - `drawing`: look at the marked frame; an arrow points at what to change,
+     a box frames it.
+   - `range`: `target` says which part of that stretch: `segment:N` and
+     `overlay:N` (the EDL's `segments[N]` and `overlays[N]`), `sfx:N`
+     (`sfx[N]`), `captions`, `headline` or `title`. Without a target, the
+     text says what to change in the whole stretch.
+   - `style` with `target: "captions"`: copy each new value into the EDL's
+     `captions` (`size`, `position_y`, `words_per_line`, `max_chars`,
+     `highlight`). The old value is what the page showed: for `size` it may
+     be the default the render computed, when the EDL had none.
+   - `style` with `target: "brand"`: set those colours (`primary`,
+     `accent`, `background`, `caption_outline`) in the EDL's brand file.
+     With `save_as`, or when the EDL has no brand file, write a new brand
+     file `<outdir>/brands/<save_as or "brand">.json` with the changes and
+     point the EDL's `brand` at it; never edit a brand file outside the job
+     directory without asking.
+   - `style` with `target: "style:<name>"`: the keys are the dotted
+     frontmatter keys (`palette.accent`, `fonts.display`,
+     `fonts.weights.body`, `shape.radius_px`, `motion.enter_s`, …). Copy the
+     style file to `<outdir>/styles/<save_as>.md`, or without `save_as` to
+     `<outdir>/styles/<stem>.md`, where `<stem>` is the style file's name
+     without its folder and `.md` (`<name>` can be a path; never join it to
+     the folder). Never edit a shipped file under `references/styles/`.
+     Change those keys, point every overlay that used the old style at the
+     copy, and rewrite those overlay pages to follow it. A change to
+     `palette.key` is the key colour: also set `key_color` on every `keyed`
+     overlay that uses the style, or the render keys out the old colour and
+     shows the new one as a solid box.
+   - `restyle`: in the overlay page `html`, change each property of the
+     element `selector` names (a selector the page built; match it to the
+     page's own class or rule, don't paste it in). Values are one CSS value
+     each; the old value is the browser's computed one (`rgb(…)`, `matrix(…)`),
+     not the page's source. An element picked during its enter or exit
+     animation reports that moment's `opacity` and `transform`, not the values
+     it settles at. Then run `pipeline.py lint-overlay` on the page.
+
+   Make every change the batch asks for, then render the **next version** of
+   that clip:
 
    ```bash
    PIPE=${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py
-   python3 $PIPE review <dir> --next-version clip-01      # NEXT: <dir>/clip-01.v2.mp4
-   python3 $PIPE render <edl> --out <dir>/clip-01.v2.mp4
-   python3 $PIPE check <dir>/clip-01.v2.mp4 --preset reels --edl <edl>
+   python3 $PIPE review <outdir> --next-version clip-01      # NEXT: <outdir>/clip-01.v2.mp4
+   python3 $PIPE render <edl> --out <outdir>/clip-01.v2.mp4
+   python3 $PIPE check <outdir>/clip-01.v2.mp4 --preset reels --edl <edl>
    ```
 
    The page notices the new version within 5 s and offers it in its version

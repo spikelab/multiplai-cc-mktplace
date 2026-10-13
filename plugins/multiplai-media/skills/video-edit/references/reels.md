@@ -81,7 +81,41 @@ proof sheet (step 7) shows a caption that is wrong.
 ## 3. Measure the panels once per show
 
 Most interview recordings keep one layout for the whole show: each speaker in
-a fixed rectangle. Write one frame with a grid and read the rectangles off it:
+a fixed rectangle. The user draws the rectangles on the job page; chat is the
+fallback.
+
+**On the job page.** After prep, get the output directory (`P outdir
+<show-and-episode>`, §5) and write `<outdir>/job.json`, every path absolute
+(`context.md` lists the transcript and sentences files):
+
+```json
+{"source": "/path/to/recording.mp4",
+ "transcript": "/path/to/cache/transcript.json",
+ "sentences": "/path/to/cache/sentences.json",
+ "kind": "reels"}
+```
+
+Start the page in the background with `P review <outdir>` and watch its
+mailbox (`SKILL.md` §6). In the **Speakers** tab the user scrubs to a frame,
+draws a box around each speaker, names it, and maps each transcript speaker
+label to a box, with a few lines from each label to tell who is who. A
+button checks the boxes on a frame at 85% of the recording. Sending adds one
+`panels` row:
+
+```json
+{"kind": "panels", "panels": {"Host": {"x": 64, "y": 72, "w": 512, "h": 576},
+                              "Guest": {"x": 704, "y": 72, "w": 512, "h": 576}},
+ "speakers": {"SPEAKER_0": "Host", "SPEAKER_1": "Guest"}, "text": ""}
+```
+
+Copy `panels` into every EDL's `layout.panels` and `speakers` into
+`layout.speakers`, unchanged: both are in source pixels and use the user's
+box names, which a segment's `frame` then names too. The newest `panels` row
+wins. Check the boxes against the rules
+below; if one cuts a graphic in half, say so and ask.
+
+**In chat**, when the page cannot be opened: write one frame with a grid and
+read the rectangles off it:
 
 ```bash
 P frame <recording.mp4> --at 300 --grid --out <outdir>/grid.png
@@ -110,7 +144,8 @@ if the layout changes mid-show, split the clips by layout.
 
 Read the entire transcript in `context.md` before choosing anything — the
 best moment is often late. Then write `<outdir>/candidates.md` with **8–12
-candidates**. For each:
+candidates**, and the same candidates as `<outdir>/candidates.json` for the
+job page (schema: `schema/candidates.schema.json`). For each:
 
 - start and end (source seconds), and the duration;
 - which speaker carries it;
@@ -143,7 +178,33 @@ P snap <recording.mp4> <start> <end>
 `snap` widens the clip to whole sentences and moves each edge into the
 nearest pause, so no clip starts mid-word.
 
-**Present the candidates to the user and render only the ones they pick.**
+In `candidates.json` each candidate is one object; the five scores use the
+short keys `hook`, `payoff`, `quotable`, `standalone` and `density`, and
+`why` holds the reasoning:
+
+```json
+[{"id": "c1", "start": 812.34, "end": 851.96, "speaker": "SPEAKER_1",
+  "hook": "We stopped fearing Fridays.", "excerpt": "We stopped fearing Fridays. Every change …",
+  "scores": {"hook": 5, "payoff": 4, "quotable": 4, "standalone": 4, "density": 5},
+  "why": "Hook: a number in the first line. Payoff: …"}]
+```
+
+**Present the candidates on the job page and render only the ones the user
+picks.** The page polls the output directory, so `candidates.json` appears
+in the **Clips** tab without a restart. There the user plays each candidate
+from the source, accepts or rejects it, drags its edges (they snap to
+sentence edges, or to words with Alt) and adds a note. "Send picks" adds one
+`pick` row per decided candidate:
+
+```json
+{"kind": "pick", "candidate": "c1", "decision": "accept", "start": 812.34, "end": 840.10,
+ "text": "end on the laugh"}
+```
+
+The newest row per candidate wins. For every accepted one, run `P snap` on
+its `start` and `end` (the page snaps to sentences, not to pauses), follow its
+note, and write its EDL (§5). Drop the rejected ones. Without the page, show
+`candidates.md` in chat and wait for the user's choice there.
 
 ## 5. Write one EDL per chosen clip
 
@@ -269,6 +330,53 @@ P timeline <outdir>/edl/clip-01.edl.json
 `render` fails if the caption font lacks a character the transcript uses —
 pick a brand font that covers the language.
 
+### Look and music on the job page
+
+Before the first EDL, write `<outdir>/looks.json` and `<outdir>/music.json`
+beside `job.json` (schemas: `schema/looks.schema.json`,
+`schema/music.schema.json`; `SKILL.md` §6 says what goes in each list). The
+user picks in the page's **Look** and **Music** tabs instead of in chat:
+
+```json
+{"styles": [{"name": "clean-tech", "file": "/…/references/styles/clean-tech.md",
+             "sample_html": "/…/<outdir>/looks/clean-tech.html"}],
+ "brands": [{"name": "house", "file": "/…/brand.json"}],
+ "captions": [{"name": "Bold, 2 words", "values": {"size": 84, "position_y": 0.66, "words_per_line": 2, "highlight": true}},
+              {"name": "Classic", "values": {"words_per_line": 5, "highlight": false}}]}
+```
+
+```json
+{"beds": [{"name": "calm", "file": "/…/<outdir>/samples/calm.wav"}, {"name": "track", "file": "/…/track.mp3"}],
+ "sfx_sets": [{"name": "soft", "files": ["/…/pop.wav", "/…/whoosh.wav"]}],
+ "voice_sample": {"start": 812.3, "end": 820.1}}
+```
+
+A synth bed is listed as a 15 s sample, rendered first with
+`P music-sample calm --out <outdir>/samples/calm.wav`. Keep caption options
+inside the caption band rules below (`position_y` 0.635–0.6875).
+
+Each tab sends one row; the newest wins:
+
+```json
+{"kind": "look", "style": "clean-tech", "brand": "house",
+ "captions": {"size": 84, "position_y": 0.66, "words_per_line": 2, "highlight": true}, "text": ""}
+{"kind": "music", "bed": "calm", "volume_db": -14, "sfx_set": "soft", "text": ""}
+```
+
+Apply them to **every** EDL you write (§5), and to EDLs already written
+before the next render: `brand` is the brand's `file`; `captions` keys go
+into the EDL's `captions`; overlay pages are written in `style` and name it;
+`music` is `{"file": <bed file>, "volume_db": …}`, or `{"synth": "calm",
+"volume_db": …}` for a synth sample; sounds come only from the `sfx_set`'s
+files (§ Sound effects). `null` means none of that kind. Without the page,
+ask in chat.
+
+Once clips are rendered, the **Review** tab carries the rest: comments,
+drawings and ranges on a render, `style` rows from its style panel (caption
+values, brand colours, style values) and `restyle` rows from its live
+overlays. `SKILL.md` §6 has the table of all nine row kinds and what to do
+with each.
+
 ### Brand file
 
 `brand.json` sets the caption and headline font, the colours and a logo:
@@ -315,6 +423,14 @@ done
 `check` exits 1 on any failing requirement (size, codec, 48 kHz audio, frame
 rate, bitrate, file size, length, text inside the unsafe bands). Fix the EDL
 and re-render; prep is cached, so a re-render costs only the encode.
+
+Each render also leaves `$OUT/<name>.edl.json`, its record for the job
+page's timeline (`SKILL.md` §4). That is why the EDLs live in `edl/`: one
+saved as `$OUT/clip-01.edl.json` would sit where render writes, and render
+refuses it. In the page's **Review** tab the user comments on a spot, draws
+on a paused frame, or marks a stretch of the timeline and clicks the
+segment, caption line, overlay or sound it is about; each arrives as a
+`point`, `drawing` or `range` row (`SKILL.md` §6).
 
 ## 7. Proof every reel before reporting it
 

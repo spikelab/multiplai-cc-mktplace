@@ -40,7 +40,8 @@ def test_render_writes_a_hidden_partial_then_renames_it(tmp_path, monkeypatch: p
     monkeypatch.setattr(pipeline.composite, "render", fake_render)
     assert pipeline.cmd_render(_args(tmp_path)) == 0
     assert seen == [tmp_path / "out" / ".clip-01.v2.partial.mp4"]
-    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["clip-01.v2.mp4"]
+    # and the sidecar the review page reads (tests/test_render_sidecar.py)
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["clip-01.v2.edl.json", "clip-01.v2.mp4"]
 
 
 def test_failed_render_leaves_no_output(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

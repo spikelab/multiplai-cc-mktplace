@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "video-edit/candidates.schema.json",
+  "title": "video-edit clip candidates",
+  "description": "<outdir>/candidates.json, written by the session beside candidates.md (references/reels.md section 4). The Clips tab shows one card per candidate, sorted by total score; ids must be unique and end must be after start.",
+  "type": "array",
+  "items": {"$ref": "#/$defs/Candidate"},
+  "$defs": {
+    "Score": {"type": "number", "minimum": 1, "maximum": 5},
+    "Candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "start", "end", "speaker", "hook", "excerpt", "scores", "why"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 64, "description": "Stable id; pick rows name the candidate by it."},
+        "start": {"type": "number", "minimum": 0, "description": "Source seconds."},
+        "end": {"type": "number", "minimum": 0, "description": "Source seconds, after start."},
+        "speaker": {"type": "string", "description": "Who carries the clip: a transcript speaker label or a name."},
+        "hook": {"type": "string", "description": "The first spoken line, or the headline the session would add."},
+        "excerpt": {"type": "string", "description": "The transcript of the span, or its first lines."},
+        "scores": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["hook", "payoff", "quotable", "standalone", "density"],
+          "description": "1-5 on each axis of references/reels.md section 4.",
+          "properties": {
+            "hook": {"$ref": "#/$defs/Score"},
+            "payoff": {"$ref": "#/$defs/Score"},
+            "quotable": {"$ref": "#/$defs/Score"},
+            "standalone": {"$ref": "#/$defs/Score"},
+            "density": {"$ref": "#/$defs/Score"}
+          }
+        },
+        "why": {"type": "string", "description": "The session's reasoning for the scores."}
+      }
+    }
+  }
+}
