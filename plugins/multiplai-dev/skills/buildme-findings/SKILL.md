@@ -17,7 +17,7 @@ build runs. Each round replies on the PR and re-runs the review.
 ```bash
 uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
   python -m build_pipeline findings --pr <number> --project-dir "<repo>" \
-  [--change <name>] [--auto] [--trust-repo]
+  [--change <name>] [--auto] [--max-rounds <n>] [--trust-repo]
 ```
 
 - `--pr`: the PR number on the repository at `--project-dir`.
@@ -25,8 +25,13 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
   PR's branch name after `buildme/`. Its documents are `specs/changes/<name>/`,
   or the newest `specs/archive/<date>-<name>/` after an archived build.
   Neither found: exit 2, and the message names `--change`.
-- `--auto`: unattended. After each round the re-review's findings are posted
-  by `/multiplai-dev:review`'s own rule, without the viewer.
+- `--auto`: unattended. After each round the re-review's Code findings, and
+  its Tests findings that cite a source file other than a test file, are
+  posted without the viewer. The choice is written to
+  `buildme-decisions.json` in the review's own folder under the data
+  directory, never in the worktree, and passed to `/multiplai-dev:review
+  post --decisions`.
+- `--max-rounds <n>`: stop after `n` rounds; overrides `findings.max_rounds`.
 - `--trust-repo`: required. The triage, fix and review agents hold tools and
   run without asking; pass it only after the user says they trust the
   repository's specs and code.
@@ -63,9 +68,16 @@ never removed. A PR whose branch lives in a fork is refused.
 4. **Code.** Each `code_fix` is one block in `findings-r<N>-tasks.md`, run
    through buildme's TDD engine: `test(block-<k>)` then `impl(block-<k>)`
    commits, with the RED gate, test hashing, refactor discard and per-block
-   review. A block the engine fails (its test never fails before the fix, say)
-   is kept under a wip ref, discarded from the branch, and answered "not
-   fixed"; the round goes on with the next block.
+   review. Each block also asks the fixer to search the same function, its
+   other branches, its callers and the rest of the PR's diff for the same
+   mistake, fix each one, and end its report with a `SEARCHED:` section; the
+   reply quotes it. A block the engine fails (its test never fails before the
+   fix, say) is kept under a wip ref, discarded from the branch, and answered
+   "not fixed"; the round goes on with the next block.
+   Once the blocks pass, one read-only agent (`Read`, `Glob`, `Grep`) checks
+   the round's own fix commits, once per round. A problem it lists is kept as
+   `findings-r<N>-self-check.md`, committed with the tasks file, and fixed as
+   one more block through the same engine.
 5. **Publish.** Push, then the PR description's "Review rounds" section
    through `/multiplai-dev:pr edit`, then one reply per acted-on thread (the
    fixing commit, or why nothing changed) and one reply for the round's
@@ -74,7 +86,7 @@ never removed. A PR whose branch lives in a fork is refused.
 6. **Review.** `/multiplai-dev:review --pr <number>` runs on the new head.
 
 The loop stops when a round finds no new comment to act on, or after
-`findings.max_rounds` rounds (default 3).
+`findings.max_rounds` rounds (default 3, or `--max-rounds`).
 
 ## Relay these lines
 
@@ -130,8 +142,9 @@ outside the project.
   skill; posts replies to review comments and one PR comment per round; and,
   under `--auto`, posts the re-review's findings through the review skill.
 - **Writes** `findings-r<N>.md`, `findings-r<N>-tasks.md`,
-  `respec-findings-r<N>.md` and the state files in the change directory, and
-  commits to the PR's branch.
+  `findings-r<N>-self-check.md`, `respec-findings-r<N>.md` and the state files
+  in the change directory, and commits to the PR's branch. Under `--auto` it
+  also writes `buildme-decisions.json` next to the review's `findings.json`.
 
 ## Prerequisites
 

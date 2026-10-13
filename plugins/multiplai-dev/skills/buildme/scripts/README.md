@@ -31,7 +31,17 @@ python -m build_pipeline tdd --change my-feature --project-dir /path
 
 # Archive a completed change (merge delta specs → main registry)
 python -m build_pipeline archive --change my-feature --project-dir /path
+
+# Fix a PR's review comments in rounds (the /multiplai-dev:buildme-findings skill)
+python -m build_pipeline findings --pr 42 --project-dir /path [--auto] [--max-rounds 2]
 ```
+
+`findings` fixes each code defect through the TDD engine, asking the fixer to
+look for the same mistake elsewhere (`SEARCHED:`), then checks the round's
+own fix commits once with a read-only agent and fixes what it lists as one
+more block. Under `--auto` it posts the re-review's Code findings, and Tests
+findings on source files, through `buildme-decisions.json` in the review's
+folder (`build_pipeline/findings/README.md`).
 
 ## Model-Adaptive Behavior
 

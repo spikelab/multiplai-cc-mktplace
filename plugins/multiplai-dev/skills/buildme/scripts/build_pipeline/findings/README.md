@@ -11,7 +11,8 @@ again until a round finds nothing new or `findings.max_rounds` is reached.
 | `fetch.py` | lists unresolved review threads, top-level comments and the findings in review bodies; decides whose comments are acted on; fences every body |
 | `triage.py` | one read-only agent per allowed comment; writes `findings-r<N>.md` |
 | `spec.py` | writes `respec-findings-r<N>.md`, applies it to the change's requirements (and `specs/registry/` when the change is archived), commits `spec(findings-r<N>): …` |
-| `code.py` | writes `findings-r<N>-tasks.md` and runs the TDD engine on it against `.findings-r<N>-state.json`, through the `BuildConfig` overrides `change_dir`, `tasks_file` and `state_file` |
+| `code.py` | writes `findings-r<N>-tasks.md` (each block asks for the same mistake elsewhere and a `SEARCHED:` section, which `searched_text` reads back for the reply) and runs the TDD engine on it against `.findings-r<N>-state.json`, through the `BuildConfig` overrides `change_dir`, `tasks_file` and `state_file`; `run_self_check` is the one read-only check of the round's fix commits, whose problems become one more block (`write_self_check`, `add_block`) |
+| `decisions.py` | under `--auto`, writes `buildme-decisions.json` next to the review's `findings.json`: every Code finding, and every Tests finding citing a non-test source file, for `review post --decisions` |
 | `publish.py` | pushes, refreshes the PR body through the pr skill's `edit`, replies in each thread |
 | `loop.py` | the round loop, its checkpoint (`.findings-state.json`), the wip refs and the `FINDINGS:*` lines |
 | `cli.py` | resolves the change, branch and worktree for `--pr`, then runs the loop |

@@ -17,6 +17,30 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-10-13
+
+### Added
+- `/multiplai-dev:buildme-findings`: each code-fix block now asks the fixer to
+  search the same function, its other branches, its callers and the rest of
+  the PR's diff for the same mistake, fix each one, and end its report with a
+  `SEARCHED:` section. The reply on the PR quotes where it searched.
+- After a round's fixes pass, one read-only agent checks the round's own fix
+  commits, once per round. A problem it finds is written to
+  `findings-r<N>-self-check.md`, committed with the tasks file, and fixed as
+  one more block through the same TDD engine. Its model is the new
+  `findings_self_check` step (`review` stage) under `models:`.
+- `findings --max-rounds <n>` overrides `findings.max_rounds` for one run.
+
+### Changed
+- `findings --auto` no longer posts the re-review's findings by the review
+  skill's section rule. It posts every Code finding and every Tests finding
+  that cites a source file other than a test file, through
+  `review post --decisions buildme-decisions.json`; the file is written next
+  to the review's `findings.json` in the data directory, never in the PR's
+  worktree. A review folder without a readable `findings.json` now fails the
+  review step (`FINDINGS:FAILED:review:cannot choose what to post: …`)
+  instead of posting.
+
 ## [0.51.0] - 2026-10-13
 
 ### Added
