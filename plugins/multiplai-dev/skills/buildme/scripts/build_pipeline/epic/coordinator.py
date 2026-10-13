@@ -45,6 +45,7 @@ import re
 import signal
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -222,6 +223,13 @@ def fix_pid(change: str, project: Path) -> int | None:
     one `ps` line holding `build_pipeline`, `findings`, `--change <change>`
     and `--project-dir <project>`. Raises ReadFailed when `ps` fails."""
     return _ps_pid("build_pipeline", "findings", f"--change {change}", f"--project-dir {project}")
+
+
+def post_pid(review_dir: str) -> int | None:
+    """The pid of a live `review_pipeline post <review_dir>` (D2.S2): an
+    earlier run's post runs in its own session, so it can outlive its
+    coordinator. Raises ReadFailed when `ps` fails."""
+    return _ps_pid("review_pipeline", f"post {review_dir}")
 
 
 def _ps_pid(*needles: str) -> int | None:
@@ -728,30 +736,38 @@ class Coordinator:
         code, c.rproc = c.rproc.returncode, None
         return code, review.log_text(attempt.log)
 
-    async def _fixer_gone(self, c: Child, change: str, project: Path) -> bool:
-        """Wait while a `findings` of this child runs: never two at once (D2.S4,
-        D2.S9). False, with the child `unknown`, when `ps` fails."""
+    async def _gone(self, c: Child, what: str, find: Callable[[], int | None]) -> bool:
+        """Wait while *find* sees a live process of this child: never two at
+        once (D2.S2, D2.S4, D2.S9). False, with the child `unknown`, when `ps`
+        fails."""
         while True:
             try:
-                if fix_pid(change, project) is None:
+                if find() is None:
                     return True
             except ReadFailed as e:
-                c.status, c.reason = "unknown", f"cannot tell whether its fixer is still running: {e}"
+                c.status, c.reason = "unknown", f"cannot tell whether its {what} is still running: {e}"
                 log.warning("EPIC child %s: %s", c.id, c.reason)
                 return False
             await CLOCK.sleep(POLL)
 
+    async def _fixer_gone(self, c: Child, change: str, project: Path) -> bool:
+        return await self._gone(c, "fixer", lambda: fix_pid(change, project))
+
+    def _rounds_left(self, c: Child) -> int:
+        return self.settings.max_review_rounds - (c.pr_round or 0)
+
     def _rounds_for_fixer(self, c: Child, project: Path) -> int:
-        """`<M>` (32.2): the rounds in the change's findings state plus the review
-        rounds the PR has left."""
-        left = self.settings.max_review_rounds - (c.pr_round or 0)
-        return fix.rounds_done(project, f"{self.epic.name}-{c.id}") + left
+        """`<M>` (32.2): the rounds in the change's findings state whose review
+        finished, plus the review rounds the PR has left. A round still open is
+        one of those left: its review is not in `pr_round` yet."""
+        return fix.rounds_done(project, f"{self.epic.name}-{c.id}") + self._rounds_left(c)
 
     async def _run_fix(self, c: Child, head: str, number: int, rounds: int) -> bool:
         """32.2: run `findings` on *c*'s PR. True when it exited 0, so the review
         step reads the PR again; else the child is parked (`FINDINGS:FAILED`, or
-        any other exit), `built` when the fixer died of a signal (its result
-        `interrupted`, so the next run runs it again, D2.S5), or `unknown`."""
+        any other exit), `built` when the fixer was stopped by a signal (killed,
+        or exit 128 + SIGTERM or SIGHUP; its result `interrupted`, so the next
+        run runs it again, D2.S5), or `unknown`."""
         project = self._child_project(c)
         change = f"{self.epic.name}-{c.id}"
         if not await self._fixer_gone(c, change, project):
@@ -763,10 +779,10 @@ class Coordinator:
         if code == 0:
             records.finish(attempt, code, interrupted=False)
             return True
-        if code < 0:
+        if fix.stopped(code):
             records.finish(attempt, code, interrupted=True)
             c.status, c.reason = "built", ""
-            log.warning("EPIC child %s: its fixer died of signal %d; the next run runs it again", c.id, -code)
+            log.warning("EPIC child %s: its fixer was stopped (exit %d); the next run runs it again", c.id, code)
             return False
         why = fix.failed_reason(out) or f"the fixer exited {code}: {review.tail(out)}"
         records.finish(attempt, code, interrupted=False, extra={"parked": why})
@@ -783,7 +799,7 @@ class Coordinator:
                                 pr_round=c.pr_round)
         try:
             write_decisions(review_dir)
-        except (FileNotFoundError, ValueError) as e:
+        except (OSError, ValueError) as e:
             why = f"cannot choose what to post: {e}"
             records.finish(attempt, None, interrupted=False, extra={"parked": why})
             self._park(c, why)
@@ -827,28 +843,40 @@ class Coordinator:
         return await self._run_fix(c, head, number, self._rounds_for_fixer(c, self._child_project(c)))
 
     async def _fix_pending(self, c: Child, number: int, head: str) -> bool | None:
-        """Item 33's resume. A `post` an earlier run left gets its result
-        (D2.S2: the next post skips what it posted). When the last `fix` has
-        no result (its coordinator was stopped) or an `interrupted` one, wait
-        while it runs, write its result, and run it again with `--max-rounds`
-        recomputed (D2.S4, S5, S7, S11): True when it exited 0, False when the
-        step ends, None when no fixer is to be run again."""
+        """Item 33's resume. A `post` an earlier run left is waited for while it
+        runs, then gets its result (D2.S2: the next post skips what it posted).
+        When the last `fix` has no result (its coordinator was stopped) or an
+        `interrupted` one, wait while it runs and write its result; when its
+        log ends in `FINDINGS:FAILED`, park with the reason (D2.S6), else run
+        it again with `--max-rounds` recomputed (D2.S4, S5, S7, S11): True
+        when it exited 0, False when the step ends, None when no fixer is to
+        be run again."""
         tries = [a for a in records.attempts(self.epic_dir) if a.child == c.id and a.kind in FIX_KINDS]
         for a in tries:
             if a.kind == "post" and a.result is None:
+                argv = a.started.get("argv") or []
+                target = argv[argv.index("post") + 1] if "post" in argv[:-1] else None
+                if target is not None and not await self._gone(c, "post", lambda t=target: post_pid(t)):
+                    return False
                 records.finish(a, None, interrupted=True)
         fixes = [a for a in tries if a.kind == "fix"]
         if not fixes or (fixes[-1].result is not None and not fixes[-1].result.get("interrupted")):
             return None
         last, project = fixes[-1], self._child_project(c)
+        if last.result is None and not await self._fixer_gone(c, f"{self.epic.name}-{c.id}", project):
+            return False
+        why = fix.failed_reason(review.log_text(last.log))
+        if why:               # it ended refusing or failing: running it again repeats that step
+            code = (last.result or {}).get("exit_code")
+            records.finish(last, code, interrupted=False, extra={"parked": why})
+            self._park(c, why)
+            return False
         if last.result is None:
-            if not await self._fixer_gone(c, f"{self.epic.name}-{c.id}", project):
-                return False
             records.finish(last, None, interrupted=True)
         c.pr_round = review.pr_round(review.ledger_lines(), self.slug, number)
-        rounds = self._rounds_for_fixer(c, project)
-        if rounds < 1:        # no round left for it to finish: the review step decides
+        if self._rounds_left(c) < 1:      # no review round left: the review step decides
             return None
+        rounds = self._rounds_for_fixer(c, project)
         if self._over_budget():
             c.status = "built"
             return False

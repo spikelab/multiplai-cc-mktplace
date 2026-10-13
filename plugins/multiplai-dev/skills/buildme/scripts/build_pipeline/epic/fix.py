@@ -13,10 +13,14 @@ of records each:
 2. `fix`: `python -m build_pipeline findings --pr <n> --change <epic>-<id>
    --project-dir <P> --auto --trust-repo --max-rounds <M>`, cwd `<P>`, the
    child's worktree joined with the project's offset. `<M>` is the rounds in
-   the change's `.findings-state.json` plus the review rounds the PR has left
-   (`epic.max_review_rounds` less `pr_round`), so `findings`, which counts
-   its own rounds from its state, stops where the epic's cap is. `findings`
-   resumes itself, so an interrupted one is run again with the same command.
+   the change's `.findings-state.json` whose review finished plus the review
+   rounds the PR has left (`epic.max_review_rounds` less `pr_round`), so
+   `findings`, which counts its own rounds from its state, stops where the
+   epic's cap is. A round still open (its review not yet in the ledger, so not
+   in `pr_round`) is one of the rounds left: `findings` finishes it first.
+   `findings` resumes itself, so an interrupted one is run again with the same
+   command; `findings` exits 128 + the signal on SIGTERM or SIGHUP, which is a
+   stop like a kill, not a failure.
 
 Then the coordinator's review step reads the PR's head again and reuses the
 fixer's last review. The steps that run these are `Coordinator._fix` and
@@ -28,9 +32,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+import signal
 from pathlib import Path
 
-from ..findings.cli import ResolveError, change_dir_for
+from ..findings.cli import ResolveError, change_dir_for, change_name_for
 from ..findings.decisions import DECISIONS_FILE
 from ..findings.loop import STATE_FILE
 from . import review
@@ -46,12 +51,14 @@ def post_argv(review_dir: str) -> list[str]:
 
 
 def rounds_done(project: Path, change: str) -> int:
-    """The fix rounds `findings` has started for *change*: the rounds in its
-    `<change dir>/.findings-state.json`; 0 when there is no change directory
-    or no state file, or the file holds no list of rounds."""
+    """The fix rounds `findings` has finished for *change*: the rounds in its
+    `<change dir>/.findings-state.json` with `review` among their finished
+    steps. The change directory is the one `findings` resolves, under the
+    normalised change name. 0 when there is no change directory or no state
+    file, or the file holds no list of rounds."""
     try:
-        path = change_dir_for(project / "specs", change) / STATE_FILE
-    except ResolveError:
+        path = change_dir_for(project / "specs", change_name_for(change, "")) / STATE_FILE
+    except (ResolveError, ValueError):
         return 0
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
@@ -60,8 +67,23 @@ def rounds_done(project: Path, change: str) -> int:
     except (OSError, ValueError) as e:
         log.warning("cannot read %s: %s", path, e)
         return 0
-    rounds = (doc.get("findings") or {}).get("rounds") if isinstance(doc, dict) else None
-    return len(rounds) if isinstance(rounds, list) else 0
+    found = doc.get("findings") if isinstance(doc, dict) else None
+    rounds = found.get("rounds") if isinstance(found, dict) else None
+    if not isinstance(rounds, list):
+        return 0
+    return sum(1 for r in rounds if isinstance(r, dict) and isinstance(r.get("finished"), list)
+               and "review" in r["finished"])
+
+
+# `findings` turns SIGTERM and SIGHUP into SystemExit(128 + signal)
+# (`build_pipeline/__main__.py`): a stop, which the next run resumes.
+STOPPED_EXITS = frozenset(128 + s for s in (signal.SIGHUP, signal.SIGTERM))
+
+
+def stopped(code: int) -> bool:
+    """Whether exit *code* is a fixer stopped by a signal: killed (< 0) or
+    one of STOPPED_EXITS."""
+    return code < 0 or code in STOPPED_EXITS
 
 
 def fix_argv(session_id: str, number: int, change: str, project: Path, max_rounds: int) -> list[str]:

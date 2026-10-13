@@ -89,14 +89,18 @@ build. A review with blockers below the cap runs the fix loop (`epic/fix.py`,
 `review_pipeline post <review dir> --decisions <review dir>/buildme-decisions.json`
 (record kind `post`), then `python -m build_pipeline findings --pr <n> --change
 <epic>-<id> --project-dir <worktree + project offset> --auto --trust-repo
---max-rounds <rounds in .findings-state.json + rounds left>` (kind `fix`), both
+--max-rounds <reviewed rounds in .findings-state.json + rounds left>` (kind `fix`), both
 with cwd the child's project directory; then the PR is read again and the
 fixer's last review reused. A head with a `fix` record after its review is
 not fixed again; one with a `post` that exited 0 and no `fix` runs the fixer
-only. A `fix` with no result is waited for while `ps` shows it (`fix_pid`),
-then gets an `interrupted` result and runs again (`_fix_pending`), as does one
-that died of a signal. `FINDINGS:FAILED`, another failing exit, or a failed
-post parks the child. A file
+only. A `post` with no
+result is waited for while `ps` shows it (`post_pid`), then gets an
+`interrupted` result and posts again. A `fix` with no result is waited for
+while `ps` shows it (`fix_pid`), then gets an `interrupted` result and runs
+again (`_fix_pending`), as does one killed or stopped by SIGTERM or SIGHUP
+(exit 143 or 129, `fix.stopped`); one whose log holds `FINDINGS:FAILED` parks
+instead. `FINDINGS:FAILED`, another failing exit, or a failed post parks the
+child. A file
 changed after approval, another process holding the epic's lock, or a
 `specs/config.yaml` turning off `git.worktree` or `git.push`, exits 2.
 `--no-epic-split` skips the decision.

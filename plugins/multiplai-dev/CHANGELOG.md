@@ -25,14 +25,16 @@ time, not derived from a tag.
   would accept (`review_pipeline post --decisions`, the decisions file next to
   the review, outside the worktree), then runs `/multiplai-dev:buildme-findings`
   unattended in the child's worktree (`findings --auto --trust-repo
-  --max-rounds <M>`, where `<M>` is the fixer's rounds so far plus the review
-  rounds the PR has left). When the fixer ends, its last review is reused and
-  the round count goes on from the review ledger; blockers on it start one
-  more post and fix, and at the cap the child parks. A failed fixer
-  (`FINDINGS:FAILED`, with its reason), a failed post, or a review folder with
-  no `findings.json` parks the child. A re-run after the post runs the fixer,
-  not a review; a fixer left running by a stopped run is waited for and then
-  run again, never two at once. The post and the fixer count against
+  --max-rounds <M>`, where `<M>` is the fixer's rounds whose review finished
+  plus the review rounds the PR has left). When the fixer ends, its last review
+  is reused and the round count goes on from the review ledger; blockers on it
+  start one more post and fix, and at the cap the child parks. A failed fixer
+  (`FINDINGS:FAILED`, with its reason, also read from the log of one whose end
+  was not recorded), a failed post, or a review folder with no
+  `findings.json` parks the child. A re-run after the post runs the fixer,
+  not a review; a post or fixer left running by a stopped run is waited for
+  and then run again, never two at once; a fixer stopped by SIGTERM or SIGHUP
+  is run again by the next run. The post and the fixer count against
   `epic.max_parallel` and `epic.max_usd`.
 
 ## [0.62.0] - 2026-10-13

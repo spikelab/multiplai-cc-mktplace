@@ -715,18 +715,21 @@ review_pipeline post <review dir> --decisions <that file>`, run in the child's
 project directory (`agents/<NNN>-post-<id>.*`). Then the fixer runs there:
 `python -m build_pipeline findings --pr <n> --change <epic>-<id> --project-dir
 <child project dir> --auto --trust-repo --max-rounds <M>`
-(`agents/<NNN>-fix-<id>.*`), where `<M>` is the rounds already in the change's
-`.findings-state.json` plus the review rounds the PR has left, so the fixer
-stops at the epic's cap. When it ends, the coordinator reads the PR again and
+(`agents/<NNN>-fix-<id>.*`), where `<M>` is the rounds in the change's
+`.findings-state.json` whose review finished plus the review rounds the PR
+has left, so the fixer stops at the epic's cap, also when it resumes a round
+it had started. When it ends, the coordinator reads the PR again and
 reuses the fixer's last review (no new review launch): blockers on it start
 one more post and fix, and at the cap the child parks. A head with a fix
-after its review is not fixed again. `FINDINGS:FAILED:<step>:<reason>`, any
+after its review is not fixed again. `FINDINGS:FAILED:<step>:<reason>` (also
+when found in the log of a fixer whose end was not recorded), any
 other failing exit of the fixer, a failed post, or a review folder with no
 `findings.json` parks the child with the reason, and it stays parked. On a
 re-run, a head whose post succeeded runs the fixer, not a second post or a
-review; a fixer an earlier run left running is waited for (never two at once),
-then run again with `--max-rounds` recomputed, and `findings` resumes itself;
-a fixer that died of a signal is run again by the next run. The post and the
+review; a post or fixer an earlier run left running is waited for (never two
+at once), then a post runs again, and a fixer runs again with `--max-rounds`
+recomputed, and `findings` resumes itself; a fixer killed or stopped by
+SIGTERM or SIGHUP (exit 143 or 129) is run again by the next run. The post and the
 fixer count against `epic.max_parallel` and `epic.max_usd` like a build, and
 Ctrl-C or SIGTERM stops a fixer this run started. Merging the children's PRs
 comes in a later release.
