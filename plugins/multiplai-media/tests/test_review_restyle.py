@@ -159,6 +159,21 @@ def test_overlay_route_refuses_pages_no_sidecar_names(server, which) -> None:
     assert _req(server, "GET", f"/media/overlay?{q}", token=False)[0].status == 404
 
 
+def test_an_overlay_page_named_by_a_relative_path_gets_no_key_and_is_not_served(server, monkeypatch) -> None:
+    # A relative path would resolve against the server's working directory, not the job.
+    monkeypatch.chdir(server["pages"].parent)
+    page = _sidecar(server)
+    record = json.loads((server["job"]["dir"] / "clip-01.edl.json").read_text())
+    record["edl"]["overlays"].append({**record["edl"]["overlays"][0], "html": "pages/other.html"})
+    (server["job"]["dir"] / "clip-01.edl.json").write_text(json.dumps(record))
+    _, data = _req(server, "GET", "/api/edl?video=clip-01&version=1")
+    assert json.loads(data)["overlay_keys"] == {str(page): rs.overlay_key(server["token"], str(page))}
+    other = str(server["pages"] / "other.html")
+    for path in (other, "pages/other.html"):
+        q = urlencode({"path": path, "k": rs.overlay_key(server["token"], path)})
+        assert _req(server, "GET", f"/media/overlay?{q}", token=False)[0].status == 404, path
+
+
 def test_overlay_route_refuses_everything_without_a_sidecar(server) -> None:
     page = server["pages"] / "card.html"
     q = urlencode({"path": str(page), "k": rs.overlay_key(server["token"], str(page))})
