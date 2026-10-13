@@ -1071,3 +1071,522 @@ def test_history_finds_a_042_folder_nested_under_a_repo_called_tree(tmp_path):
     (out / "tree" / ".DS_Store").write_text("finder")
     found = rounds.history_elsewhere(out / "tree" / "pr-7", "spikelab-tree--pr-7", remote)
     assert found == [nested / "findings.json"]
+
+
+# --- the plan's stop and resume table: one test per row ------------------------------
+#
+# Each test stops a run at its row's point (a child process that exits there, as a
+# killed run does, so the kernel drops its run lock), or finds the row's state left
+# on disk, then reruns or resumes. It compares the result with a run of the same
+# target that never stopped: the finding ids, the names under rounds/, the ledger
+# events of the chosen folder, and a snapshot of every folder that was there before.
+
+STOP_DRIVER = """
+import os, shutil, sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from review_pipeline import ledger, orchestrator, rounds, sdk, target
+from test_orchestrator import FakeAgents
+
+data = Path(sys.argv[2])
+ledger.data_dir = lambda: data
+ledger.legacy_reviews_root = lambda: data.parent / "no-legacy-reviews"
+target.branch_rules = lambda repo, branch, needs=None: None
+base, head = sys.argv[4], sys.argv[5]
+target._pr_view = lambda repo, n: {"headRefOid": head, "baseRefOid": base, "headRefName": "feature",
+                                   "baseRefName": "main", "title": "t", "body": ""}
+sdk.agent_call_structured = FakeAgents()
+where, nth = sys.argv[3].split(":")
+calls = [0]
+
+
+def dies(owner, name, before=False):
+    real = getattr(owner, name)
+
+    def wrapped(*a, **k):
+        calls[0] += 1
+        if before and calls[0] == int(nth):
+            os._exit(137)
+        result = real(*a, **k)
+        if calls[0] == int(nth):
+            os._exit(137)
+        return result
+    setattr(owner, name, wrapped)
+
+
+if where == "hold":          # R1: after <out>/<repo>/ exists, before the lock
+    dies(orchestrator, "_hold", before=True)
+elif where == "folder":      # R2, R3: holding a folder's lock, having read whose it is
+    dies(rounds, "folder_target")
+elif where == "resumable":   # R12: holding the 0.46 folder's lock, before reading the ledger for it
+    dies(orchestrator, "_resumable", before=True)
+elif where == "write":       # R6: after the target files, before the state
+    dies(target, "write_target_files")
+elif where == "started":     # R7, R8: after the state and the started line
+    dies(orchestrator.review_ledger, "started")
+elif where == "copy":        # R4 (import_dir), R5 (keep_round): part way through a copytree
+    real_copytree = shutil.copytree
+
+    def copytree(src, dst, *a, **k):
+        copied = [0]
+
+        def copy(s, d, **kw):
+            copied[0] += 1
+            if copied[0] > 1:
+                os._exit(137)
+            return shutil.copy2(s, d, **kw)
+        return real_copytree(src, dst, *a, **dict(k, copy_function=copy))
+    shutil.copytree = copytree
+
+from review_pipeline.__main__ import main
+sys.exit(main(sys.argv[6:]))
+"""
+
+
+def _stop(tmp_path: Path, base: str, head: str, where: str, *argv: str) -> int:
+    """Run `main(argv)` in a child process that exits (137) at *where* (`<point>:<nth call>`)."""
+    driver = tmp_path / "stop_driver.py"
+    driver.write_text(STOP_DRIVER)
+    proc = subprocess.run([sys.executable, str(driver), str(TESTS), str(tmp_path / "data"), where, base, head,
+                           *argv], capture_output=True, text=True, env=dict(os.environ), timeout=120)
+    return proc.returncode
+
+
+def _pr_args(repo: Path, out: Path, *extra: str) -> list[str]:
+    return ["--out", str(out), "review", "--repo", str(repo), "--pr", "7", "--trust-repo", *extra]
+
+
+def _result(tmp_path: Path, folder: Path) -> dict:
+    data = json.loads((folder / "findings.json").read_text())
+    kept = folder / "rounds"
+    return {"ids": sorted(f["id"] for f in data["findings"]),
+            "rounds": sorted(p.name for p in kept.iterdir()) if kept.is_dir() else [],
+            "events": [e["event"] for e in _ledger_lines(tmp_path) if e.get("target_dir") == str(folder)]}
+
+
+PR7 = ("github-tests", "pr-7")
+
+
+def test_row_U1_a_046_folder_with_finished_rounds_is_read_as_history_and_left_alone(layout_clone, tmp_path, agents):
+    repo, _, _ = layout_clone
+    out, never, gen = tmp_path / "out", tmp_path / "never-stopped", tmp_path / "gen"
+    agents()
+    assert main(_pr_args(repo, gen)) == 0
+    assert main(_pr_args(repo, gen)) == 0  # a top-level round and one kept round, as 0.46 writes them
+    flat = out / f"{SLUG_REPO}--pr-7"
+    shutil.copytree(gen.joinpath(*PR7), flat)
+    _decide(flat, json.loads((flat / "findings.json").read_text())["findings"][0]["id"])
+    for _ in range(2):
+        ledger.started(slug=flat.name, target_dir=flat, head_sha="a" * 40, session_id="0.46")
+        ledger.finished(producer="multiplai-dev:review 0.46.0", session_id="0.46", slug=flat.name,
+                        target_dir=flat, round_="01", head_sha="a" * 40, base_sha="b" * 40, kind="pr", pr=7,
+                        stopped=None, run={})
+    before = _snapshot(flat)
+    assert main(_pr_args(repo, out)) == 0
+    state = json.loads((out.joinpath(*PR7) / "review-state.json").read_text())
+    assert state["repeats"]  # the old folder's rejection was read
+    assert len(rounds.history_elsewhere(out.joinpath(*PR7), f"{SLUG_REPO}--pr-7", ORIGIN)) == 2
+    assert _snapshot(flat) == before
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+
+
+def _unfinished_046(tmp_path: Path, repo: Path, base: str, head: str, out: Path) -> Path:
+    """A 0.46 folder `<out>/<slug>/` holding a run stopped after its `started` line on *head*."""
+    gen = tmp_path / "gen"
+    assert _stop(tmp_path, base, head, "started:1", *_pr_args(repo, gen)) == 137
+    flat = out / f"{SLUG_REPO}--pr-7"
+    shutil.copytree(gen.joinpath(*PR7), flat)
+    state = flat / "review-state.json"
+    state.write_text(state.read_text().replace(str(gen.joinpath(*PR7)), str(flat)))
+    ledger.started(slug=flat.name, target_dir=flat, head_sha=head, session_id="0.46 run that died")
+    return flat
+
+
+def test_row_U2_an_unfinished_046_run_exits_4_naming_the_old_folder_and_resume_finishes_it_there(
+        layout_clone, tmp_path, agents, capsys):
+    repo, base, head = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    flat = _unfinished_046(tmp_path, repo, base, head, out)
+    agents()
+    assert main(_pr_args(repo, never)) == 0
+    fake = agents()
+    capsys.readouterr()
+    assert main(_pr_args(repo, out)) == 4
+    assert f"continue with: python -m review_pipeline resume {flat}" in capsys.readouterr().err
+    assert fake.calls == [] and not out.joinpath(*PR7).exists()
+    assert main(["resume", str(flat), "--trust-repo"]) == 0
+    expected = _result(tmp_path, never.joinpath(*PR7))
+    assert _result(tmp_path, flat) == dict(expected, events=["started", "started", "finished"])
+    assert (out / "HIGH-only.md").is_file() and not (out / "github-tests" / "HIGH-only.md").exists()
+
+
+def test_row_U2_restart_starts_in_the_new_folder_and_leaves_the_046_one_as_it_is(
+        layout_clone, tmp_path, agents):
+    repo, base, head = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    flat = _unfinished_046(tmp_path, repo, base, head, out)
+    before = _snapshot(flat)
+    agents()
+    assert main(_pr_args(repo, never)) == 0
+    assert main(_pr_args(repo, out, "--restart")) == 0
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+    assert _snapshot(flat) == before
+
+
+def test_row_U3_once_the_new_folder_has_state_the_046_folder_is_history_only(layout_clone, tmp_path, agents):
+    repo, base, head = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    flat = _unfinished_046(tmp_path, repo, base, head, out)
+    agents()
+    assert main(_pr_args(repo, out, "--restart")) == 0
+    before = _snapshot(flat)
+    assert main(_pr_args(repo, out)) == 0  # not exit 4: the old folder is not checked
+    assert main(_pr_args(repo, never)) == 0
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+    assert _snapshot(flat) == before
+
+
+def test_row_U4_a_run_still_going_in_the_046_folder_exits_2_until_the_new_folder_has_state(
+        layout_clone, tmp_path, agents, capsys):
+    from review_pipeline import runlock
+    repo, base, head = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    flat = _unfinished_046(tmp_path, repo, base, head, out)
+    before = _snapshot(flat)
+    fake = agents()
+    with runlock.hold(flat):
+        capsys.readouterr()
+        assert main(_pr_args(repo, out)) == 2
+        assert f"a review of {flat} is running now" in capsys.readouterr().err
+        assert fake.calls == []
+        assert main(_pr_args(repo, out, "--restart")) == 0  # the new folder now has state
+        assert main(_pr_args(repo, out)) == 0  # two folders: neither run waits for the other
+    assert _snapshot(flat) == before
+    assert main(_pr_args(repo, never)) == 0
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+
+
+def _nested_042(folder: Path, remote: str = ORIGIN) -> Path:
+    """What multiplai-dev 0.42 leaves in a new-layout folder given to it as `--out`: its own
+    `<checkout>--pr-7/` with a kept round and a rejection, and its four rollups."""
+    nested = folder / "checkout--pr-7"
+    _old_round(nested / "rounds" / "aaaaaaaaaaaa", "a" * 40, "2026-01-01T00:00:00Z", "4000000001",
+               remote=remote, slug="checkout--pr-7")
+    _old_round(nested, "a" * 40, "2026-01-02T00:00:00Z", "4000000002", remote=remote, slug="checkout--pr-7")
+    _decide(nested, "4000000002")
+    for name in rounds.ROLLUP_FILES:
+        (folder / name).write_text(f"0.42 {name}\n")
+    return nested
+
+
+def _042_snapshot(folder: Path) -> dict:
+    return {"nested": _snapshot(folder / "checkout--pr-7"),
+            "rollups": {n: (folder / n).read_bytes() for n in sorted(rounds.ROLLUP_FILES)}}
+
+
+def test_row_U5_a_042_folder_is_used_its_nested_review_is_history_and_never_copied_into_a_round(
+        layout_clone, tmp_path, agents):
+    """Also Done means 8, first test."""
+    repo, _, _ = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    folder = out.joinpath(*PR7)
+    _nested_042(folder)
+    before = _042_snapshot(folder)
+    fake = agents()
+    assert main(_pr_args(repo, out)) == 0
+    assert [c for c in fake.calls if c.startswith("repeats")]  # the nested rejection was read
+    assert main(_pr_args(repo, out)) == 0
+    (kept,) = (folder / "rounds").iterdir()
+    assert not [p for p in kept.iterdir() if p.is_dir()]
+    assert not [p.name for p in kept.iterdir() if p.name in rounds.ROLLUP_FILES]
+    assert _042_snapshot(folder) == before
+    agents()
+    assert main(_pr_args(repo, never)) == 0
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, folder) == _result(tmp_path, never.joinpath(*PR7))
+    # resume or assess-only given the nested folder use its parent as <out>, as 0.42 did.
+    assert rounds.out_root(folder / "checkout--pr-7") == folder
+
+
+def test_row_U6_legacy_and_the_old_inbox_reviews_are_read_and_never_written(
+        layout_clone, tmp_path, agents, monkeypatch):
+    repo, _, _ = layout_clone
+    out, never = default_out(), tmp_path / "never-stopped"
+    copy = out / "legacy" / "old-checkout--pr-7"
+    _old_round(copy, "c" * 40, "2026-01-06T00:00:00Z", "3000000001", slug="old-checkout--pr-7")
+    _decide(copy, "3000000001")
+    inbox = tmp_path / "no-legacy-reviews"
+    _old_round(inbox / "inbox-checkout--pr-7", "d" * 40, "2026-01-07T00:00:00Z", "3000000002",
+               slug="inbox-checkout--pr-7")
+    before = (_snapshot(out / "legacy"), _snapshot(inbox))
+    fake = agents()
+    assert main(["review", "--repo", str(repo), "--pr", "7", "--trust-repo"]) == 0
+    assert [c for c in fake.calls if c.startswith("repeats")]
+    assert (_snapshot(out / "legacy"), _snapshot(inbox)) == before
+    assert sorted(p.name for p in out.iterdir() if p.is_dir()) == ["github-tests", "legacy"]
+    agents()
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+
+
+def test_row_U7_a_042_process_writing_its_nested_folder_now_does_not_stop_or_leak_into_the_new_run(
+        layout_clone, tmp_path, agents, monkeypatch):
+    repo, _, _ = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    folder = out.joinpath(*PR7)
+    nested = _nested_042(folder)
+    agents()
+    assert main(_pr_args(repo, out)) == 0
+    real_keep = rounds.keep_round
+
+    def keep_while_042_writes(*a, **k):
+        # 0.42 is part way through its own run: a snapshot and a findings.json not yet complete.
+        (nested / "tree").mkdir(exist_ok=True)
+        (nested / "tree" / "x.py").write_text("X = 1\n")
+        (nested / "findings.json").write_text('{"schema_version": 1, "find')
+        return real_keep(*a, **k)
+
+    monkeypatch.setattr(rounds, "keep_round", keep_while_042_writes)
+    assert main(_pr_args(repo, out)) == 0
+    (kept,) = (folder / "rounds").iterdir()
+    assert not [p for p in kept.iterdir() if p.is_dir()]
+    assert (nested / "findings.json").read_text() == '{"schema_version": 1, "find'  # never written by us
+    monkeypatch.setattr(rounds, "keep_round", real_keep)
+    agents()
+    assert main(_pr_args(repo, never)) == 0
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, folder) == _result(tmp_path, never.joinpath(*PR7))
+
+
+def test_row_R1_stopped_after_creating_the_repo_folder_before_the_lock(layout_clone, tmp_path, agents):
+    repo, base, head = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    assert _stop(tmp_path, base, head, "hold:1", *_pr_args(repo, out)) == 137
+    assert [p.name for p in (out / "github-tests").iterdir()] == []
+    agents()
+    assert main(_pr_args(repo, out)) == 0
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+
+
+def test_row_R2_stopped_holding_another_remotes_folder_before_switching_to_owner(layout_clone, tmp_path, agents):
+    repo, base, head = layout_clone
+    other = "https://github.com/someone/github-tests"
+    results = []
+    for out, stop in ((tmp_path / "out", True), (tmp_path / "never-stopped", False)):
+        theirs = out.joinpath(*PR7)
+        _state_file(theirs, other, "7", "someone-github-tests--pr-7")
+        before = _snapshot(theirs)
+        if stop:
+            assert _stop(tmp_path, base, head, "folder:1", *_pr_args(repo, out)) == 137
+            assert json.loads((out / "github-tests" / ".locks" / "pr-7.lock").read_text())["pid"]
+            assert not (out / "github-tests@spikelab").exists()
+        agents()
+        assert main(_pr_args(repo, out)) == 0
+        assert _snapshot(theirs) == before
+        results.append(_result(tmp_path, out / "github-tests@spikelab" / "pr-7"))
+    assert results[0] == results[1]
+
+
+@pytest.mark.parametrize("fork", [False, True], ids=["same-remote", "after-the-fork-step"])
+def test_row_R3_stopped_holding_another_refs_folder_before_switching_to_the_hash(
+        layout_clone, tmp_path, agents, fork):
+    repo, base, head = layout_clone
+    other = "https://github.com/someone/github-tests"
+    part = "github-tests@spikelab" if fork else "github-tests"
+    results = []
+    for out, stop in ((tmp_path / "out", True), (tmp_path / "never-stopped", False)):
+        if fork:
+            _state_file(out / "github-tests" / "branch-feat_x", other, "feat/x", "someone-github-tests--feat_x")
+        _state_file(out / part / "branch-feat_x", ORIGIN, "feat/x", f"{SLUG_REPO}--feat_x")
+        before = _snapshot(out)
+        argv = ["--out", str(out), "review", "--repo", str(repo), "--branch", "feat_x", "--trust-repo"]
+        if stop:
+            assert _stop(tmp_path, base, head, f"folder:{2 if fork else 1}", *argv) == 137
+            assert (out / part / ".locks" / "branch-feat_x.lock").is_file()
+        agents()
+        assert main(argv) == 0
+        assert {k: v for k, v in _snapshot(out).items() if k in before} == before
+        results.append(_result(tmp_path, out / part / f"branch-feat_x-{_hex6('feat_x')}"))
+    assert results[0] == results[1]
+
+
+def test_row_R4_stopped_part_way_through_the_dir_copy(tmp_path, agents):
+    src = tmp_path / "proj"
+    src.mkdir()
+    for name in ("a.py", "b.py", "c.py"):
+        (src / name).write_text(f"{name[0].upper()} = 1\n")
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    argv = ["--out", str(out), "review", "--dir", str(src), "--trust-repo"]
+    assert _stop(tmp_path, "-", "-", "copy:0", *argv) == 137
+    folder = out / "proj" / f"dir-proj-{_hex6(str(src))}"
+    assert (out / "proj" / ".locks" / f"{folder.name}.lock").is_file()
+    assert len(list((folder / "source").iterdir())) == 1  # a partial copy, never committed
+    agents()
+    assert main(argv) == 0
+    assert main(["--out", str(never), "review", "--dir", str(src), "--trust-repo"]) == 0
+    assert _result(tmp_path, folder) == _result(tmp_path, never / "proj" / folder.name)
+    git_files = subprocess.run(["git", "-C", str(folder / "source"), "ls-files"], capture_output=True, text=True)
+    assert git_files.stdout.split() == ["a.py", "b.py", "c.py"]
+
+
+def test_row_R5_stopped_during_keep_rounds_copy(layout_clone, tmp_path, agents):
+    repo, base, head = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    agents()
+    assert main(_pr_args(repo, out)) == 0
+    assert _stop(tmp_path, base, head, "copy:0", *_pr_args(repo, out)) == 137
+    assert [p.name for p in (out.joinpath(*PR7) / "rounds").iterdir()][0].startswith(".partial-")
+    assert main(_pr_args(repo, out)) == 0
+    assert main(_pr_args(repo, never)) == 0
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+
+
+def test_row_R6_stopped_after_the_target_files_before_the_state(layout_clone, tmp_path, agents):
+    repo, base, head = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    assert _stop(tmp_path, base, head, "write:1", *_pr_args(repo, out)) == 137
+    folder = out.joinpath(*PR7)
+    assert sorted(p.name for p in folder.iterdir()) == ["commits.txt", "diff.patch", "files.txt"]
+    assert rounds.folder_target(folder) == {}  # names no remote: the next run uses it
+    agents()
+    assert main(_pr_args(repo, out)) == 0
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, folder) == _result(tmp_path, never.joinpath(*PR7))
+
+
+def test_row_R7_stopped_after_the_state_is_saved_exits_4_and_resume_finishes(
+        layout_clone, tmp_path, agents, capsys):
+    repo, base, head = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    folder = out.joinpath(*PR7)
+    assert _stop(tmp_path, base, head, "started:1", *_pr_args(repo, out)) == 137
+    fake = agents()
+    capsys.readouterr()
+    assert main(_pr_args(repo, out)) == 4
+    assert f"continue with: python -m review_pipeline resume {folder}" in capsys.readouterr().err
+    assert fake.calls == []
+    assert main(["resume", str(folder), "--trust-repo"]) == 0
+    assert (out / "HIGH-only.md").is_file() and not (out / "github-tests" / "HIGH-only.md").exists()
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, folder) == dict(_result(tmp_path, never.joinpath(*PR7)),
+                                             events=["started", "started", "finished"])
+
+
+def test_row_R8_stopped_twice_at_the_same_point_one_resume_finishes_and_the_state_is_kept_once(
+        layout_clone, tmp_path, agents):
+    repo, base, head = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    folder = out.joinpath(*PR7)
+    assert _stop(tmp_path, base, head, "started:1", *_pr_args(repo, out)) == 137
+    assert _stop(tmp_path, base, head, "started:1", "resume", str(folder), "--trust-repo") == 137
+    assert [e["event"] for e in _ledger_lines(tmp_path) if e["target_dir"] == str(folder)] == ["started"] * 2
+    agents()
+    assert main(["resume", str(folder), "--trust-repo"]) == 0
+    assert main(_pr_args(repo, out)) == 0  # keeps the finished round once
+    assert main(_pr_args(repo, never)) == 0
+    assert main(_pr_args(repo, never)) == 0
+    expected = _result(tmp_path, never.joinpath(*PR7))
+    assert _result(tmp_path, folder) == dict(expected, events=["started"] * 3 + ["finished", "started", "finished"])
+
+
+def test_row_R9_a_run_of_the_same_folder_still_alive_exits_2(layout_clone, tmp_path, agents, capsys):
+    from review_pipeline import runlock
+    repo, _, _ = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    folder = out.joinpath(*PR7)
+    (out / "github-tests").mkdir(parents=True)
+    fake = agents()
+    with runlock.hold(folder):
+        capsys.readouterr()
+        assert main(_pr_args(repo, out)) == 2
+        assert f"a review of {folder} is running now" in capsys.readouterr().err
+    assert fake.calls == [] and not folder.exists()
+    assert main(_pr_args(repo, out)) == 0
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, folder) == _result(tmp_path, never.joinpath(*PR7))
+
+
+def test_row_R10_origin_changed_between_rounds_uses_the_owner_folder_and_not_the_old_history(
+        layout_clone, tmp_path, agents):
+    repo, _, _ = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    agents()
+    assert main(_pr_args(repo, out)) == 0
+    first = out.joinpath(*PR7)
+    _decide(first, json.loads((first / "findings.json").read_text())["findings"][0]["id"])
+    before = _snapshot(first)
+    fixture_git(repo, "remote", "set-url", "origin", "https://github.com/someone/github-tests.git")
+    agents()
+    assert main(_pr_args(repo, out)) == 0
+    state = json.loads((out / "github-tests@someone" / "pr-7" / "review-state.json").read_text())
+    assert not state["repeats"]  # the old origin's rejection is not read
+    assert _snapshot(first) == before
+    assert main(_pr_args(repo, never)) == 0
+    assert (_result(tmp_path, out / "github-tests@someone" / "pr-7")
+            == _result(tmp_path, never.joinpath(*PR7)))
+
+
+def test_row_R11_edits_to_the_working_tree_or_to_decisions_between_runs(layout_clone, tmp_path, agents):
+    repo, _, _ = layout_clone
+    out, never = tmp_path / "out", tmp_path / "never-stopped"
+    folder = out.joinpath(*PR7)
+    agents()
+    assert main(_pr_args(repo, out)) == 0
+    (repo / "settings.py").write_text("edited by the person\n")
+    (repo / "scratch.txt").write_text("not committed\n")
+    _decide(folder, json.loads((folder / "findings.json").read_text())["findings"][0]["id"])
+    decisions = (folder / "viewer" / "decisions.json").read_bytes()
+    agents()
+    assert main(_pr_args(repo, out)) == 0
+    state = json.loads((folder / "review-state.json").read_text())
+    assert state["repeats"], "the decision is read where it is"
+    assert (folder / "viewer" / "decisions.json").read_bytes() == decisions
+    assert main(_pr_args(repo, never)) == 0
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, folder) == _result(tmp_path, never.joinpath(*PR7))
+
+
+def test_row_R12_stopped_holding_the_046_folders_lock_during_the_interrupted_run_check(
+        layout_clone, tmp_path, agents):
+    """A row this change adds: the check takes `<out>/.locks/<slug>.lock`, which stays on disk."""
+    repo, base, head = layout_clone
+    out, never, gen = tmp_path / "out", tmp_path / "never-stopped", tmp_path / "gen"
+    agents()
+    assert main(_pr_args(repo, gen)) == 0
+    flat = out / f"{SLUG_REPO}--pr-7"
+    shutil.copytree(gen.joinpath(*PR7), flat)
+    before = _snapshot(flat)
+    assert _stop(tmp_path, base, head, "resumable:2", *_pr_args(repo, out)) == 137
+    lock = out / ".locks" / f"{flat.name}.lock"
+    assert json.loads(lock.read_text())["pid"]
+    assert main(_pr_args(repo, out)) == 0
+    assert lock.is_file() and _snapshot(flat) == before
+    assert main(_pr_args(repo, never)) == 0
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+
+
+def test_every_top_level_directory_a_review_writes_is_in_not_kept(layout_clone, tmp_path, agents, monkeypatch):
+    """Done means 8, second test: a later directory the pipeline adds fails this and forces a decision."""
+    from review_pipeline import orchestrator
+    repo, _, _ = layout_clone
+    out = tmp_path / "out"
+    folder = out.joinpath(*PR7)
+    seen: set[str] = set()
+    real_save = orchestrator.save_state
+
+    def save_and_look(state, target_dir):
+        seen.update(p.name for p in target_dir.iterdir() if p.is_dir())
+        return real_save(state, target_dir)
+
+    monkeypatch.setattr(orchestrator, "save_state", save_and_look)
+    agents()
+    assert main(_pr_args(repo, out)) == 0
+    assert main(_pr_args(repo, out)) == 0
+    seen.update(p.name for p in folder.iterdir() if p.is_dir())
+    assert seen and seen <= rounds.NOT_KEPT, seen - rounds.NOT_KEPT
