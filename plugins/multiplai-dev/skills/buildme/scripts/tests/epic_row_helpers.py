@@ -523,6 +523,10 @@ of that head in the review ledger with the round's `findings`. A round with
 no review), `review` after its review is in the ledger but before the round
 records it as finished. A launch that finds the last round unfinished
 finishes it with its first entry of `rounds`, as `findings` resumes a round.
+After its rounds it prints `FINDINGS:DONE:<rounds>`, or with `max_rounds`
+`FINDINGS:MAX_ROUNDS:<rounds>`, as `findings` ends. A PR with no entry in
+`fixes.json` has no fixer under test: it exits 0 printing no `FINDINGS:` end
+line, so the coordinator neither parks nor fixes it again (PR C's tests).
 `SPEND:<spend>:0` on every exit but a kill."""
 import atexit, json, os, pathlib, signal, subprocess, sys, time
 
@@ -548,6 +552,8 @@ step = steps[k - 1] if k <= len(steps) else (steps[-1] if steps else {{}})
 atexit.register(lambda: print(f"SPEND:{{step.get('spend', 0.25)}}:0", flush=True))
 for _sig in (signal.SIGTERM, signal.SIGHUP):
     signal.signal(_sig, lambda signum, _frame: sys.exit(128 + signum))
+if str(n) not in fx:
+    sys.exit(0)
 if step.get("block"):
     gate = root / "release" / f"fix-{{n}}"
     while not gate.exists():
@@ -600,7 +606,8 @@ for i, r in enumerate(todo):
     rnd["finished"] = ALL
     save()
     print(f"FINDINGS:ROUND_DONE:{{rnd['number']}}", flush=True)
-print(f"FINDINGS:DONE:{{len(doc['findings']['rounds'])}}", flush=True)
+print(f"FINDINGS:{{'MAX_ROUNDS' if step.get('max_rounds') else 'DONE'}}:{{len(doc['findings']['rounds'])}}",
+      flush=True)
 '''
 
 

@@ -89,7 +89,7 @@ class Root:
     def fix_pid(self) -> int:
         """The pid of the fixer the stopped run left blocked, once it has started."""
         for _ in range(500):
-            pid = coordinator.fix_pid("e-a", self.root / "ws" / ".worktrees" / "buildme-e-a")
+            pid = coordinator.fix_pid(N, self.project)
             if pid:
                 return pid
             time.sleep(0.02)

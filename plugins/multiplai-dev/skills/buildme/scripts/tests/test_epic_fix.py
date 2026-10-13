@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -201,15 +202,29 @@ def test_a_review_folder_without_findings_parks_before_posting(tmp_path, monkeyp
     assert e.fakes.post_launches() == [] and e.fakes.fix_launches() == []
 
 
-def test_a_fix_that_leaves_the_head_where_it_was_runs_once(tmp_path, monkeypatch):
-    """Item 33: a head with a `fix` record after its review goes to neither
-    32.1 nor 32.2 again, in this run or the next."""
-    e = Epic(tmp_path, monkeypatch)
+@pytest.mark.parametrize("step,end", [({}, "FINDINGS:DONE:0"), ({"max_rounds": True}, "FINDINGS:MAX_ROUNDS:0")],
+                         ids=["done", "max-rounds"])
+def test_a_fixer_that_ends_without_moving_the_head_parks_the_child(tmp_path, monkeypatch, step, end):
+    """D2.S15: `findings` exited 0 saying it is done (or at its own cap) and
+    the PR's head is the one reviewed with blockers: nothing will fix them,
+    so the child parks with its blockers. Item 33: a head with a `fix` after
+    its review goes to neither 32.1 nor 32.2 again; the next run reuses the
+    review, launches nothing and parks the child again."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, fixes={str(N): [step]})
     assert e.run() == 0
     assert e.kinds() == ["build", "review", "post", "fix"]
-    assert e.status()["status"] == "built"
+    head = e.head()
+    assert e.tries()[1].started["head_sha"] == head
+    st = e.status()
+    assert st["status"] == "parked"
+    assert st["reason"] == (f"the fixer ended ({end}) and left {head[:12]} with 1 blocker(s): "
+                            + "; ".join(e.tries()[1].result["blocking"]))
+    assert e.status("b")["status"] == "skipped"
     assert e.run() == 0
     assert e.kinds() == ["build", "review", "post", "fix"]
+    assert len(e.fakes.post_launches()) == 1 and len(e.fakes.fix_launches()) == 1
+    assert e.status()["status"] == "parked" and e.status()["reason"] == st["reason"]
+    assert len([x for x in e.fakes.review_launches() if str(N) in x["argv"]]) == 1
 
 
 def test_a_fix_is_a_launch_the_epic_budget_stops(tmp_path, monkeypatch, capsys):
@@ -353,7 +368,7 @@ def test_a_fixer_stopped_alone_by_sigterm_or_sighup_is_relaunched(tmp_path, monk
 
     def tick(coord):
         if not sent and e.fakes.fix_launches():
-            pid = coordinator.fix_pid("e-a", e.worktree)
+            pid = coordinator.fix_pid(N, e.project)
             if pid:
                 os.kill(pid, sig)
                 sent.append(pid)
@@ -429,6 +444,117 @@ def test_a_post_killed_by_a_signal_is_posted_again_by_the_next_run(tmp_path, mon
     assert e.run() == 0
     assert len(e.fakes.post_launches()) == 2 and len(e.fakes.fix_launches()) == 1
     assert e.status()["status"] == "built"
+
+
+@pytest.mark.parametrize("code", [128 + signal.SIGKILL, 128 + signal.SIGTERM, 128 + signal.SIGHUP],
+                         ids=["137", "143", "129"])
+def test_a_post_that_uv_reports_stopped_by_a_signal_is_posted_again_by_the_next_run(tmp_path, monkeypatch, code):
+    """D2.S12: the post runs under `uv run`, which reports a child killed by a
+    signal as 128 + signal, not as a negative code. That is a stop, not a
+    failure: the result is `interrupted`, the child stays `built`, and the
+    next run posts again and runs the fixer."""
+    e = Epic(tmp_path, monkeypatch, reviews={**BLOCKED, "post": [{"exit": code}, {}]},
+             fixes={str(N): [{"rounds": [{}]}]})
+    assert e.run() == 0
+    [post] = [a for a in e.tries() if a.kind == "post"]
+    assert (post.result["exit_code"], post.result["interrupted"], post.result.get("parked")) == (code, True, None)
+    assert e.status()["status"] == "built" and e.fakes.fix_launches() == []
+    assert e.run() == 0
+    assert len(e.fakes.post_launches()) == 2 and len(e.fakes.fix_launches()) == 1
+    assert e.status()["status"] == "built"
+
+
+@pytest.mark.parametrize("step", [{"die": True}, {"exit": 128 + signal.SIGKILL}, {"exit": 128 + signal.SIGTERM}],
+                         ids=["killed", "137", "143"])
+def test_a_review_stopped_by_a_signal_is_not_parked_and_the_next_run_reviews_again(tmp_path, monkeypatch, step):
+    """C.S3 with the coordinator alive, the same rule as the post's: a review
+    killed by a signal (negative, or 128 + signal as `uv run` reports it) gets
+    an `interrupted` result and the child stays `built`; the next run asks the
+    review again, which resumes a killed run (exit 4 with the hint)."""
+    e = Epic(tmp_path, monkeypatch, reviews={str(N): [step, {}]})
+    assert e.run() == 0
+    [rv] = [a for a in e.tries() if a.kind == "review"]
+    assert rv.result["interrupted"] is True and rv.result.get("parked") is None
+    assert e.status()["status"] == "built"
+    assert e.run() == 0
+    want = ["review", "review", "resume"] if step.get("die") else ["review", "review"]
+    assert [a.kind for a in e.tries() if a.kind in ("review", "resume")] == want
+    assert e.status()["status"] == "built" and not e.status().get("reason")
+
+
+def _hand_fixer(pr: int, *extra: str) -> subprocess.Popen:
+    """A process whose command line reads as `findings` started by hand, as
+    buildme-findings' SKILL.md shows it: no `--change`."""
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "-m", "build_pipeline",
+                             "findings", *extra])
+
+
+def _git_init(path: Path) -> Path:
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                    "--allow-empty", "-m", "init"], check=True)
+    return path
+
+
+def test_fix_pid_sees_a_findings_started_by_hand_on_the_same_pr_and_repo(tmp_path):
+    """D2.S9: a `findings` on the PR counts without `--change`, and with a
+    `--project-dir` naming the source repo or another worktree of it; one on
+    the same PR number of another repo does not."""
+    from build_pipeline.epic import coordinator
+
+    repo, other = _git_init(tmp_path / "repo"), _git_init(tmp_path / "other")
+    tree = tmp_path / "tree"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "x", str(tree)], check=True)
+    procs = []
+    try:
+        procs.append(_hand_fixer(4321, "--pr", "4321", "--project-dir", str(tree)))
+        for _ in range(250):
+            if coordinator.fix_pid(4321, repo):
+                break
+            time.sleep(0.02)
+        assert coordinator.fix_pid(4321, repo) == procs[0].pid
+        assert coordinator.fix_pid(4321, other) is None
+        assert coordinator.fix_pid(432, repo) is None
+        procs.append(_hand_fixer(4321, "--pr=4321"))          # no --project-dir: it may be any repo
+        for _ in range(250):
+            if coordinator.fix_pid(4321, other):
+                break
+            time.sleep(0.02)
+        assert coordinator.fix_pid(4321, other) == procs[1].pid
+    finally:
+        for p in procs:
+            p.kill()
+            p.wait()
+
+
+def test_a_fixer_started_by_hand_on_the_pr_is_waited_for(tmp_path, monkeypatch):
+    """D2.S9: `findings --pr <n> --project-dir <repo>` started by hand (no
+    `--change`) runs on the child's worktree too; the coordinator launches no
+    second fixer while it lives, then runs its own."""
+    from build_pipeline.epic import coordinator
+
+    e = Epic(tmp_path, monkeypatch, fixes={str(N): [{"rounds": [{}]}]})
+    hand = _hand_fixer(N, "--pr", str(N), "--project-dir", str(e.project))
+    looks = []
+
+    def tick(coord):
+        posted = [a for a in e.tries() if a.kind == "post" and a.result is not None]
+        if posted and hand.poll() is None:
+            looks.append(1)
+            assert e.fakes.fix_launches() == []                # never a second fixer
+            if len(looks) == 5:
+                hand.terminate()
+                hand.wait()
+
+    monkeypatch.setattr(coordinator, "_tick", tick)
+    try:
+        assert e.run() == 0
+    finally:
+        hand.kill()
+        hand.wait()
+    assert len(looks) == 5
+    assert len(e.fakes.fix_launches()) == 1 and e.status()["status"] == "built"
 
 
 def test_a_decisions_file_that_cannot_be_written_parks_the_child(tmp_path, monkeypatch):
