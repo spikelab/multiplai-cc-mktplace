@@ -1097,6 +1097,30 @@ def test_resume_of_a_new_layout_folder_writes_rollups_to_out_and_reads_its_revie
     assert state.run_config["stages"]["verify"]["model"] == "claude-resume"
 
 
+def test_assess_only_reads_the_review_yaml_of_the_out_the_review_used(tmp_path, monkeypatch, capsys):
+    """Done means 7, for `assess-only`: `<out>/review.yaml` for a new-layout folder and for a
+    0.46 folder, never `<out>/<repo>/review.yaml`."""
+    from review_pipeline import orchestrator
+    out = tmp_path / "out"
+    remote = "https://github.com/spikelab/github-tests.git"
+    new = _layout_review(out / "github-tests" / "pr-7", "spikelab-github-tests--pr-7", remote)
+    flat = _layout_review(out / "spikelab-github-tests--pr-2", "spikelab-github-tests--pr-2", remote)
+    for folder in (new, flat):
+        _decide(folder, "1000000001", decision="accept")
+    (out / "review.yaml").write_text("verifier_model: claude-out\n")
+    (out / "github-tests" / "review.yaml").write_text("verifier_model: claude-repo-folder\n")
+    seen = {}
+
+    async def assess_only(target_dir, config):
+        seen[target_dir] = config.verifier_model
+        return orchestrator.AssessOnly(target_dir=target_dir, cost_usd=0.0, rows=[])
+
+    monkeypatch.setattr(orchestrator, "assess_only", assess_only)
+    report = tmp_path / "report.md"
+    assert main(["assess-only", str(new), str(flat), "--report", str(report), "--trust-repo"]) == 0
+    assert seen == {new: "claude-out", flat: "claude-out"}
+
+
 def test_history_finds_a_042_folder_nested_under_a_repo_called_tree(tmp_path):
     """Done means 9 (history): `tree` is a repo here, not a snapshot to skip."""
     out = tmp_path / "out"
