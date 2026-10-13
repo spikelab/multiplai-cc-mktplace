@@ -17,6 +17,39 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-10-13
+
+### Changed
+- `/multiplai-dev:review` writes each review to `<out>/<repo>/<object>/`:
+  a review of PR 283 of `spikelab/multiplai-cc-mktplace` lands in
+  `reviews/multiplai-cc-mktplace/pr-283/`. The object says what was
+  reviewed: `pr-<n>`, `branch-<name>`, `range-<base>..<head>`, `tree`,
+  `tree-<path>`, or `dir-<name>-<hash>` for `--dir` (under `<name>/`).
+- A fork's PR and its upstream's PR with the same number never share a
+  directory: the second goes to `<repo>@<owner>/`. Two branches whose
+  names clean to the same text (`feat/x`, `feat_x`) get two directories.
+  A run going on in the other one does not stop the second from starting;
+  a second run of the same target still exits 2.
+- The run lock is `<out>/<repo>/.locks/<object>.lock`.
+- Nothing already on disk moves. Directories written by 0.46 (named
+  `<owner>-<repo>--<target>`), reviews a 0.42 run nested inside a new
+  directory, and `reviews/legacy/` stay where they are, are never written
+  to, and are read as earlier rounds with their decisions. A 0.46 run of
+  the same target left unfinished still stops a plain review with exit 4
+  and names its directory, until the new directory has a run of its own.
+- `findings.json`, the ledger and the file names keep the slug
+  `<owner>-<repo>--<target>`. `resume` and `assess-only` read `review.yaml`
+  and write the rollups in the same `<out>` as the review, in either
+  layout.
+- review-viewer finds reviews in the new layout, the 0.46 one and 0.42
+  folders nested in a new one.
+- The `HIGH-only.md`, `MEDIUM-only.md` and `LOW-only.md` rollups list the
+  new layout and the 0.46 one. A target reviewed in both is listed once,
+  with the findings of its new directory; `runs.jsonl` keeps a line for
+  every run in both. Rollups written in a review directory that a 0.42 run
+  used as `--out` list the 0.42 review nested in it, never that
+  directory's own earlier rounds or snapshots.
+
 ## [0.47.0] - 2026-10-13
 
 ### Changed

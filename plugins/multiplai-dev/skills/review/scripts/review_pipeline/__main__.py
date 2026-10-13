@@ -133,21 +133,21 @@ def build_parser() -> argparse.ArgumentParser:
     _mode_flag(bt)
 
     ru = sub.add_parser("rollup", parents=[common], help="Regenerate HIGH/MEDIUM/LOW-only.md and runs.jsonl from findings.json files")
-    ru.add_argument("paths", nargs="*", help="findings.json files in order (default: <out>/*/findings.json)")
+    ru.add_argument("paths", nargs="*", help="findings.json files in order (default: every review's latest one under <out>)")
 
-    rs = sub.add_parser("resume", parents=[common], help="Continue a review from <out>/<slug>/review-state.json")
-    rs.add_argument("target_dir", help="The review's directory, <out>/<slug>")
+    rs = sub.add_parser("resume", parents=[common], help="Continue a review from <out>/<repo>/<object>/review-state.json")
+    rs.add_argument("target_dir", help="The review's directory, <out>/<repo>/<object>")
     _trust_flag(rs)
     _budget_flag(rs)
 
     po = sub.add_parser("post", parents=[common],
                         help="Post the accepted findings as one PR review, one inline comment each")
-    po.add_argument("target_dir", help="The review's directory, <out>/<slug>")
+    po.add_argument("target_dir", help="The review's directory, <out>/<repo>/<object>")
     po.add_argument("--decisions", help="The viewer's decisions.json; only accepted findings are posted")
 
     ao = sub.add_parser("assess-only", parents=[common],
                         help="Run repeats and assess on saved reviews; report labels beside recorded decisions")
-    ao.add_argument("target_dirs", nargs="+", help="Review directories, <out>/<slug>; those without "
+    ao.add_argument("target_dirs", nargs="+", help="Review directories, <out>/<repo>/<object>; those without "
                                                    "viewer/decisions.json are skipped")
     ao.add_argument("--report", required=True, help="Markdown report to write")
     _trust_flag(ao)
@@ -179,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "trust_repo", False):
         os.environ["REVIEW_TRUST_REPO"] = "1"
 
-    from . import orchestrator, render, sdk, target
+    from . import orchestrator, render, rounds, sdk, target
     from .config import load_config
     from .post import PostError, post
     from .stages.verify import VerifyIncomplete
@@ -268,10 +268,11 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "resume":
             target_dir = Path(args.target_dir).expanduser().resolve()
-            path = asyncio.run(orchestrator.resume(target_dir, load_config(target_dir.parent, max_cost_usd=max_cost),
+            root = rounds.out_root(target_dir)
+            path = asyncio.run(orchestrator.resume(target_dir, load_config(root, max_cost_usd=max_cost),
                                                    session_id=args.session_id))
-            render.write_rollups(target_dir.parent)
-            render.write_runs(target_dir.parent)
+            render.write_rollups(root)
+            render.write_runs(root)
             print(f"findings: {path}")
             print(f"checks: {path.parent / 'checks.json'}")
             return 0
@@ -285,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 try:
                     result = asyncio.run(orchestrator.assess_only(
-                        target_dir, load_config(target_dir.parent, max_cost_usd=max_cost)))
+                        target_dir, load_config(rounds.out_root(target_dir), max_cost_usd=max_cost)))
                 except sdk.RepoTrustError:
                     raise
                 except orchestrator.budget.BudgetExceededError as e:
@@ -328,12 +329,12 @@ def main(argv: list[str] | None = None) -> int:
         print(TRUST_MESSAGE, file=sys.stderr)
         return 3
     except orchestrator.budget.BudgetExceededError as e:
-        print(f"STOPPED: {e}\n{e.diagnosis}\nResume with: python -m review_pipeline resume <out>/<slug> "
+        print(f"STOPPED: {e}\n{e.diagnosis}\nResume with: python -m review_pipeline resume <out>/<repo>/<object> "
               f"--max-cost-usd <higher>", file=sys.stderr)
         return 4
     except VerifyIncomplete as e:
         print(f"STOPPED: {e}\nThe other verdicts are kept. Retry only these findings with: "
-              f"python -m review_pipeline resume <out>/<slug> --trust-repo", file=sys.stderr)
+              f"python -m review_pipeline resume <out>/<repo>/<object> --trust-repo", file=sys.stderr)
         return 5
     except sdk.AgentCallError as e:
         log.error("review failed: %s", e, exc_info=True)

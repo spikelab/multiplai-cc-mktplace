@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 from conftest import REAL_BRANCH_RULES
@@ -184,3 +185,82 @@ def test_deployed_in(target_info, fixture_repo):
     assert target.deployed(target_info.model_copy(update={"deployed_in": "main"})) == "no"
     assert target.deployed(target_info.model_copy(update={"deployed_in": "gone"})).startswith("unknown")
     assert target.deployed(target_info) is None
+
+
+# --- folder names: <out>/<repo>/<object>/ -------------------------------------------
+
+
+def _resolved(kind: str, ref: str, pr: int | None = None, path: str = "") -> target.Resolved:
+    return target.Resolved(repo=Path("/x"), kind=kind, ref=ref, base_sha=None, head_sha=None, pr=pr,
+                           path=path)
+
+
+@pytest.mark.parametrize(("resolved", "name"), [
+    (_resolved("pr", "7", pr=7), "pr-7"),
+    (_resolved("branch", "feat/x"), "branch-feat_x"),
+    (_resolved("branch", "main"), "branch-main"),
+    (_resolved("range", "a..b"), "range-a..b"),
+    (_resolved("tree", "."), "tree"),
+    (_resolved("tree", "src", path="src"), "tree-src"),
+    (_resolved("tree", "src/a b", path="src/a b"), "tree-src_a_b"),
+], ids=["pr", "branch-slash", "branch", "range", "whole-tree", "tree-path", "tree-path-cleaned"])
+def test_object_name_says_what_kind_of_thing_was_reviewed(resolved, name):
+    assert target.object_name(resolved) == name
+
+
+@pytest.mark.parametrize(("url", "pair"), [
+    ("https://github.com/spikelab/github-tests.git", ("spikelab", "github-tests")),
+    ("git@github.com:spikelab/github-tests.git", ("spikelab", "github-tests")),
+    ("ssh://git@github.com/spikelab/github-tests", ("spikelab", "github-tests")),
+    ("github-tests", None),
+    ("", None),
+    (None, None),
+])
+def test_origin_owner_repo_and_origin_name_agree(url, pair):
+    assert target.origin_owner_repo(url) == pair
+    assert target.origin_name(url) == ("-".join(pair) if pair else None)
+
+
+@pytest.mark.parametrize(("name", "owner", "part"), [
+    ("github-tests", "spikelab", "github-tests"),
+    ("legacy", "spikelab", "legacy@spikelab"),
+    (".locks", "spikelab", ".locks@spikelab"),
+    ("legacy", None, "legacy@local"),
+    ("my repo", None, "my_repo"),
+])
+def test_repo_part_renames_the_two_names_the_review_root_uses(name, owner, part):
+    assert target.repo_part(name, owner) == part
+
+
+def test_checkout_repo_part_reads_origin_else_the_directory_name(fixture_repo, tmp_path):
+    repo, _, _ = fixture_repo
+    assert target.checkout_repo_part(repo) == ("booking-engine", "example")
+    bare = tmp_path / "legacy"
+    bare.mkdir()
+    subprocess.run(["git", "init", "-q", str(bare)], check=True)
+    assert target.checkout_repo_part(bare) == ("legacy@local", None)
+
+
+def test_dir_object_names_the_directory_and_its_path_hash(tmp_path):
+    src = tmp_path / "proj"
+    repo, obj = target.dir_object(src)
+    assert repo == "proj"
+    assert obj == f"dir-{target.dir_name(src)}"
+    assert obj.startswith("dir-proj-") and len(obj) == len("dir-proj-") + 6
+    repo, obj = target.dir_object(tmp_path / "legacy")
+    assert repo == "legacy@local" and obj.startswith("dir-legacy-")
+
+
+def test_is_review_folder_needs_a_file_the_pipeline_writes(tmp_path):
+    d = tmp_path / "d"
+    d.mkdir()
+    assert not target.is_review_folder(d)
+    (d / ".DS_Store").write_text("x")
+    (d / "rounds").mkdir()
+    assert not target.is_review_folder(d)
+    for name in ("findings.json", "review-state.json", "files.txt"):
+        f = d / name
+        f.write_text("{}")
+        assert target.is_review_folder(d)
+        f.unlink()
+    assert not target.is_review_folder(tmp_path / "missing")

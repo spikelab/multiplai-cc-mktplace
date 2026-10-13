@@ -584,6 +584,56 @@ def slug_repo_name(repo: Path) -> str:
     return origin_name(remote_url(repo)) or repo.name
 
 
+# Same rules as `review_pipeline.target.REVIEW_FILES`, `NOT_OBJECT_NAMES` and
+# `TAKEN_REPO_NAMES`: where a review folder can be under a reviews directory.
+REVIEW_FILES = ("findings.json", "review-state.json", "files.txt")
+NOT_OBJECT_NAMES = frozenset({"rounds", "viewer", "base-tree", "assess-tree", "source", ".git", ".locks"})
+TAKEN_REPO_NAMES = frozenset({"legacy", ".locks"})
+# Never a review an older version nested inside a review folder: the folder's own
+# rounds, viewer state and snapshots.
+NOT_NESTED_NAMES = NOT_OBJECT_NAMES | {"tree"}
+
+
+def is_review_folder(path: Path) -> bool:
+    """Same rule as `review_pipeline.target.is_review_folder`: *path* holds a file
+    only a review writes. A dot file such as `.DS_Store` never counts."""
+    return any((path / name).is_file() for name in REVIEW_FILES)
+
+
+def review_findings(root: Path) -> list[Path]:
+    """Every review's latest `findings.json` under the reviews directory *root*.
+
+    Same rule as `review_pipeline.target.object_folders`, plus the two older
+    layouts: `<root>/<slug>/` (multiplai-dev 0.46), `<root>/<repo>/<object>/`
+    (now), and `<root>/<repo>/<object>/<slug>/` (0.42, run with `--out` set to
+    a new-layout folder). Where a name sits decides what it is: a repo may be
+    called `tree` or `rounds`, and the whole-tree object is `tree`. When *root*
+    is itself a review folder, its own rounds, viewer state and snapshots
+    (`NOT_NESTED_NAMES`) are not searched (`review_pipeline.target.review_children`).
+    """
+    found: list[Path] = []
+    if not root.is_dir():
+        return found
+    own = is_review_folder(root)
+    for first in sorted(root.iterdir()):
+        if (not first.is_dir() or first.name in TAKEN_REPO_NAMES or first.name.startswith(".partial-")
+                or (own and first.name in NOT_NESTED_NAMES)):
+            continue
+        if (first / "findings.json").is_file():
+            found.append(first / "findings.json")
+        if is_review_folder(first):
+            continue
+        for obj in sorted(first.iterdir()):
+            if not obj.is_dir() or obj.name in NOT_OBJECT_NAMES or obj.name.startswith(".partial-"):
+                continue
+            if (obj / "findings.json").is_file():
+                found.append(obj / "findings.json")
+            found.extend(nested / "findings.json" for nested in sorted(obj.iterdir())
+                         if nested.is_dir() and nested.name not in NOT_NESTED_NAMES
+                         and not nested.name.startswith(".") and (nested / "findings.json").is_file())
+    return found
+
+
 def legacy_slug(target: Target) -> str | None:
     """The slug a review written before multiplai-dev 0.46 gave *target*: the
     checkout's directory name where `slug_repo_name()` now puts

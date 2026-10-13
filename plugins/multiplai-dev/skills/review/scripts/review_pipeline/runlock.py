@@ -4,7 +4,8 @@ The ledger cannot tell a review that is still running from one that was
 killed: both leave a `started` line with nothing after it. So every run that
 writes a target directory (`review`, `resume`, each target of a batch,
 `--plan-only`) first takes an exclusive `flock` on
-`<out>/.locks/<slug>.lock` and holds it until the run ends. The kernel drops
+`<out>/<repo>/.locks/<object>.lock` (beside the target directory
+`<out>/<repo>/<object>/`) and holds it until the run ends. The kernel drops
 the lock when the process dies, however it dies, so a held lock means a
 process is running that target now, and a free one means none is. The lock
 file holds the holder's pid, host and start time, for the message only.

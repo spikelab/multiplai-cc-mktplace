@@ -234,3 +234,61 @@ def test_serve_prints_the_walkthrough_line_last(env, fixture_repo, tmp_path):
         finally:
             if proc.poll() is None:
                 proc.kill()
+
+
+# --- where reviews are: <dir>/<repo>/<object>/, 0.46's <dir>/<slug>/, and 0.42's nested folders ---
+
+
+def _target(findings_path):
+    from review_viewer.models import load_findings
+    return load_findings(findings_path).target
+
+
+@pytest.mark.parametrize("name", [
+    "acme-fixture--pr-7",                       # 0.46: <dir>/<slug>/
+    "fixture/pr-7",                             # new: <dir>/<repo>/<object>/
+    "fixture/pr-7/checkout--pr-7",              # 0.42 nested under a new-layout folder
+    "fixture/tree",                             # a whole-tree review
+    "tree/pr-7", "source/pr-7", "viewer/pr-7", "rounds/pr-7",  # repos named like a snapshot
+], ids=["046", "new", "042-nested", "whole-tree", "repo-tree", "repo-source", "repo-viewer", "repo-rounds"])
+def test_find_review_finds_a_review_in_each_layout(findings_path, tmp_path, name):
+    reviews = tmp_path / "reviews"
+    path = _review(reviews, findings_path, name=name)
+    (reviews / name.split("/")[0]).joinpath(".DS_Store").write_text("finder")
+    (reviews / ".DS_Store").write_text("finder")
+    assert find_review(_target(findings_path), [reviews])[:2] == ("match", path)
+
+
+@pytest.mark.parametrize("name", [
+    "legacy/x--pr-7",                           # migrate's copies are read as deep_dirs, not here
+    "fixture/rounds",                           # never an object
+    "fixture/pr-7/rounds/01-aaaaaaaaaaaa",      # a kept round
+    "fixture/pr-7/viewer/x",
+    "fixture/pr-7/tree/x",                      # a snapshot inside a review folder
+    "acme-fixture--pr-7/sub",                   # under a 0.46 review folder
+    "fixture/pr-7/checkout--pr-7/deeper",
+], ids=["legacy", "rounds-object", "kept-round", "viewer", "snapshot", "under-046", "too-deep"])
+def test_find_review_never_reads_a_round_snapshot_or_copy_as_the_review(findings_path, tmp_path, name):
+    reviews = tmp_path / "reviews"
+    (reviews / "acme-fixture--pr-7").mkdir(parents=True)
+    (reviews / "acme-fixture--pr-7" / "files.txt").write_text("")
+    _review(reviews, findings_path, name=name)
+    assert find_review(_target(findings_path), [reviews])[0] == "none"
+
+
+@pytest.mark.parametrize("name", [
+    "rounds/01-aaaaaaaaaaaa",                   # the folder's own kept round
+    "tree", "source", "base-tree",              # its snapshots, which may hold a findings.json
+    "viewer/x",
+], ids=["kept-round", "tree", "source", "base-tree", "viewer"])
+def test_find_review_in_a_review_folder_given_as_the_dir_reads_only_the_042_review_nested_in_it(
+        findings_path, tmp_path, name):
+    """`--reviews-dir` set to a new-layout folder a 0.42 run used as `--out`: the 0.42 review
+    nested in it is found, the folder's own rounds and snapshots never are."""
+    folder = tmp_path / "reviews" / "fixture" / "pr-7"
+    folder.mkdir(parents=True)
+    (folder / "files.txt").write_text("")
+    _review(folder, findings_path, name=name)
+    assert find_review(_target(findings_path), [folder])[0] == "none"
+    nested = _review(folder, findings_path, name="checkout--pr-7")
+    assert find_review(_target(findings_path), [folder])[:2] == ("match", nested)

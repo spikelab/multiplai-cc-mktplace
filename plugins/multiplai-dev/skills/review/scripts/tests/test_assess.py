@@ -546,7 +546,7 @@ def test_a_finding_rejected_in_round_one_comes_back_reworded_and_is_labelled_rep
     args = ["--out", str(out), "review", "--repo", str(repo), "--branch", "feature", "--base-branch", "main",
             "--trust-repo"]
     assert main(args) == 0
-    target_dir = out / "weather--feature"
+    target_dir = out / "weather" / "branch-feature"
     round_one_head = json.loads((target_dir / "findings.json").read_text())["target"]["head_sha"]
     decide(target_dir, **{first.id: ("reject", "negative levels are the sensor's idle state")})
 
@@ -634,7 +634,7 @@ def test_assess_only_labels_a_saved_review_and_changes_nothing_in_it(tmp_path, m
                                                       AssessItem(id=noise.id, label="useful")])
     answers["assess"], saved = answers_during_review, answers["assess"]
     assert main(["--out", str(out), "review", "--repo", str(repo), "--range", f"{base}..{head}", "--trust-repo"]) == 0
-    target_dir = next(out.glob("weather--*"))
+    target_dir = next(out.glob("weather/range-*"))
     decide(target_dir, **{kept.id: ("accept", ""), noise.id: ("reject", "never")})
     before = {p.name: p.read_bytes() for p in target_dir.iterdir() if p.is_file()}
     answers["assess"] = saved

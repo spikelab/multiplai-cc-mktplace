@@ -101,12 +101,12 @@ def github_web_base(url: str | None) -> str | None:
     return f"https://github.com/{m.group(1)}/{m.group(2)}" if m else None
 
 
-def origin_name(url: str | None) -> str | None:
-    """`<owner>-<repo>` from a remote URL (the last two path parts, `.git` dropped), else None.
+def origin_owner_repo(url: str | None) -> tuple[str, str] | None:
+    """`(owner, repo)` from a remote URL (the last two path parts, `.git` dropped), else None.
 
     `https://github.com/spikelab/github-tests.git`,
     `git@github.com:spikelab/github-tests.git` and the `ssh://` form all give
-    `spikelab-github-tests`.
+    `("spikelab", "github-tests")`.
     """
     if not url:
         return None
@@ -116,7 +116,13 @@ def origin_name(url: str | None) -> str | None:
     parts = [p for p in re.split(r"[/:]", path) if p]
     if len(parts) < 2:
         return None
-    return f"{parts[-2]}-{parts[-1]}"
+    return parts[-2], parts[-1]
+
+
+def origin_name(url: str | None) -> str | None:
+    """`<owner>-<repo>` from a remote URL (`origin_owner_repo`), else None: `spikelab-github-tests`."""
+    pair = origin_owner_repo(url)
+    return "-".join(pair) if pair else None
 
 
 def slug_repo_name(repo: Path) -> str:
@@ -494,6 +500,97 @@ def dir_name(src: Path) -> str:
     review never replaces the other's `source/` repository.
     """
     return f"{src.name}-{hashlib.sha256(str(src).encode()).hexdigest()[:6]}"
+
+
+# --- where a review is written: <out>/<repo>/<object>/ ------------------------------
+#
+# The slug (`build_target`) is unchanged and still names the review inside its
+# files; only the folder is built from these. `review_pipeline.orchestrator.prepare`
+# chooses the folder, and review-viewer's `gitdata` restates `REVIEW_FILES`,
+# `NOT_OBJECT_NAMES` and `NOT_NESTED_NAMES` (no import between the two packages).
+
+# The names the review root itself uses (`legacy/` for migrate's copies, `.locks/`
+# for run locks): a repository with one of them is renamed `<name>@<owner>`.
+TAKEN_REPO_NAMES = frozenset({"legacy", ".locks"})
+# A folder holding any of these is a review folder (`write_target_files` writes
+# `files.txt` on every run, before any stage).
+REVIEW_FILES = ("findings.json", "review-state.json", "files.txt")
+# Children of a repo folder that are never object folders. `tree` is not here: it
+# is the whole-tree object's name.
+NOT_OBJECT_NAMES = frozenset({"rounds", "viewer", "base-tree", "assess-tree", "source", ".git", ".locks"})
+# A review folder's own children that never hold another review: its rounds,
+# viewer state and snapshots.
+NOT_NESTED_NAMES = NOT_OBJECT_NAMES | {"tree"}
+
+
+def object_name(resolved: Resolved) -> str:
+    """The folder of one reviewed thing under its repo folder: `pr-<n>`, `branch-<ref>`,
+    `range-<a>..<b>`, `tree`, or `tree-<path>` for one directory."""
+    if resolved.kind == "pr":
+        return sanitize_slug(f"pr-{resolved.pr}")
+    if resolved.kind == "tree":
+        return sanitize_slug(f"tree-{resolved.path}") if resolved.path else "tree"
+    return sanitize_slug(f"{resolved.kind}-{resolved.ref}")
+
+
+def repo_part(name: str, owner: str | None) -> str:
+    """The repo folder's name: *name* cleaned, `@<owner>` (or `@local`) added when it is
+    `legacy` or `.locks`, the two names the review root already uses."""
+    part = sanitize_slug(name)
+    return f"{part}@{owner or 'local'}" if part in TAKEN_REPO_NAMES else part
+
+
+def checkout_repo_part(repo: Path) -> tuple[str, str | None]:
+    """`(repo folder name, owner)` from *repo*'s `origin`; with no origin (or one that
+    names no owner), the directory name and None."""
+    pair = origin_owner_repo(remote_url(repo))
+    if pair:
+        return repo_part(pair[1], pair[0]), pair[0]
+    return repo_part(Path(repo).name, None), None
+
+
+def dir_object(src: Path) -> tuple[str, str]:
+    """`(repo folder name, object name)` of a `--dir` review of *src*:
+    `(<basename>, dir-<basename>-<6 hex>)`. The hash of the absolute path keeps two
+    directories with one basename apart."""
+    return repo_part(src.name, None), "dir-" + sanitize_slug(dir_name(src))
+
+
+def is_review_folder(path: Path) -> bool:
+    """True when *path* holds a file only a review writes (`REVIEW_FILES`).
+    A dot file such as `.DS_Store` never makes a folder a review folder."""
+    return any((path / name).is_file() for name in REVIEW_FILES)
+
+
+def review_children(out_dir: Path) -> list[Path]:
+    """*out_dir*'s child folders that may hold a review, sorted. When *out_dir* is
+    itself a review folder (a new-layout folder a 0.42 run was given as `--out`),
+    its own `rounds/`, `viewer/` and snapshots (`NOT_NESTED_NAMES`) are left out."""
+    if not out_dir.is_dir():
+        return []
+    own = is_review_folder(out_dir)
+    return sorted(p for p in out_dir.iterdir() if p.is_dir() and not (own and p.name in NOT_NESTED_NAMES))
+
+
+def object_folders(out_dir: Path) -> list[Path]:
+    """Every `<out>/<repo>/<object>/` folder under *out_dir*, sorted.
+
+    Where a name sits decides what it is, not the name alone: a repo may be
+    called `tree` or `rounds`, and the whole-tree object is `tree`. The first
+    level skips `legacy/`, `.locks/` and partial copies, and any review folder
+    (a 0.46 `<out>/<its slug>/`), and, when *out_dir* is itself a review folder,
+    its own rounds, viewer state and snapshots (`review_children`). Under a repo
+    folder, every child folder is an object except the `NOT_OBJECT_NAMES` and
+    partial copies. A review an older version nested inside an object folder is
+    not listed.
+    """
+    found: list[Path] = []
+    for repo in review_children(out_dir):
+        if repo.name in TAKEN_REPO_NAMES or repo.name.startswith(".partial-") or is_review_folder(repo):
+            continue
+        found.extend(obj for obj in sorted(repo.iterdir())
+                     if obj.is_dir() and obj.name not in NOT_OBJECT_NAMES and not obj.name.startswith(".partial-"))
+    return found
 
 
 def _import_git(dest: Path, src: Path, *args: str) -> subprocess.CompletedProcess:
