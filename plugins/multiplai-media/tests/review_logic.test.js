@@ -641,6 +641,15 @@ test("sendBatches counts UTF-8 bytes, as the server does", () => {
   assert.deepEqual(L.sendBatches(rows, one + 120), [[0], [1]]);           // 100 chars, but 200 bytes
 });
 
+test("takesKeys: the player keys leave text, number, colour and checkbox fields alone", () => {
+  for (const type of ["text", "number", "color", "checkbox", undefined]) assert.equal(L.takesKeys("INPUT", type), true, type);
+  assert.equal(L.takesKeys("textarea"), true);
+  assert.equal(L.takesKeys("SELECT"), true);
+  for (const type of ["range", "button", "submit"]) assert.equal(L.takesKeys("INPUT", type), false, type);
+  assert.equal(L.takesKeys("VIDEO"), false);
+  assert.equal(L.takesKeys("BUTTON", "submit"), false);
+});
+
 // --- Review: the style panel ---------------------------------------------------------------------
 
 const STYLE_INFO = {

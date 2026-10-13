@@ -962,6 +962,16 @@
     return out;
   }
 
+  /* Whether a key pressed in an element with tag `tag` (and input `type`) is the element's
+   * own: text, number, colour and checkbox inputs, lists and text areas take Space and the
+   * arrows, so the Review tab's player keys leave them alone. The seek slider and buttons
+   * do not. */
+  function takesKeys(tag, type) {
+    const t = String(tag || "").toUpperCase();
+    if (t === "TEXTAREA" || t === "SELECT") return true;
+    return t === "INPUT" && !["range", "button", "submit", "reset"].includes(String(type || "text").toLowerCase());
+  }
+
   const api = {
     TABS, INPUT_FILES, fmt, inputNotice, isReels, latestBy, rowsOfKind, clipsOpen, speakersOpen, firstOpenTab,
     oneAtATime,
@@ -976,7 +986,7 @@
     DRAW_TOOLS, DRAW_COLOURS, MAX_SHAPES, MAX_PEN_POINTS, MAX_DRAWING_POINTS, MAX_MARK_BYTES, MAX_BODY_BYTES,
     isColour, toPictureFrac, simplifyStroke, finishShape, drawingRoom, strokeWidth, shapePaths, exportSize, drawingRow,
     LANES, MIN_RANGE_S, timelineLanes, blockBox, timeAtFrac, rangeFromDrag, blockRange, targetLabel, rangeRow,
-    reviewRow, canSendReview, reviewSent, sendBatches,
+    reviewRow, canSendReview, reviewSent, sendBatches, takesKeys,
     CAPTION_FIELDS, BRAND_FIELDS, isCssValue, styleField, styleGroups, checkField, groupChanges, styleRows,
     editedValues, regroupWords, captionAt, groupEdited, changeSummary, styleSent,
     RESTYLE_PROPS, MAX_SELECTOR, liveOverlays, overlayTime, regionBox, bridgeMessage, cssColourToHex,

@@ -712,8 +712,7 @@
     window.addEventListener("resize", () => { renderMarkers(); emit("resize"); });
     document.addEventListener("keydown", (ev) => {
       if (App.current() !== "review" || !state.clip) return;
-      if (ev.target instanceof HTMLTextAreaElement || ev.target instanceof HTMLSelectElement
-          || (ev.target instanceof HTMLInputElement && ev.target.type === "color")) return;
+      if (ev.target instanceof Element && L.takesKeys(ev.target.tagName, ev.target.type)) return;
       if (ev.key === " ") { ev.preventDefault(); video.paused ? video.play() : video.pause(); }
       if (ev.key === "ArrowLeft") video.currentTime = Math.max(0, video.currentTime - 1);
       if (ev.key === "ArrowRight") video.currentTime = Math.min(video.duration || 0, video.currentTime + 1);
