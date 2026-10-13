@@ -398,8 +398,8 @@ class TestFixOnPass:
         assert _unfixed(p) == ""
 
     @pytest.mark.asyncio
-    async def test_a_build_killed_after_the_fix_agent_rolls_back_and_reruns_the_pass(
-        self, project,
+    async def test_row_F2_a_pass_stopped_at_review_rolls_back_and_reruns(
+        self, project, tmp_path,
     ):
         """Dies after the fix agent and before the second review. The resume
         throws the half-applied fix away and runs the pass again."""
@@ -451,6 +451,12 @@ class TestFixOnPass:
         # The dead attempt's report is kept next to the one that finished.
         assert rounds[1]["earlier_fixes"][0]["report"] == "fixed"
 
+        clean = _make_project(tmp_path / "unstopped")
+        clean_code = await _run_unstopped(clean, fixer=_fixer(
+            clean.dir, {"app.py": FIXED}, "fixed\nSEARCHED:\n- add(): both branches\n"))
+        assert clean_code == code
+        assert_same_as_unstopped(p.root, clean.root)
+
     @staticmethod
     async def _kill_after_fix_agent(p):
         """Run the pass and die before the second review, leaving the fix
@@ -477,7 +483,10 @@ class TestFixOnPass:
             code = await run_tdd_engine(p.config, SimpleNamespace(block=None), standalone=False)
         return code, fix
 
-    def _assert_refused(self, p, code, fix, head):
+    def _assert_refused(self, p, code, fix, head, before):
+        """The resume refused: nothing ran, the block waits for the next
+        resume, and the repo is exactly as it was (`before`, a `repo_state`)."""
+        assert repo_state(p.root) == before
         assert code == EXIT_BUILD_FAILURE
         fix.assert_not_awaited()
         assert _git(p.dir, "rev-parse", "HEAD") == head  # nothing was reset
@@ -487,15 +496,16 @@ class TestFixOnPass:
         assert "Did not resume the fix on pass" in p.config.progress_file_path().read_text()
 
     @pytest.mark.asyncio
-    async def test_a_resume_refuses_a_file_the_user_added_after_the_stop(self, project):
+    async def test_row_F2_a_file_the_user_added_after_the_stop_is_refused(self, project):
         p = project
         await self._kill_after_fix_agent(p)
         head = _git(p.dir, "rev-parse", "HEAD")
         (p.dir / "mine.py").write_text("the user's work\n")
+        before = repo_state(p.root)
 
         code, fix = await self._resume(p)
 
-        self._assert_refused(p, code, fix, head)
+        self._assert_refused(p, code, fix, head, before)
         assert (p.dir / "mine.py").read_text() == "the user's work\n"
         assert (p.dir / "app.py").read_text() == "half-applied\n"
 
@@ -507,32 +517,34 @@ class TestFixOnPass:
         assert (p.dir / "app.py").read_text() == FIXED
 
     @pytest.mark.asyncio
-    async def test_a_resume_refuses_an_edit_to_a_file_the_fix_agent_left(self, project):
+    async def test_row_F2_an_edit_to_a_file_the_fix_agent_left_is_refused(self, project):
         p = project
         await self._kill_after_fix_agent(p)
         head = _git(p.dir, "rev-parse", "HEAD")
         (p.dir / "app.py").write_text("half-applied\n# and the user's line\n")
+        before = repo_state(p.root)
 
         code, fix = await self._resume(p)
 
-        self._assert_refused(p, code, fix, head)
+        self._assert_refused(p, code, fix, head, before)
         assert (p.dir / "app.py").read_text() == "half-applied\n# and the user's line\n"
 
     @pytest.mark.asyncio
-    async def test_a_resume_refuses_a_commit_added_after_the_stop(self, project):
+    async def test_row_F2_a_commit_added_after_the_stop_is_refused(self, project):
         p = project
         await self._kill_after_fix_agent(p)
         (p.dir / "app.py").write_text("the user's commit\n")
         _git(p.dir, "commit", "-qam", "user")
         head = _git(p.dir, "rev-parse", "HEAD")
+        before = repo_state(p.root)
 
         code, fix = await self._resume(p)
 
-        self._assert_refused(p, code, fix, head)
+        self._assert_refused(p, code, fix, head, before)
         assert (p.dir / "app.py").read_text() == "the user's commit\n"
 
     @pytest.mark.asyncio
-    async def test_a_resume_refuses_edits_left_by_a_fix_agent_killed_mid_edit(self, project):
+    async def test_row_F1_edits_left_by_a_fix_agent_killed_mid_edit_are_refused(self, project):
         """Killed while the fix agent ran: no record says which edits are
         the agent's, so none of them is discarded."""
         p = project
@@ -549,10 +561,11 @@ class TestFixOnPass:
             await _run_integration_and_review(p.block, p.config, p.state, p.progress)
         assert BuildState.load(p.config.state_file_path()).tdd.blocks[0].fix_pass.step == "fix_agent"
         head = _git(p.dir, "rev-parse", "HEAD")
+        before = repo_state(p.root)
 
         code, fix = await self._resume(p)
 
-        self._assert_refused(p, code, fix, head)
+        self._assert_refused(p, code, fix, head, before)
         assert (p.dir / "app.py").read_text() == "half-applied\n"
 
 
@@ -580,10 +593,11 @@ def _edit_outside(root: Path, staged: bool) -> None:
         _git(root, "add", OUTSIDE)
 
 
-async def _run_unstopped(p) -> int:
+async def _run_unstopped(p, fixer=None) -> int:
     """The block with one accepted finding, its fix on pass kept, and the
     engine run to the end, never stopped."""
-    stack, _, _ = _engine([_passing([_finding()]), _passing()], _fixer(p.dir, {"app.py": FIXED}))
+    stack, _, _ = _engine([_passing([_finding()]), _passing()],
+                          fixer or _fixer(p.dir, {"app.py": FIXED}))
     with stack:
         assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
     code, _ = await TestFixOnPass._resume(p)
@@ -628,6 +642,64 @@ class TestFixOnPassRows:
         assert (OUTSIDE in _git(p.root, "diff", "--cached", "--name-only").split()) is staged
         assert_same_as_unstopped(p.root, clean.root)
 
+
+    @pytest.mark.asyncio
+    async def test_row_F1_a_clean_stop_at_the_fix_agent_ends_as_an_unstopped_run(
+            self, project, tmp_path):
+        clean = _make_project(tmp_path / "unstopped")
+        clean_code = await _run_unstopped(clean)
+
+        p = project
+        await _stop_at(p, "fix_agent")
+        code, fix = await TestFixOnPass._resume(p, [_passing()])
+
+        assert code == clean_code == EXIT_SUCCESS
+        assert fix.await_count == 1
+        assert_same_as_unstopped(p.root, clean.root)
+
+    @staticmethod
+    def _killed_at_the_pass_tests(p):
+        """Patch `integration_gate` so its call inside the fix on pass (the
+        second: the first is the block's own gate, before the pass) raises
+        Killed, as a kill while the suite runs would."""
+        from build_pipeline import tdd_engine
+        real, calls = tdd_engine.integration_gate, []
+
+        def gate(*a, **k):
+            calls.append(a)
+            if len(calls) == 2:
+                raise Killed()
+            return real(*a, **k)
+
+        return patch("build_pipeline.tdd_engine.integration_gate", side_effect=gate)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("first_stop", ["review", "tests"])
+    async def test_row_F4_a_pass_stopped_twice_ends_as_an_unstopped_run(
+            self, project, tmp_path, first_stop):
+        clean = _make_project(tmp_path / "unstopped")
+        clean_code = await _run_unstopped(clean)
+
+        p = project
+        if first_stop == "review":
+            await TestFixOnPass._kill_after_fix_agent(p)
+        else:
+            stack, _, _ = _engine([_passing([_finding()])], _fixer(p.dir, {"app.py": "first try\n"}))
+            with stack, self._killed_at_the_pass_tests(p), pytest.raises(Killed):
+                await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+        assert BuildState.load(p.config.state_file_path()).tdd.blocks[0].fix_pass.step == first_stop
+
+        # The rerun pass stops at `review` again, with different bytes from its fix agent.
+        with pytest.raises(Killed):
+            await TestFixOnPass._resume(p, [Killed()], _fixer(p.dir, {"app.py": "second try\n"}))
+        assert BuildState.load(p.config.state_file_path()).tdd.blocks[0].fix_pass.step == "review"
+
+        code, fix = await TestFixOnPass._resume(p, [_passing()])
+
+        assert code == clean_code == EXIT_SUCCESS
+        assert fix.await_count == 1
+        assert len(_rounds(p)[1]["earlier_fixes"]) == 2
+        assert_same_as_unstopped(p.root, clean.root)
 
     # Rows D6e and D7c: a fix-on-pass rollback stopped inside `discard_to`,
     # after its soft reset (`restore`) or after its restore (`clean`). SIGKILL
@@ -712,8 +784,7 @@ class TestFixOnPassRows:
 
         code, fix = asyncio.run(TestFixOnPass._resume(p, [_passing()]))
 
-        TestFixOnPass()._assert_refused(p, code, fix, head)
-        assert repo_state(p.root) == before
+        TestFixOnPass()._assert_refused(p, code, fix, head, before)
 
 
 # --- Item 12: the fix agent looks for the same mistake ---------------------
