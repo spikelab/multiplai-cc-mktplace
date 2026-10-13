@@ -2,7 +2,7 @@
 name: plan
 model: opus
 effort: medium
-description: Author self-contained, executable implementation plans that carry their own completion contract — verifiable "Done means" criteria, explicit constraints/out-of-scope, and stop-and-ask gates. The resulting plan file can be handed to a fresh session ("implement the plan"), fed to a goal runner, or used as buildme input, with no conversation context needed. Triggers on "write a plan", "make a plan", "implementation plan", "plan this out", "draft a plan for", or explicit /plan invocation.
+description: Author self-contained, executable implementation plans that carry their own completion contract — verifiable "Done means" criteria, explicit constraints/out-of-scope, stop-and-ask gates, and a table of what is on disk and what resume does at every point a step can stop. The resulting plan file can be handed to a fresh session ("implement the plan"), fed to a goal runner, or used as buildme input, with no conversation context needed. Triggers on "write a plan", "make a plan", "implementation plan", "plan this out", "draft a plan for", or explicit /plan invocation.
 ---
 
 # Plan
@@ -10,13 +10,16 @@ description: Author self-contained, executable implementation plans that carry t
 Produce an implementation plan that defines **done**, not just **how**. A plan
 that only describes steps leaves the executing agent to decide when to stop —
 that is where scope drift and premature "done!" come from. Every plan this
-skill emits carries three things most plans lack:
+skill emits carries four things most plans lack:
 
 1. **Done means** — numbered, verifiable completion criteria.
 2. **Constraints / out of scope** — hard rules, exclusions, and stop-and-ask
    gates that survive context compaction.
 3. **Self-containedness** — a fresh session with zero conversation context can
    execute the plan from the file alone.
+4. **Stop and resume states** — a table with one row per step and stop
+   point, saying what is on disk and what resume does, so nobody invents
+   resume behaviour while writing or fixing the code.
 
 ## Process
 
@@ -38,6 +41,12 @@ Ground the plan in reality, not memory:
   sends the executor into a wall.
 - Check repo state (`git status`, current branch) for anything the plan must
   work around (uncommitted WIP, missing remotes, credential scope).
+- List every step of the delivered work that writes state — files, git
+  refs or commits, a state or checkpoint file, a lock, a ledger line, a
+  pushed branch or PR — and every point where it can stop: a kill or
+  crash, Ctrl-C, a timeout, a failed command, a budget or round cap. If
+  resume code already exists, read it, so the table says what resume does
+  today.
 
 **Stop and ask when recon shows the scope is not homogeneous.** If the
 requested work turns out to span mechanisms with different risk and effort
@@ -70,6 +79,10 @@ Re-read the plan as if you were a fresh session with no conversation history:
 - Every referenced artifact either exists (verified in step 2) or is created
   by a numbered work item.
 - Each "Done means" criterion is checkable by a command or observation.
+- Every step that writes state has a row in "Stop and resume states" for
+  each point where it can stop, plus the four perturbation rows.
+- Done means names the test that stops at each row and lists the rows it
+  covers, or says in one line why the plan needs none.
 
 Fix what fails, then reply with the file path and a 2–3 sentence summary —
 not the plan body.
@@ -99,6 +112,25 @@ Ordered, numbered, with file-level specifics. Each item names its
 deliverable (file, branch, PR, passing test) so progress is checkable.
 Note parallelizable items explicitly.
 
+## Stop and resume states
+
+One row per step × stop point. A step is a step of the delivered code
+that writes state. Number the rows so tests and fixers can name them.
+
+| # | Step | Stops at | On disk | Resume does |
+|---|---|---|---|---|
+| S1 | <step> | <after X, before Y> | <files, refs, commits, saved fields> | <what it keeps, what it redoes, what it refuses and the message it prints> |
+
+Add these rows for every step they apply to:
+- the user edited files between the stop and the resume;
+- origin or the base branch moved;
+- the same step stopped twice in a row;
+- the process that stopped is still alive when resume starts.
+
+If the delivered code writes no state, say so in one sentence and give
+the rows for this plan's own work items as an executor runs them
+(branch, commits, push, PR).
+
 ## Constraints / out of scope
 
 - Hard rules the executor must not violate (repos not to touch, branches
@@ -108,11 +140,25 @@ Note parallelizable items explicitly.
 - Stop-and-ask gates: "if X fails / is missing, stop and ask" for any
   step that depends on access, credentials, or decisions the executor
   may not have. Never let the agent improvise past a gate.
+- Implementers and fixers add no resume behaviour the Stop and resume
+  states table does not ask for: no extra refusal, fast-forward, retry,
+  saved field or ref name.
+- A change that saves new state (a field, a ref name, a state file, a
+  lock, a ledger line) first adds a row for it to the table in this plan
+  file, and a test case for that row.
+- If a row's "Resume does" cannot be built as written, stop and ask.
 
 ## Done means
 
 Numbered criteria. Every criterion is verifiable by a specific command
 or observation — see quality bar below.
+
+When the Stop and resume states table has rows for the delivered code,
+one criterion names a test that, for each row, stops the step at that
+point (or applies that row's perturbation), resumes, and compares the
+result with a run that never stopped: same files, commits, refs and
+saved state, except where the row's "Resume does" says otherwise. The
+test names the rows it covers (S1, S2, …).
 
 ## Verification
 
@@ -124,7 +170,7 @@ production access), say so explicitly instead of claiming it.
 
 Sections may be short, but none may be omitted. An empty
 "Constraints / out of scope" is a statement ("no constraints beyond
-workspace defaults"), not a missing section.
+workspace defaults"), not a missing section. A plan whose delivered code writes no state still has "Stop and resume states": one sentence saying so, and the rows for its own work items.
 
 ## Quality bar for "Done means"
 
@@ -136,6 +182,7 @@ Each criterion must be checkable without judgment calls:
 | Docs updated | `README.md` has a "Configuration" section listing all 4 env vars from `.env.example` |
 | Doesn't break existing flows | `make test` passes; `docker compose config` shows `front` outside the default profile |
 | Report delivered | Report written to `<exact path>` ending with a pass/fail table and the user's merge commands |
+| Resume works | `pytest tests/test_resume.py -v` shows one passing case per table row, S1–S12, each compared with a run that never stopped |
 
 If a criterion cannot be made verifiable, either sharpen the work item
 until it can, or move it to Verification as an explicitly user-checked
