@@ -10,10 +10,17 @@ Writes into <dir>:
     cache/sentences.json      built from those words by stages/clips.py, as prep does
     job.json                  {source, transcript, sentences, kind: "reels"}
     candidates.json           four candidates on sentence edges
+    looks.json                the two shipped styles, each with its Example page as
+                              the sample (looks/<style>.html), two brands
+                              (brands/*.json) and two caption options
+    music.json                two synth beds (samples/<preset>.wav, 15 s, made as
+                              `pipeline.py music-sample` makes them), two
+                              sound-effect sets (sfx/*.wav) and a voice sample
 
 `--no-video` (and `build(..., video=False)`, which the tests use) writes a
-few stand-in bytes instead of running ffmpeg. Generated media goes wherever
-<dir> is; never into the repository.
+few stand-in bytes instead of running ffmpeg, for the audio too.
+`--no-offers` (`offers=False`) leaves out looks.json and music.json.
+Generated media goes wherever <dir> is; never into the repository.
 """
 from __future__ import annotations
 
@@ -28,7 +35,27 @@ _SCRIPTS = Path(__file__).resolve().parents[2] / "skills" / "video-edit" / "scri
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from stages import clips  # noqa: E402
+from stages import clips, music  # noqa: E402
+
+STYLES_DIR = _SCRIPTS.parent / "references" / "styles"
+BRANDS = {
+    "house": {"primary": "#FFFFFF", "accent": "#3DDC97", "background": "#0B1220", "caption_outline": "#000000"},
+    "warm": {"primary": "#FFF8EC", "accent": "#FF6B4A", "background": "#1F2A44", "caption_outline": "#1F2A44"},
+}
+CAPTION_OPTIONS = [
+    {"name": "Bold, 2 words", "values": {"size": 84, "position_y": 0.66, "words_per_line": 2, "highlight": True}},
+    {"name": "Classic, 5 words", "values": {"size": 64, "position_y": 0.68, "words_per_line": 5, "highlight": False}},
+]
+BEDS = ("calm", "bright")
+SAMPLE_S = 15.0
+# name → ffmpeg lavfi source and filter for a short sound effect
+SFX = {
+    "pop": ("sine=frequency=880:sample_rate=48000:duration=0.12", "afade=t=out:st=0.04:d=0.08"),
+    "whoosh": ("anoisesrc=color=pink:sample_rate=48000:duration=0.5:amplitude=0.6",
+               "highpass=f=700,afade=t=in:d=0.2,afade=t=out:st=0.25:d=0.25"),
+    "click": ("sine=frequency=2200:sample_rate=48000:duration=0.03", "afade=t=out:st=0.01:d=0.02"),
+}
+SFX_SETS = {"soft": ("pop", "whoosh"), "clicky": ("click",)}
 
 TURNS = [
     ("SPEAKER_0", "Welcome back to the show. Today we talk about shipping small."),
@@ -92,7 +119,58 @@ def _video(path: Path) -> None:
     ], check=True)
 
 
-def build(out: Path, video: bool = True) -> dict[str, Path]:
+def example_page(style_md: Path) -> str:
+    """The `## Example` page of a style file (references/styles/README.md)."""
+    text = style_md.read_text(encoding="utf-8")
+    body = text.split("## Example", 1)[1]
+    return body.split("```html", 1)[1].split("```", 1)[0].strip() + "\n"
+
+
+def _audio(path: Path, src: str, af: str, video: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not video:
+        path.write_bytes(b"RIFF\x00\x00\x00\x00WAVEstand-in")
+        return
+    subprocess.run([shutil.which("ffmpeg") or "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", src, "-af", af, "-ac", "1", str(path)], check=True)
+
+
+def looks(out: Path) -> dict:
+    styles = []
+    for md in sorted(STYLES_DIR.glob("*.md")):
+        if md.name == "README.md":
+            continue
+        page = out / "looks" / f"{md.stem}.html"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text(example_page(md), encoding="utf-8")
+        styles.append({"name": md.stem, "file": str(md), "sample_html": str(page)})
+    brands = []
+    for name, data in BRANDS.items():
+        f = out / "brands" / f"{name}.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data, indent=1) + "\n")
+        brands.append({"name": name, "file": str(f)})
+    return {"styles": styles, "brands": brands, "captions": CAPTION_OPTIONS}
+
+
+def music_offer(out: Path, voice: dict, video: bool) -> dict:
+    beds = []
+    for preset in BEDS:
+        f = out / "samples" / f"{preset}.wav"
+        if video:
+            music.write_synth(preset, SAMPLE_S, f)
+        else:
+            _audio(f, "", "", video=False)
+        beds.append({"name": preset, "file": str(f)})
+    files = {}
+    for name, (src, af) in SFX.items():
+        files[name] = out / "sfx" / f"{name}.wav"
+        _audio(files[name], src, af, video)
+    sets = [{"name": n, "files": [str(files[x]) for x in xs]} for n, xs in SFX_SETS.items()]
+    return {"beds": beds, "sfx_sets": sets, "voice_sample": voice}
+
+
+def build(out: Path, video: bool = True, offers: bool = True) -> dict[str, Path]:
     out = out.resolve()
     cache = out / "cache"
     cache.mkdir(parents=True, exist_ok=True)
@@ -111,17 +189,27 @@ def build(out: Path, video: bool = True) -> dict[str, Path]:
     job.write_text(json.dumps({"source": str(source), "transcript": str(transcript),
                                "sentences": str(sentences_path), "kind": "reels"}, indent=1) + "\n")
     cands = out / "candidates.json"
-    cands.write_text(json.dumps(candidates(sentences), indent=1) + "\n")
-    return {"dir": out, "source": source, "transcript": transcript, "sentences": sentences_path,
-            "job": job, "candidates": cands}
+    cand_list = candidates(sentences)
+    cands.write_text(json.dumps(cand_list, indent=1) + "\n")
+    paths = {"dir": out, "source": source, "transcript": transcript, "sentences": sentences_path,
+             "job": job, "candidates": cands}
+    if offers:
+        paths["looks"] = out / "looks.json"
+        paths["looks"].write_text(json.dumps(looks(out), indent=1) + "\n")
+        c2 = next(c for c in cand_list if c["id"] == "c2")
+        voice = {"start": c2["start"], "end": round(min(c2["end"], c2["start"] + 10), 3)}
+        paths["music"] = out / "music.json"
+        paths["music"].write_text(json.dumps(music_offer(out, voice, video), indent=1) + "\n")
+    return paths
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("dir", help="directory to build the job in (created)")
-    ap.add_argument("--no-video", action="store_true", help="write stand-in bytes instead of an ffmpeg video")
+    ap.add_argument("--no-video", action="store_true", help="write stand-in bytes instead of ffmpeg video and audio")
+    ap.add_argument("--no-offers", action="store_true", help="leave out looks.json and music.json")
     args = ap.parse_args()
-    paths = build(Path(args.dir), video=not args.no_video)
+    paths = build(Path(args.dir), video=not args.no_video, offers=not args.no_offers)
     print(f"JOB: {paths['dir']}")
     return 0
 

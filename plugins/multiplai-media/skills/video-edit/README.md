@@ -46,6 +46,11 @@ buy houses. Use my brand file."*
    seconds, and you pick which to make on a local job page: play each one
    from the recording, accept or reject it, drag its start and end (they
    snap to sentence edges), and send your picks.
+   On the same page you choose the look and the music: each overlay style
+   plays a looping sample, each brand shows its colours and font, each
+   caption option draws over a frame of your recording, and each music bed
+   and sound effect plays, with a level slider and a button that plays the
+   bed under a stretch of the speech.
 4. **Edit lists and render.** Each clip becomes an edit list (EDL, a small
    JSON file) and then an MP4:
    - **Video call:** you draw a box around each person's window on the job
@@ -113,7 +118,8 @@ Every command takes `--help`.
 | `proof <mp4> --edl <edl>` | One sheet of labelled frames of a reel |
 | `shots <cache> --from --to` | List the camera cuts in a span, with three frames of each |
 | `frame <video> --at <s> [--grid]` | One frame as a PNG, optionally with a pixel grid |
-| `review <outdir>` | The local job page: pick clips, draw speaker boxes, comment on renders |
+| `review <outdir>` | The local job page: pick clips, draw speaker boxes, choose a look and music, comment on renders |
+| `music-sample <preset> --out <wav>` | A 15 s sample of a synth music bed, to offer on the job page |
 | `contact-sheet <video-or-url>` | Frames of a reference video, for deriving a style |
 | `prefs show` / `prefs add` | Read or append your saved preferences |
 | `outdir`, `make` | Create a job's output folder; print the whole workflow |

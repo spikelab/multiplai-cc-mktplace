@@ -15,6 +15,7 @@ Subcommands (see --help for all):
 from __future__ import annotations
 import argparse
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -389,6 +390,24 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_music_sample(args: argparse.Namespace) -> int:
+    """Write a short sample of a synth bed, for the job page's Music tab."""
+    out = Path(args.out).resolve()
+    try:
+        music_stage.write_synth(args.preset, args.seconds, out)
+    except ValueError as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    except FileNotFoundError:
+        print("✗ ffmpeg not found on PATH. Install it (brew install ffmpeg, or apt install ffmpeg) and try again.", file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as e:
+        print(f"✗ ffmpeg could not write the sample (exit {e.returncode})", file=sys.stderr)
+        return 1
+    print(f"SAMPLE: {out}")
+    return 0
+
+
 def cmd_contact_sheet(args: argparse.Namespace) -> int:
     """Tile frames of a video (or a URL) into 4x4 sheets for deriving a style."""
     from stages import contact_sheet
@@ -571,6 +590,12 @@ def main() -> int:
     rv.add_argument("--next-version", metavar="CLIP", default=None,
                     help="print the path for CLIP's next version and exit")
     rv.set_defaults(func=cmd_review)
+
+    ms = sub.add_parser("music-sample", help="write a short sample of a synth music bed (for music.json)")
+    ms.add_argument("preset", choices=sorted(music_stage.SYNTH_PRESETS), help="the synth bed: what EDL music.synth names")
+    ms.add_argument("--out", required=True, help="the .wav to write, e.g. <outdir>/samples/calm.wav")
+    ms.add_argument("--seconds", type=float, default=15.0, help="sample length (default 15)")
+    ms.set_defaults(func=cmd_music_sample)
 
     cs = sub.add_parser("contact-sheet", help="tile a reference video's frames into 4x4 sheets")
     cs.add_argument("source", help="video file or URL (fetched with yt-dlp)")

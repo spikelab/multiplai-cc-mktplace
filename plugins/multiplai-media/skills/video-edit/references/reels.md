@@ -330,6 +330,47 @@ P timeline <outdir>/edl/clip-01.edl.json
 `render` fails if the caption font lacks a character the transcript uses —
 pick a brand font that covers the language.
 
+### Look and music on the job page
+
+Before the first EDL, write `<outdir>/looks.json` and `<outdir>/music.json`
+beside `job.json` (schemas: `schema/looks.schema.json`,
+`schema/music.schema.json`; `SKILL.md` §6 says what goes in each list). The
+user picks in the page's **Look** and **Music** tabs instead of in chat:
+
+```json
+{"styles": [{"name": "clean-tech", "file": "/…/references/styles/clean-tech.md",
+             "sample_html": "/…/<outdir>/looks/clean-tech.html"}],
+ "brands": [{"name": "house", "file": "/…/brand.json"}],
+ "captions": [{"name": "Bold, 2 words", "values": {"size": 84, "position_y": 0.66, "words_per_line": 2, "highlight": true}},
+              {"name": "Classic", "values": {"words_per_line": 5, "highlight": false}}]}
+```
+
+```json
+{"beds": [{"name": "calm", "file": "/…/<outdir>/samples/calm.wav"}, {"name": "track", "file": "/…/track.mp3"}],
+ "sfx_sets": [{"name": "soft", "files": ["/…/pop.wav", "/…/whoosh.wav"]}],
+ "voice_sample": {"start": 812.3, "end": 820.1}}
+```
+
+A synth bed is listed as a 15 s sample, rendered first with
+`P music-sample calm --out <outdir>/samples/calm.wav`. Keep caption options
+inside the caption band rules below (`position_y` 0.635–0.6875).
+
+Each tab sends one row; the newest wins:
+
+```json
+{"kind": "look", "style": "clean-tech", "brand": "house",
+ "captions": {"size": 84, "position_y": 0.66, "words_per_line": 2, "highlight": true}, "text": ""}
+{"kind": "music", "bed": "calm", "volume_db": -14, "sfx_set": "soft", "text": ""}
+```
+
+Apply them to **every** EDL you write (§5), and to EDLs already written
+before the next render: `brand` is the brand's `file`; `captions` keys go
+into the EDL's `captions`; overlay pages are written in `style` and name it;
+`music` is `{"file": <bed file>, "volume_db": …}`, or `{"synth": "calm",
+"volume_db": …}` for a synth sample; sounds come only from the `sfx_set`'s
+files (§ Sound effects). `null` means none of that kind. Without the page,
+ask in chat.
+
 ### Brand file
 
 `brand.json` sets the caption and headline font, the colours and a logo:

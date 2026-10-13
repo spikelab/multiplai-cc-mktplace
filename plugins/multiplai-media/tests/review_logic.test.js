@@ -275,3 +275,165 @@ test("clipDraft starts from the newest sent pick only while it fits the candidat
     { decision: "accept", start: 101, end: 139, note: "keep", for: [100, 140] });
   assert.equal(L.clipDraft({ ...c, start: 500, end: 540 }, null, pick("c3", 101, 139)).decision, null);
 });
+
+// --- Look ------------------------------------------------------------------------------
+
+const LOOKS = { status: "ok", file: "/job/looks.json", data: {
+  styles: [{ name: "clean-tech" }, { name: "flat-vector" }],
+  brands: [{ name: "house" }],
+  captions: [{ name: "Bold", values: { size: 84, position_y: 0.66, words_per_line: 2, highlight: true } },
+             { name: "Classic", values: { words_per_line: 5, highlight: false } }],
+} };
+const lookRowSent = (extra = {}) => ({ kind: "look", style: "flat-vector", brand: null,
+  captions: { words_per_line: 5, highlight: false }, text: "", ...extra });
+
+test("lookOpen: open while looks.json offers something and no look row was sent", () => {
+  assert.equal(L.lookOpen({ looks: LOOKS, rows: [] }), true);
+  assert.equal(L.lookOpen({ looks: LOOKS, rows: [lookRowSent()] }), false);
+  assert.equal(L.lookOpen({ looks: { status: "ok", data: { styles: [] } }, rows: [] }), false);
+  assert.equal(L.lookOpen({ looks: { status: "missing" }, rows: [] }), false);
+  assert.equal(L.lookOpen({ looks: null, rows: [] }), false);
+});
+
+test("the first open tab follows Look and Music after Clips and Speakers", () => {
+  assert.equal(L.firstOpenTab({ clips: false, speakers: false, look: true, music: true }), "look");
+  assert.equal(L.firstOpenTab({ look: false, music: true }), "music");
+});
+
+test("lookDraft starts from the first of each list, then the newest sent row, and keeps a valid draft", () => {
+  assert.deepEqual(L.lookDraft(LOOKS, null, null), { style: "clean-tech", brand: "house", caption: "Bold", note: "" });
+  // the sent row's caption values find their option by value, whatever the key order
+  assert.deepEqual(L.lookDraft(LOOKS, null, lookRowSent({ captions: { highlight: false, words_per_line: 5 }, text: "hi" })),
+    { style: "flat-vector", brand: null, caption: "Classic", note: "hi" });
+  const draft = { style: null, brand: "house", caption: "Classic", note: "x" };
+  assert.deepEqual(L.lookDraft(LOOKS, draft, lookRowSent()), draft);
+});
+
+test("lookDraft drops a draft that names something no longer on offer", () => {
+  const stale = { style: "neon", brand: "house", caption: "Bold", note: "" };
+  assert.equal(L.lookDraft(LOOKS, stale, null).style, "clean-tech");
+  assert.equal(L.lookDraft(LOOKS, stale, lookRowSent({ style: "gone" })).style, null);
+  assert.equal(L.lookDraft(LOOKS, { style: undefined, brand: null, caption: null }, null).style, "clean-tech");
+});
+
+test("lookRow sends the caption option's values, and a look must pick something", () => {
+  const row = L.lookRow({ style: "clean-tech", brand: null, caption: "Bold", note: " warm " }, LOOKS);
+  assert.deepEqual(row, { kind: "look", style: "clean-tech", brand: null,
+    captions: { size: 84, position_y: 0.66, words_per_line: 2, highlight: true }, text: "warm" });
+  assert.equal(L.lookProblem(row), null);
+  const none = L.lookRow({ style: null, brand: null, caption: null, note: "" }, LOOKS);
+  assert.equal(none.captions, null);
+  assert.match(L.lookProblem(none), /Pick a style, a brand or a caption option/);
+});
+
+test("lookProblem refuses a brand whose file cannot be used", () => {
+  const brands = [{ name: "house", status: "invalid", error: "bad json" }, { name: "warm", status: "ok" }];
+  const row = L.lookRow({ style: null, brand: "house", caption: null, note: "" }, LOOKS);
+  assert.match(L.lookProblem(row, brands), /The house brand file cannot be used/);
+  assert.equal(L.lookProblem({ ...row, brand: "warm" }, brands), null);
+  assert.equal(L.lookProblem(row, []), null);           // brands not loaded yet: the server still checks the name
+});
+
+test("sameChoice: a row that repeats the last one sent is not sent again", () => {
+  const keys = ["style", "brand", "captions"];
+  const row = L.lookRow({ style: "flat-vector", brand: null, caption: "Classic", note: "" }, LOOKS);
+  assert.equal(L.sameChoice(row, lookRowSent({ captions: { highlight: false, words_per_line: 5 } }), keys), true);
+  assert.equal(L.sameChoice(row, lookRowSent({ text: "note" }), keys), false);
+  assert.equal(L.sameChoice(row, lookRowSent({ brand: "house" }), keys), false);
+  assert.equal(L.sameChoice(row, null, keys), false);
+});
+
+test("outputSize: 9:16 for reels and until job.json is known, 16:9 for a demo", () => {
+  assert.deepEqual(L.outputSize(JOB), { width: 1080, height: 1920 });
+  assert.deepEqual(L.outputSize(null), { width: 1080, height: 1920 });
+  assert.deepEqual(L.outputSize(DEMO), { width: 1920, height: 1080 });
+});
+
+test("captionMetrics scales stages/captions.py's output-pixel sizes to the stage", () => {
+  const out = { width: 1080, height: 1920 };
+  const m = L.captionMetrics({ size: 84, position_y: 0.66 }, out, 960);
+  assert.equal(m.fontPx, 42);
+  assert.equal(m.centerY, 0.66);
+  assert.equal(m.outlinePx, Math.round(84 * 0.07) / 2);
+  const d = L.captionMetrics({}, out, 1920);                 // defaults: round(H * 0.036), 0.68
+  assert.equal(d.fontPx, Math.round(1920 * 0.036));
+  assert.equal(d.centerY, 0.68);
+  assert.equal(L.captionMetrics({ size: 10 }, out, 1920).outlinePx, 2);   // never thinner than 2 px
+});
+
+test("captionLine takes words_per_line words within 22 characters and marks the spoken word", () => {
+  const ws = ["We", "stopped", "fearing", "Fridays.", "Every", "change"].map((text) => ({ text }));
+  assert.deepEqual(L.captionLine(ws, { words_per_line: 2 }), { words: ["We", "stopped"], spoken: 1 });
+  assert.deepEqual(L.captionLine(ws, { words_per_line: 5 }).words, ["We", "stopped", "fearing"]);  // 22 chars
+  assert.equal(L.captionLine(ws, { highlight: false }).spoken, -1);
+  assert.deepEqual(L.captionLine([], {}), { words: [], spoken: -1 });
+  assert.deepEqual(L.captionLine([{ text: "Supercalifragilisticexpialidocious" }], {}).words,
+    ["Supercalifragilisticexpialidocious"]);                 // one long word still shows
+});
+
+test("brandColours fills in the defaults a render uses without a brand", () => {
+  assert.deepEqual(L.brandColours(null), L.BRAND_DEFAULTS);
+  assert.equal(L.brandColours({ status: "ok", colours: { ...L.BRAND_DEFAULTS, accent: "#3DDC97" } }).accent, "#3DDC97");
+  assert.deepEqual(L.brandColours({ status: "invalid", error: "x" }), L.BRAND_DEFAULTS);
+});
+
+test("loopTime plays the sample, holds its last frame, and starts over", () => {
+  assert.equal(L.loopTime(0.5, 2), 0.5);
+  assert.equal(L.loopTime(2.5, 2), 2);                       // holding the last frame
+  assert.equal(L.loopTime(3.25, 2), 0.25);                   // the next loop
+  assert.equal(L.loopTime(4.5, 0), 4);                       // no duration: 4 s, then a 1 s hold
+  assert.equal(L.loopTime(NaN, 2), 0);
+});
+
+test("fitScale fits a sample page into its card", () => {
+  assert.equal(L.fitScale(1080, 1920, 270, 200), 200 / 1920);
+  assert.equal(L.fitScale(900, 560, 225, 400), 0.25);
+  assert.equal(L.fitScale(0, 10, 100, 100), 1);
+});
+
+test("readyMessage accepts only a well-formed ready message from a sample page", () => {
+  assert.deepEqual(L.readyMessage({ type: "ready", width: 900, height: 560, duration: 2.1, seek: "default" }),
+    { width: 900, height: 560, duration: 2.1 });
+  assert.equal(L.readyMessage({ type: "ready", width: 900, height: 560, duration: 0 }).duration, 4);
+  for (const bad of [null, "ready", { type: "seek", t: 1 }, { type: "ready", width: "900", height: 560, duration: 1 },
+    { type: "ready", width: 900, height: 99999, duration: 1 }, { type: "ready", width: 900, height: 560, duration: NaN }]) {
+    assert.equal(L.readyMessage(bad), null, JSON.stringify(bad));
+  }
+});
+
+// --- Music -----------------------------------------------------------------------------
+
+const MUSIC = { status: "ok", file: "/job/music.json", data: {
+  beds: [{ name: "calm" }, { name: "bright" }], sfx_sets: [{ name: "soft" }], voice_sample: { start: 10, end: 18 },
+} };
+
+test("musicOpen: open while music.json offers something and no music row was sent", () => {
+  assert.equal(L.musicOpen({ music: MUSIC, rows: [] }), true);
+  assert.equal(L.musicOpen({ music: MUSIC, rows: [{ kind: "music", bed: "calm", volume_db: -10, sfx_set: null }] }), false);
+  assert.equal(L.musicOpen({ music: { status: "ok", data: {} }, rows: [] }), false);
+  assert.equal(L.musicOpen({ music: { status: "invalid", error: "x" }, rows: [] }), false);
+});
+
+test("musicDraft starts at the first bed, no sounds and the EDL's default level", () => {
+  assert.deepEqual(L.musicDraft(MUSIC, null, null), { bed: "calm", sfx_set: null, volume_db: -10, note: "" });
+  const last = { kind: "music", bed: "bright", volume_db: -18, sfx_set: "soft", text: "ok" };
+  assert.deepEqual(L.musicDraft(MUSIC, null, last), { bed: "bright", sfx_set: "soft", volume_db: -18, note: "ok" });
+  assert.equal(L.musicDraft(MUSIC, { bed: "jazz", sfx_set: null, volume_db: -5 }, null).bed, "calm");
+  assert.equal(L.musicDraft(MUSIC, { bed: null, sfx_set: "soft", volume_db: -99 }, null).volume_db, -40);
+});
+
+test("musicRow rounds the level, and music must pick a bed or a sound set", () => {
+  assert.deepEqual(L.musicRow({ bed: "calm", sfx_set: null, volume_db: -12.04, note: " " }),
+    { kind: "music", bed: "calm", volume_db: -12, sfx_set: null, text: "" });
+  assert.equal(L.musicProblem(L.musicRow({ bed: null, sfx_set: "soft", volume_db: -10 })), null);
+  assert.match(L.musicProblem(L.musicRow({ bed: null, sfx_set: null, volume_db: -10 })), /Pick a music bed/);
+});
+
+test("dbToGain and fmtDb", () => {
+  assert.equal(L.dbToGain(0), 1);
+  assert.ok(Math.abs(L.dbToGain(-20) - 0.1) < 1e-12);
+  assert.ok(Math.abs(L.dbToGain(-6) - 0.501) < 1e-3);
+  assert.equal(L.dbToGain(NaN), 1);
+  assert.equal(L.fmtDb(-10), "−10 dB");
+  assert.equal(L.fmtDb(0), "0 dB");
+});

@@ -152,14 +152,15 @@ platform requirements and exits 1 on any failure.
 
 Print the output path and total duration. If quality issues are visible (caption errors, wrong segment, etc.), iterate on the EDL and re-render — the cached prep means re-renders are fast (the bulk of time is the per-segment cut pass).
 
-### 6. The job page: picks, speaker boxes and review
+### 6. The job page: picks, speaker boxes, look, music and review
 
 One local page carries the user's choices for the whole job, so they click
 instead of typing timestamps in chat. It has five tabs: **Clips** (pick from
-the candidates), **Speakers** (draw a box per speaker), **Look** and
-**Music** (list what the session offers; picking there comes later), and
-**Review** (comment on the renders). It opens on the earliest tab with a
-decision still open. Each choice comes back as a row in a mailbox file.
+the candidates), **Speakers** (draw a box per speaker), **Look** (pick an
+overlay style, a brand and a caption option), **Music** (pick a bed, its
+level and a sound-effect set), and **Review** (comment on the renders). It
+opens on the earliest tab with a decision still open. Each choice comes back
+as a row in a mailbox file.
 
 **The page shows files the session writes into the job's output directory,
 and never edits them.** A tab whose file is missing says so; one that fails
@@ -178,6 +179,35 @@ The server plays only files those name (the source, beds, sound effects,
 sample pages) and the renders in the directory; it refuses every other path.
 `references/reels.md` §3–4 say when to write `job.json` and
 `candidates.json`.
+
+**`looks.json` and `music.json`: write them for every job, reels or demo,
+before the first EDL**, so the user picks the look and the music before
+anything is rendered:
+
+- `styles`: each style the user might want (`references/styles/*.md`, or a
+  style derived for this job), with `sample_html` an overlay page in that
+  style: the style's `## Example` page saved to `<outdir>/looks/<name>.html`
+  will do. The Look tab loops it in a sandboxed frame, seeked as the
+  renderer seeks it. A page that follows the page rules plays there as it
+  is; one that loads anything from the network does not.
+- `brands`: the user's brand files. The tab shows each one's colours and
+  caption font, or its error.
+- `captions`: two or three caption options as `values` (`size`,
+  `position_y`, `words_per_line`, `highlight`; a missing key keeps the
+  default). The tab draws each over a frame of the source in the chosen
+  brand's colours, labelled approximate.
+- `beds`: audio files. **For a synth bed, render a 15 s sample first** and
+  list that, named after the preset:
+
+  ```bash
+  python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py music-sample calm --out <outdir>/samples/calm.wav
+  ```
+
+- `sfx_sets`: named sets of the sound files the user supplied (§ Sound
+  effects in `references/reels.md`).
+- `voice_sample`: `{start, end}` in source seconds, 5–10 s of clear speech.
+  "Play with voice" plays it with the chosen bed under it at the chosen
+  level.
 
 1. **Start the server in the background** (Bash with `run_in_background`),
    pointing it at the job's output directory, where the renders go too:
@@ -213,9 +243,28 @@ sample pages) and the renders in the directory; it refuses every other path.
    | `point` | `t`, `x`, `y`: the time in that render in seconds, and the click as a fraction of the width and height (0,0 is top left) | Change what the comment asks for at that moment and spot (step 3) |
    | `pick` | `candidate`, `decision` (`accept`\|`reject`), `start`, `end` (source seconds, maybe moved by the user) | Snap each accepted clip with `pipeline.py snap`, follow its note, write one EDL each; drop the rejected (`references/reels.md` §4) |
    | `panels` | `panels: {name: {x, y, w, h}}` (source pixels), `speakers: {label: name}` | Write them into every EDL's `layout` (`references/reels.md` §3) |
+   | `look` | `style`, `brand` (names from `looks.json`, or `null` for none), `captions` (the chosen option's values, or `null`) | Use them in every EDL and overlay page you write (below) |
+   | `music` | `bed`, `sfx_set` (names from `music.json`, or `null` for none), `volume_db` | Set every EDL's `music`, and take the sounds `sfx-suggest` proposes from that set (below) |
 
    Without the Monitor tool, read the file when the user says they sent
    something.
+
+   **Apply the newest `look` and `music` rows to every EDL you write**, and
+   to EDLs already written before the next render:
+
+   - `look.style`: write every overlay page in that style and set each
+     overlay's `style` to its name; `null` means the user wants no
+     overlays styled from the offer, so ask before adding any.
+   - `look.brand`: set `brand` to that brand's `file`; `null` means no
+     brand file.
+   - `look.captions`: copy each key into the EDL's `captions`, keeping the
+     keys it does not name; `null` leaves `captions` as it is.
+   - `music.bed`: set `music` to `{"file": <the bed's file>, "volume_db":
+     <volume_db>}`. For a synth bed's sample, set `{"synth": <preset>,
+     "volume_db": …}` instead: the sample is 15 s, a render synthesizes the
+     full length. `null` means no `music`.
+   - `music.sfx_set`: place sounds only from that set's files, at the moments
+     `pipeline.py sfx-suggest` proposes; `null` means no `sfx`.
 
 3. **For `point` rows, wait for the batch to finish** (rows arriving within a
    few seconds of each other belong to one Send), then map each comment to
