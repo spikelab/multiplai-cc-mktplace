@@ -604,8 +604,7 @@ are then. Re-run the same command with `--approve-split`: it checks the table
 and every plan again (ids, dependencies, no cycle, `# Plan:` and
 `## Done means` in each) and records each file's hash. A failed check exits `1`
 naming the file. After approval, the build prints
-`EPIC:APPROVED:<epic.json>` and exits `0`; building the children comes in a
-later release. A file changed after approval exits `2` naming it, and so
+`EPIC:APPROVED:<epic.json>` and runs the children. A file changed after approval exits `2` naming it, and so
 does an `epic.json` whose children no longer match the approved table and plans. Pass
 `--no-epic-split` to build the input as one change without asking; it applies
 only before the decision is made, so for a change that already split, start
@@ -613,6 +612,39 @@ again under a new `--change` name.
 
 Only one process at a time writes an epic's directory. A second one exits `2`
 with `epic <name> is running now (pid <n> on <host>, since <time>)`.
+
+**Running the children.** The approved build runs each child as its own
+`build --mode brief --change <epic>-<id> --plan-file <epic dir>/plans/<id>.md`
+subprocess with `--auto --trust-repo --no-epic-split --pr-ready`, in the
+parent's project directory, branching from the source checkout's HEAD, so
+each child gets its own worktree, branch and ready PR. A `specs/config.yaml`
+that sets `git.worktree` or `git.push` to `false` would build the children in
+place or open no PR, so the build exits `2` before launching any. The parent's
+`research.md` reaches each child as `--research-path` (a parent that skipped
+research passes `--skip-research`), so no child decides on research again. A child starts once
+every child it depends on has **merged**; dependent children never stack on an
+open PR. At most `epic.max_parallel` build at once (default `2`). Each run
+writes `agents/<NNN>-build-<id>.{started.json,result.json,log}` and keeps
+each child's status, PR and reason in `epic.json` (`child_status`). A child that exits `3` (for example `SPLIT:REQUIRED`) or
+exits `0` without a PR is parked, and the children that depend on it are
+skipped; a child that fails is relaunched once per run. While a child waits on
+an open PR, the build exits `3` with `EPIC:MERGE_WAITING:<urls>`. Re-running the
+same command continues from what is on disk: a child still running from an
+earlier run is waited for, never started twice, and a PR a stopped child
+opened is found and kept. When `gh` or `ps` fails while checking a stopped
+child, or `gh pr view` fails for a PR another child waits on, that child is
+`unknown`: nothing is launched for it or its dependants, and the run exits
+`1`; re-run once they work. Each failed or `unknown` child is named on stderr
+(`EPIC: child <id> <status>: <reason>`), beside `EPIC:MERGE_WAITING` too. Ctrl-C (or SIGTERM) stops every child, those
+started by an earlier run included, and exits `130` (`143`).
+
+`specs/config.yaml` takes an `epic:` block: `epic.max_parallel` (default `2`),
+`epic.max_review_rounds` (default `6`), `epic.merge` (`auto` or `manual`,
+default `manual`; under `manual` a human merges each child's PR) and
+`epic.max_usd` (one ceiling for the whole epic, default none). This release
+reads `epic.max_usd` but does not enforce it yet: each child is bounded only by
+its own `budget.max_usd`. Enforcing it, and reviewing, fixing and merging the
+children's PRs, come in later releases.
 
 ### The size gate (after plan review)
 
@@ -728,14 +760,14 @@ Parse pipeline stdout for progress lines:
   `PASSED — score …` or `FAILED: …`); a failure ends with `ERROR:` like any
   failed build
 - `RESULT:SUCCESS` — build complete
-- `EPIC:APPROVED:<epic.json>` — the epic split is approved (exit `0`); its children are not built yet
+- `EPIC:APPROVED:<epic.json>` — the epic split is approved; the children build next. The run then exits `0`; `1` when a child failed or is `unknown`; `3` with `EPIC:MERGE_WAITING`; `130`/`143` when stopped by a signal
 - `ERROR:<message>` — failure
 
 **Exit codes.** `0` done, `1` failure, `2` usage error or a refusal that wrote
 nothing (another process holds the epic's lock, or an approved epic file
 changed: the `ERROR:` line names the process or the file; report it, and never
 change the flags to get past it), `4` an agent timed out
-(a failure: report it like `1`), and `3` — **waiting on a human or on you**. Each `3` prints one marker. Handle it, then re-run the
+(a failure: report it like `1`), `130` or `143` an epic run stopped by Ctrl-C or SIGTERM (re-run to continue), and `3` — **waiting on a human or on you**. Each `3` prints one marker. Handle it, then re-run the
 **same** `build --change <name>` command (plus the flag named below) to resume:
 
 | Marker | What happened | What you do |
@@ -743,9 +775,10 @@ change the flags to get past it), `4` an agent timed out
 | `INTERVIEW:WAITING:<path>` | `interview: ticket` wrote its questions to `<path>` | Post them as **one** ticket comment (plane: `comment <ref> "<text>"`; github: `gh issue comment <n> --body-file <path>`), tell the user the build is waiting for replies, and stop. On the next run, fetch the comments posted after yours into a file and pass `--interview-replies <file>`. No replies yet: it prints the marker again. |
 | `RESEARCH:NEEDED:<path>` | the research decision asked for research; topics in `<path>` | Run `/deep-research` on them and re-run with `--research-path <output>` — or, without `multiplai-research`, say so and re-run with `--skip-research`. |
 | `SPLIT:REQUIRED:<path>` | the size gate wants the plan split; proposal in `<path>` | Post `<path>` on the ticket (plane `comment` / `gh issue comment --body-file`), or show it to the user for a prompt, and stop. Re-run with `--accept-size` only when the user chooses to build it as one PR. |
+| `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and stop. Re-run the same command once they are merged; a PR closed without a merge parks the children that wait on it. |
 | `EPIC:SPLIT:<path>` | the input is several changes; the split is in `<path>` (`split.md`), one plan per child in `plans/` beside it | For a GitHub ticket, post **one** comment whose body is the line `<!-- buildme-epic-split:<sha256 of split.md> -->` (`shasum -a 256 <path>`) followed by the content of `<path>`, and only when no comment on the issue already starts with that line (`gh issue view <n> --json comments --jq '.comments[].body'`): a re-run prints the same line for the same `split.md`, so it never posts twice. For any other input, show `<path>` to the user. Then stop. Re-run with `--approve-split` only when the user approves the split. Never create, close or edit a ticket for a child. |
 
-These four are the only cases where you post on a ticket. The pipeline itself
+`INTERVIEW:WAITING`, `SPLIT:REQUIRED` and `EPIC:SPLIT` are the only cases where you post on a ticket. The pipeline itself
 never posts and never talks to a ticket system.
 
 Also point the user at the build's companion artifacts inside the change

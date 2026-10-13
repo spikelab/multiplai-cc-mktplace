@@ -161,7 +161,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             board.record(config, state, BuildPhase.EPIC_SPLIT, progress=progress)
         if state.epic_dir:
             from .epic import phase as epic_phase
-            return epic_phase.continue_epic(config, state, args, just_split=just_split)
+            return await epic_phase.continue_epic(config, state, args, just_split=just_split)
 
         # Phase: Spec Generation
         if not state.is_phase_complete(BuildPhase.SPEC_GENERATION) and not config.mode == "only":

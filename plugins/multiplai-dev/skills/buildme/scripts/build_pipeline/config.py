@@ -405,6 +405,21 @@ class GitToggles:
     pr: Literal["draft", "ready", "none"] = "draft"
 
 
+def git_toggles(data: dict) -> GitToggles:
+    """Git lifecycle: `git: {worktree: true, push: true, pr: draft|ready|none}`
+    from a parsed specs/config.yaml, before any CLI flag."""
+    git_cfg = data.get("git", {}) or {}
+    pr_mode = str(git_cfg.get("pr", "draft")).lower()
+    if pr_mode not in ("draft", "ready", "none"):
+        log.warning("Invalid git.pr value %r in config.yaml — using 'draft'", pr_mode)
+        pr_mode = "draft"
+    return GitToggles(
+        worktree=bool(git_cfg.get("worktree", True)),
+        push=bool(git_cfg.get("push", True)),
+        pr=pr_mode,
+    )
+
+
 # Ticket providers buildme can take a ticket from (`intake.provider` in
 # specs/config.yaml). One table, mirrored in SKILL.md Step 0: each value says
 # how the *wrapper session* fetches a ticket, because the pipeline itself never
@@ -535,6 +550,20 @@ class FindingsSettings:
     authors: str | list[str] = "collaborators"
     max_rounds: int = 3
     allow_bots: list[str] = field(default_factory=list)
+
+
+@dataclass
+class EpicSettings:
+    """`epic:` block: how an approved epic runs its children
+    (plan-buildme-epic-mode-2026-10-12.md, item 16a). `max_parallel`: children
+    building at once. `max_review_rounds`: review rounds per child PR.
+    `merge`: `auto` or `manual` (a human merges). `max_usd`: one ceiling for
+    the whole epic, None for none."""
+
+    max_parallel: int = 2
+    max_review_rounds: int = 6
+    merge: Literal["auto", "manual"] = "manual"
+    max_usd: float | None = None
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -717,6 +746,7 @@ class BuildConfig:
     architecture: str = ""
     pr: PrSettings = field(default_factory=PrSettings)
     findings: FindingsSettings = field(default_factory=FindingsSettings)
+    epic: EpicSettings = field(default_factory=EpicSettings)
     # `models:` from specs/config.yaml: step, stage or `default` → a model spec
     # as written. `model_for` resolves it.
     model_specs: dict[str, str] = field(default_factory=dict)
@@ -1089,17 +1119,7 @@ class BuildConfig:
         )
         self.mutation = _load_mutation_settings(data.get("mutation"))
 
-        # Git lifecycle: git: {worktree: true, push: true, pr: draft|ready|none}
-        git_cfg = data.get("git", {}) or {}
-        pr_mode = str(git_cfg.get("pr", "draft")).lower()
-        if pr_mode not in ("draft", "ready", "none"):
-            log.warning("Invalid git.pr value %r in config.yaml — using 'draft'", pr_mode)
-            pr_mode = "draft"
-        self.git = GitToggles(
-            worktree=bool(git_cfg.get("worktree", True)),
-            push=bool(git_cfg.get("push", True)),
-            pr=pr_mode,
-        )
+        self.git = git_toggles(data)
 
         self._load_intake_and_stage_settings(data)
         self._load_code_facts_settings(data)
@@ -1185,6 +1205,8 @@ class BuildConfig:
             max_rounds=_cfg_int(findings_cfg.get("max_rounds", 3), "findings.max_rounds", 3),
             allow_bots=[b.strip() for b in allow_bots],
         )
+
+        self._load_epic(_cfg_mapping(data.get("epic"), "epic"))
 
         specs: dict[str, str] = {}
         for key, spec in _cfg_mapping(data.get("models"), "models").items():
@@ -1293,6 +1315,24 @@ class BuildConfig:
             self.budget_max_usd = float(raw_usd) if raw_usd else None
         except (TypeError, ValueError):
             log.warning("Invalid budget.max_usd=%r — ignoring", raw_usd)
+
+    def _load_epic(self, epic_cfg: dict) -> None:
+        merge = epic_cfg.get("merge", "manual")
+        if merge not in ("auto", "manual"):
+            log.warning("Invalid epic.merge value %r in config.yaml — using 'manual'", merge)
+            merge = "manual"
+        raw_usd = epic_cfg.get("max_usd")
+        max_usd = None
+        try:
+            max_usd = float(raw_usd) if raw_usd is not None else None
+        except (TypeError, ValueError):
+            log.warning("Invalid epic.max_usd=%r — ignoring", raw_usd)
+        self.epic = EpicSettings(
+            max_parallel=_cfg_int(epic_cfg.get("max_parallel", 2), "epic.max_parallel", 2),
+            max_review_rounds=_cfg_int(epic_cfg.get("max_review_rounds", 6), "epic.max_review_rounds", 6),
+            merge=merge,
+            max_usd=max_usd,
+        )
 
     def _discover_test_command(self) -> None:
         """Auto-detect test command if not specified in config."""

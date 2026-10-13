@@ -17,6 +17,42 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-10-13
+
+### Added
+- An approved epic builds its children. After `EPIC:APPROVED`, the same
+  command runs each child as its own buildme build (`--mode brief`, the
+  child's plan, `--auto --no-epic-split --pr-ready`) from the source
+  checkout's HEAD, so each gets its own worktree, branch and ready PR, and the
+  parent's research as `--research-path` (or `--skip-research` when the
+  parent skipped it), so no child decides on research again. A `specs/config.yaml` with `git.worktree` or `git.push` set to
+  `false` is refused (exit 2) before any child starts. A child starts
+  once every child it depends on has merged; at most `epic.max_parallel` build
+  at once (default 2). While a child waits on an open PR the build exits 3
+  with `EPIC:MERGE_WAITING:<urls>`; re-run it once they are merged. A PR closed
+  without a merge parks the children waiting on it.
+- `epic.json` keeps each child's status, PR and park reason. Every child
+  build leaves `agents/<NNN>-build-<id>.{started.json,result.json,log}`.
+- Re-running an epic continues from those records: a child still running from
+  an earlier run is waited for, never started twice; a PR a stopped child
+  opened is found (`gh pr list --head`) and kept; a child that exited 3 or
+  without a PR stays parked and its dependants are skipped; a failed child is
+  relaunched once per run. When `gh` or `ps` fails while checking a stopped
+  child, or `gh pr view` fails for a PR another child waits on, nothing is
+  launched for it and the run exits 1. Failed and unknown children are named
+  on stderr, beside `EPIC:MERGE_WAITING` too. Ctrl-C or SIGTERM
+  stops every child, one started by an earlier run included, and exits 130
+  or 143.
+- `specs/config.yaml` takes an `epic:` block: `max_parallel`,
+  `max_review_rounds`, `merge` (`auto` or `manual`, default `manual`) and
+  `max_usd`. `max_usd` is read but not enforced yet. Enforcing it, and
+  reviewing, fixing and merging the children's PRs, come in later releases.
+
+### Changed
+- An approved epic's build no longer exits 0 right after `EPIC:APPROVED`: it
+  runs the children, and exits 0 when none is left to build, 1 when a child
+  failed, or 3 while one waits on a merge.
+
 ## [0.58.0] - 2026-10-13
 
 ### Added

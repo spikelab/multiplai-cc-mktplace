@@ -45,6 +45,17 @@ class EpicFileError(Exception):
     """An epic file cannot be read, or fails the checks."""
 
 
+class ChildStatus(BaseModel):
+    """A child's status, rebuilt from the records at each start (PR B1):
+    `pending`, `running`, `built` (PR open), `waiting` (a dependency's PR is
+    open), `merged`, `parked`, `skipped` (a dependency parked), `failed` or
+    `unknown` (a `gh`, `git` or `ps` read about a stopped child failed)."""
+
+    status: str = "pending"
+    pr: str | None = None
+    reason: str = ""
+
+
 class Epic(BaseModel):
     name: str
     state: Literal["proposed", "approved"] = "proposed"
@@ -54,6 +65,7 @@ class Epic(BaseModel):
     hashes: dict[str, str] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     approved_at: str | None = None
+    child_status: dict[str, ChildStatus] = Field(default_factory=dict)
 
 
 # --- the directory name (copied from review_pipeline/target.py) ---------------

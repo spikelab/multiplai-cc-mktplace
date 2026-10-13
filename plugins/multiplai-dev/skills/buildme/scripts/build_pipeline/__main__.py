@@ -9,11 +9,13 @@ Subcommands for dev/debug use (only /buildme is user-facing):
   setup         — Write or merge specs/config.yaml (the wrapper asks the questions)
   config-get    — Print one resolved specs/config.yaml value (e.g. intake.provider)
 
-Exit codes: 0 done (an approved epic prints EPIC:APPROVED), 1 failure, 2 usage,
+Exit codes: 0 done (an approved epic prints EPIC:APPROVED and runs its
+children), 1 failure (for an epic: a child failed), 2 usage,
 or a refusal that wrote nothing (the epic's lock is held, or an approved epic
 file changed), 3 waiting on a human or the wrapper
-(stdout says which: INTERVIEW:WAITING, RESEARCH:NEEDED, SPLIT:REQUIRED, EPIC:SPLIT or
-FINDINGS:REVIEW_READY), 4 an agent timed out.
+(stdout says which: INTERVIEW:WAITING, RESEARCH:NEEDED, SPLIT:REQUIRED, EPIC:SPLIT,
+EPIC:MERGE_WAITING or FINDINGS:REVIEW_READY), 4 an agent timed out, 130 or 143 an
+epic stopped by SIGINT or SIGTERM.
 """
 
 from __future__ import annotations
