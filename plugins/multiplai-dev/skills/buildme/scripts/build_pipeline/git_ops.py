@@ -10,9 +10,12 @@ Design rules (these are the trust boundary — do not relax them):
   cannot become a path traversal or an option-looking argument.
 - **Never destructive except for one guarded discard.** Nothing here merges,
   rebases, force-pushes, or deletes a branch. The single exception is
-  ``discard_to``, which throws away a failed refactor — and it refuses unless
-  the target sha is still an ancestor of HEAD, so it can only ever move
-  backwards along the current history. ``remove_worktree`` exists as a
+  ``discard_to``, which throws away a failed step's work — and it refuses
+  unless the target sha is still an ancestor of HEAD, so it can only ever move
+  backwards along the current history. It touches only files under the
+  project directory, and refuses when a commit it would drop changes a file
+  outside it: the project may be a subdirectory of a larger repo, and nothing
+  outside the project is buildme's to revert. ``remove_worktree`` exists as a
   documented helper for a *calling session* to use from the workspace root;
   the pipeline itself never calls it (worktree-safety rule: never self-cleanup
   from inside the worktree).
@@ -512,6 +515,8 @@ def commit_paths(worktree: Path, message: str, paths: list[str]) -> str | None:
     raised: a bookkeeping commit must not kill a build).
 
     Explicit pathspecs only. This function never stages the whole tree.
+    The commit takes only ``paths`` and leaves anything else that is staged
+    staged.
 
     Exclude pathspecs (``:(exclude…)``) are applied by staging the positive
     paths and then resetting the excluded matches out of the index, not by
@@ -539,11 +544,11 @@ def commit_paths(worktree: Path, message: str, paths: list[str]) -> str | None:
                         worktree, unstage.stderr.strip())
             _run(["git", "reset", "-q", "--", *positives], cwd=worktree)
             return None
-    staged = _run(["git", "diff", "--cached", "--quiet"], cwd=worktree)
+    staged = _run(["git", "diff", "--cached", "--quiet", "--", *positives, *excludes], cwd=worktree)
     if staged.returncode == 0:
         log.info("Nothing staged to commit in %s (%s)", worktree, message)
         return None
-    commit = _run(["git", "commit", "-m", message], cwd=worktree)
+    commit = _run(["git", "commit", "-m", message, "--", *positives, *excludes], cwd=worktree)
     if not commit.ok:
         log.warning("git commit failed in %s: %s", worktree, commit.stderr.strip())
         return None
@@ -595,18 +600,26 @@ def commit_stage(config, message: str, paths: list[str]) -> str | None:
 
 # --- Whole-tree operations (the TDD block loop) ---------------------------
 #
-# Everything above stages explicit paths. The three below are the pipeline's
+# Everything above stages explicit paths. The ones below are the pipeline's
 # only whole-tree git operations, and they live here rather than in the TDD
 # engine so that every `git` invocation the pipeline makes is in one module,
 # behind one `_run`. They are pathspec-limited (`-- . :(exclude)…`), never a
 # bare `git add -A`: a block's output is not fully enumerable from the agent's
 # self-reported FILES: slot, so dropping a produced file would be worse than
-# sweeping one in — and since the build runs inside its own worktree,
-# "everything under ." IS this build's own work.
+# sweeping one in — and "everything under ." is this build's own work.
+#
+# Every one of them is limited to the project directory, the commits and the
+# discard included. The project may be a subdirectory of a larger repo
+# (`--no-worktree` in a monorepo, or the findings stage's project inside its
+# worktree), and the rest of that repo is the user's: a commit must not take
+# a file the user staged there, and a discard must not revert an edit or drop
+# a commit there. So the commits name their pathspec (`git commit -- …`, which
+# leaves every other staged entry staged), and the discard resets only the
+# branch pointer and restores files under `.`.
 
 
 def commit_tree(repo: Path | str, message: str, label: str = "") -> str | None:
-    """Commit everything in *repo* except buildme's bookkeeping.
+    """Commit everything under *repo* except buildme's bookkeeping.
 
     Returns the new commit's SHA, or None when there was nothing to commit or
     the commit failed (logged as a warning — never raises). *label* only names
@@ -616,11 +629,11 @@ def commit_tree(repo: Path | str, message: str, label: str = "") -> str | None:
     if not add.ok:
         log.warning("Failed to commit %s: %s", label, add.stderr.strip() or add.stdout.strip())
         return None
-    staged = _run(["git", "diff", "--cached", "--quiet"], cwd=repo)
+    staged = _run(["git", "diff", "--cached", "--quiet", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
     if staged.returncode == 0:
         log.info("No changes to commit for %s", label)
         return None
-    commit = _run(["git", "commit", "-m", message], cwd=repo)
+    commit = _run(["git", "commit", "-m", message, "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
     if not commit.ok:
         log.warning("Failed to commit %s: %s", label, commit.stderr.strip() or commit.stdout.strip())
         return None
@@ -767,28 +780,46 @@ def dirty_files(repo: Path | str, ignore: Path | str | None = None) -> dict[str,
 
 
 def discard_to(repo: Path | str, sha: str, label: str = "") -> bool:
-    """Throw away every change made since *sha*, keeping buildme's bookkeeping.
+    """Throw away every change made under *repo* since *sha*, keeping
+    buildme's bookkeeping and everything outside *repo*.
 
-    Used to un-do a refactor that failed verification. `reset --hard` restores
-    tracked files; the `clean` removes files the agent newly created, which
-    `reset` leaves behind and the next whole-tree commit would otherwise sweep
-    into the build as reverted-but-committed work. The bookkeeping pathspecs
-    are what keep the clean from deleting .build-state.json out from under a
-    running build. (File-level excludes cannot save a wholly *untracked*
-    directory — `clean -d` removes those entire. By the time a block runs the
-    spec stages have committed the change directory, so the exclude bites on
-    the individual files, which is the case that matters.)
+    Used to un-do a failed step: a refactor that failed verification, a fix
+    not kept, a mutant left on disk, a findings step being rewound. In order:
 
-    **Only ever moves backwards along the current history.** `reset --hard`
-    will happily jump to any commit, including one on unrelated history, and
-    the refactorer holds `Bash` — so it can move HEAD, commit, or switch
+    1. *sha* must still be an ancestor of HEAD (below).
+    2. When *repo* is a subdirectory of its repo, no commit in
+       ``<sha>..HEAD`` may change a path outside *repo*: dropping it would
+       drop someone else's work, so this refuses instead.
+    3. ``reset --soft <sha>`` moves the branch back and keeps every file.
+    4. ``restore --source=<sha> --staged --worktree -- .`` puts the index and
+       the files under *repo* back to *sha*; files outside *repo* keep their
+       content and their staged state.
+    5. ``clean`` removes files the step newly created, which the next
+       whole-tree commit would otherwise sweep into the build as
+       reverted-but-committed work. The bookkeeping pathspecs keep the clean
+       from deleting .build-state.json out from under a running build.
+       (File-level excludes cannot save a wholly *untracked* directory —
+       `clean -d` removes those entire. By the time a block runs the spec
+       stages have committed the change directory, so the exclude bites on
+       the individual files, which is the case that matters.)
+
+    At the repo root this gives the same HEAD, index and files as
+    ``reset --hard <sha>`` plus the same clean. The soft reset goes first so
+    that a stop between steps 3 and 4 leaves HEAD at *sha* with the dropped
+    changes staged under *repo*, which a resumed step's stop record can tell
+    apart from someone else's work.
+
+    **Only ever moves backwards along the current history.** A reset will
+    happily jump to any commit, including one on unrelated history, and the
+    refactorer holds `Bash` — so it can move HEAD, commit, or switch
     branches between the moment *sha* was captured and this call. Resetting
     without checking would then discard whatever HEAD had actually reached:
     earlier blocks' commits, or, under `--no-worktree`, the user's own. So
     *sha* must still be an ancestor of HEAD, and this refuses when it is not.
 
-    Returns False (with a warning) when git refused — never raises. A caller
-    that gets False must not treat the refactor as reverted.
+    Returns False (with a warning) when git refused or a check failed —
+    never raises. A caller that gets False must not treat the work as
+    discarded.
     """
     if not is_ancestor_of_head(repo, sha):
         log.warning(
@@ -797,14 +828,39 @@ def discard_to(repo: Path | str, sha: str, label: str = "") -> bool:
             label, sha[:8],
         )
         return False
-    reset = _run(["git", "reset", "--hard", sha], cwd=repo)
+    prefix = path_prefix(repo)
+    if prefix is None:
+        log.warning("Refusing to discard %s: git could not say where %s is in its repo",
+                    label, repo)
+        return False
+    if prefix:
+        outside = _run(["git", "diff", "--name-only", sha, "HEAD", "--", ":/",
+                        f":(top,exclude){prefix}"], cwd=repo)
+        if not outside.ok:
+            log.warning("Refusing to discard %s: git could not list the files changed "
+                        "since %s: %s", label, sha[:8], outside.stderr.strip())
+            return False
+        paths = outside.stdout.splitlines()
+        if paths:
+            shown = ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
+            log.warning("Refusing to discard %s: the commits after %s change files outside "
+                        "the project (%s) — dropping them would drop work that is not "
+                        "this step's", label, sha[:8], shown)
+            return False
+    reset = _run(["git", "reset", "--soft", sha], cwd=repo)
     if not reset.ok:
-        log.warning("Could not discard %s (reset to %s): %s",
+        log.warning("Could not discard %s (soft reset to %s): %s",
                     label, sha[:8], reset.stderr.strip() or reset.stdout.strip())
+        return False
+    restore = _run(["git", "restore", f"--source={sha}", "--staged", "--worktree", "--", "."],
+                   cwd=repo)
+    if not restore.ok:
+        log.warning("Could not discard %s (restore to %s after the soft reset): %s",
+                    label, sha[:8], restore.stderr.strip() or restore.stdout.strip())
         return False
     clean = _run(["git", "clean", "-fdq", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
     if not clean.ok:
-        log.warning("Could not discard %s (clean after reset to %s): %s",
+        log.warning("Could not discard %s (clean after restoring %s): %s",
                     label, sha[:8], clean.stderr.strip() or clean.stdout.strip())
         return False
     log.info("DISCARD %s reset to %s", label, sha[:8])
