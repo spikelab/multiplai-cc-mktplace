@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from . import budget
 from .findings.models import PRComment, SpecChange, Triage
 from .models import BlockInfo, BlockStatus, BuildPhase
+from .stop_record import StepStop  # noqa: F401  (moved; `from .state import StepStop` keeps working)
 
 log = logging.getLogger(__name__)
 
@@ -93,15 +94,6 @@ class TDDState(BaseModel):
 
 
 FINDINGS_STEPS = ("fetch", "triage", "spec", "code", "publish", "review")
-
-
-class StepStop(BaseModel):
-    """What the tree held when a findings step last stopped: HEAD, and every
-    uncommitted path outside the change directory with a fingerprint of its
-    content (`git_ops.dirty_files`). A resume keeps and discards only this."""
-
-    head: str | None = None
-    edits: dict[str, str] = Field(default_factory=dict)
 
 
 class FindingsRound(BaseModel):
