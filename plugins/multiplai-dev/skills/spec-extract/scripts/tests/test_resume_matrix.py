@@ -5,7 +5,7 @@ Each test stops the step at its row's point, resumes with the same command, and
 compares with a reference run that never stopped, on an identical fixture with
 the same fixed clock: the same `<run>` under its root, byte-equal outputs
 (`conftest.outputs`), and the same saved target and steps. PR 1a's rows: R13,
-R18, R19, R23. Later PRs add theirs here.
+R18, R19, R23, R27. Later PRs add theirs here.
 """
 
 from __future__ import annotations
@@ -178,7 +178,7 @@ def test_R18_restart_stopped(tmp_path, monkeypatch, kind, stop_at, resume):
 
 # --- R19: a resume finds its folder after an earlier candidate changed ------------------------
 
-@pytest.mark.parametrize("change", ["deleted", "renamed", "emptied"])
+@pytest.mark.parametrize("change", ["deleted", "renamed", "emptied", "made_unreadable"])
 def test_R19_resume_keeps_its_folder(tmp_path, monkeypatch, capsys, change):
     t = Target("tree", tmp_path / "a")
     root = tmp_path / "out"
@@ -201,16 +201,21 @@ def test_R19_resume_keeps_its_folder(tmp_path, monkeypatch, capsys, change):
         shutil.rmtree(first)
     elif change == "renamed":
         first.rename(first.parent / "moved")
-    else:
+    elif change == "emptied":
         shutil.rmtree(first)
         first.mkdir()
+    else:  # another target's state.json, now unreadable, does not name this target
+        (first / "state.json").write_text("{not json", encoding="utf-8")
 
     capsys.readouterr()
     assert t.run(root) == 0
     assert f"SPEC_EXTRACT:RESOLVED {ours}" in capsys.readouterr().out
-    assert first.exists() == (change == "emptied")
+    assert first.exists() == (change in ("emptied", "made_unreadable"))
     if change == "emptied":
         assert list(first.iterdir()) == []
+    if change == "made_unreadable":
+        assert sorted(p.name for p in first.iterdir()) == ["state.json"]
+        assert (first / "state.json").read_text(encoding="utf-8") == "{not json"
 
     ref_root = tmp_path / "ref"
     fake_state(ref_root / t.rel, kind="tree", path="", remote_url=OTHER)
@@ -234,3 +239,34 @@ def test_R23_unreadable_state(tmp_path, capsys, kind):
     assert str(run_dir / "state.json") in err and "--restart" in err
     assert everything(run_dir) == before
     assert sorted(p.name for p in run_dir.parent.iterdir()) == sorted([".locks", run_dir.name])
+
+
+# --- R27: a --dir run's source/ lost its import commit after state was written -------------
+
+@pytest.mark.parametrize("damage", ["source_deleted", "git_deleted", "another_commit"])
+def test_R27_dir_source_without_its_import(tmp_path, capsys, damage):
+    """The saved target names the import commit; a re-import would give another one,
+    so the run would go on with a state the snapshot and source contradict."""
+    t = Target("dir", tmp_path / "a")
+    root = tmp_path / "out"
+    run_dir = root / t.rel
+    assert t.run(root) == 0
+    if damage == "source_deleted":
+        shutil.rmtree(run_dir / "source")
+    elif damage == "git_deleted":
+        shutil.rmtree(run_dir / "source" / ".git")
+    else:
+        write(run_dir / "source" / "pkg" / "new.py", "x = 1\n")
+        git(run_dir / "source", "add", "-A")
+        git(run_dir / "source", "commit", "-q", "-m", "user commit")
+    before = everything(run_dir)
+    capsys.readouterr()
+    assert t.run(root) == 1
+    err = capsys.readouterr().err
+    assert str(run_dir / "source") in err and "--restart" in err
+    assert everything(run_dir) == before
+
+    assert t.run(root, "--restart") == 0
+    ref_root = tmp_path / "ref"
+    assert t.run(ref_root) == 0
+    assert_same_as_reference(run_dir, root, ref_root / t.rel, ref_root)

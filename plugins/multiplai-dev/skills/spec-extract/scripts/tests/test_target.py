@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from conftest import (FIXED, Killed, commit_file, fake_state, git, make_repo, read_state, run,
+from conftest import (FIXED, Killed, commit_file, everything, fake_state, git, make_repo, read_state, run,
                       source_head, write)
 from spec_extract_pipeline import target as target_mod
 
@@ -192,6 +194,51 @@ def test_this_targets_folder_found_at_a_later_candidate(repo, root):
     assert not (root / "widgets").exists()
 
 
+def test_another_targets_held_folder_is_skipped(repo, root):
+    """Another remote's folder, its lock held by another process: the run moves on to
+    `widgets@acme/` instead of exiting 5."""
+    from test_resume_matrix import _hold, _release
+
+    sha = git(repo, "rev-parse", "HEAD")
+    theirs = root / "widgets" / f"tree@{sha[:12]}"
+    fake_state(theirs, kind="tree", path="", remote_url=OTHER)
+    holder = _hold(theirs)
+    try:
+        assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
+    finally:
+        _release(holder)
+    assert read_state(root / "widgets@acme" / f"tree@{sha[:12]}")["steps_done"] == ["resolve"]
+
+
+def test_absolute_path_with_a_subdirectory_repo(repo, root):
+    """An absolute `--path` gives the folder its relative form gives."""
+    sha = git(repo, "rev-parse", "HEAD")
+    assert run("run", "--repo", repo / "src", "--tree", "HEAD", "--path",
+               (repo / "src" / "billing").resolve(), "--out", root) == 0
+    assert read_state(root / "widgets" / f"tree-src_billing@{sha[:12]}")["target"]["path"] == "src/billing"
+
+
+def test_unknown_field_inside_the_saved_target_is_refused(repo, root, capsys):
+    """A field a newer version saved inside `target` is refused (exit 1), not dropped."""
+    sha = git(repo, "rev-parse", "HEAD")
+    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
+    folder = root / "widgets" / f"tree@{sha[:12]}"
+    state = read_state(folder)
+    state["target"]["newer_field"] = 1
+    (folder / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    before = (folder / "state.json").read_bytes()
+    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 1
+    assert "--restart" in capsys.readouterr().err
+    assert (folder / "state.json").read_bytes() == before
+
+
+def test_pr_without_gh_is_refused_with_the_install_hint(repo, root, monkeypatch, capsys):
+    monkeypatch.setattr(target_mod.shutil, "which", lambda name: None)
+    assert run("run", "--repo", repo, "--pr", "7", "--out", root) == 2
+    assert "cli.github.com" in capsys.readouterr().err
+    assert not root.exists()
+
+
 # --- --pr -----------------------------------------------------------------------
 
 def _pr_repo(tmp_path):
@@ -325,7 +372,93 @@ def test_dir_output_inside_the_source_is_refused(tmp_path, capsys):
     assert not (src / "out").exists()
 
 
+@pytest.mark.parametrize("out", ["source", "parent"])
+def test_dir_run_folder_at_or_under_the_source_is_refused(tmp_path, capsys, out):
+    """`--out` the source's parent puts `<root>/y/` at the source itself."""
+    src = _source(tmp_path)
+    before = everything(tmp_path / "x")
+    assert run("run", "--dir", src, "--out", src if out == "source" else src.parent) == 2
+    assert "inside" in capsys.readouterr().err
+    assert everything(tmp_path / "x") == before
+
+
+def test_dir_run_folder_beside_the_source_is_used(tmp_path):
+    """`--out` the source's parent with another basename is outside the source."""
+    src = _source(tmp_path)
+    assert run("run", "--dir", src, "--out", tmp_path / "x" / "z") == 0
+    assert sorted(p.name for p in src.iterdir()) == ["node_modules", "pkg"]
+
+
 # --- snapshot, state and --restart ---------------------------------------------------
+
+def _blobs(repo: Path, sha: str) -> dict[str, bytes]:
+    """Every regular file at *sha* with its bytes as git stores them."""
+    out = {}
+    for line in git(repo, "ls-tree", "-r", sha).splitlines():
+        meta, path = line.split("\t", 1)
+        mode, kind, oid = meta.split()
+        if kind == "blob" and mode != "120000":
+            out[path] = subprocess.run(["git", "-C", str(repo), "cat-file", "blob", oid],
+                                       capture_output=True, check=True).stdout
+    return out
+
+
+def _files(folder: Path) -> dict[str, bytes]:
+    return {p.relative_to(folder).as_posix(): p.read_bytes() for p in sorted(folder.rglob("*"))
+            if p.is_file() and not p.is_symlink() and p.name != ".spec-extract-head"}
+
+
+def test_snapshot_ignores_export_attributes(repo, root):
+    """export-ignore, export-subst and eol conversion change what `git archive` writes;
+    the snapshot holds the bytes git stores, which the gates read."""
+    write(repo / ".gitattributes", "/tests export-ignore\npkg/v.py export-subst\n*.txt text eol=crlf\n")
+    write(repo / "tests" / "test_m.py", "def test_m():\n    pass\n")
+    write(repo / "pkg" / "v.py", 'V = "$Format:%H$"\n')
+    sha = commit_file(repo, "notes.txt", "one\ntwo\n")
+    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
+    snap = root / "widgets" / f"tree@{sha[:12]}" / "snapshot"
+    assert _files(snap) == _blobs(repo, sha)
+
+
+def test_snapshot_keeps_the_executable_bit(repo, root):
+    write(repo / "bin" / "tool.py", "print(1)\n")
+    os.chmod(repo / "bin" / "tool.py", 0o755)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "tool")
+    sha = git(repo, "rev-parse", "HEAD")
+    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
+    snap = root / "widgets" / f"tree@{sha[:12]}" / "snapshot"
+    assert os.access(snap / "bin" / "tool.py", os.X_OK)
+    assert not os.access(snap / "src" / "a" / "one.py", os.X_OK)
+
+
+def test_snapshot_skips_links_out_of_the_tree(repo, root, capsys):
+    """An absolute link, or one that leaves the tree, is not extracted; the run goes on and
+    names it. A link inside the tree is kept."""
+    os.symlink("/etc/hostname", repo / "src" / "abs_link")
+    os.symlink("../../../outside", repo / "src" / "a" / "up_link")
+    os.symlink("one.py", repo / "src" / "a" / "in_link")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "links")
+    sha = git(repo, "rev-parse", "HEAD")
+    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
+    err = capsys.readouterr().err
+    assert "src/abs_link" in err and "src/a/up_link" in err and "in_link" not in err
+    snap = root / "widgets" / f"tree@{sha[:12]}" / "snapshot"
+    assert not (snap / "src" / "abs_link").is_symlink()
+    assert not (snap / "src" / "a" / "up_link").is_symlink()
+    assert os.readlink(snap / "src" / "a" / "in_link") == "one.py"
+    assert (snap / ".spec-extract-head").read_text().strip() == sha
+
+
+def test_dir_with_a_link_out_of_the_tree_resolves(tmp_path, root):
+    src = _source(tmp_path)
+    os.symlink("/etc/hostname", src / "pkg" / "cfg")
+    assert run("run", "--dir", src, "--out", root) == 0
+    folder = root / "y" / f"dir-y-{_hex6(str(src.resolve()))}"
+    assert (folder / "snapshot" / "pkg" / "mod.py").is_file()
+    assert not (folder / "snapshot" / "pkg" / "cfg").is_symlink()
+
 
 def test_snapshot_is_reused_when_its_marker_matches(repo, root):
     assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
