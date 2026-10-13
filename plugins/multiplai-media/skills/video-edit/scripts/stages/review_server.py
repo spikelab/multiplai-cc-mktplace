@@ -28,7 +28,9 @@ carries a key for that one page (`&k=`, sample_key) instead of the token.
 
 Video versions: `clip-01.mp4` is version 1, `clip-01.v2.mp4` version 2, and so
 on. The page polls the list, so a re-render saved as the next version appears
-without a restart.
+without a restart. `pipeline.py render` writes `<stem>.edl.json` beside each
+render (stages/render_sidecar.py); `/api/edl` serves it, and the Review tab
+draws the render's timeline from it.
 """
 from __future__ import annotations
 
@@ -56,6 +58,7 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v"}
 VERSION_RE = re.compile(r"^(?P<clip>.+?)(?:\.v(?P<v>\d+))?$")
 MAX_BODY_BYTES = 256 * 1024
+EDL_SIDECAR = ".edl.json"           # stages/render_sidecar.SUFFIX: <stem>.edl.json beside a render
 MAX_TEXT = 4000
 CHUNK = 1024 * 1024
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; "
@@ -618,6 +621,8 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                     return self._named(url.path[len("/media/"):], query)
                 if url.path == "/api/comments" and self.command == "POST":
                     return self._post_comments()
+                if url.path == "/api/edl" and get:
+                    return self._edl(query)
                 if url.path == "/api/comments" and get:
                     clip, kind = query.get("video", [None])[0], query.get("kind", [None])[0]
                     return self._json({"comments": [
@@ -707,6 +712,28 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             if label is not None:
                 speakers = [s for s in speakers if s["label"] == label]
             return self._json({"speakers": speakers})
+
+        def _edl(self, query: dict) -> None:
+            """The sidecar `pipeline.py render` wrote beside one render; 404 for a render without one."""
+            video = query.get("video", [""])[0]
+            try:
+                version = int(query.get("version", [""])[0])
+            except ValueError:
+                raise _Reject(400, "version must be a number") from None
+            name = next((v["name"] for c in videos() if c["clip"] == video
+                         for v in c["versions"] if v["version"] == version), None)
+            if name is None:
+                raise _Reject(404, f"no render {video!r} version {version}")
+            path = video_dir / (Path(name).stem + EDL_SIDECAR)
+            if not path.is_file():
+                raise _Reject(404, f"{name} has no {path.name}: it was rendered before render wrote one")
+            try:
+                data = cache.get(path)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+                raise _Reject(422, f"cannot read {path.name}: {e}") from None
+            if not isinstance(data, dict) or not isinstance(data.get("edl"), dict):
+                raise _Reject(422, f"{path.name} is not a render sidecar")
+            return self._json({"status": "ok", "data": data})
 
         def _named(self, what: str, query: dict) -> None:
             """A file a validated input file names; anything else is 404."""

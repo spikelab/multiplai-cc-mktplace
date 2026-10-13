@@ -14,6 +14,7 @@ Subcommands (see --help for all):
 """
 from __future__ import annotations
 import argparse
+import copy
 import signal
 import subprocess
 import sys
@@ -22,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from stages.edl import EDL, Music  # noqa: E402
-from stages import composite, prep as prep_stage, music as music_stage  # noqa: E402
+from stages import composite, prep as prep_stage, music as music_stage, render_sidecar  # noqa: E402
 
 
 def _resolve_music_arg(file: str | None, url: str | None, synth: str | None,
@@ -53,13 +54,30 @@ def cmd_render(args: argparse.Namespace) -> int:
     # finishes, so a review page watching the folder never offers a
     # half-written render.
     part = out.with_name(f".{out.stem}.partial{out.suffix}")
+    loaded = copy.deepcopy(edl)     # render fills in parts of the EDL; the sidecar records it as loaded
     try:
         composite.render(edl, part, work_dir=Path(args.work_dir) if args.work_dir else None)
     except BaseException:
         part.unlink(missing_ok=True)
         raise
+    # The sidecar (<stem>.edl.json) is what the review page draws the timeline
+    # from. An old one is removed before the new mp4 takes its name, so a
+    # render is never paired with another render's sidecar; the new one is
+    # written after the mp4, and a render without one still counts.
+    sidecar = render_sidecar.path_for(out)
+    try:
+        record = render_sidecar.build(loaded, Path(args.edl), out.name)
+    except Exception as e:  # noqa: BLE001 — the mp4 is good; only its timeline is lost
+        record = None
+        print(f"⚠ no {sidecar.name}: {e} (the review page shows no timeline for this render)")
+    sidecar.unlink(missing_ok=True)
     part.replace(out)
     print(f"✓ wrote {out} ({out.stat().st_size/1e6:.1f} MB)")
+    if record is not None:
+        try:
+            render_sidecar.write(out, record)
+        except OSError as e:
+            print(f"⚠ could not write {sidecar.name}: {e} (the review page shows no timeline for this render)")
     return 0
 
 
@@ -465,7 +483,8 @@ def main() -> int:
 
     r = sub.add_parser("render", help="render a hand-written EDL to mp4")
     r.add_argument("edl", help="path to EDL JSON")
-    r.add_argument("--out", default="reel.mp4", help="output mp4 path")
+    r.add_argument("--out", default="reel.mp4",
+                   help="output mp4 path; <stem>.edl.json beside it records the EDL for the review page")
     r.add_argument("--work-dir", default=None, help="scratch directory for intermediate files")
     r.add_argument("--music-file", default=None, help="audio file to use as background bed")
     r.add_argument("--music-url", default=None, help="audio URL (yt-dlp): YouTube Audio Library, Pixabay Music, etc.")
