@@ -17,6 +17,30 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-10-13
+
+### Added
+- Epic mode fixes each child's PR. A review that leaves open Code HIGH or
+  MEDIUM findings below `epic.max_review_rounds` posts the findings `--auto`
+  would accept (`review_pipeline post --decisions`, the decisions file next to
+  the review, outside the worktree), then runs `/multiplai-dev:buildme-findings`
+  unattended in the child's worktree (`findings --auto --trust-repo
+  --max-rounds <M>`, where `<M>` is the fixer's rounds whose review finished
+  plus the review rounds the PR has left). When the fixer ends, its last review
+  is reused and the round count goes on from the review ledger; blockers on it
+  start one more post and fix, and at the cap the child parks. A failed fixer
+  (`FINDINGS:FAILED`, with its reason, also read from the log of one whose end
+  was not recorded), a failed post, or a review folder with no
+  `findings.json` parks the child. A re-run after the post runs the fixer,
+  not a review; a post or fixer left running by a stopped run is waited for
+  and then run again, never two at once; a fixer, post or review stopped by
+  SIGKILL, SIGTERM or SIGHUP (also as `uv run` reports it, 128 + signal) is
+  run again by the next run. A fixer that ends with `FINDINGS:DONE` or
+  `FINDINGS:MAX_ROUNDS` and leaves the head where it was parks the child with
+  its blockers. Any `findings` on the PR's number, one started by hand
+  included, is waited for before a fixer starts. The post and the fixer count
+  against `epic.max_parallel` and `epic.max_usd`.
+
 ## [0.62.0] - 2026-10-13
 
 ### Added

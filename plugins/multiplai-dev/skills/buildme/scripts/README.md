@@ -84,7 +84,29 @@ the head, the base, the review directory, the cost, `pr_round`, `reused`,
 `conflicts` (never blocks) and `blocking` (open Code HIGH/MEDIUM findings); at
 `epic.max_review_rounds` with blockers, or on any other failure, the child
 parks. A review counts against `epic.max_parallel` and `epic.max_usd` like a
-build. A file
+build. A review with blockers below the cap runs the fix loop (`epic/fix.py`,
+`Coordinator._fix`): `findings.decisions.write_decisions(<review dir>)`, then
+`review_pipeline post <review dir> --decisions <review dir>/buildme-decisions.json`
+(record kind `post`), then `python -m build_pipeline findings --pr <n> --change
+<epic>-<id> --project-dir <worktree + project offset> --auto --trust-repo
+--max-rounds <reviewed rounds in .findings-state.json + rounds left>` (kind `fix`), both
+with cwd the child's project directory; then the PR is read again and the
+fixer's last review reused. A head with a `fix` record after its review is
+not fixed again; when that fix exited 0 with `FINDINGS:DONE` or
+`FINDINGS:MAX_ROUNDS` (`fix.ended`), its head still has blockers and the
+child parks, again on each later run until a new commit. One with a `post`
+that exited 0 and no `fix` runs the fixer only. A `post` with no
+result is waited for while `ps` shows it (`post_pid`), then gets an
+`interrupted` result and posts again. A `fix` with no result is waited for
+while `ps` shows it (`fix_pid`: any `findings` on the PR's number whose
+`--project-dir`, if absolute, is in the same repository, so one started by
+hand counts too; it is checked before every fixer launch), then gets an
+`interrupted` result and runs again (`_fix_pending`), as does one killed or
+stopped by SIGKILL, SIGTERM or SIGHUP (a negative exit, or 137, 143 or 129,
+`fix.stopped`); one whose log holds `FINDINGS:FAILED` parks instead. A post
+or review stopped the same way (`uv run` reports 128 + signal) gets an
+`interrupted` result, and the next run posts or reviews again. `FINDINGS:FAILED`, another failing exit, or a failed post parks the
+child. A file
 changed after approval, another process holding the epic's lock, or a
 `specs/config.yaml` turning off `git.worktree` or `git.push`, exits 2.
 `--no-epic-split` skips the decision.

@@ -704,8 +704,41 @@ stops a review this run started, with the children; a review an earlier run
 left running, or one another process runs (your own `/multiplai-dev:review`,
 say), is not signalled: it keeps running, and the next run uses what it
 finished. SIGHUP leaves a review running, and the next run uses what it
-finished. Fixing and merging the children's PRs come in
-later releases.
+finished.
+
+**Fixing the children's PRs.** A review that leaves blockers below
+`epic.max_review_rounds` runs the fix loop. First the review's findings are
+chosen as `--auto` chooses them (every Code finding, and every Tests finding
+on a non-test source file, in `buildme-decisions.json` next to the review's
+`findings.json`, outside the worktree) and posted with `python -m
+review_pipeline post <review dir> --decisions <that file>`, run in the child's
+project directory (`agents/<NNN>-post-<id>.*`). Then the fixer runs there:
+`python -m build_pipeline findings --pr <n> --change <epic>-<id> --project-dir
+<child project dir> --auto --trust-repo --max-rounds <M>`
+(`agents/<NNN>-fix-<id>.*`), where `<M>` is the rounds in the change's
+`.findings-state.json` whose review finished plus the review rounds the PR
+has left, so the fixer stops at the epic's cap, also when it resumes a round
+it had started. When it ends, the coordinator reads the PR again and
+reuses the fixer's last review (no new review launch): blockers on it start
+one more post and fix, and at the cap the child parks. A head with a fix
+after its review is not fixed again: when that fixer exited 0 with
+`FINDINGS:DONE` or `FINDINGS:MAX_ROUNDS` and left the head where it was, the
+child parks with the blockers, and each later run parks it again until a new
+commit is pushed. `FINDINGS:FAILED:<step>:<reason>` (also
+when found in the log of a fixer whose end was not recorded), any
+other failing exit of the fixer, a failed post, or a review folder with no
+`findings.json` parks the child with the reason, and it stays parked. On a
+re-run, a head whose post succeeded runs the fixer, not a second post or a
+review; a post or fixer an earlier run left running is waited for (never two
+at once), then a post runs again, and a fixer runs again with `--max-rounds`
+recomputed, and `findings` resumes itself; a fixer, post or review killed or
+stopped by SIGKILL, SIGTERM or SIGHUP (a negative exit, or 137, 143 or 129,
+as `findings` and `uv run` report it) is run again by the next run. Before
+each fixer launch, any `findings` on the PR's number is waited for, one
+started by hand without `--change` included. The post and the
+fixer count against `epic.max_parallel` and `epic.max_usd` like a build, and
+Ctrl-C or SIGTERM stops a fixer this run started. Merging the children's PRs
+comes in a later release.
 
 ### The size gate (after plan review)
 
