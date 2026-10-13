@@ -370,10 +370,14 @@
              text: (draft.note || "").trim() };
   }
 
-  /* Why a look row cannot be sent, or null. */
-  function lookProblem(row) {
-    return row.style === null && row.brand === null && row.captions === null
-      ? "Pick a style, a brand or a caption option." : null;
+  /* Why a look row cannot be sent, or null. `brands` is /api/brands: a brand
+   * whose file cannot be read would fail at render, so it cannot be sent. */
+  function lookProblem(row, brands) {
+    if (row.style === null && row.brand === null && row.captions === null) {
+      return "Pick a style, a brand or a caption option.";
+    }
+    const bad = row.brand !== null && (brands || []).find((b) => b.name === row.brand && b.status !== "ok");
+    return bad ? `The ${row.brand} brand file cannot be used; pick another brand or none.` : null;
   }
 
   /* The time to show in a looping sample page `elapsed` seconds after it started:

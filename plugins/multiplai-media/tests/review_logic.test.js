@@ -326,6 +326,14 @@ test("lookRow sends the caption option's values, and a look must pick something"
   assert.match(L.lookProblem(none), /Pick a style, a brand or a caption option/);
 });
 
+test("lookProblem refuses a brand whose file cannot be used", () => {
+  const brands = [{ name: "house", status: "invalid", error: "bad json" }, { name: "warm", status: "ok" }];
+  const row = L.lookRow({ style: null, brand: "house", caption: null, note: "" }, LOOKS);
+  assert.match(L.lookProblem(row, brands), /The house brand file cannot be used/);
+  assert.equal(L.lookProblem({ ...row, brand: "warm" }, brands), null);
+  assert.equal(L.lookProblem(row, []), null);           // brands not loaded yet: the server still checks the name
+});
+
 test("sameChoice: a row that repeats the last one sent is not sent again", () => {
   const keys = ["style", "brand", "captions"];
   const row = L.lookRow({ style: "flat-vector", brand: null, caption: "Classic", note: "" }, LOOKS);

@@ -242,7 +242,7 @@
 
   function renderSend() {
     const row = L.lookRow(draft, looks);
-    const problem = L.lookProblem(row);
+    const problem = L.lookProblem(row, brands);
     const last = lastSent();
     const unchanged = L.sameChoice(row, last, ["style", "brand", "captions"]);
     sendBtn.disabled = !!problem || unchanged;
@@ -254,7 +254,7 @@
 
   async function send() {
     const row = L.lookRow(draft, looks);
-    if (L.lookProblem(row)) return;
+    if (L.lookProblem(row, brands)) return;
     sendBtn.disabled = true;
     try {
       await App.send([row]);
