@@ -24,6 +24,7 @@ whose PR merged, keeps the files it started with.
 from __future__ import annotations
 
 import ast
+import logging
 import os
 import subprocess
 import warnings
@@ -35,6 +36,8 @@ from pydantic import BaseModel, ConfigDict
 
 from . import target as target_mod
 from .target import Target
+
+log = logging.getLogger(__name__)
 
 # Lines per explore unit: buildme's codebase analysis uses the same (`code_analysis.py`, UNIT_LINES).
 UNIT_LINES = 6000
@@ -130,6 +133,7 @@ def _check_attrs(repo: str, head: str, paths: list[str]) -> dict[str, str]:
         input="\0".join(paths) + "\0", capture_output=True, text=True, env=git_env(), shell=False, check=False,
     )
     if proc.returncode != 0:
+        log.warning("git check-attr --source failed; not skipping generated files: %s", proc.stderr.strip()[:300])
         return {}
     parts = proc.stdout.split("\0")
     out: dict[str, str] = {}
