@@ -374,6 +374,11 @@
     if (state.draft && state.draft.kind === "drawing" && !state.draft.shapes.length) closeComposer();
     else composerLabel();
     renderLayer();
+    // The composer sits under the timeline, below the fold beside a tall 9:16 picture. Bring it
+    // into view once, after the first shape (never mid-stroke, and without taking the focus).
+    if (shape && state.draft && state.draft.kind === "drawing" && state.draft.shapes.length === 1) {
+      composer.scrollIntoView({ block: "nearest" });
+    }
   }
 
   /* The frame at native size with the shapes on it, as a JPEG blob and a small preview. */
