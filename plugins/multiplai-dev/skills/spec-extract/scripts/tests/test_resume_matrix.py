@@ -86,8 +86,9 @@ def _release(proc: subprocess.Popen) -> None:
 
 
 @pytest.mark.parametrize("held", ["state_names_this_target", "no_state_json", "only_the_lock_file"])
-def test_R13_another_process_holds_the_lock(tmp_path, capsys, held):
-    t = Target("tree", tmp_path / "a")
+@pytest.mark.parametrize("kind", ["tree", "dir"])
+def test_R13_another_process_holds_the_lock(tmp_path, capsys, kind, held):
+    t = Target(kind, tmp_path / "a")
     root = tmp_path / "out"
     run_dir = root / t.rel
     if held == "state_names_this_target":
@@ -237,6 +238,7 @@ def test_R23_unreadable_state(tmp_path, capsys, kind):
     assert t.run(root) == 1
     err = capsys.readouterr().err
     assert str(run_dir / "state.json") in err and "--restart" in err
+    assert "--out" in err  # the folder may hold another target's run: --restart would move it aside
     assert everything(run_dir) == before
     assert sorted(p.name for p in run_dir.parent.iterdir()) == sorted([".locks", run_dir.name])
 

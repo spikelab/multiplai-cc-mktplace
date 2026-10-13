@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -309,6 +310,60 @@ def test_pr_fetch_fetches_origin_and_the_pr_head(tmp_path, root, pr_view):
     assert run("run", "--repo", clone, "--pr", "4", "--fetch", "--out", root) == 0
 
 
+
+def _fake_gh(tmp_path: Path, monkeypatch, stdout: str, code: int = 0) -> Path:
+    """Put a `gh` in place that saves its argv to the returned file and prints *stdout*."""
+    argv_file = tmp_path / "gh-argv.json"
+    gh = tmp_path / "bin" / "gh"
+    write(gh, f"#!{sys.executable}\nimport json, sys\n"
+              f"open({str(argv_file)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+              f"sys.stdout.write({stdout!r})\nsys.exit({code})\n")
+    gh.chmod(0o755)
+    which = target_mod.shutil.which
+    monkeypatch.setattr(target_mod.shutil, "which", lambda name: str(gh) if name == "gh" else which(name))
+    return argv_file
+
+
+@pytest.mark.parametrize("origin", ["https://github.com/acme/widgets.git",
+                                    "git@github.com:acme/widgets.git",
+                                    "ssh://git@github.com/acme/widgets"])
+def test_pr_asks_gh_about_origins_repository(tmp_path, root, monkeypatch, origin):
+    """In a fork clone gh would pick `upstream` over `origin`; the fetch, the hints and the
+    folder all name origin, so gh is told origin's repository."""
+    repo, fork, head, base_tip = _pr_repo(tmp_path)
+    git(repo, "remote", "set-url", "origin", origin)
+    git(repo, "remote", "add", "upstream", OTHER)
+    argv_file = _fake_gh(tmp_path, monkeypatch, json.dumps(
+        {"headRefOid": head, "baseRefOid": base_tip, "url": "https://github.com/acme/widgets/pull/7"}))
+    assert run("run", "--repo", repo, "--pr", "7", "--out", root) == 0
+    argv = json.loads(argv_file.read_text())
+    assert argv[:3] == ["pr", "view", "7"]
+    assert argv[argv.index("--repo") + 1] == "acme/widgets"
+    assert read_state(root / "widgets" / f"pr-7@{head[:12]}")["target"]["base_sha"] == fork
+
+
+def test_pr_of_another_repository_than_origin_is_refused(tmp_path, root, monkeypatch, capsys):
+    """origin is not on github.com, so gh chooses the repository; a PR of another one than
+    origin is refused rather than fetched from and filed under origin."""
+    repo, fork, head, base_tip = _pr_repo(tmp_path)
+    git(repo, "remote", "set-url", "origin", "https://git.example.com/acme/widgets.git")
+    argv_file = _fake_gh(tmp_path, monkeypatch, json.dumps(
+        {"headRefOid": head, "baseRefOid": base_tip, "url": "https://git.example.com/other/widgets/pull/7"}))
+    assert run("run", "--repo", repo, "--pr", "7", "--out", root) == 2
+    assert "--repo" not in json.loads(argv_file.read_text())
+    err = capsys.readouterr().err
+    assert "other/widgets" in err and "acme/widgets" in err
+    assert not root.exists()
+
+
+@pytest.mark.parametrize("stdout,code", [("", 1), ("not json", 0), ("[1]", 0)])
+def test_pr_gh_failure_is_refused(repo, root, monkeypatch, capsys, stdout, code):
+    _fake_gh(repo.parent, monkeypatch, stdout, code)
+    assert run("run", "--repo", repo, "--pr", "7", "--out", root) == 2
+    assert "gh pr view 7" in capsys.readouterr().err
+    assert not root.exists()
+
+
 # --- --dir ----------------------------------------------------------------------
 
 def _source(tmp_path) -> Path:
@@ -331,6 +386,23 @@ def test_dir_names_and_import(tmp_path, root):
     assert (folder / "snapshot" / "pkg" / "mod.py").is_file()
     assert sorted(p.name for p in src.iterdir()) == ["node_modules", "pkg"]  # nothing written there
 
+
+
+def test_dir_import_commits_what_a_copied_gitignore_names(tmp_path, root):
+    """GitHub's Python `.gitignore` ignores `lib/`: copied code it names is still in the
+    import commit, so in the snapshot and in what the gates read."""
+    src = tmp_path / "x" / "y"
+    write(src / "lib" / "core" / "a.py", "A = 1\n")
+    write(src / "app" / "b.py", "B = 2\n")
+    write(src / "app" / ".gitignore", "*\n")
+    write(src / ".gitignore", "lib/\n")
+    assert run("run", "--dir", src, "--out", root) == 0
+    folder = root / "y" / f"dir-y-{_hex6(str(src.resolve()))}"
+    assert sorted(git(folder / "source", "ls-files").splitlines()) == [
+        ".gitignore", "app/.gitignore", "app/b.py", "lib/core/a.py"]
+    assert git(folder / "source", "status", "--porcelain", "--ignored") == ""
+    assert (folder / "snapshot" / "lib" / "core" / "a.py").read_text() == "A = 1\n"
+    assert (folder / "snapshot" / "app" / "b.py").read_text() == "B = 2\n"
 
 def test_dir_import_is_the_same_commit_for_the_same_files_and_clock(tmp_path):
     src = _source(tmp_path)
