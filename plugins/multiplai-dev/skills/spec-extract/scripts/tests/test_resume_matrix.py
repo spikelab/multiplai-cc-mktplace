@@ -5,9 +5,11 @@ Each test stops the step at its row's point, resumes with the same command, and
 compares with a reference run that never stopped, on an identical fixture with
 the same fixed clock: the same `<run>` under its root, byte-equal outputs
 (`conftest.outputs`), and the same saved target and steps. PR 1a's rows: R13,
-R18, R19, R23, R27. PR 1b's: R4, R5, R6, R12, R26, which also check that the
+R18, R19, R23, R27. PR 1b's: R4, R5, R6, R12, R26, R30, which also check that the
 stopped run's answers equal the reference's for every key answered in both, and
 that the fake `CallFn` was called no more often per unit than in the reference.
+R6 resumes on a later clock, so its byte-equal facts.json also checks R28 (the
+saved `generated_at`).
 Later PRs add theirs here.
 """
 
@@ -18,9 +20,11 @@ import json
 import shutil
 import subprocess
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from multiplai_core.citations import file_at
 
 from conftest import (FIXED, SCRIPTS_DIR, Killed, commit_file, everything, fake_state, git, make_repo,
                       make_units_repo, outputs, read_state, run, source_head, unit_file, write)
@@ -281,8 +285,8 @@ def test_R27_dir_source_without_its_import(tmp_path, capsys, damage):
 
 # --- PR 1b: explore rows ------------------------------------------------------------------
 
-def _tree(repo: Path, root: Path, *extra) -> int:
-    return run("run", "--repo", repo, "--tree", "HEAD", "--out", root, *extra)
+def _tree(repo: Path, root: Path, *extra, now=FIXED) -> int:
+    return run("run", "--repo", repo, "--tree", "HEAD", "--out", root, *extra, now=now)
 
 
 def _folder(root: Path) -> Path:
@@ -420,7 +424,9 @@ def test_R6_answers_saved_outputs_missing(tmp_path, monkeypatch, fake_call, left
         (run_dir / "report.md").write_text("stale\n")
     calls_before = dict(fake_call.calls)
 
-    assert _tree(repo, root) == 0
+    # Resumed a day later: facts.json still says when explore first finished (row R28),
+    # so it is the same bytes as the reference's.
+    assert _tree(repo, root, now=FIXED + timedelta(days=1)) == 0
     assert dict(fake_call.calls) == calls_before  # no call
     assert read_state(run_dir)["steps_done"] == ["resolve", "scope", "explore"]
     assert not (run_dir / "facts.json.tmp").exists()
@@ -452,8 +458,22 @@ def test_R12_budget_reached_then_raised(tmp_path, capsys, fake_call):
 
 # --- R26: a --pr run's base moved, or the PR merged, after a stop ---------------------------
 
+def _stop_before_scope(monkeypatch) -> None:
+    """Kill the run at the save that would first hold its scope, before it writes: the
+    state on disk has the resolved target and no scope (row R3's step, not yet done)."""
+    real = state_mod.save
+
+    def save(state, run_dir):
+        if state.scope is not None:
+            raise Killed("stopped before the scope was saved")
+        real(state, run_dir)
+
+    monkeypatch.setattr(state_mod, "save", save)
+
+
+@pytest.mark.parametrize("stop", ["before_scope", "after_one_answer"])
 @pytest.mark.parametrize("change", ["base_moved", "merged"])
-def test_R26_pr_keeps_its_base_and_scope(tmp_path, monkeypatch, pr_view, fake_call, change):
+def test_R26_pr_keeps_its_base_and_scope(tmp_path, monkeypatch, pr_view, fake_call, change, stop):
     repo = make_units_repo(tmp_path / "widgets", 3)
     base = git(repo, "rev-parse", "HEAD")
     git(repo, "checkout", "-q", "-b", "feature")
@@ -473,9 +493,17 @@ def test_R26_pr_keeps_its_base_and_scope(tmp_path, monkeypatch, pr_view, fake_ca
 
     root = tmp_path / "out"
     with monkeypatch.context() as m:
-        _stop_after_answers(m, 1)
+        if stop == "before_scope":
+            _stop_before_scope(m)
+        else:
+            _stop_after_answers(m, 1)
         _stopped(lambda: go(root))
-    assert len(read_state(_folder(root))["explore_answers"]) == 1
+    stopped = read_state(_folder(root))
+    if stop == "before_scope":
+        # The scope is computed on resume, after the base moved: from the saved base_sha.
+        assert stopped.get("scope") is None and stopped["target"]["base_sha"] == base
+    else:
+        assert len(stopped["explore_answers"]) == 1
     if change == "base_moved":
         # Part of the PR (c1) lands on main, which moves on: the merge-base is now c1.
         git(repo, "merge", "-q", "--ff-only", c1)
@@ -492,3 +520,35 @@ def test_R26_pr_keeps_its_base_and_scope(tmp_path, monkeypatch, pr_view, fake_ca
     assert state["target"]["base_sha"] == base
     assert state["scope"] == ref_state["scope"]
     assert_explore_matches(run_dir, root, _folder(ref_root), ref_root, dict(fake_call.calls), ref_calls)
+
+
+# --- R30: resumed from another checkout of the same remote, the first one removed ------------
+
+@pytest.mark.parametrize("stop", ["before_scope", "after_one_answer"])
+def test_R30_resume_from_another_checkout(tmp_path, monkeypatch, fake_call, stop):
+    """Decided 14 shares a run folder between every checkout of one remote. The saved
+    target names the checkout the run started in; a resume from another checkout reads
+    git there, never from the saved path, which may be gone (a removed worktree)."""
+    first = make_units_repo(tmp_path / "a" / "widgets", 3)
+    ref_root = tmp_path / "ref"
+    ref_calls = _reference(fake_call, {}, lambda: _tree(first, ref_root))
+
+    root = tmp_path / "out"
+    with monkeypatch.context() as m:
+        if stop == "before_scope":
+            _stop_before_scope(m)
+        else:
+            _stop_after_answers(m, 1)
+        _stopped(lambda: _tree(first, root))
+    other = tmp_path / "b" / "widgets"
+    subprocess.run(["git", "clone", "-q", str(first), str(other)], check=True, capture_output=True)
+    git(other, "remote", "set-url", "origin", "https://github.com/acme/widgets.git")
+    shutil.rmtree(tmp_path / "a")
+    file_at.cache_clear()  # a resume is a new process: nothing read from the first checkout is cached
+
+    assert _tree(other, root) == 0
+    run_dir, ref_dir = _folder(root), _folder(ref_root)
+    assert read_state(run_dir)["scope"] == read_state(ref_dir)["scope"]
+    assert_explore_matches(run_dir, root, ref_dir, ref_root, dict(fake_call.calls), ref_calls)
+    # The citations were checked in the other checkout: none was dropped for a missing repo.
+    assert json.loads((run_dir / "facts.json").read_text())["dropped"] == []

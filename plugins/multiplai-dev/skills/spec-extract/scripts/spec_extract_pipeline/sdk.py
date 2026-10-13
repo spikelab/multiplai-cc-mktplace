@@ -12,9 +12,14 @@ multiplai-core.
 - **Tools.** Explore agents get `Read`, `Glob` and `Grep` only, on the
   snapshot. No agent can run a command or write (plan, Constraints).
 - **Retry policy.** A call whose answer does not parse is re-asked once as a
-  reformat of the text already paid for (no tools, one turn); a call that
-  failed outright is re-run once with the error appended. A second failure
-  raises `CallFailed`, which the dispatch rule stores as an error answer.
+  reformat of the text already paid for (no tools, one turn). A call that
+  failed outright is not re-run here: it raises `CallFailed`, which the
+  dispatch rule stores as an error answer and asks once more (plan, item 7),
+  so a unit makes at most two agent runs.
+- **A backend that cannot run** (an unknown provider, the Claude Agent SDK
+  missing or rejecting its options) raises `BackendUnavailable`, not
+  `CallFailed`: no call could get past it, so it counts no attempt and stops
+  the run (exit 1) until the setting is fixed.
 - **Budget.** Every call is checked against the run folder's ledger first and
   recorded into it as it returns (`multiplai_core.budget`, a ContextVar).
   `BudgetExceededError` is not a `CallFailed`: it stops the run (exit 3).
@@ -26,7 +31,6 @@ multiplai-core.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from dataclasses import dataclass
@@ -34,7 +38,7 @@ from typing import TypeVar
 
 from multiplai_core import budget as core_budget
 from multiplai_core import resolve_model_spec
-from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, run_agent
+from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, UnknownAgentBackendError, run_agent
 from multiplai_core.budget import BudgetExceededError, SpendLedger
 from multiplai_core.env import load_multiplai_conf
 from multiplai_core.stage_config import conf_value
@@ -57,13 +61,22 @@ TRUST_MESSAGE = (
     f"tree. If you trust the repository, re-run with --trust-repo (or set {TRUST_ENV}=1)."
 )
 
-__all__ = ["BudgetExceededError", "CallFailed", "DEFAULT_MAX_USD", "RepoTrustError", "SpecExtractBudget",
-           "TRUST_MESSAGE", "agent_call_structured", "model_for", "repo_is_trusted", "require_trusted_repo",
+__all__ = ["BackendUnavailable", "BudgetExceededError", "CallFailed", "DEFAULT_MAX_USD", "RepoTrustError",
+           "SpecExtractBudget", "TRUST_MESSAGE", "agent_call_structured", "model_for", "repo_is_trusted", "require_trusted_repo",
            "start_budget"]
 
 
 class CallFailed(Exception):
     """A model call failed, or its answer did not validate after the re-ask."""
+
+
+class BackendUnavailable(Exception):
+    """No call can run: the model's backend is unknown, or the Claude Agent SDK is missing or
+    rejects its options. Not a `CallFailed`: the dispatch rule counts no attempt for it."""
+
+
+# `run_agent`'s reasons for a failure no call can get past (multiplai_core.agent_runner).
+_SETUP_REASONS = ("claude-agent-sdk not installed", "ClaudeAgentOptions rejected")
 
 
 class RepoTrustError(Exception):
@@ -120,6 +133,8 @@ async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effo
             component="spec-extract",
         )
     except AgentRunError as e:
+        if isinstance(e, UnknownAgentBackendError) or e.reason.startswith(_SETUP_REASONS):
+            raise BackendUnavailable(f"no model call can run: {e.reason}") from e
         partial = getattr(e, "partial", None)
         if partial is not None:
             core_budget.record(partial.usage, label=budget_label)
@@ -143,31 +158,22 @@ async def agent_call_structured(
 ) -> T:
     """Run an agent and parse its final message into *schema* (the `CallFn` code_facts calls).
 
-    One re-ask on failure, then `CallFailed`. `RepoTrustError` and
-    `BudgetExceededError` are never caught here.
+    An answer that does not parse is sent back once to be reformatted; a failed
+    run is not re-run. Either failure ends in `CallFailed`. `RepoTrustError`,
+    `BackendUnavailable` and `BudgetExceededError` are never caught here.
     """
     name = budget_label or "agent"
     common = dict(model=model, effort=effort, cwd=cwd, call_timeout=call_timeout, budget_label=budget_label)
-    text: str | None = None
+    text = await _run(prompt, allowed_tools=allowed_tools, max_turns=max_turns, **common)
     try:
-        text = await _run(prompt, allowed_tools=allowed_tools, max_turns=max_turns, **common)
         return parse_answer(text, schema)
-    except (ValidationError, ValueError, CallFailed) as e:
+    except (ValidationError, ValueError) as e:
         first_error = e
-        log.warning("%s: answer unusable (attempt 1/2): %s", name, str(e)[:500])
-
+        log.warning("%s: answer unusable, asking for a reformat: %s", name, str(e)[:500])
     try:
-        if text is None:
-            retry = (
-                f"{prompt}\n\n---\nYour previous answer was rejected by a program: {str(first_error)[:2000]}\n"
-                f"Return ONLY one JSON object matching this schema:\n"
-                f"{json.dumps(schema.model_json_schema(), indent=1)}\n"
-            )
-            text = await _run(retry, allowed_tools=allowed_tools, max_turns=max_turns, **common)
-        else:
-            text = await _run(reformat_prompt(text, schema, first_error), allowed_tools=[],
-                              max_turns=REFORMAT_MAX_TURNS, run_label=f"{name}:reformat", **common)
+        text = await _run(reformat_prompt(text, schema, first_error), allowed_tools=[],
+                          max_turns=REFORMAT_MAX_TURNS, run_label=f"{name}:reformat", **common)
         return parse_answer(text, schema)
     except (ValidationError, ValueError, CallFailed) as e:
-        log.warning("%s: answer unusable (attempt 2/2): %s", name, str(e)[:500])
-        raise CallFailed(f"{name}: no valid answer after a re-ask: {e}") from e
+        log.warning("%s: answer unusable after the reformat: %s", name, str(e)[:500])
+        raise CallFailed(f"{name}: no valid answer after a reformat: {e}") from e

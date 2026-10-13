@@ -14,6 +14,7 @@ state an earlier version wrote still loads.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from multiplai_core import checkpoint
@@ -50,6 +51,9 @@ class State(BaseModel):
     explore_attempts: dict[str, int] = {}
     # `ledger.to_state()`, saved with every answer: the spend of every call kept.
     budget: dict | None = None
+    # facts.json's `generated_at`: the clock when explore first finished, saved before
+    # facts.json is first written, so every later rewrite is the same bytes (row R28).
+    facts_generated_at: datetime | None = None
 
 
 def load(run_dir: Path) -> State | None:

@@ -10,7 +10,7 @@ Version numbers are this plugin's version in the marketplace manifest
 
 Recorded history starts at **0.1.1**; anything earlier is in `git log` only.
 
-Of the 25 versions recorded here, `0.1.1` and `0.5.0`–`0.5.3` carry a git tag;
+Of the versions recorded here, `0.1.1` and `0.5.0`–`0.5.3` carry a git tag;
 tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
@@ -36,7 +36,13 @@ time, not derived from a tag.
   stops before any model call.
 - A resumed run asks only the slices with no answer, asks a slice at most
   twice in all, and a `--pr` run keeps the base and file list it started with
-  even after the base branch moves or the PR merges.
+  even after the base branch moves or the PR merges. It can resume from
+  another checkout of the same repository, even when the first one is gone.
+  A re-run after explore writes `facts.json` with the same bytes, its
+  `generated_at` included.
+- A model setting no call can run with (an unknown provider in
+  `spec_extract_explore_model`, or `claude-agent-sdk` missing) exits 1 and
+  counts no attempt, so the same command works once it is fixed.
 
 ## [0.52.0] - 2026-10-13
 

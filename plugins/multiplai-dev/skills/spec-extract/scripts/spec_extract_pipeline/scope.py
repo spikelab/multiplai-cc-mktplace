@@ -222,8 +222,9 @@ def plan_text(target: Target, scope: TargetScope, describe: str) -> str:
     n = len(scope.units)
     s = len(scope.symbols)
     lines = [f"spec-extract plan: {describe}", "",
-             f"Explore: {n} unit(s), one call each (a unit whose call fails is asked once more, "
-             f"so at most {2 * n} calls)."]
+             f"Explore: {n} unit(s), one agent run each (a unit whose run fails is asked once more, "
+             f"so at most {2 * n} agent runs; an answer that does not parse is sent back once to be "
+             f"reformatted, in one turn with no tools)."]
     for u in scope.units:
         lines.append(f"- {u.id}: {len(u.files)} file(s), {u.lines} lines: {', '.join(u.files)}")
     lines += ["",
@@ -233,11 +234,3 @@ def plan_text(target: Target, scope: TargetScope, describe: str) -> str:
               f"Skipped: {len(scope.skipped)} file(s). Not analysed (ast could not parse): "
               f"{len(scope.unparsed)} file(s)."]
     return "\n".join(lines) + "\n"
-
-
-def load_or_compute(target: Target, saved: TargetScope | None) -> tuple[TargetScope, bool]:
-    """(scope, computed now). A saved scope is returned as it is, never recomputed."""
-    if saved is not None:
-        return saved, False
-    return compute(target), True
-

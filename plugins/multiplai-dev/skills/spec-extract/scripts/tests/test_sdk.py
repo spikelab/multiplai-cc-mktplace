@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from multiplai_core import budget as core_budget
-from multiplai_core.agent_runner import AgentRunError
+from multiplai_core.agent_runner import AgentRunError, UnknownAgentBackendError
 from multiplai_core.budget import BudgetExceededError
 from pydantic import BaseModel
 
@@ -72,14 +72,35 @@ def test_unparsable_answer_is_reformatted_once_without_tools(monkeypatch):
     assert core_budget.get().cost_usd == 1.0
 
 
-def test_two_failures_raise_call_failed(monkeypatch):
+def test_a_failed_run_raises_call_failed_without_a_rerun(monkeypatch):
+    # The dispatch rule asks the unit once more (plan, item 7); the wrapper does not re-run it
+    # too, or each attempt could cost two agent runs.
     err = AgentRunError("boom", reason="cli", stderr_tail="tail", partial=_result("", cost=0.25))
-    fake, go = _call(monkeypatch, err, err)
+    fake, go = _call(monkeypatch, err, _result('{"value": 1}'))
     with pytest.raises(sdk.CallFailed):
         asyncio.run(go())
-    assert len(fake.calls) == 2
-    assert "rejected by a program" in fake.calls[1]["prompt"]
-    assert core_budget.get().cost_usd == 0.5  # each failed run's partial spend is kept
+    assert len(fake.calls) == 1
+    assert core_budget.get().cost_usd == 0.25  # the failed run's partial spend is kept
+
+
+def test_a_reformat_that_does_not_parse_raises_call_failed(monkeypatch):
+    fake, go = _call(monkeypatch, _result("not json"), _result("still not json"))
+    with pytest.raises(sdk.CallFailed):
+        asyncio.run(go())
+    assert len(fake.calls) == 2 and fake.calls[1]["allowed_tools"] == []
+
+
+@pytest.mark.parametrize("err", [
+    UnknownAgentBackendError("no agent backend for provider 'pi'", reason="unknown agent backend 'pi'"),
+    AgentRunError("claude-agent-sdk is not available", reason="claude-agent-sdk not installed"),
+    AgentRunError("rejected", reason="ClaudeAgentOptions rejected: unexpected keyword"),
+], ids=["unknown-backend", "sdk-missing", "options-rejected"])
+def test_a_backend_that_cannot_run_is_not_a_call_failure(monkeypatch, err):
+    fake, go = _call(monkeypatch, err, _result('{"value": 1}'))
+    with pytest.raises(sdk.BackendUnavailable) as e:
+        asyncio.run(go())
+    assert not isinstance(e.value, sdk.CallFailed)
+    assert len(fake.calls) == 1
 
 
 def test_budget_reached_is_not_a_call_failure(monkeypatch):
@@ -93,6 +114,8 @@ def test_budget_reached_is_not_a_call_failure(monkeypatch):
 def test_model_key_from_multiplai_conf(monkeypatch):
     monkeypatch.setattr(sdk, "load_multiplai_conf", lambda: {"spec_extract_explore_model": "pi:some/model"})
     assert _REAL_MODEL_FOR("explore") == "pi:some/model"
+    monkeypatch.setattr(sdk, "load_multiplai_conf", lambda: {"spec_extract_explore_model": "anthropic:claude-sonnet-5"})
+    assert _REAL_MODEL_FOR("explore") == "claude-sonnet-5"  # an Anthropic model goes bare
     monkeypatch.setattr(sdk, "load_multiplai_conf", lambda: {})
     assert _REAL_MODEL_FOR("explore") is None
 
@@ -126,3 +149,53 @@ def test_plan_only_needs_no_trust_and_makes_no_call(tmp_path, monkeypatch, capsy
     assert not fake_call.calls
     state = read_state(folder)
     assert state["steps_done"] == ["resolve", "scope"] and state["budget"] is None
+
+
+def _real_call_with(monkeypatch, run_agent) -> None:
+    monkeypatch.setattr(sdk, "agent_call_structured", _REAL_CALL)
+    monkeypatch.setattr(sdk, "run_agent", run_agent)
+
+
+def test_a_unit_whose_runs_fail_makes_at_most_two_agent_runs(tmp_path, monkeypatch):
+    calls = []
+
+    async def failing(prompt, **kwargs):
+        calls.append(prompt)
+        raise AgentRunError("boom", reason="cli")
+
+    _real_call_with(monkeypatch, failing)
+    repo = make_repo(tmp_path / "widgets")
+    root = tmp_path / "out"
+    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
+    (folder,) = (root / "widgets").glob("tree@*")
+    assert len(calls) == 2  # one per attempt, as plan.txt says
+    assert "at most 2 agent runs" in (folder / "plan.txt").read_text()
+    assert read_state(folder)["explore_attempts"] == {"unit:u1": 2}
+
+
+def test_a_backend_that_cannot_run_counts_no_attempt(tmp_path, monkeypatch, capsys):
+    calls = []
+
+    async def no_backend(prompt, **kwargs):
+        calls.append(prompt)
+        raise UnknownAgentBackendError("no agent backend for provider 'pi'", reason="unknown agent backend 'pi'")
+
+    _real_call_with(monkeypatch, no_backend)
+    repo = make_repo(tmp_path / "widgets")
+    root = tmp_path / "out"
+    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 1
+    assert "unknown agent backend 'pi'" in capsys.readouterr().err
+    (folder,) = (root / "widgets").glob("tree@*")
+    state = read_state(folder)
+    assert len(calls) == 1
+    assert state["explore_attempts"] == {} and state["explore_answers"] == {}
+    assert "explore" not in state["steps_done"]
+
+    # Once the setting is fixed, the same command asks the unit, as a run that never failed does.
+    async def ok(prompt, **kwargs):
+        return _result('{"facts": [], "files": []}')
+
+    monkeypatch.setattr(sdk, "run_agent", ok)
+    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
+    state = read_state(folder)
+    assert state["explore_attempts"] == {"unit:u1": 1} and "facts" in state["explore_answers"]["unit:u1"]

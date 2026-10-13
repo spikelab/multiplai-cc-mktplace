@@ -176,3 +176,26 @@ def test_scope_is_saved_and_read_back(tmp_path):
     assert state["steps_done"][:2] == ["resolve", "scope"]
     assert state["scope"]["files"] == ["src/a/one.py", "src/billing/charge.py", "src_a/two.py"]
     assert (folder / "plan.txt").is_file()
+
+
+def test_a_failed_check_attr_warns_and_skips_nothing(tmp_path, caplog):
+    """An old git without `check-attr --source`, or one that fails, keeps every file and says so."""
+    repo = make_repo(tmp_path / "widgets")
+    write(repo / "gen.py", "def generated():\n    pass\n")
+    write(repo / ".gitattributes", "gen.py linguist-generated\n")
+    commit_file(repo, "gen.py", "def generated():\n    pass\n", "generated")
+    with caplog.at_level("WARNING", logger=scope_mod.log.name):
+        assert scope_mod._check_attrs(str(repo), "no-such-ref", ["gen.py"]) == {}
+    assert "git check-attr --source failed; not skipping generated files" in caplog.text
+    assert scope_mod._check_attrs(str(repo), git(repo, "rev-parse", "HEAD"), ["gen.py"]) == {
+        "gen.py": "linguist-generated"}
+
+
+def test_the_size_limit_counts_characters_not_bytes(tmp_path):
+    repo = make_repo(tmp_path / "widgets")
+    # 300,002 bytes, 150,002 characters: kept. Over 200,000 characters: skipped.
+    write(repo / "wide.py", "# " + "é" * 150_000 + "\n")
+    commit_file(repo, "long.py", "# " + "é" * 200_000 + "\n", "wide and long")
+    s = scope_mod.compute(_tree(repo))
+    assert "wide.py" in s.files
+    assert [(x.path, x.reason) for x in s.skipped] == [("long.py", "over 200000 characters")]

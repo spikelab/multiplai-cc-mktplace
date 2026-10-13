@@ -16,6 +16,10 @@ stopped before:
   the call) takes back the attempt it counted, saves, and marks the task
   "stopped by budget"; it never escapes `code_facts.bounded`, so calls in
   flight finish and are saved. Then the run exits 3.
+- A call that cannot run at all (`sdk.BackendUnavailable`, or
+  `sdk.RepoTrustError` from the wrapper's own check) is handled the same way,
+  then raised: exit 1 or 4, and a re-run after the fix asks the unit as if it
+  had never been asked.
 
 **Order.** `explore_answers` fills in return order, so nothing reads that
 order. `ordered_answers` orders them by `scope.units` (`partition`'s order),
@@ -106,6 +110,7 @@ async def run(state: State, run_dir: Path, *, call: CallFn, ledger: SpendLedger,
     call_kwargs = dict(allowed_tools=list(sdk.READ_ONLY_TOOLS), max_turns=sdk.EXPLORE_MAX_TURNS,
                        cwd=str(snapshot), model=model)
     stopped: list[str] = []
+    cannot_run: list[Exception] = []
 
     def save() -> None:
         state.budget = ledger.to_state()
@@ -125,13 +130,16 @@ async def run(state: State, run_dir: Path, *, call: CallFn, ledger: SpendLedger,
         try:
             await ask(key, unit_prompt(state.target, unit), call, answers, call_kwargs=call_kwargs, errors=[],
                       recoverable=(sdk.CallFailed,), fatal=(BudgetExceededError,))
-        except BudgetExceededError as e:
+        except (BudgetExceededError, sdk.BackendUnavailable, sdk.RepoTrustError) as e:
             if before is None:
                 attempts.pop(key, None)
             else:
                 attempts[key] = before
             save()
-            stopped.append(str(e))
+            if isinstance(e, BudgetExceededError):
+                stopped.append(str(e))
+            else:
+                cannot_run.append(e)
             return
         save()
 
@@ -140,6 +148,8 @@ async def run(state: State, run_dir: Path, *, call: CallFn, ledger: SpendLedger,
         if not todo:
             break
         await bounded(todo, one, CONCURRENCY)
+        if cannot_run:
+            raise cannot_run[0]
         if stopped:
             raise BudgetStopped(stopped[0])
 
@@ -183,16 +193,22 @@ def facts_document(target: Target, scope: TargetScope, answers: dict[str, dict],
     }
 
 
-def finish(state: State, run_dir: Path, now: datetime) -> tuple[int, int]:
+def finish(state: State, run_dir: Path, now: datetime, git_target: Target) -> tuple[int, int]:
     """Write `facts.json` and `report.md` from state, then add `explore`. (answered, units).
 
     Runs on every run that gets past explore, so a resume rewrites both files
-    from state with the same bytes (rows R6, R24).
+    from state with the same bytes (rows R6, R24). `generated_at` is the time
+    the first run got here, saved in state before `facts.json` is first
+    written (row R28). *git_target* is the saved target read from this run's
+    checkout, where the citations are checked.
     """
     scope = state.scope
     assert scope is not None
     answers = state.explore_answers
-    doc = facts_document(state.target, scope, answers, run_dir, now)
+    if state.facts_generated_at is None:
+        state.facts_generated_at = now
+        state_mod.save(state, run_dir)
+    doc = facts_document(git_target, scope, answers, run_dir, state.facts_generated_at)
     report_mod.write_output(run_dir, FACTS_FILE, json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
     report_mod.write_report(run_dir, state.target,
                             report_mod.scope_sections(scope, not_answered_files(scope.units, answers)))

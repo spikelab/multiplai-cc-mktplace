@@ -23,8 +23,12 @@ capability into a run folder. **This version stops after the explore step**:
    are split into explore units (at most 6,000 lines each); more than
    `--max-units` units is refused. Writes `plan.txt`.
 3. **Explore.** One agent per unit, four at a time, with `Read`, `Glob` and
-   `Grep` on `snapshot/` only. A unit whose call fails is asked once more; one
-   with no answer after two attempts is listed as not analysed. Every fact
+   `Grep` on `snapshot/` only. A unit whose agent run fails is asked once
+   more; one with no answer after two attempts is listed as not analysed. An
+   answer that does not parse is sent back once to be reformatted (one turn,
+   no tools). A model setting no call can run with (an unknown provider, or
+   `claude-agent-sdk` missing) stops the run with exit 1 and counts no
+   attempt, so the same command works once the setting is fixed. Every fact
    must cite lines a program re-reads at the commit with `git show`; the rest
    are dropped. Writes `facts.json` and `report.md`, and prints
    `SPEC_EXTRACT:EXPLORED <answered>/<units>`.
@@ -91,7 +95,7 @@ Only one run may write a folder at a time: a run holds
 | Code | Means |
 |---|---|
 | 0 | Done. |
-| 1 | Failed, including a `state.json` that cannot be read, or a `--dir` run whose `<run>/source/` no longer holds its import commit (the message names `--restart`). |
+| 1 | Failed, including a model setting no call can run with (nothing is counted), a `state.json` that cannot be read, or a `--dir` run whose `<run>/source/` no longer holds its import commit (the message names `--restart`). |
 | 2 | Refused: a bad target, a commit not in the clone, a `--dir` run folder that would be inside its source (for example `--out` the source's parent), every candidate folder holds another target's run (pass `--out`), no Python file to read (`SPEC_EXTRACT:NO_PYTHON`), or more explore units than `--max-units`. |
 | 3 | The run folder's spend reached `--max-usd`. Everything paid for is saved; re-run with a higher `--max-usd` to continue. |
 | 4 | The repository is not trusted: pass `--trust-repo`. |
