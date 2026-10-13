@@ -47,7 +47,8 @@ def cmd_render(args: argparse.Namespace) -> int:
         edl.music = cli_music
     out = Path(args.out).resolve()
     sidecar = render_sidecar.path_for(out)
-    if sidecar == Path(args.edl).resolve():
+    # samefile, not ==: on a case-insensitive disk (macOS) Clip-01.edl.json is clip-01.edl.json.
+    if sidecar == Path(args.edl).resolve() or (sidecar.exists() and sidecar.samefile(args.edl)):
         print(f"✗ the EDL is {sidecar}, where render writes its record of this render (the review page's "
               "timeline) — move the EDL (e.g. into edl/) or pick another --out", file=sys.stderr)
         return 2
@@ -74,7 +75,10 @@ def cmd_render(args: argparse.Namespace) -> int:
     except Exception as e:  # noqa: BLE001 — the mp4 is good; only its timeline is lost
         record = None
         print(f"⚠ no {sidecar.name}: {e} (the review page shows no timeline for this render)")
-    sidecar.unlink(missing_ok=True)
+    try:
+        sidecar.unlink(missing_ok=True)
+    except OSError as e:
+        print(f"⚠ could not remove the old {sidecar.name}: {e} (it describes an earlier render; delete it)")
     part.replace(out)
     print(f"✓ wrote {out} ({out.stat().st_size/1e6:.1f} MB)")
     if record is not None:

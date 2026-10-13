@@ -128,6 +128,41 @@ def test_an_edl_where_the_sidecar_goes_is_refused_before_rendering(job, tmp_path
     assert "move the EDL" in capsys.readouterr().err
 
 
+def test_the_edl_under_another_name_for_the_sidecar_is_refused(job, tmp_path: Path, monkeypatch, capsys) -> None:
+    """A hard link here; on a case-insensitive disk, Clip-01.edl.json for clip-01.mp4 is the same."""
+    out = tmp_path / "out" / "clip-01.mp4"
+    out.parent.mkdir()
+    edl = out.parent / "edl-01.json"
+    edl.write_text(job["edl"].read_text())
+    os.link(edl, out.parent / "clip-01.edl.json")
+    called = []
+    monkeypatch.setattr(pipeline.composite, "render", lambda *a, **k: called.append(a))
+    assert pipeline.cmd_render(_args(edl, out)) == 2
+    assert called == [] and edl.read_text() == job["edl"].read_text()
+    assert "move the EDL" in capsys.readouterr().err
+
+
+def test_a_sidecar_that_cannot_be_written_leaves_the_render_in_place(job, monkeypatch, capsys) -> None:
+    def full(out, record):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(render_sidecar, "write", full)
+    assert pipeline.cmd_render(_args(job["edl"], job["out"])) == 0
+    assert job["out"].read_bytes() == b"video"
+    assert not render_sidecar.path_for(job["out"]).exists()
+    assert "could not write clip-01.v2.edl.json: [Errno 28]" in capsys.readouterr().out
+
+
+def test_an_old_sidecar_that_cannot_be_removed_still_lets_the_render_finish(job, capsys) -> None:
+    render_sidecar.path_for(job["out"]).mkdir(parents=True)     # a directory where the sidecar goes
+    assert pipeline.cmd_render(_args(job["edl"], job["out"])) == 0
+    assert job["out"].read_bytes() == b"video"
+    assert not list(job["out"].parent.glob(".*partial*"))
+    out = capsys.readouterr().out
+    assert "could not remove the old clip-01.v2.edl.json" in out
+    assert "could not write clip-01.v2.edl.json" in out
+
+
 # --- what it holds -----------------------------------------------------------------------
 
 def test_the_sidecar_holds_the_edl_as_loaded_with_absolute_paths_and_cli_music(job, tmp_path: Path) -> None:
