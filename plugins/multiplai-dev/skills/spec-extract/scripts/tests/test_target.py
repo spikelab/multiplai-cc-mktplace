@@ -244,7 +244,7 @@ def test_pr_fetch_fetches_origin_and_the_pr_head(tmp_path, root, pr_view):
     git(upstream, "update-ref", "refs/pull/4/head", head)
     git(upstream, "checkout", "-q", "main")
     clone = tmp_path / "widgets"
-    git(tmp_path, "clone", "-q", "--single-branch", "--branch", "main", str(upstream), str(clone))
+    git(tmp_path, "clone", "-q", "--no-local", "--single-branch", "--branch", "main", str(upstream), str(clone))
     pr_view.info[4] = {"headRefOid": head, "baseRefOid": git(clone, "rev-parse", "HEAD")}
     assert run("run", "--repo", clone, "--pr", "4", "--out", root) == 2
     assert run("run", "--repo", clone, "--pr", "4", "--fetch", "--out", root) == 0

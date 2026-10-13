@@ -227,9 +227,10 @@ def test_R23_unreadable_state(tmp_path, capsys, kind):
     run_dir = root / t.rel
     assert t.run(root) == 0
     (run_dir / "state.json").write_text("{not json", encoding="utf-8")
-    before = everything(root)
+    before = everything(run_dir)  # under <run>: taking the lock rewrites only the holder note beside it
     capsys.readouterr()
     assert t.run(root) == 1
     err = capsys.readouterr().err
     assert str(run_dir / "state.json") in err and "--restart" in err
-    assert everything(root) == before
+    assert everything(run_dir) == before
+    assert sorted(p.name for p in run_dir.parent.iterdir()) == sorted([".locks", run_dir.name])
