@@ -1257,7 +1257,7 @@ class TestDirtyTree:
 
 
     @pytest.mark.asyncio
-    async def test_a_resumed_round_refuses_uncommitted_work_outside_the_change(
+    async def test_row_R2_a_user_edit_after_a_failed_spec_step_is_refused(
             self, built, fake_pr):
         repo, change, config = built
         fake_pr.add_thread("alice", "None should be refused", fid="5e1")
@@ -1277,10 +1277,12 @@ class TestDirtyTree:
         head = _git(repo, "rev-parse", "HEAD").strip()
         wip_before = _wip(repo)
         (repo / "calc.py").write_text("# someone's edit\n")
+        before = repo_state(repo)
 
         run2, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
                            spec_call=spec_call)
         assert await loop.run_findings(run2) == 1
+        assert repo_state(repo) == before
         assert lines[-1].startswith("FINDINGS:FAILED:spec:") and "uncommitted" in lines[-1]
         assert calls["n"] == 1
         assert (repo / "calc.py").read_text() == "# someone's edit\n"
@@ -1347,7 +1349,7 @@ class TestResumedStepRefusesOthersWork:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("user_file", ["notes.py", "calc.py"])
-    async def test_a_users_edit_on_a_resumed_code_step_is_refused_and_left_in_place(
+    async def test_row_R2_a_users_edit_on_a_resumed_code_step_is_refused_and_left_in_place(
             self, built, fake_pr, user_file):
         """The user's own edit, in a new file or in the file the stopped agent
         was editing, is refused and stays in the tree; once it is gone, the
@@ -1358,10 +1360,12 @@ class TestResumedStepRefusesOthersWork:
         agents = (repo / "calc.py").read_text()
         user_text = agents + "# the user's own line\n" if user_file == "calc.py" else "x = 1\n"
         (repo / user_file).write_text(user_text)
+        before = repo_state(repo)
 
         exit_code, lines = await self._rerun(repo, change, config, fake_pr)
 
         assert exit_code == 1, lines
+        assert repo_state(repo) == before
         assert lines[-1].startswith("FINDINGS:FAILED:code:") and "uncommitted" in lines[-1]
         assert user_file in lines[-1]
         assert (repo / user_file).read_text() == user_text
@@ -1383,7 +1387,7 @@ class TestResumedStepRefusesOthersWork:
         assert "notes.py" not in _git(repo, "ls-tree", "-r", "--name-only", stopped)
 
     @pytest.mark.asyncio
-    async def test_a_commit_made_after_the_code_step_stopped_is_refused(self, built, fake_pr):
+    async def test_row_R4_a_commit_made_after_the_code_step_stopped_is_refused(self, built, fake_pr):
         """Following "commit them first" must not get the user's commit
         discarded back to where the stopped block started."""
         repo, change, config = built
@@ -1392,17 +1396,19 @@ class TestResumedStepRefusesOthersWork:
         _git(repo, "add", "notes.py")
         _git(repo, "commit", "-qm", "the user's commit")
         head, wip_before = _git(repo, "rev-parse", "HEAD").strip(), _wip(repo)
+        before = repo_state(repo)
 
         exit_code, lines = await self._rerun(repo, change, config, fake_pr)
 
         assert exit_code == 1, lines
+        assert repo_state(repo) == before
         assert lines[-1].startswith("FINDINGS:FAILED:code:") and "commit" in lines[-1]
         assert _git(repo, "rev-parse", "HEAD").strip() == head
         assert _wip(repo) == wip_before
         assert "half done" in (repo / "calc.py").read_text()
 
     @pytest.mark.asyncio
-    async def test_a_stop_that_recorded_nothing_refuses_any_edit_outside_the_change(
+    async def test_row_R7_a_stop_that_recorded_nothing_refuses_any_edit_outside_the_change(
             self, built, fake_pr):
         """A hard kill records nothing, so the stopped agent's edits cannot be
         told from the user's: any edit outside the change directory is refused."""
@@ -1412,15 +1418,17 @@ class TestResumedStepRefusesOthersWork:
         data = json.loads(state_path.read_text())
         data["findings"]["rounds"][0]["stops"] = {}
         state_path.write_text(json.dumps(data))
+        before = repo_state(repo)
 
         exit_code, lines = await self._rerun(repo, change, config, fake_pr)
 
         assert exit_code == 1, lines
+        assert repo_state(repo) == before
         assert lines[-1].startswith("FINDINGS:FAILED:code:") and "calc.py" in lines[-1]
         assert "half done" in (repo / "calc.py").read_text()
 
     @pytest.mark.asyncio
-    async def test_a_commit_made_after_the_spec_step_failed_is_refused(self, built, fake_pr):
+    async def test_row_R4_a_commit_made_after_the_spec_step_failed_is_refused(self, built, fake_pr):
         repo, change, config = built
         fake_pr.add_thread("alice", "None should be refused", fid="5e1")
         triage_call = FakeTriage({
@@ -1440,10 +1448,12 @@ class TestResumedStepRefusesOthersWork:
         _git(repo, "add", "notes.py")
         _git(repo, "commit", "-qm", "the user's commit")
         head, wip_before = _git(repo, "rev-parse", "HEAD").strip(), _wip(repo)
+        before = repo_state(repo)
 
         run2, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
                            spec_call=spec_call)
         assert await loop.run_findings(run2) == 1
+        assert repo_state(repo) == before
         assert lines[-1].startswith("FINDINGS:FAILED:spec:") and "commit" in lines[-1]
         assert calls["n"] == 1
         assert _git(repo, "rev-parse", "HEAD").strip() == head
@@ -1515,6 +1525,15 @@ class _Scenario:
         self.spec_calls = 0
         self.stop_with: BaseException | None = None
         self.commit_first = False
+        self.stop_triage_with: BaseException | None = None
+
+    async def triage_call(self, prompt, schema, **kw):
+        """The triage model call. While `stop_triage_with` is set it edits
+        calc.py and raises it."""
+        if self.stop_triage_with is not None:
+            (self.repo / "calc.py").write_text("# the triage step's own edit\n")
+            raise self.stop_triage_with
+        return await self.triage(prompt, schema, **kw)
 
     async def spec_call(self, prompt, **kw):
         """The spec model call. While `stop_with` is set it edits calc.py
@@ -1530,7 +1549,7 @@ class _Scenario:
         return SPEC_DELTA
 
     async def run(self, stubs=None):
-        run, lines = _run(self.config, self.change, triage_call=self.triage,
+        run, lines = _run(self.config, self.change, triage_call=self.triage_call,
                           review=FakeReview(self.pr), spec_call=self.spec_call)
         with _Stubs(stubs if stubs is not None else engine_stubs(self.repo)):
             code_ = await loop.run_findings(run)
@@ -1744,6 +1763,164 @@ class TestKilledInsideADiscard:
         clean_exit, clean_repo = _Rows.unstopped(tmp_path / "unstopped", monkeypatch, step, stubs)
         assert asyncio.run(s.run(stubs(repo) if stubs else None)) == clean_exit, s.lines
         assert_same_as_unstopped(repo, clean_repo)
+
+
+STEP_EDIT = {"triage": "# the triage step's own edit", "spec": "# the spec step's own edit",
+             "code": "half done"}
+STEP_REF = {"triage": "refs/buildme/wip/calc/r1-triage", "spec": "refs/buildme/wip/calc/r1-spec",
+            "code": "refs/buildme/wip/calc/r1-code-block1-stopped"}
+
+
+def _scenario_for(repo, change, config, monkeypatch, step) -> "_Scenario":
+    """Triage and spec run the spec-change round; code runs the code-fix one."""
+    return _Scenario(repo, change, config, _install_pr(monkeypatch),
+                     "code" if step == "code" else "spec")
+
+
+async def _stop_step(s: "_Scenario", step: str) -> None:
+    """Stop *step* with its edit to calc.py left in the tree and a stop
+    record written: triage and spec by Ctrl-C, code by an agent timeout."""
+    if step == "code":
+        assert await s.run(s.timing_out_stubs()) == 4, s.lines
+        return
+    attr = "stop_triage_with" if step == "triage" else "stop_with"
+    setattr(s, attr, KeyboardInterrupt())
+    with pytest.raises(KeyboardInterrupt):
+        await s.run()
+    setattr(s, attr, None)
+    assert STEP_EDIT[step] in (s.repo / "calc.py").read_text()
+
+
+async def _assert_refused(s: "_Scenario", step: str, needle: str) -> None:
+    before = repo_state(s.repo)
+    assert await s.run() == 1, s.lines
+    assert s.lines[-1].startswith(f"FINDINGS:FAILED:{step}:") and needle in s.lines[-1], s.lines
+    assert repo_state(s.repo) == before
+
+
+def _origin_with_one_more_commit(repo: Path, base: Path) -> None:
+    """Give *repo* a bare origin holding its branch, push one more commit to
+    it from a second clone, then fetch and fast-forward as `findings/cli.py`
+    does before a round."""
+    bare = base / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True)
+    _git(repo, "remote", "add", "origin", str(bare))
+    _git(repo, "push", "-q", "origin", "buildme/calc")
+    clone = base / "clone"
+    subprocess.run(["git", "clone", "-q", "-b", "buildme/calc", str(bare), str(clone)],
+                   check=True, capture_output=True)
+    (clone / "upstream.py").write_text("u = 1\n")
+    _git(clone, "add", "upstream.py")
+    _git(clone, "-c", "user.email=c@example.com", "-c", "user.name=c",
+         "commit", "-qm", "a collaborator's commit")
+    _git(clone, "push", "-q", "origin", "buildme/calc")
+    _git(repo, "fetch", "-q", "origin")
+    assert git_ops.fast_forward_from_origin(repo, "buildme/calc").ok
+
+
+class TestFindingsResumeRows:
+    """Rows R1, R2 and R4-R7: a findings step stopped, perturbed, resumed."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("step", ["triage", "spec", "code"])
+    async def test_row_R1_a_stopped_step_resumes_as_an_unstopped_run(
+            self, built, tmp_path, monkeypatch, step):
+        c_repo, c_change, c_config = _make_built(tmp_path / "unstopped")
+        clean_exit = await _scenario_for(c_repo, c_change, c_config, monkeypatch, step).run()
+
+        repo, change, config = built
+        s = _scenario_for(repo, change, config, monkeypatch, step)
+        await _stop_step(s, step)
+
+        assert await s.run() == clean_exit, s.lines
+        _assert_kept_under(repo, STEP_REF[step], "calc.py", STEP_EDIT[step])
+        assert_same_as_unstopped(repo, c_repo)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("step", ["triage", "spec", "code"])
+    async def test_row_R2_a_user_edit_inside_the_project_is_refused(
+            self, built, monkeypatch, step):
+        repo, change, config = built
+        s = _scenario_for(repo, change, config, monkeypatch, step)
+        await _stop_step(s, step)
+        agents = (repo / "calc.py").read_text()
+
+        # The user edits the file the stopped step also edited.
+        (repo / "calc.py").write_text(agents + "# the user's own line\n")
+        await _assert_refused(s, step, "calc.py")
+        assert "uncommitted" in s.lines[-1]
+
+        # The user adds a file of their own.
+        (repo / "calc.py").write_text(agents)
+        (repo / "notes.py").write_text("x = 1\n")
+        await _assert_refused(s, step, "notes.py")
+        assert "uncommitted" in s.lines[-1]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("step", ["triage", "spec", "code"])
+    async def test_row_R4_a_user_commit_after_the_stop_is_refused(
+            self, built, monkeypatch, step):
+        repo, change, config = built
+        s = _scenario_for(repo, change, config, monkeypatch, step)
+        await _stop_step(s, step)
+        (repo / "notes.py").write_text("x = 1\n")
+        _git(repo, "add", "notes.py")
+        _git(repo, "commit", "-qm", "the user's commit", "--", "notes.py")
+
+        await _assert_refused(s, step, "commit")
+        assert "another branch" in s.lines[-1]
+
+    @pytest.mark.asyncio
+    async def test_row_R5_origin_moved_while_the_tree_was_clean(
+            self, built, tmp_path, monkeypatch):
+        c_repo, c_change, c_config = _make_built(tmp_path / "unstopped")
+        _origin_with_one_more_commit(c_repo, tmp_path / "unstopped")
+        clean_exit = await _scenario_for(c_repo, c_change, c_config, monkeypatch, "spec").run()
+
+        repo, change, config = built
+        s = _scenario_for(repo, change, config, monkeypatch, "spec")
+        s.stop_with = RuntimeError("model call failed")
+        assert await s.run() == 1, s.lines
+        s.stop_with = None
+        assert _git(repo, "status", "--porcelain", "--untracked-files=no").strip() == ""
+        _origin_with_one_more_commit(repo, tmp_path / "stopped")
+
+        assert await s.run() == clean_exit, s.lines
+        assert "a collaborator's commit" in _subjects(repo)
+        assert_same_as_unstopped(repo, c_repo)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("step", ["triage", "spec", "code"])
+    async def test_row_R6_a_step_stopped_twice_resumes_as_an_unstopped_run(
+            self, built, tmp_path, monkeypatch, step):
+        c_repo, c_change, c_config = _make_built(tmp_path / "unstopped")
+        clean_exit = await _scenario_for(c_repo, c_change, c_config, monkeypatch, step).run()
+
+        repo, change, config = built
+        s = _scenario_for(repo, change, config, monkeypatch, step)
+        await _stop_step(s, step)
+        await _stop_step(s, step)
+
+        assert await s.run() == clean_exit, s.lines
+        _assert_kept_under(repo, STEP_REF[step], "calc.py", STEP_EDIT[step])
+        assert_same_as_unstopped(repo, c_repo)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("step", ["triage", "spec", "code"])
+    async def test_row_R7_a_stop_with_no_record_refuses_any_edit(
+            self, built, monkeypatch, step):
+        """A SIGKILL records nothing: the stopped step's own edits cannot be
+        told from anyone else's, so any uncommitted change is refused."""
+        repo, change, config = built
+        s = _scenario_for(repo, change, config, monkeypatch, step)
+        await _stop_step(s, step)
+        state_path = change / ".findings-state.json"
+        data = json.loads(state_path.read_text())
+        data["findings"]["rounds"][0]["stops"] = {}
+        state_path.write_text(json.dumps(data))
+
+        await _assert_refused(s, step, "uncommitted")
+        assert "calc.py" in s.lines[-1]
 
 
 class TestSince:
