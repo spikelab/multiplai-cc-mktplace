@@ -419,7 +419,7 @@ test("musicDraft starts at the first bed, no sounds and the EDL's default level"
   const last = { kind: "music", bed: "bright", volume_db: -18, sfx_set: "soft", text: "ok" };
   assert.deepEqual(L.musicDraft(MUSIC, null, last), { bed: "bright", sfx_set: "soft", volume_db: -18, note: "ok" });
   assert.equal(L.musicDraft(MUSIC, { bed: "jazz", sfx_set: null, volume_db: -5 }, null).bed, "calm");
-  assert.equal(L.musicDraft(MUSIC, { bed: null, sfx_set: "soft", volume_db: -99 }, null).volume_db, L.MIN_VOLUME_DB);
+  assert.equal(L.musicDraft(MUSIC, { bed: null, sfx_set: "soft", volume_db: -99 }, null).volume_db, -40);
 });
 
 test("musicRow rounds the level, and music must pick a bed or a sound set", () => {
