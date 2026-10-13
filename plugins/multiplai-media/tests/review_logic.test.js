@@ -169,3 +169,62 @@ test("panelsRow sends whole source pixels and only the mapped labels", () => {
   assert.deepEqual(row, { kind: "panels", panels: { Host: { x: 0, y: 0, w: 640, h: 720 } },
                           speakers: { SPEAKER_0: "Host" }, text: "left" });
 });
+
+// --- one poll at a time ---------------------------------------------------------------
+
+/* A run that stays in flight until release() is called; `log` records starts and ends. */
+function gatedRun() {
+  const log = [], gates = [];
+  let n = 0;
+  const run = () => {
+    const i = ++n;
+    log.push(`start ${i}`);
+    return new Promise((resolve) => gates.push(() => { log.push(`end ${i}`); resolve(i); }));
+  };
+  const release = async () => { await new Promise((r) => setImmediate(r)); gates.shift()(); await new Promise((r) => setImmediate(r)); };
+  return { run, log, release };
+}
+
+test("oneAtATime: a call while idle runs at once", async () => {
+  const g = gatedRun();
+  const call = L.oneAtATime(g.run);
+  const p = call();
+  await g.release();
+  assert.equal(await p, 1);
+  assert.deepEqual(g.log, ["start 1", "end 1"]);
+});
+
+test("oneAtATime: a call during a run waits for one more run that starts after it", async () => {
+  const g = gatedRun();
+  const call = L.oneAtATime(g.run);
+  const first = call();
+  let secondDone = false;
+  const second = call().then((v) => { secondDone = true; return v; });
+  await g.release();                               // the first run ends
+  assert.equal(await first, 1);
+  assert.equal(secondDone, false, "the queued call must not settle when the run in flight ends");
+  assert.deepEqual(g.log, ["start 1", "end 1", "start 2"]);
+  await g.release();
+  assert.equal(await second, 2);
+  assert.deepEqual(g.log, ["start 1", "end 1", "start 2", "end 2"]);
+});
+
+test("oneAtATime: many calls during a run share one queued run", async () => {
+  const g = gatedRun();
+  const call = L.oneAtATime(g.run);
+  call();
+  const queued = [call(), call(), call()];
+  await g.release();
+  await g.release();
+  assert.deepEqual(await Promise.all(queued), [2, 2, 2]);
+  assert.deepEqual(g.log, ["start 1", "end 1", "start 2", "end 2"]);
+});
+
+test("oneAtATime: a failed run still lets the queued run go", async () => {
+  let n = 0;
+  const call = L.oneAtATime(async () => { n += 1; if (n === 1) throw new Error("down"); return n; });
+  const first = call();
+  const second = call();
+  await assert.rejects(first, /down/);
+  assert.equal(await second, 2);
+});

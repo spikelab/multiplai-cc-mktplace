@@ -64,6 +64,23 @@
     return "review";
   }
 
+  /* `run` (an async function) wrapped so only one call runs at a time. A call
+   * made while a run is in flight queues one more run right after it (calls
+   * made meanwhile share that run), and its promise settles only when the
+   * queued run has finished: a caller that awaits it sees data fetched after
+   * its call. */
+  function oneAtATime(run) {
+    let running = null, queued = null;
+    return function call() {
+      if (!running) {
+        running = Promise.resolve().then(run).finally(() => { running = null; });
+        return running;
+      }
+      if (!queued) queued = running.catch(() => {}).then(() => { queued = null; return call(); });
+      return queued;
+    };
+  }
+
   // --- Clips ---------------------------------------------------------------------------
 
   const SCORE_KEYS = ["hook", "payoff", "quotable", "standalone", "density"];
@@ -210,6 +227,7 @@
 
   const api = {
     TABS, INPUT_FILES, fmt, inputNotice, isReels, latestBy, rowsOfKind, clipsOpen, speakersOpen, firstOpenTab,
+    oneAtATime,
     SCORE_KEYS, totalScore, sortCandidates, timelineWindow, toFrac, fromFrac, snapTargets, snapEdge, stepEdge,
     itemAt, unsentPicks,
     normRect, clampRect, moveRect, resizeRect, roundRect, nextBoxName, panelsProblem, panelsRow,

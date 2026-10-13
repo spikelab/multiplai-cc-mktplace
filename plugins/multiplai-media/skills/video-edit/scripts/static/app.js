@@ -22,7 +22,7 @@ const App = (() => {
   const tabs = new Map();
   // Everything the server tells us; tabs read it and never write it.
   const state = { job: null, candidates: null, looks: null, music: null, videos: [], rows: [] };
-  let current = null, chosenByUser = false, polling = false, again = false;
+  let current = null, chosenByUser = false;
 
   function setStatus(text, isError) {
     $("status").textContent = text;
@@ -94,10 +94,11 @@ const App = (() => {
     for (const t of L.TABS) $(`tab-${t}`).classList.toggle("open", isOpen(t));
   }
 
-  async function refresh() {
-    // One poll at a time; a refresh asked for meanwhile (after a send) runs right after it.
-    if (polling) { again = true; return; }
-    polling = true;
+  // One poll at a time. A refresh asked for during a poll (a send's) runs right after
+  // it, and its promise settles only then, so send() returns with the rows it posted.
+  const refresh = L.oneAtATime(poll);
+
+  async function poll() {
     try {
       const [job, candidates, looks, music, videos, comments] = await Promise.all([
         api("/api/job"), api("/api/candidates"), api("/api/looks"), api("/api/music"),
@@ -116,9 +117,6 @@ const App = (() => {
       if (!chosenByUser) showTab(L.firstOpenTab(Object.fromEntries(L.TABS.map((t) => [t, isOpen(t)]))));
     } catch (e) {
       setStatus(`Cannot reach the review server: ${e.message}`, true);
-    } finally {
-      polling = false;
-      if (again) { again = false; refresh(); }
     }
   }
 
