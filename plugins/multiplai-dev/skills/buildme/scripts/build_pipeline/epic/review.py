@@ -36,6 +36,14 @@ BLOCKING_SEVERITIES = ("HIGH", "MEDIUM")
 # and never ended: `review_pipeline/__main__.py`, `InterruptedRun`.
 INTERRUPTED = re.compile(r"interrupted run found; continue with: python -m review_pipeline resume (.+)$",
                          re.MULTILINE)
+# What `review` prints (exit 2) when it could not read git or GitHub before
+# reviewing anything: its `git fetch` (`--fetch`) or `gh pr view` failed, or
+# its fetch missed a head or base that moved just before
+# (`review_pipeline/target.py`, `git`, `_pr_view` and `resolve`). A failed
+# read, not a failed review: the child is `unknown`, as for the coordinator's
+# own failed reads, and the next run asks again (C.S20).
+READ_FAILED = re.compile(r"^ERROR: (?:git fetch .*? failed:|gh pr view \d+ failed:"
+                         r"|.*PR #\d+ (?:head|base) [0-9a-f]+ is not in this clone)", re.MULTILINE)
 
 
 def review_skill_dir() -> Path:

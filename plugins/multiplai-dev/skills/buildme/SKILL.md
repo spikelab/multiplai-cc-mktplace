@@ -686,7 +686,11 @@ interrupted one (exit `4` with the resume hint) is continued with
 `review_pipeline resume`. The review reads the PR's head itself, so a commit
 pushed as it starts is the head it reviews; the coordinator then reads the PR
 again and uses that review. The epic's budget is checked before each of these
-launches.
+launches. When the review cannot read git or GitHub before reviewing anything
+(exit `2`: its `git fetch` or `gh pr view` failed, or the PR's head or base is
+not in the clone after its fetch), nothing parks: the child is `unknown`, as
+when the coordinator's own read fails, and the next run asks again. A child
+whose worktree was removed is reviewed from the source repo.
 Any other failure parks the child with the end of the review's output. Each
 review writes `agents/<NNN>-review-<id>.{started.json,result.json,log}`; the
 result holds `head_sha`, `base_sha`, `review_dir`, `cost_usd`, `pr_round` (the

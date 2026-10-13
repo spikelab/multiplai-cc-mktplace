@@ -76,7 +76,10 @@ review ledger already holds a complete review of is reused, a review of the
 head still running (its `started` line and its run lock held) is waited for
 without a launch, one the ledger does not show yet (exit 2 `is running now`)
 is waited for by asking again, and an interrupted one
-(exit 4 with the hint) is continued with `resume`. Its `review` record holds
+(exit 4 with the hint) is continued with `resume`. A review that exits 2
+because its `git fetch` or `gh pr view` failed, or a PR commit is not in the
+clone after its fetch, leaves the child `unknown`, and the next run asks
+again. Its `review` record holds
 the head, the base, the review directory, the cost, `pr_round`, `reused`,
 `conflicts` (never blocks) and `blocking` (open Code HIGH/MEDIUM findings); at
 `epic.max_review_rounds` with blockers, or on any other failure, the child

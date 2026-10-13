@@ -40,6 +40,10 @@ time, not derived from a tag.
   and the coordinator reads the PR again and uses that review. Ctrl-C or
   SIGTERM stops a review this run started; a review an earlier run left
   running, or one another process runs, is not signalled and keeps running.
+  A review that cannot fetch, or cannot read the PR from GitHub, does not park
+  the child: the child is `unknown` (the run exits 1) and the next run asks
+  again. A child whose worktree was removed is reviewed from the source repo
+  instead of parking.
 
 ### Changed
 - Five assertions in the epic B1 tests now look only at build records, and the

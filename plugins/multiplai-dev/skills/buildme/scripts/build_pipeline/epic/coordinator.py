@@ -516,11 +516,12 @@ class Coordinator:
                 task.result()
 
     def _worktree(self, c: Child) -> Path:
-        """The child's worktree: the last `WORKTREE:` line of its builds."""
+        """The child's worktree: the last `WORKTREE:` line of its builds; the
+        source repo when there is none or it is gone (removed by hand)."""
         found = [m for a in records.attempts(self.epic_dir) if a.kind == "build" and a.child == c.id
                  for m in records.markers(a.log)]
         trees = records.marker(found, "WORKTREE")
-        return Path(trees[-1]) if trees else self.repo
+        return Path(trees[-1]) if trees and Path(trees[-1]).is_dir() else self.repo
 
     async def _run_review(self, c: Child, kind: str, argv: list[str], head: str) -> tuple[int, str]:
         """Run one `review` or `resume` to its end, as a pair of records; its
@@ -528,8 +529,7 @@ class Coordinator:
         in the attempt's log, so it outlives a killed coordinator (C.S2)."""
         c.rattempt = records.start(self.epic_dir, kind, c.id, argv, head_sha=head, pr_round=c.pr_round)
         self._save()
-        tree = self._worktree(c)
-        c.rproc = _spawn_review(argv, c.rattempt.log, tree if tree.is_dir() else self.repo)
+        c.rproc = _spawn_review(argv, c.rattempt.log, self._worktree(c))
         while c.rproc.poll() is None:
             await CLOCK.sleep(POLL)
         code, c.rproc = c.rproc.returncode, None
@@ -586,7 +586,8 @@ class Coordinator:
     async def _review(self, c: Child) -> None:
         """Review *c*'s PR at its current head (items 21-24) and set its status:
         `built` (reviewed; blockers go to the fixer, PR D2), `parked`,
-        `merged`, or `unknown` when its PR cannot be read."""
+        `merged`, or `unknown` when its PR cannot be read, here or by the
+        review itself (C.S20)."""
         try:
             while True:
                 view = _gh(self.repo, "pr", "view", c.pr, "--json", PR_FIELDS)
@@ -654,6 +655,11 @@ class Coordinator:
                     if again["headRefOid"] != head:
                         records.finish(c.rattempt, code, interrupted=False)
                         continue
+                if code == 2 and review.READ_FAILED.search(out):     # C.S20: a failed read, not a park
+                    records.finish(c.rattempt, code, interrupted=False)
+                    c.status, c.reason = "unknown", f"its review could not read git or GitHub: {review.tail(out)}"
+                    log.warning("EPIC child %s: %s", c.id, c.reason)
+                    return
                 why = (f"review exited {code}: {review.tail(out)}" if code != 0 else
                        f"review exited 0 without a findings line and a finished ledger line: {review.tail(out)}")
                 records.finish(c.rattempt, code, interrupted=False, extra={"parked": why})
