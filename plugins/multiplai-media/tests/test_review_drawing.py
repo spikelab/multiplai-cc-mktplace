@@ -35,7 +35,7 @@ def server(tmp_path: Path):
     httpd, token, _urls = rs.serve(job["dir"], job["dir"] / "review", host="127.0.0.1", port=19065, span=200)
     t = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     t.start()
-    yield {"port": httpd.server_address[1], "token": token, "job": job, "box": job["dir"] / "review"}
+    yield {"port": httpd.server_address[1], "token": token, "job": job, "box": job["dir"] / "review", "httpd": httpd}
     httpd.shutdown()
     httpd.server_close()
     rs.unpublish(job["dir"] / "review")
@@ -121,10 +121,33 @@ def test_an_empty_or_truncated_body_is_refused(server, body) -> None:
 def test_marks_need_the_token_and_this_origin(server) -> None:
     conn = http.client.HTTPConnection("127.0.0.1", server["port"], timeout=5)
     conn.request("POST", "/api/marks", body=JPEG, headers={"Content-Type": "image/jpeg"})
-    assert conn.getresponse().status == 401
+    res = conn.getresponse()
+    assert res.status == 401
+    # The body was never read, so the connection is closed rather than parsed as a next request.
+    assert res.getheader("Connection") == "close"
     conn.close()
     res, _ = _mark(server, Origin="https://evil.example")
-    assert res.status == 403
+    assert res.status == 403 and res.getheader("Connection") == "close"
+
+
+def test_a_refused_comments_body_closes_the_connection(server) -> None:
+    res, _ = _post(server, "/api/comments", b"x" * (rs.MAX_BODY_BYTES + 1), "application/json")
+    assert res.status == 413 and res.getheader("Connection") == "close"
+
+
+def test_a_refusal_to_a_client_that_already_left_is_dropped_quietly(server, monkeypatch) -> None:
+    """Writing the refusal to a client that hung up raises BrokenPipeError; it must not reach
+    socketserver's handle_error, which prints a traceback to the terminal the session reads."""
+    errors: list = []
+    monkeypatch.setattr(server["httpd"], "handle_error", lambda request, address: errors.append(sys.exc_info()))
+
+    def gone(self, *a, **k):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(server["httpd"].RequestHandlerClass, "_json", gone)
+    with pytest.raises(http.client.RemoteDisconnected):
+        _mark(server, PNG)                # refused (415); the answer cannot be written
+    assert errors == []
 
 
 def test_marks_is_post_only(server) -> None:

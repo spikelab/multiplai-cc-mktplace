@@ -721,6 +721,10 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
                     return self._static(url.path)
                 raise _Reject(405, "method not allowed")
             except _Reject as r:
+                # A refused POST's body may be unread (a check failed before the route read it),
+                # so the connection must not carry another request.
+                if self.command == "POST":
+                    self.close_connection = True
                 # A client refused mid-upload (a mark over the limit) may already be gone.
                 try:
                     self._json({"error": r.error}, r.status, r.headers)
