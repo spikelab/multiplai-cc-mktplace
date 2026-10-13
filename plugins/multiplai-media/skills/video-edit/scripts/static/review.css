@@ -45,6 +45,32 @@ video { display: block; max-width: 100%; max-height: 72vh; cursor: crosshair; }
 #draw-tools button.colour[aria-pressed="true"] { border-color: var(--text); box-shadow: 0 0 0 2px var(--panel) inset; }
 #draw-custom { width: 30px; height: 28px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
 img.thumb { display: block; max-width: 100%; border-radius: 4px; margin-bottom: 4px; }
+#timeline { margin-top: 10px; }
+#timeline .notice { margin: 0; font-size: 12px; }
+.tl-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 8px; margin-bottom: 3px; }
+.tl-label { font-size: 11px; color: var(--muted); text-align: right; }
+.tl-track { position: relative; height: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
+            overflow: hidden; cursor: pointer; }
+.tl-track.ruler { height: 20px; background: var(--bg); cursor: col-resize; touch-action: none; user-select: none; }
+.tl-tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line); padding-left: 2px; font-size: 10px;
+           line-height: 18px; color: var(--muted); pointer-events: none; }
+button.tl-block { position: absolute; top: 2px; bottom: 2px; min-width: 3px; padding: 0 4px; border: 0; border-radius: 3px;
+                  font-size: 11px; line-height: 16px; text-align: left; color: #fff; overflow: hidden; white-space: nowrap; }
+.tl-block.lane-segments { background: #4c6ef5; box-shadow: inset 1px 0 0 rgba(255, 255, 255, .6); }
+.tl-block.lane-captions { background: #6c757d; box-shadow: inset 1px 0 0 rgba(255, 255, 255, .5); }
+.tl-block.lane-headline { background: #e8590c; }
+.tl-block.lane-overlays { background: #0ca678; }
+button.tl-block.tick { width: 4px; margin-left: -2px; padding: 0; background: #d6336c; }
+.tl-block[aria-pressed="true"] { outline: 2px solid var(--text); outline-offset: -2px; z-index: 1; }
+.tl-block .xf { position: absolute; left: 0; top: 0; bottom: 0; pointer-events: none;
+                background: repeating-linear-gradient(45deg, rgba(255, 255, 255, .5) 0 3px, transparent 3px 6px); }
+.tl-text { position: relative; display: block; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.tl-none { font-size: 11px; color: var(--muted); padding-left: 6px; line-height: 20px; pointer-events: none; }
+.tl-sel { position: absolute; top: 0; bottom: 0; z-index: 2; pointer-events: none;
+          background: color-mix(in srgb, var(--accent) 22%, transparent);
+          border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+.tl-ph { position: absolute; top: 0; bottom: 0; z-index: 3; width: 2px; margin-left: -1px; background: var(--accent);
+         pointer-events: none; }
 .marker { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%;
           border: 2px solid #000; background: var(--marker); font: 700 11px/18px system-ui;
           text-align: center; color: #000; }

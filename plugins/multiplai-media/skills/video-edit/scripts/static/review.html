@@ -66,6 +66,16 @@
         <button type="button" id="draw-undo" disabled>Undo</button>
         <button type="button" id="draw-clear" disabled>Clear</button>
       </div>
+      <section id="timeline" aria-label="Timeline">
+        <p class="notice" id="timeline-notice" hidden></p>
+        <div id="tl-body" hidden>
+          <div class="tl-row">
+            <span class="tl-label">Time</span>
+            <div id="tl-ruler" class="tl-track ruler" title="Drag to mark a range to comment on"></div>
+          </div>
+          <div id="tl-lanes"></div>
+        </div>
+      </section>
       <form id="composer" hidden>
         <label for="composer-text" id="composer-label"></label>
         <textarea id="composer-text" rows="3" placeholder="What should change here?"></textarea>
@@ -74,7 +84,7 @@
           <button type="button" id="composer-cancel" class="ghost">Cancel</button>
         </div>
       </form>
-      <p class="hint">Click the picture to pause and comment on that spot, or pick Pen, Arrow or Box and draw on the paused frame. Space plays and pauses; ← and → step 1 s.</p>
+      <p class="hint">Click the picture to pause and comment on that spot, or pick Pen, Arrow or Box and draw on the paused frame. Drag along the timeline's ruler to comment on a stretch; click a block to say which part. Space plays and pauses; ← and → step 1 s.</p>
     </section>
     <aside id="comments">
       <h2>Pending <span id="pending-count"></span></h2>

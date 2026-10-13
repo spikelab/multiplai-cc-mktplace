@@ -383,9 +383,9 @@ def _write_private(path: Path, text: str) -> None:
 
 
 # Mailbox row kinds the page may post: whether the row is about one render
-# (`video` and `version`), its own fields (all required), and whether `text`
-# may be empty. A row with no `kind` is a `point` row: that is the shape the
-# page posted before rows had kinds.
+# (`video` and `version`), its own fields (required, then `optional` ones), and
+# whether `text` may be empty. A row with no `kind` is a `point` row: that is
+# the shape the page posted before rows had kinds.
 ROW_KINDS: dict[str, dict] = {
     "point": {"review": True, "fields": ("t", "x", "y"), "needs_text": True},
     "pick": {"review": False, "fields": ("candidate", "decision", "start", "end"), "needs_text": False},
@@ -393,11 +393,14 @@ ROW_KINDS: dict[str, dict] = {
     "look": {"review": False, "fields": ("style", "brand", "captions"), "needs_text": False},
     "music": {"review": False, "fields": ("bed", "volume_db", "sfx_set"), "needs_text": False},
     "drawing": {"review": True, "fields": ("t", "image", "shapes"), "needs_text": False},
+    "range": {"review": True, "fields": ("t_start", "t_end"), "optional": ("target",), "needs_text": True},
 }
 SHAPE_TOOLS = ("pen", "arrow", "box")
 MAX_SHAPES = 100
 MAX_PEN_POINTS = 2000
 COLOUR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+# What a range row may point at on the timeline: a lane, or one block in it by index.
+TARGET_RE = re.compile(r"^(?:captions|headline|title|(?:segment|overlay|sfx):\d{1,4})$")
 MAX_PANELS = 8
 MAX_NAME = 40
 MIN_VOLUME_DB, MAX_VOLUME_DB = -60.0, 0.0
@@ -528,6 +531,16 @@ def _drawing(c: dict, marks_dir: Path | None) -> dict:
     return {"t": round(t, 3), "image": image, "shapes": _shapes(c["shapes"])}
 
 
+def _range(c: dict) -> dict:
+    t_start, t_end = _finite(c, "t_start", "t_end")
+    if t_start < 0 or t_end <= t_start:
+        raise ValueError("need 0 <= t_start < t_end")
+    target = c.get("target")
+    if target is not None and (not isinstance(target, str) or not TARGET_RE.match(target)):
+        raise ValueError("target must be captions, headline, title, or segment:N, overlay:N or sfx:N")
+    return {"t_start": round(t_start, 3), "t_end": round(t_end, 3), "target": target}
+
+
 def offered_names(outdir: Path) -> dict[str, set[str]]:
     """The names in a valid looks.json and music.json, by list (OFFERED_LISTS)."""
     files = {name: job_files.load(outdir, name) for name in ("looks", "music")}
@@ -552,7 +565,8 @@ def validate_comment(c: Any, known: set[tuple[str, int]],
     spec = ROW_KINDS.get(kind) if isinstance(kind, str) else None
     if spec is None:
         raise ValueError(f"unknown kind {kind!r}")
-    allowed = {"kind", "text", *spec["fields"], *(("video", "version") if spec["review"] else ())}
+    allowed = {"kind", "text", *spec["fields"], *spec.get("optional", ()),
+               *(("video", "version") if spec["review"] else ())}
     unknown = sorted(set(c) - allowed)
     if unknown:
         raise ValueError(f"{kind} rows have no field(s) {', '.join(map(repr, unknown))}")
@@ -583,6 +597,8 @@ def validate_comment(c: Any, known: set[tuple[str, int]],
         row.update(_music(c, offered or {}))
     elif kind == "drawing":
         row.update(_drawing(c, marks_dir))
+    elif kind == "range":
+        row.update(_range(c))
     row.update(text=text.strip(), created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     return row
 

@@ -1,5 +1,6 @@
 // Review tab: play every render, click the picture to comment on that moment and spot,
-// or draw on the paused frame (pen, arrow, box) and send the marked-up frame.
+// draw on the paused frame (pen, arrow, box) and send the marked-up frame, or mark a
+// stretch on the render's timeline (from its .edl.json sidecar) and comment on it.
 "use strict";
 
 (() => {
@@ -9,8 +10,9 @@
   const state = {
     clips: [], clip: null, version: null, pending: [], sent: [], draft: null,
     tool: "point", colour: L.DRAW_COLOURS[0][1], stroke: null,
+    timeline: null, timelineKey: null, drag: null,
   };
-  const COMMENT_KINDS = ["point", "drawing"];
+  const COMMENT_KINDS = ["point", "drawing", "range"];
 
   // --- pending comments survive a reload (per viewer, best effort) -------------
 
@@ -65,6 +67,194 @@
     loadPending();
     renderClips();
     refreshSent();
+    loadTimeline();
+  }
+
+  // --- the timeline ----------------------------------------------------------------
+
+  let retryTimer = null;
+
+  /* The selected render's sidecar, drawn as lanes; a render without one says why, and is
+   * asked again every 5 s (render writes the sidecar just after the mp4 appears). */
+  async function loadTimeline() {
+    clearTimeout(retryTimer);
+    const key = `${state.clip}@${state.version}`;
+    if (state.timelineKey !== key) { state.timeline = null; renderTimeline(); }   // never another render's lanes
+    state.timelineKey = key;
+    try {
+      const q = new URLSearchParams({ video: state.clip, version: String(state.version) });
+      const res = await App.api(`/api/edl?${q}`);
+      if (state.timelineKey !== key) return;
+      state.timeline = L.timelineLanes(res.data);
+      App.notice($("timeline-notice"), null);
+    } catch (e) {
+      if (state.timelineKey !== key) return;
+      state.timeline = null;
+      App.notice($("timeline-notice"), { text: `No timeline for this render: ${e.message}` });
+      retryTimer = setTimeout(() => { if (state.timelineKey === key) loadTimeline(); }, 5000);
+    }
+    renderTimeline();
+  }
+
+  const tlDuration = () => (state.timeline ? state.timeline.duration : 0);
+
+  function fracIn(el, clientX) {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 ? (clientX - r.left) / r.width : 0;
+  }
+
+  function seekTo(version, t) {
+    if (version !== state.version) selectClip(state.clip, version);
+    const seek = () => { video.currentTime = t; video.pause(); };
+    if (video.readyState >= 1) seek(); else video.addEventListener("loadedmetadata", seek, { once: true });
+  }
+
+  function trackChildren(track) {
+    const sel = document.createElement("div");
+    sel.className = "tl-sel";
+    sel.hidden = true;
+    const ph = document.createElement("div");
+    ph.className = "tl-ph";
+    track.append(sel, ph);
+  }
+
+  function blockEl(lane, b) {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = `tl-block lane-${lane.id}${b.tick ? " tick" : ""}`;
+    el.dataset.target = b.target;
+    const box = L.blockBox(b, tlDuration());
+    el.style.left = `${box.left}%`;
+    if (!b.tick) el.style.width = `${box.width}%`;
+    el.title = b.title;
+    el.setAttribute("aria-label", `${lane.label}: ${b.title}`);
+    if (b.xfade > 0 && b.end > b.start) {
+      const xf = document.createElement("span");
+      xf.className = "xf";
+      xf.style.width = `${Math.min(100, (b.xfade / (b.end - b.start)) * 100)}%`;
+      el.append(xf);
+    }
+    if (!b.tick) {
+      const t = document.createElement("span");
+      t.className = "tl-text";
+      t.textContent = b.label;
+      el.append(t);
+    }
+    el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      pickBlock(b);
+    });
+    return el;
+  }
+
+  function renderTimeline() {
+    const tl = state.timeline;
+    $("tl-body").hidden = !tl;
+    const lanes = $("tl-lanes");
+    lanes.replaceChildren();
+    const ruler = $("tl-ruler");
+    ruler.replaceChildren();
+    if (!tl) return;
+    const ticks = Math.max(1, Math.floor(tl.duration));
+    const every = ticks > 60 ? 10 : ticks > 20 ? 5 : 1;
+    for (let t = 0; t <= tl.duration; t += every) {
+      const m = document.createElement("span");
+      m.className = "tl-tick";
+      m.style.left = `${(t / tl.duration) * 100}%`;
+      m.textContent = `${t}s`;
+      ruler.append(m);
+    }
+    trackChildren(ruler);
+    for (const lane of tl.lanes) {
+      const row = document.createElement("div");
+      row.className = "tl-row";
+      const label = document.createElement("span");
+      label.className = "tl-label";
+      label.textContent = lane.label;
+      const track = document.createElement("div");
+      track.className = `tl-track lane-${lane.id}`;
+      for (const b of lane.blocks) track.append(blockEl(lane, b));
+      if (!lane.blocks.length) {
+        const none = document.createElement("span");
+        none.className = "tl-none";
+        none.textContent = "none";
+        track.append(none);
+      }
+      trackChildren(track);
+      track.addEventListener("click", (ev) => seekTo(state.version, L.timeAtFrac(fracIn(track, ev.clientX), tlDuration())));
+      row.append(label, track);
+      lanes.append(row);
+    }
+    renderTimelineState();
+  }
+
+  /* The playhead, the range being marked and the block it names. */
+  function renderTimelineState() {
+    if (!state.timeline) return;
+    const d = tlDuration();
+    const ph = `${Math.min(100, Math.max(0, (video.currentTime / d) * 100))}%`;
+    for (const el of document.querySelectorAll("#timeline .tl-ph")) el.style.left = ph;
+    const r = state.drag ? L.rangeFromDrag(state.drag.t0, state.drag.t1, d, 0)
+      : state.draft && state.draft.kind === "range" ? state.draft : null;
+    for (const el of document.querySelectorAll("#timeline .tl-sel")) {
+      el.hidden = !r;
+      if (r) {
+        const box = L.blockBox({ start: r.t_start, end: r.t_end }, d);
+        el.style.left = `${box.left}%`;
+        el.style.width = `${box.width}%`;
+      }
+    }
+    const target = state.draft && state.draft.kind === "range" ? state.draft.target : null;
+    for (const el of document.querySelectorAll("#timeline .tl-block")) el.setAttribute("aria-pressed", String(el.dataset.target === target && !!target));
+  }
+
+  /* A block click names it as the range's target; with no range marked, the block is the range. */
+  function pickBlock(b) {
+    video.pause();
+    if (state.draft && state.draft.kind === "range") {
+      state.draft.target = b.target;
+      composerLabel();
+      renderTimelineState();
+      return;
+    }
+    const r = L.blockRange(b, tlDuration());
+    video.currentTime = r.t_start;
+    openComposer({ kind: "range", ...r, target: b.target });
+  }
+
+  function initTimeline() {
+    const ruler = $("tl-ruler");
+    ruler.addEventListener("pointerdown", (ev) => {
+      if (!state.timeline || ev.button !== 0) return;
+      ev.preventDefault();
+      const t = L.timeAtFrac(fracIn(ruler, ev.clientX), tlDuration());
+      state.drag = { t0: t, t1: t };
+      ruler.setPointerCapture(ev.pointerId);
+      renderTimelineState();
+    });
+    ruler.addEventListener("pointermove", (ev) => {
+      if (!state.drag) return;
+      state.drag.t1 = L.timeAtFrac(fracIn(ruler, ev.clientX), tlDuration());
+      renderTimelineState();
+    });
+    const end = () => {
+      if (!state.drag) return;
+      const { t0, t1 } = state.drag;
+      state.drag = null;
+      const r = L.rangeFromDrag(t0, t1, tlDuration());
+      if (!r) { seekTo(state.version, t0); renderTimelineState(); return; }
+      video.pause();
+      video.currentTime = r.t_start;
+      if (state.draft && state.draft.kind === "range") {   // a new stretch for the range being written
+        Object.assign(state.draft, r);
+        composerLabel();
+        renderTimelineState();
+      } else {
+        openComposer({ kind: "range", ...r, target: null });
+      }
+    };
+    ruler.addEventListener("pointerup", end);
+    ruler.addEventListener("pointercancel", end);
   }
 
   function updateVideos(videos) {
@@ -211,7 +401,9 @@
     const n = d.kind === "drawing" ? d.shapes.length : 0;
     $("composer-label").textContent = d.kind === "drawing"
       ? `Drawing at ${fmt(d.t)} (${n} shape${n === 1 ? "" : "s"})`
-      : `Comment at ${fmt(d.t)}`;
+      : d.kind === "range"
+        ? `${fmt(d.t_start)}–${fmt(d.t_end)}${d.target ? ` on ${L.targetLabel(d.target)}` : ""} (click a block to name it)`
+        : `Comment at ${fmt(d.t)}`;
     $("composer-submit").textContent = d.kind === "drawing" ? "Add drawing" : "Add comment";
     composerText.placeholder = d.kind === "drawing" ? "What should change here? (optional)" : "What should change here?";
   }
@@ -223,6 +415,7 @@
     composerText.value = "";
     if (draft.kind !== "drawing") composerText.focus();
     renderMarkers();
+    renderTimelineState();
   }
 
   function closeComposer() {
@@ -230,6 +423,7 @@
     state.stroke = null;
     composer.hidden = true;
     renderMarkers();
+    renderTimelineState();
   }
 
   const newKey = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -242,6 +436,10 @@
       if (!text) return;
       // crypto.randomUUID needs a secure origin, and a plain-http page on a LAN name is not one.
       state.pending.push({ key: newKey(), kind: "point", video: state.clip, version: state.version, t: d.t, x: d.x, y: d.y, text });
+    } else if (d.kind === "range") {
+      if (!text) return;
+      state.pending.push({ key: newKey(), kind: "range", video: state.clip, version: state.version, t: d.t_start,
+                           t_start: d.t_start, t_end: d.t_end, target: d.target, text });
     } else if (d.kind === "drawing") {
       if (!d.shapes.length) return;
       $("composer-submit").disabled = true;
@@ -280,18 +478,15 @@
     renderLayer();
   }
 
-  function seekTo(version, t) {
-    if (version !== state.version) selectClip(state.clip, version);
-    const seek = () => { video.currentTime = t; video.pause(); };
-    if (video.readyState >= 1) seek(); else video.addEventListener("loadedmetadata", seek, { once: true });
-  }
-
   function tsButton(c) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "ts";
-    b.textContent = `${kindOf(c) === "drawing" ? "✎ " : ""}${fmt(c.t)} · v${c.version}`;
-    b.addEventListener("click", () => seekTo(c.version, c.t));
+    const range = kindOf(c) === "range";
+    b.textContent = range
+      ? `${fmt(c.t_start)}–${fmt(c.t_end)} · v${c.version}${c.target ? ` · ${L.targetLabel(c.target)}` : ""}`
+      : `${kindOf(c) === "drawing" ? "✎ " : ""}${fmt(c.t)} · v${c.version}`;
+    b.addEventListener("click", () => seekTo(c.version, range ? c.t_start : c.t));
     return b;
   }
 
@@ -308,7 +503,8 @@
   function renderComments() {
     const list = $("pending");
     list.replaceChildren();
-    state.pending.sort((a, b) => a.version - b.version || a.t - b.t);
+    const at = (c) => (kindOf(c) === "range" ? c.t_start : c.t);
+    state.pending.sort((a, b) => a.version - b.version || at(a) - at(b));
     state.pending.forEach((c, i) => {
       const li = document.createElement("li");
       const meta = document.createElement("div");
@@ -361,11 +557,12 @@
   }
 
   function updateSend() {
-    $("send").disabled = !state.pending.length || state.pending.some((c) => kindOf(c) === "point" && !c.text.trim());
+    $("send").disabled = !state.pending.length || state.pending.some((c) => kindOf(c) !== "drawing" && !c.text.trim());
   }
 
   function rowOf(c) {
     if (kindOf(c) === "drawing") return L.drawingRow(c);
+    if (kindOf(c) === "range") return L.rangeRow(c);
     const { video: v, version, t, x, y, text } = c;
     return { kind: "point", video: v, version, t, x, y, text: text.trim() };
   }
@@ -375,6 +572,13 @@
     seek.value = String(video.currentTime);
     $("time").textContent = `${fmt(video.currentTime)} / ${fmt(video.duration || 0)}`;
     renderMarkers();
+    renderTimelineState();
+  }
+
+  // The playhead follows every frame while playing (timeupdate fires only ~4 times a second).
+  function followPlayhead() {
+    renderTimelineState();
+    if (!video.paused) requestAnimationFrame(followPlayhead);
   }
 
   function initTools() {
@@ -425,6 +629,7 @@
       if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) composer.requestSubmit();
     });
     initTools();
+    initTimeline();
 
     $("send").addEventListener("click", async () => {
       const batch = state.pending.map(rowOf);
@@ -443,7 +648,9 @@
 
     const play = $("play"), seek = $("seek");
     play.addEventListener("click", () => (video.paused ? video.play() : video.pause()));
-    video.addEventListener("play", () => { play.textContent = "❚❚"; play.setAttribute("aria-label", "Pause"); closeComposer(); });
+    video.addEventListener("play", () => {
+      play.textContent = "❚❚"; play.setAttribute("aria-label", "Pause"); closeComposer(); requestAnimationFrame(followPlayhead);
+    });
     video.addEventListener("pause", () => { play.textContent = "▶"; play.setAttribute("aria-label", "Play"); renderLayer(); });
     video.addEventListener("loadedmetadata", () => { seek.max = String(video.duration); showTime(); });
     video.addEventListener("timeupdate", showTime);

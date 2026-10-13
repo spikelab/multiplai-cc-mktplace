@@ -544,6 +544,90 @@
              text: (d.text || "").trim() };
   }
 
+  // --- Review: the timeline from a render's sidecar ----------------------------------------
+
+  const LANES = [["segments", "Segments"], ["captions", "Captions"], ["headline", "Headline"],
+                 ["overlays", "Overlays"], ["sfx", "Sounds"]];
+  const MIN_RANGE_S = 0.1;
+  const TICK_RANGE_S = 0.25;     // a sound effect's range: this long either side of it
+
+  const fileName = (p) => String(p || "").split(/[\\/]/).pop();
+  const r3 = (v) => Math.round(v * 1000) / 1000;
+
+  /* The Review timeline from a render's sidecar (stages/render_sidecar.py):
+   * {duration, lanes: [{id, label, blocks: [{start, end, label, title, target, xfade?, tick?}]}]}
+   * in output seconds; `duration` is the render's. `target` is what a range row names for that block. */
+  function timelineLanes(side) {
+    const e = (side && side.edl) || {};
+    const segs = [];
+    if (e.title) {
+      segs.push({ start: 0, end: Number(e.title.duration) || 0, label: "Title",
+                  title: [e.title.line1, e.title.line2].filter(Boolean).join(" / "), target: "title" });
+    }
+    for (const s of (side && side.segments) || []) {
+      const notes = [`source ${fmt(s.src_start)}–${fmt(s.src_end)}`];
+      if (s.speed !== 1) notes.push(`${s.speed}× speed`);
+      if (s.xfade_in > 0) notes.push(`${s.xfade_in} s crossfade in`);
+      if (s.muted) notes.push("muted");
+      segs.push({ start: s.out_start, end: s.out_end, xfade: s.xfade_in || 0, label: `seg ${s.index}`,
+                  title: `seg ${s.index}: ${notes.join(", ")}`, target: `segment:${s.index}` });
+    }
+    const caps = ((side && side.captions_events) || []).map((c) => (
+      { start: c.start, end: c.end, label: c.text, title: `${fmt(c.start)} ${c.text}`, target: "captions" }));
+    const head = e.headline ? [{ start: e.headline.start, end: e.headline.end, label: e.headline.text,
+                                 title: `Headline: ${e.headline.text}`, target: "headline" }] : [];
+    const overlays = (e.overlays || []).map((o, i) => {
+      const label = fileName(o.html) + (o.style ? ` · ${o.style}` : "");
+      return { start: o.start, end: o.end, label, title: `overlay ${i}: ${label} (${o.mode || "keyed"})`, target: `overlay:${i}` };
+    });
+    const sfx = (e.sfx || []).map((x, i) => (
+      { start: x.at, end: x.at, tick: true, label: fileName(x.sound), title: `${fmt(x.at)} ${fileName(x.sound)}`, target: `sfx:${i}` }));
+    const blocks = { segments: segs, captions: caps, headline: head, overlays, sfx };
+    // The render's length; a block past it (the last caption's hold can be) is cut off at
+    // the edge, as the render cuts it. Only a sidecar without a duration takes the blocks'.
+    const given = Number(side && side.duration);
+    const duration = given > 0 ? given : Math.max(0, ...Object.values(blocks).flat().map((b) => b.end));
+    return { duration, lanes: LANES.map(([id, label]) => ({ id, label, blocks: blocks[id] })) };
+  }
+
+  /* A block's left and width on a timeline `duration` long, in percent. */
+  function blockBox(b, duration) {
+    if (!(duration > 0)) return { left: 0, width: 0 };
+    const left = clamp01(b.start / duration), right = clamp01(b.end / duration);
+    return { left: round4(left * 100), width: round4(Math.max(0, right - left) * 100) };
+  }
+
+  /* The time at fraction `f` across a timeline `duration` long. */
+  function timeAtFrac(f, duration) {
+    return r3(clamp01(f) * (duration > 0 ? duration : 0));
+  }
+
+  /* A drag on the ruler from t0 to t1 → {t_start, t_end} in order and within
+   * the render, or null when it is shorter than `minLen` (a click). */
+  function rangeFromDrag(t0, t1, duration, minLen = MIN_RANGE_S) {
+    const hi = duration > 0 ? duration : Infinity;
+    const a = Math.min(hi, Math.max(0, Math.min(t0, t1))), b = Math.min(hi, Math.max(0, Math.max(t0, t1)));
+    return b - a >= minLen ? { t_start: r3(a), t_end: r3(b) } : null;
+  }
+
+  /* The range a click on a block marks: the block, or TICK_RANGE_S either side of a tick. */
+  function blockRange(b, duration) {
+    const hi = duration > 0 ? duration : Infinity;
+    if (b.end - b.start >= MIN_RANGE_S) return { t_start: r3(Math.max(0, b.start)), t_end: r3(Math.min(hi, b.end)) };
+    return { t_start: r3(Math.max(0, b.start - TICK_RANGE_S)), t_end: r3(Math.min(hi, b.start + TICK_RANGE_S)) };
+  }
+
+  /* "overlay:2" → "overlay 2"; null → "" */
+  function targetLabel(target) {
+    return target ? target.replace(":", " ") : "";
+  }
+
+  /* The mailbox row for a pending range comment (review_server: kind "range"). */
+  function rangeRow(d) {
+    return { kind: "range", video: d.video, version: d.version, t_start: r3(d.t_start), t_end: r3(d.t_end),
+             target: d.target || null, text: (d.text || "").trim() };
+  }
+
   const api = {
     TABS, INPUT_FILES, fmt, inputNotice, isReels, latestBy, rowsOfKind, clipsOpen, speakersOpen, firstOpenTab,
     oneAtATime,
@@ -557,6 +641,7 @@
     musicRow, musicProblem, fmtDb,
     DRAW_TOOLS, DRAW_COLOURS, MAX_PEN_POINTS, MAX_MARK_BYTES, isColour, toPictureFrac, simplifyStroke, finishShape,
     strokeWidth, shapePaths, exportSize, drawingRow,
+    LANES, MIN_RANGE_S, timelineLanes, blockBox, timeAtFrac, rangeFromDrag, blockRange, targetLabel, rangeRow,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JobLogic = api;

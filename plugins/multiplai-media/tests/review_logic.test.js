@@ -498,3 +498,80 @@ test("drawingRow is the server's drawing row", () => {
                              shapes, text: "  the logo  ", thumb: "data:image/jpeg;base64,xx" });
   assert.deepEqual(row, { kind: "drawing", video: "clip-01", version: 2, t: 3.142, image: "a".repeat(32), shapes, text: "the logo" });
 });
+
+// --- Review: the timeline ----------------------------------------------------------------
+
+const SIDE = {
+  duration: 8.97,
+  edl: {
+    headline: { text: "Ship small", start: 0, end: 2.5 },
+    overlays: [{ html: "/jobs/x/looks/clean-tech.html", start: 1, end: 3, mode: "alpha", style: "clean-tech" },
+               { html: "C:\\jobs\\x\\card.html", start: 4, end: 6 }],
+    sfx: [{ at: 1, sound: "/jobs/x/sfx/pop.wav", volume_db: -14 }],
+  },
+  segments: [
+    { index: 0, src_start: 20.16, src_end: 25.345, speed: 1, out_start: 0, out_end: 5.185, muted: false, xfade_in: 0 },
+    { index: 1, src_start: 26.345, src_end: 30.53, speed: 1, out_start: 4.785, out_end: 8.97, muted: false, xfade_in: 0.4 },
+  ],
+  captions_events: [{ start: 0, end: 0.74, text: "But our deploys", words: [] }, { start: 0.79, end: 1.32, text: "doubled in", words: [] }],
+};
+
+test("timelineLanes has a lane per kind of block, each block naming its range target", () => {
+  const tl = L.timelineLanes(SIDE);
+  assert.equal(tl.duration, 8.97);
+  assert.deepEqual(tl.lanes.map((l) => l.id), ["segments", "captions", "headline", "overlays", "sfx"]);
+  const by = Object.fromEntries(tl.lanes.map((l) => [l.id, l.blocks]));
+  assert.deepEqual(by.segments.map((b) => [b.start, b.end, b.xfade, b.target]), [[0, 5.185, 0, "segment:0"], [4.785, 8.97, 0.4, "segment:1"]]);
+  assert.match(by.segments[1].title, /source 0:26\.3–0:30\.5, 0\.4 s crossfade in/);
+  assert.deepEqual(by.captions.map((b) => [b.label, b.target]), [["But our deploys", "captions"], ["doubled in", "captions"]]);
+  assert.deepEqual(by.headline.map((b) => [b.start, b.end, b.target]), [[0, 2.5, "headline"]]);
+  assert.deepEqual(by.overlays.map((b) => [b.label, b.target]), [["clean-tech.html · clean-tech", "overlay:0"], ["card.html", "overlay:1"]]);
+  assert.match(by.overlays[1].title, /\(keyed\)/);                           // an overlay without a mode is keyed
+  assert.deepEqual(by.sfx.map((b) => [b.start, b.end, b.tick, b.label, b.target]), [[1, 1, true, "pop.wav", "sfx:0"]]);
+});
+
+test("the timeline is as long as the render, even when the last caption is held past its end", () => {
+  const side = { ...SIDE, captions_events: [...SIDE.captions_events, { start: 8.5, end: 9.57, text: "impossible.", words: [] }] };
+  const tl = L.timelineLanes(side);
+  assert.equal(tl.duration, 8.97);
+  assert.equal(L.timeAtFrac(0.5, tl.duration), 4.485);
+  const last = tl.lanes[1].blocks[2];
+  assert.equal(L.blockBox(last, tl.duration).left + L.blockBox(last, tl.duration).width, 100);   // cut at the edge
+  assert.equal(L.timelineLanes({ ...side, duration: undefined }).duration, 9.57);                  // no duration: the blocks'
+});
+
+test("timelineLanes puts a title card first and survives a sidecar with nothing in it", () => {
+  const tl = L.timelineLanes({ duration: 5, edl: { title: { line1: "Hello", line2: "World", duration: 2 } }, segments: [] });
+  assert.deepEqual(tl.lanes[0].blocks.map((b) => [b.start, b.end, b.target, b.title]), [[0, 2, "title", "Hello / World"]]);
+  const empty = L.timelineLanes({ edl: {} });
+  assert.equal(empty.duration, 0);
+  assert.ok(empty.lanes.every((l) => l.blocks.length === 0));
+});
+
+test("blockBox places a block in percent and clamps it to the timeline", () => {
+  assert.deepEqual(L.blockBox({ start: 2, end: 4 }, 10), { left: 20, width: 20 });
+  assert.deepEqual(L.blockBox({ start: 8, end: 14 }, 10), { left: 80, width: 20 });
+  assert.deepEqual(L.blockBox({ start: 1, end: 2 }, 0), { left: 0, width: 0 });
+});
+
+test("rangeFromDrag orders the ends, keeps them in the render and ignores a click", () => {
+  assert.deepEqual(L.rangeFromDrag(5.2, 1.04449, 8.97), { t_start: 1.044, t_end: 5.2 });
+  assert.deepEqual(L.rangeFromDrag(-1, 20, 8.97), { t_start: 0, t_end: 8.97 });
+  assert.equal(L.rangeFromDrag(3, 3.05, 8.97), null);
+  assert.equal(L.timeAtFrac(0.5, 8.97), 4.485);
+  assert.equal(L.timeAtFrac(1.5, 8.97), 8.97);
+});
+
+test("blockRange is the block, or a short stretch around a sound tick", () => {
+  assert.deepEqual(L.blockRange({ start: 1, end: 3 }, 8.97), { t_start: 1, t_end: 3 });
+  assert.deepEqual(L.blockRange({ start: 1, end: 1, tick: true }, 8.97), { t_start: 0.75, t_end: 1.25 });
+  assert.deepEqual(L.blockRange({ start: 0.1, end: 0.1, tick: true }, 8.97), { t_start: 0, t_end: 0.35 });
+});
+
+test("rangeRow is the server's range row; no target is null", () => {
+  const d = { key: "k", kind: "range", video: "clip-01", version: 1, t: 1, t_start: 1.00049, t_end: 3, target: "overlay:0", text: " too slow " };
+  assert.deepEqual(L.rangeRow(d), { kind: "range", video: "clip-01", version: 1, t_start: 1, t_end: 3, target: "overlay:0", text: "too slow" });
+  assert.equal(L.rangeRow({ ...d, target: undefined }).target, null);
+  assert.equal(L.targetLabel("overlay:2"), "overlay 2");
+  assert.equal(L.targetLabel(null), "");
+});
