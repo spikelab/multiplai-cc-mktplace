@@ -74,21 +74,39 @@ def project(tmp_path, monkeypatch):
     `broken.flag` exists, so a fix agent can turn the tests red."""
     # The integration gate runs the project's test command only in a trusted repo.
     monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
-    project_dir = tmp_path / "project"
+    return _make_project(tmp_path)
+
+
+@pytest.fixture
+def project_in_subdir(tmp_path, monkeypatch):
+    """`project`, in `root/project` of a repo rooted at `root` that also
+    holds a committed `other/notes.txt`."""
+    monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+    return _make_project(tmp_path, subdir=True)
+
+
+def _make_project(base: Path, subdir: bool = False) -> SimpleNamespace:
+    """The `project` fixture's build under *base*; with *subdir*, the project
+    is `base/root/project` and the repo is rooted at `base/root`."""
+    root = base / "root" if subdir else base / "project"
+    project_dir = root / "project" if subdir else root
     (project_dir / "specs" / "changes" / "test").mkdir(parents=True)
     (project_dir / "app.py").write_text(BUGGY)
-    _git(project_dir, "init", "-q")
-    _git(project_dir, "config", "user.email", "t@example.com")
-    _git(project_dir, "config", "user.name", "T")
-    _git(project_dir, "add", "-A")
-    _git(project_dir, "commit", "-qm", "init")
+    if subdir:
+        (root / "other").mkdir()
+        (root / "other" / "notes.txt").write_text("v1\n")
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "T")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "init")
     baseline = _git(project_dir, "rev-parse", "HEAD")
 
     config = BuildConfig(
         project_dir=project_dir, change_name="test", tier="advanced",
         test_command=(f"{sys.executable} -c \"import pathlib,sys; "
                       f"sys.exit(pathlib.Path('broken.flag').exists())\""),
-        config_dir=tmp_path / "config",
+        config_dir=base / "config",
         core_memory_files=[], stack_memory_files=[], additional_memory_files=[],
     )
     config.specs_dir = project_dir / "specs"
@@ -100,9 +118,9 @@ def project(tmp_path, monkeypatch):
         tdd=TDDState(blocks=[block], baseline_tests_pass=True),
     )
     state.checkpoint(config.state_file_path())
-    progress = ProgressWriter(tmp_path / "progress.md")
+    progress = ProgressWriter(base / "progress.md")
     progress.initialize("test", "only", "advanced", 1)
-    return SimpleNamespace(dir=project_dir, config=config, state=state, block=block,
+    return SimpleNamespace(dir=project_dir, root=root, config=config, state=state, block=block,
                            progress=progress, baseline=baseline)
 
 
@@ -536,6 +554,77 @@ class TestFixOnPass:
 
         self._assert_refused(p, code, fix, head)
         assert (p.dir / "app.py").read_text() == "half-applied\n"
+
+
+# --- Stop-and-resume rows (plan-buildme-discard-safety-2026-10-13.md) ------
+#
+# Each test stops the fix on pass at its row's point, applies the row's
+# perturbation, and resumes. A resume that proceeds is compared with the same
+# block run in a second project that never stopped (`assert_same_as_unstopped`);
+# a refusal must leave the repo exactly as it was (`repo_state`).
+
+from tests.row_helpers import assert_same_as_unstopped, repo_state, run_killed_at  # noqa: E402
+
+OUTSIDE = "other/notes.txt"
+
+
+class Killed(BaseException):
+    """A stop no handler on the fix-on-pass path catches, like a kill."""
+
+
+def _edit_outside(root: Path, staged: bool) -> None:
+    (root / OUTSIDE).write_text("v2 user edit\n")
+    if staged:
+        _git(root, "add", OUTSIDE)
+
+
+async def _run_unstopped(p) -> int:
+    """The block with one accepted finding, its fix on pass kept, and the
+    engine run to the end, never stopped."""
+    stack, _, _ = _engine([_passing([_finding()]), _passing()], _fixer(p.dir, {"app.py": FIXED}))
+    with stack:
+        assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+    code, _ = await TestFixOnPass._resume(p)
+    return code
+
+
+async def _stop_at(p, point: str) -> None:
+    """Stop the fix on pass at *point*: `fix_agent` (the agent dies before it
+    writes anything, so no record) or `review` (after the agent's edit, with
+    the record taken at `tests` and `review`)."""
+    if point == "review":
+        await TestFixOnPass._kill_after_fix_agent(p)
+    else:
+        def dying_fixer(**kwargs):
+            raise Killed()
+
+        stack, _, _ = _engine([_passing([_finding()])], dying_fixer)
+        with stack, pytest.raises(Killed):
+            await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+    assert BuildState.load(p.config.state_file_path()).tdd.blocks[0].fix_pass.step == point
+
+
+class TestFixOnPassRows:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("staged", [False, True], ids=["unstaged", "staged"])
+    @pytest.mark.parametrize("point", ["fix_agent", "review"])
+    async def test_row_F3_outside_edit_survives_a_resumed_fix_pass(
+            self, project_in_subdir, tmp_path, point, staged):
+        clean = _make_project(tmp_path / "unstopped", subdir=True)
+        _edit_outside(clean.root, staged)
+        clean_code = await _run_unstopped(clean)
+
+        p = project_in_subdir
+        await _stop_at(p, point)
+        _edit_outside(p.root, staged)
+
+        code, fix = await TestFixOnPass._resume(p, [_passing()])
+
+        assert code == clean_code == EXIT_SUCCESS
+        assert fix.await_count == 1
+        assert (p.root / OUTSIDE).read_text() == "v2 user edit\n"
+        assert (OUTSIDE in _git(p.root, "diff", "--cached", "--name-only").split()) is staged
+        assert_same_as_unstopped(p.root, clean.root)
 
 
 # --- Item 12: the fix agent looks for the same mistake ---------------------
