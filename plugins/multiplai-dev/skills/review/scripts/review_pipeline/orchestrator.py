@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import logging
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -340,13 +341,25 @@ def _same_remote(url: str | None, here: tuple[str, str] | None) -> bool:
     return (tuple(x.lower() for x in pair) if pair else None) == (tuple(x.lower() for x in here) if here else None)
 
 
-def _try_folder(folder: Path, lock: contextlib.ExitStack | None) -> tuple[contextlib.ExitStack, dict]:
-    """Take *folder*'s run lock in a stack of its own (with *lock*), then read whose it is."""
+def _try_folder(folder: Path, lock: contextlib.ExitStack | None,
+                passed_over: Callable[[dict], bool]) -> tuple[contextlib.ExitStack, dict]:
+    """Take *folder*'s run lock in a stack of its own (with *lock*), then read whose it is.
+
+    When another process holds the lock, read whose the folder is without it: a folder
+    *passed_over* (another remote's or another ref's) is returned unlocked, so the caller
+    moves on to the next one; for any other folder RunInProgress stands.
+    """
     held = contextlib.ExitStack()
     if lock is not None:
         folder.parent.mkdir(parents=True, exist_ok=True)
         try:
             _hold(held, folder)
+        except RunInProgress:
+            held.close()
+            t = rounds.folder_target(folder)
+            if passed_over(t):
+                return contextlib.ExitStack(), t
+            raise
         except BaseException:
             held.close()
             raise
@@ -376,16 +389,19 @@ def _choose_folder(out_dir: Path, resolved: target_mod.Resolved, lock: contextli
     def other_ref(t: dict) -> bool:
         return hashed and bool(t.get("ref")) and str(t.get("ref")) != resolved.ref
 
+    def passed_over(t: dict) -> bool:
+        return other_remote(t) or other_ref(t)
+
     folder = out_dir / repo_name / obj
-    held, t = _try_folder(folder, lock)
+    held, t = _try_folder(folder, lock, passed_over)
     if other_remote(t):
         held.close()
         folder = out_dir / f"{repo_name.split('@')[0]}@{owner or 'local'}" / obj
-        held, t = _try_folder(folder, lock)
+        held, t = _try_folder(folder, lock, passed_over)
     if not other_remote(t) and other_ref(t):
         held.close()
         folder = folder.parent / f"{obj}-{hashlib.sha256(resolved.ref.encode()).hexdigest()[:6]}"
-        held, t = _try_folder(folder, lock)
+        held, t = _try_folder(folder, lock, passed_over)
     if other_remote(t) or other_ref(t):
         held.close()
         raise ReviewError(

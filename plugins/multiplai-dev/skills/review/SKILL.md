@@ -325,7 +325,10 @@ lock on its target directory (`<out>/<repo>/.locks/<object>.lock`) until it ends
 while another process holds it, `review` (with or without `--restart`),
 `--plan-only` and `resume` of that target print `a review of <target_dir> is
 running now (pid <n> on <host>, since <time>)` and exit `2` without writing
-anything. Wait for that run to finish; do not resume it.
+anything. Wait for that run to finish; do not resume it. A run going on in a
+directory that holds another remote's review (or, for a branch or range, another
+ref's) does not stop yours: that directory is read without its lock and passed
+over, as when no run holds it.
 
 Each target gets `<out>/<repo>/<object>/` with `progress.log`. While the run is going,
 check it with a bounded loop, never a bare `tail -f`:

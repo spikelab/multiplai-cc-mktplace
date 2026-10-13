@@ -28,6 +28,8 @@ time, not derived from a tag.
 - A fork's PR and its upstream's PR with the same number never share a
   directory: the second goes to `<repo>@<owner>/`. Two branches whose
   names clean to the same text (`feat/x`, `feat_x`) get two directories.
+  A run going on in the other one does not stop the second from starting;
+  a second run of the same target still exits 2.
 - The run lock is `<out>/<repo>/.locks/<object>.lock`.
 - Nothing already on disk moves. Directories written by 0.46 (named
   `<owner>-<repo>--<target>`), reviews a 0.42 run nested inside a new

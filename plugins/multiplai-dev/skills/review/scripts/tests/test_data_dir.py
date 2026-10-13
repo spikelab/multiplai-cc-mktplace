@@ -6,6 +6,7 @@ Every test writes under its own tmp_path: conftest points `ledger.data_dir` ther
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -1598,6 +1599,54 @@ def test_row_R9_a_run_of_the_same_folder_still_alive_exits_2(layout_clone, tmp_p
     assert main(_pr_args(repo, out)) == 0
     assert main(_pr_args(repo, never)) == 0
     assert _result(tmp_path, folder) == _result(tmp_path, never.joinpath(*PR7))
+
+
+@contextlib.contextmanager
+def _held_by_another_process(folder: Path):
+    """Hold *folder*'s run lock in a child process until the body ends."""
+    code = ("import sys; from pathlib import Path; from review_pipeline import runlock\n"
+            "with runlock.hold(Path(sys.argv[1])):\n    print('held', flush=True); sys.stdin.read()\n")
+    proc = subprocess.Popen([sys.executable, "-c", code, str(folder)], cwd=str(TESTS.parent),
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout.readline().strip() == "held"
+        yield
+    finally:
+        proc.stdin.close()
+        proc.wait(timeout=30)
+
+
+@pytest.mark.parametrize("case", ["another-remote", "another-ref", "this-remote-and-ref"])
+def test_a_busy_folder_of_another_remote_or_ref_is_passed_over_and_one_of_this_target_exits_2(
+        layout_clone, tmp_path, agents, capsys, case):
+    """A run in another remote's (or, for a branch, another ref's) folder does not stop this
+    one: the busy folder is read without its lock. A busy folder of this target still exits 2 (R9)."""
+    repo, _, _ = layout_clone
+    out = tmp_path / "out"
+    if case == "another-remote":
+        busy, argv = out.joinpath(*PR7), _pr_args(repo, out)
+        _state_file(busy, "https://github.com/someone/github-tests", "7", "someone-github-tests--pr-7")
+        chosen = out / "github-tests@spikelab" / "pr-7"
+    elif case == "another-ref":
+        busy = out / "github-tests" / "branch-feat_x"
+        argv = ["--out", str(out), "review", "--repo", str(repo), "--branch", "feat_x", "--trust-repo"]
+        _state_file(busy, ORIGIN, "feat/x", f"{SLUG_REPO}--feat_x")
+        chosen = out / "github-tests" / f"branch-feat_x-{_hex6('feat_x')}"
+    else:
+        busy, argv, chosen = out.joinpath(*PR7), _pr_args(repo, out), None
+        _state_file(busy, ORIGIN, "7", f"{SLUG_REPO}--pr-7")
+    before = _snapshot(busy)
+    fake = agents()
+    with _held_by_another_process(busy):
+        capsys.readouterr()
+        if chosen is None:
+            assert main(argv) == 2
+            assert f"a review of {busy} is running now" in capsys.readouterr().err
+            assert fake.calls == []
+        else:
+            assert main(argv) == 0
+            assert (chosen / "findings.json").is_file()
+    assert _snapshot(busy) == before
 
 
 def test_row_R10_origin_changed_between_rounds_uses_the_owner_folder_and_not_the_old_history(
