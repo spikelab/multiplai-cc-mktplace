@@ -118,6 +118,36 @@ def test_a_style_named_by_path_is_a_valid_target(tmp_path: Path) -> None:
     assert row["target"] == f"style:{path}"
 
 
+# --- which style file a name reads ----------------------------------------------------------------
+
+def _offer(job: dict, styles: list[dict]) -> None:
+    looks = json.loads(job["looks"].read_text())
+    looks["styles"] = styles
+    job["looks"].write_text(json.dumps(looks))
+
+
+def test_style_summary_reads_the_file_looks_json_names_before_the_shipped_one(tmp_path: Path) -> None:
+    job = make_job.build(tmp_path / "job", video=False, offers=True)
+    own = tmp_path / "clean-tech-house.md"
+    own.write_text((STYLES / "clean-tech.md").read_text().replace("#3DDC97", "#123456"))
+    sample = job["dir"] / "looks" / "clean-tech.html"
+    _offer(job, [{"name": "clean-tech", "file": str(own), "sample_html": str(sample)},
+                 {"name": "house-only", "file": str(own), "sample_html": str(sample)}])
+    got = rs.style_summary("clean-tech", job["dir"])
+    assert got["status"] == "ok" and got["file"] == str(own) and got["values"]["palette.accent"] == "#123456"
+    # a name only looks.json lists resolves too
+    assert rs.style_summary("house-only", job["dir"])["file"] == str(own)
+    # a shipped style looks.json does not list is still found among the shipped ones
+    assert rs.style_summary("flat-vector", job["dir"])["file"] == str(STYLES / "flat-vector.md")
+
+
+def test_style_summary_falls_back_to_the_shipped_style_when_looks_json_is_invalid(tmp_path: Path) -> None:
+    job = make_job.build(tmp_path / "job", video=False, offers=True)
+    job["looks"].write_text("{not json")
+    assert rs.style_summary("clean-tech", job["dir"])["file"] == str(STYLES / "clean-tech.md")
+    assert rs.style_summary("house-only", job["dir"])["status"] == "missing"
+
+
 # --- /api/style ---------------------------------------------------------------------------------
 
 @pytest.fixture
