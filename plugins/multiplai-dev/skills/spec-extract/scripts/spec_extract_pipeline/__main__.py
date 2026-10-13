@@ -72,11 +72,10 @@ def _run(args: argparse.Namespace, now: Callable[[], datetime]) -> int:
             state = state_mod.State(target=fresh)
             state_mod.save(state, run_dir)
         else:
+            # The saved target is never rewritten: a resumed --pr keeps the base_sha it
+            # started with, which later steps read from state.target. Re-resolving after
+            # the base branch moved, or the PR merged, gives another merge-base (R26).
             state = saved
-            if fresh.kind == "pr":
-                # A resumed --pr keeps the base it started with: re-resolving after the base
-                # branch moved, or the PR merged, gives another merge-base (R26).
-                fresh = fresh.model_copy(update={"base_sha": saved.target.base_sha})
         target.snapshot(fresh, run_dir)
         if "resolve" not in state.steps_done:
             state.steps_done.append("resolve")

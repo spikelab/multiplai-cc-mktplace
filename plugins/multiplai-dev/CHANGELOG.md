@@ -17,6 +17,21 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-10-13
+
+### Added
+- `/multiplai-dev:spec-extract`, first part: it resolves a commit
+  (`--tree [<commit>] [--path <dir>]`), a PR's head (`--pr <n>`) or a directory
+  not under git (`--dir`), chooses its run folder
+  `<data_dir>/spec-extract/<repo>/<object>/` (or `--out`), and extracts the
+  commit for later steps. It prints `SPEC_EXTRACT:RESOLVED <run>` and makes no
+  model call yet; writing the specs comes in later versions.
+- Running the same command again resumes the same folder, also when an earlier
+  candidate folder was renamed or deleted since. A second run of the same
+  target while one is running exits 5 and writes nothing. `--restart` renames
+  the run folder to `<object>.old-<timestamp>` and starts again; it never
+  deletes. An unreadable `state.json` exits 1 and names `--restart`.
+
 ## [0.50.0] - 2026-10-13
 
 ### Changed
