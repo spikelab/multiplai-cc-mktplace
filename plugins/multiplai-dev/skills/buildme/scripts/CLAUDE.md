@@ -19,7 +19,7 @@
 | `gates.py` | Quality gate assertions (pure code) + agent-report parsers (`parse_agent_status`, `parse_implementation_note`, `parse_docs_impact`, `parse_searched` for a review-fix agent's `SEARCHED:` section). New gates: `unknowns_gate`, `prototype_required`, `prototype_gate`, `docs_freshness_gate` (warn-only). | No |
 | `budget.py` | Per-build token/cost ledger + circuit-breaker (module singleton) | No |
 | `dependencies.py` | Pure detection of dependencies **new to this project**: parses the proposal's `## Impact` and design's `## Decisions`, subtracts every manifest (`pyproject.toml`, `package.json`, `Package.swift`, `Cargo.toml`, `go.mod`, `requirements.txt`) and every existing import. Feeds the B1 explainer gate. No LLM, no network. | No |
-| `git_ops.py` | Every `git`/`gh` invocation: worktree+branch setup, explicit-path commits, the TDD loop's whole-tree `commit_tree`/`tree_is_clean`/`discard_to`, push, and the seam that runs the pr skill (`_run_pr_skill`, `open_pr_with_skill`; the argv, `uv run --directory ../../pr/scripts python -m pr_pipeline open --no-push`, is `orchestrator._pr_open_argv`), which opens the PR from the repo's template. `shell=False`, fixed argv, never merges/force-pushes/deletes; the one destructive call (`discard_to`) refuses unless the target sha is still an ancestor of HEAD. `BOOKKEEPING_EXCLUDES` is the single list of buildme's own files (`pr-sections/` included), honored by every commit path and by the discard's `clean`. | No |
+| `git_ops.py` | Every `git`/`gh` invocation: worktree+branch setup, explicit-path commits, the TDD loop's whole-tree `commit_tree`/`tree_is_clean`/`discard_to`, push, and the seam that runs the pr skill (`_run_pr_skill`, `open_pr_with_skill`; the argv, `uv run --directory ../../pr/scripts python -m pr_pipeline open --no-push`, is `orchestrator._pr_open_argv`), which opens the PR from the repo's template. `shell=False`, fixed argv, never merges/force-pushes/deletes; the one destructive call (`discard_to`) refuses unless the target sha is still an ancestor of HEAD. Every commit and the discard are limited to the project directory, which may be a subdirectory of a larger repo: `commit_tree` and `commit_paths` commit only their own pathspec (`git commit -- <paths>`), so anything else staged stays staged, and `discard_to` runs `reset --soft`, `restore --source=<sha> --staged --worktree -- .` and the `clean`, and refuses when a commit it would drop changes a file outside the project. `BOOKKEEPING_EXCLUDES` is the single list of buildme's own files (`pr-sections/` included), honored by every commit path and by the discard's `clean`. | No |
 | `code_analysis.py` | Checked, cited facts about the project's code, from the shared `code_facts` package (`plugins/multiplai-dev/lib/code_facts`, an editable path source). `analyse` builds the scope (source files at HEAD from `git_ops.files_at`; test files by walkthrough's `--depth overview` rule, vendored/generated/tool directories, binaries left out), adds one dependency slice of manifests and config files (`config_files`, `dependency_slice`; its file and fact entries render under Dependencies), caps the source at `codebase_analysis_max_units` units less that slice (`limit_scope`: files the change's documents name, then the most imported by a text heuristic), points each source unit at up to two tests importing its modules for test style only (`tests_for_units`), runs one agent per unit through the caller's call function (no retry of its own) and gates every citation with `multiplai_core.check_quote` at HEAD, resolving a monorepo subpackage through the repo prefix. `render_markdown` writes Architecture/Patterns/Dependencies/Conventions with `path:line` links plus "Not analysed"; `write_facts_file` writes `facts.json` in review's `facts.v1` format (kind `tree`, base = git's empty tree). `block_facts_section` is the `block_facts` context section: the facts naming a file the block's text names, re-checked at the current HEAD. | No (the caller's call function makes them) |
 | `walkthroughs.py` | The first `orchestrator.PRE_PUBLISH_CONTRIBUTORS` entry (`pr_section`): runs codebase-walkthrough's model-free `check --at-head` on `docs/walkthroughs/*-walkthrough.md` through `git_ops._run_walkthrough_skill` (`uv run --directory ../../codebase-walkthrough/scripts`), with `--repo key=path` for each header repo resolved from the main checkout (`_locate`; the project's own maps to the worktree), then checks each stale one at `BuildState.base_sha` (a copy of the file at the base with its header commits pinned) so one already stale before the build is reported apart and never regenerated; prints `WALKTHROUGH:` lines and writes the "Stale walkthroughs" PR-body section. With `regenerate_walkthroughs`, `regenerate` re-runs a stale one from its header's module directory, depth and mode with `--repos <its one repo>` and `--max-usd walkthrough_max_usd`, only when `sdk._repo_is_trusted()`, and commits it with `commit_stage`. `tests/conftest.py` refuses any test that starts a real walkthrough `run`. | No (a regenerated walkthrough's run does, in its own process) |
 | `board.py` | Board seam: pure `column_for(phase, block_status)` → `BoardColumn`, `.board.json` card writer, `BOARD:<slug>:<Column>` stdout line. Drives Shaping → Planning → In Development → In Review only; its docstring names the columns it never sets. The `BoardCard`/`BoardEvent` pydantic models live here deliberately (they are the card file's private schema, not shared pipeline data). | No |
@@ -188,18 +188,28 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   wrong test; a refactorer is behavior-preserving by definition, so any
   test-file change there is a failure. This is also why the windows are safe to
   be strict: the implementation is committed first, so a failed refactor is
-  discarded (`reset --hard` to the impl commit, plus a `clean` that excludes
-  buildme's bookkeeping) and the block keeps the code that was already green.
+  discarded (`git_ops.discard_to` back to the impl commit, which leaves
+  buildme's bookkeeping in place) and the block keeps the code that was
+  already green.
   A refactor must never turn a green block red.
-- **A discard only ever moves backwards along the current history.**
-  `git_ops.discard_to` checks `merge-base --is-ancestor <sha> HEAD` and refuses
-  otherwise. `reset --hard` will jump to any commit, and the refactorer holds
-  `Bash` — so it can commit, move HEAD, or switch branches between the moment
-  the impl sha was captured and the discard. Resetting unchecked would throw
-  away whatever HEAD had actually reached: earlier blocks' commits, or under
-  `--no-worktree` the user's own. Unknown ancestry (git unavailable) reads as
-  "refuse", never as "safe to destroy" — the caller then treats the refactor as
-  *not* reverted.
+- **A discard only ever moves backwards along the current history, and only
+  inside the project.** `git_ops.discard_to` checks `merge-base --is-ancestor
+  <sha> HEAD` and refuses otherwise. A reset will jump to any commit, and the
+  refactorer holds `Bash` — so it can commit, move HEAD, or switch branches
+  between the moment the impl sha was captured and the discard. Resetting
+  unchecked would throw away whatever HEAD had actually reached: earlier
+  blocks' commits, or under `--no-worktree` the user's own. Unknown ancestry
+  (git unavailable) reads as "refuse", never as "safe to destroy" — the caller
+  then treats the refactor as *not* reverted. The project may be a
+  subdirectory of a larger repo, so the discard never resets the whole repo:
+  when the project is a subdirectory it refuses if a commit in `<sha>..HEAD`
+  changes a file outside it, then runs `reset --soft <sha>` (the branch moves,
+  every file stays), `restore --source=<sha> --staged --worktree -- .` (the
+  project's index entries and files go back to `<sha>`; everything outside
+  keeps its content and staged state) and the bookkeeping-excluding `clean`.
+  The soft reset goes first so that a stop before the restore leaves HEAD at
+  `<sha>` with the dropped changes staged, which a resumed step's stop record
+  can tell apart from someone else's work.
 - **An agent's self-report decides what gets *committed*, never what gets
   *believed*.** `DOCS_IMPACT:` is the only pathspec the documentation commit
   uses (`_docs_paths` resolves it, confines it to the project, and requires a

@@ -48,6 +48,14 @@ def make_bare_origin(repo: Path, bare: Path) -> Path:
     return bare
 
 
+def _write_bookkeeping(repo: Path) -> None:
+    (repo / "build-progress.md").write_text("# progress\n")
+    change = repo / "specs" / "changes" / "feat"
+    change.mkdir(parents=True, exist_ok=True)
+    (change / ".build-state.json").write_text("{}\n")
+    (change / ".board.json").write_text("{}\n")
+
+
 # --- inspection -----------------------------------------------------------
 
 
@@ -347,6 +355,194 @@ class TestCommitPaths:
         assert ".board.json" not in tracked
 
 
+# --- commits and discards stay inside the project (rows C and D) ----------
+#
+# The project may be a subdirectory of a larger repo (`--no-worktree` in a
+# monorepo, or the findings stage's `<worktree>/<project relative to the repo
+# root>`). Row ids are the ones in plan-buildme-discard-safety-2026-10-13.md.
+
+
+def _out(repo: Path, *argv: str) -> str:
+    return _git(repo, *argv).stdout
+
+
+def _project_repo(tmp_path: Path, name: str = "repo", subdir: bool = True) -> tuple[Path, Path]:
+    """A repo whose project is ``pkg/app`` (or the root, with ``subdir=False``),
+    with a committed change directory, two project files, and two files
+    outside the project. Returns ``(root, project)``."""
+    root = make_repo(tmp_path / name)
+    proj = root / "pkg" / "app" if subdir else root
+    change = proj / "specs" / "changes" / "feat"
+    change.mkdir(parents=True)
+    (change / "proposal.md").write_text("# proposal\n")
+    (proj / "app.py").write_text("x = 1\n")
+    (proj / "gone.py").write_text("g = 1\n")
+    if subdir:
+        (root / "other").mkdir()
+        (root / "other" / "notes.txt").write_text("v1\n")
+        (root / "other" / "keep.txt").write_text("k1\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "base")
+    return root, proj
+
+
+def _head(repo: Path) -> str:
+    return _out(repo, "rev-parse", "HEAD").strip()
+
+
+def _do_step_work(proj: Path) -> None:
+    """What a step leaves behind: a commit holding an edit, a deletion and a
+    new file, then an uncommitted edit, an untracked file and bookkeeping.
+    The commit is limited to the project, so it never takes anything else."""
+    (proj / "app.py").write_text("x = 2\n")
+    (proj / "gone.py").unlink()
+    (proj / "added.py").write_text("a = 1\n")
+    _git(proj, "add", "-A", "--", ".")
+    _git(proj, "commit", "-qm", "step", "--", ".")
+    (proj / "app.py").write_text("x = 3\n")
+    (proj / "untracked.py").write_text("u = 1\n")
+    _write_bookkeeping(proj)
+
+
+def _assert_project_discarded(proj: Path) -> None:
+    assert (proj / "app.py").read_text() == "x = 1\n", "the edit is reverted"
+    assert (proj / "gone.py").read_text() == "g = 1\n", "the deleted file is back"
+    assert not (proj / "added.py").exists(), "the committed new file is gone"
+    assert not (proj / "untracked.py").exists(), "the untracked file is gone"
+    assert (proj / "build-progress.md").exists()
+    assert (proj / "specs/changes/feat/.build-state.json").exists()
+    assert (proj / "specs/changes/feat/.board.json").exists()
+
+
+def _stage_outside_edits(root: Path) -> None:
+    """The user staged one edit outside the project and left another unstaged."""
+    (root / "other" / "notes.txt").write_text("v2 user edit, staged\n")
+    _git(root, "add", "other/notes.txt")
+    (root / "other" / "keep.txt").write_text("k2 user edit, unstaged\n")
+
+
+def _assert_outside_edits_kept(root: Path) -> None:
+    assert (root / "other" / "notes.txt").read_text() == "v2 user edit, staged\n"
+    assert "other/notes.txt" in _out(root, "diff", "--cached", "--name-only").split()
+    assert (root / "other" / "keep.txt").read_text() == "k2 user edit, unstaged\n"
+    assert "other/keep.txt" in _out(root, "diff", "--name-only").split()
+    assert "other/keep.txt" not in _out(root, "diff", "--cached", "--name-only").split()
+
+
+def _repo_view(root: Path) -> dict[str, str]:
+    return {
+        "status": _out(root, "status", "--porcelain", "--untracked-files=all"),
+        "index": _out(root, "ls-files", "-s"),
+    }
+
+
+class TestCommitScope:
+    """`commit_tree` and `commit_paths` commit only what they staged, so a
+    file the user staged outside the project never goes into buildme's
+    commit (rows C1-C5)."""
+
+    @staticmethod
+    def _root_work(root: Path) -> None:
+        """An edit, a partly staged file, a deletion, a new file, an untracked
+        `.build-state.json` and a modified tracked `build-progress.md`."""
+        (root / "part.py").write_text("p = 1\n")
+        (root / "build-progress.md").write_text("# progress 1\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "more base")
+        (root / "app.py").write_text("x = 2\n")
+        (root / "part.py").write_text("p = 2\n")
+        _git(root, "add", "part.py")
+        (root / "part.py").write_text("p = 3\n")
+        (root / "gone.py").unlink()
+        (root / "new.py").write_text("n = 1\n")
+        (root / "specs/changes/feat/.build-state.json").write_text("{}\n")
+        (root / "build-progress.md").write_text("# progress 2\n")
+
+    def _two_roots(self, tmp_path: Path) -> tuple[Path, Path]:
+        a, _ = _project_repo(tmp_path, "a", subdir=False)
+        b, _ = _project_repo(tmp_path, "b", subdir=False)
+        self._root_work(a)
+        self._root_work(b)
+        return a, b
+
+    def test_row_C1_root_commit_tree_matches_a_bare_commit(self, tmp_path):
+        ref, repo = self._two_roots(tmp_path)
+        _git(ref, "add", "-A", "--", ".", *git_ops.BOOKKEEPING_EXCLUDES)
+        _git(ref, "commit", "-qm", "block")
+
+        assert git_ops.commit_tree(repo, "block", "row C1")
+        assert _out(repo, "rev-parse", "HEAD^{tree}") == _out(ref, "rev-parse", "HEAD^{tree}")
+        assert _repo_view(repo) == _repo_view(ref)
+
+    def test_row_C1_root_commit_paths_matches_a_bare_commit(self, tmp_path):
+        ref, repo = self._two_roots(tmp_path)
+        _git(ref, "add", "--", ".")
+        _git(ref, "reset", "-q", "--",
+             *(git_ops._positive_pathspec(e) for e in git_ops.BOOKKEEPING_EXCLUDES))
+        _git(ref, "commit", "-qm", "spec")
+
+        assert git_ops.commit_paths(repo, "spec", [".", *git_ops.BOOKKEEPING_EXCLUDES])
+        assert _out(repo, "rev-parse", "HEAD^{tree}") == _out(ref, "rev-parse", "HEAD^{tree}")
+        assert _repo_view(repo) == _repo_view(ref)
+
+    @pytest.mark.parametrize("commit", ["commit_tree", "commit_paths", "save_wip_ref"])
+    def test_row_C2_a_staged_outside_edit_stays_staged(self, tmp_path, commit):
+        root, proj = _project_repo(tmp_path)
+        _stage_outside_edits(root)
+        (proj / "app.py").write_text("x = 2\n")
+
+        if commit == "commit_tree":
+            assert git_ops.commit_tree(proj, "block", "row C2")
+        elif commit == "commit_paths":
+            assert git_ops.commit_paths(proj, "spec", ["app.py"])
+        else:
+            assert git_ops.save_wip_ref(proj, "refs/buildme/wip/feat/c2", "wip")
+
+        committed = _out(root, "diff", "--name-only", "HEAD~1", "HEAD").split()
+        assert committed == ["pkg/app/app.py"]
+        _assert_outside_edits_kept(root)
+
+    def test_row_C3_a_path_staged_before_commit_paths_stays_staged(self, tmp_path):
+        root, _ = _project_repo(tmp_path, subdir=False)
+        (root / "part.py").write_text("p = 1\n")
+        _git(root, "add", "part.py")
+        (root / "app.py").write_text("x = 2\n")
+
+        assert git_ops.commit_paths(root, "spec", ["app.py"])
+        assert _out(root, "diff", "--name-only", "HEAD~1", "HEAD").split() == ["app.py"]
+        assert _out(root, "diff", "--cached", "--name-only").split() == ["part.py"]
+
+    def test_row_C3_a_staged_bookkeeping_file_stays_staged(self, tmp_path):
+        root, _ = _project_repo(tmp_path, subdir=False)
+        (root / "build-progress.md").write_text("# progress 1\n")
+        _git(root, "add", "build-progress.md")
+        _git(root, "commit", "-qm", "track progress")
+        (root / "build-progress.md").write_text("# progress 2\n")
+        _git(root, "add", "build-progress.md")
+        (root / "app.py").write_text("x = 2\n")
+
+        assert git_ops.commit_tree(root, "block", "row C3")
+        assert _out(root, "diff", "--name-only", "HEAD~1", "HEAD").split() == ["app.py"]
+        assert _out(root, "diff", "--cached", "--name-only").split() == ["build-progress.md"]
+
+    def test_row_C5_commit_during_a_merge_returns_none(self, tmp_path):
+        root, _ = _project_repo(tmp_path, subdir=False)
+        _git(root, "checkout", "-qb", "side")
+        (root / "side.txt").write_text("s\n")
+        _git(root, "add", "side.txt")
+        _git(root, "commit", "-qm", "side")
+        _git(root, "checkout", "-q", "main")
+        _git(root, "merge", "--no-ff", "--no-commit", "side")
+        (root / "app.py").write_text("x = 2\n")
+        head = _head(root)
+
+        assert git_ops.commit_tree(root, "block", "row C5") is None
+        assert (root / ".git" / "MERGE_HEAD").exists()
+        assert git_ops.save_wip_ref(root, "refs/buildme/wip/feat/c5", "wip") is None
+        assert (root / ".git" / "MERGE_HEAD").exists()
+        assert _head(root) == head
+
+
 # --- push -----------------------------------------------------------------
 
 
@@ -478,11 +674,7 @@ class TestWholeTreeOperations:
     buildme's own bookkeeping."""
 
     def _bookkeeping(self, repo: Path) -> None:
-        (repo / "build-progress.md").write_text("# progress\n")
-        change = repo / "specs" / "changes" / "feat"
-        change.mkdir(parents=True, exist_ok=True)
-        (change / ".build-state.json").write_text("{}\n")
-        (change / ".board.json").write_text("{}\n")
+        _write_bookkeeping(repo)
 
     def test_commit_tree_excludes_bookkeeping_at_every_depth(self, tmp_path):
         repo = make_repo(tmp_path / "proj")
@@ -610,6 +802,144 @@ class TestDiscardToAncestorGuard:
     def test_unknown_ancestry_is_never_treated_as_safe(self, tmp_path):
         """Git could not be asked → "unknown", which must not mean "destroy"."""
         assert git_ops.is_ancestor_of_head(tmp_path / "nonexistent", "a" * 40) is False
+
+
+class TestDiscardInSubdirectory:
+    """`discard_to` throws away the step's work inside the project and
+    nothing else, and refuses when a commit it would drop touches a file
+    outside the project (rows D1-D7)."""
+
+    @pytest.fixture
+    def sub(self, tmp_path):
+        root, proj = _project_repo(tmp_path)
+        return root, proj, _head(root)
+
+    def test_row_D1_root_project_matches_reset_hard(self, tmp_path):
+        ref, _ = _project_repo(tmp_path, "a", subdir=False)
+        repo, _ = _project_repo(tmp_path, "b", subdir=False)
+        ref_start, start = _head(ref), _head(repo)
+        for r in (ref, repo):
+            _do_step_work(r)
+        _git(ref, "reset", "-q", "--hard", ref_start)
+        _git(ref, "clean", "-fdq", "--", ".", *git_ops.BOOKKEEPING_EXCLUDES)
+
+        assert git_ops.discard_to(repo, start, "row D1") is True
+        assert _head(repo) == start
+        assert _out(repo, "rev-parse", "HEAD^{tree}") == _out(ref, "rev-parse", "HEAD^{tree}")
+        assert _out(repo, "log", "--format=%s") == _out(ref, "log", "--format=%s")
+        assert _repo_view(repo) == _repo_view(ref)
+        _assert_project_discarded(repo)
+
+    def test_row_D2_outside_edit_survives_unstaged(self, sub):
+        root, proj, start = sub
+        _do_step_work(proj)
+        (root / "other" / "keep.txt").write_text("k2 user edit, unstaged\n")
+
+        assert git_ops.discard_to(proj, start, "row D2") is True
+        assert _head(root) == start
+        assert (root / "other" / "keep.txt").read_text() == "k2 user edit, unstaged\n"
+        assert _out(root, "diff", "--name-only").split() == ["other/keep.txt"]
+        _assert_project_discarded(proj)
+
+    def test_row_D2_outside_edit_survives_staged(self, sub):
+        root, proj, start = sub
+        _do_step_work(proj)
+        _stage_outside_edits(root)
+
+        assert git_ops.discard_to(proj, start, "row D2") is True
+        assert _head(root) == start
+        _assert_outside_edits_kept(root)
+        _assert_project_discarded(proj)
+
+    def test_row_D2_staged_outside_edit_survives_keep_then_discard(self, sub):
+        root, proj, start = sub
+        _do_step_work(proj)
+        _stage_outside_edits(root)
+
+        ref = git_ops.save_wip_ref(proj, "refs/buildme/wip/feat/d2", "wip")
+        assert ref
+        assert git_ops.discard_to(proj, start, "row D2") is True
+        assert _head(root) == start
+        kept = _out(root, "diff", "--name-only", start, ref).split()
+        assert kept and all(p.startswith("pkg/app/") for p in kept), kept
+        _assert_outside_edits_kept(root)
+        _assert_project_discarded(proj)
+
+    def test_row_D3_outside_untracked_survives(self, sub):
+        root, proj, start = sub
+        _do_step_work(proj)
+        (root / "other" / "new.txt").write_text("untracked user file\n")
+
+        assert git_ops.discard_to(proj, start, "row D3") is True
+        assert (root / "other" / "new.txt").read_text() == "untracked user file\n"
+        _assert_project_discarded(proj)
+
+    def test_row_D4_outside_commit_refuses(self, sub):
+        root, proj, start = sub
+        _do_step_work(proj)
+        (root / "other" / "notes.txt").write_text("v2 committed by the user\n")
+        _git(root, "commit", "-qm", "user", "--", "other/notes.txt")
+        before = (_head(root), _repo_view(root), _out(root, "diff"),
+                  (proj / "app.py").read_text(), (proj / "untracked.py").read_text())
+
+        assert git_ops.discard_to(proj, start, "row D4") is False
+        after = (_head(root), _repo_view(root), _out(root, "diff"),
+                 (proj / "app.py").read_text(), (proj / "untracked.py").read_text())
+        assert after == before
+        assert (root / "other" / "notes.txt").read_text() == "v2 committed by the user\n"
+
+    def test_row_D4_inside_commit_discards(self, sub):
+        root, proj, start = sub
+        _do_step_work(proj)
+
+        assert git_ops.discard_to(proj, start, "row D4") is True
+        assert _head(root) == start
+        _assert_project_discarded(proj)
+
+    def test_row_D5_agent_outside_edit_left_in_place(self, sub):
+        root, proj, start = sub
+        _do_step_work(proj)
+        (root / "other" / "notes.txt").write_text("v2 agent edit\n")
+
+        assert git_ops.discard_to(proj, start, "row D5") is True
+        assert (root / "other" / "notes.txt").read_text() == "v2 agent edit\n"
+        assert " M other/notes.txt" in _out(root, "status", "--porcelain").splitlines()
+        _assert_project_discarded(proj)
+
+    @staticmethod
+    def _fail_at(monkeypatch, git_command: str) -> None:
+        real = git_ops._run
+
+        def run(argv, *a, **k):
+            if argv[1:2] == [git_command]:
+                return GitResult(list(argv), 1, "", f"{git_command} failed (test)")
+            return real(argv, *a, **k)
+
+        monkeypatch.setattr(git_ops, "_run", run)
+
+    def test_row_D6_restore_failure_leaves_work_staged_at_sha(self, sub, monkeypatch):
+        root, proj, start = sub
+        _do_step_work(proj)
+        self._fail_at(monkeypatch, "restore")
+
+        assert git_ops.discard_to(proj, start, "row D6") is False
+        assert _head(root) == start
+        staged = _out(root, "diff", "--cached", "--name-status").splitlines()
+        assert sorted(staged) == ["A\tpkg/app/added.py", "D\tpkg/app/gone.py",
+                                  "M\tpkg/app/app.py"]
+        assert (proj / "app.py").read_text() == "x = 3\n"
+        assert (proj / "added.py").exists()
+        assert (proj / "untracked.py").exists()
+
+    def test_row_D7_clean_failure_returns_false(self, sub, monkeypatch):
+        root, proj, start = sub
+        _do_step_work(proj)
+        self._fail_at(monkeypatch, "clean")
+
+        assert git_ops.discard_to(proj, start, "row D7") is False
+        assert _head(root) == start
+        assert (proj / "app.py").read_text() == "x = 1\n"
+        assert (proj / "untracked.py").exists()
 
 
 class TestSaveWipRef:
