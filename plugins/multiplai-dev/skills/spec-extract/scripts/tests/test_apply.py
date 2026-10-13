@@ -20,8 +20,8 @@ from spec_extract_pipeline import apply as apply_mod
 CAPS = ["charge.md", "one.md", "two.md"]
 
 
-def _tree(repo: Path, root: Path, *extra) -> int:
-    return run("run", "--repo", repo, "--tree", "HEAD", "--out", root, *extra)
+def _tree(repo: Path, root: Path, *extra, tree: str = "HEAD") -> int:
+    return run("run", "--repo", repo, "--tree", tree, "--out", root, *extra)
 
 
 def _folder(root: Path) -> Path:
@@ -121,14 +121,14 @@ def test_apply_copies_new_files_and_commits_nothing(tmp_path, capsys):
 
 def test_identical_file_counts_as_applied(tmp_path, capsys):
     repo = make_repo(tmp_path / "widgets")
-    root = tmp_path / "out"
+    root, sha = tmp_path / "out", git(repo, "rev-parse", "HEAD")
     assert _tree(repo, root) == 0
     run_dir = _folder(root)
-    for name in CAPS:  # an earlier apply, committed
+    for name in CAPS:  # an earlier apply, committed; the run is still the first commit's
         write(repo / "specs" / "registry" / name, (run_dir / "registry" / name).read_text())
     commit_file(repo, "specs/registry/one.md", (run_dir / "registry" / "one.md").read_text())
     capsys.readouterr()
-    assert _tree(repo, root, "--apply") == 0
+    assert _tree(repo, root, "--apply", tree=sha) == 0
     assert _lines(capsys.readouterr().out)[-1] == "SPEC_EXTRACT:APPLIED 3"
     assert git(repo, "status", "--porcelain") == ""
     assert read_state(run_dir)["apply_stop"] is None  # nothing copied, nothing recorded
