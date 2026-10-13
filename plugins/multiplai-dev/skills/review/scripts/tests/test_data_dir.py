@@ -987,7 +987,7 @@ def _with_high(folder: Path, claim: str) -> None:
 
 
 def test_rollups_list_a_target_once_and_prefer_its_new_layout_folder_over_its_046_folder(tmp_path):
-    """U1: after the first new-layout review of a target that has a 0.46 `<out>/<slug>/`, the
+    """U1: after the first new-layout review of a target that has a 0.46 folder named by the slug alone, the
     severity rollups list that slug once, from the new-layout folder. A 0.46 folder no new-layout
     folder replaces is still listed, and runs.jsonl keeps one line per run from both layouts."""
     out = tmp_path / "out"
