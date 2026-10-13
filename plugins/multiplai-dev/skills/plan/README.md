@@ -49,6 +49,20 @@ serves every consumer: a human reviewer, a fresh session told to
 Constraints *are* the goal contract), or buildme (Context + Outcome seed
 the proposal stage).
 
+## Why every plan has a stop and resume table
+
+Reviews of five buildme PRs (October 2026) found that 13 of the 25
+blockers raised in a second or later review sat in stop, resume or
+saved-state code. The plans had stated a goal ("a crash at any point
+resumes at the step that did not finish") and required a test at one
+stop point. All three such tests passed while 20 resume blockers sat at
+other points: the user's uncommitted edits, commits pulled from origin,
+a step failing twice, a run still alive. Fixers then added saved state
+(10 of 25 fix commits) that no plan recorded, and the next review found
+it broken. The table makes the planner decide each case before code
+exists, the test checks every row, and the constraints stop
+implementers and fixers from adding cases the table does not have.
+
 ## When a separate goal doc is still the right call
 
 When the goal genuinely **aggregates several plans** — multi-repo

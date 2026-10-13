@@ -17,6 +17,19 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-10-13
+
+### Changed
+- `/multiplai-dev:plan` writes a "Stop and resume states" table into
+  every plan: one row per step and stop point, saying what is on disk and
+  what resume does, plus rows for files the user edited, a moved origin,
+  a step stopped twice and a process still running.
+- A plan's Done means now asks for a test that stops each step at each
+  row, resumes, and compares the result with a run that never stopped.
+- A plan's constraints now forbid implementers and fixers from adding
+  resume behaviour the table does not ask for, and require a new row
+  before any new saved state.
+
 ## [0.46.0] - 2026-10-12
 
 ### Changed
