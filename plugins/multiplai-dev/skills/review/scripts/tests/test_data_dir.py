@@ -977,6 +977,41 @@ def test_rollups_list_new_layout_reviews_whatever_the_repo_is_called(tmp_path, r
     assert new.is_dir() and whole.is_dir() and flat.is_dir()
 
 
+def _with_high(folder: Path, claim: str) -> None:
+    """Give *folder*'s latest round one listed HIGH finding with *claim*."""
+    data = json.loads((folder / "findings.json").read_text())
+    data["findings"] = [{"id": "1234567890", "status": "confirmed", "severity": "HIGH", "claim": claim,
+                         "file": "f.py", "line_start": 1, "line_end": 1, "citations": [],
+                         "failure_scenario": "it breaks"}]
+    (folder / "findings.json").write_text(json.dumps(data))
+
+
+def test_rollups_list_a_target_once_and_prefer_its_new_layout_folder_over_its_046_folder(tmp_path):
+    """U1: after the first new-layout review of a target that has a 0.46 `<out>/<slug>/`, the
+    severity rollups list that slug once, from the new-layout folder. A 0.46 folder no new-layout
+    folder replaces is still listed, and runs.jsonl keeps one line per run from both layouts."""
+    out = tmp_path / "out"
+    remote = "https://github.com/spikelab/github-tests.git"
+    slug = "spikelab-github-tests--pr-2"
+    old = _layout_review(out / slug, slug, remote, head="a" * 40, rounds_kept=1)
+    _with_high(old, "stale finding from the last 0.46 round")
+    new = _layout_review(out / "github-tests" / "pr-2", slug, remote, head="b" * 40)
+    _with_high(new, "finding of the new-layout round")
+    other = _layout_review(out / "spikelab-other--pr-1", "spikelab-other--pr-1", remote, head="c" * 40)
+    _with_high(other, "finding of a 0.46 target with no new-layout folder")
+    before = _snapshot(old)
+    render.write_rollups(out)
+    high = (out / "HIGH-only.md").read_text()
+    assert "# HIGH findings — 2 across 2 of 2 targets" in high, high
+    assert high.count(f"(`{slug}`)") == 1, high
+    assert "finding of the new-layout round" in high and "stale finding" not in high
+    assert "finding of a 0.46 target with no new-layout folder" in high
+    _, lines, _ = render.write_runs(out)
+    heads = sorted(json.loads(line)["target"]["head_sha"][0] for line in (out / "runs.jsonl").read_text().splitlines())
+    assert heads == ["a", "a", "b", "c"] and lines == 4
+    assert _snapshot(old) == before
+
+
 # --- history across layouts -------------------------------------------------------
 
 

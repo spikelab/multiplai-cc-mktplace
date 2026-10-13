@@ -537,12 +537,25 @@ def _object_files(out_dir: Path, pattern: str) -> list[Path]:
     return [p for folder in object_folders(out_dir) for p in folder.glob(pattern) if p.is_file()]
 
 
+def _latest_rounds(out_dir: Path) -> list[dict]:
+    """Each target's latest round once, sorted by path: every `<out>/<repo>/<object>/findings.json`,
+    and a 0.46 `<out>/<its slug>/findings.json` only when no new-layout folder holds that slug:
+    once one does, a review of the target writes there, and the 0.46 copy is an older round."""
+    new = set(_object_files(out_dir, "findings.json"))
+    pairs = [(p, d) for p in sorted([*out_dir.glob("*/findings.json"), *new]) for d in load_findings_files([p])]
+    newer = {_slug(d) for p, d in pairs if p in new} - {None}
+    return [d for p, d in pairs if p in new or _slug(d) not in newer]
+
+
+def _slug(data: dict) -> str | None:
+    return (data.get("target") or {}).get("slug")
+
+
 def write_rollups(out_dir: Path, paths: list[Path] | None = None) -> list[Path]:
     """`<SEV>-only.md` for each severity, from *paths* (default: every review's latest round,
-    `<out>/<repo>/<object>/findings.json` and the 0.46 `<out>/<its slug>/findings.json`, sorted)."""
-    if paths is None:
-        paths = sorted([*out_dir.glob("*/findings.json"), *_object_files(out_dir, "findings.json")])
-    files = load_findings_files(paths)
+    `<out>/<repo>/<object>/findings.json` and the 0.46 `<out>/<its slug>/findings.json` of a
+    slug no new-layout folder holds, sorted)."""
+    files = _latest_rounds(out_dir) if paths is None else load_findings_files(paths)
     written = []
     for severity in SEVERITIES:
         path = out_dir / f"{severity}-only.md"

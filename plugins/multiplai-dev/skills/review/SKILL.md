@@ -571,7 +571,9 @@ stage runs on the session's model.
 
 - `rollup [findings.json ...]` rewrites `HIGH-only.md`, `MEDIUM-only.md`,
   `LOW-only.md` and `runs.jsonl` in `--out` from the given files (default:
-  every `<out>/*/findings.json` for the rollups; every round, earlier ones
+  each review's latest `findings.json`, in `<out>/<repo>/<object>/` and in
+  0.46's `<out>/<slug>/`, for the rollups, which list a target reviewed in
+  both layouts once, from its new directory; every round, earlier ones
   under `rounds/` included, for `runs.jsonl`). It prints how many files it
   skipped for having no `run`. A review, resume or batch refreshes
   `runs.jsonl` too.

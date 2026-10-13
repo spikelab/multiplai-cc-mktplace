@@ -41,6 +41,10 @@ time, not derived from a tag.
   layout.
 - review-viewer finds reviews in the new layout, the 0.46 one and 0.42
   folders nested in a new one.
+- The `HIGH-only.md`, `MEDIUM-only.md` and `LOW-only.md` rollups list the
+  new layout and the 0.46 one. A target reviewed in both is listed once,
+  with the findings of its new directory; `runs.jsonl` keeps a line for
+  every run in both.
 
 ## [0.47.0] - 2026-10-13
 
