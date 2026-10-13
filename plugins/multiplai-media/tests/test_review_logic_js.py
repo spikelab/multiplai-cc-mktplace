@@ -39,3 +39,14 @@ def test_the_page_loads_logic_and_app_first_then_one_script_per_tab() -> None:
                        "tab-music.js", "tab-review.js"]
     assert all((STATIC / s).is_file() for s in scripts)
     assert "<script>" not in html                      # CSP: script-src 'self', no inline scripts
+
+
+def test_each_tab_file_registers_the_tab_it_is_named_for() -> None:
+    """A wrong id in registerTab leaves its panel blank; the script-order test cannot see that."""
+    logic = (STATIC / "logic.js").read_text()
+    tabs = re.findall(r'"([a-z]+)"', re.search(r"const TABS = \[([^\]]+)\]", logic).group(1))
+    files = sorted(p.stem.removeprefix("tab-") for p in STATIC.glob("tab-*.js"))
+    assert sorted(tabs) == files
+    for tab in tabs:
+        text = (STATIC / f"tab-{tab}.js").read_text()
+        assert re.findall(r'App\.registerTab\("([^"]+)"', text) == [tab], tab
