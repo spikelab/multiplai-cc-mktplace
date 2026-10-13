@@ -59,6 +59,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--plan-file <file>` | A plan written with the plan skill (`# Plan:` + `## Done means`). Saved as `plan.md`; its text goes into the spec input and `interview.md` in every interview mode, and plan authoring still runs. |
 | `--interview-replies <file>` | `interview: ticket` only — the ticket replies posted after the questions. |
 | `--accept-size` | Build a plan the size gate says should be split, as one PR. The build remembers it, so a later retry or resume does not stop on size again. |
+| `--approve-split` | Approve the epic split the build printed as `EPIC:SPLIT:<split.md>`, as `split.md` and `plans/` are on disk now. See [Epic mode](#epic-mode-one-input-several-changes). |
 | `--no-epic-split` | Build the input as one change: no `EPIC_SPLIT` decision, no model call. An epic's child builds pass it. |
 | `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. |
 
@@ -464,7 +465,11 @@ before the next build.
    - **`plane`** — invoke the `multiplai-pm:plane` skill: `get <ref>`, then
      `comments <ref>`. Its project allowlist applies: a `BLOCKED` refusal is a
      stop. Report the project to the user; never route around it.
-   - **`github`** — `gh issue view <n> --json title,body,comments,url`.
+   - **`github`** — `gh issue view <n> --json title,body,comments,url`. If the
+     issue is an epic, also fetch its sub-issues,
+     `gh api repos/{owner}/{repo}/issues/<n>/sub_issues --jq '.[] | "- #\(.number) \(.title) (\(.state))"'`,
+     and add them to the ticket file under `## Sub-issues`. A task list in the
+     body (`- [ ] …`) is already in the body; keep it as it is.
 
    Write what you fetched to a scratch Markdown file, starting with the
    ticket's URL, and pass `--ticket-file <path> --ticket-ref <ref> --ticket-url
@@ -547,7 +552,7 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
   [--ticket-file "{ticket_md}" --ticket-ref "{ref}" --ticket-url "{url}"] \
   [--context-files {paths}] [--plan-file "{plan_md}"] \
   [--interview-replies "{replies_md}"] [--accept-size] \
-  [--no-epic-split] \
+  [--approve-split] [--no-epic-split] \
   [--auto] [--spec-only] [--skip-research] [--lenient-review] \
   [--skip-explainers] [--prototype|--no-prototype] \
   [--no-worktree] [--no-push] [--no-pr] [--pr-ready]
@@ -588,11 +593,23 @@ nothing new. Several — an epic, a PRD with separate features, an issue with
 sub-issues or a task list — stops the build before any spec is written: the
 pipeline writes one plan per child (with the children it depends on) to
 `<data_dir>/buildme/epics/<owner>-<repo>--<change>/` (`epic.json`, `split.md`,
-`plans/<id>.md`) and exits `3` with `EPIC:SPLIT:<split.md>`. Re-running prints
-the same line and makes no new call. Approving the split and building the
-children come in later releases. Pass `--no-epic-split` to build the input as
-one change without asking; it applies only before the decision is made, so for
-a change that already split, start again under a new `--change` name.
+`plans/<id>.md`) and exits `3` with `EPIC:SPLIT:<split.md>`.
+
+Show `split.md` to the user, or post it on the ticket (see the marker table in
+[Step 4](#step-4-report-results)), and stop. The user may edit the table in
+`split.md` or any `plans/<id>.md` before approving; approval reads them as they
+are then. Re-run the same command with `--approve-split`: it checks the table
+and every plan again (ids, dependencies, no cycle, `# Plan:` and
+`## Done means` in each) and records each file's hash. A failed check exits `1`
+naming the file. After approval, the build prints
+`EPIC:APPROVED:<epic.json>` and exits `0`; building the children comes in a
+later release. A file changed after approval exits `2` naming it. Pass
+`--no-epic-split` to build the input as one change without asking; it applies
+only before the decision is made, so for a change that already split, start
+again under a new `--change` name.
+
+Only one process at a time writes an epic's directory. A second one exits `2`
+with `epic <name> is running now (pid <n> on <host>, since <time>)`.
 
 ### The size gate (after plan review)
 
@@ -708,6 +725,7 @@ Parse pipeline stdout for progress lines:
   `PASSED — score …` or `FAILED: …`); a failure ends with `ERROR:` like any
   failed build
 - `RESULT:SUCCESS` — build complete
+- `EPIC:APPROVED:<epic.json>` — the epic split is approved (exit `0`); its children are not built yet
 - `ERROR:<message>` — failure
 
 **Exit codes.** `0` done, `1` failure, `2` usage error, `4` an agent timed out
@@ -719,9 +737,9 @@ Parse pipeline stdout for progress lines:
 | `INTERVIEW:WAITING:<path>` | `interview: ticket` wrote its questions to `<path>` | Post them as **one** ticket comment (plane: `comment <ref> "<text>"`; github: `gh issue comment <n> --body-file <path>`), tell the user the build is waiting for replies, and stop. On the next run, fetch the comments posted after yours into a file and pass `--interview-replies <file>`. No replies yet: it prints the marker again. |
 | `RESEARCH:NEEDED:<path>` | the research decision asked for research; topics in `<path>` | Run `/deep-research` on them and re-run with `--research-path <output>` — or, without `multiplai-research`, say so and re-run with `--skip-research`. |
 | `SPLIT:REQUIRED:<path>` | the size gate wants the plan split; proposal in `<path>` | Post `<path>` on the ticket (plane `comment` / `gh issue comment --body-file`), or show it to the user for a prompt, and stop. Re-run with `--accept-size` only when the user chooses to build it as one PR. |
-| `EPIC:SPLIT:<path>` | the input is several changes; the split is in `<path>` (`split.md`), one plan per child in `plans/` beside it | Show `<path>` to the user and stop. This release cannot approve a split or build its children. To build the input as one change instead, start a build under a new `--change` name with `--no-epic-split`. |
+| `EPIC:SPLIT:<path>` | the input is several changes; the split is in `<path>` (`split.md`), one plan per child in `plans/` beside it | For a GitHub ticket, post **one** comment whose body is the line `<!-- buildme-epic-split:<sha256 of split.md> -->` (`shasum -a 256 <path>`) followed by the content of `<path>`, and only when no comment on the issue already starts with that line (`gh issue view <n> --json comments --jq '.comments[].body'`): a re-run prints the same line for the same `split.md`, so it never posts twice. For any other input, show `<path>` to the user. Then stop. Re-run with `--approve-split` only when the user approves the split. Never create, close or edit a ticket for a child. |
 
-These three are the only cases where you post on a ticket. The pipeline itself
+These four are the only cases where you post on a ticket. The pipeline itself
 never posts and never talks to a ticket system.
 
 Also point the user at the build's companion artifacts inside the change

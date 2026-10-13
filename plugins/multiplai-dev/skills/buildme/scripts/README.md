@@ -12,7 +12,7 @@ SKILL.md (thin wrapper — handles interview, plan review)
         ├── tdd_engine.py      — per-block TDD with agent spawning
         ├── apply.py           — manual single-agent implementation
         ├── change_manager.py  — manages specs/ directory
-        ├── epic/              — EPIC_SPLIT: one change, or several child plans
+        ├── epic/              — EPIC_SPLIT: one change or several child plans, the approval
         └── shared: config, state, models, gates, sdk, logging, env, progress
 ```
 
@@ -39,8 +39,11 @@ python -m build_pipeline archive --change my-feature --project-dir /path
 After the codebase analysis, `build` decides whether the input is one change or
 several (`BuildPhase.EPIC_SPLIT`, one structured call). Several writes
 `<data_dir>/buildme/epics/<owner>-<repo>--<change>/` — `epic.json`, `split.md`,
-`plans/<id>.md` — prints `EPIC:SPLIT:<split.md>` and exits 3, on this run and
-every re-run. `--no-epic-split` skips the decision.
+`plans/<id>.md`, `.lock` — prints `EPIC:SPLIT:<split.md>` and exits 3.
+`build ... --approve-split` re-checks `split.md`'s table and the plans as on disk,
+saves `state: approved` with each file's sha256, and prints
+`EPIC:APPROVED:<epic.json>` (exit 0). A file changed after approval, or another
+process holding the epic's lock, exits 2. `--no-epic-split` skips the decision.
 
 ## Model-Adaptive Behavior
 
