@@ -170,7 +170,9 @@ production access), say so explicitly instead of claiming it.
 
 Sections may be short, but none may be omitted. An empty
 "Constraints / out of scope" is a statement ("no constraints beyond
-workspace defaults"), not a missing section. A plan whose delivered code writes no state still has "Stop and resume states": one sentence saying so, and the rows for its own work items.
+workspace defaults"), not a missing section.
+A plan whose delivered code writes no state still has "Stop and resume
+states": one sentence saying so, and the rows for its own work items.
 
 ## Quality bar for "Done means"
 
