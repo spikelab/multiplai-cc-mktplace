@@ -457,8 +457,12 @@
 
   const DRAW_TOOLS = ["pen", "arrow", "box"];
   const DRAW_COLOURS = [["Yellow", "#FFD400"], ["Red", "#FF3B30"], ["Cyan", "#00C2FF"]];
-  const MAX_PEN_POINTS = 2000;            // review_server.MAX_PEN_POINTS
-  const MAX_MARK_BYTES = 4 * 1024 * 1024; // review_server.MAX_MARK_BYTES
+  // The server's limits (stages/review_server.py; tests/test_review_logic_js.py checks they agree).
+  const MAX_SHAPES = 100;
+  const MAX_PEN_POINTS = 2000;
+  const MAX_DRAWING_POINTS = 6000;        // all of one drawing's shapes together
+  const MAX_MARK_BYTES = 4 * 1024 * 1024;
+  const MAX_BODY_BYTES = 256 * 1024;      // one POST /api/comments
   const MAX_EXPORT_SIDE = 3840;
 
   const round4 = (v) => Math.round(v * 10000) / 10000;
@@ -495,13 +499,23 @@
   }
 
   /* The shape a drag made, or null when it is too small to mean anything
-   * (an arrow or a box needs a drag; a pen click is a dot). */
-  function finishShape(tool, color, points) {
-    if (!DRAW_TOOLS.includes(tool) || !isColour(color) || !points.length) return null;
-    if (tool === "pen") return { tool, color, points: simplifyStroke(points) };
+   * (an arrow or a box needs a drag; a pen click is a dot). A pen stroke is
+   * thinned to `maxPoints`; with fewer than 2 to spare there is no shape. */
+  function finishShape(tool, color, points, maxPoints = MAX_PEN_POINTS) {
+    if (!DRAW_TOOLS.includes(tool) || !isColour(color) || !points.length || !(maxPoints >= 2)) return null;
+    if (tool === "pen") return { tool, color, points: simplifyStroke(points, undefined, Math.min(MAX_PEN_POINTS, maxPoints)) };
     const a = points[0], b = points[points.length - 1];
     if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.01) return null;
     return { tool, color, points: [[round4(a[0]), round4(a[1])], [round4(b[0]), round4(b[1])]] };
+  }
+
+  /* What one more shape may use in a drawing that has `shapes`: null when the
+   * drawing is full (MAX_SHAPES shapes, or under 2 of MAX_DRAWING_POINTS left),
+   * else the most points it may have. */
+  function drawingRoom(shapes) {
+    const used = shapes.reduce((n, s) => n + s.points.length, 0);
+    const left = MAX_DRAWING_POINTS - used;
+    return shapes.length >= MAX_SHAPES || left < 2 ? null : Math.min(MAX_PEN_POINTS, left);
   }
 
   /* Line width for a picture `w` pixels wide: 0.5% of it, at least 2 px. */
@@ -628,6 +642,47 @@
              target: d.target || null, text: (d.text || "").trim() };
   }
 
+  // --- Review: sending -----------------------------------------------------------------------
+
+  const REVIEW_KINDS = ["point", "drawing", "range"];
+  const kindOf = (c) => c.kind || "point";
+
+  /* The mailbox row for a pending Review comment of any kind. */
+  function reviewRow(c) {
+    if (kindOf(c) === "drawing") return drawingRow(c);
+    if (kindOf(c) === "range") return rangeRow(c);
+    const { video, version, t, x, y } = c;
+    return { kind: "point", video, version, t, x, y, text: (c.text || "").trim() };
+  }
+
+  /* Whether the pending comments can be sent: some, and each with text but a drawing. */
+  function canSendReview(pending) {
+    return pending.length > 0 && pending.every((c) => kindOf(c) === "drawing" || !!(c.text || "").trim());
+  }
+
+  /* The sent rows the Review tab lists for `clip`: its point, drawing and range rows. */
+  function reviewSent(rows, clip) {
+    return (rows || []).filter((r) => REVIEW_KINDS.includes(kindOf(r)) && r.video === clip);
+  }
+
+  /* `rows` split into POST /api/comments bodies of at most `maxBytes`, in order,
+   * as lists of indexes into `rows`. A row too big for any body goes alone (the
+   * server refuses it; the server's own limits keep a drawing under the cap). */
+  function sendBatches(rows, maxBytes = MAX_BODY_BYTES) {
+    const enc = new TextEncoder();
+    const empty = enc.encode(JSON.stringify({ comments: [] })).length;
+    const out = [];
+    let cur = [], size = empty;
+    rows.forEach((r, i) => {
+      const n = enc.encode(JSON.stringify(r)).length;
+      if (cur.length && size + 1 + n > maxBytes) { out.push(cur); cur = []; size = empty; }   // 1: the comma
+      size += n + (cur.length ? 1 : 0);
+      cur.push(i);
+    });
+    if (cur.length) out.push(cur);
+    return out;
+  }
+
   const api = {
     TABS, INPUT_FILES, fmt, inputNotice, isReels, latestBy, rowsOfKind, clipsOpen, speakersOpen, firstOpenTab,
     oneAtATime,
@@ -639,9 +694,10 @@
     lookProblem, loopTime, fitScale, readyMessage,
     DEFAULT_VOLUME_DB, SFX_VOLUME_DB, MIN_VOLUME_DB, MAX_VOLUME_DB, musicOpen, dbToGain, clampDb, musicDraft,
     musicRow, musicProblem, fmtDb,
-    DRAW_TOOLS, DRAW_COLOURS, MAX_PEN_POINTS, MAX_MARK_BYTES, isColour, toPictureFrac, simplifyStroke, finishShape,
-    strokeWidth, shapePaths, exportSize, drawingRow,
+    DRAW_TOOLS, DRAW_COLOURS, MAX_SHAPES, MAX_PEN_POINTS, MAX_DRAWING_POINTS, MAX_MARK_BYTES, MAX_BODY_BYTES,
+    isColour, toPictureFrac, simplifyStroke, finishShape, drawingRoom, strokeWidth, shapePaths, exportSize, drawingRow,
     LANES, MIN_RANGE_S, timelineLanes, blockBox, timeAtFrac, rangeFromDrag, blockRange, targetLabel, rangeRow,
+    reviewRow, canSendReview, reviewSent, sendBatches,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JobLogic = api;

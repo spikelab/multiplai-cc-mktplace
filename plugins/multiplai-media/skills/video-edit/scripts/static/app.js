@@ -68,6 +68,9 @@ const App = (() => {
     set(key, value) {
       try { localStorage.setItem(`video-edit-job:${key}`, JSON.stringify(value)); } catch (e) { /* storage off */ }
     },
+    remove(key) {
+      try { localStorage.removeItem(`video-edit-job:${key}`); } catch (e) { /* storage off */ }
+    },
   };
 
   /* A tab's "nothing to show yet" line; null hides it. */

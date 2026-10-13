@@ -216,6 +216,7 @@ def marks(tmp_path: Path) -> tuple[Path, str]:
     ({"shapes": [{**SHAPES[1], "points": [[0.1, 0.1]]}]}, "2..2 points"),
     ({"shapes": [{**SHAPES[2], "points": [[0.1, 0.1], [0.2, 0.2], [0.3, 0.3]]}]}, "2..2 points"),
     ({"shapes": [{**SHAPES[0], "points": [[0.1, 0.1]] * 2001}]}, "1..2000 points"),
+    ({"shapes": [{**SHAPES[0], "points": [[0.1, 0.1]] * 2000}] * 3 + [SHAPES[0]]}, "at most 6000 points"),
     ({"shapes": [{**SHAPES[0], "points": [[0.1, 1.5]]}]}, "within 0..1"),
     ({"shapes": [{**SHAPES[0], "points": [[0.1, True]]}]}, "finite"),
     ({"shapes": [{**SHAPES[0], "points": [{"x": 0.1, "y": 0.1}]}]}, r"\[x, y\]"),
@@ -225,6 +226,21 @@ def test_drawing_rejected(marks, over, match) -> None:
     d, image = marks
     with pytest.raises(ValueError, match=match):
         rs.validate_comment({**_drawing(image), **over}, KNOWN, marks_dir=d)
+
+
+def test_the_largest_drawing_row_fits_in_one_comments_body(marks) -> None:
+    """The page sends a drawing whole, so the biggest one the server accepts must fit in a body."""
+    d, image = marks
+    pt = [0.1234, 0.5678]                                                # the longest a point gets
+    boxes = [{"tool": "box", "color": "#FFD400", "points": [pt, pt]}] * (rs.MAX_SHAPES - 3)
+    left = rs.MAX_DRAWING_POINTS - 2 * len(boxes)                        # every shape, every point
+    pens = [{"tool": "pen", "color": "#FFD400", "points": [pt] * n}
+            for n in (rs.MAX_PEN_POINTS, rs.MAX_PEN_POINTS, left - 2 * rs.MAX_PEN_POINTS)]
+    shapes = pens + boxes
+    assert len(shapes) == rs.MAX_SHAPES and sum(len(x["points"]) for x in shapes) == rs.MAX_DRAWING_POINTS
+    row = {**_drawing(image), "shapes": shapes, "text": "\u0001" * rs.MAX_TEXT}   # 6 bytes each as JSON
+    rs.validate_comment(row, KNOWN, marks_dir=d)
+    assert len(json.dumps({"comments": [row]}).encode()) < rs.MAX_BODY_BYTES
 
 
 def test_a_drawing_row_needs_the_marks_directory(marks) -> None:

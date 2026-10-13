@@ -29,6 +29,8 @@ Nothing yet.
   colour, and mark the frame: circle the logo that is cut off, point at the
   caption that covers a mouth. Undo and Clear fix a slip. Claude gets the
   frame at full size with your marks on it, with your note if you add one.
+  A drawing holds up to 100 shapes; when one is full the page says so, and
+  you add it and draw the rest as another.
 - **Review tab: a timeline under every render.** It shows the render's
   segments (crossfades hatched), caption lines (hover for the text), the
   headline, overlays (file and style) and sound effects, with a playhead

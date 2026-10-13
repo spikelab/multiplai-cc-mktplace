@@ -575,3 +575,68 @@ test("rangeRow is the server's range row; no target is null", () => {
   assert.equal(L.targetLabel("overlay:2"), "overlay 2");
   assert.equal(L.targetLabel(null), "");
 });
+
+// --- Review: sending ---------------------------------------------------------------------
+
+test("finishShape thins a pen stroke to the room left in its drawing, and refuses one with no room", () => {
+  const pts = Array.from({ length: 500 }, (_, i) => [i / 500, 0.5]);
+  assert.equal(L.finishShape("pen", "#FFD400", pts, 50).points.length, 50);
+  assert.equal(L.finishShape("pen", "#FFD400", pts, 1), null);
+  assert.equal(L.finishShape("box", "#FFD400", [[0.1, 0.1], [0.3, 0.4]], null), null);
+});
+
+test("drawingRoom: the points one more shape may have, null when the drawing is full", () => {
+  const pen = (n) => ({ tool: "pen", color: "#FFD400", points: Array.from({ length: n }, () => [0.1, 0.1]) });
+  assert.equal(L.drawingRoom([]), L.MAX_PEN_POINTS);
+  assert.equal(L.drawingRoom([pen(2000), pen(2000), pen(1500)]), 500);
+  assert.equal(L.drawingRoom([pen(2000), pen(2000), pen(1999)]), null);
+  assert.equal(L.drawingRoom(Array.from({ length: L.MAX_SHAPES }, () => pen(1))), null);
+});
+
+const POINT = { key: "p", video: "clip-01", version: 1, t: 1.5, x: 0.2, y: 0.3, text: " too dark " };
+const DRAWING = { key: "d", kind: "drawing", video: "clip-01", version: 1, t: 2, image: "a".repeat(32),
+                  shapes: [{ tool: "box", color: "#FFD400", points: [[0.1, 0.1], [0.3, 0.4]] }], text: "" };
+const RANGE = { key: "r", kind: "range", video: "clip-01", version: 1, t: 3, t_start: 3, t_end: 5, target: "overlay:0", text: "late" };
+
+test("reviewRow sends each pending comment as its own kind of row", () => {
+  assert.deepEqual(L.reviewRow(POINT), { kind: "point", video: "clip-01", version: 1, t: 1.5, x: 0.2, y: 0.3, text: "too dark" });
+  assert.equal(L.reviewRow(DRAWING).kind, "drawing");
+  assert.deepEqual(L.reviewRow(DRAWING), L.drawingRow(DRAWING));
+  assert.deepEqual(L.reviewRow(RANGE), L.rangeRow(RANGE));
+  assert.ok(!("x" in L.reviewRow(RANGE)));
+});
+
+test("canSendReview: a drawing may go without text, a point or a range may not", () => {
+  assert.equal(L.canSendReview([]), false);
+  assert.equal(L.canSendReview([DRAWING]), true);
+  assert.equal(L.canSendReview([DRAWING, RANGE, POINT]), true);
+  assert.equal(L.canSendReview([DRAWING, { ...RANGE, text: "  " }]), false);
+  assert.equal(L.canSendReview([{ ...POINT, text: "" }]), false);
+});
+
+test("reviewSent lists this clip's point, drawing and range rows, and nothing else", () => {
+  const rows = [{ video: "clip-01", t: 1 }, { ...DRAWING }, { ...RANGE }, { ...RANGE, video: "clip-02" },
+                { kind: "pick", candidate: "c1" }, { kind: "look", video: "clip-01" }];
+  assert.deepEqual(L.reviewSent(rows, "clip-01").map((r) => r.kind || "point"), ["point", "drawing", "range"]);
+  assert.deepEqual(L.reviewSent(undefined, "clip-01"), []);
+});
+
+test("sendBatches keeps every body under the limit, in order, and a too-big row alone", () => {
+  const big = (n) => ({ kind: "point", text: "x".repeat(n) });
+  const rows = [big(100), big(100), big(100), big(500), big(10)];
+  const bytes = (idx) => Buffer.byteLength(JSON.stringify({ comments: idx.map((i) => rows[i]) }));
+  const batches = L.sendBatches(rows, 400);                              // a 100-char row is 126 bytes
+  assert.deepEqual(batches, [[0, 1, 2], [3], [4]]);
+  for (const b of batches.filter((b) => !b.includes(3))) assert.ok(bytes(b) <= 400, String(bytes(b)));
+  assert.deepEqual(L.sendBatches([]), []);
+  assert.deepEqual(L.sendBatches(rows), [[0, 1, 2, 3, 4]]);                // the server's limit
+  // a body exactly at the limit is one batch
+  assert.deepEqual(L.sendBatches(rows.slice(0, 2), bytes([0, 1])), [[0, 1]]);
+  assert.deepEqual(L.sendBatches(rows.slice(0, 2), bytes([0, 1]) - 1), [[0], [1]]);
+});
+
+test("sendBatches counts UTF-8 bytes, as the server does", () => {
+  const rows = [{ text: "é".repeat(100) }, { text: "é".repeat(100) }];
+  const one = Buffer.byteLength(JSON.stringify({ comments: [rows[0]] }));
+  assert.deepEqual(L.sendBatches(rows, one + 120), [[0], [1]]);           // 100 chars, but 200 bytes
+});

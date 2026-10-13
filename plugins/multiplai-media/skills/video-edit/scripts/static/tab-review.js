@@ -12,16 +12,38 @@
     tool: "point", colour: L.DRAW_COLOURS[0][1], stroke: null,
     timeline: null, timelineKey: null, drag: null,
   };
-  const COMMENT_KINDS = ["point", "drawing", "range"];
 
   // --- pending comments survive a reload (per viewer, best effort) -------------
 
-  const draftKey = () => `pending:${state.clip}`;
+  const draftKey = (clip = state.clip) => `pending:${clip}`;
   const savePending = () => App.store.set(draftKey(), state.pending);
   const loadPending = () => { state.pending = App.store.get(draftKey(), []); };
   const kindOf = (c) => c.kind || "point";
+
+  /* Change `clip`'s pending list with `fn`, shown or not: an upload or a send can
+   * outlast a switch to another clip, and its comments still belong to the first. */
+  function editPending(clip, fn) {
+    if (clip === state.clip) {
+      state.pending = fn(state.pending);
+      savePending();
+      renderComments();
+    } else {
+      App.store.set(draftKey(clip), fn(App.store.get(draftKey(clip), [])));
+    }
+  }
+
   // A drawing's small preview, kept per viewer by image id so sent drawings show it too.
+  // Only the newest MAX_THUMBS are kept (about 10 KB each), so they never fill the storage
+  // the pending comments are saved in.
+  const MAX_THUMBS = 40;
   const thumbOf = (image) => App.store.get(`thumb:${image}`, null);
+  function keepThumb(image, thumb) {
+    const ids = App.store.get("thumbs", []).filter((x) => x !== image);
+    ids.push(image);
+    for (const old of ids.splice(0, Math.max(0, ids.length - MAX_THUMBS))) App.store.remove(`thumb:${old}`);
+    App.store.set("thumbs", ids);
+    App.store.set(`thumb:${image}`, thumb);
+  }
 
   // --- clips and versions ---------------------------------------------------------
 
@@ -276,7 +298,7 @@
   }
 
   function refreshSent() {
-    state.sent = (App.state.rows || []).filter((r) => COMMENT_KINDS.includes(kindOf(r)) && r.video === state.clip);
+    state.sent = L.reviewSent(App.state.rows, state.clip);
     renderComments();
   }
 
@@ -372,7 +394,9 @@
     if (!state.stroke) return;
     const s = state.stroke;
     state.stroke = null;
-    const shape = L.finishShape(s.tool, s.color, s.tool === "pen" ? s.points.slice(1) : s.points);
+    const room = state.draft && state.draft.kind === "drawing" ? L.drawingRoom(state.draft.shapes) : null;
+    const shape = room ? L.finishShape(s.tool, s.color, s.tool === "pen" ? s.points.slice(1) : s.points, room) : null;
+    if (!room) App.setStatus("This drawing is full: add it, then draw the rest as another.", true);
     if (shape && state.draft && state.draft.kind === "drawing") state.draft.shapes.push(shape);
     if (state.draft && state.draft.kind === "drawing" && !state.draft.shapes.length) closeComposer();
     else composerLabel();
@@ -439,7 +463,7 @@
 
   async function submitComposer() {
     const d = state.draft;
-    if (!d) return;
+    if (!d || $("composer-submit").disabled) return;   // Ctrl/Cmd+Enter while a drawing uploads
     const text = composerText.value.trim();
     if (d.kind === "point") {
       if (!text) return;
@@ -451,18 +475,22 @@
                            t_start: d.t_start, t_end: d.t_end, target: d.target, text });
     } else if (d.kind === "drawing") {
       if (!d.shapes.length) return;
+      // The render it was drawn on, read before the upload: the viewer may switch clips meanwhile.
+      const item = { key: newKey(), kind: "drawing", video: state.clip, version: state.version, t: d.t, shapes: d.shapes, text };
       $("composer-submit").disabled = true;
       try {
         const { blob, thumb } = await exportDrawing(d.shapes);
         const { image } = await App.postBlob("/api/marks", blob, "image/jpeg");
-        App.store.set(`thumb:${image}`, thumb);
-        state.pending.push({ key: newKey(), kind: "drawing", video: state.clip, version: state.version, t: d.t, image, shapes: d.shapes, text });
+        keepThumb(image, thumb);
+        editPending(item.video, (list) => list.concat({ ...item, image }));
       } catch (e) {
         App.setStatus(`Drawing not added: ${e.message}`, true);
         return;
       } finally {
         $("composer-submit").disabled = false;
       }
+      if (state.draft === d) closeComposer();
+      return;
     }
     savePending();
     closeComposer();
@@ -566,14 +594,7 @@
   }
 
   function updateSend() {
-    $("send").disabled = !state.pending.length || state.pending.some((c) => kindOf(c) !== "drawing" && !c.text.trim());
-  }
-
-  function rowOf(c) {
-    if (kindOf(c) === "drawing") return L.drawingRow(c);
-    if (kindOf(c) === "range") return L.rangeRow(c);
-    const { video: v, version, t, x, y, text } = c;
-    return { kind: "point", video: v, version, t, x, y, text: text.trim() };
+    $("send").disabled = !L.canSendReview(state.pending);
   }
 
   function showTime() {
@@ -640,19 +661,25 @@
     initTools();
     initTimeline();
 
+    // Sent in bodies the server accepts (a few big drawings can outgrow one); each body's
+    // comments leave the pending list as soon as it is sent, so a failure resends only the rest.
     $("send").addEventListener("click", async () => {
-      const batch = state.pending.map(rowOf);
+      const clip = state.clip, items = state.pending.slice(), rows = items.map(L.reviewRow);
       $("send").disabled = true;
+      let sent = 0;
       try {
-        const ids = await App.send(batch);
-        state.pending = [];
-        savePending();
-        App.setStatus(`Sent ${ids.length} comment${ids.length === 1 ? "" : "s"}. The next version appears here when it is rendered.`);
-        refreshSent();
+        for (const batch of L.sendBatches(rows)) {
+          await App.send(batch.map((i) => rows[i]));
+          const done = new Set(batch.map((i) => items[i].key));
+          editPending(clip, (list) => list.filter((c) => !done.has(c.key)));
+          sent += batch.length;
+        }
+        App.setStatus(`Sent ${sent} comment${sent === 1 ? "" : "s"}. The next version appears here when it is rendered.`);
       } catch (e) {
-        App.setStatus(`Not sent: ${e.message}`, true);
-        updateSend();
+        App.setStatus(`${sent ? `Sent ${sent}; the other ${items.length - sent} not sent` : "Not sent"}: ${e.message}`, true);
       }
+      refreshSent();
+      updateSend();
     });
 
     const play = $("play"), seek = $("seek");

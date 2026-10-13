@@ -398,6 +398,9 @@ ROW_KINDS: dict[str, dict] = {
 SHAPE_TOOLS = ("pen", "arrow", "box")
 MAX_SHAPES = 100
 MAX_PEN_POINTS = 2000
+# Points in one drawing row, all shapes together: at about 16 bytes a point as JSON, a full
+# drawing stays well inside MAX_BODY_BYTES, so the page can always send it.
+MAX_DRAWING_POINTS = 6000
 COLOUR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 # What a range row may point at on the timeline: a lane, or one block in it by index.
 TARGET_RE = re.compile(r"^(?:captions|headline|title|(?:segment|overlay|sfx):\d{1,4})$")
@@ -517,6 +520,8 @@ def _shapes(shapes: Any) -> list[dict]:
                 raise ValueError(f"shape {i}: points are fractions of the picture, within 0..1")
             clean.append([round(x, 4), round(y, 4)])
         out.append({"tool": sh["tool"], "color": sh["color"].upper(), "points": clean})
+    if sum(len(sh["points"]) for sh in out) > MAX_DRAWING_POINTS:
+        raise ValueError(f"a drawing has at most {MAX_DRAWING_POINTS} points in all its shapes")
     return out
 
 
