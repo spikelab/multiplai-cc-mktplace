@@ -12,7 +12,7 @@ SKILL.md (thin wrapper — handles interview, plan review)
         ├── tdd_engine.py      — per-block TDD with agent spawning
         ├── apply.py           — manual single-agent implementation
         ├── change_manager.py  — manages specs/ directory
-        ├── epic/              — EPIC_SPLIT: one change or several child plans, the approval
+        ├── epic/              — EPIC_SPLIT: one change or several child plans, the approval, running the children
         └── shared: config, state, models, gates, sdk, logging, env, progress
 ```
 
@@ -54,8 +54,15 @@ several (`BuildPhase.EPIC_SPLIT`, one structured call). Several writes
 `plans/<id>.md`, `.lock` — prints `EPIC:SPLIT:<split.md>` and exits 3.
 `build ... --approve-split` re-checks `split.md`'s table and the plans as on disk,
 saves `state: approved` with each file's sha256, and prints
-`EPIC:APPROVED:<epic.json>` (exit 0). A file changed after approval, or another
-process holding the epic's lock, exits 2. `--no-epic-split` skips the decision.
+`EPIC:APPROVED:<epic.json>`, then runs the children (`epic/coordinator.py`):
+each is its own `python -m build_pipeline build` subprocess in its own process
+group, launched once its dependencies merged, at most `epic.max_parallel` at
+once, from origin's default branch (`--base-ref`). Records go to
+`agents/<NNN>-build-<id>.{started.json,result.json,log}` (`epic/records.py`)
+and each run ends with `runs/<NN>/summary.json` (`EPIC:SUMMARY:<path>`). A
+child waiting on an open PR exits 3 with `EPIC:MERGE_WAITING:<urls>`. A file
+changed after approval, or another process holding the epic's lock, exits 2.
+`--no-epic-split` skips the decision.
 
 ## Model-Adaptive Behavior
 
