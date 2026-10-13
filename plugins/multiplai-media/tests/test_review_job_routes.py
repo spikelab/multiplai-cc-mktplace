@@ -230,3 +230,18 @@ def test_new_routes_need_the_token(server, path) -> None:
 def test_new_routes_refuse_a_foreign_origin(server) -> None:
     res, _ = _get(server, "/api/candidates", Origin="https://evil.example")
     assert res.status == 403
+
+
+def test_the_json_cache_rereads_a_file_that_changed_on_disk(tmp_path: Path) -> None:
+    import os
+    f = tmp_path / "sentences.json"
+    f.write_text("[1]")
+    cache = rs._JsonCache()
+    first = cache.get(f)
+    assert first == [1] and cache.get(f) is first          # unchanged: the parsed copy
+    f.write_text("[1, 2]")                                  # new size
+    assert cache.get(f) == [1, 2]
+    st = f.stat()
+    f.write_text("[3, 4]")                                  # same size, new mtime
+    os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+    assert cache.get(f) == [3, 4]
