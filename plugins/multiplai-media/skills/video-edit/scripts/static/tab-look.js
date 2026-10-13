@@ -324,7 +324,7 @@
     const grid = el("div", "look-grid");
     const left = el("div", "");
     left.append(el("h2", "", "Overlay style"),
-      el("p", "hint", "Each sample loops as the renderer would play it. The renders use the style for every overlay page."),
+      el("p", "hint", "Each sample loops as the renderer would play it. A keyed style shows its key colour here; the render removes it. The renders use the style for every overlay page."),
       styleList, el("h2", "", "Brand"), brandList);
     const right = el("div", "");
     right.append(el("h2", "", "Captions"), capCol);
