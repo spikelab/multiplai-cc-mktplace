@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import json
 import logging
 import sys
@@ -110,6 +111,8 @@ def resolve(args: argparse.Namespace) -> FindingsRun:
     cli.change = name
     config = BuildConfig.from_cli_args(cli)
     config.change_dir = change_dir_for(config.specs_dir, name)
+    if getattr(args, "max_rounds", None) is not None:
+        config.findings = dataclasses.replace(config.findings, max_rounds=args.max_rounds)
     return FindingsRun(config=config, pr=args.pr, repo=repo, branch=head,
                        change_dir=config.change_dir, auto=bool(args.auto),
                        trust_repo=bool(args.trust_repo))
