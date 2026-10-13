@@ -193,10 +193,11 @@ class BuildState(BaseModel):
     # completes the phase. Set means the build is an epic: every later run
     # reads epic.json and never reaches spec generation. Default None.
     epic_dir: str | None = None
-    # EPIC_SPLIT answered one change. A retry of a FAILED build (which re-runs
-    # every phase) skips the step instead of asking again, since a second
-    # answer of several would turn a change already being built into an
-    # epic. Default False.
+    # EPIC_SPLIT answered one change, or skipped (`--no-epic-split`, `only`).
+    # A retry of a FAILED build (which re-runs every phase) skips the step
+    # instead of asking again, since a second answer of several would turn a
+    # change already being built into an epic. Default False; `load` sets it
+    # on a checkpoint saved before epic mode that is FAILED or past the split.
     epic_single: bool = False
 
     # Git lifecycle — set when the pipeline creates its own worktree/branch.
@@ -282,6 +283,13 @@ class BuildState(BaseModel):
         """Load state from a JSON file."""
         data = json.loads(path.read_text())
         state = cls.model_validate(data)
+        # Saved before epic mode (no `epic_single` key), FAILED or past
+        # EPIC_SPLIT: a change already being built as one change. A FAILED
+        # checkpoint does not say where it failed, and a retry re-runs every
+        # phase, so it keeps building as one change, as it started (row A.S14).
+        if "epic_single" not in data and state.epic_dir is None and (
+                state.phase == BuildPhase.FAILED or state.is_phase_complete(BuildPhase.EPIC_SPLIT)):
+            state.epic_single = True
         log.info("Resumed state from %s (phase=%s)", path, state.phase)
         return state
 
