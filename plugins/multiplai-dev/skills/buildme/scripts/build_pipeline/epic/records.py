@@ -27,7 +27,8 @@ NAMED_MARKERS = ("WORKTREE", "BRANCH", "PR", "SPEND")
 # The kind and child come from the started record, which the name must match:
 # the name alone is ambiguous (`merge-tests-api` is `merge-tests` of `api` or
 # `merge` of `tests-api`).
-_NAME_RE = re.compile(r"^(\d{3})-(.+)\.started\.json$")
+# `NNN` is at least three digits: a thousandth record is `1000-...`.
+_NAME_RE = re.compile(r"^(\d{3,})-(.+)\.started\.json$")
 # A marker line: `WORD:WORD...`, as buildme prints them (`SPLIT:REQUIRED:<path>`).
 _MARKER_RE = re.compile(r"^[A-Z][A-Z_]*:[A-Z][A-Z_]*(?::|$)")
 _NOT_MARKERS = ("PHASE:", "RESULT:", "BOARD:")
@@ -78,7 +79,7 @@ def attempts(epic_dir: Path) -> list[Attempt]:
         base = p.with_name(p.name[:-len(".started.json")])
         out.append(Attempt(int(m.group(1)), kind, child, base, started,
                            _read_json(base.with_name(base.name + ".result.json"))))
-    return out
+    return sorted(out, key=lambda a: a.n)     # by number: `1000-` sorts before `999-` by name
 
 
 def start(epic_dir: Path, kind: str, child: str, argv: list[str], *,

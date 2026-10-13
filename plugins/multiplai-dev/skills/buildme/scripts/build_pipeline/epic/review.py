@@ -17,8 +17,11 @@ The steps that run it are `Coordinator._review` in `coordinator.py`.
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -46,7 +49,10 @@ def _skill(*args: str) -> list[str]:
 
 
 def review_argv(worktree: Path, number: int) -> list[str]:
-    return _skill("review", "--repo", str(worktree), "--pr", str(number), "--trust-repo")
+    """`--fetch`: the review needs the PR's head and base commits in the clone.
+    A sibling's merge moves the base, and a push from elsewhere moves the
+    head, without any launch here fetching them (C.S8)."""
+    return _skill("review", "--repo", str(worktree), "--pr", str(number), "--trust-repo", "--fetch")
 
 
 def resume_argv(target_dir: str) -> list[str]:
@@ -91,6 +97,40 @@ def finished_line(lines: list[dict], repo_slug: str, number: int, head: str) -> 
     """The last complete review of this PR at *head*, else None (item 24)."""
     hits = [line for line in lines if _complete(line, repo_slug, number) and line.get("head_sha") == head]
     return hits[-1] if hits else None
+
+
+def running_dir(lines: list[dict], repo_slug: str, head: str) -> str | None:
+    """The `target_dir` of a review of this repo at *head* whose last ledger
+    line is `started`: one that is running now, or was killed. None without one."""
+    last: dict[str, str] = {}
+    for line in lines:
+        if line.get("event") in ("started", "finished") and line.get("head_sha") == head \
+                and str(line.get("slug") or "").startswith(repo_slug + "--") and line.get("target_dir"):
+            last[str(line["target_dir"])] = line["event"]
+    found = [d for d, event in last.items() if event == "started"]
+    return found[-1] if found else None
+
+
+def lock_held(target_dir: str) -> bool:
+    """True while a process holds the review skill's run lock on *target_dir*:
+    an exclusive `flock` on `<parent>/.locks/<name>.lock`
+    (`review_pipeline/runlock.py`), held until that review ends, after its
+    `finished` ledger line. Looking takes a shared lock for an instant and
+    drops it; a lock file that cannot be opened is not held."""
+    path = Path(target_dir).parent / ".locks" / f"{Path(target_dir).name}.lock"
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except OSError as e:
+        return e.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES)
+    else:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
 
 
 def conflicts(view: dict) -> bool | None:

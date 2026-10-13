@@ -565,8 +565,10 @@ class Coordinator:
 
     def _reuse(self, c: Child, line: dict, head: str, number: int) -> None:
         """Item 24, found: no review. A started record for this head with no
-        result gets its result now (C.S2, C.S4); with no record of this head at
-        all, one pair is written; a head already recorded writes nothing."""
+        result gets its result now (C.S2, C.S4); when no record of this head
+        holds a review's fields (none at all, or only the exit-2 `is running
+        now` asks), one pair is written; a head whose review is recorded
+        writes nothing."""
         tries = [a for a in records.attempts(self.epic_dir) if a.child == c.id and a.kind in REVIEW_KINDS
                  and a.started.get("head_sha") == head]
         fields = self._fields(c, line, str(line.get("target_dir")), number, reused=True)
@@ -575,7 +577,7 @@ class Coordinator:
             records.finish(a, None, interrupted=True)
         if open_:
             records.finish(open_[-1], None, interrupted=True, extra=fields)
-        elif not tries:
+        elif not any("blocking" in a.result for a in tries):
             argv = review.review_argv(self._worktree(c), number)
             a = records.start(self.epic_dir, "review", c.id, argv, head_sha=head, pr_round=c.pr_round)
             records.finish(a, 0, interrupted=False, extra=fields)
@@ -597,10 +599,21 @@ class Coordinator:
                 number, head = view["number"], view["headRefOid"]
                 c.conflicts = review.conflicts(view)
                 lines = review.ledger_lines()
+                running = review.running_dir(lines, self.slug, head)
+                if running is not None:
+                    if review.lock_held(running):     # C.S2: it runs now; never two at once
+                        await CLOCK.sleep(review.REVIEW_WAIT)
+                        continue
+                    # Its lock is free, so it ended: read again, as its `finished`
+                    # line may have come after the read above.
+                    lines = review.ledger_lines()
                 c.pr_round = review.pr_round(lines, self.slug, number)
                 line = review.finished_line(lines, self.slug, number, head)
                 if line is not None:
                     self._reuse(c, line, head, number)
+                    return
+                if self._over_budget():           # Decided 6: before each launch
+                    c.status, c.reason = "built", ""
                     return
                 stale = [a for a in records.attempts(self.epic_dir)
                          if a.child == c.id and a.kind in REVIEW_KINDS and a.result is None]
@@ -614,6 +627,9 @@ class Coordinator:
                 hint = review.INTERRUPTED.search(out) if code == 4 else None
                 if hint:                  # C.S3
                     records.finish(c.rattempt, code, interrupted=False)
+                    if self._over_budget():
+                        c.status, c.reason = "built", ""
+                        return
                     code, out = await self._run_review(c, "resume", review.resume_argv(hint.group(1).strip()), head)
                     if code == 2 and review.RUNNING_NOW in out:
                         records.finish(c.rattempt, code, interrupted=False)

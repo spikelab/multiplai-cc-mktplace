@@ -166,26 +166,28 @@ def _result(root: Root, i: int) -> dict:
 
 
 def test_C_S2_coordinator_killed_with_the_review_alive_waits_for_it(tmp_path, monkeypatch):
-    """C.S2: the resumed `review` answers exit 2 `is running now`; the
-    coordinator waits 60 s and asks again until the review finished, then
-    writes the killed record's result from the ledger. Never two reviews.
-    One more launch and pair."""
+    """C.S2: the ledger's `started` line for this head and the review's run
+    lock held: the coordinator launches nothing, waits 60 s and looks again
+    until the lock is free, then reads the ledger and writes the killed
+    record's result from it. Never two reviews; no launch and no pair."""
     reviews = {str(N): [{"block": True}, {}]}
     stopped, clean = _roots(tmp_path, monkeypatch, reviews)
     stopped.killed(_kill_at_review)
     pid = stopped.review_pid()
     assert subprocess.run(["kill", "-0", str(pid)]).returncode == 0      # the review outlived it
+    looks, launched = [], stopped.fakes.review_launches()
 
     def tick(coord):
-        answered = [a for a in stopped.reviews() if (a.result or {}).get("exit_code") == 2]
-        if answered and not stopped.finished():
-            assert len([a for a in stopped.reviews() if a.result is None]) == 1   # never two
-            stopped.release_and_wait()
+        if coord.children["a"].status == "reviewing" and not stopped.finished():
+            looks.append(1)
+            assert stopped.fakes.review_launches() == launched      # never a second review
+            if len(looks) == 5:
+                stopped.release_and_wait()
 
     assert stopped.run(tick) == 0
+    assert len(looks) == 5
     assert clean.run(_release_when_reviewed(clean)) == 0
-    _assert_same(stopped, clean, ["<build>", ("review", None, None, [], True), ("review", None, 2, [], False)],
-                 ["review"])
+    _assert_same(stopped, clean, ["<build>", ("review", None, None, [], True)], [])
     old = _result(stopped, 0)
     assert (old["reused"], old["pr_round"], old["head_sha"]) == (True, 1, _result(clean, 0)["head_sha"])
     assert old["reused_pipeline_run"] == {"target_dir": str(stopped.target), "round": "01"}

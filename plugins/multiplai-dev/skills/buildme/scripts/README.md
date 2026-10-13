@@ -70,10 +70,12 @@ line to (`:incomplete` when one printed none); each result record keeps it as
 children's PRs. Once that reaches `epic.max_usd`, nothing more launches and
 the run exits 3 with `EPIC:BUDGET:<spent>`. Each child's open PR is reviewed
 by the review skill as a subprocess (`uv run --directory <review scripts>
-python -m review_pipeline review --repo <worktree> --pr <n> --trust-repo`;
+python -m review_pipeline review --repo <worktree> --pr <n> --trust-repo --fetch`;
 `epic/review.py`, `Coordinator._review`), at most once per head: a head the
-review ledger already holds a complete review of is reused, a review still
-running (exit 2 `is running now`) is waited for, and an interrupted one
+review ledger already holds a complete review of is reused, a review of the
+head still running (its `started` line and its run lock held) is waited for
+without a launch, one the ledger does not show yet (exit 2 `is running now`)
+is waited for by asking again, and an interrupted one
 (exit 4 with the hint) is continued with `resume`. Its `review` record holds
 the head, the base, the review directory, the cost, `pr_round`, `reused`,
 `conflicts` (never blocks) and `blocking` (open Code HIGH/MEDIUM findings); at

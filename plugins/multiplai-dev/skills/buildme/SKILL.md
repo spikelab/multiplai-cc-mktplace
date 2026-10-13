@@ -673,12 +673,18 @@ children already running and exits `3` with `EPIC:BUDGET:<spent>`.
 
 **Reviewing the children's PRs.** Each child's open PR is reviewed with
 `/multiplai-dev:review` (`python -m review_pipeline review --repo <child
-worktree> --pr <n> --trust-repo`, run as a subprocess), at most once per head:
+worktree> --pr <n> --trust-repo --fetch`, run as a subprocess; `--fetch`
+brings in a base a sibling's merge moved), at most once per head:
 when the review ledger (`<data_dir>/reviews/ledger.jsonl`) already holds a
 complete review of the PR at its current head, no review starts and the
-record says `reused: true`. A review another process is running (exit `2`,
-`is running now`) is waited for, asking again every 60 s; an interrupted one
-(exit `4` with the resume hint) is continued with `review_pipeline resume`.
+record says `reused: true`. While a review of that head is running (its
+`started` ledger line, its run lock held), nothing is launched: the
+coordinator looks again every 60 s and then uses what it finished. A review
+of the PR another process is running that the ledger does not show yet
+(exit `2`, `is running now`) is waited for, asking again every 60 s; an
+interrupted one (exit `4` with the resume hint) is continued with
+`review_pipeline resume`. The epic's budget is checked before each of these
+launches.
 Any other failure parks the child with the end of the review's output. Each
 review writes `agents/<NNN>-review-<id>.{started.json,result.json,log}`; the
 result holds `head_sha`, `base_sha`, `review_dir`, `cost_usd`, `pr_round` (the

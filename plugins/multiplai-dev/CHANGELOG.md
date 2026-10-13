@@ -31,12 +31,21 @@ time, not derived from a tag.
   review fails any other way, the child parks with the reason and stays
   parked. A review counts against `epic.max_parallel` and `epic.max_usd`, and
   the summary's `rounds` is each PR's review round count. SIGHUP leaves a
-  running review running, as it leaves the children.
+  running review running, as it leaves the children. The review fetches
+  (`--fetch`), so a base moved by a sibling's merge does not park the child.
+  While a review of the head holds the review skill's run lock, nothing is
+  launched; the coordinator waits and reads the ledger once the lock is free,
+  so a review that ends meanwhile is never run twice.
 
 ### Changed
 - Five assertions in the epic B1 tests now look only at build records, and the
   B1 stop-and-resume tests expect each child's review records after its builds.
   What they check for builds is unchanged.
+- The epic tests' fake build adds its PR to the shared PR file under a lock,
+  so two builds ending at once both keep their PR.
+
+### Fixed
+- Epic records past number 999 are seen, in number order.
 
 ## [0.61.0] - 2026-10-13
 
