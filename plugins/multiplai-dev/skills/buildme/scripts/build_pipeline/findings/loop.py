@@ -37,11 +37,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from .. import git_ops
+from .. import git_ops, stop_record
 from ..change_manager import normalize_change_name
 from ..config import BuildConfig
 from ..models import BlockStatus, BuildPhase
-from ..state import BuildState, FindingsRound, FindingsState, StepStop
+from ..state import BuildState, FindingsRound, FindingsState
 from . import code, fetch, publish, spec, triage
 from .models import TriageRecord
 
@@ -227,70 +227,33 @@ async def _step(run: FindingsRun, st: BuildState, rnd: FindingsRound, name: str,
 
 
 def record_stop(run: FindingsRun, rnd: FindingsRound, step: str) -> None:
-    """Record what the tree holds as *step* stops: HEAD and its uncommitted
-    paths outside the change directory with their content. Never raises; when
-    git cannot be asked, no record is kept, and a resume then refuses any
-    such change (`others_work`)."""
-    try:
-        edits = git_ops.dirty_files(run.project_dir, ignore=_change_dir_in_project(run))
-        if edits is None:
-            rnd.stops.pop(step, None)
-            return
-        rnd.stops[step] = StepStop(head=git_ops.rev_parse_head(run.project_dir), edits=edits)
-    except Exception:
-        log.exception("findings r%d %s: could not record the stop", rnd.number, step)
+    """Record what the tree holds as *step* stops (`stop_record.record`):
+    HEAD and its uncommitted paths outside the change directory with their
+    content. Never raises; when git cannot be asked, no record is kept, and a
+    resume then refuses any such change (`others_work`)."""
+    stop = stop_record.record(run.project_dir, ignore=_change_dir_in_project(run))
+    if stop is None:
         rnd.stops.pop(step, None)
-
-
-def _names(paths) -> str:
-    paths = sorted(paths)
-    more = f" and {len(paths) - 5} more" if len(paths) > 5 else ""
-    return ", ".join(paths[:5]) + more
+    else:
+        rnd.stops[step] = stop
 
 
 def others_work(run: FindingsRun, rnd: FindingsRound) -> str | None:
-    """Why a resumed round must not go on, or None. A resumed step that
-    discards (`DISCARDING_STEPS`) keeps everything the tree holds under a wip
-    ref and resets it, so it must first be sure all of that is its own.
-
-    The rule: the stopped step's own work is exactly what `record_stop`
-    recorded when it stopped. An uncommitted path outside the change
-    directory is refused unless the record lists it with the same content
-    (an edit the user made after the stop, even to a file the stopped agent
-    was editing, changes that content). For a discarding step, HEAD must
-    also be where the step stopped, or wholly on origin (the CLI
-    fast-forwards from origin, and `rewind_target` keeps origin's commits):
-    a commit made since the stop would be discarded. A step with no record
-    (killed before it could write one, or a checkpoint older than the
-    record) cannot tell its edits from anyone else's, so any uncommitted
-    path outside the change directory is refused. The change directory
-    itself is the round's own and is not checked."""
+    """Why a resumed round must not go on, or None: `stop_record.others_work`
+    for the next step. A resumed step that discards (`DISCARDING_STEPS`)
+    keeps everything the tree holds under a wip ref and resets it, so it
+    must first be sure all of that is its own. The stopped step's record is
+    compared with the tree; for a discarding step, HEAD must also be where
+    the step stopped, or wholly on origin (the CLI fast-forwards from origin,
+    and `rewind_target` keeps origin's commits). The change directory is the
+    round's own and is not checked."""
     step = _next_step(rnd)
-    repo = run.project_dir
-    edits = git_ops.dirty_files(repo, ignore=_change_dir_in_project(run))
-    if edits is None:
-        return f"git could not list the changes in {repo}; inspect it before re-running"
-    where = f"{repo} has uncommitted changes outside {run.change_dir}"
     stop = rnd.stops.get(step) if step in rnd.started else None
-    if stop is None:
-        if not edits:
-            return None
-        why = (f", and the {step} step was stopped without recording its own edits, so "
-               "they cannot be told from anyone else's" if step in rnd.started else "")
-        return f"{where} ({_names(edits)}){why}; stash them first"
-    theirs = [p for p, fp in edits.items() if stop.edits.get(p) != fp]
-    if theirs:
-        return (f"{where} that the stopped {step} step did not leave ({_names(theirs)}); "
-                "stash them first")
-    if step in DISCARDING_STEPS and stop.head:
-        head = git_ops.rev_parse_head(repo)
-        on_origin = bool(head) and git_ops.merge_base(
-            repo, head, f"refs/remotes/origin/{run.branch}") == head
-        if head != stop.head and not on_origin:
-            return (f"commits were added to {run.branch} after the {step} step stopped at "
-                    f"{stop.head[:12]}; resuming would discard them back to where the step "
-                    "started, so move them to another branch first")
-    return None
+    head = stop.head if stop and step in DISCARDING_STEPS else None
+    reason = stop_record.others_work(
+        run.project_dir, stop, ignore=_change_dir_in_project(run), head=head,
+        origin_ref=f"refs/remotes/origin/{run.branch}")
+    return f"{step} step: {reason}" if reason else None
 
 
 def keep_stopped_code_work(run: FindingsRun, rnd: FindingsRound) -> None:

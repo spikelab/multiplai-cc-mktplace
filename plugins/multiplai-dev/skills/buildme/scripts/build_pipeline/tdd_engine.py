@@ -25,6 +25,7 @@ from . import budget as budget_mod
 from .budget import BudgetExceededError
 from . import board
 from . import git_ops
+from . import stop_record
 from . import review_rounds
 from .change_manager import extract_global_constraints
 from .config import BuildConfig
@@ -1706,53 +1707,29 @@ def _records_dir_in_project(config: BuildConfig) -> Path | None:
 
 
 def _record_fix_pass_stop(config: BuildConfig, fp: FixOnPassState) -> None:
-    """Record the tree as the pass leaves it on reaching its next step: HEAD
-    and every uncommitted path with its content. A resume rolls back only
-    this (`_others_work_in_fix_pass`). When git cannot be asked, no record is
-    kept, and a resume then refuses any uncommitted change."""
-    edits = git_ops.dirty_files(config.project_dir, ignore=_records_dir_in_project(config))
-    fp.stop_edits = edits
-    fp.stop_head = git_ops.rev_parse_head(config.project_dir) if edits is not None else None
+    """Record the tree as the pass leaves it on reaching its next step
+    (`stop_record.record`): HEAD and every uncommitted path with its content.
+    A resume rolls back only this (`_others_work_in_fix_pass`). When git
+    cannot be asked, no record is kept, and a resume then refuses any
+    uncommitted change."""
+    stop = stop_record.record(config.project_dir, ignore=_records_dir_in_project(config))
+    fp.stop_head = stop.head if stop else None
+    fp.stop_edits = stop.edits if stop else None
 
 
 def _others_work_in_fix_pass(config: BuildConfig, fp: FixOnPassState) -> str | None:
-    """Why a resumed fix on pass must not roll the tree back, or None.
-
-    The rollback is a `reset --hard` and a `clean`, so it must first be sure
-    everything it throws away is the stopped pass's own: an uncommitted path
-    must be in the pass's record with the same content (an edit made after
-    the stop, even to a file the fix agent was editing, changes that
-    content), and HEAD must be where the pass stopped. Killed while the fix
-    agent ran, the pass has no record of its edits, so it cannot tell them
-    from anyone else's and refuses any. The round records are the pass's own
-    and are not checked."""
-    repo = config.project_dir
-    edits = git_ops.dirty_files(repo, ignore=_records_dir_in_project(config))
-    head = git_ops.rev_parse_head(repo)
-    if edits is None or head is None:
-        return f"git could not list the changes in {repo}; inspect it before re-running"
-
-    def names(paths: list[str]) -> str:
-        more = f" and {len(paths) - 5} more" if len(paths) > 5 else ""
-        return ", ".join(sorted(paths)[:5]) + more
-
-    recorded = fp.step != "fix_agent" and fp.stop_edits is not None
-    if recorded:
-        theirs = [p for p, content in edits.items() if fp.stop_edits.get(p) != content]
-        if theirs:
-            return (f"{repo} has uncommitted changes the stopped fix on pass did not leave "
-                    f"({names(theirs)}); stash them first")
-    elif edits:
-        why = ("the fix agent was stopped mid-edit" if fp.step == "fix_agent"
-               else "the pass stopped without recording its own edits")
-        return (f"{repo} has uncommitted changes ({names(list(edits))}), and {why}, so they "
-                "cannot be told from anyone else's; stash them first")
-    stopped_at = fp.stop_head if recorded else fp.checkpoint
-    if head != stopped_at:
-        return (f"HEAD moved since the fix on pass stopped at {stopped_at[:12]}; resuming "
-                f"would discard those commits back to {fp.checkpoint[:12]}, so move them "
-                "to another branch first")
-    return None
+    """Why a resumed fix on pass must not roll the tree back, or None:
+    `stop_record.others_work` against the pass's record. The rollback
+    discards back to the checkpoint, so everything it throws away must be
+    the stopped pass's own, and HEAD must be where the pass stopped. Killed
+    while the fix agent ran, the pass has no record, so it refuses any
+    uncommitted change and HEAD must be at the checkpoint. The round records
+    are the pass's own and are not checked."""
+    recorded = fp.step != "fix_agent" and fp.stop_edits is not None and fp.stop_head
+    stop = stop_record.StepStop(head=fp.stop_head, edits=fp.stop_edits) if recorded else None
+    return stop_record.others_work(
+        config.project_dir, stop, ignore=_records_dir_in_project(config),
+        head=fp.stop_head if recorded else fp.checkpoint)
 
 
 def _restore_block(block: BlockInfo, fp: FixOnPassState) -> None:
