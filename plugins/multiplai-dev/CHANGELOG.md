@@ -17,6 +17,27 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-10-13
+
+### Added
+- `/multiplai-dev:spec-extract`, second part: after resolving its target, a
+  run lists the Python files and their public functions, classes and methods,
+  then asks one read-only agent per slice of code (at most 6,000 lines) what
+  the code does. It keeps only facts whose cited lines are at the commit, and
+  writes `facts.json`, `report.md` (files left out, files not analysed, with
+  reasons) and `plan.txt`. It prints `SPEC_EXTRACT:EXPLORED <answered>/<units>`.
+  Writing the specs comes in a later version.
+- `--trust-repo` (or `SPEC_EXTRACT_TRUST_REPO=1`) is required before the first
+  model call, since the code is sent to a model; without it the run exits 4.
+- `--max-usd` (default 80) caps the spend of a run folder across every run
+  that resumes it; reaching it exits 3 with everything paid for saved, and a
+  higher cap continues. `--max-units` (default 20) refuses a target too large
+  to explore in one run. `--plan-only` prints the units and call counts and
+  stops before any model call.
+- A resumed run asks only the slices with no answer, asks a slice at most
+  twice in all, and a `--pr` run keeps the base and file list it started with
+  even after the base branch moves or the PR merges.
+
 ## [0.52.0] - 2026-10-13
 
 ### Added
