@@ -322,15 +322,22 @@ anything is rendered:
    - `style` with `target: "style:<name>"`: the keys are the dotted
      frontmatter keys (`palette.accent`, `fonts.display`,
      `fonts.weights.body`, `shape.radius_px`, `motion.enter_s`, …). Copy the
-     style file to `<outdir>/styles/<save_as or name>.md` (never edit a
-     shipped file under `references/styles/`), change those keys, point
-     every overlay that used the old style at the copy, and rewrite those
-     overlay pages to follow it.
+     style file to `<outdir>/styles/<save_as>.md`, or without `save_as` to
+     `<outdir>/styles/<stem>.md`, where `<stem>` is the style file's name
+     without its folder and `.md` (`<name>` can be a path; never join it to
+     the folder). Never edit a shipped file under `references/styles/`.
+     Change those keys, point every overlay that used the old style at the
+     copy, and rewrite those overlay pages to follow it. A change to
+     `palette.key` is the key colour: also set `key_color` on every `keyed`
+     overlay that uses the style, or the render keys out the old colour and
+     shows the new one as a solid box.
    - `restyle`: in the overlay page `html`, change each property of the
      element `selector` names (a selector the page built; match it to the
      page's own class or rule, don't paste it in). Values are one CSS value
      each; the old value is the browser's computed one (`rgb(…)`, `matrix(…)`),
-     not the page's source. Then run `pipeline.py lint-overlay` on the page.
+     not the page's source. An element picked during its enter or exit
+     animation reports that moment's `opacity` and `transform`, not the values
+     it settles at. Then run `pipeline.py lint-overlay` on the page.
 
    Make every change the batch asks for, then render the **next version** of
    that clip:
