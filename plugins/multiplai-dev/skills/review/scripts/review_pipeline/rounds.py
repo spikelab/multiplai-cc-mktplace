@@ -1,11 +1,11 @@
-"""Earlier rounds of a review: kept under `<out>/<slug>/rounds/`, read by repeats and assess.
+"""Earlier rounds of a review: kept under `<out>/<repo>/<object>/rounds/`, read by repeats and assess.
 
-A PR is reviewed into the same `<out>/<slug>/` each time, so a new run would
+A PR is reviewed into the same `<out>/<repo>/<object>/` each time, so a new run would
 write over the last round's files. Before it does, `keep_round` copies every
-file and directory of that round (`findings.json`, the review, `checks.json`,
-`progress.log`, `review-state.json`, `diff.patch`, `commits.txt`, ... but not
-`rounds/`, `viewer/` or the snapshots git can rebuild: `tree/`, `base-tree/`,
-`assess-tree/`) to `rounds/<NN>-<old head_sha[:12]>/`, also when the new run is
+file of that round (`findings.json`, the review, `checks.json`,
+`progress.log`, `review-state.json`, `diff.patch`, `commits.txt`, ... but no
+directory: not `rounds/`, `viewer/`, the snapshots git can rebuild, or a review
+an older version nested here) to `rounds/<NN>-<old head_sha[:12]>/`, also when the new run is
 on the same head (a rerun), so the repeat and assess stages have that run to
 compare with. `<NN>` is the two-digit round number, one more than the
 directories already in `rounds/`, so a second run on one head gets the next
@@ -84,7 +84,7 @@ def out_root(target_dir: Path, slug: str | None = None) -> Path:
     """The `<out>` a review folder was written under.
 
     A folder named by its own slug was written by multiplai-dev 0.46 or
-    earlier (`<out>/<slug>/`), and so is one whose slug cannot be read: its
+    earlier (`<out>/<its slug>/`), and so is one whose slug cannot be read: its
     parent. Any other folder is `<out>/<repo>/<object>/`: its grandparent. An
     object name starts with its kind (`pr-`, `branch-`, ...) and a slug with
     `<owner>-<repo>--`, so the two never meet. With *slug* None it is read
@@ -345,7 +345,7 @@ def history_elsewhere(target_dir: Path, slug: str, remote_url: str | None) -> li
     (`_walked_children`), so a repo called `tree` and a whole-tree review
     `<repo>/tree/` are read. The target's own folder is walked too, without
     its own `findings.json` and `rounds/`, for a review an older version
-    nested in it. This target's 0.46 folder `<out>/<slug>/` is always read,
+    nested in it. This target's 0.46 folder `<out>/<its slug>/` is always read,
     whatever its origin.
     """
     from .target import origin_name

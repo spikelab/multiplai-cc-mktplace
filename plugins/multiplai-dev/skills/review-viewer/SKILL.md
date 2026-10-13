@@ -97,7 +97,8 @@ PR (a PR target, or a review whose `review-state.json` records `target.pr`).
 directory must be a clone of `o/r`. `--base <branch>` changes the default
 branch; `--fetch` fetches origin first; `--reviews-dir <dir>` (repeatable)
 says where to look for a review (default: where `/multiplai-dev:review`
-writes, `<data_dir>/reviews/`, then where it wrote before multiplai-dev
+writes, `<data_dir>/reviews/<repo>/<object>/`, and the folders it wrote
+there before (`<data_dir>/reviews/<slug>/`), then where it wrote before multiplai-dev
 0.45, `<workspace>/INBOX/reviews/`, and the copies the review skill's
 `migrate` made of those under `<data_dir>/reviews/legacy/`; a review found
 only there loads with a notice in the page naming that location; those old

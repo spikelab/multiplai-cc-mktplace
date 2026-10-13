@@ -10,7 +10,7 @@ GitHub renders nothing for it:
 - `round` names the review round by its head: the head sha cut to 12 hex
   characters, with a `-2`, `-3`, ... suffix for a later round on the same
   head (`rounds.round_name`). Before multiplai-dev 0.46 this was also the
-  round's directory name under `<out>/<slug>/rounds/`; rounds are now kept as
+  round's directory name under the target directory's `rounds/`; rounds are now kept as
   `<NN>-<sha12>/`, and the marker keeps its v1 form so posted markers parse.
 - `v` is `MARKER_VERSION`.
 

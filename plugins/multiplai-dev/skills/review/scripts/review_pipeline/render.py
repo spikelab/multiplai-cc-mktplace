@@ -539,7 +539,7 @@ def _object_files(out_dir: Path, pattern: str) -> list[Path]:
 
 def write_rollups(out_dir: Path, paths: list[Path] | None = None) -> list[Path]:
     """`<SEV>-only.md` for each severity, from *paths* (default: every review's latest round,
-    `<out>/<repo>/<object>/findings.json` and the 0.46 `<out>/<slug>/findings.json`, sorted)."""
+    `<out>/<repo>/<object>/findings.json` and the 0.46 `<out>/<its slug>/findings.json`, sorted)."""
     if paths is None:
         paths = sorted([*out_dir.glob("*/findings.json"), *_object_files(out_dir, "findings.json")])
     files = load_findings_files(paths)
@@ -562,7 +562,7 @@ def write_runs(out_dir: Path, paths: list[Path] | None = None) -> tuple[Path, in
     Each line holds the target's label, slug and head sha, `generated_at`,
     `producer` and the whole `run` object, so one `jq -s` answers questions
     across reviews. By default it reads each target's latest round
-    (`<out>/<repo>/<object>/findings.json`, and the 0.46 `<out>/<slug>/findings.json`)
+    (`<out>/<repo>/<object>/findings.json`, and the 0.46 `<out>/<its slug>/findings.json`)
     and every earlier round kept under its `rounds/*/`, so a target reviewed three times has three lines. A
     round read twice (kept, and still at the top) gets one line. Lines are
     sorted by `generated_at`. Returns (path, lines written, files skipped for

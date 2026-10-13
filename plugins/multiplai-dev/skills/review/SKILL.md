@@ -35,7 +35,7 @@ Python between them:
 4. **repeats** — when this PR (or branch) was reviewed before, each earlier
    round is kept in full (its findings, review, `progress.log`,
    `review-state.json`, `diff.patch`, ...) in
-   `<out>/<slug>/rounds/<NN>-<head sha, 12 chars>/`, where `<NN>` is the
+   `<out>/<repo>/<object>/rounds/<NN>-<head sha, 12 chars>/`, where `<NN>` is the
    round number (`01`, `02`, ...), also when the new run is on the same
    commit (it gets the next number). Rounds kept before multiplai-dev 0.46 are named
    `<sha>/` and `<sha>-2/` and are still read. A run that stopped before it
@@ -45,7 +45,8 @@ Python between them:
    multiplai-dev 0.46 under a directory named after the local checkout
    (`<dirname>--pr-<n>`, in the old `INBOX/reviews/`, in `migrate`'s copies or
    beside the new directory) are read too, with the decisions recorded there,
-   when they name the same `origin`. Every finding is checked against the findings the user
+   when they name the same `origin`, and so are the rounds in the target's
+   multiplai-dev 0.46 directory and in a 0.42 review nested in its directory. Every finding is checked against the findings the user
    rejected in those rounds (`viewer/decisions.json`): the same id matches in
    Python, the rest go to one agent that says which describe the same defect,
    however they are worded. A match is labelled `repeat`, with the earlier
@@ -169,7 +170,7 @@ Three targets review code as it stands instead of a diff:
   relative to the subdirectory. The slug is the one review-viewer's
   `serve --tree --repo` gives the same directory;
 - `--dir <path>` reviews a directory that is not under git. It is copied into
-  `<out>/<slug>/source/` (without `node_modules`, `.venv`, `venv`,
+  `<out>/<name>/dir-<name>-<hash>/source/` (without `node_modules`, `.venv`, `venv`,
   `__pycache__`, `dist` and `build`, and honouring a `.gitignore` in it) and
   committed there; the source directory is never written to. The slug is the
   directory's name plus six characters derived from its full path, so two
@@ -181,7 +182,7 @@ Three targets review code as it stands instead of a diff:
 The base is git's empty tree, so every file counts as added and there are no
 commits. Binary files, files over 200 000 characters, lockfiles (`uv.lock`,
 `package-lock.json` and the like) and files marked `linguist-generated` or
-`linguist-vendored` in `.gitattributes` are left out; `<out>/<slug>/skipped.txt`
+`linguist-vendored` in `.gitattributes` are left out; `<out>/<repo>/<object>/skipped.txt`
 lists each with its reason. A repository does not fit in one prompt, so the
 files are split into groups of up to 100 000 characters, one top-level
 directory at a time, and each finder runs once per group. `history` does not
@@ -193,7 +194,7 @@ has no PR.
 
 `--plan-only` resolves the target, prints one line per group and a total line
 (`groups: <n>  finder calls: <n>  files skipped: <n>`), writes
-`<out>/<slug>/plan.txt`, and stops before any model call.
+`<out>/<repo>/<object>/plan.txt`, and stops before any model call.
 
 ## What this skill does on the machine
 
@@ -276,11 +277,31 @@ multiplai-core's data directory, by default `~/.multiplai/data/reviews/`) — ne
 `INBOX/`. The first stdout line, `out: <dir>`, says which; tell the user. Do
 not pass `--out` into a session scratchpad: it is deleted with the session.
 
-`<slug>` names the repository by its `origin` remote, `<owner>-<repo>`, then
-the target: `spikelab-multiplai-cc-mktplace--pr-283`, `…--<branch>`,
-`…--<base>..<head>`, `…--tree`. So the same PR reviewed from the main
-checkout and from any worktree goes to one directory. A repository with no
-`origin` remote uses its directory name instead (logged).
+Each review goes to `<out>/<repo>/<object>/`. `<repo>` is the repository's
+name from its `origin` remote, without the owner (the directory name when there
+is no `origin`), so the same PR reviewed from the main checkout and from any
+worktree goes to one directory. `<object>` says what was reviewed: `pr-283`,
+`branch-<name>`, `range-<base>..<head>`, `tree` (the whole tree),
+`tree-<path>` (one directory), and `dir-<name>-<hash>` for `--dir`, whose
+`<repo>` is the directory's name. Characters other than letters, digits,
+`.`, `_` and `-` become `_`.
+
+Before it writes into a directory that already exists, a run reads whose it is
+from its `review-state.json` (else `findings.json`). If it holds another
+remote's review (a fork and its upstream both have a PR #12), the run uses
+`<out>/<repo>@<owner>/<object>/` instead (`@local` with no `origin`). If a
+branch or range directory holds another branch whose name cleans to the same
+text (`feat/x` and `feat_x`), the run adds `-<hash>` of its own name. A
+repository named `legacy` or `.locks`, two names the output directory already
+uses, becomes `legacy@<owner>`.
+
+Directories written by multiplai-dev 0.46 (named by the slug alone), the
+directories a 0.42 run nested inside a new one, and `reviews/legacy/` stay
+where they are, are never written to, and are read as earlier rounds.
+`<slug>`, inside `findings.json`, the ledger and the file names, still names
+the repository by `<owner>-<repo>`, then the target:
+`spikelab-multiplai-cc-mktplace--pr-283`, `…--<branch>`, `…--<base>..<head>`,
+`…--tree`.
 
 Every run appends to `<data_dir>/reviews/ledger.jsonl`, whatever `--out`
 says: a `started` line (`slug`, `target_dir`, `head_sha`, `session_id`) when
@@ -293,22 +314,24 @@ no later `finished` line for the same `target_dir` and `head_sha` is a run
 that was killed or stopped with Ctrl-C: a plain `review` of that target then makes no model call,
 prints `interrupted run found; continue with: python -m review_pipeline
 resume <target_dir>` and exits `4`. Run that `resume` (it continues from the
-last finished stage), or pass `--restart` to start over on purpose. When the
+last finished stage), or pass `--restart` to start over on purpose. Until the
+target's directory has a saved state of its own, the same check covers the
+directory multiplai-dev 0.46 used for it, and the message names that one. When the
 target directory no longer holds a readable `review-state.json` on that head
 (the directory or the file was deleted, or a later run on another head wrote
 over it), there is nothing to resume, and `review` starts over instead. A review
 that is still running leaves the same `started` line, so every run holds a
-lock on its target directory (`<out>/.locks/<slug>.lock`) until it ends:
+lock on its target directory (`<out>/<repo>/.locks/<object>.lock`) until it ends:
 while another process holds it, `review` (with or without `--restart`),
 `--plan-only` and `resume` of that target print `a review of <target_dir> is
 running now (pid <n> on <host>, since <time>)` and exit `2` without writing
 anything. Wait for that run to finish; do not resume it.
 
-Each target gets `<out>/<slug>/` with `progress.log`. While the run is going,
+Each target gets `<out>/<repo>/<object>/` with `progress.log`. While the run is going,
 check it with a bounded loop, never a bare `tail -f`:
 
 ```bash
-until grep -qE '^\[[^]]*\] (DONE|FAILED)' <out>/<slug>/progress.log; do sleep 20; done; tail -5 <out>/<slug>/progress.log
+until grep -qE '^\[[^]]*\] (DONE|FAILED)' <out>/<repo>/<object>/progress.log; do sleep 20; done; tail -5 <out>/<repo>/<object>/progress.log
 ```
 
 (run through the Monitor tool, or in the background with a timeout.) The
@@ -321,11 +344,11 @@ the run at `--max-cost-usd` (default 50 per target), or the ledger shows an
 interrupted run of the same target and head (the message names the
 `resume` command). On a budget `4`, report the spend
 and the partial state; resume only if the user raises the ceiling:
-`python -m review_pipeline resume <out>/<slug> --trust-repo --max-cost-usd <n>`
-(`<out>/<slug>` is the target's directory under the output directory above).
+`python -m review_pipeline resume <out>/<repo>/<object> --trust-repo --max-cost-usd <n>`
+(`<out>/<repo>/<object>` is the target's directory under the output directory above).
 `5` the verifier gave no usable answer for some findings after three tries
 each; the message lists them, and the other verdicts are kept. Tell the user,
-then run `python -m review_pipeline resume <out>/<slug> --trust-repo`, which
+then run `python -m review_pipeline resume <out>/<repo>/<object> --trust-repo`, which
 asks again only for those findings.
 
 ### 2. Report
@@ -402,7 +425,7 @@ to the PR as one review, one inline comment each:
 
 ```bash
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts \
-  python -m review_pipeline post <out>/<slug> --decisions <out>/<slug>/viewer/decisions.json
+  python -m review_pipeline post <out>/<repo>/<object> --decisions <out>/<repo>/<object>/viewer/decisions.json
 ```
 
 Run it only when the user types yes in the terminal. A message that arrives
@@ -457,7 +480,7 @@ which GitHub does not render:
 `id` is the finding's id in `findings.json`. `round` names the round by its
 head: the head sha cut to 12 characters, with `-2`, `-3`, … for a later
 round on the same head. Since multiplai-dev 0.46 that is not the round's directory name
-under `<out>/<slug>/rounds/` (`<NN>-<sha12>`), so markers already posted
+under `<out>/<repo>/<object>/rounds/` (`<NN>-<sha12>`), so markers already posted
 keep parsing with the regex below. Any tool
 can find review findings on a PR by fetching its review comments and review
 bodies and matching this regex (from `scripts/review_pipeline/pr_marker.py`):
@@ -491,7 +514,7 @@ returned no usage counts as 0 and adds a line to the errors. The cost line in
 multiplai-dev 0.28 have no `run`.
 
 `runs.jsonl` in the output directory has one line per run with a `run`,
-earlier rounds included (from `<slug>/rounds/*/findings.json`), sorted by
+earlier rounds included (from each target directory's `rounds/*/findings.json`), sorted by
 `generated_at`: the target's `label`, `slug` and `head_sha`, `generated_at`,
 `producer` and the whole `run`. It is rebuilt after each review; the ledger
 (`ledger.jsonl`, above) is the record that is never rewritten and also keeps
@@ -534,7 +557,7 @@ stage runs on the session's model.
 
 ## Other commands
 
-- `assess-only <out>/<slug> [...] --report <file.md> --trust-repo` runs the
+- `assess-only <out>/<repo>/<object> [...] --report <file.md> --trust-repo` runs the
   repeats and assess stages on saved reviews that have decisions and writes a
   report: each finding's recorded decision beside its label, and how many
   rejected and accepted findings were labelled `repeat` or `low-value`. It

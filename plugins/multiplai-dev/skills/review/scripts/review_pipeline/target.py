@@ -565,7 +565,7 @@ def object_folders(out_dir: Path) -> list[Path]:
     Where a name sits decides what it is, not the name alone: a repo may be
     called `tree` or `rounds`, and the whole-tree object is `tree`. The first
     level skips `legacy/`, `.locks/` and partial copies, and any review folder
-    (a 0.46 `<out>/<slug>/`). Under a repo folder, every child folder is an
+    (a 0.46 `<out>/<its slug>/`). Under a repo folder, every child folder is an
     object except the `NOT_OBJECT_NAMES` and partial copies. A review an older
     version nested inside an object folder is not listed.
     """

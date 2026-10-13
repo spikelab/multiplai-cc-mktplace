@@ -1193,7 +1193,7 @@ def test_row_U1_a_046_folder_with_finished_rounds_is_read_as_history_and_left_al
 
 
 def _unfinished_046(tmp_path: Path, repo: Path, base: str, head: str, out: Path) -> Path:
-    """A 0.46 folder `<out>/<slug>/` holding a run stopped after its `started` line on *head*."""
+    """A 0.46 folder `<out>/<its slug>/` holding a run stopped after its `started` line on *head*."""
     gen = tmp_path / "gen"
     assert _stop(tmp_path, base, head, "started:1", *_pr_args(repo, gen)) == 137
     flat = out / f"{SLUG_REPO}--pr-7"
@@ -1554,7 +1554,7 @@ def test_row_R11_edits_to_the_working_tree_or_to_decisions_between_runs(layout_c
 
 def test_row_R12_stopped_holding_the_046_folders_lock_during_the_interrupted_run_check(
         layout_clone, tmp_path, agents):
-    """A row this change adds: the check takes `<out>/.locks/<slug>.lock`, which stays on disk."""
+    """A row this change adds: the check takes the 0.46 lock `.locks/<its slug>.lock` under `<out>`, which stays on disk."""
     repo, base, head = layout_clone
     out, never, gen = tmp_path / "out", tmp_path / "never-stopped", tmp_path / "gen"
     agents()

@@ -275,7 +275,7 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
     started and never ended raises InterruptedRun before anything is
     written, when `resume` can continue it (`_resumable`); otherwise this run
     starts over. While the chosen directory has no saved state yet, the
-    directory multiplai-dev 0.46 used for this target (`<out>/<slug>/`) is
+    directory multiplai-dev 0.46 used for this target (`<out>/<its slug>/`) is
     checked the same way, under its own lock.
     """
     repo, tree, name, src = spec.repo, spec.tree, None, None

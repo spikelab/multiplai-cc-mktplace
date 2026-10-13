@@ -195,8 +195,14 @@ mailbox under `<workspace INBOX or ~/.multiplai>/review-viewer/<slug>/viewer/`. 
 target whose review is found uses that review's `viewer/`. `serve` looks in
 `--reviews-dir` (default: `default_reviews_dir()`, `<data_dir>/reviews` from
 multiplai-core's `get_paths()`, where the review skill writes — it and the
-review skill's `default_out()` must agree) for `*/findings.json` with the
-same base and head. With no `--reviews-dir`, a review not matched there is
+review skill's `default_out()` must agree) for a `findings.json` with the
+same base and head at three depths (`gitdata.review_findings`, restating the
+pipeline's `target.object_folders`): `<dir>/<slug>/` (multiplai-dev 0.46),
+`<dir>/<repo>/<object>/` (now), and `<dir>/<repo>/<object>/<slug>/` (a 0.42
+run given a new-layout directory as `--out`). Where a name sits decides what
+it is: a repo may be called `tree` or `rounds`, `legacy/` and `.locks/` are
+never a repo, and a review folder's `rounds/`, `viewer/` and snapshots are
+never read as a review. With no `--reviews-dir`, a review not matched there is
 looked for in `legacy_reviews_dir()` (`<workspace INBOX or
 ~/.multiplai>/reviews`, where the skill wrote before multiplai-dev 0.46) and, at any
 depth but not in `rounds/`, in `migrated_reviews_dir()` (`<data_dir>/reviews/legacy`,
@@ -204,7 +210,7 @@ where the skill's `migrate` copies them); one found there loads with a notice na
 that location. Those reviews' slugs name the checkout's directory, so that search also
 accepts `gitdata.legacy_slug()` for a tree match or a stale review. `gitdata.slug_repo_name()` restates
 the pipeline's slug rule (`<owner>-<repo>` from `origin`, else the directory
-name) for PR, branch, unpushed and tree targets, so both name one directory.
+name) for PR, branch, unpushed and tree targets, so both give a target one slug.
 
 ## Logging
 

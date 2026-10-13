@@ -31,7 +31,7 @@ class RunContext:
     diff: str
     progress: ProgressWriter | None = None
     session_id: str = ""
-    # `<out>/<slug>/`, where earlier rounds and the person's decisions are
+    # `<out>/<repo>/<object>/`, where earlier rounds and the person's decisions are
     # read from (repeats, assess). None in tests that need neither.
     target_dir: Path | None = None
     # Stage-level counts for the `stage` activity event, filled by each stage.
