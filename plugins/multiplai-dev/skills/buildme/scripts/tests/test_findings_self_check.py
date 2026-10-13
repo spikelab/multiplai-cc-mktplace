@@ -195,7 +195,7 @@ class TestSameMistake:
         head = "x" * MAX_EVIDENCE_CHARS + "\nSEARCHED: review-fix 1's search"
         report = (head + tail)[-MAX_EVIDENCE_CHARS:]
         with caplog.at_level(logging.WARNING):
-            assert code.searched_text(report) == ""
+            assert code.searched_text(report, "review-fix 1") == ""
 
     def test_a_trimmed_report_with_no_marker_left_gives_empty(self, caplog):
         """A later agent's output longer than `MAX_EVIDENCE_CHARS` cuts away
@@ -206,7 +206,15 @@ class TestSameMistake:
                   + "\nSEARCHED:\n- naming nit: rest of calc.py\n")[-MAX_EVIDENCE_CHARS:]
         assert "[review-fix" not in report
         with caplog.at_level(logging.WARNING):
-            assert code.searched_text(report) == ""
+            assert code.searched_text(report, "review-fix 1") == ""
+
+    def test_a_trimmed_report_s_first_marker_is_the_first_later_agent_s(self):
+        """With no review fix, `[fix on pass]` is the first later part, so
+        the text before it is the fixer's."""
+        from build_pipeline.tdd_engine import MAX_EVIDENCE_CHARS
+        report = ("x" * MAX_EVIDENCE_CHARS + "\nSEARCHED: calc.py\n\n[fix on pass]\n"
+                  "renamed\nSEARCHED: naming nit\n")[-MAX_EVIDENCE_CHARS:]
+        assert code.searched_text(report, "fix on pass") == "calc.py"
 
     def test_an_untrimmed_report_with_no_later_agent_is_the_fixer_s(self):
         from build_pipeline.tdd_engine import MAX_EVIDENCE_CHARS
@@ -223,16 +231,25 @@ class TestSameMistake:
             assert code.searched_text("done, nothing else to say") == ""
         assert any("SEARCHED" in r.getMessage() for r in caplog.records)
 
-    def test_fixes_from_state_carries_searched(self, tmp_path):
+    @pytest.mark.parametrize("long, review_iterations, fix_on_pass_kept, searched", [
+        (False, 1, False, "calc.py add and sub; none"),
+        (True, 1, False, "calc.py add and sub; none"),
+        (True, 2, False, ""), (True, 1, True, "")])
+    def test_fixes_from_state_carries_searched(self, tmp_path, long, review_iterations,
+                                               fix_on_pass_kept, searched):
+        """A long report with no marker is the fixer's unless the block had a
+        review fix or a kept fix on pass, whose long output cuts its marker."""
         state = BuildState(change_name="calc", mode="only", tier="advanced",
                            state_file=str(tmp_path / "s.json"))
         state.tdd = TDDState(blocks=[BlockInfo(
             number=1, name="Fix finding ab12", description="d", status=BlockStatus.DONE,
-            test_commit="t" * 40, impl_commit="i" * 40,
-            implementer_report="ok\nSEARCHED: calc.py add and sub; none")])
+            test_commit="t" * 40, impl_commit="i" * 40, review_iterations=review_iterations,
+            fix_on_pass_kept=fix_on_pass_kept,
+            implementer_report=("x" * 4000 if long else "ok")[-3970:]
+            + "\nSEARCHED: calc.py add and sub; none")])
         state.checkpoint(tmp_path / "s.json")
         fixes = code.fixes_from_state(tmp_path / "s.json", {1: "finding:ab12"})
-        assert fixes["finding:ab12"]["searched"] == "calc.py add and sub; none"
+        assert fixes["finding:ab12"]["searched"] == searched
 
     def _outcome(self, searched: str) -> str:
         r = _fix_record()

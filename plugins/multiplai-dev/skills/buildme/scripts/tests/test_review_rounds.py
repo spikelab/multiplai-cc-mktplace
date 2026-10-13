@@ -295,6 +295,7 @@ class TestFixOnPass:
         # The pass does not count toward MAX_REVIEW_ITERATIONS.
         assert p.block.review_iterations == 1
         assert p.block.fix_pass is None
+        assert p.block.fix_on_pass_kept is True
 
     @pytest.mark.asyncio
     async def test_fix_on_pass_rolled_back_when_tests_go_red(self, project):
@@ -337,6 +338,7 @@ class TestFixOnPass:
         assert rounds[1]["fix"]["kept"] is False
         # The block keeps the review it passed with, not the one it failed.
         assert p.block.review_scores.weighted_average == pytest.approx(5.0)
+        assert p.block.fix_on_pass_kept is False
 
     @pytest.mark.asyncio
     async def test_a_block_whose_only_findings_are_notes_gets_no_fix_pass(self, project):
