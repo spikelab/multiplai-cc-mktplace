@@ -166,6 +166,16 @@ test("panelsProblem explains what blocks sending", () => {
   assert.equal(L.panelsProblem([a, b], { SPEAKER_0: "Host", SPEAKER_1: "" }), null);
 });
 
+test("panelsProblem: every transcript speaker label needs a box", () => {
+  const a = { name: "Host", x: 0, y: 0, w: 10, h: 10 }, b = { name: "Guest", x: 10, y: 0, w: 10, h: 10 };
+  const labels = ["SPEAKER_0", "SPEAKER_1", "SPEAKER_2"];
+  assert.match(L.panelsProblem([a, b], { SPEAKER_0: "Host", SPEAKER_1: "Guest" }, labels),
+    /^Pick a box for SPEAKER_2: /);
+  assert.match(L.panelsProblem([a, b], { SPEAKER_0: "Host", SPEAKER_1: "" }, labels), /SPEAKER_1, SPEAKER_2/);
+  assert.equal(L.panelsProblem([a, b], { SPEAKER_0: "Host", SPEAKER_1: "Guest", SPEAKER_2: "Guest" }, labels), null);
+  assert.equal(L.panelsProblem([a], {}, []), null);    // no labels: boxes on their own
+});
+
 test("panelsRow sends whole source pixels and only the mapped labels", () => {
   const row = L.panelsRow([{ name: " Host ", x: 0.4, y: 0, w: 640.2, h: 720 }], { SPEAKER_0: "Host", SPEAKER_1: "" }, " left ");
   assert.deepEqual(row, { kind: "panels", panels: { Host: { x: 0, y: 0, w: 640, h: 720 } },

@@ -227,7 +227,7 @@
   // --- sending -----------------------------------------------------------------------
 
   function renderSend() {
-    const problem = L.panelsProblem(draft.boxes, draft.mapping);
+    const problem = L.panelsProblem(draft.boxes, draft.mapping, speakers.map((x) => x.label));
     problemEl.textContent = problem || "";
     sendBtn.disabled = !!problem;
     const last = lastSent();
@@ -238,7 +238,7 @@
   }
 
   async function send() {
-    const problem = L.panelsProblem(draft.boxes, draft.mapping);
+    const problem = L.panelsProblem(draft.boxes, draft.mapping, speakers.map((x) => x.label));
     if (problem) return;
     sendBtn.disabled = true;
     try {

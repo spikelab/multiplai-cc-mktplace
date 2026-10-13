@@ -222,8 +222,10 @@
     return `Box ${(boxes || []).length + 1}`;
   }
 
-  /* Why the boxes cannot be sent yet, or null. */
-  function panelsProblem(boxes, mapping) {
+  /* Why the boxes cannot be sent yet, or null. `labels` are the transcript's
+   * speaker labels: an EDL that follows the speaker (frame "speaker") is
+   * refused unless every one of them maps to a box. */
+  function panelsProblem(boxes, mapping, labels) {
     if (!boxes || !boxes.length) return "Draw at least one box.";
     if (boxes.length > 8) return "At most 8 boxes.";
     const names = boxes.map((b) => b.name.trim());
@@ -232,6 +234,10 @@
     if (new Set(names).size !== names.length) return "Two boxes have the same name.";
     for (const [label, name] of Object.entries(mapping || {})) {
       if (name && !names.includes(name)) return `${label} is mapped to a box that no longer exists.`;
+    }
+    const unmapped = (labels || []).filter((l) => !(mapping || {})[l]);
+    if (unmapped.length) {
+      return `Pick a box for ${unmapped.join(", ")}: a clip that follows the speaker needs every speaker mapped.`;
     }
     return null;
   }
