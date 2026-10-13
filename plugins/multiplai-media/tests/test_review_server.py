@@ -312,3 +312,35 @@ def test_stopping_the_review_command_removes_the_token_files(tmp_path: Path, sig
             proc.kill()
     assert not box.token_file.exists() and not box.open_html.exists()
     assert box.comments.exists()
+
+
+def test_the_review_command_reports_the_input_files_and_leaves_the_source_out(tmp_path: Path) -> None:
+    import signal
+    import subprocess
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
+    import make_job
+    job = make_job.build(tmp_path / "job", video=False)        # source.mp4 sits in the job dir
+    (job["dir"] / "clip-01.mp4").write_bytes(b"x")
+    (job["dir"] / "music.json").write_text('{"beds": "calm"}')
+    box = rs.Mailbox(tmp_path / "box")
+    proc = subprocess.Popen([sys.executable, str(_SCRIPTS / "pipeline.py"), "review", str(job["dir"]),
+                             "--mailbox", str(box.dir), "--port", "19785"],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            env={"PATH": "/usr/bin:/bin", "MULTIPLAI_CONTAINER": "0"})
+    lines = []
+    try:
+        for line in proc.stdout:
+            lines.append(line.rstrip("\n"))
+            if line.startswith("MAILBOX:"):
+                break
+        proc.send_signal(signal.SIGTERM)
+        lines += proc.communicate(timeout=10)[0].splitlines()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    out = "\n".join(lines)
+    assert any(x.startswith("REVIEW: serving 1 clip(s) from ") for x in lines), out
+    assert "INPUTS: job.json ok, candidates.json ok, looks.json missing, music.json invalid" in lines, out
+    bad = [x for x in lines if x.startswith("✗ music.json: ")]
+    assert len(bad) == 1 and "beds" in bad[0], out
+    assert not any(x.startswith("✗") and "music.json" not in x for x in lines), out
