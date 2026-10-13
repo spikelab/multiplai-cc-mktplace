@@ -9,11 +9,25 @@
     sendBtn, problemEl, sentEl;
   // This viewer's draft: boxes in source pixels, label → box name, the frame time, the note.
   let draft = { boxes: [], mapping: {}, t: null, note: "" };
+  let draftKey = null;              // where the draft is stored: one key per source recording
   let speakers = [], speakersFor = null, selected = null, backTo = null, playUntil = null, nextId = 1;
 
   const W = () => video.videoWidth || 0;
   const H = () => video.videoHeight || 0;
-  const save = () => App.store.set("speakers", draft);
+  const save = () => { if (draftKey) App.store.set(draftKey, draft); };
+
+  // Drafts are stored per source recording, so a later job served on the same port
+  // does not inherit this one's boxes.
+  function loadDraft(key) {
+    draftKey = key;
+    const saved = App.store.get(key, null);
+    draft = saved && Array.isArray(saved.boxes)
+      ? { boxes: saved.boxes, mapping: saved.mapping || {}, t: saved.t ?? null, note: saved.note || "" }
+      : { boxes: [], mapping: {}, t: null, note: "" };
+    for (const b of draft.boxes) { b.id = nextId++; }
+    selected = null;
+    noteEl.value = draft.note;
+  }
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -258,6 +272,8 @@
     App.notice(notice, n);
     body.hidden = !!n;
     if (n || !(changed.job || changed.rows)) return;
+    const key = `speakers:${s.job.data.source}`;
+    if (key !== draftKey) loadDraft(key);
     if (!video.src) video.src = App.mediaUrl("/media/source");
     if (speakersFor !== s.job.data.transcript || changed.job) {
       speakersFor = s.job.data.transcript;
@@ -276,11 +292,6 @@
   function init(panel) {
     notice = panel.querySelector(".notice");
     body = panel.querySelector(".body");
-    const saved = App.store.get("speakers", null);
-    if (saved && Array.isArray(saved.boxes)) {
-      draft = { boxes: saved.boxes, mapping: saved.mapping || {}, t: saved.t ?? null, note: saved.note || "" };
-      for (const b of draft.boxes) { b.id = nextId++; }
-    }
     const grid = el("div", "speakers-grid");
     const frameCol = el("div", "frame-col");
     stage = el("div", "frame-stage");
