@@ -19,6 +19,7 @@ table in the plan. Every wait goes through `CLOCK`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -31,7 +32,7 @@ from pathlib import Path
 
 import yaml
 
-from .. import git_ops
+from .. import git_ops, intake
 from ..config import git_toggles
 from . import records, store
 
@@ -111,12 +112,41 @@ def _gh(repo: Path, *args: str) -> object | None:
         return None
 
 
-def base_sha(repo: Path) -> str | None:
-    """`git fetch origin`, then origin's default branch's sha (item 12). A failed
-    or timed-out fetch uses the remote ref as it is; no ref at all gives None."""
-    fetch = _git(repo, "fetch", "origin", timeout=FETCH_TIMEOUT)
-    if fetch.returncode != 0:
-        log.warning("git fetch origin in %s failed: %s", repo, fetch.stderr.strip()[-400:])
+async def _fetch_origin(repo: Path) -> str | None:
+    """`git fetch origin` as a subprocess the event loop awaits, so a signal or
+    a running child's exit is handled while it runs. It is killed after
+    FETCH_TIMEOUT seconds, or when the run is stopped. None when it worked,
+    else why not."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "fetch", "origin", cwd=str(repo),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+    except OSError as e:
+        return str(e)
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), FETCH_TIMEOUT)
+    except TimeoutError:
+        return f"timed out after {FETCH_TIMEOUT}s"
+    finally:
+        if proc.returncode is None:       # timed out, or the run was stopped
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+    if proc.returncode != 0:
+        return err.decode(errors="replace").strip()[-400:] or f"exit {proc.returncode}"
+    return None
+
+
+async def base_sha(repo: Path, *, need_fetch: bool) -> str | None:
+    """`git fetch origin`, then origin's default branch's sha (item 12). A
+    fetch that fails or times out raises ReadFailed when *need_fetch* (a child
+    with dependencies, whose base must hold their merges); otherwise the
+    remote ref is used as it is. No ref at all gives None."""
+    failed = await _fetch_origin(repo)
+    if failed is not None:
+        if need_fetch:
+            raise ReadFailed(f"git fetch origin failed: {failed}")
+        log.warning("git fetch origin in %s failed: %s", repo, failed)
     default = git_ops.default_branch(repo)
     sha = _git(repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{default}^{{commit}}")
     if sha.returncode == 0 and sha.stdout.strip():
@@ -370,10 +400,27 @@ class Coordinator:
 
     # -- launching and watching -------------------------------------------------
 
-    async def _launch(self, c: Child) -> None:
+    async def _launch(self, c: Child) -> bool:
+        """Start *c*. False when it was not started, with nothing written for
+        it but its status: a first launch whose base could not be fetched, or
+        whose specs/config.yaml is not the base's (B1.S22). The next run then
+        fetches again."""
         if c.status == "failed":
             c.relaunched = True
-        argv = c.argv or self.new_argv(c.id, base_sha(self.repo))
+        argv = c.argv
+        if argv is None:
+            try:
+                base = await base_sha(self.repo, need_fetch=bool(c.depends_on))
+            except ReadFailed as e:       # no launch until a fetch answers
+                c.status, c.reason = "unknown", f"cannot get a base that holds its dependencies' merges: {e}"
+                self._save()
+                return False
+            if base and intake.config_yaml_off_ref(self.project_dir, base):
+                c.status, c.relaunched = "failed", True
+                c.reason = f"in {self.project_dir}: {intake.CONFIG_NOT_ON_BASE}"
+                self._save()
+                return False
+            argv = self.new_argv(c.id, base)
         plan = _plan_of(argv)
         head = argv[argv.index("--base-ref") + 1] if "--base-ref" in argv[:-1] else None
         c.attempt = records.start(self.epic_dir, "build", c.id, argv, head_sha=head)
@@ -384,6 +431,7 @@ class Coordinator:
         # One start at a time: worktree creation in one repo is not run concurrently.
         while c.proc.poll() is None and not records.marker(records.markers(c.attempt.log), "WORKTREE"):
             await CLOCK.sleep(POLL)
+        return True
 
     def _done(self, c: Child, exit_code: int | None, *, interrupted: bool) -> None:
         records.finish(c.attempt, exit_code, interrupted=interrupted)
@@ -481,6 +529,9 @@ class Coordinator:
             await self._stop_children(sig)
             self._summary(run_dir)
             return 128 + sig
+        except Exception:
+            self._summary(run_dir)        # where each child stood when the run broke
+            raise
         finally:
             try:
                 loop.remove_signal_handler(signal.SIGTERM)
@@ -504,8 +555,8 @@ class Coordinator:
             for c in ready:
                 if running >= self.settings.max_parallel:
                     break
-                await self._launch(c)
-                running += 1
+                if await self._launch(c):
+                    running += 1
             if running:
                 await CLOCK.sleep(POLL)
                 _tick(self)

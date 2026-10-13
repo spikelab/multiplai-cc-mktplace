@@ -945,12 +945,13 @@ def open_pr_with_skill(worktree: Path, argv: list[str]) -> tuple[str | None, lis
 
 def manual_finish_commands(
     worktree: Path, branch: str, title: str, *, include_pr: bool = True, draft: bool = True,
-    pr_skill_argv: list[str] | None = None,
+    pr_skill_argv: list[str] | None = None, base: str | None = None,
 ) -> str:
     """The exact commands a human runs to finish by hand after a push/PR
     failure. Printed into build-progress.md — never executed. With
     ``pr_skill_argv``, the PR is opened by the pr skill from the repo's PR
-    template, and ``gh pr create`` is listed after it as the fallback."""
+    template, and ``gh pr create`` is listed after it as the fallback.
+    ``base`` is the PR's base branch when it is not the default branch."""
     lines = [
         f"cd {shlex.quote(str(worktree))}",
         f"git push -u origin {shlex.quote(branch)}",
@@ -960,6 +961,8 @@ def manual_finish_commands(
         lines.append("# or, without the repo's PR template:")
     if include_pr:
         pr = f"gh pr create --title {shlex.quote(title)} --body-file -"
+        if base:
+            pr += f" --base {shlex.quote(base)}"
         if draft:
             pr += " --draft"
         lines.append(pr)

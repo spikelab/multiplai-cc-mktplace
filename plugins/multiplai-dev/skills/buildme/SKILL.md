@@ -61,7 +61,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--accept-size` | Build a plan the size gate says should be split, as one PR. The build remembers it, so a later retry or resume does not stop on size again. |
 | `--approve-split` | Approve the epic split the build printed as `EPIC:SPLIT:<split.md>`, as `split.md` and `plans/` are on disk now. See [Epic mode](#epic-mode-one-input-several-changes). |
 | `--no-epic-split` | Build the input as one change: no `EPIC_SPLIT` decision, no model call. An epic's child builds pass it. |
-| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch; a build that re-binds to its worktree ignores it. Exits `1` when the `specs/config.yaml` committed at HEAD was never pushed to that commit (push it first); a checkout only behind origin is fine. |
+| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch; a build that re-binds to its worktree ignores it. When the commit is not on the default branch, the PR targets the branch that holds it (`--base`). Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
 | `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. |
 
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: true}`,
@@ -98,7 +98,12 @@ keeps the default.
 **Commit `specs/config.yaml`.** The build's worktree branches from `HEAD`, so an
 uncommitted config never reaches it. With `git.worktree` on, the pipeline stops
 with `ERROR: specs/config.yaml is not committed; the build's worktree would not
-see it. Commit it first.`
+see it. Commit it first.` With `--base-ref` (every epic child) the worktree
+branches from that commit instead, and the build still reads the checkout's
+file, so the version committed at `HEAD` must be the one at that commit:
+otherwise it stops with `... Push it, or pull origin's, first.` An epic checks
+this before each child's first launch and launches nothing for it, so the next
+run, after the push or pull, fetches again and goes on.
 
 ### Reference docs — the standards the specs are written against
 
@@ -624,7 +629,10 @@ place or open no PR, so the build exits `2` before launching any. The parent's
 `research.md` reaches each child as `--research-path` (a parent that skipped
 research passes `--skip-research`), so no child decides on research again. A child starts once
 every child it depends on has **merged**; dependent children never stack on an
-open PR. At most `epic.max_parallel` build at once (default `2`). Each run
+open PR. Before a child's first launch the build runs `git fetch origin`; when
+that fails for a child with dependencies, the child is `unknown` and is not
+launched, since its base could lack their merges. At most `epic.max_parallel`
+build at once (default `2`). Each run
 writes `agents/<NNN>-build-<id>.{started.json,result.json,log}` and ends with
 `runs/<NN>/summary.json` (each child's status, PR and reason), printing
 `EPIC:SUMMARY:<path>`. A child that exits `3` (for example `SPLIT:REQUIRED`) or
