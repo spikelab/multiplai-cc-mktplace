@@ -279,6 +279,13 @@ class TestReviewSpend:
         ledger.write_text("{not json\n" + json.dumps(_finished("o-r--pr-1", "h1", 2.0)) + "\n")
         assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(2.0), True)
 
+    def test_a_line_with_a_bad_byte_is_skipped(self, tmp_path):
+        """The ledger is shared: one line that is not UTF-8 must not stop the
+        coordinator, whose `_save` and `_summary` read it."""
+        ledger = tmp_path / "ledger.jsonl"
+        ledger.write_bytes(b'{"slug": "\xff"}\n' + json.dumps(_finished("o-r--pr-1", "h1", 2.0)).encode() + b"\n")
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(2.0), True)
+
     def test_child_slugs_come_from_numbered_pr_urls(self):
         prs = ["https://github.com/o/r/pull/12", None, "https://example.invalid/o/r/pull/e-a"]
         assert spend.review_slugs("o-r", prs) == {"o-r--pr-12"}
@@ -547,6 +554,36 @@ class TestSkillSpend:
         """Killed on a timeout, or by buildme's own stop: what it spent is unknown."""
         budget.record(_usage(1.0, 10))
         self._run(*argv, out="", code=-9 % 256)
+        assert budget.spend_marker() == "SPEND:1.000000:10:incomplete"
+
+    def test_a_skill_that_times_out_makes_the_total_incomplete(self):
+        """Row B2.S12, the timeout: the group is killed before its `SPEND:`."""
+        import sys
+
+        budget.record(_usage(1.0, 10))
+        r = git_ops._run_skill([sys.executable, "-c", "import time; time.sleep(30)", "pr_pipeline", "open"],
+                               None, 1)
+        assert r.returncode == 124
+        assert budget.spend_marker() == "SPEND:1.000000:10:incomplete"
+
+    def test_a_stop_during_the_wait_makes_the_total_incomplete(self):
+        """Row B2.S12, buildme's own stop: a SIGTERM during the wait kills the
+        group before its `SPEND:`, and the stop still ends buildme."""
+        import os
+        import signal
+        import sys
+        import threading
+
+        budget.record(_usage(1.0, 10))
+        timer = threading.Timer(0.5, os.kill, (os.getpid(), signal.SIGTERM))
+        timer.start()
+        try:
+            with pytest.raises(SystemExit) as stop:
+                git_ops._run_skill([sys.executable, "-c", "import time; time.sleep(30)",
+                                    "walkthrough_pipeline", "run", "/m"], None, 60)
+        finally:
+            timer.cancel()
+        assert stop.value.code == 128 + signal.SIGTERM
         assert budget.spend_marker() == "SPEND:1.000000:10:incomplete"
 
     def test_a_walkthrough_check_calls_no_model(self):

@@ -45,3 +45,13 @@ def test_record_adds_to_the_process_total(monkeypatch):
     budget.start(None, {"cost_usd": 9.0})       # a resume restores spend it did not make
     budget.record(SimpleNamespace(input_tokens=1, output_tokens=0, cost_usd=0.25))
     assert budget.spend_marker() == "SPEND:0.750000:16"
+
+
+def test_record_never_raises_on_a_bad_usage(monkeypatch):
+    """The module's rule: recording never raises, the process total included."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(budget, "_process", budget.ProcessSpend())
+    budget.start(None)
+    budget.record(SimpleNamespace(input_tokens="many", output_tokens=5, cost_usd="a lot"))
+    assert budget.spend_marker() == "SPEND:0.000000:0"
