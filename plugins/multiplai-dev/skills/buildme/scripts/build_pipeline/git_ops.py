@@ -79,14 +79,18 @@ class GitResult:
         return " ".join(shlex.quote(a) for a in self.argv)
 
 
-def _run(argv: list[str], cwd: Path | str | None = None, timeout: int = _GIT_TIMEOUT) -> GitResult:
-    """Run a fixed argv list. shell=False (the default) — never a string."""
+def _run(argv: list[str], cwd: Path | str | None = None, timeout: int = _GIT_TIMEOUT,
+         errors: str | None = None) -> GitResult:
+    """Run a fixed argv list. shell=False (the default) — never a string.
+    *errors* is how undecodable output bytes are decoded (`subprocess.run`);
+    None raises `UnicodeDecodeError`."""
     try:
         proc = subprocess.run(
             argv,
             cwd=str(cwd) if cwd else None,
             capture_output=True,
             text=True,
+            errors=errors,
             timeout=timeout,
         )
         return GitResult(argv, proc.returncode, proc.stdout or "", proc.stderr or "")
@@ -714,11 +718,13 @@ def merge_base(repo: Path | str, a: str, b: str) -> str | None:
 
 def diff_range(repo: Path | str, base: str, head: str, exclude: Path | str | None = None) -> str | None:
     """`git diff <base>..<head>` over the project directory, leaving out
-    *exclude* (a directory relative to *repo*). None when git could not be asked."""
+    *exclude* (a directory relative to *repo*). None when git could not be
+    asked. Bytes that are not UTF-8 (a Latin-1 source file) are shown as
+    U+FFFD: the diff is for a model to read."""
     spec = ["--", "."]
     if exclude is not None:
         spec.append(f":(exclude,literal){Path(exclude).as_posix()}")
-    res = _run(["git", "diff", f"{base}..{head}", *spec], cwd=repo)
+    res = _run(["git", "diff", f"{base}..{head}", *spec], cwd=repo, errors="replace")
     if not res.ok:
         log.warning("git diff %s..%s failed: %s", base[:12], head[:12], res.stderr.strip())
         return None

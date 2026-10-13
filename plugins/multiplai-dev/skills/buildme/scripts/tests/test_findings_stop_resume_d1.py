@@ -23,6 +23,7 @@ from unittest.mock import patch
 import pytest
 
 from build_pipeline.findings import code, loop
+from build_pipeline.models import AgentResult
 from build_pipeline.state import BuildState
 from tests.row_helpers import assert_same_as_unstopped, repo_state
 from tests.test_findings_round import (
@@ -34,7 +35,14 @@ from tests.test_findings_round import (
     _run,
     _Stubs,
 )
-from tests.test_findings_self_check import PROBLEM, FakeCheck, _log, block_stubs, calls
+from tests.test_findings_self_check import (
+    PROBLEM,
+    FakeCheck,
+    _log,
+    _slug,
+    block_stubs,
+    calls,
+)
 
 FIX_BLOCK = "Fix finding ab12"
 CHECK_BLOCK = "Fix what the check of this round's fixes found"
@@ -217,11 +225,26 @@ class TestD1Rows:
         clean = _unstopped(tmp_path, monkeypatch, PROBLEM)
         s = _Round(tmp_path / "stopped", monkeypatch, PROBLEM)
         refs_after: list[dict[str, str]] = []
-        for _ in range(2):
+
+        async def second_attempt(*_a, **kw):
+            """Block k's test writer on the second try: a different test, which
+            the engine commits before the implementer, where the stop is."""
+            name = kw.get("block_name", "")
+            _log(s.log, "test_writer", name)
+            test = s.repo / "tests" / f"test_{_slug(name)}.py"
+            test.write_text(f"{test.read_text() if test.exists() else ''}# the second attempt\n"
+                            "from calc import add\n\ndef test_again():\n    assert add(1, 1) == 2\n")
+            return AgentResult(success=True, output="tests written")
+
+        for attempt in range(2):
             if where == "check":
                 _killed(lambda: s.run(check_stop=_die))
-            else:
+            elif attempt == 0:
                 _killed(lambda: s.run(stop_at=("implementer", CHECK_BLOCK)))
+            else:
+                _killed(lambda: s.run(stop_at=("implementer", CHECK_BLOCK),
+                                      patches=[patch("build_pipeline.tdd_engine.run_test_writer",
+                                                     side_effect=second_attempt)]))
             refs_after.append(_wip_refs(s))
         assert s.run() == 0, s.lines
         if where == "check":
@@ -230,16 +253,23 @@ class TestD1Rows:
             assert _checks(s) == 1                     # never again once saved
             _assert_like_unstopped(s, clean, extra_calls=[("test_writer", CHECK_BLOCK),
                                                           ("implementer", CHECK_BLOCK)] * 2)
-            # The second keep writes `<ref>-2`; the first attempt's work stays
-            # where the first keep put it.
+            # The second attempt's work differs, so the second keep writes
+            # `<ref>-2`; the first attempt's work stays where the first keep
+            # put it.
             first = "refs/buildme/wip/calc/r1-code-block2-stopped"
             assert refs_after[0] == {}
             assert list(refs_after[1]) == [first]
             refs = _wip_refs(s)
             assert set(refs) == {first, f"{first}-2"}
             assert refs[first] == refs_after[1][first]
-            assert refs[f"{first}-2"] != refs[first]
             assert [ln.split(":")[2] for ln in _wip_lines(s)] == [f"{first}-2"]
+            test = f"tests/test_{_slug(CHECK_BLOCK)}.py"
+            show = lambda ref: subprocess.run(  # noqa: E731
+                ["git", "show", f"{ref}:{test}"], cwd=s.repo, check=True, capture_output=True,
+                text=True).stdout
+            assert "# the second attempt" in show(f"{first}-2")
+            assert "# the second attempt" not in show(first)
+            assert "# the second attempt" not in (s.repo / test).read_text()
 
     def test_after_a_resumed_block_the_check_gets_the_unstopped_run_s_range(self, tmp_path,
                                                                              monkeypatch):

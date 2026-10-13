@@ -27,13 +27,15 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
   Neither found: exit 2, and the message names `--change`.
 - `--auto`: unattended. After each round the re-review's Code findings, and
   its Tests findings that cite a source file other than a test file, are
-  posted without the viewer. The choice is written to
+  posted without the viewer. A finding the review does not list (a repeat of
+  one rejected earlier, a low-value one, and in `critical` mode one not rated
+  as breaking) is never posted. The choice is written to
   `buildme-decisions.json` in the review's own folder under the data
   directory, never in the worktree, and passed to `/multiplai-dev:review
   post --decisions`.
 - `--max-rounds <n>`: stop after `n` rounds; overrides `findings.max_rounds`.
-- `--trust-repo`: required. The triage, fix and review agents hold tools and
-  run without asking; pass it only after the user says they trust the
+- `--trust-repo`: required. The triage, fix, self-check and review agents
+  hold tools and run without asking; pass it only after the user says they trust the
   repository's specs and code.
 
 Ask the user before the first run: it pushes the PR's branch and writes
@@ -74,8 +76,11 @@ never removed. A PR whose branch lives in a fork is refused.
    reply quotes it. A block the engine fails (its test never fails before the
    fix, say) is kept under a wip ref, discarded from the branch, and answered
    "not fixed"; the round goes on with the next block.
-   Once the blocks pass, one read-only agent (`Read`, `Glob`, `Grep`) checks
-   the round's own fix commits, once per round. A problem it lists is kept as
+   When the engine finishes every block with nothing stopping after them,
+   one read-only agent (`Read`, `Glob`, `Grep`) checks the round's own fix
+   commits, once per round; a round whose whole-change refactor or mutation
+   testing stops after the blocks is published unchecked, saying what
+   failed, and a round with no fix commit left is not checked. A problem it lists is kept as
    `findings-r<N>-self-check.md`, committed with the tasks file, and fixed as
    one more block through the same engine.
 5. **Publish.** Push, then the PR description's "Review rounds" section
@@ -133,7 +138,8 @@ outside the project.
 ## What this skill does on the machine
 
 - **Sends the repository's contents to a model** through the triage, spec,
-  TDD and review agents, and the PR comments, fenced as untrusted data.
+  TDD, self-check and review agents (the self-check gets the round's fix
+  commits as a diff and reads the project), and the PR comments, fenced as untrusted data.
 - **Runs agents that edit the worktree and run its test command**, as a
   buildme build does (needs `--trust-repo`).
 - **Uses the GitHub CLI** (`gh`) under the user's login: reads review threads,

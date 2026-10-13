@@ -192,7 +192,7 @@ class TestSameMistake:
         that starts inside a later agent's output, the fixer's section is gone."""
         from build_pipeline.tdd_engine import MAX_EVIDENCE_CHARS
         tail = "\n\n[review-fix 2]\nmore\nSEARCHED: the reviewer's finding\n"
-        head = "x" * (MAX_EVIDENCE_CHARS - len(tail) - 40) + "\nSEARCHED: review-fix 1's search"
+        head = "x" * MAX_EVIDENCE_CHARS + "\nSEARCHED: review-fix 1's search"
         report = (head + tail)[-MAX_EVIDENCE_CHARS:]
         with caplog.at_level(logging.WARNING):
             assert code.searched_text(report) == ""
@@ -465,6 +465,8 @@ class TestTheCheckAgent:
         "NO PROBLEMS — the fix is complete.",
         "I opened calc.py and its callers.\n\nNO PROBLEMS",
         "I listed one problem, then checked it again.\n\nPROBLEMS:\n- calc.py:2 x\n\nNO PROBLEMS",
+        "Checked every caller.\n\nPROBLEMS: none",
+        "",
     ])
     @pytest.mark.asyncio
     async def test_no_problems_in_any_wording_or_after_narration(self, built, answer):

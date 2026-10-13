@@ -121,6 +121,7 @@ branch of the same function or elsewhere in the change, a test that does not
 exercise the fix. Name the file and line of each, and say what is wrong in
 one or two sentences.
 
-Answer with a markdown list, one problem per item. When you find no problem,
-answer with exactly `NO PROBLEMS` and nothing else.
+End your answer with one of these two, and write nothing after it:
+- a line `PROBLEMS:`, then a markdown list, one problem per item;
+- when you find no problem, the line `NO PROBLEMS`.
 """

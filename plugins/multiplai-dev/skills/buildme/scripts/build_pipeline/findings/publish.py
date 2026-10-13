@@ -70,8 +70,10 @@ def _spec_lines(rnd: FindingsRound, key: str) -> list[str]:
     return lines
 
 
-def outcome(rnd: FindingsRound, record: TriageRecord) -> str:
-    """What happened to one acted-on comment, in one or two sentences."""
+def outcome(rnd: FindingsRound, record: TriageRecord, *, searched: bool = True) -> str:
+    """What happened to one acted-on comment, in one or two sentences. With
+    *searched* False (the PR body's section, which lists every round under the
+    pr skill's word limit), the fixer's search is left out."""
     t = record.triage
     assert t is not None
     key = record.comment.key
@@ -81,7 +83,7 @@ def outcome(rnd: FindingsRound, record: TriageRecord) -> str:
         if fix and fix.get("impl"):
             test = f" (failing test first in `{_short(fix.get('test'))}`)" if fix.get("test") else ""
             parts.append(f"Fixed in `{_short(fix['impl'])}`{test}.")
-            if fix.get("searched"):
+            if searched and fix.get("searched"):
                 parts.append(f"Searched for the same mistake: {_line(fix['searched'], 600)}")
             if rnd.code_check_failed:
                 parts.append(f"After the fixes, {_line(rnd.code_check_failed, 300)}.")
@@ -130,7 +132,7 @@ def render_section(fs: FindingsState) -> str:
                 ident = f"finding {c.finding_id}" if c.finding_id else c.label
                 link = f"[{ident}]({c.url})" if c.url else ident
                 out.append(f"| {link} | {r.triage.verdict.value} | "
-                           f"{outcome(rnd, r).replace('|', '/')} |")
+                           f"{outcome(rnd, r, searched=False).replace('|', '/')} |")
         skipped = len(records) - len(acted)
         if skipped:
             out += ["", f"{skipped} comment(s) not acted on; `findings-r{rnd.number}.md` "

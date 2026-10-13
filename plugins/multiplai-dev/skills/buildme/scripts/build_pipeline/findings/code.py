@@ -155,22 +155,32 @@ def write_self_check(change_dir: Path, round_n: int, self_check: dict | None) ->
     return path
 
 
-# The engine appends each review-fix agent's report to the implementer's
-# (`tdd_engine`, `[review-fix <n>]`); a section must not run into the next.
-_REVIEW_FIX_SPLIT = re.compile(r"\n\[review-fix \d+\]\n")
+# The engine appends each review-fix agent's report, and the fix on a passed
+# block's, to the implementer's (`tdd_engine`, `[review-fix <n>]`,
+# `[fix on pass]`). Those agents end with their own `SEARCHED:` section, about
+# the block reviewer's findings, not the PR comment the fixer was given.
+_LATER_AGENT = re.compile(r"\n\[(review-fix (\d+)|fix on pass)\]\n")
 
 
 def searched_text(report: str) -> str:
-    """The last `SEARCHED:` section of a block's implementer report, as one
-    line (`gates.parse_searched`'s entries joined), or "" with a warning when
-    the report has none. Recorded, never checked: code cannot tell whether a
-    search happened."""
-    for part in reversed(_REVIEW_FIX_SPLIT.split(report or "")):
-        entries = parse_searched(part)
-        if entries is not None:
-            return "; ".join(entries)
-    log.warning("the fixer's report has no SEARCHED: section")
-    return ""
+    """The fixer's own `SEARCHED:` section (the last one before any later
+    agent's part) of a block's implementer report, as one line
+    (`gates.parse_searched`'s entries joined), or "" with a warning when it has
+    none. The engine keeps only the report's last `MAX_EVIDENCE_CHARS`: when a
+    later agent's part comes first and is not `[review-fix 1]`, the fixer's
+    part may be gone, and "" is safer than another agent's search. Recorded,
+    never checked: code cannot tell whether a search happened."""
+    from ..tdd_engine import MAX_EVIDENCE_CHARS
+
+    report = report or ""
+    first = _LATER_AGENT.search(report)
+    lost = (first is not None and len(report) >= MAX_EVIDENCE_CHARS
+            and first.group(2) != "1")
+    entries = None if lost else parse_searched(report[:first.start()] if first else report)
+    if entries is None:
+        log.warning("the fixer's report has no SEARCHED: section")
+        return ""
+    return "; ".join(entries)
 
 
 def fixes_from_state(state_path: Path, blocks: dict[int, str]) -> dict[str, dict[str, str]]:
@@ -240,7 +250,30 @@ def add_block(state_path: Path, tasks_path: Path, number: int) -> None:
     state.checkpoint(state_path, keep_budget=True)
 
 
-_NO_PROBLEMS = re.compile(r"\W*no problems?\W*", re.IGNORECASE)
+# The check's answer ends with one of two marker lines (`SELF_CHECK_PROMPT`):
+# `NO PROBLEMS` (any wording that starts so), or `PROBLEMS:` and the list.
+# Its output joins the text of every turn, so narration may come first: the
+# last marker decides.
+_CHECK_MARKER = re.compile(r"^[^\w\n]*(?:(?P<none>no problems?\b)|problems?\s*:)",
+                           re.IGNORECASE | re.MULTILINE)
+
+_NONE = re.compile(r"[^\w\n]*(none|nothing)\b[^\n]*", re.IGNORECASE)
+
+
+def _check_report(text: str) -> str:
+    """The problems a check answer lists, or "" for none. An answer with no
+    marker is kept whole: the agent wrote something, and dropping it could
+    drop a problem."""
+    last = None
+    for last in _CHECK_MARKER.finditer(text):
+        pass
+    if last is None:
+        return text
+    listed = text[last.end():].strip()
+    if last.group("none") or _NONE.fullmatch(listed):
+        return ""
+    return listed or text
+
 
 # Enough of the round's diff to judge; the agent opens the rest with Read.
 MAX_SELF_CHECK_DIFF_CHARS = 150_000
@@ -266,8 +299,7 @@ async def run_self_check(config: BuildConfig, diff: str) -> str:
     )
     if not result.success:
         raise RuntimeError(f"the self-check agent failed: {' '.join((result.error or '').split())[:300]}")
-    text = (result.output or "").strip()
-    return "" if not text or _NO_PROBLEMS.fullmatch(text) else text
+    return _check_report((result.output or "").strip())
 
 
 def failed_block(state_path: Path) -> BlockInfo | None:

@@ -23,9 +23,17 @@ time, not derived from a tag.
 - `/multiplai-dev:buildme-findings`: each code-fix block now asks the fixer to
   search the same function, its other branches, its callers and the rest of
   the PR's diff for the same mistake, fix each one, and end its report with a
-  `SEARCHED:` section. The reply on the PR quotes where it searched.
-- After a round's fixes pass, one read-only agent checks the round's own fix
-  commits, once per round. A problem it finds is written to
+  `SEARCHED:` section. The reply on the PR quotes where it searched (the
+  fixer's own section, not one a later review-fix agent wrote); the PR
+  description's "Review rounds" section does not, to stay under the pr
+  skill's word limit.
+- When the TDD engine finishes a round's blocks with nothing stopping after
+  them, one read-only agent checks the round's own fix commits, once per
+  round; a round whose whole-change refactor or mutation testing stops after
+  the blocks is published unchecked, as before, and a round with no fix
+  commit left makes no call. The agent ends its answer with `NO PROBLEMS` or
+  a `PROBLEMS:` list, and the last of these decides, so narration before it
+  is not read as a problem. A problem it finds is written to
   `findings-r<N>-self-check.md`, committed with the tasks file, and fixed as
   one more block through the same TDD engine. Its model is the new
   `findings_self_check` step (`review` stage) under `models:`.
@@ -33,8 +41,11 @@ time, not derived from a tag.
 
 ### Changed
 - `findings --auto` no longer posts the re-review's findings by the review
-  skill's section rule. It posts every Code finding and every Tests finding
-  that cites a source file other than a test file, through
+  skill's section rule. Of the findings the review lists (never a `repeat`
+  or `low-value` one, and in `critical` mode only one rated as breaking), it
+  posts every Code finding and every Tests finding that cites a source file
+  other than a test file (in Python, Go, Swift, JS/TS, the JVM, .NET, Ruby,
+  Elixir or PHP naming), through
   `review post --decisions buildme-decisions.json`; the file is written next
   to the review's `findings.json` in the data directory, never in the PR's
   worktree. A review folder without a readable `findings.json` now fails the
