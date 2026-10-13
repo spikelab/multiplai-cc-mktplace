@@ -1,0 +1,26 @@
+{
+  "change_name": "legacy-epic",
+  "mode": "scratch",
+  "tier": "advanced",
+  "phase": "codebase_analysis",
+  "bootstrap_done": true,
+  "interview_summary": "Split the billing epic.",
+  "research_path": null,
+  "split_required": false,
+  "size_accepted": false,
+  "worktree_path": null,
+  "branch": null,
+  "source_repo": null,
+  "pr_url": null,
+  "spec_gen": {
+    "completed_artifacts": [],
+    "research_path": null,
+    "codebase_analysis_path": "specs/changes/legacy-epic/codebase-analysis.md",
+    "tasks_audit_done": false,
+    "explainers_done": false
+  },
+  "tdd": null,
+  "state_file": "",
+  "started_at": "2026-10-12T09:14:02.118203+00:00",
+  "updated_at": "2026-10-12T09:31:47.902114+00:00"
+}

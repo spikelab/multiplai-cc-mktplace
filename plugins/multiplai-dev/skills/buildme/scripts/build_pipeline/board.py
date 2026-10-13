@@ -96,6 +96,8 @@ _PHASE_COLUMNS: dict[BuildPhase, BoardColumn] = {
     # Reading the existing codebase is still shaping — it produces
     # codebase-analysis.md, which the design is then written against.
     BuildPhase.CODEBASE_ANALYSIS: BoardColumn.SHAPING,
+    # Deciding whether the input is one change or several is shaping too.
+    BuildPhase.EPIC_SPLIT: BoardColumn.SHAPING,
     BuildPhase.SPEC_GENERATION: BoardColumn.SHAPING,
     BuildPhase.DESIGN_AUDIT: BoardColumn.PLANNING,
     # The plan review IS the Planning column's stated gate ("specs -> impl

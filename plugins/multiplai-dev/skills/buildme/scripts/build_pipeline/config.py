@@ -440,6 +440,7 @@ STEP_STAGES: dict[str, str] = {
     "design_audit": "spec",
     "tasks_audit": "spec",
     "codebase_analysis": "spec",
+    "epic_split": "spec",
     "explainer": "spec",
     "respec": "spec",
     "interview": "spec",
