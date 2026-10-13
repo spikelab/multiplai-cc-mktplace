@@ -5,19 +5,14 @@ items 11-17). The build is a fake first on PATH that prints the real markers;
 
 from __future__ import annotations
 
-import argparse
-import asyncio
 import copy
 import json
-import os
-import shutil
 import subprocess
 import time
 from pathlib import Path
 
 import pytest
 
-from build_pipeline import git_ops, intake, orchestrator
 from build_pipeline.config import BuildConfig, EpicSettings
 from build_pipeline.epic import coordinator, records, store
 from build_pipeline.epic import lock as epic_lock
@@ -31,13 +26,10 @@ from .epic_row_helpers import (
     FakeClock,
     approve,
     child,
-    die_at,
     make_build,
     make_project,
-    move_origin,
     pr_url,
     run_coordinator,
-    run_killed,
     use_workspace,
 )
 
@@ -78,8 +70,8 @@ class Epic:
     def status(self) -> dict:
         return {k: v["status"] for k, v in json.loads((self.dir / "epic.json").read_text())["child_status"].items()}
 
-    def summary(self, n: int) -> dict:
-        return json.loads((self.dir / "runs" / f"{n:02d}" / "summary.json").read_text())
+    def reasons(self) -> dict:
+        return {k: v["reason"] for k, v in json.loads((self.dir / "epic.json").read_text())["child_status"].items()}
 
 
 # --- launching, in dependency order ----------------------------------------------
@@ -148,9 +140,8 @@ def test_a_parked_child_skips_its_dependants(tmp_path, monkeypatch, capsys):
     e = Epic(tmp_path, monkeypatch, steps={"api": [{"marker": "SPLIT:REQUIRED:/x/plan.md"}]})
     assert e.run() == 0
     assert e.status() == {"api": "parked", "ui": "built", "docs": "skipped"}
-    summary = {c["id"]: c for c in e.summary(1)["children"]}
-    assert summary["api"]["reason"].startswith("SPLIT:REQUIRED")
-    assert "api" in summary["docs"]["reason"]
+    assert e.reasons()["api"].startswith("SPLIT:REQUIRED")
+    assert "api" in e.reasons()["docs"]
     assert e.run() == 0                       # stays parked: nothing relaunched
     assert sorted(e.launches()) == ["api", "ui"]
 
@@ -159,7 +150,7 @@ def test_exit_0_without_a_pr_parks(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"no_pr": True}]})
     assert e.run() == 0
     assert e.status()["a"] == "parked"
-    assert {c["id"]: c for c in e.summary(1)["children"]}["a"]["reason"] == "no PR opened"
+    assert e.reasons()["a"] == "no PR opened"
 
 
 @pytest.mark.parametrize("key", ["worktree", "push"])
@@ -171,7 +162,7 @@ def test_children_never_build_in_place(tmp_path, monkeypatch, capsys, key):
     yaml_path.write_text(f"git:\n  {key}: false\n")
     assert e.run() == 2
     assert f"git.{key}" in capsys.readouterr().err
-    assert e.launches() == [] and not (e.dir / "runs").exists()
+    assert e.launches() == [] and not (e.dir / "agents").exists()
     yaml_path.write_text("git:\n  worktree: true\n")
     assert e.run() == 0 and sorted(e.launches()) == ["a", "b", "c"]
 
@@ -254,26 +245,6 @@ def test_a_parent_that_skipped_research_skips_it_in_each_child(tmp_path, monkeyp
         assert "--skip-research" in argv and "--research-path" not in argv
 
 
-def test_base_ref_reaches_a_new_child_and_a_relaunch_keeps_its_own(tmp_path, monkeypatch):
-    """origin moves right after a's first launch: b, launched next, branches
-    from the new sha (B1.S14); a's relaunch reuses its first command (item 15)."""
-    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit": 1}, {}]})
-    old = _sha(tmp_path / "o" / "r.git", "main")
-    real, moved = coordinator._spawn, []
-
-    def spawn(argv, log_path):
-        proc = real(argv, log_path)
-        moved.append(moved[0] if moved else move_origin(tmp_path))
-        return proc
-
-    monkeypatch.setattr(coordinator, "_spawn", spawn)
-    assert e.run() == 0
-    first, again = [a.started["argv"] for a in records.attempts(e.dir) if a.child == "a"]
-    assert first[first.index("--base-ref") + 1] == old
-    assert again == first                      # the relaunch is the same command
-    assert (tmp_path / "bases" / "b").read_text() == moved[0] != old
-
-
 def test_a_child_builds_in_the_source_checkout_when_the_parent_used_a_worktree(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
     wt = tmp_path / "parent-wt"
@@ -283,23 +254,8 @@ def test_a_child_builds_in_the_source_checkout_when_the_parent_used_a_worktree(t
     state = BuildState(change_name="e", mode="scratch", tier="advanced",
                        source_repo=str(e.project), worktree_path=str(wt))
     coord = coordinator.Coordinator(config, state, None, e.dir, store.load_epic(e.dir))
-    argv = coord.new_argv("a", None)
+    argv = coord.new_argv("a")
     assert argv[argv.index("--project-dir") + 1] == str(e.project / "sub")
-
-
-def test_a_hung_fetch_times_out(tmp_path, monkeypatch):
-    """`git fetch` before a launch is bounded: a hung one gives origin's ref as it is."""
-    use_workspace(monkeypatch, tmp_path)
-    project = make_project(tmp_path)
-    shim = tmp_path / "gitbin"
-    shim.mkdir()
-    (shim / "git").write_text(f'#!/bin/sh\n[ "$1" = fetch ] && exec sleep 30\nexec {shutil.which("git")} "$@"\n')
-    (shim / "git").chmod(0o755)
-    monkeypatch.setenv("PATH", f"{shim}:{os.environ['PATH']}")
-    monkeypatch.setattr(coordinator, "FETCH_TIMEOUT", 1)
-    began = time.monotonic()
-    assert coordinator.base_sha(project) == _sha(project)
-    assert time.monotonic() - began < 10
 
 
 def test_a_subdirectory_project_gets_that_subdirectory(tmp_path):
@@ -337,36 +293,6 @@ def test_record_names_keep_kind_and_child_apart(tmp_path):
     assert [(a.kind, a.child) for a in records.attempts(tmp_path)] == [("merge-tests", "api"), ("merge", "tests-api")]
 
 
-def test_a_child_refuses_a_config_yaml_that_is_not_on_its_base_ref(tmp_path, monkeypatch):
-    """With --base-ref, a specs/config.yaml committed but not pushed would not
-    reach the worktree: the build refuses, as for an uncommitted one."""
-    use_workspace(monkeypatch, tmp_path)
-    project = make_project(tmp_path)
-    base = _sha(project)
-    (project / "specs").mkdir()
-    (project / "specs" / "config.yaml").write_text("context: x\n")
-    subprocess.run(["git", "add", "specs"], cwd=project, check=True)
-    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "config"], cwd=project, check=True)
-    config = BuildConfig(project_dir=project, change_name="c")
-    config.base_ref = base
-    state = BuildState(change_name="c", mode="brief", tier="advanced")
-    with pytest.raises(intake.ConfigNotCommittedError, match="not on"):
-        asyncio.run(orchestrator._run_bootstrap(config, state, None, None))
-    assert state.worktree_path is None
-    config.base_ref = _sha(project)
-    assert not intake.config_yaml_off_ref(project, config.base_ref)
-    # Only behind origin, which changed the file after this checkout's version
-    # was pushed: nothing to push, the worktree gets origin's version.
-    subprocess.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=project, check=True)
-    other = tmp_path / "other"
-    subprocess.run(["git", "clone", "-q", str(tmp_path / "o" / "r.git"), str(other)], check=True)
-    (other / "specs" / "config.yaml").write_text("context: y\n")
-    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qam", "config y"], cwd=other, check=True)
-    subprocess.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=other, check=True)
-    subprocess.run(["git", "fetch", "-q", "origin"], cwd=project, check=True)
-    assert not intake.config_yaml_off_ref(project, _sha(project, "origin/main"))
-
-
 # --- waiting for a dependency's merge ----------------------------------------------
 
 def test_a_closed_dependency_parks_its_dependant(tmp_path, monkeypatch, capsys):
@@ -378,8 +304,7 @@ def test_a_closed_dependency_parks_its_dependant(tmp_path, monkeypatch, capsys):
     assert e.run() == 0
     assert "EPIC:MERGE_WAITING" not in capsys.readouterr().out
     assert e.status() == {"api": "parked", "ui": "merged", "docs": "skipped"}
-    reasons = {c["id"]: c["reason"] for c in e.summary(2)["children"]}
-    assert reasons["api"] == "PR closed without a merge"
+    assert e.reasons()["api"] == "PR closed without a merge"
     assert len(e.launches()) == 2
 
 
@@ -402,7 +327,7 @@ def test_a_failed_pr_read_is_read_again(tmp_path, monkeypatch):
 
 def test_a_failed_child_shows_beside_merge_waiting(tmp_path, monkeypatch, capsys):
     """ui fails twice while docs waits on api's open PR: exit 3 (item 15a),
-    and the failure is named on stderr, not only in the summary."""
+    and the failure is named on stderr."""
     e = Epic(tmp_path, monkeypatch, steps={"ui": [{"exit": 1}, {"exit": 1}]})
     assert e.run() == 3
     out = capsys.readouterr()
@@ -427,23 +352,6 @@ def test_a_merge_while_running_launches_the_dependant(tmp_path, monkeypatch):
     assert e.launches()[-1] == "docs" and len(e.launches()) == 3
 
 
-# --- summary ---------------------------------------------------------------------
-
-def test_killed_after_one_of_three_the_rerun_launches_the_other_two(tmp_path, monkeypatch, capsys):
-    """Done means 4."""
-    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, parallel=1)
-    run_killed(lambda: e.run(), die_at(records, "finish", after=True))
-    assert e.launches() == ["a"]
-    capsys.readouterr()
-    assert e.run() == 0
-    assert e.launches() == ["a", "b", "c"]
-    summary = e.summary(2)
-    assert [c["id"] for c in summary["children"]] == ["a", "b", "c"]
-    assert all(c["status"] == "built" for c in summary["children"])
-    assert summary["totals"] == {"built": 3}
-    assert f"EPIC:SUMMARY:{e.dir / 'runs' / '02' / 'summary.json'}" in capsys.readouterr().out
-
-
 # --- config ----------------------------------------------------------------------
 
 @pytest.mark.parametrize("yaml_text, want", [
@@ -463,56 +371,3 @@ def test_epic_keys_defaults_and_fallbacks(tmp_path, yaml_text, want):
     assert config.epic == want
     assert EpicSettings() == EpicSettings(max_parallel=2, max_review_rounds=6, merge="manual", max_usd=None)
 
-
-# --- --base-ref in the build itself -------------------------------------------------
-
-def _sha(repo: Path, ref: str = "HEAD") -> str:
-    return subprocess.run(["git", "rev-parse", ref], cwd=repo, capture_output=True, text=True,
-                          check=True).stdout.strip()
-
-
-def test_create_worktree_takes_a_start_point(tmp_path, monkeypatch):
-    use_workspace(monkeypatch, tmp_path)
-    project = make_project(tmp_path)
-    start = _sha(project)
-    (project / "x.txt").write_text("x\n")
-    subprocess.run(["git", "add", "x.txt"], cwd=project, check=True)
-    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "local"], cwd=project, check=True)
-    dest = tmp_path / "wt"
-    git_ops.create_worktree(project, "b", dest, start_point=start)
-    assert _sha(dest) == start != _sha(project)
-
-
-def test_the_build_branches_from_base_ref_and_counts_an_empty_branch_against_it(tmp_path, monkeypatch):
-    """A first attempt killed before its first commit left `buildme/c` at the base
-    ref, which local main has not reached: the next attempt makes `buildme/c-2`."""
-    use_workspace(monkeypatch, tmp_path)
-    project = make_project(tmp_path)
-    other = tmp_path / "other"
-    subprocess.run(["git", "clone", "-q", str(tmp_path / "o" / "r.git"), str(other)], check=True)
-    (other / "y.txt").write_text("y\n")
-    subprocess.run(["git", "add", "y.txt"], cwd=other, check=True)
-    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "moved"], cwd=other, check=True)
-    subprocess.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=other, check=True)
-    subprocess.run(["git", "fetch", "-q", "origin"], cwd=project, check=True)
-    base = _sha(project, "origin/main")
-    subprocess.run(["git", "branch", "buildme/c", base], cwd=project, check=True)
-
-    config = BuildConfig(project_dir=project, change_name="c")
-    config.base_ref = base
-    state = BuildState(change_name="c", mode="brief", tier="advanced")
-    orchestrator._setup_worktree(config, state)
-    assert state.branch == "buildme/c-2"
-    assert _sha(Path(state.worktree_path)) == base != _sha(project)
-
-
-def test_base_ref_is_a_build_flag(tmp_path):
-    from build_pipeline.__main__ import build_parser
-
-    args = build_parser().parse_args(["build", "--project-dir", str(tmp_path), "--base-ref", "abc123"])
-    config = BuildConfig(project_dir=tmp_path)
-    config._apply_git_cli_overrides(args)
-    assert config.base_ref == "abc123"
-    config = BuildConfig(project_dir=tmp_path)
-    config._apply_git_cli_overrides(argparse.Namespace())
-    assert config.base_ref == ""

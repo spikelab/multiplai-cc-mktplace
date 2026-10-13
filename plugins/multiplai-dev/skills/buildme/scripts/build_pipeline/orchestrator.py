@@ -854,11 +854,6 @@ async def _run_bootstrap(
         if (not _inside_own_worktree(config, state)
                 and intake.config_yaml_uncommitted(config.project_dir)):
             raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_COMMITTED)
-        # With --base-ref (an epic's child) it branches from that commit
-        # instead, where a committed but unpushed config.yaml is missing too.
-        if (config.base_ref and not _inside_own_worktree(config, state)
-                and intake.config_yaml_off_ref(config.project_dir, config.base_ref)):
-            raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_ON_BASE)
         _setup_worktree(config, state)
         state_path = config.state_file_path()
         cm = ChangeManager(config.specs_dir)
@@ -985,12 +980,9 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
 
     repo = git_ops.preflight(config.project_dir, worktree_requested=True)
     offset = _project_offset(config.project_dir, repo)
-    # With --base-ref (an epic's child), an empty branch left by an attempt
-    # killed before its first commit sits at that ref, which the local default
-    # branch may not have reached: count its commits against the ref.
-    base = config.base_ref or git_ops.default_branch(repo)
+    base = git_ops.default_branch(repo)
     branch, dest = git_ops.resolve_new_branch(repo, config.change_name, base)
-    git_ops.create_worktree(repo, branch, dest, start_point=config.base_ref or None)
+    git_ops.create_worktree(repo, branch, dest)
 
     state.source_repo = str(repo)
     state.branch = branch

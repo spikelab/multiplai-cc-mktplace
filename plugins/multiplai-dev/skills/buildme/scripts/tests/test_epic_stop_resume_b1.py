@@ -5,8 +5,7 @@ Each case stops the coordinator at the row's point (a forked child exiting
 137, as SIGKILL would; Ctrl-C as `KeyboardInterrupt` at a seam) or applies
 the row's perturbation, resumes, and compares with the same scenario run
 without a stop in a second temporary root: the epic directory, the records
-per child as (kind, argv, exit_code, markers, interrupted), the last summary
-and the launches. The only differences allowed are the ones the row's
+per child as (kind, argv, exit_code, markers, interrupted) and the launches. The only differences allowed are the ones the row's
 "Resume does" names.
 """
 
@@ -39,10 +38,8 @@ from .epic_row_helpers import (
     commit_names,
     die_at,
     epic_snapshot,
-    last_summary,
     make_build,
     make_project,
-    move_origin,
     name_commits,
     alive,
     pr_url,
@@ -116,8 +113,7 @@ class Root:
     def snapshot(self) -> dict:
         names = commit_names([self.root / "o" / "r.git", self.project])
         return name_commits({"epic": epic_snapshot(self.dir, self.root),
-                             "records": records_snapshot(self.dir, self.root),
-                             "summary": last_summary(self.dir, self.root)}, names)
+                             "records": records_snapshot(self.dir, self.root)}, names)
 
     def launches(self) -> list[dict]:
         return CallLog(self.root / "calls.log").calls()
@@ -137,12 +133,11 @@ def _release_all(root: Root):
 
 def _assert_same(stopped: Root, clean: Root, records: dict | None = None,
                  extra_launches: list[str] = ()) -> None:
-    """Same epic files and summary; records equal except the children named in
+    """Same epic files; records equal except the children named in
     *records* (stopped-run records given whole, with "<argv>" for the child's
     one argv); launches equal plus one per child id in *extra_launches*."""
     s, c = stopped.snapshot(), clean.snapshot()
     assert s["epic"] == c["epic"]
-    assert s["summary"] == c["summary"]
     for cid, got in s["records"].items():
         if records and cid in records:
             argv = c["records"][cid][0][1]
@@ -270,8 +265,7 @@ def test_B1_S10_failed_then_killed_before_the_relaunch(tmp_path, monkeypatch):
 
 
 def test_B1_S13_user_edit_in_a_stopped_childs_worktree_is_left_alone(tmp_path, monkeypatch):
-    """B1.S13: the coordinator touches nothing; the relaunch has the same argv,
-    though origin moved at the same seam (B1.S14: b branches from the new sha);
+    """B1.S13: the coordinator touches nothing; the relaunch has the same argv;
     the edited file is byte-identical. Otherwise as B1.S5 (no PR found)."""
     steps = {"a": [{"block": True}, {}]}
     stopped, clean = _roots(tmp_path, monkeypatch, steps)
@@ -284,13 +278,11 @@ def test_B1_S13_user_edit_in_a_stopped_childs_worktree_is_left_alone(tmp_path, m
     stopped.kill_child("a")
     (wt(stopped) / "notes.txt").write_bytes(edit)                     # at the kill seam
     (wt(stopped) / "README.md").write_text("# r, edited\n")
-    moved = move_origin(stopped.root)
 
     def clean_tick(coord):
         if not (wt(clean) / "notes.txt").exists():
             (wt(clean) / "notes.txt").write_bytes(edit)
             (wt(clean) / "README.md").write_text("# r, edited\n")
-            move_origin(clean.root)
         _release_all(clean)(coord)
 
     assert stopped.run(_release_all(stopped)) == 0
@@ -300,7 +292,6 @@ def test_B1_S13_user_edit_in_a_stopped_childs_worktree_is_left_alone(tmp_path, m
         assert (wt(root) / "README.md").read_text() == "# r, edited\n"
     argvs = [a.started["argv"] for a in records.attempts(stopped.dir) if a.child == "a"]
     assert len(argvs) == 2 and argvs[0] == argvs[1]
-    assert moved not in argvs[1] and (stopped.root / "bases" / "b").read_text() == moved
     _assert_same(stopped, clean, {"a": [
         ("build", "<argv>", None, _built("a")[:2], True),
         ("build", "<argv>", 0, [_built("a")[0], _built("a")[2]], False)]}, ["a"])

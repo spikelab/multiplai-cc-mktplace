@@ -22,8 +22,8 @@ time, not derived from a tag.
 ### Added
 - An approved epic builds its children. After `EPIC:APPROVED`, the same
   command runs each child as its own buildme build (`--mode brief`, the
-  child's plan, `--auto --no-epic-split --pr-ready`) from origin's default
-  branch, so each gets its own worktree, branch and ready PR, and the
+  child's plan, `--auto --no-epic-split --pr-ready`) from the source
+  checkout's HEAD, so each gets its own worktree, branch and ready PR, and the
   parent's research as `--research-path` (or `--skip-research` when the
   parent skipped it), so no child decides on research again. A `specs/config.yaml` with `git.worktree` or `git.push` set to
   `false` is refused (exit 2) before any child starts. A child starts
@@ -31,9 +31,8 @@ time, not derived from a tag.
   at once (default 2). While a child waits on an open PR the build exits 3
   with `EPIC:MERGE_WAITING:<urls>`; re-run it once they are merged. A PR closed
   without a merge parks the children waiting on it.
-- Each epic run ends with `runs/<NN>/summary.json` in the epic directory (each
-  child's status, PR and park reason) and prints `EPIC:SUMMARY:<path>`. Every
-  child build leaves `agents/<NNN>-build-<id>.{started.json,result.json,log}`.
+- `epic.json` keeps each child's status, PR and park reason. Every child
+  build leaves `agents/<NNN>-build-<id>.{started.json,result.json,log}`.
 - Re-running an epic continues from those records: a child still running from
   an earlier run is waited for, never started twice; a PR a stopped child
   opened is found (`gh pr list --head`) and kept; a child that exited 3 or
@@ -48,10 +47,6 @@ time, not derived from a tag.
   `max_review_rounds`, `merge` (`auto` or `manual`, default `manual`) and
   `max_usd`. `max_usd` is read but not enforced yet. Enforcing it, and
   reviewing, fixing and merging the children's PRs, come in later releases.
-- `build --base-ref <sha>` branches a new worktree from that commit instead of
-  the source checkout's HEAD. It exits 1 when the `specs/config.yaml`
-  committed at HEAD was never pushed to that commit; a checkout only behind
-  origin is fine.
 
 ### Changed
 - An approved epic's build no longer exits 0 right after `EPIC:APPROVED`: it
