@@ -136,10 +136,10 @@ scenarios carry `- **CITES** \`path:start-end\`` and `- **EVIDENCE**` lines),
 `report.md` (the target and commit, the files left out and why, the files not
 analysed, counts, every dropped item with its reason, the symbols not
 specified, not grouped or not written) and `summary.json` (the same lists).
-None carries a timestamp or a spend. Only `state.json` is read back; until
-the registry files are written the others are rewritten from it, so editing
-them changes nothing. After that a re-run makes no call and leaves them as
-they are.
+Only `state.json` holds the spend, and only it and `facts.json` (its
+`generated_at`) a timestamp. Only `state.json` is read back; until the
+registry files are written the others are rewritten from it, so editing them
+changes nothing. After that a re-run makes no call and leaves them as they are.
 
 ## What it writes outside its output
 
