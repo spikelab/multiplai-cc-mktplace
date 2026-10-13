@@ -301,6 +301,9 @@ with (root / "calls.log").open("a") as f:
 fx = json.loads((root / "fakes.json").read_text()) if (root / "fakes.json").exists() else {{}}
 steps = fx.get(cid, [])
 step = steps[n - 1] if n <= len(steps) else (steps[-1] if steps else {{}})
+if "spend" in step:     # as the real build: SPEND on every exit path but a kill
+    import atexit
+    atexit.register(lambda: print(f"SPEND:{{step['spend']}}:0", flush=True))
 
 project = pathlib.Path(opt("--project-dir"))
 top = git("rev-parse", "--show-toplevel", cwd=project).stdout.strip()
@@ -376,7 +379,7 @@ else:
 class Fakes:
     """The fake build and `gh` first on PATH, answering from `<root>/fakes.json`
     (per child, one step per attempt: `block`, `marker`, `exit`, `no_pr`,
-    `die_before_pr_line`, `grandchild`, `ignore_signals`) and `<root>/prs.json`; launches go to
+    `die_before_pr_line`, `grandchild`, `ignore_signals`, `spend`) and `<root>/prs.json`; launches go to
     `<root>/calls.log`. `<root>/gh-fails` makes every `gh` call fail; `ps_fails`
     puts a `ps` that exits 1 first on PATH."""
 
