@@ -35,6 +35,17 @@ from build_pipeline.state import BuildState
 from tests.test_git_ops import make_repo
 
 
+@pytest.fixture(autouse=True)
+def _epic_split_is_one_change(monkeypatch):
+    """Every build here is one change: EPIC_SPLIT's model call answers `single: true`."""
+    from unittest.mock import AsyncMock
+
+    from build_pipeline.epic import split as epic_split
+
+    answer = epic_split.EpicSplitAnswer(single=True, reason="one change")
+    monkeypatch.setattr(epic_split, "epic_split", AsyncMock(return_value=answer))
+
+
 def _args(project: Path, change: str, **over) -> argparse.Namespace:
     base = dict(
         mode="scratch", change=change, project_dir=str(project), auto=False,

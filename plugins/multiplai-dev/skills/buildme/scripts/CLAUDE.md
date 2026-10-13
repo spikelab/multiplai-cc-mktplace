@@ -30,6 +30,7 @@
 | _(logging)_ | Uses shared `log_utils.setup_logging()` from hooks/ | No |
 | `env.py` | .env loading, multiplai.conf parsing, model resolution | No |
 | `progress.py` | Tail-able progress file writer | No |
+| `epic/` | Epic mode, PR A1 (plan-buildme-epic-mode-2026-10-12.md). `split.py`: `epic_split`, the one structured call (`STEP_STAGES["epic_split"]`, spec stage; tests patch it as a module attribute, so callers use `split.epic_split`), its inputs (`ticket.md`, `plan.md`, `interview.md`, `research.md`, the context files, `codebase-analysis.md`) and `check_answer`/`check_children` (unique lowercase hyphenated ids, every `depends_on` names a child, no cycle, each plan holds `# Plan:` and `## Done means`; at least two children). `store.py`: the epic directory `<data_dir>/buildme/epics/<owner>-<repo>--<change>/`, named with the review skill's slug rule copied from `review_pipeline/target.py` (pinned by `test_epic_split.py::TestSlug`), `epic.json` (`Epic`, saved with `multiplai_core.checkpoint.save_model`), `split.md` and `plans/<id>.md`. `phase.py`: `run_epic_split_phase` (skip for `--no-epic-split` or `only` mode; one call and at most one retry with the errors; one change completes the phase and writes nothing; several saves `epic.json` first, renders the files, then saves `state.epic_dir` and the phase in one checkpoint; entered with `epic.json` present, no call, and only missing files are rendered, so a hand edit stays) and `continue_epic` (`EPIC:SPLIT`, exit 3). Never runs `git`, other than `remote get-url origin` for the directory name. | Via sdk |
 | `findings/` | `python -m build_pipeline findings --pr <n>` (the `/multiplai-dev:buildme-findings` skill). `fetch.py` reads a PR's unresolved review threads and new top-level comments through `git_ops._run_gh`, decides whose are acted on (`findings.authors`, `findings.allow_bots`) and flags injection-shaped bodies; `triage.py` runs one read-only agent (`Read`/`Glob`/`Grep`) per allowed comment on the fenced body and writes `findings-r<N>.md`; `spec.py` writes `respec-findings-r<N>.md`, applies it to the change's `requirements/*.md` with `ChangeManager._apply_delta` and commits `spec(findings-r<N>): <ids>`; `code.py` turns each `code_fix` into a block of `findings-r<N>-tasks.md` (whose brief asks the fixer to search the same function, its other branches, its callers and the rest of the PR's diff for the same mistake and to end with `SEARCHED:`, recorded per fix as `searched` and quoted in the reply, never gated) and runs `run_tdd_engine(standalone=False)` on it through the `BuildConfig` overrides `change_dir` / `tasks_file` / `state_file`; once the engine returns 0 (not when it stops after the blocks, `code_check_failed`), `loop.do_code` runs one read-only check agent (`code.run_self_check`, step `findings_self_check`) over `git diff <FindingsRound.code_base>..HEAD` (none for an empty range) and saves its answer in `FindingsRound.self_check` before writing anything, so it never runs twice; a listed problem becomes block `k` (`findings-r<N>-self-check.md` and the tasks file in one commit, then `code.add_block`; it skips the whole-change refactor and mutation testing, whose done flags are already set), and every re-render of both files comes from saved state, so a resume commits nothing new; and answers "not fixed" only for a block `failed_block` finds failed on its own work (a block the engine marks `resumable`, stopped by an agent call that timed out or errored or by the budget, is resumed instead); `publish.py` pushes, then refreshes the PR body through the pr skill's `edit --section`, then replies (each reply checkpointed before the next, never a thread resolve); `loop.py` checkpoints each step's start and finish in `<change>/.findings-state.json` (a `BuildState` with only `findings` set: `.build-state.json` is never recreated, because the pr skill reads its presence as a build in progress) and keeps a failed triage/spec step's edits under `refs/buildme/wip/<change>/r<N>-<step>` before `discard_to`, and, before a code step resumes, the stopped engine attempt's edits under `r<N>-code-block<k>-stopped` (`keep_stopped_code_work`); before any resumed step keeps or discards, `others_work` refuses an uncommitted change, or a commit, that the stopped step did not record when it stopped (`FindingsRound.stops`, written by `record_stop` through `stop_record.record`; the comparison is `stop_record.others_work`); under `--auto`, `decisions.write_decisions` writes `buildme-decisions.json` next to the review's `findings.json` (outside the worktree) and `post_review` passes it as `--decisions`; `run_review` resumes a review of the PR head that was killed part way (the review skill's exit 4 naming `resume <target_dir>`) instead of reporting it as a failed review; `cli.py` resolves change, branch and worktree. `README.md` holds the GitHub calls as checked on a scratch repo. | Via sdk |
 
 ## LLM Steps (llm_steps/)
@@ -63,6 +64,7 @@ Templates are Python f-strings with `{placeholders}`. Each template is a constan
 | `rubric_prompts.py` | RUBRIC_PROMPT |
 | `plan_review.py` | PLAN_REVIEW_PROMPT |
 | `interview.py` | QUESTIONER_PROMPT, ANSWERER_PROMPT, RESEARCH_DECISION_PROMPT, UNTRUSTED_NOTICE |
+| `epic_split.py` | EPIC_SPLIT_PROMPT, EPIC_SPLIT_RETRY |
 | `findings.py` | TRIAGE_PROMPT, SPEC_DELTA_PROMPT, SELF_CHECK_PROMPT |
 | `vendored/` | Prompt text borrowed from `anthropics/claude-plugins-official`'s `pr-review-toolkit` under Apache-2.0 — `reviewer_blocks.py` holds the blocks, `SOURCES.json` pins each one by blob SHA, `LICENSE` sits beside them. Never edit a block to fit a local house rule; `scripts/check_vendored_prompts.py` re-fetches every pin and reports drift, and it is a **run-it-before-a-release** script wired to nothing. |
 
@@ -342,7 +344,7 @@ its own artifact rather than two more proposal sections because
 keep old checkpoints loadable (fixtures under `tests/fixtures/` cover this):
 
 ```
-INIT → BOOTSTRAP → INTERVIEW_DONE → RESEARCH → CODEBASE_ANALYSIS
+INIT → BOOTSTRAP → INTERVIEW_DONE → RESEARCH → CODEBASE_ANALYSIS → EPIC_SPLIT
   → SPEC_GENERATION → DESIGN_AUDIT → PLAN_REVIEW → PROTOTYPE → REVIEW
   → TDD_BUILD → DOCS_UPDATE → RESPEC → PUBLISH → COMPLETE  (or FAILED)
 ```
@@ -368,12 +370,24 @@ the documentation it writes is committed onto the same branch and lands in the
 same PR as the code it describes. `PUBLISH` runs **after** the `--auto` archive
 move, so the pushed branch carries the archived layout.
 
-`CODEBASE_ANALYSIS` sits before `SPEC_GENERATION` because `design.md` is its
-only consumer. It is best-effort in three ways, all deliberate: skipped in
+`CODEBASE_ANALYSIS` sits before `SPEC_GENERATION` because `design.md` and
+`EPIC_SPLIT` read it. It is best-effort in three ways, all deliberate: skipped in
 `only` mode (no specs are generated, so nothing would read it), skipped when
 the project has no source files yet (explore agents reporting "(new
 project)" is pure spend), and non-fatal on failure (the design falls back to
 "(new project)", exactly the pre-phase behavior). Every skip logs its reason.
+
+`EPIC_SPLIT` sits after `CODEBASE_ANALYSIS`, whose report it reads, and before
+`SPEC_GENERATION`, which a split build never reaches. It is the one phase
+whose pointer counts as done: the orchestrator skips it when `state.phase` is
+`EPIC_SPLIT` or later, when `state.epic_dir` is set, or when
+`state.epic_single` is (saved with a one-change answer or a skip, so a FAILED build's
+retry does not ask again), because re-entering would pay for the decision
+again. With `state.epic_dir` set, every run goes to
+`epic.phase.continue_epic` and returns. Old checkpoints load with it ahead
+(`tests/fixtures/build-state-pre-epic-split.json`); FAILED or past it, with `state.epic_single` set (A.S14). Its stop and resume rows
+are PR A's table in the plan; `tests/test_epic_stop_resume_a.py` tests the
+ones where a resume could destroy work or pay twice.
 
 `implementation-notes.md`, `respec.md`, `prototype/` and `.board.json` are not
 DAG artifacts, and neither are the documents `DOCS_UPDATE` writes — README,

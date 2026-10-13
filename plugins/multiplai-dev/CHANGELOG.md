@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.54.0] - 2026-10-13
+## [0.55.0] - 2026-10-13
 
 ### Added
 - `/multiplai-dev:buildme-findings`: each code-fix block now asks the fixer to
@@ -54,6 +54,21 @@ time, not derived from a tag.
   worktree. A review folder without a readable `findings.json` now fails the
   review step (`FINDINGS:FAILED:review:cannot choose what to post: …`)
   instead of posting.
+
+## [0.54.0] - 2026-10-13
+
+### Added
+- buildme decides, after the codebase analysis, whether its input is one
+  change or several. One change builds exactly as before. Several (an epic, a
+  PRD with separate features, an issue with sub-issues or a task list) stops
+  before any spec is written: buildme writes one plan per child, with the
+  children each depends on, to
+  `<data_dir>/buildme/epics/<owner>-<repo>--<change>/` and exits 3 with
+  `EPIC:SPLIT:<split.md>`. A re-run prints the same line and makes no new
+  model call, and keeps any plan you edited meanwhile. A retry of a one-change
+  build that failed does not ask again, nor does one that skipped the question or predates it. Approving the split and building the children come in later
+  releases.
+- `--no-epic-split` builds the input as one change without asking.
 
 ## [0.53.0] - 2026-10-13
 

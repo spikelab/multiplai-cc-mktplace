@@ -21,6 +21,12 @@ class BuildPhase(str, Enum):
     # this phase existed still load (the stored value is a phase name, not an
     # index) and resume at their recorded phase.
     CODEBASE_ANALYSIS = "codebase_analysis"
+    # Epic mode: one structured call decides whether the input is one change
+    # or several. Several stops the build here (exit 3, `EPIC:SPLIT`) with one
+    # plan per child in the epic directory. It reads codebase-analysis.md, so
+    # it sits after CODEBASE_ANALYSIS, and before spec generation, which a
+    # split build never reaches. Old checkpoints load and resume with it ahead.
+    EPIC_SPLIT = "epic_split"
     SPEC_GENERATION = "spec_generation"
     DESIGN_AUDIT = "design_audit"
     # The plan review the board already claims exists: column 4 is "specs ->

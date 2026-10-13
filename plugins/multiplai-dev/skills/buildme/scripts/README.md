@@ -12,6 +12,7 @@ SKILL.md (thin wrapper — handles interview, plan review)
         ├── tdd_engine.py      — per-block TDD with agent spawning
         ├── apply.py           — manual single-agent implementation
         ├── change_manager.py  — manages specs/ directory
+        ├── epic/              — EPIC_SPLIT: one change, or several child plans
         └── shared: config, state, models, gates, sdk, logging, env, progress
 ```
 
@@ -44,6 +45,14 @@ block (which skips the whole-change refactor and mutation testing). Under
 `--auto` it posts the re-review's listed Code findings, and Tests findings
 on source files, through `buildme-decisions.json` in the review's
 folder (`build_pipeline/findings/README.md`).
+
+### Epic mode
+
+After the codebase analysis, `build` decides whether the input is one change or
+several (`BuildPhase.EPIC_SPLIT`, one structured call). Several writes
+`<data_dir>/buildme/epics/<owner>-<repo>--<change>/` — `epic.json`, `split.md`,
+`plans/<id>.md` — prints `EPIC:SPLIT:<split.md>` and exits 3, on this run and
+every re-run. `--no-epic-split` skips the decision.
 
 ## Model-Adaptive Behavior
 

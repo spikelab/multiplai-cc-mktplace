@@ -232,6 +232,8 @@ class TestTier:
 CALL_SITES = {
     ("findings/code.py", "run_self_check", "agent_call"):
         ("config.model_for('findings_self_check')", ("findings_self_check",)),
+    ("epic/split.py", "epic_split", "call"):
+        ("config.model_for('epic_split')", ("epic_split",)),
     ("findings/spec.py", "write_delta", "call"):
         ("config.model_for('findings_spec')", ("findings_spec",)),
     ("findings/triage.py", "triage_comment", "call"):
