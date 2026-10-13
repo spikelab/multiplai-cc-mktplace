@@ -609,7 +609,8 @@ def main() -> int:
     od.add_argument("job", help="job name, e.g. the show and episode")
     od.set_defaults(func=cmd_outdir)
 
-    rv = sub.add_parser("review", help="serve the job page: pick clips, draw speaker boxes, comment on renders")
+    rv = sub.add_parser("review", help="serve the job page: pick clips, draw speaker boxes, choose a look and music, "
+                                         "comment on renders and restyle them")
     rv.add_argument("dir", help="the job's output directory: renders (clip.mp4, clip.v2.mp4, …) and the "
                                "job.json, candidates.json, looks.json, music.json the session writes")
     rv.add_argument("--mailbox", default=None, help="where comments.jsonl goes (default: <dir>/review)")

@@ -642,6 +642,285 @@
              target: d.target || null, text: (d.text || "").trim() };
   }
 
+  // --- Review: the style panel ------------------------------------------------------------------
+
+  // What the panel edits, with the server's bounds (stages/review_server.py; looks.schema.json for captions).
+  const CAPTION_FIELDS = [
+    { key: "size", label: "Size (output px)", type: "int", min: 8, max: 400, step: 1 },
+    { key: "position_y", label: "Height (0 top, 1 bottom)", type: "number", min: 0, max: 1, step: 0.005 },
+    { key: "words_per_line", label: "Words a line", type: "int", min: 1, max: 20, step: 1 },
+    { key: "max_chars", label: "Characters a line, at most", type: "int", min: 8, max: 80, step: 1 },
+    { key: "highlight", label: "Colour the spoken word", type: "bool" },
+  ];
+  const BRAND_FIELDS = [["primary", "Text"], ["accent", "Spoken word, headline box"],
+                        ["background", "Background"], ["caption_outline", "Outline"]];
+  const STYLE_LABELS = { "fonts.display": "Display font", "fonts.body": "Body font",
+                         "fonts.weights.display": "Display weight", "fonts.weights.body": "Body weight",
+                         "shape.radius_px": "Corner radius (px)", "motion.enter_s": "Enter (s)",
+                         "motion.exit_s": "Exit (s)", "motion.stagger_s": "Stagger (s)" };
+  // One CSS value the session copies into a page (stages/review_server.py CSS_VALUE_RE and _css_text).
+  const CSS_VALUE_RE = /^[^;{}<>\\\u0000-\u001f\u007f]{1,200}$/;
+  const SAVE_AS_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/;
+  // stages/captions.py: a line appears LEAD_S before its first word, stays HOLD_S after its last,
+  // leaves CLEAR_S before the next, and a pause longer than MAX_GAP_S ends it.
+  const LEAD_S = 0.08, HOLD_S = 0.6, CLEAR_S = 0.05, MAX_GAP_S = 0.3;
+
+  /* Whether `v` is one CSS value the server accepts: no ; { } < > \, comment or url(). */
+  function isCssValue(v) {
+    return typeof v === "string" && CSS_VALUE_RE.test(v.trim()) && !v.includes("/*") && !/url\s*\(/i.test(v);
+  }
+
+  /* A style value's field: a colour for palette keys, text for fonts, a bounded number otherwise. */
+  function styleField(key, value) {
+    const label = STYLE_LABELS[key] || key.replace(/^palette\./, "").replace(/_/g, " ");
+    if (key.startsWith("palette.")) return { key, label: `${label} colour`, type: "colour", value };
+    if (key === "fonts.display" || key === "fonts.body") return { key, label, type: "text", value };
+    if (key.startsWith("fonts.weights.")) return { key, label, type: "int", min: 100, max: 1000, step: 100, value };
+    if (key === "shape.radius_px") return { key, label, type: "number", min: 0, max: 1000, step: 1, value };
+    return { key, label, type: "number", min: 0, max: 10, step: 0.05, value };
+  }
+
+  /* The panel's groups from an /api/style answer: one per row target ("captions", "brand",
+   * "style:<name>"), each with its fields and their current values, or an error. */
+  function styleGroups(info) {
+    if (!info || info.status !== "ok") return [];
+    const groups = [];
+    if (info.captions) {
+      const height = (info.output && info.output.height) || 1920;
+      const cur = { ...info.captions };
+      if (!Number.isFinite(cur.size)) cur.size = Math.round(height * 0.036);   // captions.py layout_metrics
+      groups.push({ target: "captions", title: "Captions", saveAs: false,
+                    fields: CAPTION_FIELDS.filter((f) => cur[f.key] !== undefined).map((f) => ({ ...f, value: cur[f.key] })) });
+    }
+    const b = info.brand || {};
+    const brandTitle = b.file ? `Brand · ${fileName(b.file)}` : "Brand · none (the defaults)";
+    if (b.status === "ok") {
+      groups.push({ target: "brand", title: brandTitle, saveAs: true,
+                    fields: BRAND_FIELDS.map(([key, label]) => ({ key, label, type: "colour", value: String(b.colours[key]).toUpperCase() })) });
+    } else {
+      groups.push({ target: "brand", title: brandTitle, saveAs: true, fields: [], error: b.error || "cannot read the brand file" });
+    }
+    for (const s of info.styles || []) {
+      const title = `Style · ${fileName(s.name)}`;
+      if (s.status !== "ok") { groups.push({ target: `style:${s.name}`, title, saveAs: true, fields: [], error: s.error }); continue; }
+      groups.push({ target: `style:${s.name}`, title, saveAs: true,
+                    fields: Object.entries(s.values).map(([k, v]) => styleField(k, v)) });
+    }
+    return groups;
+  }
+
+  /* An edited field value, cleaned: {value} or {error}. */
+  function checkField(f, raw) {
+    if (f.type === "bool") return { value: !!raw };
+    if (f.type === "colour") {
+      return isColour(raw) ? { value: raw.toUpperCase() } : { error: `${f.label} must be a #RRGGBB colour` };
+    }
+    if (f.type === "text") {
+      const v = String(raw).trim();
+      return isCssValue(v) ? { value: v }
+        : { error: `${f.label} must be 1–200 characters without ; { } < > \\ or url()` };
+    }
+    const n = typeof raw === "number" ? raw : Number(String(raw).trim());
+    if (String(raw).trim() === "" || !Number.isFinite(n)) return { error: `${f.label} must be a number` };
+    if (f.type === "int" && !Number.isInteger(n)) return { error: `${f.label} must be a whole number` };
+    if (n < f.min || n > f.max) return { error: `${f.label} must be within ${f.min}–${f.max}` };
+    return { value: n };
+  }
+
+  function sameValue(a, b) {
+    return typeof a === "string" && typeof b === "string" ? a.toUpperCase() === b.toUpperCase() : a === b;
+  }
+
+  /* One group's changes from the edits for it ({key: raw}): {changes: {key: [old, new]}, errors}. */
+  function groupChanges(group, edits) {
+    const changes = {}, errors = [];
+    for (const f of group.fields) {
+      if (!edits || !(f.key in edits)) continue;
+      const got = checkField(f, edits[f.key]);
+      if (got.error) errors.push(got.error);
+      else if (!sameValue(got.value, f.value)) changes[f.key] = [f.value, got.value];
+    }
+    return { changes, errors };
+  }
+
+  /* The style rows for the edits ({target: {key: raw}}) and save-as names ({target: name}),
+   * one per group that changes something, and why they cannot be sent: {rows, problem}. */
+  function styleRows(video, version, groups, edits, saveAs, note) {
+    const rows = [], problems = [];
+    for (const g of groups) {
+      const { changes, errors } = groupChanges(g, (edits || {})[g.target]);
+      problems.push(...errors);
+      if (!Object.keys(changes).length) continue;
+      const row = { kind: "style", video, version, target: g.target, changes, text: (note || "").trim() };
+      const name = ((saveAs || {})[g.target] || "").trim();
+      if (name && g.saveAs) {
+        if (SAVE_AS_RE.test(name)) row.save_as = name;
+        else problems.push(`"Save as" must be a file name of letters, digits, - or _ (${g.title})`);
+      }
+      rows.push(row);
+    }
+    if (!rows.length && !problems.length) problems.push("Change a value to send it.");
+    return { rows, problem: problems.length ? problems[0] : null };
+  }
+
+  /* The caption values a preview draws with: the panel's captions group with its edits applied
+   * where they are valid. */
+  function editedValues(group, edits) {
+    const out = {};
+    for (const f of (group && group.fields) || []) {
+      const got = edits && f.key in edits ? checkField(f, edits[f.key]) : { value: f.value };
+      out[f.key] = got.error ? f.value : got.value;
+    }
+    return out;
+  }
+
+  /* Words into caption lines as the edited values would break them: a line ends at
+   * words_per_line words, before it would pass max_chars characters, after a word that
+   * ends a sentence, or at a pause longer than MAX_GAP_S; it shows from LEAD_S before its
+   * first word until HOLD_S after its last, leaving CLEAR_S before the next. A rough copy
+   * of stages/captions.py group_words and line_times (it does not join short lines), for
+   * the preview only. */
+  function regroupWords(words, values) {
+    const per = values.words_per_line || 5, max = values.max_chars || 22;
+    const lines = [];
+    let cur = [];
+    for (const w of words) {
+      const prev = cur[cur.length - 1];
+      if (cur.length && (cur.length >= per || w.start - prev.end > MAX_GAP_S
+                         || [...cur, w].map((x) => x.text).join(" ").length > max)) { lines.push(cur); cur = []; }
+      cur.push(w);
+      if (/[.?!…]$/.test(w.text)) { lines.push(cur); cur = []; }
+    }
+    if (cur.length) lines.push(cur);
+    const ins = lines.map((ws) => Math.max(0, ws[0].start - LEAD_S));
+    return lines.map((ws, i) => {
+      const out = ws[ws.length - 1].end + HOLD_S;
+      return { start: ins[i], end: i + 1 < lines.length ? Math.min(out, ins[i + 1] - CLEAR_S) : out, words: ws };
+    });
+  }
+
+  /* The caption line a preview shows at output time t: {words: [text], spoken} (spoken is the
+   * index of the word being said, -1 without highlighting), or null between lines. The render's
+   * own lines (captions_events) are used while the line breaks are unchanged. */
+  function captionAt(events, t, values, original) {
+    const evs = (events || []).filter((e) => Array.isArray(e.words) && e.words.length);
+    const same = original && values.words_per_line === original.words_per_line && values.max_chars === original.max_chars;
+    const lines = same ? evs : regroupWords(evs.flatMap((e) => e.words), values);
+    const line = lines.find((l) => l.start <= t + 1e-6 && t < l.end);
+    if (!line) return null;
+    let spoken = -1;
+    if (values.highlight !== false) {
+      line.words.forEach((w, i) => { if (w.start <= t + 1e-6) spoken = i; });
+      spoken = Math.max(0, spoken);
+    }
+    return { words: line.words.map((w) => w.text), spoken };
+  }
+
+  /* Whether a group has edits that change a value (for the caption preview). */
+  function groupEdited(group, edits) {
+    return !!group && Object.keys(groupChanges(group, edits).changes).length > 0;
+  }
+
+  /* {key: [old, new]} → "size 64 → 80, highlight true → false" */
+  function changeSummary(changes) {
+    return Object.entries(changes || {}).map(([k, [a, b]]) => `${k} ${a === null ? "—" : a} → ${b}`).join(", ");
+  }
+
+  /* The style and restyle rows sent about `clip`, oldest first. */
+  function styleSent(rows, clip) {
+    return (rows || []).filter((r) => ["style", "restyle"].includes(r.kind) && r.video === clip);
+  }
+
+  // --- Review: live overlays and click-to-restyle -----------------------------------------------
+
+  // What the overlay bridge reports for a picked element, and what a restyle row may change
+  // (stages/review_server.py RESTYLE_PROPS; static/overlay-bridge.js PROPS).
+  const RESTYLE_PROPS = ["color", "background-color", "font-family", "font-size", "font-weight", "opacity", "transform"];
+  const MAX_SELECTOR = 300, MAX_OLD_VALUE = 300, MAX_PICK_TEXT = 80;
+
+  /* The overlays of a render's sidecar the page can play live: those it has a key for
+   * (review_server overlay_keys), each with its place in output pixels.
+   * [{index, html, key, start, end, mode, transparent, rect: {x, y, w, h}, style}] */
+  function liveOverlays(side, keys) {
+    const e = (side && side.edl) || {};
+    const out = e.output || {};
+    const W = Number(out.width) || 1080, H = Number(out.height) || 1920;
+    return (e.overlays || []).map((o, index) => {
+      const key = keys && typeof o.html === "string" ? keys[o.html] : null;
+      if (!key) return null;
+      const r = o.region || { x: 0, y: 0, w: W, h: H };
+      const mode = o.mode || "keyed";
+      return { index, html: o.html, key, start: Number(o.start), end: Number(o.end), mode,
+               transparent: mode !== "panel", rect: { x: r.x, y: r.y, w: r.w, h: r.h }, style: o.style || null };
+    }).filter(Boolean);
+  }
+
+  /* The overlay's own clock at render time t (its page starts at 0), or null when it is not on screen. */
+  function overlayTime(o, t) {
+    return Number.isFinite(t) && t >= o.start && t < o.end ? r3(t - o.start) : null;
+  }
+
+  /* Where an overlay's frame goes over the picture: CSS pixels from the picture's top left,
+   * and the scale from output pixels. `out` is the render's size, `picture` the shown one. */
+  function regionBox(rect, out, picture) {
+    const scale = out && out.width > 0 ? picture.width / out.width : 0;
+    return { left: rect.x * scale, top: rect.y * scale, width: rect.w * scale, height: rect.h * scale, scale };
+  }
+
+  /* A message from an overlay frame (static/overlay-bridge.js), checked:
+   * {type: "ready", width, height} or {type: "picked", selector, box, styles, text}; null otherwise. */
+  function bridgeMessage(data) {
+    if (!data || typeof data !== "object") return null;
+    const num = (x, lo, hi) => typeof x === "number" && Number.isFinite(x) && x >= lo && x <= hi;
+    if (data.type === "ready") {
+      return num(data.width, 1, 4096) && num(data.height, 1, 4096) ? { type: "ready", width: data.width, height: data.height } : null;
+    }
+    if (data.type !== "picked") return null;
+    const { selector, box, styles, text } = data;
+    if (typeof selector !== "string" || !selector || selector.length > MAX_SELECTOR || /[\u0000-\u001f\u007f]/.test(selector)) return null;
+    if (!box || ![box.x, box.y].every((v) => num(v, -8192, 8192)) || ![box.w, box.h].every((v) => num(v, 0, 8192))) return null;
+    if (!styles || typeof styles !== "object") return null;
+    const clean = {};
+    for (const p of RESTYLE_PROPS) {
+      if (typeof styles[p] !== "string") return null;
+      clean[p] = styles[p].slice(0, MAX_OLD_VALUE);
+    }
+    return { type: "picked", selector, box: { x: box.x, y: box.y, w: box.w, h: box.h }, styles: clean,
+             text: typeof text === "string" ? text.slice(0, MAX_PICK_TEXT) : "" };
+  }
+
+  /* "rgb(61, 220, 151)" or "#3ddc97" → "#3DDC97" for a colour input; null when it is not a plain colour. */
+  function cssColourToHex(v) {
+    if (isColour(v)) return v.toUpperCase();
+    const m = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(String(v || "").trim());
+    if (!m || (m[4] !== undefined && Number(m[4]) !== 1)) return null;
+    const hex = m.slice(1, 4).map((x) => Math.min(255, Number(x)).toString(16).padStart(2, "0")).join("");
+    return `#${hex.toUpperCase()}`;
+  }
+
+  /* The changes a restyle makes ({prop: [computed, new]}) from the edits ({prop: raw}); a blank or
+   * unchanged edit is left out. {changes, problem}: problem names the first edit the server would refuse. */
+  function restyleChanges(picked, edits) {
+    const changes = {};
+    for (const p of RESTYLE_PROPS) {
+      if (!edits || typeof edits[p] !== "string") continue;
+      const v = edits[p].trim();
+      if (!v || v === picked.styles[p]) continue;
+      if (!isCssValue(v)) return { changes: {}, problem: `${p} must be one CSS value of 1–200 characters without ; { } < > \\ or url()` };
+      changes[p] = [picked.styles[p], v];
+    }
+    return { changes, problem: null };
+  }
+
+  /* The restyle row for a picked element of overlay `o` at render time t, or {problem}. */
+  function restyleRow(video, version, t, o, picked, edits, note) {
+    const { changes, problem } = restyleChanges(picked, edits);
+    if (problem) return { row: null, problem };
+    if (!Object.keys(changes).length) return { row: null, problem: "Change a value to send it." };
+    return { row: { kind: "restyle", video, version, t: r3(t), overlay: o.index, html: o.html,
+                    selector: picked.selector, changes, text: (note || "").trim() }, problem: null };
+  }
+
   // --- Review: sending -----------------------------------------------------------------------
 
   const REVIEW_KINDS = ["point", "drawing", "range"];
@@ -683,6 +962,16 @@
     return out;
   }
 
+  /* Whether a key pressed in an element with tag `tag` (and input `type`) is the element's
+   * own: text, number, colour and checkbox inputs, lists and text areas take Space and the
+   * arrows, so the Review tab's player keys leave them alone. The seek slider and buttons
+   * do not. */
+  function takesKeys(tag, type) {
+    const t = String(tag || "").toUpperCase();
+    if (t === "TEXTAREA" || t === "SELECT") return true;
+    return t === "INPUT" && !["range", "button", "submit", "reset"].includes(String(type || "text").toLowerCase());
+  }
+
   const api = {
     TABS, INPUT_FILES, fmt, inputNotice, isReels, latestBy, rowsOfKind, clipsOpen, speakersOpen, firstOpenTab,
     oneAtATime,
@@ -697,7 +986,11 @@
     DRAW_TOOLS, DRAW_COLOURS, MAX_SHAPES, MAX_PEN_POINTS, MAX_DRAWING_POINTS, MAX_MARK_BYTES, MAX_BODY_BYTES,
     isColour, toPictureFrac, simplifyStroke, finishShape, drawingRoom, strokeWidth, shapePaths, exportSize, drawingRow,
     LANES, MIN_RANGE_S, timelineLanes, blockBox, timeAtFrac, rangeFromDrag, blockRange, targetLabel, rangeRow,
-    reviewRow, canSendReview, reviewSent, sendBatches,
+    reviewRow, canSendReview, reviewSent, sendBatches, takesKeys,
+    CAPTION_FIELDS, BRAND_FIELDS, isCssValue, styleField, styleGroups, checkField, groupChanges, styleRows,
+    editedValues, regroupWords, captionAt, groupEdited, changeSummary, styleSent,
+    RESTYLE_PROPS, MAX_SELECTOR, liveOverlays, overlayTime, regionBox, bridgeMessage, cssColourToHex,
+    restyleChanges, restyleRow,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JobLogic = api;

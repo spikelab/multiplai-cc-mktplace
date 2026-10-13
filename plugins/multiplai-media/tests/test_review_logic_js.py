@@ -38,7 +38,7 @@ def test_the_page_loads_logic_and_app_first_then_one_script_per_tab() -> None:
     html = (STATIC / "review.html").read_text()
     scripts = re.findall(r'<script src="/static/([^"]+)"></script>', html)
     assert scripts == ["logic.js", "app.js", "tab-clips.js", "tab-speakers.js", "tab-look.js",
-                       "tab-music.js", "tab-review.js"]
+                       "tab-music.js", "tab-review.js", "review-style.js", "review-live.js"]
     assert all((STATIC / s).is_file() for s in scripts)
     assert "<script>" not in html                      # CSP: script-src 'self', no inline scripts
 
@@ -67,3 +67,17 @@ def test_the_page_and_the_server_agree_on_the_drawing_and_body_limits() -> None:
     proc = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
     assert dict(zip(names, json.loads(proc.stdout))) == {n: getattr(rs, n) for n in names}
+
+
+def test_the_page_and_the_server_agree_on_what_a_restyle_may_change() -> None:
+    sys.path.insert(0, str(STATIC.parent))
+    from stages import review_server as rs
+
+    node = shutil.which("node")
+    assert node, "node is required for the page-logic tests"
+    script = (f"const L = require({json.dumps(str(STATIC / 'logic.js'))});"
+              "console.log(JSON.stringify([L.RESTYLE_PROPS, L.MAX_SELECTOR]))")
+    proc = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    props, max_selector = json.loads(proc.stdout)
+    assert (tuple(props), max_selector) == (rs.RESTYLE_PROPS, rs.MAX_SELECTOR)

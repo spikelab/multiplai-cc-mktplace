@@ -339,7 +339,7 @@ def test_edl_serves_the_sidecar_of_one_render(server) -> None:
     d = server["job"]["dir"]
     (d / "clip-01.edl.json").write_text(json.dumps(SIDECAR))
     res, body = _get(server, "/api/edl?video=clip-01&version=1")
-    assert res.status == 200 and body == {"status": "ok", "data": SIDECAR}
+    assert res.status == 200 and body == {"status": "ok", "data": SIDECAR, "overlay_keys": {}}
     # a second version reads its own sidecar, not the first one's
     (d / "clip-01.v2.mp4").write_bytes(b"render 2")
     (d / "clip-01.v2.edl.json").write_text(json.dumps({**SIDECAR, "video": "clip-01.v2.mp4"}))

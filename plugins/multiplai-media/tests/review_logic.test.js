@@ -640,3 +640,237 @@ test("sendBatches counts UTF-8 bytes, as the server does", () => {
   const one = Buffer.byteLength(JSON.stringify({ comments: [rows[0]] }));
   assert.deepEqual(L.sendBatches(rows, one + 120), [[0], [1]]);           // 100 chars, but 200 bytes
 });
+
+test("takesKeys: the player keys leave text, number, colour and checkbox fields alone", () => {
+  for (const type of ["text", "number", "color", "checkbox", undefined]) assert.equal(L.takesKeys("INPUT", type), true, type);
+  assert.equal(L.takesKeys("textarea"), true);
+  assert.equal(L.takesKeys("SELECT"), true);
+  for (const type of ["range", "button", "submit"]) assert.equal(L.takesKeys("INPUT", type), false, type);
+  assert.equal(L.takesKeys("VIDEO"), false);
+  assert.equal(L.takesKeys("BUTTON", "submit"), false);
+});
+
+// --- Review: the style panel ---------------------------------------------------------------------
+
+const STYLE_INFO = {
+  status: "ok", video: "clip-01", version: 1, output: { width: 720, height: 1280 },
+  captions: { words_per_line: 3, max_chars: 22, position_y: 0.68, highlight: true, size: null },
+  brand: { file: "/job/brands/warm.json", status: "ok",
+           colours: { primary: "#fff8ec", accent: "#FF6B4A", background: "#1F2A44", caption_outline: "#1F2A44" } },
+  styles: [
+    { name: "clean-tech", status: "ok", file: "/x/clean-tech.md",
+      values: { "palette.accent": "#3DDC97", "fonts.display": "Inter, sans-serif", "fonts.weights.display": 800,
+                "shape.radius_px": 18, "motion.enter_s": 0.5 } },
+    { name: "/job/gone.md", status: "missing", error: "no style file" },
+  ],
+};
+
+test("styleGroups: captions (default size from the output height), brand, then each style", () => {
+  const groups = L.styleGroups(STYLE_INFO);
+  assert.deepEqual(groups.map((g) => g.target), ["captions", "brand", "style:clean-tech", "style:/job/gone.md"]);
+  const caps = groups[0];
+  assert.equal(caps.saveAs, false);
+  assert.deepEqual(caps.fields.map((f) => [f.key, f.value]),
+    [["size", 46], ["position_y", 0.68], ["words_per_line", 3], ["max_chars", 22], ["highlight", true]]);
+  assert.equal(groups[1].title, "Brand · warm.json");
+  assert.equal(groups[1].fields[0].value, "#FFF8EC");                              // colours shown upper case
+  const style = groups[2];
+  assert.deepEqual(style.fields.map((f) => f.type), ["colour", "text", "int", "number", "number"]);
+  assert.equal(style.fields[0].label, "accent colour");
+  assert.equal(groups[3].title, "Style · gone.md");
+  assert.equal(groups[3].error, "no style file");
+  assert.deepEqual(groups[3].fields, []);
+});
+
+test("styleGroups: no captions group without captions; a brand it cannot read keeps its error", () => {
+  const groups = L.styleGroups({ ...STYLE_INFO, captions: null, brand: { file: null, status: "invalid", error: "bad" }, styles: [] });
+  assert.deepEqual(groups.map((g) => g.target), ["brand"]);
+  assert.equal(groups[0].title, "Brand · none (the defaults)");
+  assert.equal(groups[0].error, "bad");
+  assert.deepEqual(L.styleGroups(null), []);
+  assert.deepEqual(L.styleGroups({ status: "error" }), []);
+});
+
+test("checkField: bounds, whole numbers, colours and CSS text, as the server checks them", () => {
+  const [size, posY, , , highlight] = L.CAPTION_FIELDS;
+  assert.deepEqual(L.checkField(size, "60"), { value: 60 });
+  assert.match(L.checkField(size, "60.5").error, /whole number/);
+  assert.match(L.checkField(size, "4").error, /within 8–400/);
+  assert.match(L.checkField(size, "").error, /a number/);
+  assert.deepEqual(L.checkField(posY, "0.7"), { value: 0.7 });
+  assert.deepEqual(L.checkField(highlight, 0), { value: false });
+  const colour = L.styleField("palette.accent", "#3DDC97");
+  assert.deepEqual(L.checkField(colour, "#ff0000"), { value: "#FF0000" });
+  assert.match(L.checkField(colour, "red").error, /#RRGGBB/);
+  const font = L.styleField("fonts.body", "Inter");
+  assert.deepEqual(L.checkField(font, "  Georgia, serif "), { value: "Georgia, serif" });
+  for (const bad of ["x; color: red", "a { b }", "x /* y */", "Evil, url(http://x/f.woff)", "a\\b", ""]) {
+    assert.ok(L.checkField(font, bad).error, bad);
+  }
+  assert.equal(L.styleField("fonts.weights.body", 500).step, 100);
+  assert.deepEqual([L.styleField("motion.stagger_s", 0.1).min, L.styleField("motion.stagger_s", 0.1).max], [0, 10]);
+});
+
+test("styleRows: one row per changed group, only the changed keys, [old, new]", () => {
+  const groups = L.styleGroups(STYLE_INFO);
+  const edits = {
+    captions: { size: "60", position_y: "0.68", highlight: false },                  // position_y unchanged
+    brand: { accent: "#ff6b4a" },                                                     // same colour, other case
+    "style:clean-tech": { "palette.accent": "#FF0000", "shape.radius_px": "4" },
+  };
+  const { rows, problem } = L.styleRows("clip-01", 1, groups, edits, { "style:clean-tech": "clean-red", captions: "nope" }, " note ");
+  assert.equal(problem, null);
+  assert.deepEqual(rows, [
+    { kind: "style", video: "clip-01", version: 1, target: "captions",
+      changes: { size: [46, 60], highlight: [true, false] }, text: "note" },
+    { kind: "style", video: "clip-01", version: 1, target: "style:clean-tech",
+      changes: { "palette.accent": ["#3DDC97", "#FF0000"], "shape.radius_px": [18, 4] }, text: "note", save_as: "clean-red" },
+  ]);
+});
+
+test("styleRows: nothing changed, a bad value or a bad file name is a problem", () => {
+  const groups = L.styleGroups(STYLE_INFO);
+  assert.deepEqual(L.styleRows("clip-01", 1, groups, {}, {}, ""), { rows: [], problem: "Change a value to send it." });
+  assert.match(L.styleRows("clip-01", 1, groups, { captions: { size: "2" } }, {}, "").problem, /within/);
+  const bad = L.styleRows("clip-01", 1, groups, { brand: { accent: "#000000" } }, { brand: "../evil" }, "");
+  assert.match(bad.problem, /Save as/);
+});
+
+test("editedValues and groupEdited: valid edits apply, invalid ones keep the old value", () => {
+  const caps = L.styleGroups(STYLE_INFO)[0];
+  const v = L.editedValues(caps, { size: "80", words_per_line: "abc" });
+  assert.equal(v.size, 80);
+  assert.equal(v.words_per_line, 3);
+  assert.equal(L.groupEdited(caps, { size: "80" }), true);
+  assert.equal(L.groupEdited(caps, { size: "46" }), false);
+  assert.equal(L.groupEdited(undefined, { size: "80" }), false);
+});
+
+const W = (text, start, end) => ({ text, start, end });
+const EVENTS = [
+  { start: 0.92, end: 2.0, text: "one two three", words: [W("one", 1.0, 1.2), W("two", 1.3, 1.5), W("three", 1.6, 1.8)] },
+  { start: 2.0, end: 3.2, text: "four five.", words: [W("four", 2.1, 2.3), W("five.", 2.4, 2.6)] },
+];
+const ORIGINAL = { words_per_line: 3, max_chars: 22, highlight: true };
+
+test("captionAt keeps the render's own lines while the line breaks are unchanged", () => {
+  assert.deepEqual(L.captionAt(EVENTS, 1.35, { ...ORIGINAL, size: 80 }, ORIGINAL), { words: ["one", "two", "three"], spoken: 1 });
+  assert.deepEqual(L.captionAt(EVENTS, 0.95, ORIGINAL, ORIGINAL), { words: ["one", "two", "three"], spoken: 0 });
+  assert.deepEqual(L.captionAt(EVENTS, 2.5, { ...ORIGINAL, highlight: false }, ORIGINAL), { words: ["four", "five."], spoken: -1 });
+  assert.equal(L.captionAt(EVENTS, 0.5, ORIGINAL, ORIGINAL), null);
+  assert.equal(L.captionAt([], 1, ORIGINAL, ORIGINAL), null);
+});
+
+test("captionAt re-breaks the words when words_per_line or max_chars change", () => {
+  const two = { ...ORIGINAL, words_per_line: 2 };
+  assert.deepEqual(L.captionAt(EVENTS, 1.1, two, ORIGINAL).words, ["one", "two"]);
+  assert.deepEqual(L.captionAt(EVENTS, 1.7, two, ORIGINAL).words, ["three"]);         // the pause after it ends the line
+  assert.deepEqual(L.captionAt(EVENTS, 2.2, two, ORIGINAL).words, ["four", "five."]);
+  // a sentence end always ends a line
+  const run = [W("a", 0, 0.2), W("b.", 0.25, 0.4), W("c", 0.45, 0.6), W("d", 0.65, 0.8)];
+  assert.deepEqual(L.regroupWords(run, { words_per_line: 10, max_chars: 80 }).map((l) => l.words.length), [2, 2]);
+});
+
+test("regroupWords: max_chars, pauses and the timing rules of stages/captions.py", () => {
+  const words = [W("alpha", 1.0, 1.2), W("beta", 1.25, 1.4), W("gamma", 2.0, 2.2), W("delta", 2.25, 2.4)];
+  const lines = L.regroupWords(words, { words_per_line: 5, max_chars: 22 });
+  assert.deepEqual(lines.map((l) => l.words.map((w) => w.text)), [["alpha", "beta"], ["gamma", "delta"]]);   // 0.6 s pause
+  assert.ok(Math.abs(lines[0].start - 0.92) < 1e-9);                       // LEAD_S before the first word
+  assert.ok(Math.abs(lines[0].end - 1.87) < 1e-9);                         // CLEAR_S before the next line's lead
+  assert.ok(Math.abs(lines[1].end - 3.0) < 1e-9);                          // HOLD_S after the last word
+  const narrow = L.regroupWords(words.slice(0, 2), { words_per_line: 5, max_chars: 8 });
+  assert.deepEqual(narrow.map((l) => l.words.length), [1, 1]);             // "alpha beta" is 10 characters
+});
+
+test("changeSummary and styleSent", () => {
+  assert.equal(L.changeSummary({ size: [null, 60], highlight: [true, false] }), "size — → 60, highlight true → false");
+  const rows = [{ kind: "style", video: "clip-01" }, { kind: "point", video: "clip-01" }, { kind: "style", video: "clip-02" }];
+  assert.deepEqual(L.styleSent(rows, "clip-01"), [rows[0]]);
+});
+
+test("the style panel's CSS value check matches the server's", () => {
+  assert.equal(L.isCssValue("Georgia, 'Times New Roman', serif"), true);
+  for (const bad of ["a;b", "a{", "<b>", "a\\b", "x/*", "URL (x)", "", "x".repeat(201), "a\nb"]) assert.equal(L.isCssValue(bad), false, bad);
+});
+
+// --- Review: live overlays and click-to-restyle ------------------------------------------------------
+
+const LIVE_SIDE = { edl: { output: { width: 720, height: 1280 }, overlays: [
+  { html: "/job/a.html", start: 1, end: 3, mode: "alpha", region: { x: 40, y: 860, w: 640, h: 200 }, style: "clean-tech" },
+  { html: "/job/b.html", start: 4, end: 6, mode: "panel", region: null },
+  { html: "/job/c.html", start: 6, end: 7 },                                   // no key: not played
+] } };
+const LIVE_KEYS = { "/job/a.html": "ka", "/job/b.html": "kb" };
+
+test("liveOverlays: the overlays with a key, their mode and region (the whole frame without one)", () => {
+  const live = L.liveOverlays(LIVE_SIDE, LIVE_KEYS);
+  assert.deepEqual(live.map((o) => [o.index, o.key, o.mode, o.transparent]), [[0, "ka", "alpha", true], [1, "kb", "panel", false]]);
+  assert.deepEqual(live[1].rect, { x: 0, y: 0, w: 720, h: 1280 });
+  assert.equal(L.liveOverlays({ edl: { overlays: [{ html: "/x.html", start: 0, end: 1 }] } }, { "/x.html": "k" })[0].mode, "keyed");
+  assert.equal(L.liveOverlays({ edl: { overlays: [{ html: "/x.html", start: 0, end: 1 }] } }, { "/x.html": "k" })[0].transparent, true);
+  assert.deepEqual(L.liveOverlays(null, LIVE_KEYS), []);
+  assert.deepEqual(L.liveOverlays(LIVE_SIDE, {}), []);
+});
+
+test("overlayTime is the overlay's own clock while it is on screen", () => {
+  const [o] = L.liveOverlays(LIVE_SIDE, LIVE_KEYS);
+  assert.equal(L.overlayTime(o, 0.99), null);
+  assert.equal(L.overlayTime(o, 1), 0);
+  assert.equal(L.overlayTime(o, 2.5004), 1.5);
+  assert.equal(L.overlayTime(o, 3), null);
+  assert.equal(L.overlayTime(o, NaN), null);
+});
+
+test("regionBox scales a region from output pixels to the picture", () => {
+  assert.deepEqual(L.regionBox({ x: 40, y: 860, w: 640, h: 200 }, { width: 720, height: 1280 }, { width: 360, height: 640 }),
+    { left: 20, top: 430, width: 320, height: 100, scale: 0.5 });
+  assert.equal(L.regionBox({ x: 1, y: 1, w: 1, h: 1 }, { width: 0 }, { width: 100 }).scale, 0);
+});
+
+const PICKED = { type: "picked", selector: "body > div.card > div.n:nth-of-type(2)", box: { x: 56, y: 76, w: 300, h: 150 },
+  styles: { color: "rgb(255, 255, 255)", "background-color": "rgba(0, 0, 0, 0)", "font-family": "Inter, sans-serif",
+            "font-size": "150px", "font-weight": "800", opacity: "1", transform: "none" }, text: "72%" };
+
+test("bridgeMessage accepts ready and picked messages and nothing else", () => {
+  assert.deepEqual(L.bridgeMessage({ type: "ready", width: 640, height: 200, seek: "default" }), { type: "ready", width: 640, height: 200 });
+  assert.equal(L.bridgeMessage({ type: "ready", width: 0, height: 200 }), null);
+  assert.deepEqual(L.bridgeMessage(PICKED), PICKED);
+  for (const bad of [null, "picked", { type: "seek", t: 1 }, { ...PICKED, selector: "" }, { ...PICKED, selector: "a\nb" },
+                     { ...PICKED, selector: "x".repeat(301) }, { ...PICKED, box: { x: 1, y: 1, w: -1, h: 1 } },
+                     { ...PICKED, box: null }, { ...PICKED, styles: { color: "red" } }, { ...PICKED, styles: { ...PICKED.styles, opacity: 1 } }]) {
+    assert.equal(L.bridgeMessage(bad), null, JSON.stringify(bad));
+  }
+  const long = L.bridgeMessage({ ...PICKED, text: "y".repeat(500), styles: { ...PICKED.styles, "font-family": "f".repeat(400) } });
+  assert.equal(long.text.length, 80);
+  assert.equal(long.styles["font-family"].length, 300);
+});
+
+test("cssColourToHex reads computed colours for the colour picker", () => {
+  assert.equal(L.cssColourToHex("rgb(255, 59, 48)"), "#FF3B30");
+  assert.equal(L.cssColourToHex("rgba(0, 0, 0, 1)"), "#000000");
+  assert.equal(L.cssColourToHex("#3ddc97"), "#3DDC97");
+  assert.equal(L.cssColourToHex("rgba(0, 0, 0, 0)"), null);              // transparent has no plain colour
+  assert.equal(L.cssColourToHex("red"), null);
+});
+
+test("restyleRow: only changed, valid properties, with the computed value as old", () => {
+  const [o] = L.liveOverlays(LIVE_SIDE, LIVE_KEYS);
+  const picked = L.bridgeMessage(PICKED);
+  const { row, problem } = L.restyleRow("clip-01", 1, 1.80049, o, picked,
+    { color: "#FF3B30", opacity: "1", "font-size": "  ", transform: "scale(1.1)" }, " redder ");
+  assert.equal(problem, null);
+  assert.deepEqual(row, { kind: "restyle", video: "clip-01", version: 1, t: 1.8, overlay: 0, html: "/job/a.html",
+    selector: PICKED.selector, changes: { color: ["rgb(255, 255, 255)", "#FF3B30"], transform: ["none", "scale(1.1)"] },
+    text: "redder" });
+  assert.deepEqual(L.restyleRow("clip-01", 1, 1.8, o, picked, { opacity: "1" }, ""), { row: null, problem: "Change a value to send it." });
+  assert.match(L.restyleRow("clip-01", 1, 1.8, o, picked, { color: "red; display:none" }, "").problem, /one CSS value/);
+  assert.match(L.restyleRow("clip-01", 1, 1.8, o, picked, { "background-color": "url(x)" }, "").problem, /url/);
+  assert.deepEqual(L.restyleRow("clip-01", 1, 1.8, o, picked, { width: "1px" }, "").row, null);   // not a restyle property
+});
+
+test("the page and the bridge agree on the restyle properties", () => {
+  const fs = require("node:fs");
+  const bridge = fs.readFileSync(path.join(__dirname, "..", "skills", "video-edit", "scripts", "static", "overlay-bridge.js"), "utf8");
+  const props = JSON.parse(/var PROPS = (\[[^\]]+\]);/.exec(bridge)[1]);
+  assert.deepEqual(props, L.RESTYLE_PROPS);
+});

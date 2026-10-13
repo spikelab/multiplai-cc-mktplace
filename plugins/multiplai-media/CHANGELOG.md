@@ -21,6 +21,31 @@ a tag.
 
 Nothing yet.
 
+## [0.14.0] - 2026-10-13
+
+### Added
+
+- **Review tab: a style panel.** Under the timeline it shows the render's
+  caption values (size, height, words per line, characters per line,
+  highlight), its brand's four colours, and each overlay style's colours,
+  fonts, weights, corner radius and enter, exit and stagger timings. Change
+  any of them and send: Claude gets only what you changed, old and new, and
+  can save a changed brand or style as a new file in the job folder. Caption
+  edits show at once as a caption over the picture, labelled approximate:
+  the render burns captions in with ffmpeg, so the next version is the
+  exact one.
+- **Review tab: live overlays and click-to-restyle.** Turn on live overlays
+  and the render's overlay pages play over the picture, in step with it.
+  Pick an element (a number, a label, a card) and the page shows its colour,
+  background, font, size, weight, opacity and transform; change them and
+  the overlay changes at once. Send it and Claude edits that overlay's page.
+  The overlays run in a locked-down frame that cannot reach the page or the
+  server.
+
+### Changed
+
+- `comments.jsonl` rows can now also be `style` and `restyle` rows.
+
 ## [0.13.0] - 2026-10-13
 
 ### Added
