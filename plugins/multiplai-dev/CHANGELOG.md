@@ -17,6 +17,24 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-10-13
+
+### Added
+- `build` and `findings` print `SPEND:<usd>:<tokens>` as their last line on
+  every exit but a kill (success, failure, exit 3, an error, Ctrl-C): what
+  that process spent on model calls. A resumed build reports only what it
+  spent itself, and `findings` with several rounds reports all of them.
+- `epic.max_usd` is enforced. An epic's spend is what each child build
+  printed on its `SPEND:` line plus the reviews of the children's PRs in the
+  review ledger (a review resumed after its own budget stop counts once).
+  Before each launch, once the spend has reached `epic.max_usd`, nothing more
+  is launched: the build waits for the children already running and exits 3
+  with `EPIC:BUDGET:<spent>`. A re-run stops again until the ceiling is
+  raised.
+- `epic.json` and each `runs/<NN>/summary.json` hold the epic's
+  `spent_usd`, and `spend_complete: false` when a child was killed before it
+  printed `SPEND:` or a review of a child's PR has not finished.
+
 ## [0.60.0] - 2026-10-13
 
 ### Added

@@ -60,7 +60,12 @@ group, launched once its dependencies merged, at most `epic.max_parallel` at
 once, from origin's default branch (`--base-ref`). Records go to
 `agents/<NNN>-build-<id>.{started.json,result.json,log}` (`epic/records.py`)
 and each run ends with `runs/<NN>/summary.json` (`EPIC:SUMMARY:<path>`). A
-child waiting on an open PR exits 3 with `EPIC:MERGE_WAITING:<urls>`. A file
+child waiting on an open PR exits 3 with `EPIC:MERGE_WAITING:<urls>`. `build`
+and `findings` print `SPEND:<usd>:<tokens>` last, from a process total that
+`budget.reset()` and `load_state` leave alone; each result record keeps it as
+`spend`, and `epic/spend.py` adds those to the review ledger's spend for the
+children's PRs. Once that reaches `epic.max_usd`, nothing more launches and
+the run exits 3 with `EPIC:BUDGET:<spent>`. A file
 changed after approval, another process holding the epic's lock, or a
 `specs/config.yaml` turning off `git.worktree` or `git.push`, exits 2.
 `--no-epic-split` skips the decision.
