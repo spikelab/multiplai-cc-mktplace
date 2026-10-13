@@ -251,12 +251,164 @@
     return { kind: "panels", panels, speakers, text: (note || "").trim() };
   }
 
+  // --- Look: shared helpers ------------------------------------------------------------
+
+  /* Whether a valid input file offers anything in any of the lists `keys`. */
+  function offersAny(file, keys) {
+    return !!file && file.status === "ok" && keys.some((k) => (file.data[k] || []).length > 0);
+  }
+
+  /* `v` with object keys sorted at every depth, so two values compare as JSON. */
+  function canon(v) {
+    if (Array.isArray(v)) return v.map(canon);
+    if (v && typeof v === "object") {
+      return Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])]));
+    }
+    return v;
+  }
+
+  function same(a, b) {
+    return JSON.stringify(canon(a === undefined ? null : a)) === JSON.stringify(canon(b === undefined ? null : b));
+  }
+
+  /* Whether `row` says what `last` (the newest row sent of its kind) already says. */
+  function sameChoice(row, last, keys) {
+    return !!last && keys.every((k) => same(row[k], last[k])) && (last.text || "") === row.text;
+  }
+
+  /* The newest row of `kind`, or null. */
+  function lastOfKind(rows, kind) {
+    const list = rowsOfKind(rows, kind);
+    return list.length ? list[list.length - 1] : null;
+  }
+
+  /* The names in list `key` of a valid input file. */
+  function namesIn(file, key) {
+    return file && file.status === "ok" ? (file.data[key] || []).map((x) => x.name) : [];
+  }
+
+  /* A name still on offer in list `key`, or null (null means none chosen). */
+  function onOffer(file, key, name) {
+    return typeof name === "string" && namesIn(file, key).includes(name) ? name : null;
+  }
+
+  // --- Look ------------------------------------------------------------------------------
+
+  /* What a render uses without a brand file (stages/brand.py Brand). */
+  const BRAND_DEFAULTS = { primary: "#FFFFFF", accent: "#FFD400", background: "#0a0a0a", caption_outline: "#000000" };
+  const MAX_CHARS = 22;                 // stages/edl.py Captions.max_chars
+  const SAMPLE_DEFAULT_S = 4;
+
+  /* Look is open while looks.json offers something and no look row has been sent. */
+  function lookOpen(s) {
+    return offersAny(s.looks, ["styles", "brands", "captions"]) && rowsOfKind(s.rows, "look").length === 0;
+  }
+
+  /* The output frame a caption option is judged on: 9:16 for reels, 16:9 for a demo. */
+  function outputSize(job) {
+    return isReels(job) === false ? { width: 1920, height: 1080 } : { width: 1080, height: 1920 };
+  }
+
+  /* The four colours a brand gives captions, defaults filled in. `b` is an /api/brands item. */
+  function brandColours(b) {
+    return { ...BRAND_DEFAULTS, ...(b && b.status === "ok" && b.colours ? b.colours : {}) };
+  }
+
+  /* Caption size and place on a stage `stageH` pixels tall that shows output `out`,
+   * as stages/captions.py layout_metrics computes them in output pixels. */
+  function captionMetrics(values, out, stageH) {
+    const v = values || {};
+    const size = Number.isFinite(v.size) ? v.size : Math.round(out.height * 0.036);
+    const k = stageH / out.height;
+    return {
+      fontPx: size * k,
+      centerY: Number.isFinite(v.position_y) ? v.position_y : 0.68,
+      outlinePx: Math.max(2, Math.round(size * 0.07)) * k,
+      sideMargin: 0.12,
+    };
+  }
+
+  /* One caption line from `words` ({text}): up to words_per_line words within
+   * MAX_CHARS characters. `spoken` is the highlighted word's index, -1 when
+   * the option turns highlighting off. */
+  function captionLine(words, values, maxChars = MAX_CHARS) {
+    const v = values || {};
+    const per = Number.isInteger(v.words_per_line) && v.words_per_line > 0 ? v.words_per_line : 5;
+    const line = [];
+    for (const w of words || []) {
+      const text = String((w && w.text) || "").trim();
+      if (!text) continue;
+      if (line.length && (line.length >= per || [...line, text].join(" ").length > maxChars)) break;
+      line.push(text);
+    }
+    return { words: line, spoken: v.highlight === false || !line.length ? -1 : Math.min(1, line.length - 1) };
+  }
+
+  /* This viewer's look choice ({style, brand, caption, note}; names, null for none):
+   * the draft while everything it names is still on offer, else the newest sent
+   * look row, else the first of each list. */
+  function lookDraft(looks, draft, last) {
+    const ok = (key, n) => n === null || (typeof n === "string" && namesIn(looks, key).includes(n));
+    if (draft && ok("styles", draft.style) && ok("brands", draft.brand) && ok("captions", draft.caption)) {
+      return { style: draft.style, brand: draft.brand, caption: draft.caption, note: draft.note || "" };
+    }
+    if (last) {
+      const caps = looks && looks.status === "ok" ? looks.data.captions || [] : [];
+      const cap = last.captions ? caps.find((o) => same(o.values, last.captions)) : null;
+      return { style: onOffer(looks, "styles", last.style), brand: onOffer(looks, "brands", last.brand),
+               caption: cap ? cap.name : null, note: last.text || "" };
+    }
+    const first = (key) => namesIn(looks, key)[0] ?? null;
+    return { style: first("styles"), brand: first("brands"), caption: first("captions"), note: "" };
+  }
+
+  /* The look row for a draft: the caption option's values, not its name. */
+  function lookRow(draft, looks) {
+    const caps = looks && looks.status === "ok" ? looks.data.captions || [] : [];
+    const opt = caps.find((o) => o.name === draft.caption);
+    return { kind: "look", style: draft.style, brand: draft.brand, captions: opt ? opt.values : null,
+             text: (draft.note || "").trim() };
+  }
+
+  /* Why a look row cannot be sent, or null. */
+  function lookProblem(row) {
+    return row.style === null && row.brand === null && row.captions === null
+      ? "Pick a style, a brand or a caption option." : null;
+  }
+
+  /* The time to show in a looping sample page `elapsed` seconds after it started:
+   * it plays its `duration`, holds the last frame for `hold` seconds, and starts over. */
+  function loopTime(elapsed, duration, hold = 1) {
+    const d = Number.isFinite(duration) && duration > 0 ? duration : SAMPLE_DEFAULT_S;
+    const period = d + Math.max(0, hold);
+    const e = Number.isFinite(elapsed) ? elapsed : 0;
+    return Math.min(d, ((e % period) + period) % period);
+  }
+
+  /* The scale that fits a w x h page inside a boxW x boxH box. */
+  function fitScale(w, h, boxW, boxH) {
+    return w > 0 && h > 0 && boxW > 0 && boxH > 0 ? Math.min(boxW / w, boxH / h) : 1;
+  }
+
+  /* A sample page's "ready" message ({type, width, height, duration}, from
+   * static/sample-loop.js), checked; null for anything else. */
+  function readyMessage(data) {
+    if (!data || typeof data !== "object" || data.type !== "ready") return null;
+    const { width, height, duration } = data;
+    const num = (x, lo, hi) => typeof x === "number" && Number.isFinite(x) && x >= lo && x <= hi;
+    if (!num(width, 1, 4096) || !num(height, 1, 4096) || !num(duration, 0, 30)) return null;
+    return { width, height, duration: duration > 0 ? duration : SAMPLE_DEFAULT_S };
+  }
+
   const api = {
     TABS, INPUT_FILES, fmt, inputNotice, isReels, latestBy, rowsOfKind, clipsOpen, speakersOpen, firstOpenTab,
     oneAtATime,
     SCORE_KEYS, totalScore, sortCandidates, timelineWindow, toFrac, fromFrac, snapTargets, snapEdge, stepEdge,
     itemAt, pickFits, clipDraft, unsentPicks,
     normRect, clampRect, moveRect, resizeRect, roundRect, nextBoxName, panelsProblem, panelsRow,
+    offersAny, canon, sameChoice, lastOfKind, namesIn,
+    BRAND_DEFAULTS, lookOpen, outputSize, brandColours, captionMetrics, captionLine, lookDraft, lookRow,
+    lookProblem, loopTime, fitScale, readyMessage,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JobLogic = api;

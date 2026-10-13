@@ -23,11 +23,14 @@ PICK = {"kind": "pick", "candidate": "c1", "decision": "accept", "start": 9.28, 
 PANELS = {"kind": "panels", "panels": {"Host": {"x": 0, "y": 0, "w": 640, "h": 720},
                                        "Guest": {"x": 640.4, "y": 0, "w": 640, "h": 720}},
           "speakers": {"SPEAKER_0": "Host", "SPEAKER_1": "Guest"}, "text": "guest on the right"}
+LOOK = {"kind": "look", "style": "clean-tech", "brand": "house",
+        "captions": {"size": 84, "position_y": 0.66, "words_per_line": 2, "highlight": True}, "text": ""}
+OFFERED = {"styles": {"clean-tech", "flat-vector"}, "brands": {"house"}}
 COMMON = {"id", "kind", "text", "created_at"}
 
 
 def _v(row: dict) -> dict:
-    return rs.validate_comment(row, KNOWN, CANDS)
+    return rs.validate_comment(row, KNOWN, CANDS, OFFERED)
 
 
 # --- valid rows --------------------------------------------------------------------------
@@ -61,9 +64,23 @@ def test_panels_row_rounds_to_source_pixels() -> None:
     assert row["speakers"] == {"SPEAKER_0": "Host", "SPEAKER_1": "Guest"}
 
 
+def test_look_row() -> None:
+    row = _v(LOOK)
+    assert set(row) == COMMON | {"style", "brand", "captions"}
+    assert (row["style"], row["brand"]) == ("clean-tech", "house")
+    assert row["captions"] == LOOK["captions"]
+
+
+def test_look_row_may_leave_out_any_two_choices_as_null() -> None:
+    row = _v({**LOOK, "style": None, "brand": None})
+    assert (row["style"], row["brand"], row["captions"]["size"]) == (None, None, 84)
+    assert _v({**LOOK, "captions": None, "brand": None})["style"] == "clean-tech"
+    assert _v({**LOOK, "captions": {}})["captions"] == {}         # an option that keeps every default
+
+
 # --- rejected rows -----------------------------------------------------------------------
 
-@pytest.mark.parametrize("kind", ["comment", "look", "", None, 3])
+@pytest.mark.parametrize("kind", ["comment", "Look", "", None, 3])
 def test_unknown_kind_is_rejected(kind) -> None:
     with pytest.raises(ValueError, match="unknown kind"):
         _v({**POINT, "kind": kind})
@@ -127,6 +144,36 @@ def test_panels_rejected(bad) -> None:
         _v(bad)
 
 
+@pytest.mark.parametrize("bad,match", [
+    ({**LOOK, "style": "neon"}, "not a style the session offers"),
+    ({**LOOK, "brand": "other"}, "not a brand"),
+    ({**LOOK, "style": 3}, "not a style"),
+    ({**LOOK, "captions": {"size": 2}}, "captions.size: must be >= 8"),
+    ({**LOOK, "captions": {"font": "Comic Sans"}}, "unknown field 'font'"),
+    ({**LOOK, "captions": {"highlight": "yes"}}, "expected boolean"),
+    ({**LOOK, "captions": [84]}, "expected object"),
+    ({**LOOK, "style": None, "brand": None, "captions": None}, "must pick"),
+    ({k: v for k, v in LOOK.items() if k != "brand"}, "need brand"),
+    ({**LOOK, "video": "clip-01", "version": 1}, "no field"),
+])
+def test_look_rejected(bad, match) -> None:
+    with pytest.raises(ValueError, match=match):
+        _v(bad)
+
+
+def test_look_needs_a_valid_looks_file() -> None:
+    with pytest.raises(ValueError, match="not a style the session offers"):
+        rs.validate_comment(LOOK, KNOWN, CANDS)
+
+
+def test_offered_names_come_from_valid_files_only(tmp_path: Path) -> None:
+    job = make_job.build(tmp_path / "job", video=False)
+    names = rs.offered_names(job["dir"])
+    assert names == {"styles": {"clean-tech", "flat-vector"}, "brands": {"house", "warm"}}
+    job["looks"].write_text('{"styles": [{"name": "x"}]}')               # invalid: no file
+    assert rs.offered_names(job["dir"])["styles"] == set()
+
+
 # --- over HTTP ----------------------------------------------------------------------------
 
 @pytest.fixture
@@ -169,6 +216,15 @@ def test_rows_written_before_kinds_count_as_points(server) -> None:
     (server["box"] / "comments.jsonl").write_text(json.dumps({**POINT, "id": "c-old", "created_at": "x"}) + "\n")
     _, points = _req(server, "GET", "/api/comments?kind=point")
     assert [r["id"] for r in points["comments"]] == ["c-old"]
+
+
+def test_look_rows_name_what_the_job_offers(server) -> None:
+    res, data = _req(server, "POST", "/api/comments", {"comments": [{**LOOK, "brand": "warm"}]})
+    assert res.status == 200, data
+    rows = [json.loads(x) for x in (server["box"] / "comments.jsonl").read_text().splitlines()]
+    assert [(r["kind"], r["style"], r["brand"]) for r in rows] == [("look", "clean-tech", "warm")]
+    res, data = _req(server, "POST", "/api/comments", {"comments": [{**LOOK, "style": "neon"}]})
+    assert res.status == 400 and "neon" in data["error"]
 
 
 def test_a_pick_for_a_candidate_not_on_file_rejects_the_batch(server) -> None:

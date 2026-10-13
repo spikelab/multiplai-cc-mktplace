@@ -3,9 +3,9 @@
 The server is pointed at the job's output directory. The page shows what the
 session wrote there (job.json, candidates.json, looks.json, music.json; see
 stages/job_files.py) and plays every render in it. Each choice the user makes
-(a comment on a render, picked clips, speaker boxes) is posted as a mailbox
-row, appended to `comments.jsonl` in the mailbox directory, which the session
-watches. The server never writes a job file.
+(a comment on a render, picked clips, speaker boxes, a look) is posted
+as a mailbox row, appended to `comments.jsonl` in the mailbox directory, which
+the session watches. The server never writes a job file.
 
 Standard library only, so the media test suite keeps running without the
 workspace environment.
@@ -21,7 +21,10 @@ Origin is not this server is refused. In a container the server binds
 Media is served only for files the job names: the source recording job.json
 names (`/media/source`), audio and sample pages named by a valid music.json or
 looks.json (`/media/audio?path=`, `/media/sample?path=`), and the renders in
-the directory (`/media/<name>`). Any other path is refused.
+the directory (`/media/<name>`). Any other path is refused. A sample page is
+an overlay page the session wrote; it plays in a sandboxed frame with the
+renderer's seek shim injected, under its own CSP (SAMPLE_CSP), and its address
+carries a key for that one page (`&k=`, sample_key) instead of the token.
 
 Video versions: `clip-01.mp4` is version 1, `clip-01.v2.mp4` version 2, and so
 on. The page polls the list, so a re-render saved as the next version appears
@@ -47,7 +50,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from stages import job_files
+from stages import brand, job_files
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v"}
@@ -56,12 +59,20 @@ MAX_BODY_BYTES = 256 * 1024
 MAX_TEXT = 4000
 CHUNK = 1024 * 1024
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; "
-       "img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
+       "img-src 'self' data:; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; "
        "frame-ancestors 'none'")
-# A sample page is served on its own, never with the page's script rights: the
-# `sandbox` directive gives it an opaque origin even when opened directly.
-SAMPLE_CSP = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; "
-              "form-action 'none'; frame-ancestors 'none'; sandbox")
+# An overlay sample page plays in the Look tab's <iframe sandbox="allow-scripts">.
+# Its own scripts and the two injected below run inline, but it can fetch
+# nothing (overlay pages are self-contained: styles/README.md), and only this
+# server's page may frame it. The `sandbox allow-scripts` directive gives it an
+# opaque origin even when opened directly, so it never gets the page's rights.
+SAMPLE_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+              "img-src data:; font-src data:; media-src data:; connect-src 'none'; base-uri 'none'; "
+              "form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts")
+# Injected into every sample page, in this order, before the page's own scripts:
+# the renderer's clock (stages/overlay.py installs the same file), then the
+# listener that lets the Look tab loop the page over postMessage.
+SAMPLE_SCRIPTS = ("seek-shim.js", "sample-loop.js")
 SAMPLE_LINES = 5            # lines per speaker label for /api/transcript?speaker=
 SAMPLE_LINE_WORDS = 24
 MAX_WORDS_WINDOW_S = 900.0  # /api/transcript?start=&end= returns at most this span of words
@@ -233,6 +244,53 @@ def words_between(words: list[dict], start: float, end: float) -> list[dict]:
             for w in words if w["end"] >= start and w["start"] <= end]
 
 
+# --- overlay sample pages ----------------------------------------------------------
+
+_HEAD_RE = re.compile(r"<head(?:\s[^>]*)?>", re.IGNORECASE)
+_DOCTYPE_RE = re.compile(r"^\s*<!doctype[^>]*>", re.IGNORECASE)
+
+
+def inject_scripts(html: str, scripts: list[str]) -> str:
+    """`html` with each of `scripts` as an inline <script>, ahead of the page's own.
+
+    They go right after `<head>`, or after the doctype when there is no head
+    (before the doctype would put the page in quirks mode), or first.
+    """
+    for s in scripts:
+        if "</script" in s.lower():
+            raise ValueError("an injected script must not contain </script")
+    tags = "".join(f"<script>\n{s}\n</script>\n" for s in scripts)
+    m = _HEAD_RE.search(html) or _DOCTYPE_RE.match(html)
+    return html[:m.end()] + "\n" + tags + html[m.end():] if m else tags + html
+
+
+def sample_key(token: str, path: str) -> str:
+    """The key that opens one sample page instead of the access token.
+
+    A sample page runs scripts the session wrote, inside the Look tab's frame,
+    and can read its own address. So its address carries this key, which
+    opens that one page and nothing else, never the token itself.
+    """
+    return hmac.new(token.encode("utf-8"), b"sample\0" + path.encode("utf-8"), "sha256").hexdigest()[:32]
+
+
+def brand_summary(path: str) -> dict:
+    """{status: "ok", colours, font} for a brand file, or {status: "invalid", error}.
+
+    `colours` are the four the captions and headline use, defaults filled in;
+    `font` is the caption font's file name without its extension, or None
+    for the default font.
+    """
+    try:
+        b = brand.load(path)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
+        return {"status": "invalid", "error": str(e)}
+    font = b.caption_font()
+    return {"status": "ok",
+            "colours": {k: getattr(b, k) for k in ("primary", "accent", "background", "caption_outline")},
+            "font": Path(font).stem if font else None}
+
+
 class _JsonCache:
     """Parsed JSON by (path, mtime, size), so polling a large transcript reads it once."""
 
@@ -311,9 +369,12 @@ ROW_KINDS: dict[str, dict] = {
     "point": {"review": True, "fields": ("t", "x", "y"), "needs_text": True},
     "pick": {"review": False, "fields": ("candidate", "decision", "start", "end"), "needs_text": False},
     "panels": {"review": False, "fields": ("panels", "speakers"), "needs_text": False},
+    "look": {"review": False, "fields": ("style", "brand", "captions"), "needs_text": False},
 }
 MAX_PANELS = 8
 MAX_NAME = 40
+# What the session offers, by the list a look row picks from.
+OFFERED_LISTS = {"styles": ("looks", "styles"), "brands": ("looks", "brands")}
 
 
 def _finite(c: dict, *keys: str) -> list[float]:
@@ -362,12 +423,46 @@ def _panels(c: dict) -> dict:
     return {"panels": out, "speakers": dict(speakers)}
 
 
+def _chosen(c: dict, field: str, offered: set[str] | frozenset[str], what: str) -> str | None:
+    """A name the session offers in looks.json or music.json, or None for none."""
+    v = c[field]
+    if v is None:
+        return None
+    if not isinstance(v, str) or v not in offered:
+        raise ValueError(f"{field} {v!r} is not a {what} the session offers")
+    return v
+
+
+def _look(c: dict, offered: dict[str, set[str]]) -> dict:
+    captions = c["captions"]
+    if captions is not None:
+        node = job_files.schema("looks")["properties"]["captions"]["items"]["properties"]["values"]
+        errors = job_files.check(captions, node, where="captions")
+        if errors:
+            raise ValueError(errors[0])
+    row = {"style": _chosen(c, "style", offered.get("styles", set()), "style"),
+           "brand": _chosen(c, "brand", offered.get("brands", set()), "brand"),
+           "captions": captions}
+    if all(v is None for v in row.values()):
+        raise ValueError("a look row must pick a style, a brand or caption values")
+    return row
+
+
+def offered_names(outdir: Path) -> dict[str, set[str]]:
+    """The names in a valid looks.json, by list (OFFERED_LISTS)."""
+    files = {name: job_files.load(outdir, name) for name in ("looks",)}
+    return {key: ({x["name"] for x in files[f]["data"].get(lst, [])} if files[f]["status"] == "ok" else set())
+            for key, (f, lst) in OFFERED_LISTS.items()}
+
+
 def validate_comment(c: Any, known: set[tuple[str, int]],
-                     candidates: set[str] | frozenset[str] = frozenset()) -> dict:
+                     candidates: set[str] | frozenset[str] = frozenset(),
+                     offered: dict[str, set[str]] | None = None) -> dict:
     """One row from the page → a mailbox row, or ValueError.
 
     `known` is the (video, version) pairs on disk; `candidates` the ids in a
-    valid candidates.json. Unknown kinds and fields are refused.
+    valid candidates.json; `offered` the names a look row may pick
+    (offered_names). Unknown kinds and fields are refused.
     """
     if not isinstance(c, dict):
         raise ValueError("each comment must be an object")
@@ -400,6 +495,8 @@ def validate_comment(c: Any, known: set[tuple[str, int]],
         row.update(_pick(c, candidates))
     elif kind == "panels":
         row.update(_panels(c))
+    elif kind == "look":
+        row.update(_look(c, offered or {}))
     row.update(text=text.strip(), created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     return row
 
@@ -464,6 +561,11 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             if not hmac.compare_digest(given.encode("utf-8"), token.encode("utf-8")):
                 raise _Reject(401, "unauthorized")
 
+        def _check_sample_key(self, query: dict) -> None:
+            given, path = query.get("k", [""])[0], query.get("path", [""])[0]
+            if not hmac.compare_digest(given.encode("utf-8"), sample_key(token, path).encode("utf-8")):
+                raise _Reject(401, "unauthorized")
+
         def do_GET(self):
             self._dispatch()
 
@@ -478,13 +580,19 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             query = parse_qs(url.query)
             try:
                 self._check_origin()
-                if url.path.startswith(("/api/", "/media/")):
+                if url.path == "/media/sample" and "k" in query:
+                    self._check_sample_key(query)
+                elif url.path.startswith(("/api/", "/media/")):
                     self._check_token(query)
                 get = self.command in ("GET", "HEAD")
                 if url.path == "/api/videos" and get:
                     return self._json({"videos": videos()})
-                if url.path in ("/api/job", "/api/candidates", "/api/looks", "/api/music") and get:
+                if url.path == "/api/looks" and get:
+                    return self._json(self._looks())
+                if url.path in ("/api/job", "/api/candidates", "/api/music") and get:
                     return self._json(job_files.load(video_dir, url.path[len("/api/"):]))
+                if url.path == "/api/brands" and get:
+                    return self._json({"brands": self._brands()})
                 if url.path == "/api/sentences" and get:
                     return self._json({"sentences": self._sentences()})
                 if url.path == "/api/transcript" and get:
@@ -523,6 +631,22 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             self._headers(200, ctype, len(body))
             if self.command != "HEAD":
                 self.wfile.write(body)
+
+        def _looks(self) -> dict:
+            """looks.json as /api/job serves the others, plus a key per sample page (sample_key)."""
+            got = job_files.load(video_dir, "looks")
+            if got["status"] == "ok":
+                got["sample_keys"] = {s["sample_html"]: sample_key(token, s["sample_html"])
+                                      for s in got["data"].get("styles", [])}
+            return got
+
+        def _brands(self) -> list[dict]:
+            """Each brand looks.json offers, read with stages/brand.py; [] without a valid looks.json."""
+            got = job_files.load(video_dir, "looks")
+            if got["status"] != "ok":
+                return []
+            return [{"name": b["name"], "file": b["file"], **brand_summary(b["file"])}
+                    for b in got["data"].get("brands", [])]
 
         def _job_file(self, key: str) -> Any:
             j = job()
@@ -579,7 +703,12 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             if path is None or not path.is_file():
                 raise _Reject(404, "not found")
             if what == "sample":
-                body = path.read_bytes()
+                try:
+                    html = path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    raise _Reject(422, "the sample page is not UTF-8 text") from None
+                body = inject_scripts(html, [(STATIC_DIR / n).read_text(encoding="utf-8")
+                                             for n in SAMPLE_SCRIPTS]).encode("utf-8")
                 self._headers(200, "text/html; charset=utf-8", len(body), csp=SAMPLE_CSP)
                 if self.command != "HEAD":
                     self.wfile.write(body)
@@ -638,8 +767,9 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
             known = {(c["clip"], v["version"]) for c in videos() for v in c["versions"]}
             cands = job_files.load(video_dir, "candidates")
             ids = {c["id"] for c in cands["data"]} if cands["status"] == "ok" else set()
+            offered = offered_names(video_dir)
             try:
-                rows = [validate_comment(c, known, ids) for c in comments]
+                rows = [validate_comment(c, known, ids, offered) for c in comments]
             except ValueError as e:
                 raise _Reject(400, str(e)) from None
             mailbox.append(rows)

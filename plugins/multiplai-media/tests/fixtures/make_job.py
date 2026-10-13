@@ -10,10 +10,14 @@ Writes into <dir>:
     cache/sentences.json      built from those words by stages/clips.py, as prep does
     job.json                  {source, transcript, sentences, kind: "reels"}
     candidates.json           four candidates on sentence edges
+    looks.json                the two shipped styles, each with its Example page as
+                              the sample (looks/<style>.html), two brands
+                              (brands/*.json) and two caption options
 
 `--no-video` (and `build(..., video=False)`, which the tests use) writes a
-few stand-in bytes instead of running ffmpeg. Generated media goes wherever
-<dir> is; never into the repository.
+few stand-in bytes instead of running ffmpeg.
+`--no-offers` (`offers=False`) leaves out looks.json.
+Generated media goes wherever <dir> is; never into the repository.
 """
 from __future__ import annotations
 
@@ -29,6 +33,16 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 from stages import clips  # noqa: E402
+
+STYLES_DIR = _SCRIPTS.parent / "references" / "styles"
+BRANDS = {
+    "house": {"primary": "#FFFFFF", "accent": "#3DDC97", "background": "#0B1220", "caption_outline": "#000000"},
+    "warm": {"primary": "#FFF8EC", "accent": "#FF6B4A", "background": "#1F2A44", "caption_outline": "#1F2A44"},
+}
+CAPTION_OPTIONS = [
+    {"name": "Bold, 2 words", "values": {"size": 84, "position_y": 0.66, "words_per_line": 2, "highlight": True}},
+    {"name": "Classic, 5 words", "values": {"size": 64, "position_y": 0.68, "words_per_line": 5, "highlight": False}},
+]
 
 TURNS = [
     ("SPEAKER_0", "Welcome back to the show. Today we talk about shipping small."),
@@ -92,7 +106,32 @@ def _video(path: Path) -> None:
     ], check=True)
 
 
-def build(out: Path, video: bool = True) -> dict[str, Path]:
+def example_page(style_md: Path) -> str:
+    """The `## Example` page of a style file (references/styles/README.md)."""
+    text = style_md.read_text(encoding="utf-8")
+    body = text.split("## Example", 1)[1]
+    return body.split("```html", 1)[1].split("```", 1)[0].strip() + "\n"
+
+
+def looks(out: Path) -> dict:
+    styles = []
+    for md in sorted(STYLES_DIR.glob("*.md")):
+        if md.name == "README.md":
+            continue
+        page = out / "looks" / f"{md.stem}.html"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text(example_page(md), encoding="utf-8")
+        styles.append({"name": md.stem, "file": str(md), "sample_html": str(page)})
+    brands = []
+    for name, data in BRANDS.items():
+        f = out / "brands" / f"{name}.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data, indent=1) + "\n")
+        brands.append({"name": name, "file": str(f)})
+    return {"styles": styles, "brands": brands, "captions": CAPTION_OPTIONS}
+
+
+def build(out: Path, video: bool = True, offers: bool = True) -> dict[str, Path]:
     out = out.resolve()
     cache = out / "cache"
     cache.mkdir(parents=True, exist_ok=True)
@@ -111,17 +150,23 @@ def build(out: Path, video: bool = True) -> dict[str, Path]:
     job.write_text(json.dumps({"source": str(source), "transcript": str(transcript),
                                "sentences": str(sentences_path), "kind": "reels"}, indent=1) + "\n")
     cands = out / "candidates.json"
-    cands.write_text(json.dumps(candidates(sentences), indent=1) + "\n")
-    return {"dir": out, "source": source, "transcript": transcript, "sentences": sentences_path,
-            "job": job, "candidates": cands}
+    cand_list = candidates(sentences)
+    cands.write_text(json.dumps(cand_list, indent=1) + "\n")
+    paths = {"dir": out, "source": source, "transcript": transcript, "sentences": sentences_path,
+             "job": job, "candidates": cands}
+    if offers:
+        paths["looks"] = out / "looks.json"
+        paths["looks"].write_text(json.dumps(looks(out), indent=1) + "\n")
+    return paths
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("dir", help="directory to build the job in (created)")
     ap.add_argument("--no-video", action="store_true", help="write stand-in bytes instead of an ffmpeg video")
+    ap.add_argument("--no-offers", action="store_true", help="leave out looks.json")
     args = ap.parse_args()
-    paths = build(Path(args.dir), video=not args.no_video)
+    paths = build(Path(args.dir), video=not args.no_video, offers=not args.no_offers)
     print(f"JOB: {paths['dir']}")
     return 0
 

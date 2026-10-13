@@ -319,7 +319,7 @@ def test_the_review_command_reports_the_input_files_and_leaves_the_source_out(tm
     import subprocess
     sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
     import make_job
-    job = make_job.build(tmp_path / "job", video=False)        # source.mp4 sits in the job dir
+    job = make_job.build(tmp_path / "job", video=False, offers=False)   # source.mp4 sits in the job dir
     (job["dir"] / "clip-01.mp4").write_bytes(b"x")
     (job["dir"] / "music.json").write_text('{"beds": "calm"}')
     box = rs.Mailbox(tmp_path / "box")

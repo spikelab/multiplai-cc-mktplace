@@ -11,7 +11,7 @@ import json
 import sys
 import threading
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import pytest
 
@@ -25,7 +25,7 @@ from stages import review_server as rs  # noqa: E402
 
 @pytest.fixture
 def server(tmp_path: Path):
-    job = make_job.build(tmp_path / "job", video=False)
+    job = make_job.build(tmp_path / "job", video=False, offers=False)
     (job["dir"] / "clip-01.mp4").write_bytes(b"render")
     media = tmp_path / "media"
     media.mkdir()
@@ -210,12 +210,99 @@ def test_sample_page_is_sandboxed_and_refuses_unlisted_paths(server) -> None:
     assert res.status == 404                  # no looks.json yet
     _looks(server)
     res, data = _get(server, f"/media/sample?path={quote(str(sample))}")
-    assert res.status == 200 and data == sample.read_bytes()
-    csp = res.getheader("Content-Security-Policy")
-    assert "sandbox" in csp and "script-src" not in csp
+    assert res.status == 200 and data.endswith(sample.read_bytes())
+    csp = [d.strip() for d in res.getheader("Content-Security-Policy").split(";")]
+    assert "sandbox allow-scripts" in csp                      # an opaque origin, even opened directly
+    assert "script-src 'unsafe-inline'" in csp and "connect-src 'none'" in csp
+    assert "frame-ancestors 'self'" in csp and "default-src 'none'" in csp
+    assert not any("allow-same-origin" in d for d in csp)
     for other in (server["media"] / "style.md", server["job"]["source"]):
         res, _ = _get(server, f"/media/sample?path={quote(str(other))}")
         assert res.status == 404
+
+
+def test_sample_page_gets_the_seek_shim_and_loop_listener_before_its_own_scripts(server) -> None:
+    sample = server["media"] / "sample.html"
+    sample.write_text('<!doctype html><html><head><meta charset="utf-8"><script>window.mine = 1</script>'
+                      '</head><body></body></html>')
+    _looks(server)
+    _, data = _get(server, f"/media/sample?path={quote(str(sample))}")
+    html = data.decode()
+    shim, loop, mine = html.index("window.__veFrame = function"), html.index("__veSampleLoop"), html.index("window.mine")
+    assert html.index("<head>") < shim < loop < mine
+    assert html.startswith("<!doctype html>")
+
+
+def test_main_page_may_frame_only_its_own_server(server) -> None:
+    res, _ = _req(server, "/")
+    csp = [d.strip() for d in res.getheader("Content-Security-Policy").split(";")]
+    assert "frame-src 'self'" in csp and "frame-ancestors 'none'" in csp and "script-src 'self'" in csp
+
+
+def test_a_sample_key_opens_that_sample_page_and_nothing_else(server) -> None:
+    _looks(server)
+    sample = str(server["media"] / "sample.html")
+    _, looks = _get(server, "/api/looks")
+    key = looks["sample_keys"][sample]
+    assert key == rs.sample_key(server["token"], sample) and server["token"] not in json.dumps(looks)
+    res, data = _req(server, f"/media/sample?{urlencode({'path': sample, 'k': key})}")   # no token
+    assert res.status == 200 and b"<p>sample</p>" in data
+    res, _ = _req(server, f"/media/sample?{urlencode({'path': sample, 'k': key[:-1] + 'x'})}")
+    assert res.status == 401
+    other = str(server["media"] / "style.md")
+    res, _ = _req(server, f"/media/sample?{urlencode({'path': other, 'k': key})}")
+    assert res.status == 401                  # a key opens only the page it was made for
+    for path in ("/api/job", "/media/source", f"/media/audio?path={quote(str(server['media'] / 'bed.m4a'))}"):
+        sep = "&" if "?" in path else "?"
+        res, _ = _req(server, f"{path}{sep}{urlencode({'path': sample, 'k': key})}")
+        assert res.status == 401, path
+
+
+def test_sample_keys_are_absent_without_a_valid_looks_file(server) -> None:
+    _, looks = _get(server, "/api/looks")
+    assert "sample_keys" not in looks
+
+
+def test_inject_scripts_places_scripts_first_in_head_or_after_the_doctype() -> None:
+    assert rs.inject_scripts("<html><HEAD lang=x><title>t</title>", ["a()"]) == \
+        "<html><HEAD lang=x>\n<script>\na()\n</script>\n<title>t</title>"
+    assert rs.inject_scripts("<!DOCTYPE html><p>x", ["a()", "b()"]).startswith(
+        "<!DOCTYPE html>\n<script>\na()\n</script>\n<script>\nb()\n</script>\n<p>x")
+    assert rs.inject_scripts("<p>x", ["a()"]) == "<script>\na()\n</script>\n<p>x"
+    assert rs.inject_scripts("<header>x</header>", ["a()"]).startswith("<script>")   # <header> is not <head>
+    with pytest.raises(ValueError):
+        rs.inject_scripts("<p>", ["x = '</script>'"])
+
+
+def test_the_shipped_injected_scripts_can_be_inlined() -> None:
+    for name in rs.SAMPLE_SCRIPTS:
+        assert "</script" not in (rs.STATIC_DIR / name).read_text().lower()
+
+
+# --- brands -------------------------------------------------------------------------------
+
+def test_brands_show_colours_and_font_or_their_error(server) -> None:
+    _, data = _get(server, "/api/brands")
+    assert data == {"brands": []}             # no looks.json yet
+    m = server["media"]
+    (m / "brand.json").write_text(json.dumps({"accent": "#3DDC97", "font_bold_file": "Brand-Bold.ttf"}))
+    (m / "Brand-Bold.ttf").write_bytes(b"font")
+    (m / "bad.json").write_text(json.dumps({"accent": "green"}))
+    _looks(server)
+    looks = json.loads((server["job"]["dir"] / "looks.json").read_text())
+    looks["brands"].append({"name": "bad", "file": str(m / "bad.json")})
+    (server["job"]["dir"] / "looks.json").write_text(json.dumps(looks))
+    _, data = _get(server, "/api/brands")
+    house, bad = data["brands"]
+    assert house["name"] == "house" and house["status"] == "ok" and house["font"] == "Brand-Bold"
+    assert house["colours"] == {"primary": "#FFFFFF", "accent": "#3DDC97", "background": "#0a0a0a",
+                                "caption_outline": "#000000"}
+    assert bad["status"] == "invalid" and "#RRGGBB" in bad["error"]
+
+
+def test_brands_need_the_token(server) -> None:
+    res, _ = _req(server, "/api/brands")
+    assert res.status == 401
 
 
 @pytest.mark.parametrize("path", ["/api/job", "/api/candidates", "/api/looks", "/api/music", "/api/sentences",

@@ -57,6 +57,19 @@ def test_fixture_job_and_candidates_are_valid(job) -> None:
     assert [c["id"] for c in jf.load(job["dir"], "candidates")["data"]] == ["c1", "c2", "c3", "c4"]
 
 
+def test_fixture_looks_are_valid(job) -> None:
+    looks = jf.load(job["dir"], "looks")
+    assert looks["status"] == "ok", looks.get("error")
+    assert [s["name"] for s in looks["data"]["styles"]] == ["clean-tech", "flat-vector"]
+    for s in looks["data"]["styles"]:                       # each style's Example page is its sample
+        assert Path(s["sample_html"]).read_text().startswith("<!doctype html>")
+
+
+def test_fixture_without_offers_has_no_looks(tmp_path) -> None:
+    job = make_job.build(tmp_path / "bare", video=False, offers=False)
+    assert jf.load(job["dir"], "looks")["status"] == "missing"
+
+
 def test_looks_and_music_valid(tmp_path, media) -> None:
     _write(tmp_path, "looks", _looks(media))
     _write(tmp_path, "music", _music(media))
