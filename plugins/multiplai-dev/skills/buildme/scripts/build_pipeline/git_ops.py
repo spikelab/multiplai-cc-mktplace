@@ -26,11 +26,14 @@ No LLM calls live in this module.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
 import shlex
+import signal
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -95,23 +98,118 @@ def _run_gh(argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_T
     return _run(argv, cwd=cwd, timeout=timeout)
 
 
+@contextlib.contextmanager
+def _exit_on_termination():
+    """Make SIGINT, SIGTERM and SIGHUP raise for the length of the block.
+
+    A child started with `start_new_session=True` (a skill run here,
+    cosmic-ray in `mutation`) does not get the signals sent to buildme's
+    process group, so buildme has to pass them on by killing the child's
+    group in its own cleanup. This makes that cleanup run.
+
+    SIGTERM and SIGHUP become SystemExit: their default action ends the
+    process at once, with no `finally` run, so a detached review would keep
+    spending model budget and hold its target's run lock, and a detached
+    cosmic-ray would keep rewriting source files. A handler someone else
+    installed for them is left alone.
+
+    SIGINT becomes KeyboardInterrupt unless it is ignored. buildme runs under
+    `asyncio.run`, whose SIGINT handler only cancels the main task on the
+    first Ctrl-C; a wait in `communicate` blocks the event loop, so that
+    cancel is not seen until the child finishes on its own. Raising in the
+    wait is what lets the caller kill the group at once. The previous
+    handler is put back afterwards.
+
+    Outside the main thread (where Python cannot set a handler) this does
+    nothing.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def _raise(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    def _interrupt(_signum, _frame):
+        raise KeyboardInterrupt
+
+    previous = {}
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        if signal.getsignal(sig) == signal.SIG_DFL:
+            previous[sig] = signal.signal(sig, _raise)
+    if signal.getsignal(signal.SIGINT) not in (signal.SIG_IGN, None):
+        previous[signal.SIGINT] = signal.signal(signal.SIGINT, _interrupt)
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _run_skill(argv: list[str], cwd: Path | str | None, timeout: int) -> GitResult:
+    """Run a skill launcher (`uv run ... python -m ...`) in a process group of its own.
+
+    `uv run` starts the skill as its own child. `subprocess.run` kills only
+    `uv` on a timeout, which left the skill running with its output pipes
+    closed: a review kept its target's run lock and later died on a closed
+    pipe, recorded as a failure instead of an interrupted run. So whatever
+    ends the wait (the timeout, a KeyboardInterrupt, a SystemExit) kills the
+    whole group, the way a killed review is meant to end.
+
+    The group of its own also keeps the skill from getting the signals sent
+    to buildme's group, so `_exit_on_termination` turns a SIGTERM, a SIGHUP
+    or a Ctrl-C to buildme into an exception here, and the group is killed
+    the same way.
+    """
+    with _exit_on_termination():
+        try:
+            proc = subprocess.Popen(argv, cwd=str(cwd) if cwd else None, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, start_new_session=True)
+        except FileNotFoundError as e:
+            return GitResult(argv, 127, "", str(e))
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_group(proc)
+            return GitResult(argv, 124, "", f"timed out after {timeout}s")
+        except BaseException:
+            _kill_group(proc)
+            raise
+    return GitResult(argv, proc.returncode, out or "", err or "")
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    """SIGKILL *proc*'s process group, then reap *proc* and close its pipes."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        log.warning("pid %s did not exit after SIGKILL", proc.pid)
+    for pipe in (proc.stdout, proc.stderr):
+        if pipe is not None:
+            pipe.close()
+
+
 def _run_pr_skill(argv: list[str], cwd: Path | str | None = None,
                   timeout: int = _PR_SKILL_TIMEOUT) -> GitResult:
     """Separate seam for the pr skill's subprocess so tests can stub it."""
-    return _run(argv, cwd=cwd, timeout=timeout)
+    return _run_skill(argv, cwd, timeout)
 
 
 def _run_review_skill(argv: list[str], cwd: Path | str | None = None,
                       timeout: int = _REVIEW_SKILL_TIMEOUT) -> GitResult:
     """Separate seam for the review skill's subprocess (the findings stage)."""
-    return _run(argv, cwd=cwd, timeout=timeout)
+    return _run_skill(argv, cwd, timeout)
 
 
 def _run_walkthrough_skill(argv: list[str], cwd: Path | str | None = None,
                            timeout: int = _WALKTHROUGH_SKILL_TIMEOUT) -> GitResult:
     """Separate seam for the codebase-walkthrough skill's subprocess
     (``walkthrough_pipeline check`` and ``run``, after the build)."""
-    return _run(argv, cwd=cwd, timeout=timeout)
+    return _run_skill(argv, cwd, timeout)
 
 
 # --- Inspection -----------------------------------------------------------

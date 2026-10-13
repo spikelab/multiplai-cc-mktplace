@@ -16,7 +16,10 @@ FIXTURE = TESTS / "fixtures" / "findings.example.json"
 
 @pytest.fixture(autouse=True)
 def _isolate_state(tmp_path, monkeypatch):
-    """Keep the live-viewer index and container detection out of the real machine."""
+    """Keep the live-viewer index, the data directory and container detection out of the real machine."""
+    from review_viewer import __main__ as cli
+
+    monkeypatch.setattr(cli, "data_dir", lambda: tmp_path / "data")
     monkeypatch.setenv("REVIEW_VIEWER_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("MULTIPLAI_CONTAINER", "0")
     monkeypatch.delenv("REVIEW_VIEWER_HOST", raising=False)

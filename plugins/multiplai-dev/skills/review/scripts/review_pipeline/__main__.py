@@ -10,6 +10,9 @@
   assess-only — run the repeats and assess stages on saved reviews and compare
             their labels with the decisions already recorded (writes a report;
             changes no review)
+  migrate — copy review directories written elsewhere (INBOX/reviews before
+            multiplai-dev 0.46) into <out>/legacy/, with a ledger line per findings.json;
+            the source is never changed
 
 stdout contract: progress summary lines, a `summary: <path>` line per finished
 target, then for review/batch/resume a `findings: <path>[ <path>...]` line
@@ -18,11 +21,16 @@ line listing the checks.json beside each. `review --plan-only` prints one line
 per file group, a `groups: <n>  finder calls: <n>  files skipped: <n>` line and
 a final `plan: <path>` line, and calls no model.
 
-Exit codes: 0 done; 1 a target failed; 2 bad input, unresolvable target, or
-post refused; 3 repository not trusted; 4 the budget circuit breaker stopped
-the run (resume with a higher --max-cost-usd to continue); 5 the verifier gave
-no usable answer for some findings after three tries each (resume retries only
-those).
+Exit codes: 0 done; 1 a target failed; 2 bad input, unresolvable target,
+post refused, or another process is running a review of the target now
+(runlock.py); 3 repository not trusted; 4 the budget circuit breaker stopped
+the run (resume with a higher --max-cost-usd to continue), or `review` found
+an interrupted run of the same target and head in the ledger whose saved
+state is still in the target directory (resume it, or pass --restart); 5 the verifier gave no usable answer for some findings after
+three tries each (resume retries only those).
+
+Every run appends to `<data_dir>/reviews/ledger.jsonl` (see ledger.py),
+whatever --out says.
 """
 
 from __future__ import annotations
@@ -39,27 +47,20 @@ from .models import MODES
 
 log = logging.getLogger("review_pipeline")
 
-SUBCOMMANDS = ("review", "batch", "rollup", "resume", "post", "assess-only")
+SUBCOMMANDS = ("review", "batch", "rollup", "resume", "post", "assess-only", "migrate")
 
 
 def default_out() -> Path:
-    """`<workspace>/INBOX/reviews` when the workspace has an INBOX, else
-    `~/.multiplai/reviews`.
+    """`<data_dir>/reviews`: core's data directory (`$WORKSPACE/.multiplai/data`
+    in a workspace), so every checkout, worktree and session writes one place.
 
     Never `./reviews`: the directory the user runs from is usually the
     repository under review, and the output would land in its working tree.
     review-viewer's `default_reviews_dir()` makes the same choice; they must
     agree, because the viewer finds a review by looking here."""
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
-    if config_dir:
-        marker = Path(config_dir) / ".workspace"
-        try:
-            workspace = Path(marker.read_text(encoding="utf-8").strip()).expanduser()
-        except OSError:
-            workspace = None
-        if workspace and (workspace / "INBOX").is_dir():
-            return workspace / "INBOX" / "reviews"
-    return Path.home() / ".multiplai" / "reviews"
+    from . import ledger
+
+    return ledger.reviews_root()
 
 
 def _trust_flag(p: argparse.ArgumentParser) -> None:
@@ -87,8 +88,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--session-id", default="", help="Claude Code session id, for log correlation")
     parser.add_argument("--out", default=None,
-                        help="Output directory (default: <workspace>/INBOX/reviews if it exists, "
-                             "else ~/.multiplai/reviews)")
+                        help="Output directory (default: <data_dir>/reviews, the multiplai data "
+                             "directory: <workspace>/.multiplai/data/reviews in a workspace)")
     # The same two flags are accepted after the subcommand too
     # (`review --out DIR`). SUPPRESS keeps an absent one from overwriting the
     # value given before the subcommand.
@@ -117,6 +118,9 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--fetch", action="store_true", help="git fetch origin first (never done otherwise)")
     rv.add_argument("--ticket", action="append", default=[], help="Ticket id for the header (repeatable)")
     rv.add_argument("--deployed-in", help="Branch to report whether head is deployed in (origin/<name>)")
+    rv.add_argument("--restart", action="store_true",
+                    help="Start over even when the ledger shows an interrupted run of this target and head "
+                         "(without it, such a run exits 4 and names the resume command)")
     _trust_flag(rv)
     _budget_flag(rv)
     _mode_flag(rv)
@@ -148,6 +152,11 @@ def build_parser() -> argparse.ArgumentParser:
     ao.add_argument("--report", required=True, help="Markdown report to write")
     _trust_flag(ao)
     _budget_flag(ao)
+
+    mg = sub.add_parser("migrate", parents=[common],
+                        help="Copy review directories from another place into <out>/legacy/, never changing the source")
+    mg.add_argument("--from", dest="source", required=True,
+                    help="The directory holding review directories (e.g. <workspace>/INBOX/reviews)")
     return parser
 
 
@@ -175,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     from .post import PostError, post
     from .stages.verify import VerifyIncomplete
 
-    out = Path(args.out).expanduser().resolve() if args.out else default_out()
+    out = Path(args.out).expanduser().resolve() if args.out else default_out().resolve()
 
     if args.command == "rollup":
         paths = [Path(p).resolve() for p in args.paths] or None
@@ -183,6 +192,20 @@ def main(argv: list[str] | None = None) -> int:
         print("rollups: " + " ".join(str(p) for p in written))
         runs, n, skipped = render.write_runs(out, paths)
         print(f"runs: {runs} ({n} review{'' if n == 1 else 's'}, {skipped} skipped: no run recorded)")
+        return 0
+
+    if args.command == "migrate":
+        from .migrate import MigrateError, migrate
+        try:
+            result = migrate(Path(args.source), out, session_id=args.session_id)
+        except MigrateError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+        finished = f", finished {len(result.finished)} an earlier run stopped part way" if result.finished else ""
+        print(f"migrate: copied {len(result.copied)}{finished}, skipped {len(result.skipped)} already copied, "
+              f"{result.lines} ledger lines; into {result.dest}")
+        if result.config:
+            print(f"migrate: copied {Path(args.source) / 'review.yaml'} to {result.config}")
         return 0
 
     if args.command == "post":
@@ -211,7 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         spec = orchestrator.TargetSpec(repo=args.repo or "", branch=args.branch, pr=args.pr, range=args.range_,
                                        tickets=args.ticket, deployed_in=args.deployed_in,
                                        base_branch=args.base_branch, fetch=args.fetch,
-                                       tree=args.tree, path=args.path, dir=args.dir, mode=args.mode)
+                                       tree=args.tree, path=args.path, dir=args.dir, mode=args.mode,
+                                       restart=args.restart)
         if args.plan_only:
             # Reads git only: nothing reaches a model, so no trust is needed and no ledger is kept.
             try:
@@ -294,6 +318,9 @@ def main(argv: list[str] | None = None) -> int:
             print("findings: " + " ".join(str(p) for p in written))
             print("checks: " + " ".join(str(p.parent / "checks.json") for p in written))
             return 1 if failures else 0
+    except orchestrator.InterruptedRun as e:
+        print(f"STOPPED: {e}\nTo start over instead, pass --restart.", file=sys.stderr)
+        return 4
     except orchestrator.ReviewError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2

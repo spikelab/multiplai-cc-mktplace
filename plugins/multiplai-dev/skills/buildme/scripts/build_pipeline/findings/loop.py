@@ -31,6 +31,7 @@ The loop stops when a fetch finds no new comment to act on
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -366,8 +367,35 @@ def review_argv(run: FindingsRun) -> list[str]:
     return argv
 
 
+def resume_argv(run: FindingsRun, target_dir: str) -> list[str]:
+    argv = ["uv", "run", "--directory", str(_review_skill_dir()),
+            "python", "-m", "review_pipeline", "resume", target_dir]
+    if run.trust_repo:
+        argv.append("--trust-repo")
+    return argv
+
+
+# What `review` prints (exit 4) when the ledger shows a run of this target and
+# head that started and never ended, and the target directory still holds that
+# run's saved state on this head (without it, `review` starts over itself): a
+# review killed by this stage's own subprocess timeout, say. review_pipeline/orchestrator.py `InterruptedRun`.
+# `review` checks the target directory's run lock first, so a review that is
+# still running exits 2 ("is running now", `RunInProgress`) instead and is
+# never resumed here; a `resume` that finds the lock taken refuses the same way.
+_INTERRUPTED = re.compile(r"interrupted run found; continue with: python -m review_pipeline resume (.+)$",
+                          re.MULTILINE)
+
+
 def run_review(run: FindingsRun, rnd: FindingsRound) -> ReviewOutcome:
+    """Review the PR head. A review of this head that was killed part way
+    makes a plain `review` refuse to start over; that run is resumed instead,
+    so it is finished once rather than failing every later round."""
     res = git_ops._run_review_skill(review_argv(run), cwd=run.project_dir)
+    m = _INTERRUPTED.search(res.stderr or "") if res.returncode == 4 else None
+    if m:
+        target_dir = m.group(1).strip()
+        log.info("resuming the interrupted review in %s", target_dir)
+        res = git_ops._run_review_skill(resume_argv(run, target_dir), cwd=run.project_dir)
     run_dir = None
     for line in (res.stdout or "").splitlines():
         if line.startswith("findings: "):

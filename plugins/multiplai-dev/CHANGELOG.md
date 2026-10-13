@@ -17,6 +17,72 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-10-12
+
+### Changed
+- `/multiplai-dev:review` writes to `reviews/` in the multiplai data
+  directory (`<workspace>/.multiplai/data/reviews/` in a workspace) instead
+  of `INBOX/reviews/`. `--out` still overrides it.
+- A review's directory is named after the repository's `origin` remote,
+  `<owner>-<repo>`, not the local directory: the same PR reviewed from the
+  main checkout and from a worktree now goes to one directory
+  (`spikelab-multiplai-cc-mktplace--pr-283`). A repository with no `origin`
+  keeps its directory name.
+- Each earlier round is kept in full (its `progress.log`,
+  `review-state.json`, `diff.patch`, commit and file lists, summaries and
+  checks, not only the findings and the review) under
+  `rounds/<NN>-<head sha>/`, numbered `01`, `02`, …; a second run on the
+  same head gets the next number. A `--dir` review's imported checkout
+  (`source/`) is not copied into a round: its git already keeps the commit
+  each round names. Rounds kept by earlier versions
+  (`<sha>/`, `<sha>-2/`) are still read. The round id in posted PR markers
+  is unchanged. A run that stopped before it wrote its findings (a budget
+  stop, a verify stop, a failure) is kept as its own round too, instead of
+  being written over by the next run.
+- The first review of a PR after the move still sees that PR's earlier
+  rounds and the rejections recorded on them, read from the old
+  `INBOX/reviews/<dirname>--pr-<n>/` directories (and `migrate`'s copies)
+  that name the same `origin`.
+- `review.yaml` left in the old `INBOX/reviews/` still applies to reviews
+  written to the default directory, with a warning, until one exists in the
+  new place; `migrate` copies it there.
+- `runs.jsonl` lists every run, earlier rounds included, sorted by time.
+- review-viewer looks for a review in the new directory, then in the old
+  `INBOX/reviews/` and in the copies `migrate` made of it; a review found
+  only there loads with a notice naming where it came from. Those old
+  reviews are still matched by the checkout's directory name their slugs
+  carry.
+
+### Added
+- `ledger.jsonl` in the data directory's `reviews/`: one line when a run
+  starts and one when it ends (budget stops, resumes and each batch target
+  included), with its cost and counts. It is never rewritten, so it keeps
+  runs whose directory was deleted.
+- A review killed or stopped with Ctrl-C part way (no end line in the ledger) is no longer started
+  over by accident: running `review` on the same target and head exits 4
+  and prints the `resume` command. `--restart` starts over on purpose.
+  When the target directory no longer holds that run's saved state on that
+  head (deleted, or written over by a run on another head), `review` starts
+  over instead of pointing at a `resume` that would fail or continue the
+  wrong head.
+  buildme's findings stage resumes such a review of the PR head (one its
+  own timeout killed, say) instead of counting it as a failed review. When
+  buildme's timeout for the review, pr or walkthrough skill runs out, it now
+  kills the skill's whole process group, not only the `uv` launcher: before,
+  the skill ran on with its output closed, holding the review's lock.
+  A SIGTERM, a SIGHUP (a closed terminal) or a Ctrl-C sent to buildme
+  while it waits on one of those skills kills the skill's group the same
+  way, so the skill no longer runs on after buildme has stopped.
+  A review that is still running is not mistaken for one of these: each
+  run holds a lock on its target directory until it ends, and while it
+  does, a second `review`, `review --restart`, `--plan-only` or `resume` of
+  that target exits 2 saying it is running, so two runs never write the
+  same directory at once.
+- `python -m review_pipeline migrate --from <dir>` copies old review
+  directories (for example `INBOX/reviews`) to `reviews/legacy/` in the
+  data directory and records them in the ledger. It never changes or
+  deletes the source, and a second run copies nothing.
+
 ## [0.45.0] - 2026-10-12
 
 ### Added

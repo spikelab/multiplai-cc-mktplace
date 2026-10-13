@@ -37,7 +37,6 @@ import shlex
 import signal
 import subprocess
 import tempfile
-import threading
 import time
 from pathlib import Path
 
@@ -411,46 +410,8 @@ def _process_table() -> list[tuple[int, int, int]]:
     return rows
 
 
-@contextlib.contextmanager
-def _exit_on_termination():
-    """Make SIGINT, SIGTERM and SIGHUP raise for the length of the block.
-
-    SIGTERM and SIGHUP become SystemExit: their default action ends the
-    process at once, with no `finally` run, so the detached cosmic-ray would
-    keep rewriting source files and the mutant on disk would never be
-    discarded. A handler someone else installed for them is left alone.
-
-    SIGINT becomes KeyboardInterrupt unless it is ignored. buildme runs under
-    `asyncio.run`, whose SIGINT handler only cancels the main task on the
-    first Ctrl-C; `run_mutation` blocks the event loop in `communicate`, so
-    that cancel is not seen until cosmic-ray finishes on its own. Raising in
-    the wait is what lets `_run_tool` kill the group at once. The previous
-    handler is put back afterwards.
-
-    Outside the main thread (where Python cannot set a handler) this does
-    nothing.
-    """
-    if threading.current_thread() is not threading.main_thread():
-        yield
-        return
-
-    def _raise(signum, _frame):
-        raise SystemExit(128 + signum)
-
-    def _interrupt(_signum, _frame):
-        raise KeyboardInterrupt
-
-    previous = {}
-    for sig in (signal.SIGTERM, signal.SIGHUP):
-        if signal.getsignal(sig) == signal.SIG_DFL:
-            previous[sig] = signal.signal(sig, _raise)
-    if signal.getsignal(signal.SIGINT) not in (signal.SIG_IGN, None):
-        previous[signal.SIGINT] = signal.signal(signal.SIGINT, _interrupt)
-    try:
-        yield
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+# Shared with the skill runs in git_ops, which pass the same signals on.
+_exit_on_termination = git_ops._exit_on_termination
 
 
 def run_mutation(config, baseline_sha: str, paths: list[str]) -> MutationResult:

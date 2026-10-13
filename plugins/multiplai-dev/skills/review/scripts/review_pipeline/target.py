@@ -101,6 +101,40 @@ def github_web_base(url: str | None) -> str | None:
     return f"https://github.com/{m.group(1)}/{m.group(2)}" if m else None
 
 
+def origin_name(url: str | None) -> str | None:
+    """`<owner>-<repo>` from a remote URL (the last two path parts, `.git` dropped), else None.
+
+    `https://github.com/spikelab/github-tests.git`,
+    `git@github.com:spikelab/github-tests.git` and the `ssh://` form all give
+    `spikelab-github-tests`.
+    """
+    if not url:
+        return None
+    path = url.strip().rstrip("/")
+    if path.endswith(".git"):
+        path = path[:-len(".git")]
+    parts = [p for p in re.split(r"[/:]", path) if p]
+    if len(parts) < 2:
+        return None
+    return f"{parts[-2]}-{parts[-1]}"
+
+
+def slug_repo_name(repo: Path) -> str:
+    """The repository part of a slug: `<owner>-<repo>` from the `origin` remote.
+
+    Every checkout and worktree of one repository has the same origin, so a
+    PR reviewed from any of them gets one directory. Only a repository with
+    no `origin` remote (or one that names no owner) falls back to its
+    directory name, and that is logged.
+    """
+    name = origin_name(remote_url(repo))
+    if name:
+        return name
+    log.info("no origin remote in %s with an owner and a name: the slug uses the directory name %s",
+             repo, repo.name)
+    return repo.name
+
+
 def sanitize_slug(text: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("_")
     return slug or "target"
@@ -389,8 +423,9 @@ def build_target(resolved: Resolved, *, tickets: list[str] | None = None,
                  label: str | None = None, needs: list[Need] | None = None) -> TargetInfo:
     """Everything about the target except files written to disk.
 
-    *name* replaces the repository's directory name in the slug and label (a
-    `--dir` review names the source directory, not its copy); *label* replaces
+    The slug starts with `slug_repo_name()` (`<owner>-<repo>` from origin), the
+    label with the directory name. *name* replaces both (a `--dir` review
+    names the source directory, not its copy); *label* replaces
     the label outright. Every lookup that failed, here or in `resolve`, is
     appended to *needs*.
     """
@@ -400,7 +435,8 @@ def build_target(resolved: Resolved, *, tickets: list[str] | None = None,
     if resolved.kind == "tree":
         files, skipped = tree_files(repo, head, resolved.path)
         repo_name = name or repo.name
-        slug = sanitize_slug(f"{repo_name}--tree" + (f"-{resolved.path}" if resolved.path else ""))
+        slug_name = name or slug_repo_name(repo)
+        slug = sanitize_slug(f"{slug_name}--tree" + (f"-{resolved.path}" if resolved.path else ""))
         what = resolved.path or "whole tree"
         return TargetInfo(
             repo_path=str(repo), remote_url=remote_url(repo), base_sha=base, head_sha=head,
@@ -415,7 +451,7 @@ def build_target(resolved: Resolved, *, tickets: list[str] | None = None,
             commits.append((sha, subject))
     files = [f for f in git(repo, "diff", *_DIFF_FLAGS, "--name-only", f"{base}..{head}").stdout.splitlines() if f]
     ref = f"pr-{resolved.pr}" if resolved.kind == "pr" else resolved.ref
-    slug = sanitize_slug(f"{repo.name}--{ref}")
+    slug = sanitize_slug(f"{slug_repo_name(repo)}--{ref}")
     label = f"{repo.name} {('PR #' + str(resolved.pr)) if resolved.pr else resolved.ref}"
     return TargetInfo(
         repo_path=str(repo), remote_url=remote_url(repo), base_sha=base, head_sha=head,

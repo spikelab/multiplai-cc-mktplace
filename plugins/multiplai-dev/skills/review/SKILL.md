@@ -33,9 +33,19 @@ Python between them:
    reported it. The findings merged away are listed in the review's appendix
    with the finding they went into.
 4. **repeats** — when this PR (or branch) was reviewed before, each earlier
-   round is kept in `<out>/<slug>/rounds/<head sha, 12 chars>/`, also when
-   the new run is on the same commit (a second round of one commit goes to
-   `<sha>-2/`). Every finding is checked against the findings the user
+   round is kept in full (its findings, review, `progress.log`,
+   `review-state.json`, `diff.patch`, ...) in
+   `<out>/<slug>/rounds/<NN>-<head sha, 12 chars>/`, where `<NN>` is the
+   round number (`01`, `02`, ...), also when the new run is on the same
+   commit (it gets the next number). Rounds kept before multiplai-dev 0.46 are named
+   `<sha>/` and `<sha>-2/` and are still read. A run that stopped before it
+   wrote its findings (a budget stop, a verify stop, a failure, a killed run
+   started over with `--restart`) is kept the same way, without the findings
+   and review of the round before it. Rounds of the same PR kept before
+   multiplai-dev 0.46 under a directory named after the local checkout
+   (`<dirname>--pr-<n>`, in the old `INBOX/reviews/`, in `migrate`'s copies or
+   beside the new directory) are read too, with the decisions recorded there,
+   when they name the same `origin`. Every finding is checked against the findings the user
    rejected in those rounds (`viewer/decisions.json`): the same id matches in
    Python, the rest go to one agent that says which describe the same defect,
    however they are worded. A match is labelled `repeat`, with the earlier
@@ -260,9 +270,39 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts \
   batch /abs/path/targets.yaml --parallel 2 --trust-repo
 ```
 
-Without `--out`, output goes to the workspace's `INBOX/reviews/` when there is
-one, otherwise `~/.multiplai/reviews/` — never the repository's working tree. The first stdout line, `out: <dir>`, says which;
-tell the user.
+Without `--out`, output goes to `reviews/` in the multiplai data directory
+(`<workspace>/.multiplai/data/reviews/` in a workspace; outside one,
+multiplai-core's data directory, by default `~/.multiplai/data/reviews/`) — never the repository's working tree, and not
+`INBOX/`. The first stdout line, `out: <dir>`, says which; tell the user. Do
+not pass `--out` into a session scratchpad: it is deleted with the session.
+
+`<slug>` names the repository by its `origin` remote, `<owner>-<repo>`, then
+the target: `spikelab-multiplai-cc-mktplace--pr-283`, `…--<branch>`,
+`…--<base>..<head>`, `…--tree`. So the same PR reviewed from the main
+checkout and from any worktree goes to one directory. A repository with no
+`origin` remote uses its directory name instead (logged).
+
+Every run appends to `<data_dir>/reviews/ledger.jsonl`, whatever `--out`
+says: a `started` line (`slug`, `target_dir`, `head_sha`, `session_id`) when
+it starts, and a `finished` line when it ends (`generated_at`, `producer`,
+`session_id`, `slug`, `target_dir`, `round` (the `<NN>`), `head_sha`,
+`base_sha`, `kind`, `pr`, `stopped`: `null`, `budget`, `verify-incomplete`
+or `failed: <error>`, and the whole `run` object). A resume and each target
+of a batch are runs too. The file is never rewritten. A `started` line with
+no later `finished` line for the same `target_dir` and `head_sha` is a run
+that was killed or stopped with Ctrl-C: a plain `review` of that target then makes no model call,
+prints `interrupted run found; continue with: python -m review_pipeline
+resume <target_dir>` and exits `4`. Run that `resume` (it continues from the
+last finished stage), or pass `--restart` to start over on purpose. When the
+target directory no longer holds a readable `review-state.json` on that head
+(the directory or the file was deleted, or a later run on another head wrote
+over it), there is nothing to resume, and `review` starts over instead. A review
+that is still running leaves the same `started` line, so every run holds a
+lock on its target directory (`<out>/.locks/<slug>.lock`) until it ends:
+while another process holds it, `review` (with or without `--restart`),
+`--plan-only` and `resume` of that target print `a review of <target_dir> is
+running now (pid <n> on <host>, since <time>)` and exit `2` without writing
+anything. Wait for that run to finish; do not resume it.
 
 Each target gets `<out>/<slug>/` with `progress.log`. While the run is going,
 check it with a bounded loop, never a bare `tail -f`:
@@ -275,11 +315,14 @@ until grep -qE '^\[[^]]*\] (DONE|FAILED)' <out>/<slug>/progress.log; do sleep 20
 background task's own completion notice also ends the wait.
 
 Exit codes: `0` done; `1` a batch target or every finder failed (the message
-says which); `2` bad input or a target that does not resolve (no output is
-written); `3` repository not trusted; `4` the budget circuit breaker stopped
-the run at `--max-cost-usd` (default 50 per target). On `4`, report the spend
+says which); `2` bad input, a target that does not resolve, or a target another
+process is reviewing now (no output is written); `3` repository not trusted; `4` the budget circuit breaker stopped
+the run at `--max-cost-usd` (default 50 per target), or the ledger shows an
+interrupted run of the same target and head (the message names the
+`resume` command). On a budget `4`, report the spend
 and the partial state; resume only if the user raises the ceiling:
-`python -m review_pipeline resume <out>/<slug> --trust-repo --max-cost-usd <n>`.
+`python -m review_pipeline resume <out>/<slug> --trust-repo --max-cost-usd <n>`
+(`<out>/<slug>` is the target's directory under the output directory above).
 `5` the verifier gave no usable answer for some findings after three tries
 each; the message lists them, and the other verdicts are kept. Tell the user,
 then run `python -m review_pipeline resume <out>/<slug> --trust-repo`, which
@@ -411,9 +454,11 @@ which GitHub does not render:
 <!-- multiplai-review:finding id=<finding_id> round=<round> v=1 -->
 ```
 
-`id` is the finding's id in `findings.json`. `round` is the name the round
-has, or will have, under `<out>/<slug>/rounds/`: the head sha cut to 12
-characters, with `-2`, `-3`, … for a later round on the same head. Any tool
+`id` is the finding's id in `findings.json`. `round` names the round by its
+head: the head sha cut to 12 characters, with `-2`, `-3`, … for a later
+round on the same head. Since multiplai-dev 0.46 that is not the round's directory name
+under `<out>/<slug>/rounds/` (`<NN>-<sha12>`), so markers already posted
+keep parsing with the regex below. Any tool
 can find review findings on a PR by fetching its review comments and review
 bodies and matching this regex (from `scripts/review_pipeline/pr_marker.py`):
 
@@ -445,9 +490,12 @@ returned no usage counts as 0 and adds a line to the errors. The cost line in
 `summary-<slug>.md` reads the same object. Files written before
 multiplai-dev 0.28 have no `run`.
 
-`runs.jsonl` in the output directory has one line per review with a `run`:
-the target's `label`, `slug` and `head_sha`, `generated_at`, `producer` and the
-whole `run`. Two queries:
+`runs.jsonl` in the output directory has one line per run with a `run`,
+earlier rounds included (from `<slug>/rounds/*/findings.json`), sorted by
+`generated_at`: the target's `label`, `slug` and `head_sha`, `generated_at`,
+`producer` and the whole `run`. It is rebuilt after each review; the ledger
+(`ledger.jsonl`, above) is the record that is never rewritten and also keeps
+runs whose directory was deleted. Two queries:
 
 ```bash
 # total cost per month
@@ -458,7 +506,9 @@ jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd:
 
 ## Configuration
 
-`review.yaml` in the output directory sets `concurrency`, `finder_model`,
+`review.yaml` in the output directory (for the default one, the old
+default's `INBOX/reviews/review.yaml` until a `review.yaml` exists in the new
+place, with a warning) sets `concurrency`, `finder_model`,
 `verifier_model`, `merger_model` (default: the verifier's), `effort`,
 `max_turns`, `explain` and `find_with_facts`. `multiplai.conf` keys
 `review_finder_model`, `review_verifier_model`, `review_effort` and
@@ -498,5 +548,21 @@ stage runs on the session's model.
 
 - `rollup [findings.json ...]` rewrites `HIGH-only.md`, `MEDIUM-only.md`,
   `LOW-only.md` and `runs.jsonl` in `--out` from the given files (default:
-  every `<out>/*/findings.json`). It prints how many files it skipped for
-  having no `run`. A review, resume or batch refreshes `runs.jsonl` too.
+  every `<out>/*/findings.json` for the rollups; every round, earlier ones
+  under `rounds/` included, for `runs.jsonl`). It prints how many files it
+  skipped for having no `run`. A review, resume or batch refreshes
+  `runs.jsonl` too.
+
+- `migrate --from <dir>` copies each review directory under `<dir>` (for
+  example the old `<workspace>/INBOX/reviews`) whole to
+  `<out>/legacy/<directory name>/` and appends a `migrated` ledger line
+  (with `migrated_from`) for every `findings.json` in it, top level, under
+  `rounds/` or deeper. It never moves, changes or deletes anything in
+  `<dir>`, and skips a directory already copied (recorded in
+  `legacy/sources.jsonl`), so a second run copies nothing. A run that
+  stopped part way is finished by the next one under the same name, adding
+  only the ledger lines it had not written yet. A directory whose
+  name another source already used (the same PR in `INBOX/reviews` and in an
+  archive) is copied to `<name>~<6 hex>/`. Files directly under `<dir>`
+  (rollups) are not copied, except `review.yaml`, which is copied to
+  `<out>/review.yaml` when there is none there yet.

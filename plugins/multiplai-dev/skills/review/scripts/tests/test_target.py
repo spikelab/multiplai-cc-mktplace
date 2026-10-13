@@ -25,7 +25,7 @@ def test_branch_uses_merge_base_with_default_branch(fixture_repo):
     r = target.resolve(repo, branch="feature/db-2038")
     assert (r.base_sha, r.head_sha) == (base, head)
     info = target.build_target(r)
-    assert info.slug == "booking-engine--feature_db-2038"
+    assert info.slug == "example-booking-engine--feature_db-2038"
     assert info.kind == "branch"
 
 
@@ -82,7 +82,7 @@ def test_pr_uses_gh_view_and_merge_base(fixture_repo, monkeypatch):
     assert (r.base_sha, r.head_sha, r.pr, calls) == (base, head, 812, [812])
     assert (r.title, r.base_ref) == ("DB-2038: direct booking", "main")
     info = target.build_target(r)
-    assert info.slug == "booking-engine--pr-812" and info.pr == 812
+    assert info.slug == "example-booking-engine--pr-812" and info.pr == 812
     assert (info.title, info.description, info.base_ref) == (
         "DB-2038: direct booking", "Only the keyword filter.\n\nCI gates the merge.", "main")
     assert info.branch_rules == rules and asked == ["main"]
@@ -144,7 +144,7 @@ def test_writes_diff_commits_and_files_and_leaves_the_repo_alone(fixture_repo, t
     r = target.resolve(repo, range_=f"{base}..{head}")
     info = target.build_target(r, tickets=["DB-2038"])
     info = target.write_target_files(info, target.diff_text(r.repo, base, head), tmp_path / info.slug)
-    assert info.slug == f"booking-engine--{base}..{head}"
+    assert info.slug == f"example-booking-engine--{base}..{head}"
     assert sorted(info.files) == ["direct_booking.py", "rateplan_service.py", "settings.py"]
     assert info.commits == [(head, "DB-2038: direct booking from the modal")]
     assert "+KEYWORD = 'dolcebot'" in (tmp_path / info.slug / "diff.patch").read_text()

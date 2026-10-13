@@ -563,6 +563,42 @@ def sanitize_slug(text: str) -> str:
     return slug or "target"
 
 
+def origin_name(url: str | None) -> str | None:
+    """Same rule as `review_pipeline.target.origin_name`: `<owner>-<repo>` from
+    a remote URL (its last two path parts, `.git` dropped), else None."""
+    if not url:
+        return None
+    path = url.strip().rstrip("/")
+    if path.endswith(".git"):
+        path = path[:-len(".git")]
+    parts = [p for p in re.split(r"[/:]", path) if p]
+    if len(parts) < 2:
+        return None
+    return f"{parts[-2]}-{parts[-1]}"
+
+
+def slug_repo_name(repo: Path) -> str:
+    """Same rule as `review_pipeline.target.slug_repo_name`: the slug's repo
+    part is `<owner>-<repo>` from `origin`, so every checkout and worktree of
+    one repository finds the same review; the directory name without one."""
+    return origin_name(remote_url(repo)) or repo.name
+
+
+def legacy_slug(target: Target) -> str | None:
+    """The slug a review written before multiplai-dev 0.46 gave *target*: the
+    checkout's directory name where `slug_repo_name()` now puts
+    `<owner>-<repo>`. None when the two are the same, or the slug does not
+    start with the repo part (a range's)."""
+    if not target.repo_path:
+        return None
+    repo = Path(target.repo_path)
+    name = slug_repo_name(repo)
+    prefix = sanitize_slug(name) + "--"
+    if name == repo.name or not target.slug.startswith(prefix):
+        return None
+    return sanitize_slug(f"{repo.name}--{target.slug[len(prefix):]}")
+
+
 def github_web_base(url: str | None) -> str | None:
     """`https://github.com/<owner>/<repo>` for a GitHub remote, else None.
     Copied from `review_pipeline.target`."""
@@ -760,7 +796,7 @@ def _resolve_pr(spec: TargetSpec, repo: Path) -> Resolved:
                 checks=summarize_checks(info.get("statusCheckRollup")),
                 mergeable=str(info.get("mergeable") or ""), draft=bool(info.get("isDraft")),
                 review_decision=str(info.get("reviewDecision") or ""))
-    slug = sanitize_slug(f"{repo.name}--pr-{n}")
+    slug = sanitize_slug(f"{slug_repo_name(repo)}--pr-{n}")
     return Resolved(_make_target(repo, slug, f"{repo.name} PR #{n}", base, head), pr)
 
 
@@ -774,7 +810,7 @@ def _resolve_branch(spec: TargetSpec, repo: Path, base_branch: str | None) -> Re
     base = merge_base(repo, base_ref, head)
     if not base:
         raise TargetError(f"no merge-base between {base_ref} and {name}")
-    slug = sanitize_slug(f"{repo.name}--{name}")
+    slug = sanitize_slug(f"{slug_repo_name(repo)}--{name}")
     return Resolved(_make_target(repo, slug, f"{repo.name} {name}", base, head))
 
 
@@ -798,14 +834,14 @@ def _resolve_path(spec: TargetSpec, base_branch: str | None) -> Resolved:
             raise TargetError(f"{name} has no commits that are not pushed to its upstream; "
                               f"pass the branch name ({name}) to see it against the default "
                               "branch")
-        slug = sanitize_slug(f"{repo.name}--{name}--unpushed")
+        slug = sanitize_slug(f"{slug_repo_name(repo)}--{name}--unpushed")
         label = f"{repo.name} {name} (not pushed)"
     else:
         base_ref = _base_ref(repo, base_branch)
         base = merge_base(repo, base_ref, head)
         if not base:
             raise TargetError(f"no merge-base between {base_ref} and {name}")
-        slug = sanitize_slug(f"{repo.name}--{name}")
+        slug = sanitize_slug(f"{slug_repo_name(repo)}--{name}")
         label = f"{repo.name} {name}"
     return Resolved(_make_target(repo, slug, label, base, head))
 
@@ -877,7 +913,7 @@ def tree_target(repo: Path, commit: str = "HEAD", path: str | None = None) -> Ta
     files = [f for f in git(repo, "ls-tree", "-r", "-z", "--name-only", head, *spec).split("\0") if f]
     if not files:
         raise TargetError(f"no file under {sub or 'the tree'} at {head[:12]}")
-    slug = sanitize_slug(f"{repo.name}--tree" + (f"-{sub}" if sub else ""))
+    slug = sanitize_slug(f"{slug_repo_name(repo)}--tree" + (f"-{sub}" if sub else ""))
     label = f"{repo.name}: {sub or 'whole tree'} at {head[:8]}"
     return Target(slug=slug, label=label, repo_path=str(repo), remote_url=remote_url(repo),
                   base_sha=EMPTY_TREE, head_sha=head, files_changed=files)

@@ -682,3 +682,126 @@ class TestSaveWipRef:
 
         assert git_ops.save_wip_ref(repo, ref, "wip") == ref
         assert _git(repo, "rev-parse", ref).stdout.strip() == head
+
+
+# --- skill subprocesses: a timeout kills the whole process tree ----------------
+
+
+def _gone(pid: int, wait: float = 5.0) -> bool:
+    """True once *pid* no longer runs (gone, or a zombie nobody reaped yet)."""
+    import os
+    import time
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        try:
+            if Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] == "Z":
+                return True
+        except OSError:
+            pass
+        time.sleep(0.05)
+    return False
+
+
+# The pr skill's seam is refused by conftest; it is the same one-line call to `_run_skill`.
+@pytest.mark.parametrize("seam", ["_run_review_skill", "_run_walkthrough_skill", "_run_skill"])
+def test_a_skill_timeout_kills_the_launchers_child_too(tmp_path, seam):
+    """`uv run` starts the skill as its own child. A timeout that killed only
+    `uv` left the review running: it kept the target's run lock (the next
+    `review` exited 2, not 4) and later died on a closed pipe, recorded as a
+    failure, so the findings stage never resumed it."""
+    import os
+    import signal
+    pidfile = tmp_path / "child.pid"
+    # The launcher (sh) starts a child that outlives it unless it is killed.
+    script = f"sleep 60 & echo $! > {pidfile}; wait"
+    res = getattr(git_ops, seam)(["sh", "-c", script], tmp_path, 1)
+    assert res.returncode == 124 and "timed out" in res.stderr
+    pid = int(pidfile.read_text())
+    try:
+        assert _gone(pid), "the launcher's child was left running"
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def test_a_skill_run_returns_output_and_exit_code(tmp_path):
+    res = git_ops._run_review_skill(["sh", "-c", "echo out; echo err >&2; exit 3"], cwd=tmp_path)
+    assert (res.returncode, res.stdout, res.stderr) == (3, "out\n", "err\n")
+
+
+def test_a_missing_skill_launcher_is_exit_127(tmp_path):
+    res = git_ops._run_review_skill(["no-such-launcher-xyz"], cwd=tmp_path)
+    assert res.returncode == 127
+
+
+# A skill runs in a session of its own, so a signal sent to buildme (a closed
+# terminal, `kill`, Ctrl-C) no longer reaches it. `_run_skill` must pass the
+# signal on by killing the skill's group itself.
+_SKILL_RUNNER = """
+import asyncio, sys
+from build_pipeline import git_ops
+script, mode = sys.argv[1], sys.argv[2]
+def call():
+    return git_ops._run_skill(["sh", "-c", script], None, 120)
+if mode == "asyncio":
+    async def main():
+        call()
+    asyncio.run(main())
+else:
+    call()
+"""
+
+
+@pytest.mark.parametrize("signame,mode", [("SIGTERM", "plain"), ("SIGHUP", "plain"),
+                                          ("SIGTERM", "asyncio"), ("SIGINT", "asyncio")])
+def test_a_signal_to_buildme_kills_the_skill_it_is_waiting_on(tmp_path, signame, mode):
+    """Before, a SIGTERM or SIGHUP ended buildme at once with no cleanup, and
+    the review, in its own session, kept running: it spent model budget and
+    held the target's run lock, so the next round's review exited 2. Under
+    `asyncio.run` the first Ctrl-C only cancels the main task, which a loop
+    blocked in the wait never sees, so the review ran to the end."""
+    import os
+    import signal
+    import sys
+    import time
+    sig = getattr(signal, signame)
+    pidfile = tmp_path / "child.pid"
+    script = f"sleep 30 & echo $! > {pidfile}; wait"
+    scripts_dir = Path(git_ops.__file__).resolve().parent.parent
+    env = {**os.environ, "PYTHONPATH": str(scripts_dir)}
+    runner = subprocess.Popen([sys.executable, "-c", _SKILL_RUNNER, script, mode],
+                              cwd=str(scripts_dir), env=env,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    child = None
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not (
+                pidfile.exists() and pidfile.read_text().strip()):
+            time.sleep(0.05)
+        child = int(pidfile.read_text())
+        time.sleep(0.3)  # let the runner settle into the wait
+        runner.send_signal(sig)
+        try:
+            runner.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pytest.fail(f"{signame} did not end buildme's wait on the skill")
+        assert _gone(child), f"{signame} to buildme left the skill running"
+        if sig != signal.SIGINT:
+            assert runner.returncode == 128 + sig, runner.stderr.read()
+    finally:
+        if runner.poll() is None:
+            runner.kill()
+            runner.wait()
+        if runner.stderr is not None:
+            runner.stderr.close()
+        if child is not None:
+            try:
+                os.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass

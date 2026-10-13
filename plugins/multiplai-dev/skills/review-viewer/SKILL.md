@@ -97,7 +97,13 @@ PR (a PR target, or a review whose `review-state.json` records `target.pr`).
 directory must be a clone of `o/r`. `--base <branch>` changes the default
 branch; `--fetch` fetches origin first; `--reviews-dir <dir>` (repeatable)
 says where to look for a review (default: where `/multiplai-dev:review`
-writes). `serve --repo <path> --range <base>..<head>` still works.
+writes, `<data_dir>/reviews/`, then where it wrote before multiplai-dev
+0.45, `<workspace>/INBOX/reviews/`, and the copies the review skill's
+`migrate` made of those under `<data_dir>/reviews/legacy/`; a review found
+only there loads with a notice in the page naming that location; those old
+reviews are matched under the checkout's directory name too, which their
+slugs carry). `serve --repo <path> --range
+<base>..<head>` still works.
 
 For a whole tree rather than a change (the target of `review --tree`), use
 `serve --tree [<commit>] [--path <dir>] --repo /abs/path/to/clone` instead of
