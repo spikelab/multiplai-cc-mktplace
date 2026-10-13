@@ -382,7 +382,7 @@ class FakeReview:
         self.calls += 1
         return loop.ReviewOutcome(f"/reviews/r{rnd.number}", True)
 
-    def post(self, run, run_dir):
+    def post(self, run, run_dir, decisions):
         self.posts.append(run_dir)
         for i in range(self.new):
             self.pr.add_thread("alice", f"round {len(self.posts)} finding {i}",
@@ -390,13 +390,24 @@ class FakeReview:
         return True, ""
 
 
-def _run(config, change, *, triage_call, review, spec_call=None, engine=None, auto=True):
+def _run(config, change, *, triage_call, review, spec_call=None, engine=None, auto=True,
+         self_check=..., decisions=...):
+    """`...` for *self_check* is a check agent that finds nothing, and for
+    *decisions* the path `write_decisions` would write, with nothing written;
+    None is the real call."""
+    if self_check is ...:
+        async def self_check(config, diff):
+            return ""
+    if decisions is ...:
+        def decisions(review_dir):
+            return Path(review_dir) / "buildme-decisions.json"
     lines: list[str] = []
     run = loop.FindingsRun(
         config=config, pr=PR, repo=REPO, branch="buildme/calc", change_dir=change,
         auto=auto, trust_repo=True,
         seams=loop.Seams(triage_call=triage_call, spec_call=spec_call, engine=engine,
-                         review=review.review, post=review.post),
+                         review=review.review, post=review.post,
+                         self_check=self_check, decisions=decisions),
         emit=lines.append)
     return run, lines
 
@@ -743,7 +754,7 @@ class TestStop:
         fake_pr.add_thread("alice", "first look", fid="d1")
         review = FakeReview(fake_pr)
 
-        def post(run, run_dir):
+        def post(run, run_dir, decisions):
             review.posts.append(run_dir)
             if len(review.posts) == 1:
                 fake_pr.add_thread("alice", "still wrong", fid="d1")
@@ -1218,7 +1229,7 @@ class TestReviewBody:
         fake_pr.add_thread("alice", "first look", fid="d1")
         review = FakeReview(fake_pr)
 
-        def post(run, run_dir):
+        def post(run, run_dir, decisions):
             from datetime import datetime, timedelta
             review.posts.append(run_dir)
             if len(review.posts) == 1:
@@ -1931,7 +1942,7 @@ class TestSince:
         fake_pr.add_issue("alice", "question one", created="2026-01-01T00:00:00Z")
         review = FakeReview(fake_pr)
 
-        def post(run, run_dir):
+        def post(run, run_dir, decisions):
             review.posts.append(run_dir)
             if len(review.posts) == 1:
                 st = BuildState.load(change / ".findings-state.json")
