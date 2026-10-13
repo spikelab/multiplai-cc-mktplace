@@ -11,7 +11,7 @@ from multiplai_core.agent_runner import AgentRunError, UnknownAgentBackendError
 from multiplai_core.budget import BudgetExceededError
 from pydantic import BaseModel
 
-from conftest import make_repo, read_state, run
+from conftest import make_repo, make_units_repo, read_state, run
 from spec_extract_pipeline import sdk
 
 _REAL_CALL = sdk.agent_call_structured  # before the autouse fixture replaces it
@@ -114,6 +114,44 @@ def test_a_backend_that_cannot_run_is_not_a_call_failure(monkeypatch, err):
     assert len(fake.calls) == 1
 
 
+def test_a_budget_stop_at_the_reformat_is_a_call_failure(monkeypatch):
+    # The first run is paid and recorded. Letting BudgetExceededError through would take its
+    # attempt back, and a resume would pay for the whole run again (plan, item 7; row R31).
+    fake, go = _call(monkeypatch, _result("not json", cost=1.0), _result('{"value": 1}'), max_usd=1.0)
+    with pytest.raises(sdk.CallFailed) as e:
+        asyncio.run(go())
+    assert isinstance(e.value.__cause__, BudgetExceededError)
+    assert len(fake.calls) == 1
+    assert core_budget.get().cost_usd == 1.0
+
+
+def test_a_backend_failure_at_the_reformat_is_a_call_failure(monkeypatch):
+    # Same rule for a backend that fails to start only at the reformat: the first run was paid.
+    fake, go = _call(monkeypatch, _result("not json"), PI_SETUP_ERRORS[1])
+    with pytest.raises(sdk.CallFailed) as e:
+        asyncio.run(go())
+    assert isinstance(e.value.__cause__, sdk.BackendUnavailable)
+    assert len(fake.calls) == 2 and core_budget.get().cost_usd == 0.5
+
+
+@pytest.mark.parametrize("at", ["first", "reformat"])
+def test_any_other_exception_from_run_agent_is_a_call_failure(monkeypatch, at):
+    # A bare exception escaping explore's task would cancel every other unit in flight
+    # (code_facts.bounded's TaskGroup). The pi backend can raise one: usage_from_events
+    # parses usage with int() outside its try (multiplai_core/pi/backend.py).
+    err = ValueError("invalid literal for int() with base 10: 'n/a'")
+    outcomes = [err] if at == "first" else [_result("not json"), err]
+    fake, go = _call(monkeypatch, *outcomes)
+    with pytest.raises(sdk.CallFailed) as e:
+        asyncio.run(go())
+    causes, c = [], e.value
+    while c is not None:
+        causes.append(c)
+        c = c.__cause__
+    assert err in causes and "ValueError" in str(e.value)
+    assert len(fake.calls) == len(outcomes)
+
+
 def test_budget_reached_is_not_a_call_failure(monkeypatch):
     fake, go = _call(monkeypatch, _result('{"value": 1}'), max_usd=0.0001)
     core_budget.get().cost_usd = 1.0
@@ -182,6 +220,31 @@ def test_a_unit_whose_runs_fail_makes_at_most_two_agent_runs(tmp_path, monkeypat
     assert len(calls) == 2  # one per attempt, as plan.txt says
     assert "at most 2 agent runs" in (folder / "plan.txt").read_text()
     assert read_state(folder)["explore_attempts"] == {"unit:u1": 2}
+
+
+def test_an_unexpected_exception_fails_one_unit_and_spares_the_others(tmp_path, monkeypatch):
+    # Not an AgentRunError (the pi backend's int() on a malformed usage field): the unit's
+    # call fails as any other does, and the units in flight beside it are not cancelled.
+    calls: list[str] = []
+
+    async def run_agent(prompt, **kwargs):
+        unit = "d0" if "d0/mod.py" in prompt else "other"
+        calls.append(unit)
+        await asyncio.sleep(0)  # the other units are in flight now
+        if unit == "d0":
+            raise ValueError("invalid literal for int() with base 10: 'n/a'")
+        return _result('{"facts": [], "files": []}')
+
+    _real_call_with(monkeypatch, run_agent)
+    repo = make_units_repo(tmp_path / "widgets", 3)
+    root = tmp_path / "out"
+    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
+    (folder,) = (root / "widgets").glob("tree@*")
+    state = read_state(folder)
+    assert state["explore_attempts"] == {"unit:u1": 2, "unit:u2": 1, "unit:u3": 1}
+    assert "ValueError" in state["explore_answers"]["unit:u1"]["error"]
+    assert "facts" in state["explore_answers"]["unit:u2"] and "facts" in state["explore_answers"]["unit:u3"]
+    assert calls.count("d0") == 2 and calls.count("other") == 2
 
 
 @pytest.mark.parametrize("err", [

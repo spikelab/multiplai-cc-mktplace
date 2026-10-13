@@ -12,10 +12,12 @@ stopped before:
   an error. A unit with no answer after 2 attempts is final: its files are
   "not analysed" in `report.md`, and any error text stays in `state.json`.
 - A failed call (`sdk.CallFailed`) is stored as an error answer. A budget
-  stop (`BudgetExceededError`, from the check before counting or from inside
-  the call) takes back the attempt it counted, saves, and marks the task
-  "stopped by budget"; it never escapes `code_facts.bounded`, so calls in
-  flight finish and are saved. Then the run exits 3.
+  stop (`BudgetExceededError`, from the check before counting or from the
+  wrapper's check before the call's first run) takes back the attempt it
+  counted, saves, and marks the task "stopped by budget"; it never escapes
+  `code_facts.bounded`, so calls in flight finish and are saved. Then the run
+  exits 3. A budget stop at the reformat, after a paid first run, reaches
+  here as `sdk.CallFailed`: the attempt counts (row R31).
 - A call that cannot run at all (`sdk.BackendUnavailable`, or
   `sdk.RepoTrustError` from the wrapper's own check) is handled the same way,
   then raised: exit 1 or 4, and a re-run after the fix asks the unit as if it

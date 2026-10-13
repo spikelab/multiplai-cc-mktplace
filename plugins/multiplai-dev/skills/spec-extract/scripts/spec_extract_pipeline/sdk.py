@@ -25,6 +25,11 @@ multiplai-core.
 - **Budget.** Every call is checked against the run folder's ledger first and
   recorded into it as it returns (`multiplai_core.budget`, a ContextVar).
   `BudgetExceededError` is not a `CallFailed`: it stops the run (exit 3).
+- **After a paid run.** When the reformat cannot run (the budget is reached,
+  or the backend fails to start), the call raises `CallFailed`, not the
+  budget or backend error: the first run is paid and recorded, so the attempt
+  counts and a resume does not pay for that run again (row R31).
+- **Any other exception** from `run_agent` is a failed call (`CallFailed`).
 - **Models** (plan, Decided 18): `multiplai.conf` keys
   `spec_extract_explore_model` (and, from the write step, `spec_extract_write_model`),
   resolved through `multiplai_core.resolve_model_spec`. Unset means the
@@ -147,6 +152,11 @@ async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effo
             core_budget.record(partial.usage, label=budget_label)
         kind = "timeout" if isinstance(e, AgentRunTimeout) else e.reason
         raise CallFailed(f"agent call failed ({kind})\n{e.stderr_tail}") from e
+    except Exception as e:
+        # run_agent can raise more than AgentRunError: the pi backend parses usage with int()
+        # outside its try (multiplai_core/pi/backend.py, usage_from_events). Escaping explore's
+        # task, it would cancel every unit in flight; it is a failed call like any other.
+        raise CallFailed(f"agent call failed ({type(e).__name__}: {e})") from e
     core_budget.record(result.usage, label=budget_label)
     return result.text
 
@@ -167,7 +177,10 @@ async def agent_call_structured(
 
     An answer that does not parse is sent back once to be reformatted; a failed
     run is not re-run. Either failure ends in `CallFailed`. `RepoTrustError`,
-    `BackendUnavailable` and `BudgetExceededError` are never caught here.
+    `BackendUnavailable` and `BudgetExceededError` from the first run pass
+    through, as no call was paid for. From the reformat they become
+    `CallFailed`: the first run is paid and recorded, so the attempt counts
+    (row R31), and a resume does not pay for that run again.
     """
     name = budget_label or "agent"
     common = dict(model=model, effort=effort, cwd=cwd, call_timeout=call_timeout, budget_label=budget_label)
@@ -181,6 +194,9 @@ async def agent_call_structured(
         text = await _run(reformat_prompt(text, schema, first_error), allowed_tools=[],
                           max_turns=REFORMAT_MAX_TURNS, run_label=f"{name}:reformat", **common)
         return parse_answer(text, schema)
+    except (BudgetExceededError, BackendUnavailable, RepoTrustError) as e:
+        log.warning("%s: the reformat could not run: %s", name, str(e)[:500])
+        raise CallFailed(f"{name}: the reformat of a paid answer could not run: {e}") from e
     except (ValidationError, ValueError, CallFailed) as e:
         log.warning("%s: answer unusable after the reformat: %s", name, str(e)[:500])
         raise CallFailed(f"{name}: no valid answer after a reformat: {e}") from e

@@ -5,7 +5,7 @@ Each test stops the step at its row's point, resumes with the same command, and
 compares with a reference run that never stopped, on an identical fixture with
 the same fixed clock: the same `<run>` under its root, byte-equal outputs
 (`conftest.outputs`), and the same saved target and steps. PR 1a's rows: R13,
-R18, R19, R23, R27. PR 1b's: R4, R5, R6, R12, R26, R30, which also check that the
+R18, R19, R23, R27. PR 1b's: R4, R5, R6, R12, R26, R30, R31, which also check that the
 stopped run's answers equal the reference's for every key answered in both, and
 that the fake `CallFn` was called no more often per unit than in the reference.
 R6 resumes on a later clock, so its byte-equal facts.json also checks R28 (the
@@ -22,6 +22,7 @@ import subprocess
 import sys
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from multiplai_core.citations import file_at
@@ -29,10 +30,12 @@ from multiplai_core.citations import file_at
 from conftest import (FIXED, SCRIPTS_DIR, Killed, commit_file, everything, fake_state, git, make_repo,
                       make_units_repo, outputs, read_state, run, source_head, unit_file, write)
 from spec_extract_pipeline import report as report_mod
+from spec_extract_pipeline import sdk
 from spec_extract_pipeline import state as state_mod
 from spec_extract_pipeline import target as target_mod
 
 OTHER = "https://github.com/other/widgets.git"
+_REAL_CALL = sdk.agent_call_structured  # before the autouse fixture replaces it
 
 
 def _state_text(run_dir: Path, root: Path) -> dict:
@@ -552,3 +555,45 @@ def test_R30_resume_from_another_checkout(tmp_path, monkeypatch, fake_call, stop
     assert_explore_matches(run_dir, root, ref_dir, ref_root, dict(fake_call.calls), ref_calls)
     # The citations were checked in the other checkout: none was dropped for a missing repo.
     assert json.loads((run_dir / "facts.json").read_text())["dropped"] == []
+
+
+# --- R31: the budget is reached at the reformat of a paid answer ---------------------------
+
+def test_R31_budget_stop_at_the_reformat_counts_the_attempt(tmp_path, monkeypatch, fake_call):
+    """The real wrapper over a fake `run_agent`: every explore run answers text that does not
+    parse ($1 each), so every attempt needs a reformat. A budget stop at the reformat keeps the
+    paid run's attempt, so the unit is never asked a third time, however the cap is raised."""
+    runs: list[str] = []
+
+    async def run_agent(prompt, *, allowed_tools, **kwargs):
+        runs.append("reformat" if not allowed_tools else "explore")
+        return SimpleNamespace(text="not json", usage=SimpleNamespace(cost_usd=1.0, input_tokens=1,
+                                                                      output_tokens=1))
+
+    monkeypatch.setattr(sdk, "agent_call_structured", _REAL_CALL)
+    monkeypatch.setattr(sdk, "run_agent", run_agent)
+    repo = make_units_repo(tmp_path / "widgets", 1)
+    ref_root = tmp_path / "ref"
+    assert _tree(repo, ref_root) == 0
+    ref_runs = list(runs)
+    assert ref_runs == ["explore", "reformat"] * 2
+    runs.clear()
+
+    root = tmp_path / "out"
+    assert _tree(repo, root, "--max-usd", "1") == 3  # the explore run spends $1; its reformat is stopped
+    state = read_state(_folder(root))
+    assert runs == ["explore"] and state["budget"]["cost_usd"] == 1.0
+    assert state["explore_attempts"] == {"unit:u1": 1}  # the paid run's attempt counts
+    assert "reformat" in state["explore_answers"]["unit:u1"]["error"]
+    assert _tree(repo, root, "--max-usd", "1") == 3  # the same cap: exit 3 before any call
+    assert runs == ["explore"]
+    assert _tree(repo, root, "--max-usd", "2") == 0  # attempt 2, stopped at its reformat again: final
+    assert runs == ["explore", "explore"]
+    assert _tree(repo, root, "--max-usd", "10") == 0  # never a third attempt
+    assert runs == ["explore", "explore"]
+
+    run_dir, ref_dir = _folder(root), _folder(ref_root)
+    assert run_dir.relative_to(root) == ref_dir.relative_to(ref_root)
+    assert outputs(run_dir) == outputs(ref_dir)
+    assert read_state(run_dir)["explore_attempts"] == read_state(ref_dir)["explore_attempts"]
+    assert "- `d0/mod.py`: not analysed: explore gave no answer in 2 attempts" in (run_dir / "report.md").read_text()

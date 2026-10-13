@@ -26,7 +26,8 @@ capability into a run folder. **This version stops after the explore step**:
    `Grep` on `snapshot/` only. A unit whose agent run fails is asked once
    more; one with no answer after two attempts is listed as not analysed. An
    answer that does not parse is sent back once to be reformatted (one turn,
-   no tools). A model setting no call can run with (an unknown provider,
+   no tools); when the budget or the backend stops that reformat, the attempt
+   still counts, since its first run was paid for. A model setting no call can run with (an unknown provider,
    `claude-agent-sdk` missing, or for a `pi:` model the `pi` binary missing or
    failing to start) stops the run with exit 1 and counts no attempt, so the
    same command works once the setting is fixed. Every fact must cite lines
