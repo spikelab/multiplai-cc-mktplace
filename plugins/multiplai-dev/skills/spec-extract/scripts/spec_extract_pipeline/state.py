@@ -7,9 +7,9 @@ renames or deletes a `.state-*.tmp`; the run's own temp files are named
 `<file>.tmp`.
 
 `steps_done` lists the steps whose outputs are whole, in order: `resolve`,
-`scope`, `explore`, `group`, `write`, `render` (this version), then `apply`
-as a later version adds it. Each later version adds its own fields with defaults, so a
-state an earlier version wrote still loads.
+`scope`, `explore`, `group`, `write`, `render`, then `apply`. Each later
+version adds its own fields with defaults, so a state an earlier version wrote
+still loads.
 """
 
 from __future__ import annotations
@@ -33,6 +33,19 @@ class Unreadable(Exception):
                          "Run the same command with --restart to move this run folder aside "
                          "(it is renamed, never deleted) and start again. If the folder holds "
                          "another target's run, do not use --restart: pass --out <another root>")
+
+
+class ApplyStop(BaseModel):
+    """What `--apply` wrote into `<registry>`, in the shape of buildme's
+    `stop_record.StepStop`, which the uncommitted-work check validates it as
+    (plan, item 21). `edits` maps each file name, relative to `<registry>`, to
+    `"sha256:"` plus the SHA-256 of the bytes written there; it is saved before
+    each write. `head` stays None: the check compares no HEAD."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    head: str | None = None
+    edits: dict[str, str] = {}
 
 
 class State(BaseModel):
@@ -61,6 +74,8 @@ class State(BaseModel):
     # Capability names come from the gated group answer, so they are the same on every run.
     write_answers: dict[str, dict] = {}
     write_attempts: dict[str, int] = {}
+    # Set by the first copy `--apply` makes, and kept: a later --apply is a resume (item 21).
+    apply_stop: ApplyStop | None = None
 
 
 def load(run_dir: Path) -> State | None:

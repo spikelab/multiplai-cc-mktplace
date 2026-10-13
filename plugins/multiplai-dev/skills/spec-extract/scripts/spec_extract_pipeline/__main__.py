@@ -3,12 +3,15 @@
     python -m spec_extract_pipeline run (--tree [COMMIT] [--path DIR] | --pr N | --dir PATH)
         [--repo DIR] [--out ROOT] [--fetch] [--restart]
         [--max-usd USD] [--max-units N] [--plan-only] [--trust-repo]
+        [--apply [--specs-dir DIR]]
 
 Running the same command again resumes the run in the same folder. Exit codes:
 0 done, 1 failed, 2 refused, 3 the run folder's spend reached --max-usd,
-4 the repository is not trusted, 5 another run holds the lock. This version
-resolves, scopes, explores, groups, writes and renders, then prints
-`SPEC_EXTRACT:RENDERED <files> <run>/registry`.
+4 the repository is not trusted, 5 another run holds the lock. It resolves,
+scopes, explores, groups, writes and renders, then prints
+`SPEC_EXTRACT:RENDERED <files> <run>/registry`; with `--apply` it then copies
+the new registry files into `<specs-dir>/registry/` and prints
+`SPEC_EXTRACT:APPLIED <n>`.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import apply as apply_mod
 from . import explore, gate, group, runlock, sdk, write
 from . import render as render_mod
 from . import report as report_mod
@@ -73,17 +77,25 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--trust-repo", action="store_true",
                      help="Confirm you trust the repository: its contents are sent to a model, which reads "
                           f"the tree (equivalent to {sdk.TRUST_ENV}=1)")
+    run.add_argument("--apply", action="store_true",
+                     help="After render, copy each new capability file into <specs-dir>/registry/; "
+                          "a file already there is left untouched. Commits nothing")
+    run.add_argument("--specs-dir", metavar="DIR",
+                     help="With --apply: the specs directory (default <repo>/specs; required with --dir)")
     return parser
 
 
 def _run(args: argparse.Namespace, now: Callable[[], datetime]) -> int:
     if args.trust_repo:
         os.environ[sdk.TRUST_ENV] = "1"
+    apply_mod.refuse_early(args.apply, args.dir, args.specs_dir)
     root = (args.out or default_out()).expanduser().resolve()
     fresh = target.resolve(args.repo, tree=args.tree, path=args.path, pr=args.pr, dir=args.dir,
                            fetch=args.fetch)
     with contextlib.ExitStack() as lock:
         run_dir = target.run_folder(root, fresh, lock)
+        if args.apply:  # refuse a --specs-dir apply could not use before paying for anything
+            apply_mod.registry_dir(fresh, args.specs_dir, run_dir)
         if args.restart:
             old = target.restart(run_dir, now())
             if old is not None:
@@ -132,7 +144,7 @@ def _run(args: argparse.Namespace, now: Callable[[], datetime]) -> int:
         if rendered:  # R10: finish deleting the snapshot; never re-render
             render_mod.drop_snapshot(run_dir)
             print(f"SPEC_EXTRACT:RENDERED {len(list(registry.glob('*.md')))} {registry}", flush=True)
-            return EXIT_DONE
+            return _apply(args, state, run_dir, git_target)
 
         ledger = sdk.start_budget(args.max_usd, state.budget)
         if "explore" not in state.steps_done:
@@ -140,7 +152,20 @@ def _run(args: argparse.Namespace, now: Callable[[], datetime]) -> int:
                                     model=sdk.model_for("explore")))
         answered, units = explore.finish(state, run_dir, now(), git_target)
         print(f"SPEC_EXTRACT:EXPLORED {answered}/{units}", flush=True)
-        return _group_write_render(state, run_dir, git_target, ledger)
+        code = _group_write_render(state, run_dir, git_target, ledger)
+        return _apply(args, state, run_dir, git_target) if code == EXIT_DONE else code
+
+
+def _apply(args: argparse.Namespace, state: state_mod.State, run_dir: Path, git_target: target.Target) -> int:
+    """`--apply`, after render (item 21); exit 0 without it."""
+    if not args.apply:
+        return EXIT_DONE
+    registry = apply_mod.registry_dir(git_target, args.specs_dir, run_dir)
+    applied, skipped = apply_mod.run(state, run_dir, registry)
+    print(f"SPEC_EXTRACT:APPLIED {applied}", flush=True)
+    for line in skipped:
+        print(line, flush=True)
+    return EXIT_DONE
 
 
 def _ask_with_write_model(step: Coroutine[Any, Any, None]) -> None:
@@ -192,7 +217,7 @@ def main(argv: Sequence[str] | None = None, *, now: Callable[[], datetime] | Non
     except target.TargetError as e:
         print(f"spec-extract: {e}", file=sys.stderr)
         return EXIT_REFUSED
-    except scope_mod.ScopeRefused as e:
+    except (scope_mod.ScopeRefused, apply_mod.ApplyRefused) as e:
         if e.line:
             print(e.line, flush=True)
         print(f"spec-extract: {e}", file=sys.stderr)
