@@ -236,9 +236,22 @@ def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
     assert argv[argv.index("--context-files") + 1] == str(e.config.change_dir / "interview.md")
     # The parent's research decision stands: the child copies it, no second call.
     assert argv[argv.index("--research-path") + 1] == str(e.config.change_dir / "research.md")
+    assert "--skip-research" not in argv
     for i, a in enumerate(argv):
         if a in ("--plan-file", "--project-dir", "--context-files", "--research-path"):
             assert Path(argv[i + 1]).is_absolute()
+
+
+def test_a_parent_that_skipped_research_skips_it_in_each_child(tmp_path, monkeypatch):
+    """The parent ran with --skip-research, which writes no research.md: each
+    child gets --skip-research, so none decides on research again and parks
+    with RESEARCH:NEEDED."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
+    assert not (e.config.change_dir / "research.md").exists()
+    assert e.run() == 0
+    for a in records.attempts(e.dir):
+        argv = a.started["argv"]
+        assert "--skip-research" in argv and "--research-path" not in argv
 
 
 def test_base_ref_reaches_a_new_child_and_a_relaunch_keeps_its_own(tmp_path, monkeypatch):

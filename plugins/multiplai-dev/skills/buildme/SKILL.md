@@ -621,8 +621,8 @@ parent's project directory, from origin's default branch (`--base-ref`), so
 each child gets its own worktree, branch and ready PR. A `specs/config.yaml`
 that sets `git.worktree` or `git.push` to `false` would build the children in
 place or open no PR, so the build exits `2` before launching any. The parent's
-`research.md` reaches each child as `--research-path`, so no child decides on
-research again. A child starts once
+`research.md` reaches each child as `--research-path` (a parent that skipped
+research passes `--skip-research`), so no child decides on research again. A child starts once
 every child it depends on has **merged**; dependent children never stack on an
 open PR. At most `epic.max_parallel` build at once (default `2`). Each run
 writes `agents/<NNN>-build-<id>.{started.json,result.json,log}` and ends with

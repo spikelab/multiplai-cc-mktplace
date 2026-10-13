@@ -355,6 +355,22 @@ def test_B1_S21_a_failing_ps_never_counts_a_live_child_as_gone(tmp_path, monkeyp
     _assert_same(stopped, clean, {"a": [("build", "<argv>", None, _built("a"), True)]})
 
 
+def test_B1_S21_a_failing_ps_while_polling_an_adopted_child(tmp_path, monkeypatch):
+    """B1.S21, in the run loop: the resumed run adopts the live child, then `ps`
+    fails as `_poll` checks it. No result and no launch for it, status
+    `unknown`, exit 1. The next run checks again: as B1.S4."""
+    stopped, clean = _roots(tmp_path, monkeypatch, {"a": [{"block": True}, {}]})
+    stopped.killed(die_at(coordinator, "_tick"))
+    assert stopped.run(lambda coord: stopped.fakes.ps_fails(monkeypatch)) == 1
+    assert stopped.fakes.attempts("a") == 1 and stopped.status()["a"] == "unknown"
+    reason = json.loads((stopped.dir / "epic.json").read_text())["child_status"]["a"]["reason"]
+    assert reason.startswith("cannot tell whether its build is still running")
+    assert records_snapshot(stopped.dir, stopped.root)["a"][0][2] == "no result"
+    assert stopped.run(_release_all(stopped)) == 0
+    assert clean.run(_release_all(clean)) == 0
+    _assert_same(stopped, clean, {"a": [("build", "<argv>", None, _built("a"), True)]})
+
+
 def test_B1_S24_a_failed_pr_read_is_not_an_open_pr(tmp_path, monkeypatch, capsys):
     """B1.S24: `gh pr view` fails for the PR b waits on: a is `unknown`, no
     EPIC:MERGE_WAITING for a PR that may have merged, nothing launched, exit 1.

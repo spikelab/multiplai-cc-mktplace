@@ -24,8 +24,8 @@ time, not derived from a tag.
   command runs each child as its own buildme build (`--mode brief`, the
   child's plan, `--auto --no-epic-split --pr-ready`) from origin's default
   branch, so each gets its own worktree, branch and ready PR, and the
-  parent's research as `--research-path`, so no child decides on research
-  again. A `specs/config.yaml` with `git.worktree` or `git.push` set to
+  parent's research as `--research-path` (or `--skip-research` when the
+  parent skipped it), so no child decides on research again. A `specs/config.yaml` with `git.worktree` or `git.push` set to
   `false` is refused (exit 2) before any child starts. A child starts
   once every child it depends on has merged; at most `epic.max_parallel` build
   at once (default 2). While a child waits on an open PR the build exits 3

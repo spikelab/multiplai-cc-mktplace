@@ -218,8 +218,13 @@ class Coordinator:
                 "--plan-file", str(store.plan_path(self.epic_dir, cid).absolute())]
         if context:
             argv += ["--context-files", *context]
-        if research.is_file():      # the parent's research decision stands: no second one
+        # The parent's research decision stands: no child makes a second one. A
+        # parent run with --skip-research advances past RESEARCH and writes no
+        # research.md, so its children skip research too.
+        if research.is_file():
             argv += ["--research-path", str(research)]
+        else:
+            argv += ["--skip-research"]
         argv += ["--auto", "--trust-repo", "--no-epic-split", "--pr-ready",
                  "--project-dir", str(self.project_dir.absolute())]
         if base:
