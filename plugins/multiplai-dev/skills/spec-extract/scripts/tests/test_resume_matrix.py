@@ -9,7 +9,9 @@ R18, R19, R23, R27. PR 1b's: R4, R5, R6, R12, R26, R30, R31, which also check th
 stopped run's answers equal the reference's for every key answered in both, and
 that the fake `CallFn` was called no more often per unit than in the reference.
 R6 resumes on a later clock, so its byte-equal facts.json also checks R28 (the
-saved `generated_at`).
+saved `generated_at`). PR 3a's: R8, R20, R21, R22, and R12's group and write
+case, which compare every output a finished run writes (`capabilities.json`,
+`registry/`, `report.md`, `summary.json`) and the group and write answers.
 Later PRs add theirs here.
 """
 
@@ -401,6 +403,7 @@ def test_R5_unit_stopped_twice_is_not_asked_again(tmp_path, fake_call):
 
 # --- R6: every answer saved, before `explore` is in steps_done -----------------------------
 
+@pytest.mark.usefixtures("stops_after_explore")  # an explore row: the run ends there
 @pytest.mark.parametrize("left", ["absent", "old", "tmp"])
 def test_R6_answers_saved_outputs_missing(tmp_path, monkeypatch, fake_call, left):
     repo = make_units_repo(tmp_path / "widgets", 2)
@@ -438,6 +441,7 @@ def test_R6_answers_saved_outputs_missing(tmp_path, monkeypatch, fake_call, left
 
 # --- R12: the budget is reached -------------------------------------------------------------
 
+@pytest.mark.usefixtures("stops_after_explore")  # an explore row: the run ends there
 def test_R12_budget_reached_then_raised(tmp_path, capsys, fake_call):
     repo = make_units_repo(tmp_path / "widgets", 4)
     ref_root = tmp_path / "ref"
@@ -559,6 +563,7 @@ def test_R30_resume_from_another_checkout(tmp_path, monkeypatch, fake_call, stop
 
 # --- R31: the budget is reached at the reformat of a paid answer ---------------------------
 
+@pytest.mark.usefixtures("stops_after_explore")  # an explore row: the run ends there
 def test_R31_budget_stop_at_the_reformat_counts_the_attempt(tmp_path, monkeypatch, fake_call):
     """The real wrapper over a fake `run_agent`: every explore run answers text that does not
     parse ($1 each), so every attempt needs a reformat. A budget stop at the reformat keeps the
@@ -597,3 +602,171 @@ def test_R31_budget_stop_at_the_reformat_counts_the_attempt(tmp_path, monkeypatc
     assert outputs(run_dir) == outputs(ref_dir)
     assert read_state(run_dir)["explore_attempts"] == read_state(ref_dir)["explore_attempts"]
     assert "- `d0/mod.py`: not analysed: explore gave no answer in 2 attempts" in (run_dir / "report.md").read_text()
+
+
+# --- PR 3a: group and write rows ------------------------------------------------------------
+# make_repo's three modules give three capabilities (one, charge, two): one explore unit,
+# one group call and three write calls, $1 each with the fake.
+
+def _caps_reference(fake, script: dict[str, list[str]], repo: Path, ref_root: Path,
+                    expect: int = 0) -> dict[str, int]:
+    return _reference(fake, script, lambda: _tree(repo, ref_root), expect)
+
+
+def assert_run_matches(run_dir: Path, root: Path, ref_dir: Path, ref_root: Path,
+                       calls: dict[str, int], ref_calls: dict[str, int]) -> None:
+    """The same `<run>`, byte-equal outputs, equal answers where both have one, no extra call."""
+    assert run_dir.relative_to(root) == ref_dir.relative_to(ref_root)
+    assert outputs(run_dir) == outputs(ref_dir)
+    mine, ref = read_state(run_dir), read_state(ref_dir)
+    for key in mine["write_answers"].keys() & ref["write_answers"].keys():
+        if "error" not in mine["write_answers"][key]:
+            assert mine["write_answers"][key] == ref["write_answers"][key], key
+    if mine["group_answer"] and "error" not in mine["group_answer"]:
+        assert mine["group_answer"] == ref["group_answer"]
+    assert all(n <= ref_calls.get(key, 0) for key, n in calls.items()), (calls, ref_calls)
+
+
+def _stop_after_save(monkeypatch, when) -> None:
+    """Kill the run right after the first save whose state meets *when*; nothing reaches
+    the disk after it, as in a process that is gone."""
+    real = state_mod.save
+    dead = []
+
+    def save(state, run_dir):
+        if dead:
+            raise Killed("the process is gone")
+        real(state, run_dir)
+        if when(state):
+            dead.append(True)
+            raise Killed("stopped")
+
+    monkeypatch.setattr(state_mod, "save", save)
+
+
+# --- R8: write stopped with k of m capabilities answered ------------------------------------
+
+def test_R8_write_stopped_part_way(tmp_path, monkeypatch, fake_call):
+    repo = make_repo(tmp_path / "widgets")
+    script = {"write:one": ["fail"]}  # one's first write fails; round 2 answers it
+    ref_root = tmp_path / "ref"
+    ref_calls = _caps_reference(fake_call, script, repo, ref_root)
+
+    root = tmp_path / "out"
+    fake_call.script.update({k: list(v) for k, v in script.items()})
+    with monkeypatch.context() as m:
+        _stop_after_save(m, lambda st: len(st.write_answers) >= 2)
+        _stopped(lambda: _tree(repo, root))
+    stopped = read_state(_folder(root))
+    assert len(stopped["write_answers"]) == 2 and "write" not in stopped["steps_done"]
+    assert _tree(repo, root) == 0
+    assert_run_matches(_folder(root), root, _folder(ref_root), ref_root, dict(fake_call.calls), ref_calls)
+    assert read_state(_folder(root))["write_attempts"] == read_state(_folder(ref_root))["write_attempts"]
+
+
+def test_R8_capability_stopped_twice_is_not_written(tmp_path, fake_call):
+    repo = make_repo(tmp_path / "widgets")
+    ref_root = tmp_path / "ref"
+    ref_calls = _caps_reference(fake_call, {"write:charge": ["fail", "fail"]}, repo, ref_root)
+
+    root = tmp_path / "out"
+    for _ in range(2):
+        fake_call.script["write:charge"] = ["kill"]
+        _stopped(lambda: _tree(repo, root))
+    assert read_state(_folder(root))["write_attempts"]["charge"] == 2
+    assert _tree(repo, root) == 0
+    assert fake_call.calls["write:charge"] == 2  # never a third time
+    assert_run_matches(_folder(root), root, _folder(ref_root), ref_root, dict(fake_call.calls), ref_calls)
+    assert "- charge: not written: write gave no answer in 2 attempts" in (_folder(root) / "report.md").read_text()
+
+
+# --- R20: the group answer saved, capabilities.json not replaced -----------------------------
+
+@pytest.mark.parametrize("left", ["absent", "old", "tmp"])
+def test_R20_group_answered_capabilities_json_not_written(tmp_path, monkeypatch, fake_call, left):
+    repo = make_repo(tmp_path / "widgets")
+    ref_root = tmp_path / "ref"
+    ref_calls = _caps_reference(fake_call, {}, repo, ref_root)
+
+    root = tmp_path / "out"
+    real = report_mod.write_output
+
+    def write_output(run_dir, name, text):
+        if name == "capabilities.json":
+            if left == "tmp":
+                (run_dir / "capabilities.json.tmp").write_text(text[: len(text) // 2], encoding="utf-8")
+            raise Killed("stopped while writing capabilities.json")
+        return real(run_dir, name, text)
+
+    with monkeypatch.context() as m:
+        m.setattr(report_mod, "write_output", write_output)
+        _stopped(lambda: _tree(repo, root))
+    run_dir = _folder(root)
+    assert read_state(run_dir)["group_answer"] and "group" not in read_state(run_dir)["steps_done"]
+    if left == "old":
+        (run_dir / "capabilities.json").write_text("stale\n")
+    assert _tree(repo, root) == 0
+    assert fake_call.calls["group"] == 1  # no second group call
+    assert not (run_dir / "capabilities.json.tmp").exists()
+    assert_run_matches(run_dir, root, _folder(ref_root), ref_root, dict(fake_call.calls), ref_calls)
+
+
+# --- R21: group done, before the first write call -----------------------------------------
+
+def test_R21_group_done_before_any_write_call(tmp_path, monkeypatch, fake_call):
+    repo = make_repo(tmp_path / "widgets")
+    ref_root = tmp_path / "ref"
+    ref_calls = _caps_reference(fake_call, {}, repo, ref_root)
+
+    root = tmp_path / "out"
+    with monkeypatch.context() as m:
+        _stop_after_save(m, lambda st: "group" in st.steps_done)
+        _stopped(lambda: _tree(repo, root))
+    run_dir = _folder(root)
+    assert read_state(run_dir)["write_attempts"] == {}
+    (run_dir / "capabilities.json").write_text("edited\n")  # rewritten from state (R24)
+    assert _tree(repo, root) == 0
+    assert fake_call.calls["group"] == 1
+    assert_run_matches(run_dir, root, _folder(ref_root), ref_root, dict(fake_call.calls), ref_calls)
+
+
+# --- R22: group stopped twice: 2 attempts, no answer -----------------------------------------
+
+def test_R22_group_stopped_twice_is_not_grouped(tmp_path, capsys, fake_call):
+    repo = make_repo(tmp_path / "widgets")
+    ref_root = tmp_path / "ref"
+    ref_calls = _caps_reference(fake_call, {"group": ["fail", "fail"]}, repo, ref_root, expect=1)
+
+    root = tmp_path / "out"
+    for _ in range(2):
+        fake_call.script["group"] = ["kill"]
+        _stopped(lambda: _tree(repo, root))
+    assert read_state(_folder(root))["group_attempts"] == 2
+    assert _tree(repo, root) == 1
+    assert fake_call.calls["group"] == 2  # never a third time
+    assert_run_matches(_folder(root), root, _folder(ref_root), ref_root, dict(fake_call.calls), ref_calls)
+    assert "- not grouped: group gave no answer in 2 attempts" in (_folder(root) / "report.md").read_text()
+
+
+# --- R12: the budget is reached at group, then at write ---------------------------------------
+
+def test_R12_budget_reached_at_group_and_write(tmp_path, fake_call):
+    repo = make_repo(tmp_path / "widgets")
+    ref_root = tmp_path / "ref"
+    ref_calls = _caps_reference(fake_call, {}, repo, ref_root)
+
+    root = tmp_path / "out"
+    assert _tree(repo, root, "--max-usd", "0.5") == 3  # explore passes the check at $0; group sees $1
+    state = read_state(_folder(root))
+    assert state["group_attempts"] == 0 and state["budget"]["cost_usd"] == 1.0
+    assert _tree(repo, root, "--max-usd", "1.5") == 3  # group runs; every write task sees $2
+    state = read_state(_folder(root))
+    assert state["write_attempts"] == {} and state["budget"]["cost_usd"] == 2.0
+    calls = dict(fake_call.calls)
+    assert _tree(repo, root, "--max-usd", "1.5") == 3  # the same cap: exit 3 before any call
+    assert dict(fake_call.calls) == calls
+    assert _tree(repo, root, "--max-usd", "10") == 0
+
+    run_dir, ref_dir = _folder(root), _folder(ref_root)
+    assert_run_matches(run_dir, root, ref_dir, ref_root, dict(fake_call.calls), ref_calls)
+    assert read_state(run_dir)["budget"]["cost_usd"] == read_state(ref_dir)["budget"]["cost_usd"] == 5.0

@@ -7,8 +7,8 @@ renames or deletes a `.state-*.tmp`; the run's own temp files are named
 `<file>.tmp`.
 
 `steps_done` lists the steps whose outputs are whole, in order: `resolve`,
-`scope`, `explore` (this version), then `group`, `write`, `render`, `apply` as
-later versions add them. Each later version adds its own fields with defaults, so a
+`scope`, `explore`, `group`, `write`, `render` (this version), then `apply`
+as a later version adds it. Each later version adds its own fields with defaults, so a
 state an earlier version wrote still loads.
 """
 
@@ -54,6 +54,13 @@ class State(BaseModel):
     # facts.json's `generated_at`: the clock when explore first finished, saved before
     # facts.json is first written, so every later rewrite is the same bytes (row R28).
     facts_generated_at: datetime | None = None
+    # The group call's answer, or {"error": ...}; its calls started (item 14).
+    group_answer: dict | None = None
+    group_attempts: int = 0
+    # {capability: a write answer, or {"error": ...}}, and calls started per capability (item 15).
+    # Capability names come from the gated group answer, so they are the same on every run.
+    write_answers: dict[str, dict] = {}
+    write_attempts: dict[str, int] = {}
 
 
 def load(run_dir: Path) -> State | None:

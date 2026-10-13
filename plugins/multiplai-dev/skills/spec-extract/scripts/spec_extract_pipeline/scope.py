@@ -220,7 +220,7 @@ def check(scope: TargetScope, max_units: int) -> None:
 def plan_text(target: Target, scope: TargetScope, describe: str) -> str:
     """`plan.txt`: the units and the number of calls a run would make. No timestamp."""
     n = len(scope.units)
-    s = len(scope.symbols)
+    s = len({(x.path, x.name) for x in scope.symbols})  # a name defined twice is one symbol
     lines = [f"spec-extract plan: {describe}", "",
              f"Explore: {n} unit(s), one agent run each (a unit whose run fails is asked once more, "
              f"so at most {2 * n} agent runs; an answer that does not parse is sent back once to be "

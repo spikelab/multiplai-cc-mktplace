@@ -17,6 +17,31 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-10-13
+
+### Added
+- `/multiplai-dev:spec-extract`, third part: after exploring, a run now writes
+  the specs. One call groups the public symbols into capabilities (a program
+  then makes the names kebab-case and unique, puts every symbol in exactly one
+  capability, and splits any capability over 40 symbols by module); one
+  read-only agent per capability writes requirements with WHEN/THEN
+  scenarios; every scenario's cited lines are re-read at the commit, and a
+  scenario whose citations all fail is dropped and listed with the reason.
+  So is a requirement whose name repeats a kept one in its capability, or is
+  a prefix of one, or has one as a prefix: buildme matches requirement names
+  by prefix when it removes or replaces them. The run writes
+  `registry/<capability>.md` in buildme's `specs/registry/` format, each
+  scenario marked "pinned by test" or "read from code only",
+  plus `capabilities.json`, `summary.json`, and a `report.md` listing every
+  dropped item and every public symbol no scenario specifies. It ends with
+  `SPEC_EXTRACT:RENDERED <files> <run>/registry` and deletes `snapshot/`.
+  The group and write calls follow explore's retry, budget and resume rules:
+  a re-run pays for no call whose answer was saved. No group answer after two
+  attempts ends the run with exit 1 (`SPEC_EXTRACT:NOT_GROUPED`). New
+  `multiplai.conf` key `spec_extract_write_model` (group and write). Files are
+  still written into the run folder only; copying them into a repository comes
+  in a later version.
+
 ## [0.56.0] - 2026-10-13
 
 ### Added

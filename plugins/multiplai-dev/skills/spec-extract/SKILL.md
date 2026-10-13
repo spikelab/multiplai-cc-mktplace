@@ -1,6 +1,6 @@
 ---
 name: spec-extract
-description: Writes BDD capability specs, in the format of buildme's specs/registry/, from the Python code of a commit, a directory or a PR, with every scenario citing lines a gate re-read at that commit. This version resolves the target, chooses and locks its run folder, lists the Python files and their public symbols, and asks one read-only agent per slice of code what it does, keeping only facts whose cited lines are at the commit; the group, write and apply stages come in later versions.
+description: Writes BDD capability specs, in the format of buildme's specs/registry/, from the Python code of a commit, a directory or a PR, with every scenario citing lines a gate re-read at that commit. This version resolves the target, chooses and locks its run folder, lists the Python files and their public symbols, and asks one read-only agent per slice of code what it does, keeping only facts whose cited lines are at the commit; then groups the symbols into capabilities, asks one agent per capability for its requirements and scenarios, drops every scenario whose citations fail, and writes one registry file per capability. Copying them into a repository (--apply) comes in a later version.
 when_to_use: 'Triggers: spec-extract, reverse-engineer specs, write specs from code, /multiplai-dev:spec-extract'
 model: sonnet
 effort: medium
@@ -9,7 +9,8 @@ effort: medium
 # spec-extract
 
 Reads the Python code of one target and writes one capability file per
-capability into a run folder. **This version stops after the explore step**:
+capability into a run folder. **This version writes the files into the run
+folder only; copying them into a repository comes later**:
 
 1. **Resolve.** Resolves the target, chooses and locks the run folder, writes
    `state.json`, extracts the commit into `snapshot/`, and prints
@@ -34,6 +35,25 @@ capability into a run folder. **This version stops after the explore step**:
    a program re-reads at the commit with `git show`; the rest are dropped.
    Writes `facts.json` and `report.md`, and prints
    `SPEC_EXTRACT:EXPLORED <answered>/<units>`.
+4. **Group.** One call with no tools reads the checked facts and the symbol
+   list and puts the symbols into capabilities. A program then fixes the
+   answer: kebab-case unique names, every public symbol in exactly one
+   capability (one the answer left out goes to `unassigned`), at most 40
+   symbols per capability (a larger one is split by module). Writes
+   `capabilities.json`. No answer after two attempts: no capability file,
+   `SPEC_EXTRACT:NOT_GROUPED`, exit 1.
+5. **Write.** One agent per capability, four at a time, with `Read`, `Glob`
+   and `Grep` on `snapshot/`, writes requirements with WHEN/THEN scenarios,
+   each citing lines. Same retry rule as explore; a capability with no answer
+   after two attempts is "not written".
+6. **Gate.** Every citation is re-read at the commit. A scenario with no
+   citation that passes is dropped and listed with the reason; so is a
+   requirement left with no scenario. A scenario citing a test file is
+   "pinned by test", else "read from code only". A public symbol no kept
+   scenario cites is listed as not specified.
+7. **Render.** Writes `registry/<capability>.md` in buildme's
+   `specs/registry/` format, `report.md` and `summary.json`, deletes
+   `snapshot/`, and prints `SPEC_EXTRACT:RENDERED <files> <run>/registry`.
 
 **It sends the target's code to a model.** The repository's own files become
 part of what the model reads, so the run needs the user to say they trust it:
@@ -75,8 +95,8 @@ folder, not the user's checkout.
 Running the same command again resumes the run in the same folder: it asks
 only the units with no answer, and pays for no call whose answer was saved.
 
-Models: `multiplai.conf` key `spec_extract_explore_model`; unset means the
-session's model.
+Models: `multiplai.conf` keys `spec_extract_explore_model` (explore) and
+`spec_extract_write_model` (group and write); unset means the session's model.
 
 ## Where results land
 
@@ -99,7 +119,7 @@ Only one run may write a folder at a time: a run holds
 | Code | Means |
 |---|---|
 | 0 | Done. |
-| 1 | Failed, including a model setting no call can run with (nothing is counted), a `state.json` that cannot be read, or a `--dir` run whose `<run>/source/` no longer holds its import commit (the message names `--restart`). |
+| 1 | Failed, including no group answer after two attempts (`SPEC_EXTRACT:NOT_GROUPED`; re-running makes no call and exits 1 again; `--restart` starts the run over), a model setting no call can run with (nothing is counted), a `state.json` that cannot be read, or a `--dir` run whose `<run>/source/` no longer holds its import commit (the message names `--restart`). |
 | 2 | Refused: a bad target, a commit not in the clone, a `--dir` run folder that would be inside its source (for example `--out` the source's parent), every candidate folder holds another target's run (pass `--out`), no Python file to read (`SPEC_EXTRACT:NO_PYTHON`), or more explore units than `--max-units`. |
 | 3 | The run folder's spend reached `--max-usd`. Everything paid for is saved; re-run with a higher `--max-usd` to continue. |
 | 4 | The repository was not marked trusted. Ask the user whether they trust it, and re-run with `--trust-repo` only on a yes. |
@@ -108,10 +128,18 @@ Only one run may write a folder at a time: a run holds
 ## What it writes in the run folder
 
 `state.json` (the target, the scope, every answer and the spend so far),
-`snapshot/`, `plan.txt`, `facts.json` (the checked facts, in review's
-`facts.v1` format) and `report.md` (the target and commit, the files left out
-and why, and the files not analysed). Only `state.json` is read back; the
-other files are rewritten from it, so editing them changes nothing.
+`snapshot/` (deleted once the registry files are written), `plan.txt`,
+`facts.json` (the checked facts, in review's `facts.v1` format),
+`capabilities.json`, `registry/<capability>.md` (one per capability: a first
+line naming the run and the commit, then `### Requirement:` blocks whose
+scenarios carry `- **CITES** \`path:start-end\`` and `- **EVIDENCE**` lines),
+`report.md` (the target and commit, the files left out and why, the files not
+analysed, counts, every dropped item with its reason, the symbols not
+specified, not grouped or not written) and `summary.json` (the same lists).
+Only `state.json` holds the spend, and only it and `facts.json` (its
+`generated_at`) a timestamp. Only `state.json` is read back; until the
+registry files are written the others are rewritten from it, so editing them
+changes nothing. After that a re-run makes no call and leaves them as they are.
 
 ## What it writes outside its output
 

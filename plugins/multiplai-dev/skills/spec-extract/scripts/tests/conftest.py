@@ -148,19 +148,25 @@ _LISTED = re.compile(r"^- (\S.*) \((\d+) lines\)$", re.M)
 
 
 class FakeCall:
-    """Stands in for `sdk.agent_call_structured`, the `CallFn` explore calls.
+    """Stands in for `sdk.agent_call_structured`, the `CallFn` every step calls.
 
     It answers an explore prompt with one fact and one file purpose per listed
     file, each citing the file's first non-blank line, read from the snapshot
     (`cwd`), so the gate keeps them. A unit is named by its first listed file.
-    `script[file]` lists what the unit's next calls do, one action per call,
-    then "ok" for every call after:
+    A group or write call is named by its budget label (`group`,
+    `write:<capability>`): group puts each module's symbols in one capability
+    named after the module; write gives each listed symbol one requirement
+    whose scenario cites its `def` line. `answers[key]` replaces that answer.
+    `script[key]` lists what the next calls for that unit or label do, one
+    action per call, then "ok" for every call after:
 
     - "ok": record `cost` dollars into the run's ledger, as the real call does
       as it returns, and answer;
     - "fail": record the spend, then raise `CallFailed`;
     - "kill": raise `Killed` before recording, like a process killed mid-call;
-    - "over": raise `BudgetExceededError`, as the real call's own check does.
+    - "over": raise `BudgetExceededError`, as the real call's own check does;
+    - "backend": raise `BackendUnavailable` before recording, as a model no
+      backend can run does.
     """
 
     def __init__(self) -> None:
@@ -168,22 +174,58 @@ class FakeCall:
         self.script: defaultdict[str, list[str]] = defaultdict(list)
         self.cost = 1.0
         self.kwargs: list[dict] = []
+        self.answers: dict[str, dict] = {}
+        self.prompts: dict[str, str] = {}
 
     async def __call__(self, prompt, schema, *, budget_label="", cwd=None, **kwargs):
-        files = [m.group(1) for m in _LISTED.finditer(prompt)]
-        unit = files[0]
+        files = [m.group(1) for m in _LISTED.finditer(prompt)] if schema is ExploreOutput else []
+        unit = files[0] if files else budget_label
         self.calls[unit] += 1
+        self.prompts[unit] = prompt
         self.kwargs.append(dict(kwargs, cwd=cwd, budget_label=budget_label))
         action = self.script[unit].pop(0) if self.script[unit] else "ok"
         if action == "kill":
             raise Killed(f"killed during the call for {unit}")
         if action == "over":
             raise BudgetExceededError("circuit breaker stopped the run (fake)")
+        if action == "backend":
+            raise sdk.BackendUnavailable("no model call can run: fake")
         core_budget.record(SimpleNamespace(cost_usd=self.cost, input_tokens=100, output_tokens=10),
                            label=budget_label)
         if action == "fail":
             raise sdk.CallFailed(f"fake failure for {unit}")
-        return schema.model_validate(answer_for(files, Path(cwd)))
+        if unit in self.answers:
+            return schema.model_validate(self.answers[unit])
+        if schema is ExploreOutput:
+            return schema.model_validate(answer_for(files, Path(cwd)))
+        symbols = _SYMBOL.findall(prompt)
+        if budget_label == "group":
+            return schema.model_validate(group_answer_for(symbols))
+        return schema.model_validate(write_answer_for(symbols, Path(cwd)))
+
+
+_SYMBOL = re.compile(r"^- (\S+)::(\S+) \(\w+, line (\d+)\)$", re.M)
+
+
+def group_answer_for(symbols: list[tuple[str, str, str]]) -> dict:
+    """One capability per module, named after the module, in the order listed."""
+    caps: dict[str, list[str]] = {}
+    for path, name, _ in symbols:
+        caps.setdefault(Path(path).stem, []).append(f"{path}::{name}")
+    return {"capabilities": [{"name": n, "summary": f"what {n} does", "symbols": s} for n, s in caps.items()]}
+
+
+def write_answer_for(symbols: list[tuple[str, str, str]], snapshot: Path) -> dict:
+    """One requirement per symbol, its one scenario citing the symbol's `def` line."""
+    reqs = []
+    for path, name, line in symbols:
+        n = int(line)
+        quote = (snapshot / path).read_text(encoding="utf-8").splitlines()[n - 1].strip()
+        cite = {"path": path, "line_start": n, "line_end": n, "quote": quote}
+        reqs.append({"name": f"{name} behaves", "text": f"The system SHALL provide {name}.",
+                     "scenarios": [{"name": f"calling {name}", "when": f"{name} is called",
+                                    "then": "it returns", "citations": [cite]}]})
+    return {"requirements": reqs}
 
 
 def answer_for(files: list[str], snapshot: Path) -> dict:
@@ -207,3 +249,10 @@ def fake_call(monkeypatch):
     monkeypatch.setattr(sdk, "model_for", lambda step: None)
     monkeypatch.setenv(sdk.TRUST_ENV, "1")
     return fake
+
+
+@pytest.fixture
+def stops_after_explore(monkeypatch):
+    """End the run where PR 1b ended it, after `SPEC_EXTRACT:EXPLORED`, with the snapshot
+    in place: for the tests of resolve, scope and explore, which look at that state."""
+    monkeypatch.setattr(cli, "_group_write_render", lambda *a, **k: cli.EXIT_DONE)

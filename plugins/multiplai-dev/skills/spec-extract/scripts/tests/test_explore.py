@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
+import pytest
 from code_facts import UNTRUSTED_RULES
 
 from conftest import FIXED, git, make_repo, make_units_repo, read_state, run
@@ -13,6 +14,10 @@ from spec_extract_pipeline import explore
 from spec_extract_pipeline.scope import TargetScope
 from spec_extract_pipeline.state import State
 from spec_extract_pipeline.target import Target
+
+# These tests are about resolve, scope and explore: the run ends after explore, as it did
+# before the group and write steps existed.
+pytestmark = pytest.mark.usefixtures("stops_after_explore")
 
 
 def _repo_with_units(tmp_path, n: int = 3):
