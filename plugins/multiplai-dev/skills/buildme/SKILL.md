@@ -794,7 +794,7 @@ Parse pipeline stdout for progress lines:
 nothing (another process holds the epic's lock, or an approved epic file
 changed: the `ERROR:` line names the process or the file; report it, and never
 change the flags to get past it), `4` an agent timed out
-(a failure: report it like `1`), `130`, `143` or `129` an epic run stopped by Ctrl-C, SIGTERM or SIGHUP (re-run to continue), and `3` — **waiting on a human or on you**. Each `3` prints one marker. Handle it, then re-run the
+(a failure: report it like `1`), `130`, `143` or `129` an epic run stopped by Ctrl-C, SIGTERM or SIGHUP (re-run to continue; `143` and `129` also end any `build` or `findings` stopped by SIGTERM or SIGHUP), and `3` — **waiting on a human or on you**. Each `3` prints one marker. Handle it, then re-run the
 **same** `build --change <name>` command (plus the flag named below) to resume:
 
 | Marker | What happened | What you do |

@@ -13,6 +13,7 @@ of the pipeline calls (`start`, `get_budget`, `record(label=)`,
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from multiplai_core import budget as _core
@@ -23,6 +24,8 @@ from multiplai_core.budget import (  # noqa: F401 — re-exported for the pipeli
     SpendLedger,
     empty_stage,
 )
+
+log = logging.getLogger(__name__)
 
 # The review pipeline's default since multiplai-cc-mktplace PR #250.
 DEFAULT_MAX_USD = 50.0
@@ -64,9 +67,15 @@ def spend_marker() -> str:
 
 def record(usage, *, label: str = "") -> None:
     get_budget().record(usage, label=label)
-    _process.cost_usd += float(getattr(usage, "cost_usd", 0.0) or 0.0)
-    _process.tokens += sum(int(getattr(usage, name, 0) or 0) for name in (
-        "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"))
+    try:
+        cost = float(getattr(usage, "cost_usd", 0.0) or 0.0)
+        tokens = sum(int(getattr(usage, name, 0) or 0) for name in (
+            "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"))
+    except Exception as e:  # recording never raises, as the ledger's own does not
+        log.warning("Process spend accounting failed for a call (ignored): %s", e)
+        return
+    _process.cost_usd += cost
+    _process.tokens += tokens
 
 
 def check(*, stage: str = "") -> None:

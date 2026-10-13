@@ -70,7 +70,7 @@ def review_slugs(repo_slug: str, prs: list[str | None]) -> set[str]:
 def review_spend(ledger: Path, slugs: set[str]) -> tuple[float, bool]:
     """(USD, complete) of the reviews of the PRs named by *slugs*."""
     try:
-        text = Path(ledger).read_text(encoding="utf-8")
+        text = Path(ledger).read_text(encoding="utf-8", errors="replace")   # one bad line is skipped below
     except FileNotFoundError:
         return 0.0, True
     except OSError as e:

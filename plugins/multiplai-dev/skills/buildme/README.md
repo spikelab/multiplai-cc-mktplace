@@ -700,6 +700,7 @@ CLI flags win over `config.yaml` in every case.
 | 3 | Waiting on a human or the wrapper — see SKILL.md Step 4 |
 | 4 | Agent timeout |
 | 130, 143 | An epic run stopped by Ctrl-C or SIGTERM; re-run the same command to continue |
+| 129, 143 | A `build` or `findings` stopped by SIGHUP or SIGTERM (it still prints `SPEND:`). An epic run stopped by SIGHUP leaves its children running; re-run the same command to continue |
 
 ### Progress Monitoring
 
