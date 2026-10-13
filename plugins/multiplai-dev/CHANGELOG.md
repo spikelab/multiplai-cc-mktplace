@@ -70,6 +70,9 @@ time, not derived from a tag.
   buildme's timeout for the review, pr or walkthrough skill runs out, it now
   kills the skill's whole process group, not only the `uv` launcher: before,
   the skill ran on with its output closed, holding the review's lock.
+  A SIGTERM, a SIGHUP (a closed terminal) or a Ctrl-C sent to buildme
+  while it waits on one of those skills kills the skill's group the same
+  way, so the skill no longer runs on after buildme has stopped.
   A review that is still running is not mistaken for one of these: each
   run holds a lock on its target directory until it ends, and while it
   does, a second `review`, `review --restart`, `--plan-only` or `resume` of
