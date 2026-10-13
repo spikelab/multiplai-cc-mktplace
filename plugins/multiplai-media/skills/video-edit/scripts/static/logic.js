@@ -453,6 +453,97 @@
     return `${v < 0 ? "−" : ""}${Math.abs(v)} dB`;
   }
 
+  // --- Review: drawing on a paused frame -------------------------------------------------
+
+  const DRAW_TOOLS = ["pen", "arrow", "box"];
+  const DRAW_COLOURS = [["Yellow", "#FFD400"], ["Red", "#FF3B30"], ["Cyan", "#00C2FF"]];
+  const MAX_PEN_POINTS = 2000;            // review_server.MAX_PEN_POINTS
+  const MAX_MARK_BYTES = 4 * 1024 * 1024; // review_server.MAX_MARK_BYTES
+  const MAX_EXPORT_SIDE = 3840;
+
+  const round4 = (v) => Math.round(v * 10000) / 10000;
+  const clamp01 = (v) => Math.min(1, Math.max(0, v));
+
+  function isColour(c) {
+    return typeof c === "string" && /^#[0-9a-fA-F]{6}$/.test(c);
+  }
+
+  /* A pointer position as [x, y] fractions of the picture (`rect` in the same
+   * coordinates as the pointer), clamped to the picture. */
+  function toPictureFrac(clientX, clientY, rect) {
+    if (!(rect.width > 0 && rect.height > 0)) return [0, 0];
+    return [round4(clamp01((clientX - rect.left) / rect.width)), round4(clamp01((clientY - rect.top) / rect.height))];
+  }
+
+  /* A pen stroke without the points closer than `minDist` to the one kept
+   * before them (the last point always stays), then thinned to at most
+   * `max` points by keeping evenly spaced ones. */
+  function simplifyStroke(points, minDist = 0.002, max = MAX_PEN_POINTS) {
+    if (points.length <= 2) return points.map((p) => [round4(p[0]), round4(p[1])]);
+    const kept = [points[0]];
+    for (let i = 1; i < points.length - 1; i++) {
+      const a = kept[kept.length - 1], b = points[i];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) >= minDist) kept.push(b);
+    }
+    kept.push(points[points.length - 1]);
+    let out = kept;
+    if (out.length > max) {
+      const step = (out.length - 1) / (max - 1);
+      out = Array.from({ length: max }, (_, i) => kept[Math.round(i * step)]);
+    }
+    return out.map((p) => [round4(p[0]), round4(p[1])]);
+  }
+
+  /* The shape a drag made, or null when it is too small to mean anything
+   * (an arrow or a box needs a drag; a pen click is a dot). */
+  function finishShape(tool, color, points) {
+    if (!DRAW_TOOLS.includes(tool) || !isColour(color) || !points.length) return null;
+    if (tool === "pen") return { tool, color, points: simplifyStroke(points) };
+    const a = points[0], b = points[points.length - 1];
+    if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.01) return null;
+    return { tool, color, points: [[round4(a[0]), round4(a[1])], [round4(b[0]), round4(b[1])]] };
+  }
+
+  /* Line width for a picture `w` pixels wide: 0.5% of it, at least 2 px. */
+  function strokeWidth(w) {
+    return Math.max(2, Math.round(w * 0.005));
+  }
+
+  /* The polylines that draw `shape` on a w×h picture, in pixels: a pen is its
+   * stroke (a dot for one point), a box its closed outline, an arrow its shaft
+   * and a two-line head at the second point. */
+  function shapePaths(shape, w, h) {
+    const px = shape.points.map(([x, y]) => [x * w, y * h]);
+    const width = strokeWidth(w);
+    if (shape.tool === "pen") return { color: shape.color, width, paths: [px.length === 1 ? [px[0], px[0]] : px] };
+    const [[x0, y0], [x1, y1]] = px;
+    if (shape.tool === "box") {
+      return { color: shape.color, width, paths: [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]] };
+    }
+    const ang = Math.atan2(y1 - y0, x1 - x0), size = Math.max(10, width * 5), spread = Math.PI / 7;
+    const head = [
+      [x1 - size * Math.cos(ang - spread), y1 - size * Math.sin(ang - spread)],
+      [x1, y1],
+      [x1 - size * Math.cos(ang + spread), y1 - size * Math.sin(ang + spread)],
+    ];
+    return { color: shape.color, width, paths: [[[x0, y0], [x1, y1]], head] };
+  }
+
+  /* The size to export a frame at: its native size, scaled down only when a
+   * side is longer than MAX_EXPORT_SIDE. */
+  function exportSize(vw, vh, maxSide = MAX_EXPORT_SIDE) {
+    if (!(vw > 0 && vh > 0)) return null;
+    const k = Math.min(1, maxSide / Math.max(vw, vh));
+    return { width: Math.round(vw * k), height: Math.round(vh * k) };
+  }
+
+  /* The mailbox row for a pending drawing (review_server: kind "drawing"). */
+  function drawingRow(d) {
+    return { kind: "drawing", video: d.video, version: d.version, t: Math.round(d.t * 1000) / 1000,
+             image: d.image, shapes: d.shapes.map((s) => ({ tool: s.tool, color: s.color, points: s.points })),
+             text: (d.text || "").trim() };
+  }
+
   const api = {
     TABS, INPUT_FILES, fmt, inputNotice, isReels, latestBy, rowsOfKind, clipsOpen, speakersOpen, firstOpenTab,
     oneAtATime,
@@ -464,6 +555,8 @@
     lookProblem, loopTime, fitScale, readyMessage,
     DEFAULT_VOLUME_DB, SFX_VOLUME_DB, MIN_VOLUME_DB, MAX_VOLUME_DB, musicOpen, dbToGain, clampDb, musicDraft,
     musicRow, musicProblem, fmtDb,
+    DRAW_TOOLS, DRAW_COLOURS, MAX_PEN_POINTS, MAX_MARK_BYTES, isColour, toPictureFrac, simplifyStroke, finishShape,
+    strokeWidth, shapePaths, exportSize, drawingRow,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JobLogic = api;

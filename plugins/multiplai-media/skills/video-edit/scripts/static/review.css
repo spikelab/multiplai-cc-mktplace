@@ -35,6 +35,16 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: v
          display: flex; justify-content: center; }
 video { display: block; max-width: 100%; max-height: 72vh; cursor: crosshair; }
 #markers { position: absolute; inset: 0; pointer-events: none; }
+#draw-layer { position: absolute; pointer-events: none; touch-action: none; }
+#draw-layer.active { pointer-events: auto; cursor: crosshair; }
+#draw-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+#draw-tools [aria-pressed="true"][data-tool] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+#draw-tools .colours { display: inline-flex; gap: 4px; margin-left: 6px; }
+#draw-tools button.colour { width: 26px; height: 26px; padding: 0; border-radius: 50%; background: var(--c);
+                            border: 2px solid var(--line); }
+#draw-tools button.colour[aria-pressed="true"] { border-color: var(--text); box-shadow: 0 0 0 2px var(--panel) inset; }
+#draw-custom { width: 30px; height: 28px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+img.thumb { display: block; max-width: 100%; border-radius: 4px; margin-bottom: 4px; }
 .marker { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%;
           border: 2px solid #000; background: var(--marker); font: 700 11px/18px system-ui;
           text-align: center; color: #000; }

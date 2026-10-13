@@ -437,3 +437,64 @@ test("dbToGain and fmtDb", () => {
   assert.equal(L.fmtDb(-10), "−10 dB");
   assert.equal(L.fmtDb(0), "0 dB");
 });
+
+// --- Review: drawing ---------------------------------------------------------------------
+
+test("toPictureFrac gives fractions of the picture, clamped to it", () => {
+  const rect = { left: 100, top: 50, width: 400, height: 200 };
+  assert.deepEqual(L.toPictureFrac(300, 150, rect), [0.5, 0.5]);
+  assert.deepEqual(L.toPictureFrac(50, 400, rect), [0, 1]);
+  assert.deepEqual(L.toPictureFrac(1, 1, { left: 0, top: 0, width: 0, height: 0 }), [0, 0]);
+});
+
+test("simplifyStroke drops points too close to the last kept one and keeps the ends", () => {
+  const pts = [[0, 0], [0.0005, 0], [0.001, 0], [0.01, 0], [0.0101, 0], [0.5, 0.5]];
+  assert.deepEqual(L.simplifyStroke(pts), [[0, 0], [0.01, 0], [0.5, 0.5]]);
+  assert.deepEqual(L.simplifyStroke([[0.123456, 0.5]]), [[0.1235, 0.5]]);
+});
+
+test("simplifyStroke thins a long stroke to the server's point limit", () => {
+  const pts = Array.from({ length: 5000 }, (_, i) => [i / 5000, (i % 2) * 0.5]);
+  const out = L.simplifyStroke(pts);
+  assert.equal(out.length, L.MAX_PEN_POINTS);
+  assert.deepEqual(out[0], [0, 0]);
+  assert.deepEqual(out[out.length - 1], [0.9998, 0.5]);
+});
+
+test("finishShape keeps a pen dot but drops an arrow or box without a drag", () => {
+  assert.deepEqual(L.finishShape("pen", "#FFD400", [[0.2, 0.2]]), { tool: "pen", color: "#FFD400", points: [[0.2, 0.2]] });
+  assert.equal(L.finishShape("arrow", "#FFD400", [[0.2, 0.2], [0.201, 0.2]]), null);
+  assert.equal(L.finishShape("box", "#FFD400", [[0.2, 0.2], [0.2, 0.2]]), null);
+  assert.deepEqual(L.finishShape("box", "#FF3B30", [[0.1, 0.1], [0.3, 0.4]]).points, [[0.1, 0.1], [0.3, 0.4]]);
+  assert.equal(L.finishShape("circle", "#FFD400", [[0.1, 0.1], [0.3, 0.4]]), null);
+  assert.equal(L.finishShape("pen", "red", [[0.1, 0.1]]), null);
+});
+
+test("shapePaths draws a box outline, an arrow with a head, and a pen dot, in pixels", () => {
+  const box = L.shapePaths({ tool: "box", color: "#FFD400", points: [[0.1, 0.2], [0.5, 0.6]] }, 1000, 500);
+  assert.deepEqual(box.paths, [[[100, 100], [500, 100], [500, 300], [100, 300], [100, 100]]]);
+  assert.equal(box.width, 5);
+  const arrow = L.shapePaths({ tool: "arrow", color: "#FFD400", points: [[0, 0.5], [0.5, 0.5]] }, 1000, 500);
+  assert.equal(arrow.paths.length, 2);
+  assert.deepEqual(arrow.paths[0], [[0, 250], [500, 250]]);
+  const [h1, tip, h2] = arrow.paths[1];
+  assert.deepEqual(tip, [500, 250]);
+  assert.ok(h1[0] < 500 && h2[0] < 500);                                 // both barbs point back,
+  assert.ok(Math.min(h1[1], h2[1]) < 250 && Math.max(h1[1], h2[1]) > 250);  // one on each side
+  const dot = L.shapePaths({ tool: "pen", color: "#FFD400", points: [[0.5, 0.5]] }, 200, 100);
+  assert.deepEqual(dot.paths, [[[100, 50], [100, 50]]]);
+  assert.equal(dot.width, 2);                                            // never thinner than 2 px
+});
+
+test("exportSize keeps the native size and only scales down a frame larger than 4K", () => {
+  assert.deepEqual(L.exportSize(1080, 1920), { width: 1080, height: 1920 });
+  assert.deepEqual(L.exportSize(7680, 4320), { width: 3840, height: 2160 });
+  assert.equal(L.exportSize(0, 0), null);
+});
+
+test("drawingRow is the server's drawing row", () => {
+  const shapes = [{ tool: "pen", color: "#FFD400", points: [[0.1, 0.1], [0.2, 0.2]] }];
+  const row = L.drawingRow({ key: "k", kind: "drawing", video: "clip-01", version: 2, t: 3.14159, image: "a".repeat(32),
+                             shapes, text: "  the logo  ", thumb: "data:image/jpeg;base64,xx" });
+  assert.deepEqual(row, { kind: "drawing", video: "clip-01", version: 2, t: 3.142, image: "a".repeat(32), shapes, text: "the logo" });
+});

@@ -39,6 +39,14 @@ const App = (() => {
     return data;
   }
 
+  /* POST a binary body (a drawn-on frame) as `type`; returns the JSON answer. */
+  async function postBlob(path, blob, type) {
+    const res = await fetch(path, { method: "POST", body: blob, headers: { "X-Review-Token": token, "Content-Type": type } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+
   /* Post mailbox rows; returns their ids. Refreshes the rows every tab sees. */
   async function send(rows) {
     const { ids } = await api("/api/comments", { method: "POST", body: JSON.stringify({ comments: rows }) });
@@ -141,6 +149,6 @@ const App = (() => {
   }
 
   document.addEventListener("DOMContentLoaded", start);
-  return { L, $, token, state, api, send, mediaUrl, store, notice, setStatus, registerTab, showTab,
+  return { L, $, token, state, api, postBlob, send, mediaUrl, store, notice, setStatus, registerTab, showTab,
            current: () => current };
 })();

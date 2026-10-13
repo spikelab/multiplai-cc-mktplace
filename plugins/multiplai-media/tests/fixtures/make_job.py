@@ -1,6 +1,6 @@
 """Build a synthetic two-speaker reels job for the review page.
 
-    python tests/fixtures/make_job.py <dir> [--no-video]
+    python tests/fixtures/make_job.py <dir> [--no-video] [--no-offers] [--render]
 
 Writes into <dir>:
 
@@ -20,6 +20,11 @@ Writes into <dir>:
 `--no-video` (and `build(..., video=False)`, which the tests use) writes a
 few stand-in bytes instead of running ffmpeg, for the audio too.
 `--no-offers` (`offers=False`) leaves out looks.json and music.json.
+`--render` also writes edl-c2.json (candidate c2 as two segments with a
+crossfade, captions, a headline, the first style's sample page as an overlay,
+a sound effect and a music bed) and renders it with `pipeline.py render` to
+clip-01.mp4, which writes clip-01.edl.json beside it. The overlay needs
+Playwright's Chromium: run it with `uv run --no-project --with playwright`.
 Generated media goes wherever <dir> is; never into the repository.
 """
 from __future__ import annotations
@@ -170,7 +175,38 @@ def music_offer(out: Path, voice: dict, video: bool) -> dict:
     return {"beds": beds, "sfx_sets": sets, "voice_sample": voice}
 
 
-def build(out: Path, video: bool = True, offers: bool = True) -> dict[str, Path]:
+def edl_for(paths: dict[str, Path], cand: dict) -> dict:
+    """An EDL for one candidate that fills every timeline lane on the review page."""
+    looks_data = json.loads(paths["looks"].read_text())
+    music_data = json.loads(paths["music"].read_text())
+    style = looks_data["styles"][0]
+    mid = round((cand["start"] + cand["end"]) / 2, 3)
+    return {
+        "source": str(paths["source"]), "transcript": str(paths["transcript"]),
+        "segments": [{"src_start": cand["start"], "src_end": mid},
+                     {"src_start": round(mid + 1.0, 3), "src_end": cand["end"]}],
+        "transitions": [{"after": 0, "kind": "fade", "duration": 0.4}],
+        "output": {"width": 720, "height": 1280, "fit": "blur", "crf": 28},
+        "captions": {"words_per_line": 3},
+        "headline": {"text": "Deploys went 2 to 40", "start": 0.0, "end": 2.5},
+        "overlays": [{"html": style["sample_html"], "start": 1.0, "end": 3.0, "mode": "alpha",
+                      "region": {"x": 40, "y": 860, "w": 640, "h": 200}, "style": style["name"]}],
+        "sfx": [{"at": 1.0, "sound": music_data["sfx_sets"][0]["files"][0]}],
+        "music": {"file": music_data["beds"][0]["file"], "volume_db": -22},
+    }
+
+
+def render(paths: dict[str, Path], cand: dict) -> None:
+    """Write edl-c2.json and render it to clip-01.mp4 (and clip-01.edl.json)."""
+    edl = paths["dir"] / "edl-c2.json"
+    edl.write_text(json.dumps(edl_for(paths, cand), indent=1) + "\n")
+    subprocess.run([sys.executable, str(_SCRIPTS / "pipeline.py"), "render", str(edl),
+                    "--out", str(paths["dir"] / "clip-01.mp4")], check=True)
+    paths["edl"] = edl
+    paths["render"] = paths["dir"] / "clip-01.mp4"
+
+
+def build(out: Path, video: bool = True, offers: bool = True, render_clip: bool = False) -> dict[str, Path]:
     out = out.resolve()
     cache = out / "cache"
     cache.mkdir(parents=True, exist_ok=True)
@@ -200,6 +236,10 @@ def build(out: Path, video: bool = True, offers: bool = True) -> dict[str, Path]
         voice = {"start": c2["start"], "end": round(min(c2["end"], c2["start"] + 10), 3)}
         paths["music"] = out / "music.json"
         paths["music"].write_text(json.dumps(music_offer(out, voice, video), indent=1) + "\n")
+    if render_clip:
+        if not (video and offers):
+            raise ValueError("a render needs the real video and the offers (looks.json, music.json)")
+        render(paths, next(c for c in cand_list if c["id"] == "c2"))
     return paths
 
 
@@ -208,8 +248,10 @@ def main() -> int:
     ap.add_argument("dir", help="directory to build the job in (created)")
     ap.add_argument("--no-video", action="store_true", help="write stand-in bytes instead of ffmpeg video and audio")
     ap.add_argument("--no-offers", action="store_true", help="leave out looks.json and music.json")
+    ap.add_argument("--render", action="store_true",
+                    help="also write edl-c2.json and render it to clip-01.mp4 (needs Playwright's Chromium)")
     args = ap.parse_args()
-    paths = build(Path(args.dir), video=not args.no_video, offers=not args.no_offers)
+    paths = build(Path(args.dir), video=not args.no_video, offers=not args.no_offers, render_clip=args.render)
     print(f"JOB: {paths['dir']}")
     return 0
 
