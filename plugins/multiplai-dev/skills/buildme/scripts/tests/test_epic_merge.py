@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 from build_pipeline import budget, git_ops, stop_record
 from build_pipeline.config import EpicSettings, discover_test_command
@@ -514,6 +515,9 @@ async def test_the_merge_agent_runs_in_the_worktree_trusted_for_its_call_only(tm
                                                                           "merge")
     assert "- `plugin.json`\n- `a/uv.lock`" in seen["prompt"] and "`origin/main`" in seen["prompt"]
     assert "BUILDME_TRUST_REPO" not in os.environ
+    monkeypatch.setenv("BUILDME_TRUST_REPO", "0")              # a value the run started with comes back
+    assert (await merge.run_merge_agent(config, tmp_path / "w", ["plugin.json"], "b", "main")).success
+    assert os.environ["BUILDME_TRUST_REPO"] == "0"
 
 
 def test_over_budget_before_a_conflicted_merge_merges_nothing(tmp_path, monkeypatch):
@@ -777,6 +781,21 @@ def test_a_version_value_must_be_the_next_after_main_raising_the_child_s_part(tm
             assert s.beyond({"plugin.json": plugin(wrong)}) == ["plugin.json"], (main, wrong)
 
 
+def test_a_version_file_both_sides_added_and_a_lockfile_both_deleted(tmp_path):
+    """A version file both sides added at different versions has no version
+    after main's to write: any value is named (finding 890669a415). A
+    lockfile both sides deleted, which git merges cleanly, is not given to
+    the agent, which could not resolve it (finding f5aaa88565)."""
+    s = Sides(tmp_path / "added", {"app.py": ""}, {"p.json": plugin("1.0.0")}, {"p.json": plugin("2.0.0")})
+    assert s.plan() == merge.Plan(["p.json"], [])
+    for value in ("1.0.0", "2.0.0", "2.1.0"):
+        assert s.beyond({"p.json": plugin(value)}) == ["p.json"], value
+    s = Sides(tmp_path / "deleted", {"plugin.json": plugin("0.1.0"), "poetry.lock": "a\n"},
+              {"plugin.json": plugin("0.2.0"), "poetry.lock": None},
+              {"plugin.json": plugin("0.2.0"), "poetry.lock": None, "main.py": ""})
+    assert s.plan() == merge.Plan(["plugin.json"], [])
+
+
 def test_a_changelog_keeps_both_entries_in_full_lines_they_share_included(tmp_path):
     """40.3: both entries end with the same bullet, which git moves out of
     the conflict. Both entries in full pass, in either order; one that drops
@@ -799,6 +818,57 @@ def test_a_changelog_keeps_both_entries_in_full_lines_they_share_included(tmp_pa
              both.replace("- First.", "- Changed."): ["CHANGELOG.md"]}
     for text, want in cases.items():
         assert s.beyond({"CHANGELOG.md": text}) == want, text
+
+
+def test_a_changelog_entry_goes_under_the_version_the_resolution_wrote(tmp_path):
+    """40.3 (finding e846ad7621): base 0.64.0, both sides at 0.65.0, so the
+    resolution writes 0.66.0. The child's lines must keep every number but
+    its old version, which becomes 0.66.0: its heading left at 0.65.0 (a
+    second 0.65.0 entry), any other heading, or another number changed in
+    its bullets, is named. A CHANGELOG git merged cleanly is checked too
+    when the child's lines name the old version."""
+    entry = "\n## [{}]\n\n- Child, on Python 3.11.\n"
+    old = "\n## [0.63.0]\n\n- Old.\n- One.\n- Two.\n- Three.\n- Four.\n- {}\n"
+    base, main = changelog(("0.64.0", "First.")) + old.format("Typo."), changelog(("0.64.0", "First."))
+    ours = {"plugin.json": plugin("0.65.0"),
+            "CHANGELOG.md": base.replace("\n## [0.64.0]", entry.format("0.65.0") + "\n## [0.64.0]", 1)}
+    theirs = {"plugin.json": plugin("0.65.0"), "CHANGELOG.md": main.replace(
+        "\n## [0.64.0]", "\n## [0.65.0]\n\n- Main.\n\n## [0.64.0]", 1) + old.format("Typo.")}
+    s = Sides(tmp_path / "conflict", {"plugin.json": plugin("0.64.0"), "CHANGELOG.md": base}, ours, theirs)
+    assert s.plan() == merge.Plan(["CHANGELOG.md", "plugin.json"], [])
+    good = theirs["CHANGELOG.md"].replace("\n## [0.65.0]", entry.format("0.66.0") + "\n## [0.65.0]", 1)
+    cases = {good: [], good.replace("[0.66.0]", "[0.65.0]"): ["CHANGELOG.md"],
+             good.replace("[0.66.0]", "[9.9.9]"): ["CHANGELOG.md"], good.replace("3.11", "3.9"): ["CHANGELOG.md"]}
+    for text, want in cases.items():
+        assert s.beyond({"plugin.json": plugin("0.66.0"), "CHANGELOG.md": text}) == want, text
+    theirs = {"plugin.json": plugin("0.65.0"), "CHANGELOG.md": base.replace("Typo.", "Fixed.")}
+    s = Sides(tmp_path / "clean", {"plugin.json": plugin("0.64.0"), "CHANGELOG.md": base}, ours, theirs)
+    assert s.plan() == merge.Plan(["plugin.json", "CHANGELOG.md"], [])
+    gits = ours["CHANGELOG.md"].replace("Typo.", "Fixed.")
+    assert s.beyond({"plugin.json": plugin("0.66.0"), "CHANGELOG.md": gits}) == ["CHANGELOG.md"]
+    assert s.beyond({"plugin.json": plugin("0.66.0"), "CHANGELOG.md": gits.replace("[0.65.0]", "[0.66.0]")}) == []
+
+
+def test_a_changelog_takes_only_its_own_package_s_new_version(tmp_path):
+    """Two packages, each with its version file and CHANGELOG, both with the
+    child at 0.65.0: a/ was raised alike on main, so it gets 0.66.0; b/'s
+    main is at 0.64.1, so the child's 0.65.0 stands, and so does its b/
+    CHANGELOG heading."""
+    def log(*entries: str) -> str:
+        return changelog(*((v, f"{who}.") for v, who in (e.split(":") for e in entries)))
+
+    base = {f"{p}/{f}": text for p in "ab" for f, text in (("plugin.json", plugin("0.64.0")),
+                                                            ("CHANGELOG.md", log("0.64.0:First")))}
+    ours = {f"{p}/{f}": text for p in "ab" for f, text in (("plugin.json", plugin("0.65.0")),
+                                                            ("CHANGELOG.md", log("0.65.0:Child", "0.64.0:First")))}
+    theirs = {"a/plugin.json": plugin("0.65.0"), "a/CHANGELOG.md": log("0.65.0:Main", "0.64.0:First"),
+              "b/plugin.json": plugin("0.64.1"), "b/CHANGELOG.md": log("0.64.1:Main", "0.64.0:First")}
+    s = Sides(tmp_path, base, ours, theirs)
+    good = {"a/plugin.json": plugin("0.66.0"), "a/CHANGELOG.md": log("0.66.0:Child", "0.65.0:Main", "0.64.0:First"),
+            "b/plugin.json": plugin("0.65.0"), "b/CHANGELOG.md": log("0.65.0:Child", "0.64.1:Main", "0.64.0:First")}
+    assert s.beyond(good) == []
+    assert s.beyond({**good, "b/CHANGELOG.md": log("0.66.0:Child", "0.64.1:Main", "0.64.0:First")}) \
+        == ["b/CHANGELOG.md"]
 
 
 def _uv(project: str, req: str, digest: str) -> str:
@@ -845,6 +915,61 @@ def test_a_lockfile_version_the_resolution_wrote_passes(tmp_path):
         == ["uv.lock"]
 
 
+def _poetry(content: str, *names: str) -> str:
+    return "".join(f'[[package]]\nname = "{n}"\nversion = "1.0"\npython-versions = "*"\nfiles = [\n'
+                   f'    {{file = "{n}-1.0.tar.gz", hash = "sha256:{n * 8}"}},\n]\n\n' for n in names) \
+        + f'[metadata]\nlock-version = "2.0"\ncontent-hash = "{content}"\n'
+
+
+def _npm(*names: str) -> str:
+    return json.dumps({"name": "app", "lockfileVersion": 3, "packages": {
+        "": {"name": "app", "dependencies": {n: "^1.0.0" for n in names}},
+        **{f"node_modules/{n}": {"version": "1.0.0", "resolved": f"https://r/{n}-1.0.0.tgz",
+                                 "integrity": f"sha512-{n * 8}"} for n in names}}}, indent=2) + "\n"
+
+
+def _pnpm(*names: str) -> str:
+    return yaml.safe_dump({"lockfileVersion": "9.0", "importers": {".": {"dependencies": {
+        n: {"specifier": "^1.0.0", "version": "1.0.0"} for n in names}}},
+        "packages": {f"{n}@1.0.0": {"resolution": {"integrity": f"sha512-{n * 8}"}} for n in names}})
+
+
+def _yarn(*names: str) -> str:
+    return "".join(f'\n{n}@^1.0.0:\n  version "1.0.0"\n  resolved "https://r/{n}-1.0.0.tgz"\n'
+                   f'  integrity sha512-{n * 8}\n' for n in names)
+
+
+def test_a_regenerated_lockfile_with_lines_neither_side_wrote_passes(tmp_path):
+    """40.3, 'lockfiles (regenerate)' (findings 1480e8dabc, 78f307ec71,
+    077f0c6eac): the child adds dependency c, main adds d, and only the lock
+    conflicts. Its regeneration holds both, so it writes lines neither side
+    has: poetry's new `content-hash`, a JSON comma after the child's last
+    entry. A lock read as data passes when every key, every value under its
+    key and each pinned package is one side's, and a manifest hash is a hex
+    digest. One side's package with the other's hash, a key twice, a package
+    neither side has, or a manifest hash that is not one, is named."""
+    h = {k: k * 64 for k in "0123"}
+    cases = {"poetry.lock": (_poetry(h["0"], "a"), _poetry(h["1"], "a", "c"), _poetry(h["2"], "a", "d"),
+                             _poetry(h["3"], "a", "c", "d"),
+                             [_poetry("not a hash", "a", "c", "d"), _poetry(h["3"], "a", "c", "d", "e"),
+                              _poetry(h["3"], "a", "c", "d").replace("sha256:" + "c" * 8, "sha256:" + "d" * 8)]),
+             "package-lock.json": (_npm("a"), _npm("a", "c"), _npm("a", "d"), _npm("a", "c", "d"),
+                                   [_npm("a", "c", "d").replace('"sha512-' + "c" * 8, '"sha512-' + "d" * 8),
+                                    _npm("a", "c", "d").replace('"c": "^1.0.0",', '"c": "^1.0.0",\n"c": "^1.0.0",'),
+                                    _npm("a", "c", "d", "e")]),
+             "pnpm-lock.yaml": (_pnpm("a"), _pnpm("a", "c"), _pnpm("a", "d"), _pnpm("a", "c", "d"),
+                                [_pnpm("a", "c", "d").replace("sha512-" + "c" * 8, "sha512-" + "d" * 8),
+                                 _pnpm("a", "c", "d") + "lockfileVersion: '9.0'\n"]),
+             "yarn.lock": (_yarn("a"), _yarn("a", "c"), _yarn("a", "d"), _yarn("a", "c", "d"),
+                           [_yarn("a", "c", "d").replace("sha512-" + "c" * 8, "sha512-" + "d" * 8)])}
+    for name, (base, ours, theirs, good, bad) in cases.items():
+        s = Sides(tmp_path / name, {name: base}, {name: ours}, {name: theirs})
+        assert s.plan() == merge.Plan([name], []), name
+        assert s.beyond({name: good}) == [], (name, good)
+        for text in bad:
+            assert s.beyond({name: text}) == [name], (name, text)
+
+
 def test_a_conflict_without_markers_is_never_the_step_s_resolution(tmp_path):
     """A modify/delete conflict (a lockfile and a CHANGELOG included) or a
     binary one, resolved by keeping one side, leaves no marker and matches
@@ -858,6 +983,26 @@ def test_a_conflict_without_markers_is_never_the_step_s_resolution(tmp_path):
     git(s.w, "checkout", "-q", "--detach", s.ours)
     git(s.w, "-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "--no-ff", "-s", "ours", "-m", "m", s.theirs)
     assert not merge.merges_onto(s.w, git(s.w, "rev-parse", "HEAD").strip(), s.ours, "x")
+
+
+def test_a_pushed_merge_s_content_is_checked_once_per_commit(tmp_path, monkeypatch):
+    """The coordinator asks `merges_onto` about the same PR head on every
+    pass (finding 16be8d14c9): the content check runs once per merge commit,
+    named by its sha; a ref such as HEAD is checked each time."""
+    s = Sides(tmp_path, BASE, CHILD, MAIN)
+    git(s.w, "update-ref", "refs/remotes/origin/x", s.theirs)
+    git(s.w, "checkout", "-q", "--detach", s.ours)
+    subprocess.run([real_git(), "merge", "-q", "--no-ff", "--no-commit", s.theirs], cwd=s.w, capture_output=True)
+    for rel, text in RESOLVED.items():
+        (s.w / rel).write_text(text)
+    git(s.w, "add", "--", *RESOLVED)
+    git(s.w, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--no-edit")
+    head, calls = git(s.w, "rev-parse", "HEAD").strip(), []
+    checked = merge.not_resolutions
+    monkeypatch.setattr(merge, "not_resolutions", lambda *a: calls.append(a) or checked(*a))
+    assert all(merge.merges_onto(s.w, head, s.ours, "x") for _ in range(3)) and len(calls) == 1
+    assert merge._only_resolutions(s.w, "HEAD", s.ours) and merge._only_resolutions(s.w, "HEAD", s.ours)
+    assert len(calls) == 3
 
 
 def test_a_merge_in_progress_is_checked_the_same_in_any_conflict_style(tmp_path):

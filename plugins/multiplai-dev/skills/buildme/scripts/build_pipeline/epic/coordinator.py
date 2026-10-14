@@ -1063,7 +1063,7 @@ class Coordinator:
             return self._merge_park(c, f"cannot read the branch checked out in {w}")
         default, origin_ref = git_ops.default_branch(w), f"refs/remotes/origin/{name}"
         _merge_point(self, c, "start")
-        if not merge.merging(w) and merge.unpushed_merge(w, reviewed, name, default):     # item 37
+        if not merge.merging(w) and await asyncio.to_thread(merge.unpushed_merge, w, reviewed, name, default):  # 37
             head = git_ops.rev_parse_head(w)
             why = stop_record.others_work(w, None, head=head)
             if why:

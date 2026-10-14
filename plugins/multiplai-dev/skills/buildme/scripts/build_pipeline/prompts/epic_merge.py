@@ -22,7 +22,8 @@ needs the next one. Resolve by these rules only:
   `origin/{default}`'s copy (`git show MERGE_HEAD:<file>`), in its order, and
   put every line the branch added above its entry, in their order, under a
   heading for the version you wrote, even where both entries had the same
-  heading or share lines. Change only version numbers in the branch's lines.
+  heading or share lines. In the branch's lines, write the version you wrote
+  wherever the branch's own old version appears, and change nothing else.
 - A lockfile (`uv.lock`, `package-lock.json`, ...): regenerate it. Replace it
   with `origin/{default}`'s copy (`git show MERGE_HEAD:<file> > <file>`), then
   run the project's own tool on it (`uv lock`, `npm install

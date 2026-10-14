@@ -120,10 +120,25 @@ def merges_onto(w: Path, head: str, reviewed: str, default: str) -> bool:
     return False
 
 
+# `_only_resolutions`' answers by worktree and commits: a commit never changes, so neither does its
+# answer, and the coordinator asks again for the same PR head on every pass.
+_ONLY: dict[tuple[str, str, str], bool] = {}
+_SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
 def _only_resolutions(w: Path, commit: str, first: str) -> bool:
     """*commit*, a merge onto *first*, differs from git's own merge of its
-    parents only in what 40.3 lets the step resolve (`not_resolutions`)."""
-    return not_resolutions(w, first, f"{commit}^2", commit) == []
+    parents only in what 40.3 lets the step resolve (`not_resolutions`).
+    Kept for commits named by their sha, unless git could not tell."""
+    key = (str(w), commit, first)
+    if key in _ONLY:
+        return _ONLY[key]
+    found = not_resolutions(w, first, f"{commit}^2", commit)
+    if found is not None and _SHA.fullmatch(commit) and _SHA.fullmatch(first):
+        if len(_ONLY) >= 1024:
+            _ONLY.clear()
+        _ONLY[key] = found == []
+    return found == []
 
 
 class Plan(NamedTuple):
@@ -179,7 +194,7 @@ def _merge(w: Path, first: str, second: str) -> _Merge | None:
     refused = [p for p in conflicted if not _resolvable(p, side(p))]
     raised = [p for p in both_changed if p not in refused and not _special(p)
               and (s := side(p)) is not None and _raised(p, *s)]
-    extra = [p for p in both_changed if raised and _special(p) and p not in refused]
+    extra = [p for p in both_changed if raised and _special(p) and p not in refused and side(p) is not None]
     files = list(dict.fromkeys([*(p for p in conflicted if p not in refused), *raised, *extra]))
     return _Merge(tree.strip(), conflicted, raised, Plan(files, refused), {p: side(p) for p in files})
 
@@ -197,9 +212,11 @@ def not_resolutions(w: Path, first: str, second: str, result: str) -> list[str] 
       each version value the side that changed it, or, where both did, the
       next after *second*'s, raising the part *first* raised (`_versions`);
     - a CHANGELOG must be *second*'s, every line kept in its order, with the
-      lines *first* added (version numbers aside) in theirs (`_entries`);
-    - a lockfile may hold only lines of *first*'s or *second*'s copy, or a
-      version field written in a version file; it must load, and each
+      lines *first* added in theirs, *first*'s version in them replaced by
+      the one written for it (`_entries`); one git merged cleanly is checked
+      too when those lines name a version that was replaced;
+    - a lockfile must load, and hold only keys and values of *first*'s or
+      *second*'s copy, or a version written in a version file, and each
       pinned package must be one side's whole (`_lockfile`)."""
     m = _merge(w, first, second)
     differ = None if m is None else _lines(git(w, "diff", "--name-only", "-z", "--no-renames", m.tree, result))
@@ -207,19 +224,38 @@ def not_resolutions(w: Path, first: str, second: str, result: str) -> list[str] 
         return None
     check = list(dict.fromkeys([*differ, *m.conflicted, *m.raised]))
     allowed = {p: (m.sides.get(p), _blob(w, result, p)) for p in check if p in m.plan.files}
-    bad, written = [p for p in check if p not in allowed], set()
+    bad, wrote = [p for p in check if p not in allowed], {}
     for p, (s, new) in allowed.items():
         if not _special(p):
-            ok, wrote = _versions(p, *s, new) if s and new is not None else (False, set())
-            written |= wrote
+            ok, wrote[p] = _versions(p, *s, new) if s and new is not None else (False, {})
             if not ok:
                 bad.append(p)
+    for p in m.plan.files:              # the child's entry still under its old version, where git left it
+        if (_is_changelog(p) and p not in allowed and (s := m.sides.get(p))
+                and any(v in _renames(p, wrote) for x in _added(s[0], s[1]) for v in _VERSION_TEXT.findall(x))):
+            check.append(p)
+            allowed[p] = (s, _blob(w, result, p))
+    written = set().union(*_renames("", wrote).values())
     for p, (s, new) in allowed.items():
         if is_lockfile(p) and not (s and new is not None and _lockfile(p, s[1], s[2], new, written)):
             bad.append(p)
-        elif _is_changelog(p) and not (s and new is not None and _entries(*s, new)):
+        elif _is_changelog(p) and not (s and new is not None and _entries(*s, new, _renames(p, wrote))):
             bad.append(p)
     return [p for p in check if p in bad]
+
+
+def _renames(changelog: str, wrote: dict[str, dict[str, set[str]]]) -> dict[str, set[str]]:
+    """Each version value replaced, with the values written for it, in the
+    version files *wrote* holds (`_versions`) under *changelog*'s directory:
+    its package's, not another's at the same version; in all of them when
+    none is there (or *changelog* is "")."""
+    top = Path(changelog).parent.as_posix()
+    mine = [r for f, r in wrote.items() if top == "." or f.startswith(top + "/")] if changelog else []
+    found: dict[str, set[str]] = {}
+    for renames in mine or wrote.values():
+        for old, values in renames.items():
+            found.setdefault(old, set()).update(values)
+    return found
 
 
 def _blob(w: Path, tree: str, path: str) -> str | None:
@@ -303,23 +339,23 @@ def _raised(path: str, b: str, o: str, t: str) -> bool:
                and vt.get(to_t[i]) not in (None, vb[to_b[i]]) for i, v in vo.items())
 
 
-def _versions(path: str, b: str, o: str, t: str, r: str) -> tuple[bool, set[str]]:
+def _versions(path: str, b: str, o: str, t: str, r: str) -> tuple[bool, dict[str, set[str]]]:
     """*r* is git's merge of *path* with its version values aside, and each
-    value is what `_expected` says; with the values *r* wrote that neither
-    side has."""
+    value is what `_expected` says; with each value *r* wrote that neither
+    side has, under *o*'s value it replaces."""
     (nb, vb), (no, vo), (nt, vt), (nr, vr) = (_normal(path, x) for x in (b, o, t, r))
     if _merge3(no, nb, nt) != nr:
-        return False, set()
+        return False, {}
     to_b, to_o, to_t = _matched(nr, nb), _matched(nr, no), _matched(nr, nt)
-    written = set()
+    renames: dict[str, set[str]] = {}
     for i, value in vr.items():
         ours, theirs = vo.get(to_o.get(i, -1)), vt.get(to_t.get(i, -1))
         want = _expected(vb.get(to_b.get(i, -1)), ours, theirs)
         if want is None or value != want:
-            return False, set()
-        if want not in (ours, theirs):
-            written.add(want)
-    return True, written
+            return False, {}
+        if want not in (ours, theirs):          # both raised it, so *ours* is a value (`_expected`)
+            renames.setdefault(ours, set()).add(want)
+    return True, renames
 
 
 def _expected(b: str | None, o: str | None, t: str | None) -> str | None:
@@ -359,31 +395,43 @@ _VERSION_TEXT = re.compile(r"\d+(?:\.\d+)+")
 _MAX_CELLS = 4_000_000
 
 
-def _entries(b: str, o: str, t: str, r: str) -> bool:
-    """*r* keeps both CHANGELOGs in full: every line of *t* in its order and,
-    among them, the lines *o* added to *b* in their order, version numbers
-    aside, and nothing else. Blank lines do not count."""
+def _added(b: str, o: str) -> list[str]:
+    """The lines *o* added to *b*, in their order. Blank lines do not count."""
     bl, ol = ([x for x in text.splitlines() if x.strip()] for text in (b, o))
-    added = [x for tag, _, _, j1, j2 in SequenceMatcher(None, bl, ol, autojunk=False).get_opcodes()
-             if tag in ("insert", "replace") for x in ol[j1:j2]]
+    return [x for tag, _, _, j1, j2 in SequenceMatcher(None, bl, ol, autojunk=False).get_opcodes()
+            if tag in ("insert", "replace") for x in ol[j1:j2]]
+
+
+def _entries(b: str, o: str, t: str, r: str, renames: dict[str, set[str]]) -> bool:
+    """*r* keeps both CHANGELOGs in full: every line of *t* in its order and,
+    among them, the lines *o* added to *b* in their order, each version in
+    *renames* replaced by one written for it and nothing else changed, and
+    nothing more. Blank lines do not count."""
     kept = [x for x in r.splitlines() if x.strip()]
-    return _interleaves(kept, [x for x in t.splitlines() if x.strip()], [_VERSION_TEXT.sub("0", x) for x in added])
+    return _interleaves(kept, [x for x in t.splitlines() if x.strip()], _added(b, o), renames)
 
 
-def _interleaves(lines: list[str], theirs: list[str], ours: list[str]) -> bool:
+def _interleaves(lines: list[str], theirs: list[str], ours: list[str], renames: dict[str, set[str]]) -> bool:
     """*lines* are *theirs* and *ours* merged, each in its order, every line
-    of both kept once and nothing added; a line matches *ours* with its
-    version numbers aside. Time: len(theirs) x len(ours)."""
+    of both kept once and nothing added; a line of *ours* matches with each
+    version in *renames* replaced by one written for it. Time: len(theirs)
+    x len(ours)."""
     if len(lines) != len(theirs) + len(ours) or len(theirs) * len(ours) > _MAX_CELLS:
         return False
-    norm = [_VERSION_TEXT.sub("0", x) for x in lines]
+    shapes = [(_VERSION_TEXT.sub(_HOLE, x), _VERSION_TEXT.findall(x)) for x in lines]
+    wants = [(_VERSION_TEXT.sub(_HOLE, x), [renames.get(v, {v}) for v in _VERSION_TEXT.findall(x)]) for x in ours]
+
+    def fits(i: int, k: int) -> bool:           # ours[i] may stand as lines[k]
+        (form, values), (want, allowed) = shapes[k], wants[i]
+        return form == want and all(v in a for v, a in zip(values, allowed))
+
     row = [True] * (len(ours) + 1)              # row[i]: lines[:j + i] merge theirs[:j] and ours[:i]
     for i in range(1, len(ours) + 1):
-        row[i] = row[i - 1] and ours[i - 1] == norm[i - 1]
+        row[i] = row[i - 1] and fits(i - 1, i - 1)
     for j in range(1, len(theirs) + 1):
         row[0] = row[0] and theirs[j - 1] == lines[j - 1]
         for i in range(1, len(ours) + 1):
-            row[i] = (row[i] and theirs[j - 1] == lines[i + j - 1]) or (row[i - 1] and ours[i - 1] == norm[i + j - 1])
+            row[i] = (row[i] and theirs[j - 1] == lines[i + j - 1]) or (row[i - 1] and fits(i - 1, i + j - 1))
         if not any(row):
             return False
     return row[-1]
@@ -396,26 +444,38 @@ _JSON_LOCKS = frozenset({"package-lock.json", "Pipfile.lock", "composer.lock", "
 # The keys that pin a package's content.
 _HASH_KEYS = frozenset({"hash", "hashes", "checksum", "integrity", "shasum", "sha256", "sha512"})
 _PINNED_TEXT = re.compile(r"^\s*(?:integrity|checksum|resolved)\b", re.MULTILINE)
+# Where a lockfile keeps a hash of its manifest, which regenerating it rewrites: a hex digest.
+_MANIFEST_HASH = {"poetry.lock": ("metadata", "content-hash"), "composer.lock": ("content-hash",),
+                  "Pipfile.lock": ("_meta", "hash", "sha256"), "Package.resolved": ("originHash",)}
+_DIGEST = re.compile(r"[0-9a-f]{32,128}")
 
 
 def _lockfile(path: str, o: str, t: str, r: str, written: set[str]) -> bool:
-    """*r*, a regenerated lockfile, holds only lines of *o* or *t*, in any
-    order (regenerating drops the losing side's), or a version field
-    holding a version in *written*. It loads, with no key twice, and each
-    package it pins by hash (a `version` with a hash below it) is a whole
-    package of *o* or *t*: never one side's version with the other's hash."""
-    known = set(o.splitlines()) | set(t.splitlines())
-    if any(line not in known and not ((m := _VERSION_FIELD.match(line)) and m["v"] in written)
-           for line in r.splitlines()):
-        return False
+    """*r*, a regenerated lockfile. One read as data (`_load`) loads with no
+    key twice; every key in it, and every value with the key it is under,
+    is one of *o* or *t*, in any place (regenerating moves entries and drops
+    the losing side's; a JSON comma moves with them), or is a `version` in
+    *written*, or its manifest hash, a hex digest; and each package it pins
+    (`_units`) is a whole package of *o* or *t*: never one side's version
+    with the other's hash. Another holds only lines of *o* or *t* or a
+    version field holding a version in *written*, and each yarn.lock
+    paragraph that pins a package is one side's."""
     name = Path(path).name
     try:
         loaded = [_load(name, x) for x in (o, t, r)]
     except (ValueError, yaml.YAMLError):         # tomllib's and json's errors are ValueErrors
         return False
-    if loaded[2] is not None:
-        sides = {_canon(x) for d in loaded[:2] for x in _pinned(d)}
-        return all(_canon(x) in sides for x in _pinned(loaded[2]))
+    if name in _TOML_LOCKS | _JSON_LOCKS | {"pnpm-lock.yaml"}:
+        digest = [_digest(name, x) for x in loaded][2]
+        if digest is not None and not (isinstance(digest, str) and _DIGEST.fullmatch(digest)):
+            return False
+        known = _items(loaded[0]) | _items(loaded[1]) | {("=", "version", _canon(v)) for v in written}
+        units = {_canon(x) for d in loaded[:2] for x in _units(name, d)}
+        return _items(loaded[2]) <= known and all(_canon(x) in units for x in _units(name, loaded[2]))
+    known = set(o.splitlines()) | set(t.splitlines())
+    if any(line not in known and not ((m := _VERSION_FIELD.match(line)) and m["v"] in written)
+           for line in r.splitlines()):
+        return False
     if name == "yarn.lock":                      # one package per paragraph
         blocks = {b.strip() for x in (o, t) for b in x.split("\n\n")}
         return all(b.strip() in blocks for b in r.split("\n\n") if _PINNED_TEXT.search(b))
@@ -429,7 +489,7 @@ def _load(name: str, text: str):
     if name in _JSON_LOCKS:
         return json.loads(text, object_pairs_hook=_unique)
     if name == "pnpm-lock.yaml":
-        return yaml.safe_load(text)
+        return yaml.load(text, Loader=_UniqueKeys)
     return None
 
 
@@ -437,6 +497,60 @@ def _unique(pairs: list[tuple[str, object]]) -> dict:
     if len({k for k, _ in pairs}) != len(pairs):
         raise ValueError("a key appears twice")
     return dict(pairs)
+
+
+class _UniqueKeys(yaml.SafeLoader):
+    """yaml's safe loader, refusing a key written twice, which it would
+    otherwise keep the last of."""
+
+
+def _unique_mapping(loader: yaml.SafeLoader, node: yaml.MappingNode) -> dict:
+    keys = [_canon(loader.construct_object(k, deep=True)) for k, _ in node.value]
+    if len(set(keys)) != len(keys):
+        raise yaml.constructor.ConstructorError(None, None, "a key appears twice", node.start_mark)
+    return loader.construct_mapping(node, deep=True)
+
+
+_UniqueKeys.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _unique_mapping)
+
+
+def _digest(name: str, data):
+    """Takes *name*'s manifest hash (`_MANIFEST_HASH`) out of *data* and
+    returns it; None when it has none."""
+    path = _MANIFEST_HASH.get(name, ())
+    for key in path[:-1]:
+        data = data.get(key) if isinstance(data, dict) else None
+    return data.pop(path[-1], None) if path and isinstance(data, dict) else None
+
+
+def _items(data) -> set[tuple]:
+    """Every key in *data*, and every value with the key it is under."""
+    found: set[tuple] = set()
+
+    def walk(x, key) -> None:
+        if isinstance(x, dict):
+            for k, v in x.items():
+                found.add(("key", _canon(k)))
+                walk(v, k)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v, key)
+        else:
+            found.add(("=", key, _canon(x)))
+
+    walk(data, None)
+    return found
+
+
+def _units(name: str, data) -> list:
+    """What *data* pins as one package: each mapping `_pinned` finds and, in
+    pnpm's lock, which names a package by a key, each entry of `packages`
+    and `snapshots`."""
+    found: list = _pinned(data)
+    if name == "pnpm-lock.yaml" and isinstance(data, dict):
+        found += [{k: v} for part in ("packages", "snapshots") if isinstance(data.get(part), dict)
+                  for k, v in data[part].items()]
+    return found
 
 
 def _pinned(data) -> list[dict]:

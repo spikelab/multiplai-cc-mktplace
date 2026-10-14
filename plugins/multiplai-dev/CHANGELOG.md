@@ -31,9 +31,10 @@ time, not derived from a tag.
   park then names the `checkout` or `rm` that undoes those changes before
   `git merge --abort`. The resolution is checked against each file's base
   and both sides: each version is the next after the default branch's where
-  both raised it, both CHANGELOG entries are kept in full, and a regenerated
-  lockfile holds only either side's lines, loads, and pins each package as
-  one side does. A merge commit holding only such resolutions is not
+  both raised it, both CHANGELOG entries are kept in full with the child's
+  under the version written, and a regenerated lockfile holds only either
+  side's packages and values (its manifest hash aside), loads, and pins each
+  package as one side does. A merge commit holding only such resolutions is not
   reviewed again. With `epic.max_usd` reached, only a merge that would need
   the agent is held back. A change left in the worktree that the merge did
   not make parks the child before the tests run.
