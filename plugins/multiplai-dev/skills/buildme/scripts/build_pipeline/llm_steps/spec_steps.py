@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import re
 from pathlib import Path
 
 from code_facts import CallFn
@@ -46,6 +47,12 @@ REGISTRY_REQUIREMENTS_RULE = (
     "`## MODIFIED Requirements` with the same `### Requirement:` name as here; a requirement it "
     "removes goes under `## REMOVED Requirements` with that name; only new requirements go under "
     "`## ADDED Requirements`."
+)
+REGISTRY_PROPOSAL_RULE = (
+    "These capabilities are what the code does today, one file each in specs/registry/. A "
+    "capability this change alters goes under `### Modified Capabilities` with exactly the name "
+    "listed here, so its requirements are written against that file; a new capability goes under "
+    "`### New Capabilities` with a name not listed here."
 )
 REGISTRY_PLAN_RULE = (
     "These files are what the code does today, for the capabilities this change's requirements "
@@ -154,13 +161,15 @@ def _build_prompt(
     project_context = context.get("context", "")
 
     if artifact_id == "proposal":
+        names = ", ".join(context.get("registry") or [])
         return PROPOSAL_PROMPT.format(
             project_context=project_context,
             interview_summary=interview_summary or "(none provided)",
             research=research or "(no research conducted)",
             instruction=instruction,
             template=template,
-        )
+        ) + (f"\n\n{REGISTRY_HEADING}\n\n{REGISTRY_PROPOSAL_RULE}\n\n"
+             f"Capabilities in specs/registry: {names}\n" if names else "")
     elif artifact_id == "requirements":
         # Requirements generation needs proposal content
         proposal_content = _read_dep(context, "proposal", config)
@@ -250,21 +259,32 @@ def _change_capabilities(config) -> list[str]:
     return sorted(p.stem for p in (config.change_dir / "requirements").glob("*.md"))
 
 
+_REGISTRY_REQUIREMENT = re.compile(r"^###\s+Requirement:\s*(.+?)\s*$", re.MULTILINE)
+
+
 def _read_registry(config, context: dict, names: list[str]) -> str:
     """The text of `specs/registry/<name>.md` for each of *names* that exists, each
     under `### <name> (specs/registry/<name>.md)`, then one line naming every other
     registry capability. Over `REGISTRY_TEXT_LIMIT` characters, whole files are
-    dropped from the end and named instead."""
+    dropped from the end and named instead, with their requirement names."""
     registry = config.specs_dir / "registry"
     shown = [n for n in names if (registry / f"{n}.md").is_file()]
     others = [n for n in context.get("registry") or [] if n not in shown]
     tail = f"Other capabilities in specs/registry: {', '.join(others)}" if others else ""
-    parts = [f"### {n} (specs/registry/{n}.md)\n{(registry / f'{n}.md').read_text()}" for n in shown]
+    texts = {n: (registry / f"{n}.md").read_text() for n in shown}
+    parts = [f"### {n} (specs/registry/{n}.md)\n{texts[n]}" for n in shown]
     dropped: list[str] = []
+
+    def named(n: str) -> str:
+        """A left-out file, with its requirement names, which a MODIFIED or REMOVED
+        requirement must reuse."""
+        reqs = _REGISTRY_REQUIREMENT.findall(texts[n])
+        return f"{n} (specs/registry/{n}.md; requirements: {', '.join(reqs)})" if reqs \
+            else f"{n} (specs/registry/{n}.md)"
 
     def render() -> str:
         left_out = (f"Left out to stay under {REGISTRY_TEXT_LIMIT:,} characters: "
-                    + ", ".join(f"{n} (specs/registry/{n}.md)" for n in dropped)) if dropped else ""
+                    + ", ".join(named(n) for n in dropped)) if dropped else ""
         return "\n\n".join(p for p in (*parts, left_out, tail) if p)
 
     while parts and len(render()) > REGISTRY_TEXT_LIMIT:

@@ -60,8 +60,23 @@ already has instead of proposing a parallel structure beside them. At the
 review checkpoint the pipeline prints `REVIEW:CODEBASE_ANALYSIS:<path>`.
 
 The phase is skipped, with the reason logged, when the project has no source
-files yet and for `--only` runs (which generate no specs). A failure is never
-a build failure — the design falls back to treating the project as new.
+files yet and for `--only` runs (which generate no specs). A failure of the
+analysis is never a build failure — the design falls back to treating the
+project as new.
+
+The same phase then writes a baseline of what the code already does: when
+`specs/registry/` is empty and the repo is trusted (`--trust-repo`), it runs
+`/multiplai-dev:spec-extract` on the project's Python code at the build's
+starting commit with `--apply`, and commits the capability files it writes to
+the build branch (`SPEC_EXTRACT:BASELINE <n>`; `uncommitted` follows when there
+is no build branch to commit to). Spec generation then reads them. Turn it off
+with `spec_extract: false` in `specs/config.yaml`. An epic's child builds skip
+it: their parent ran it before writing their plans. When spec-extract fails the
+build goes on without a baseline, except in two cases that end the build with
+exit `1` without leaving the phase: another spec-extract run still holds the
+same commit's run folder (`SPEC_EXTRACT:RUNNING`), or the failure left
+uncommitted changes in `specs/registry/`. A re-run then repeats only
+spec-extract, not the analysis.
 
 ### Phase 3: Spec Generation
 

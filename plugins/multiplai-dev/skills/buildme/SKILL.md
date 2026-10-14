@@ -94,8 +94,8 @@ keeps the default.
 | `block_facts` | bool | `false` | the TDD engine: the test writer and implementer of each block also get the facts from `facts.json` about the files the block's tasks name, each re-checked at the current HEAD (a fact whose quoted lines changed is dropped, and counted). Off until real builds show it helps |
 | `regenerate_walkthroughs` | bool | `false` | after the build: re-run each walkthrough the build made stale under `docs/walkthroughs/` (see [Step 4](#step-4-report-results)) and commit it to the build branch. Only with `--trust-repo`, and only for a walkthrough that read the project's repo alone |
 | `walkthrough_max_usd` | number | `10` | the spend limit of each walkthrough `regenerate_walkthroughs` re-runs; a run that reaches it leaves the old file in place |
-| `spec_extract` | bool | `true` | the codebase analysis phase: when `specs/registry/` is empty, run `/multiplai-dev:spec-extract` on the project's Python code at the build's starting commit with `--apply`, and commit the registry files it writes (`SPEC_EXTRACT:` lines in [Step 4](#step-4-report-results)). Only with `--trust-repo`; never in `only` mode |
-| `spec_extract_max_usd` | number | `80` | spec-extract's `--max-usd`: its spend limit for the run folder, across every resume. Counted by spec-extract, not by buildme's budget |
+| `spec_extract` | bool | `true` | the codebase analysis phase: when `specs/registry/` is empty, run `/multiplai-dev:spec-extract` on the project's Python code at the build's starting commit with `--apply`, and commit the registry files it writes (`SPEC_EXTRACT:` lines in [Step 4](#step-4-report-results)). Only with `--trust-repo`; never in `only` mode or in an epic's child build (the parent ran it before writing the child's plan) |
+| `spec_extract_max_usd` | number | `80` | spec-extract's `--max-usd`: its spend limit for the run folder, across every resume. Capped by spec-extract, not by buildme's budget; what it spends is in buildme's `SPEND:` line |
 
 **Commit `specs/config.yaml`.** The build's worktree branches from `HEAD`, so an
 uncommitted config never reaches it. With `git.worktree` on, the pipeline stops
@@ -910,7 +910,10 @@ Parse pipeline stdout for progress lines:
 - `SPEC_EXTRACT:BASELINE <n>` — the codebase analysis phase ran
   `/multiplai-dev:spec-extract` on a project whose `specs/registry/` was empty
   and committed the `<n>` capability files it applied to the build branch;
-  spec generation reads them. `SPEC_EXTRACT:NOT_RUN exit=<n> <last line>` —
+  spec generation reads them. `SPEC_EXTRACT:BASELINE <n> uncommitted` — the
+  files are in `specs/registry/` but not committed (no build branch under
+  `--no-worktree`, or the commit failed): tell the user they are left for them
+  to commit. `SPEC_EXTRACT:NOT_RUN exit=<n> <last line>` —
   spec-extract failed and the build went on without a baseline: report the
   line. `SPEC_EXTRACT:RUNNING <message>` — another spec-extract run still holds
   this commit's run folder (often one a killed build left running) and the
@@ -921,7 +924,7 @@ Parse pipeline stdout for progress lines:
 - `RESULT:SUCCESS` — build complete
 - `EPIC:APPROVED:<epic.json>` — the epic split is approved; the children build next
 - `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown` (`3` while a child waits on a dependency's open PR); `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
-- `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent, the pr skill and a walkthrough run included (`:incomplete` follows when one of them printed no spend)
+- `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent, the pr skill, a walkthrough run and spec-extract included (`:incomplete` follows when one of them printed no spend)
 - `ERROR:<message>` — failure
 
 **Exit codes.** `0` done, `1` failure, `2` usage error or a refusal that wrote

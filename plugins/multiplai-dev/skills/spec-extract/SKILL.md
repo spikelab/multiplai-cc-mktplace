@@ -132,6 +132,10 @@ Only one run may write a folder at a time: a run holds
 
 ## Exit codes
 
+On every exit but a kill, the last line printed is `SPEND:<usd>:<tokens>`: what
+this invocation's model calls cost (a resume's earlier spend is not in it).
+buildme adds it to its own `SPEND:` line when it runs spec-extract.
+
 | Code | Means |
 |---|---|
 | 0 | Done. |

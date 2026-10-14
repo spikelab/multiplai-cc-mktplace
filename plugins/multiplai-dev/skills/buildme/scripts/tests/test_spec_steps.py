@@ -481,8 +481,8 @@ class TestRegistryInThePrompts:
         text = _read_registry(config, _registry_context(config), ["aaa", "bbb", "ccc"])
         assert len(text) <= 60_000
         assert "AAA-END" in text and "BBB-END" in text
-        assert "CCC-START" not in text
-        assert "ccc (specs/registry/ccc.md)" in text.split("BBB-END", 1)[1]
+        assert "CCC-END" not in text
+        assert "ccc (specs/registry/ccc.md; requirements: CCC-START)" in text.split("BBB-END", 1)[1]
 
     def test_read_registry_skips_names_with_no_file(self, tmp_path):
         from build_pipeline.llm_steps.spec_steps import _read_registry
@@ -492,3 +492,39 @@ class TestRegistryInThePrompts:
         assert "### billing (specs/registry/billing.md)" in text
         assert "nope" not in text
         assert "auth, users" in text
+
+
+class TestRegistryInTheProposal:
+    """The proposal picks the capability names the later prompts look up in the
+    registry, so it is told the registry's names (review round 1 of #345)."""
+
+    def test_the_proposal_prompt_names_the_registry_capabilities(self, tmp_path):
+        config = _registry_config(tmp_path, {}, TestRegistryInThePrompts.REGISTRY)
+        prompt = _build_prompt("proposal", _registry_context(config), config)
+        section = prompt.split("## Current behaviour (specs/registry)", 1)[1]
+        assert "Capabilities in specs/registry: auth, billing, users" in section
+        assert "### Modified Capabilities" in section and "### New Capabilities" in section
+        assert "TODAY-MARKER" not in section
+
+    def test_the_proposal_prompt_is_unchanged_with_an_empty_registry(self, tmp_path):
+        from build_pipeline.prompts.spec_generation import PROPOSAL_PROMPT
+
+        config = _registry_config(tmp_path, {}, {})
+        ctx = TestBuildPromptGrounding._CONTEXT
+        today = PROPOSAL_PROMPT.format(project_context="PROJECT", interview_summary="(none provided)",
+                                       research="(no research conducted)", instruction="INSTRUCTION",
+                                       template="TEMPLATE")
+        assert _build_prompt("proposal", {**ctx, "registry": []}, config) == today
+        assert _build_prompt("proposal", ctx, config) == today
+
+
+def test_a_file_left_out_by_the_cap_still_names_its_requirements(tmp_path):
+    """The requirements prompt tells the model to reuse the registry's requirement
+    names; a same-name file over the cap keeps those names in the prompt."""
+    from build_pipeline.llm_steps.spec_steps import _read_registry
+
+    big = "### Requirement: Billing totals\n" + "x" * 70_000 + "\n### Requirement: Refunds\nBODY-END\n"
+    config = _registry_config(tmp_path, {}, {"billing": big})
+    text = _read_registry(config, _registry_context(config), ["billing"])
+    assert len(text) <= 60_000 and "BODY-END" not in text
+    assert "billing (specs/registry/billing.md; requirements: Billing totals, Refunds)" in text

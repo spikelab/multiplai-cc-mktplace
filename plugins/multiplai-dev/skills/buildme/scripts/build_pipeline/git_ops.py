@@ -199,7 +199,8 @@ def _run_skill(argv: list[str], cwd: Path | str | None, timeout: int) -> GitResu
 # The skill commands that call a model and print their own
 # `SPEND:<usd>:<tokens>` line on exit. The review skill prints none: its
 # spend is in its ledger, which an epic reads.
-SPEND_REPORTING = {"pr_pipeline": ("open", "edit"), "walkthrough_pipeline": ("run", "resume")}
+SPEND_REPORTING = {"pr_pipeline": ("open", "edit"), "walkthrough_pipeline": ("run", "resume"),
+                   "spec_extract_pipeline": ("run",)}
 
 
 def _count_skill_spend(argv: list[str], stdout: str | None) -> None:

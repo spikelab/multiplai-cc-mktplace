@@ -25,24 +25,32 @@ time, not derived from a tag.
   phase now runs `/multiplai-dev:spec-extract` on the project's Python code at
   the build's starting commit, with `--apply`, and commits the capability files
   it writes to the build branch as `docs(specs): baseline registry from
-  spec-extract at <sha12>`, printing `SPEC_EXTRACT:BASELINE <n>`. It needs a
-  trusted repository (`--trust-repo`), never runs in `only` mode, and is turned
-  off with `spec_extract: false` in `specs/config.yaml`; `spec_extract_max_usd`
-  (default `80`) caps its spend, which spec-extract counts itself and buildme's
-  own budget does not. A stopped build resumes spec-extract at the same commit,
-  so it pays only for the calls that had not returned. When spec-extract fails
-  the build goes on without a baseline (`SPEC_EXTRACT:NOT_RUN exit=<n>`); when
-  another spec-extract run still holds the folder (`SPEC_EXTRACT:RUNNING`), or
-  `specs/registry/` holds uncommitted changes after a failure, the build exits
-  `1` without leaving the phase.
+  spec-extract at <sha12>`, printing `SPEC_EXTRACT:BASELINE <n>` (with
+  `uncommitted` after it when there is no build branch to commit to, as with
+  `--no-worktree`, or the commit failed). It needs a trusted repository
+  (`--trust-repo`), never runs in `only` mode or in an epic's child builds
+  (their parent ran it before writing their plans), and is turned off with
+  `spec_extract: false` in `specs/config.yaml`. `spec_extract_max_usd`
+  (default `80`) caps its spend; what it spends is counted in buildme's
+  `SPEND:` line, and so in an epic's `epic.max_usd`. A stopped build resumes
+  spec-extract at the same commit, so it pays only for the calls that had not
+  returned, and does not run the codebase analysis again. When spec-extract
+  fails the build goes on without a baseline (`SPEC_EXTRACT:NOT_RUN exit=<n>`);
+  when another spec-extract run still holds the folder
+  (`SPEC_EXTRACT:RUNNING`), or `specs/registry/` holds uncommitted changes
+  after a failure, the build exits `1` without leaving the phase.
+- spec-extract prints `SPEND:<usd>:<tokens>` last: what that invocation's model
+  calls cost.
 - Spec generation reads `specs/registry/`. When the registry holds any
-  capability, the requirements prompt gets the registry file of the same name
-  and is told to write a changed requirement under `## MODIFIED Requirements`
-  and a removed one under `## REMOVED Requirements`; the design and tasks
-  prompts get the registry files of the change's own capabilities. Each names
-  the other capabilities, and the registry text is capped at 60,000
-  characters, dropping whole files and naming them. With an empty registry the
-  prompts are unchanged.
+  capability, the proposal prompt gets the registry's capability names and is
+  told to list a capability the change alters under Modified Capabilities with
+  exactly that name; the requirements prompt gets the registry file of the
+  same name and is told to write a changed requirement under
+  `## MODIFIED Requirements` and a removed one under `## REMOVED Requirements`;
+  the design and tasks prompts get the registry files of the change's own
+  capabilities. Each names the other capabilities, and the registry text is
+  capped at 60,000 characters, dropping whole files and naming them with their
+  requirement names. With an empty registry the prompts are unchanged.
 
 ## [0.66.1] - 2026-10-14
 

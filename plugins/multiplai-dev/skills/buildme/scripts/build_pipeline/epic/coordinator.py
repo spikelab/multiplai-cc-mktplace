@@ -65,7 +65,7 @@ from .. import budget, git_ops, intake, stop_record
 from ..config import git_toggles
 from ..findings.decisions import write_decisions
 from ..models import AgentResult
-from . import fix, merge, records, review, spend, store
+from . import CHILD_ENV, fix, merge, records, review, spend, store
 
 log = logging.getLogger(__name__)
 
@@ -115,10 +115,12 @@ def _merge_point(coord: "Coordinator", c: "Child", point: str) -> None:
 
 
 def _spawn(argv: list[str], log_path: Path) -> subprocess.Popen:
-    """Start one child in its own process group, its output in *log_path*."""
+    """Start one child in its own process group, its output in *log_path*, with
+    `CHILD_ENV` set so it does not run spec-extract again."""
     with log_path.open("ab") as out:
         return subprocess.Popen(argv, cwd=SCRIPTS_DIR, stdin=subprocess.DEVNULL, stdout=out,
-                                stderr=subprocess.STDOUT, start_new_session=True)
+                                stderr=subprocess.STDOUT, start_new_session=True,
+                                env={**os.environ, CHILD_ENV: "1"})
 
 
 def _spawn_review(argv: list[str], log_path: Path, cwd: Path, env: dict | None = None) -> subprocess.Popen:

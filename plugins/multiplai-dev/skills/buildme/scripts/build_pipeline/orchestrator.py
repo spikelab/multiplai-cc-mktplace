@@ -132,7 +132,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # Phase: Codebase Analysis — read the repo that already exists so the
         # design extends it instead of inventing a parallel structure. Runs
         # before spec generation because design.md is its only consumer.
-        # Best-effort: a failure here costs grounding, never the build.
+        # Best-effort: an analysis failure costs grounding, never the build. The
+        # spec-extract step after it ends the build only when spec-extract may
+        # still write into specs/registry/ (`_run_spec_extract_step`).
         if not state.is_phase_complete(BuildPhase.CODEBASE_ANALYSIS):
             log.info("START phase=CODEBASE_ANALYSIS")
             await _run_codebase_analysis_phase(config, state, progress)
@@ -764,6 +766,13 @@ async def _run_codebase_analysis_phase(
     if config.mode == "only":
         log.info("SKIP phase=CODEBASE_ANALYSIS reason=only-mode-generates-no-specs")
         return
+    if state.spec_gen is not None and state.spec_gen.spec_extract_sha:
+        # Saved by the spec-extract step, which runs after this analysis: an
+        # earlier process already analysed the code and saved where the report is,
+        # and a re-run of the step must not pay for the analysis again.
+        log.info("SKIP phase=CODEBASE_ANALYSIS reason=analysed-before-spec-extract report=%s",
+                 state.spec_gen.codebase_analysis_path)
+        return
     if not _has_source_files(config.project_dir):
         log.info(
             "SKIP phase=CODEBASE_ANALYSIS reason=no-source-files-yet dir=%s",
@@ -822,8 +831,9 @@ def _spec_extract_argv(config: BuildConfig, sha: str) -> list[str]:
             "spec_extract_pipeline", "run", "--repo", str(top), "--tree", sha]
     if top != project and top in project.parents:
         argv += ["--path", project.relative_to(top).as_posix()]
+    # Absolute: `uv run --directory` runs spec-extract in its own scripts directory.
     return argv + ["--max-usd", f"{config.spec_extract_max_usd:g}", "--trust-repo",
-                   "--apply", "--specs-dir", str(config.specs_dir)]
+                   "--apply", "--specs-dir", str(Path(config.specs_dir).resolve())]
 
 
 def _spec_extract_last_line(res: git_ops.GitResult) -> str:
@@ -842,15 +852,21 @@ def _run_spec_extract_step(
     `state.spec_gen.spec_extract_sha` before the launch, and a resume always
     reads that commit, so it reaches the spec-extract run folder the stopped run
     paid into. spec-extract's spend is outside buildme's `BuildBudget`, bounded
-    by `spec_extract_max_usd`.
+    by `spec_extract_max_usd`; its `SPEND:` line is added to buildme's
+    (`git_ops.SPEND_REPORTING`). Skipped in an epic's child build.
     """
     from . import sdk, stop_record
+    from .epic import CHILD_ENV
 
     registry = Path(config.specs_dir) / "registry"
     saved = state.spec_gen.spec_extract_sha if state.spec_gen else None
     reason = None
     if config.mode == "only":
         reason = "only-mode"
+    elif os.environ.get(CHILD_ENV) == "1":
+        # An epic's child builds the plan its parent wrote after running
+        # spec-extract; siblings at one commit would also race for its lock.
+        reason = "epic-child"
     elif not config.spec_extract:
         reason = "spec_extract-false"
     elif not sdk._repo_is_trusted():
@@ -879,8 +895,17 @@ def _run_spec_extract_step(
                              [rel])
         applied = next((line.split()[1] for line in reversed(res.stdout.splitlines())
                         if line.startswith("SPEC_EXTRACT:APPLIED ") and len(line.split()) > 1), "0")
-        print(f"SPEC_EXTRACT:BASELINE {applied}", flush=True)
-        progress.log_phase("CODEBASE_ANALYSIS", f"spec-extract applied {applied} registry file(s)")
+        # `commit_stage` commits nothing without a pipeline branch (`--no-worktree`),
+        # and a failed commit is only logged: say when the files are left uncommitted.
+        left = stop_record.others_work(registry, None) if registry.is_dir() else None
+        if left is None:
+            print(f"SPEC_EXTRACT:BASELINE {applied}", flush=True)
+            progress.log_phase("CODEBASE_ANALYSIS", f"spec-extract applied {applied} registry file(s)")
+        else:
+            print(f"SPEC_EXTRACT:BASELINE {applied} uncommitted", flush=True)
+            log.warning("spec-extract's registry files are not committed: %s", left)
+            progress.log_phase("CODEBASE_ANALYSIS", f"spec-extract applied {applied} registry file(s), "
+                               f"left uncommitted in {rel}")
         return None
     last = _spec_extract_last_line(res)
     if res.returncode == SPEC_EXTRACT_EXIT_LOCKED:

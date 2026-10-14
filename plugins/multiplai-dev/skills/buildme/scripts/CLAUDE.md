@@ -324,7 +324,7 @@ specs/
 │   ├── unfixed-findings.md           — accepted findings a passing block left unfixed
 │   ├── respec.md                     — proposed spec delta (never auto-applied)
 │   └── requirements/<capability>.md  — BDD scenarios (one per capability)
-├── registry/<capability>.md          — main spec registry (merged from archives)
+├── registry/<capability>.md          — main spec registry (merged from archives; a first baseline from spec-extract)
 └── archive/<date>-<name>/            — archived changes
 ```
 
@@ -340,7 +340,8 @@ its own artifact rather than two more proposal sections because
 `## Capabilities` section, and persona names would land in that harvest. `codebase-analysis.md`,
 `implementation-notes.md`, `respec.md`, `prototype/` and `.board.json` are
 **not** DAG artifacts — they are written by their phases. All of them travel into `archive/<date>-<name>/`; only
-`requirements/*.md` ever merge into `registry/`.
+`requirements/*.md` ever merge into `registry/`. The one other writer of `registry/` is
+spec-extract's `--apply`, run by CODEBASE_ANALYSIS while the registry is empty (see Codebase Analysis below).
 
 ## Phases
 
@@ -387,26 +388,40 @@ not a phase of its own, so the enum, the board and the resume fixtures are
 unchanged): `uv run --directory ../../spec-extract/scripts python -m
 spec_extract_pipeline run --repo <checkout top> --tree <sha> [--path <project
 prefix>] --max-usd <spec_extract_max_usd> --trust-repo --apply --specs-dir
-<specs_dir>` through `git_ops._run_spec_extract_skill`. It is skipped, with
-`SKIP phase=CODEBASE_ANALYSIS step=spec-extract reason=<r>`, in `only` mode,
-with `spec_extract: false`, for an untrusted repo, for a project with no
-commit, and, while no commit is saved, when `specs/registry/` already holds a
-`*.md`. The commit is saved as `SpecGenState.spec_extract_sha` before the
-launch, and a resume always uses it, so it reaches the same spec-extract run
-folder. Exit 0 commits `specs/registry/` with `commit_stage` and prints
-`SPEC_EXTRACT:BASELINE <n>`; exit 5 (another run holds the folder) prints
-`SPEC_EXTRACT:RUNNING` and the build returns 1 without advancing; any other
-exit goes on without a baseline (`SPEC_EXTRACT:NOT_RUN`) unless
-`stop_record.others_work(<registry>, None)` finds uncommitted changes there,
-which also returns 1. The spend is spec-extract's own, outside `BuildBudget`
-and outside `SPEND_REPORTING` (spec-extract prints no `SPEND:` line). Its stop
-and resume rows are S1-S7 in the reverse-specs plan; `tests/test_spec_extract_step.py`
-tests S1, S3 and S5. With a non-empty registry, `artifact_context` lists its
-stems as `registry`, and `spec_steps._registry_section` appends
-`## Current behaviour (specs/registry)` to the requirements prompt (the
-same-name file, and the MODIFIED/REMOVED/ADDED rule) and to the design and
-tasks prompts (the files of the change's own capabilities), capped at
-`REGISTRY_TEXT_LIMIT`; an empty registry leaves every prompt unchanged.
+<absolute specs_dir>` through `git_ops._run_spec_extract_skill`. It is skipped,
+with `SKIP phase=CODEBASE_ANALYSIS step=spec-extract reason=<r>`, in `only`
+mode, in an epic's child build (`epic.CHILD_ENV`, which the coordinator's
+`_spawn` sets: the parent ran spec-extract before writing the child's plan, and
+siblings at one commit would race for spec-extract's lock), with
+`spec_extract: false`, for an untrusted repo, for a project with no commit,
+and, while no commit is saved, when `specs/registry/` already holds a `*.md`.
+The commit is saved as `SpecGenState.spec_extract_sha` before the launch, and a
+resume always uses it, so it reaches the same spec-extract run folder. A saved
+commit also means the analysis already ran, so `_run_codebase_analysis_phase`
+skips it (`reason=analysed-before-spec-extract`): a re-run of the step never
+pays for the analysis twice. Exit 0 commits `specs/registry/` with
+`commit_stage` and prints `SPEC_EXTRACT:BASELINE <n>`, with ` uncommitted`
+after it when the registry still holds uncommitted files (no pipeline branch
+under `--no-worktree`, or a failed commit); exit 5 (another run holds the
+folder) prints `SPEC_EXTRACT:RUNNING` and the build returns 1 without
+advancing; any other exit goes on without a baseline (`SPEC_EXTRACT:NOT_RUN`)
+unless `stop_record.others_work(<registry>, None)` finds uncommitted changes
+there, which also returns 1. The spend is outside `BuildBudget`, capped by
+`--max-usd`; spec-extract prints `SPEND:<usd>:<tokens>` last, and
+`SPEND_REPORTING` adds it to buildme's `SPEND:` line as it does a walkthrough
+run's. `tests/conftest.py` refuses a real `spec_extract_pipeline` launch, and
+clears an inherited `BUILDME_TRUST_REPO` and `BUILDME_EPIC_CHILD`. Its stop and
+resume rows are S1-S7 in the reverse-specs plan, plus S8 (a re-run of the step
+does not repeat the analysis); `tests/test_spec_extract_step.py` tests S1, S2,
+S3, S5, S6 and S8. With a non-empty registry,
+`artifact_context` lists its stems as `registry`, and the proposal prompt gets
+`## Current behaviour (specs/registry)` with the registry's capability names
+and the rule that a changed capability keeps its registry name;
+`spec_steps._registry_section` appends the same heading to the requirements
+prompt (the same-name file, and the MODIFIED/REMOVED/ADDED rule) and to the
+design and tasks prompts (the files of the change's own capabilities), capped
+at `REGISTRY_TEXT_LIMIT` (a file left out is named with its requirement names);
+an empty registry leaves every prompt unchanged.
 
 `EPIC_SPLIT` sits after `CODEBASE_ANALYSIS`, whose report it reads, and before
 `SPEC_GENERATION`, which a split build never reaches. It is the one phase

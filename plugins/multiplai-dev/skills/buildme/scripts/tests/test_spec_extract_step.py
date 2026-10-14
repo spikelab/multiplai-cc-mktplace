@@ -451,3 +451,220 @@ class TestStopAndResume:
                 "docs(specs): baseline registry from spec-extract at " + _git(repo, "rev-parse", "HEAD~1")[:12]
         assert (project / "specs/registry/billing.md").read_bytes() == \
             (ref_project / "specs/registry/billing.md").read_bytes()
+
+
+# --- review round 1 of #345 ----------------------------------------------------------------------
+
+
+class TestTheBaselineMarkerSaysWhetherItWasCommitted:
+    """`commit_stage` commits nothing without a pipeline branch (`--no-worktree`) and
+    returns None when the commit fails; the marker then says the files are uncommitted."""
+
+    def test_no_pipeline_branch_leaves_the_files_uncommitted_and_says_so(self, tmp_path, monkeypatch, capsys):
+        project = _repo(tmp_path / "p")
+        config = _config(project, branch=None)
+        before = _git(project, "rev-parse", "HEAD")
+        monkeypatch.setattr(git_ops, "_run_spec_extract_skill",
+                            FakeSpecExtract(_apply_into(config), stdout="SPEC_EXTRACT:APPLIED 1\n"))
+
+        assert _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+
+        assert _git(project, "rev-parse", "HEAD") == before
+        assert (config.specs_dir / "registry" / "billing.md").read_text() == CAPABILITY
+        out = capsys.readouterr().out
+        assert "SPEC_EXTRACT:BASELINE 1 uncommitted" in out
+
+    def test_a_failed_commit_says_so(self, tmp_path, monkeypatch, capsys):
+        config = _config(_repo(tmp_path / "p"))
+        monkeypatch.setattr(git_ops, "_run_spec_extract_skill",
+                            FakeSpecExtract(_apply_into(config), stdout="SPEC_EXTRACT:APPLIED 1\n"))
+        monkeypatch.setattr(git_ops, "commit_stage", lambda *a, **k: None)
+
+        assert _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+
+        assert "SPEC_EXTRACT:BASELINE 1 uncommitted" in capsys.readouterr().out
+
+    def test_nothing_left_to_commit_is_the_plain_marker(self, tmp_path, monkeypatch, capsys):
+        """Row S4: the files were committed before the stop; the resume applies none."""
+        project = _repo(tmp_path / "p")
+        config = _config(project)
+        state = _state(config)
+        state.spec_gen = SpecGenState()
+        state.spec_gen.spec_extract_sha = _git(project, "rev-parse", "HEAD")
+        (config.specs_dir / "registry" / "billing.md").write_text(CAPABILITY)
+        _git(project, "add", "specs")
+        _git(project, "commit", "-q", "-m", "baseline")
+        monkeypatch.setattr(git_ops, "_run_spec_extract_skill", FakeSpecExtract(0, stdout="SPEC_EXTRACT:APPLIED 0\n"))
+
+        assert _run_spec_extract_step(config, state, _progress(tmp_path)) is None
+
+        lines = capsys.readouterr().out.splitlines()
+        assert "SPEC_EXTRACT:BASELINE 0" in lines
+
+    def test_no_applied_line_counts_0(self, tmp_path, monkeypatch, capsys):
+        config = _config(_repo(tmp_path / "p"))
+        monkeypatch.setattr(git_ops, "_run_spec_extract_skill", FakeSpecExtract(0, stdout="something else\n"))
+        assert _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        assert "SPEC_EXTRACT:BASELINE 0" in capsys.readouterr().out.splitlines()
+
+    def test_an_empty_stderr_reports_the_last_stdout_line(self, tmp_path, monkeypatch, capsys):
+        config = _config(_repo(tmp_path / "p"))
+        monkeypatch.setattr(git_ops, "_run_spec_extract_skill", lambda argv, cwd=None, timeout=None:
+                            git_ops.GitResult(list(argv), 2, "first\nSPEC_EXTRACT:REFUSED here\n", ""))
+        assert _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        assert "SPEC_EXTRACT:NOT_RUN exit=2 SPEC_EXTRACT:REFUSED here" in capsys.readouterr().out
+
+
+def test_a_relative_specs_dir_is_passed_absolute(tmp_path, monkeypatch):
+    """`uv run --directory` runs spec-extract in its own scripts directory, so a
+    relative `--specs-dir` would name a directory there."""
+    project = _repo(tmp_path / "p")
+    config = _config(project)
+    monkeypatch.chdir(project)
+    config.specs_dir = Path("specs")
+    fake = FakeSpecExtract(1)
+    monkeypatch.setattr(git_ops, "_run_spec_extract_skill", fake)
+    _run_spec_extract_step(config, _state(config), _progress(tmp_path))
+    assert _flag(fake.calls[0], "--specs-dir") == str((project / "specs").resolve())
+
+
+class TestEpicChildren:
+    """An epic's child builds from the plan its parent wrote, after the parent ran
+    spec-extract; siblings at one commit would also race for spec-extract's lock."""
+
+    def test_a_child_build_skips_spec_extract(self, tmp_path, monkeypatch, caplog):
+        from build_pipeline.epic import CHILD_ENV
+
+        monkeypatch.setenv(CHILD_ENV, "1")
+        config = _config(_repo(tmp_path / "p"))
+        TestSkips()._skipped(config, _state(config), tmp_path, monkeypatch, caplog, "epic-child")
+
+    def test_the_coordinator_marks_each_child_it_starts(self, tmp_path, monkeypatch):
+        from build_pipeline.epic import CHILD_ENV, coordinator
+
+        seen = {}
+
+        class Popen:
+            def __init__(self, argv, **kw):
+                seen.update(kw)
+
+        monkeypatch.delenv(CHILD_ENV, raising=False)
+        monkeypatch.setattr(coordinator.subprocess, "Popen", Popen)
+        coordinator._spawn(["python", "-m", "build_pipeline"], tmp_path / "log")
+        assert seen["env"][CHILD_ENV] == "1"
+        assert seen["env"]["PATH"] == os.environ["PATH"]
+
+
+class TestTheAnalysisIsNotPaidTwice:
+    """Rows S1, S2 and S6 re-run the step; the codebase analysis before it already
+    ran and wrote its report, so the re-run does not ask its agents again."""
+
+    def _setup(self, tmp_path):
+        project = _repo(tmp_path / "p")
+        config = BuildConfig(project_dir=project, change_name="c", mode="scratch", auto=True,
+                             spec_only=True, skip_research=True, git=GitToggles(worktree=False))
+        config.specs_dir = project / "specs"
+        config.prototype_mode = "false"
+        cm = ChangeManager(config.specs_dir)
+        cm.init_specs()
+        cm.create_change("c")
+        (config.change_dir / "proposal.md").write_text("## Why\nA thing.\n")
+        _state(config)
+        args = argparse.Namespace(mode="scratch", change="c", project_dir=str(project), auto=True,
+                                  spec_only=True, skip_research=True, interview_summary="",
+                                  research_path="", context_files=[], session_id="")
+        return config, args
+
+    def _runs(self, config, args, monkeypatch, analysis, *steps, runs: int = 1) -> list:
+        """*runs* buildme processes on one project, each answering spec-extract from
+        *steps* in turn; *analysis* counts the codebase analysis's calls."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from build_pipeline.epic import split as epic_split
+
+        answer = epic_split.EpicSplitAnswer(single=True, reason="one change")
+        monkeypatch.setattr(epic_split, "epic_split", AsyncMock(return_value=answer))
+        monkeypatch.setattr(git_ops, "_run_spec_extract_skill", FakeSpecExtract(*steps))
+        codes = []
+        with patch("build_pipeline.llm_steps.spec_steps.run_codebase_analysis", analysis), \
+                patch("build_pipeline.spec_generator.run_spec_generator", AsyncMock(return_value=0)), \
+                patch("build_pipeline.llm_steps.spec_steps.run_design_audit", AsyncMock(return_value=[])):
+            for _ in range(runs):
+                codes.append(asyncio.run(run_orchestrator(config, args)))
+        return codes
+
+    @staticmethod
+    def _analysis():
+        from unittest.mock import AsyncMock
+
+        return AsyncMock(return_value="## Architecture\nx")
+
+    def _reference(self, tmp_path, monkeypatch):
+        """A run that never stopped."""
+        config, args = self._setup(tmp_path / "ref")
+        analysis = self._analysis()
+        assert self._runs(config, args, monkeypatch, analysis, 0) == [0]
+        return analysis, config
+
+    @pytest.mark.parametrize("first", [5, "dirty"])
+    def test_S2_and_S6_the_re_run_asks_the_analysis_once(self, first, tmp_path, monkeypatch):
+        ref_analysis, ref_config = self._reference(tmp_path, monkeypatch)
+        config, args = self._setup(tmp_path / "p")
+        mine = config.specs_dir / "registry" / "mine.md"
+
+        def user_edit():
+            mine.parent.mkdir(parents=True, exist_ok=True)
+            mine.write_text("my edit\n")
+            return 2
+
+        analysis = self._analysis()
+        assert self._runs(config, args, monkeypatch, analysis, 5 if first == 5 else user_edit) == [1]
+        if first == "dirty":
+            mine.unlink()
+        assert self._runs(config, args, monkeypatch, analysis, 0) == [0]
+
+        assert analysis.await_count == ref_analysis.await_count == 1
+        assert config.codebase_analysis_path.read_text() == ref_config.codebase_analysis_path.read_text()
+
+    def test_S1_stopped_twice_during_spec_extract_asks_the_analysis_once(self, tmp_path, monkeypatch):
+        ref_analysis, _ = self._reference(tmp_path, monkeypatch)
+        config, args = self._setup(tmp_path / "p")
+        analysis = self._analysis()
+        for _ in range(2):
+            with pytest.raises(KeyboardInterrupt):
+                self._runs(config, args, monkeypatch, analysis, KeyboardInterrupt())
+        assert self._runs(config, args, monkeypatch, analysis, 0) == [0]
+        assert analysis.await_count == ref_analysis.await_count == 1
+
+
+def test_no_test_can_start_a_real_spec_extract():
+    """conftest refuses the paid launch unless a test stubs the seam, as it refuses
+    the real pr skill and a real walkthrough run."""
+    with pytest.raises(AssertionError, match="spec-extract"):
+        git_ops._run_spec_extract_skill(["uv", "run", "python", "-m", "spec_extract_pipeline", "run"])
+
+
+class TestSpend:
+    """spec-extract prints `SPEND:<usd>:<tokens>` last, as a walkthrough run does, and
+    buildme adds it to its own `SPEND:` line, which an epic sums against `epic.max_usd`."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_total(self, monkeypatch):
+        from build_pipeline import budget
+
+        monkeypatch.setattr(budget, "_process", budget.ProcessSpend())
+
+    ARGV = ["uv", "run", "--directory", "/s", "python", "-m", "spec_extract_pipeline", "run", "--tree", "abc"]
+
+    def test_its_spend_line_is_added(self):
+        from build_pipeline import budget
+
+        git_ops._count_skill_spend(self.ARGV, "SPEC_EXTRACT:APPLIED 2\nSPEND:12.500000:3400\n")
+        assert budget.spend_marker() == "SPEND:12.500000:3400"
+
+    def test_no_spend_line_makes_the_total_incomplete(self):
+        from build_pipeline import budget
+
+        git_ops._count_skill_spend(self.ARGV, None)
+        assert budget.spend_marker() == "SPEND:0.000000:0:incomplete"
