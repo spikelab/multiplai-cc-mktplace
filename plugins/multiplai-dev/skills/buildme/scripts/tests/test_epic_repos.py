@@ -30,6 +30,7 @@ from .epic_row_helpers import (
     make_build,
     make_project,
     merge_waiting,
+    pr_number,
     pr_url,
     run_build,
     run_coordinator,
@@ -66,12 +67,13 @@ class TwoRepos:
     """The epic's repo `<root>/p` (origin `o/r.git`) and a second one,
     `<root>/q` (origin `o/r2.git`); the fakes on PATH; an approved split."""
 
-    def __init__(self, root: Path, monkeypatch, answer=CROSS, steps=None, merge_mode="manual", parallel=2):
+    def __init__(self, root: Path, monkeypatch, answer=CROSS, steps=None, merge_mode="manual", parallel=2,
+                 reviews=None, fixes=None):
         self.root, self.mp = root, monkeypatch
         self.data = use_workspace(monkeypatch, root)
         self.project = make_project(root)
         self.repo2 = make_project(root, "r2", "q")
-        self.fakes = Fakes(root, monkeypatch, steps)
+        self.fakes = Fakes(root, monkeypatch, steps, reviews, fixes)
         self.config = make_build(self.project)
         self.config.epic = EpicSettings(max_parallel=parallel, merge=merge_mode)
         approve(self.config, answer, CallLog(root / "split.log"))
@@ -101,16 +103,21 @@ def _opt(argv: list[str], name: str) -> str:
 
 # --- approval (item 43, F.S1) ----------------------------------------------------
 
-@pytest.mark.parametrize("case", ["missing", "no-origin", "not-a-checkout"])
+@pytest.mark.parametrize("case", ["missing", "no-origin", "not-a-checkout", "inside-another-checkout"])
 def test_approval_refuses_a_repo_that_is_not_a_checkout_with_origin(tmp_path, monkeypatch, capsys, case):
-    """F.S1: a missing repo, one without `origin`, or a directory git does not
-    know exits 1 naming the child and the repo; nothing is approved."""
+    """F.S1: a missing repo, one without `origin`, a directory git does not
+    know, or a plain directory inside another checkout that has an `origin`
+    (git would find that one) exits 1 naming the child and the repo; nothing
+    is approved."""
     use_workspace(monkeypatch, tmp_path)
+    if case == "inside-another-checkout":
+        git(tmp_path, "init", "-q")
+        git(tmp_path, "remote", "add", "origin", "https://example.invalid/o/outer.git")
     project = make_project(tmp_path)
     if case == "no-origin":
         make_project(tmp_path, "r2", "q")
         git(tmp_path / "q", "remote", "remove", "origin")
-    elif case == "not-a-checkout":
+    elif case in ("not-a-checkout", "inside-another-checkout"):
         (tmp_path / "q").mkdir()
     config = make_build(project)
     with patch.object(split_mod, "epic_split", FakeSplit(CallLog(tmp_path / "split.log"), CROSS)):
@@ -201,6 +208,61 @@ def test_a_checkout_moved_after_approval_parks_its_child(tmp_path, monkeypatch):
     assert e.run() == 3 and e.status() == {"a": "built", "b": "parked"}
     assert e.child_status()["b"]["repo_park"] == f"repo {tmp_path / 'q'} not found"
     assert len(e.launches()) == 1
+
+
+def test_a_checkout_gone_just_before_its_launch_parks_its_child(tmp_path, monkeypatch):
+    """F.S5 at the launch: b's checkout goes while a builds (one at a time);
+    b parks instead of launching."""
+    e = TwoRepos(tmp_path, monkeypatch, answer=APART, parallel=1, steps={"a": [{"block": True}]})
+
+    def tick(coord):
+        if (tmp_path / "q").is_dir() and coord.children["a"].status == "running":
+            (tmp_path / "q").rename(tmp_path / "q-moved")
+            e.fakes.release("a")
+
+    monkeypatch.setattr(coordinator, "_tick", tick)
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert e.status() == {"a": "built", "b": "parked"}
+    assert e.child_status()["b"]["repo_park"] == f"repo {tmp_path / 'q'} not found"
+    assert [Path(_opt(x, "--plan-file")).stem for x in e.launches()] == ["a"]
+
+
+@pytest.mark.parametrize("key", ["worktree", "push"])
+def test_a_child_s_own_repo_config_never_builds_it_in_place(tmp_path, monkeypatch, capsys, key):
+    """B1.S23 for a child in another repo: that checkout's specs/config.yaml,
+    which the child's build reads, turns off `git.worktree` or `git.push`;
+    the run exits 2 before anything is launched."""
+    e = TwoRepos(tmp_path, monkeypatch, answer=APART)
+    config_yaml = tmp_path / "q" / "specs" / "config.yaml"
+    config_yaml.parent.mkdir()
+    config_yaml.write_text(f"git:\n  {key}: false\n")
+    assert e.run() == 2
+    err = capsys.readouterr().err
+    assert f"git.{key}: false" in err and str(config_yaml) in err
+    assert e.launches() == [] and not (e.dir / "runs").exists()
+    config_yaml.unlink()
+    assert e.run() == 3 and sorted(merge_waiting()) == sorted([pr_url("e-a"), url2("e-b")])
+
+
+def test_a_fix_round_for_a_child_in_another_repo_is_read_under_its_own_slug(tmp_path, monkeypatch):
+    """Items 32-34 for a child in the second repo: the fixer runs in b's
+    worktree, its rounds are counted under r2's slug (`o-r2--pr-<n>`), and its
+    last review is reused rather than run again."""
+    n = pr_number("e-b")
+    reviews = {str(n): [{"findings": [{"id": "f1", "severity": "HIGH", "status": "confirmed",
+                                      "claim": "f1 is wrong", "file": "src/app.py", "line_start": 3}]}]}
+    fixes = {str(n): [{"rounds": [{}, {}]}]}
+    e = TwoRepos(tmp_path, monkeypatch, answer=APART, reviews=reviews, fixes=fixes)
+    assert e.run() == 3 and sorted(merge_waiting()) == sorted([pr_url("e-a"), url2("e-b")])
+    assert [a.kind for a in records.attempts(e.dir) if a.child == "b"] == ["build", "review", "post", "fix", "review"]
+    assert [x["kind"] for x in e.fakes.review_launches()] == ["review", "review"]      # a's and b's first
+    [fix] = e.fakes.fix_launches()
+    assert fix["cwd"] == "<root>/ws/.worktrees/buildme-e-b"
+    assert _opt(fix["argv"], "--max-rounds") == "5"
+    head = git(tmp_path / "q", "rev-parse", "refs/heads/buildme/e-b").strip()
+    last = e.tries("b", "review")[-1]
+    assert last.result["reused"] is True and last.result["head_sha"] == head
+    assert last.result["pr_round"] == 3 and e.child_status()["b"]["pr_round"] == 3
 
 
 def test_tracked_changes_in_the_second_repo_are_refused_by_the_child_build(tmp_path, monkeypatch):
