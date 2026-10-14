@@ -43,8 +43,13 @@ _PACKAGE_TABLES = frozenset({"project", "package", "tool.poetry", "workspace.pac
 _TABLE = re.compile(r"^\s*(\[\[?)\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$")
 # JSON: a string, or a punctuation mark that opens, closes or separates.
 _TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|[{}\[\]:,]')
-# A JSON key under which a `version` is a dependency's, not the package's own.
-_DEPENDENCY_KEY = re.compile(r"depend|require|overrides|resolutions|engines|packages", re.IGNORECASE)
+# Where a JSON file keeps the package's own `version`, as the keys of its open containers (`_own`):
+# the top level, a marketplace manifest's `metadata` and each of its `plugins[]`. Any other is a
+# component's, such as a devcontainer feature's node version or a dependency's.
+_OWN_JSON = frozenset({(None,), (None, '"metadata"'), (None, '"plugins"', None)})
+# The YAML files whose unindented `version` is the package's own. In another, such as
+# docker-compose.yml or dependabot.yml, it is the file format's.
+_OWN_YAML = frozenset({"pubspec.yaml", "Chart.yaml", "package.yaml", "galaxy.yml", "galaxy.yaml"})
 # A version field and nothing else on the line: `"version": "1.2.0",`, `version = "1.2.0"`,
 # `__version__ = "1.2"`, `version: 1.2.0`. Not any line that mentions "version".
 _VERSION_FIELD = re.compile(r"""^\s*(["']?)(?:__)?version(?:__)?\1\s*[:=]\s*(["']?)v?(?P<v>\d[\w.+-]*)\2\s*,?\s*$""",
@@ -217,7 +222,7 @@ def not_resolutions(w: Path, first: str, second: str, result: str) -> list[str] 
       too when those lines name a version that was replaced;
     - a lockfile must load, and hold only keys and values of *first*'s or
       *second*'s copy, or a version written in a version file, and each
-      pinned package must be one side's whole (`_lockfile`)."""
+      pinned package must be one side's whole, under its name (`_lockfile`)."""
     m = _merge(w, first, second)
     differ = None if m is None else _lines(git(w, "diff", "--name-only", "-z", "--no-renames", m.tree, result))
     if m is None or differ is None:
@@ -441,8 +446,10 @@ def _interleaves(lines: list[str], theirs: list[str], ours: list[str], renames: 
 
 _TOML_LOCKS = frozenset({"uv.lock", "poetry.lock", "Cargo.lock"})
 _JSON_LOCKS = frozenset({"package-lock.json", "Pipfile.lock", "composer.lock", "Package.resolved"})
-# The keys that pin a package's content.
-_HASH_KEYS = frozenset({"hash", "hashes", "checksum", "integrity", "shasum", "sha256", "sha512"})
+# The keys that pin a package's content: a hash, or a git revision (uv.lock's `source.git`,
+# poetry.lock's `resolved_reference`, Package.resolved's `revision`).
+_HASH_KEYS = frozenset({"hash", "hashes", "checksum", "integrity", "shasum", "sha256", "sha512",
+                        "git", "resolved_reference", "revision"})
 _PINNED_TEXT = re.compile(r"^\s*(?:integrity|checksum|resolved)\b", re.MULTILINE)
 # Where a lockfile keeps a hash of its manifest, which regenerating it rewrites: a hex digest.
 _MANIFEST_HASH = {"poetry.lock": ("metadata", "content-hash"), "composer.lock": ("content-hash",),
@@ -456,10 +463,11 @@ def _lockfile(path: str, o: str, t: str, r: str, written: set[str]) -> bool:
     is one of *o* or *t*, in any place (regenerating moves entries and drops
     the losing side's; a JSON comma moves with them), or is a `version` in
     *written*, or its manifest hash, a hex digest; and each package it pins
-    (`_units`) is a whole package of *o* or *t*: never one side's version
-    with the other's hash. Another holds only lines of *o* or *t* or a
-    version field holding a version in *written*, and each yarn.lock
-    paragraph that pins a package is one side's."""
+    (`_units`) is a whole package of *o* or *t* under the same name: never
+    one side's version with the other's hash, nor one package's entry under
+    another's name. Another holds only lines of *o* or *t* or a version
+    field holding a version in *written*, and each yarn.lock paragraph that
+    pins a package is one side's."""
     name = Path(path).name
     try:
         loaded = [_load(name, x) for x in (o, t, r)]
@@ -543,31 +551,40 @@ def _items(data) -> set[tuple]:
 
 
 def _units(name: str, data) -> list:
-    """What *data* pins as one package: each mapping `_pinned` finds and, in
-    pnpm's lock, which names a package by a key, each entry of `packages`
-    and `snapshots`."""
+    """What *data* pins as one package: each mapping `_pinned` finds, with
+    the keys it sits under, which name the package in package-lock.json and
+    Pipfile.lock; in pnpm's lock, which names a package by a key, each entry
+    of `packages` and `snapshots`; in Package.resolved, which pins by
+    `revision`, each pin whole, its name with its version and revision."""
     found: list = _pinned(data)
     if name == "pnpm-lock.yaml" and isinstance(data, dict):
         found += [{k: v} for part in ("packages", "snapshots") if isinstance(data.get(part), dict)
                   for k, v in data[part].items()]
+    if name == "Package.resolved" and isinstance(data, dict):
+        top = data.get("object") if isinstance(data.get("object"), dict) else data     # version 1 nests them
+        found += top["pins"] if isinstance(top.get("pins"), list) else []
     return found
 
 
-def _pinned(data) -> list[dict]:
-    """Each mapping with a `version` and a hash key at or below it that no
-    mapping below it with a `version` claims: one locked package."""
-    found: list[dict] = []
+def _pinned(data) -> list[tuple[tuple, dict]]:
+    """Each mapping but the top one with a `version` and a pin at or below
+    it (a hash key, or Cargo.lock's `git+` source) that no mapping below it
+    with a `version` claims: one locked package, with the keys of the
+    mappings above it (a list adds none: regenerating reorders it). The top
+    one's `version` is the lockfile format's."""
+    found: list[tuple[tuple, dict]] = []
 
-    def walk(x) -> bool:                         # True: x holds a hash no package below claims
+    def walk(x, at: tuple) -> bool:              # True: x holds a pin no package below claims
         if isinstance(x, dict):
-            held = [walk(v) for v in x.values()]
-            if (any(held) or any(k in _HASH_KEYS for k in x)) and "version" in x:
-                found.append(x)
+            held = [walk(v, (*at, k)) for k, v in x.items()]
+            pins = any(k in _HASH_KEYS for k in x) or str(x.get("source", "")).startswith("git+")   # Cargo.lock
+            if (any(held) or pins) and "version" in x and at:
+                found.append((at, x))
                 return False
-            return any(held) or any(k in _HASH_KEYS for k in x)
-        return any([walk(v) for v in x]) if isinstance(x, list) else False
+            return any(held) or pins
+        return any([walk(v, at) for v in x]) if isinstance(x, list) else False
 
-    walk(data)
+    walk(data, ())
     return found
 
 
@@ -628,18 +645,20 @@ def _is_changelog(path: str) -> bool:
 
 def _own(path: str, lines: list[str]) -> dict[int, str]:
     """The package's own version fields among *lines*, by line, with their
-    values: in a JSON file any not under a dependency key (`plugins[].version`
-    in a marketplace manifest is a plugin's own), in a package table (or
-    none) of a TOML or INI file, unindented elsewhere. A dependency's
-    version requirement is not one. One pass."""
+    values: in a JSON file the top-level one, or a marketplace manifest's
+    `metadata.version` or `plugins[].version` (`_OWN_JSON`), in a package
+    table (or none) of a TOML or INI file, unindented elsewhere (in YAML,
+    only in a package manifest, `_OWN_YAML`). A dependency's version
+    requirement, or a nested component's version, is not one. One pass."""
     suffix, found = Path(path).suffix.lower(), {}
     stack: list[str | None] = []             # JSON: the key each open container is under
     key = last = table = None
     for i, line in enumerate(lines):
         m = _VERSION_FIELD.match(line)
-        if m and (bool(stack) and not any(k and _DEPENDENCY_KEY.search(k) for k in stack) if suffix == ".json"
+        if m and (tuple(stack) in _OWN_JSON if suffix == ".json"
                   else (table is None or (table[0] == "[" and table[1] in _PACKAGE_TABLES))
-                  if suffix in (".toml", ".cfg", ".ini") else line == line.lstrip()):
+                  if suffix in (".toml", ".cfg", ".ini")
+                  else line == line.lstrip() and (suffix not in (".yml", ".yaml") or Path(path).name in _OWN_YAML)):
             found[i] = m["v"]
         if suffix == ".json":
             for tok in _TOKEN.findall(line):

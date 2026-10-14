@@ -714,11 +714,10 @@ def market(*versions: str) -> str:
 
 def test_the_plan_gives_the_agent_versions_changelogs_and_lockfiles_only(tmp_path):
     """40.3: a conflict only in the package's own version fields (a JSON
-    manifest's at any depth but under a dependency key, a marketplace's
-    `plugins[].version` included), a CHANGELOG by name or a lockfile goes to
-    the agent. A dependency's version, any other source line, a deletion on
-    either side and a binary file are refused, a lockfile or CHANGELOG
-    included."""
+    manifest's top-level one, a marketplace's `plugins[].version` included),
+    a CHANGELOG by name or a lockfile goes to the agent. A dependency's
+    version, any other source line, a deletion on either side and a binary
+    file are refused, a lockfile or CHANGELOG included."""
     sides = {"pyproject.toml": ('[project]\nversion = "{}"\n', "0.1.0", "0.2.0", "0.1.1"),
              "p.json": ('{{\n  "version": "{}"\n}}\n', "1", "2", "3"),
              ".claude-plugin/marketplace.json": (None, "0.1.0", "0.2.0", "0.1.1"),
@@ -968,6 +967,143 @@ def test_a_regenerated_lockfile_with_lines_neither_side_wrote_passes(tmp_path):
         assert s.beyond({name: good}) == [], (name, good)
         for text in bad:
             assert s.beyond({name: text}) == [name], (name, text)
+
+
+def _pipfile(digest: str, *pins: tuple[str, str]) -> str:
+    return json.dumps({"_meta": {"hash": {"sha256": digest}, "pipfile-spec": 6},
+                       "default": {n: {"hashes": [f"sha256:{h * 8}"], "version": "==1.0"} for n, h in pins},
+                       "develop": {}}, indent=4) + "\n"
+
+
+def _resolved(digest: str, *pins: tuple[str, str, str]) -> str:
+    return json.dumps({"originHash": digest, "pins": [
+        {"identity": n, "kind": "remoteSourceControl", "location": f"https://g/{n}",
+         "state": {"revision": r * 40, "version": v}} for n, v, r in pins], "version": 2}, indent=2) + "\n"
+
+
+def test_a_lockfile_package_is_one_side_s_entry_for_that_same_name(tmp_path):
+    """40.3, 'lockfiles (regenerate)' (finding f87b11faac): the child adds c,
+    main adds d. A regenerated lock (each manifest hash a new hex digest)
+    passes. One that files d's whole entry under c's name (package-lock.json's
+    `node_modules/c`, Pipfile.lock's `default.c`), or pairs c's version with
+    d's revision (Package.resolved, which pins by `revision`), is named."""
+    h = {k: k * 64 for k in "0123"}
+    npm = json.loads(_npm("a", "c", "d"))
+    npm["packages"]["node_modules/c"] = npm["packages"]["node_modules/d"]
+    resolved = json.loads(_resolved(h["3"], ("a", "1.0.0", "a"), ("c", "1.1.0", "c"), ("d", "1.2.0", "d")))
+    resolved["pins"][1]["state"]["revision"] = "d" * 40
+    whole = json.loads(_resolved(h["3"], ("a", "1.0.0", "a"), ("c", "1.1.0", "c"), ("d", "1.2.0", "d")))
+    whole["pins"][1]["state"] = whole["pins"][2]["state"]
+    cases = {"package-lock.json": (_npm("a"), _npm("a", "c"), _npm("a", "d"), _npm("a", "c", "d"),
+                                   [json.dumps(npm, indent=2) + "\n"]),
+             "Pipfile.lock": (_pipfile(h["0"], ("a", "a")), _pipfile(h["1"], ("a", "a"), ("c", "c")),
+                              _pipfile(h["2"], ("a", "a"), ("d", "d")),
+                              _pipfile(h["3"], ("a", "a"), ("c", "c"), ("d", "d")),
+                              [_pipfile(h["3"], ("a", "a"), ("c", "d"), ("d", "d")),
+                               _pipfile("not a hash", ("a", "a"), ("c", "c"), ("d", "d"))]),
+             "Package.resolved": (_resolved(h["0"], ("a", "1.0.0", "a")),
+                                  _resolved(h["1"], ("a", "1.0.0", "a"), ("c", "1.1.0", "c")),
+                                  _resolved(h["2"], ("a", "1.0.0", "a"), ("d", "1.2.0", "d")),
+                                  _resolved(h["3"], ("a", "1.0.0", "a"), ("c", "1.1.0", "c"), ("d", "1.2.0", "d")),
+                                  [json.dumps(resolved, indent=2) + "\n", json.dumps(whole, indent=2) + "\n",
+                                   _resolved("not a hash", ("a", "1.0.0", "a"), ("c", "1.1.0", "c"),
+                                             ("d", "1.2.0", "d"))])}
+    for name, (base, ours, theirs, good, bad) in cases.items():
+        s = Sides(tmp_path / name, {name: base}, {name: ours}, {name: theirs})
+        assert s.plan() == merge.Plan([name], []), name
+        assert s.beyond({name: good}) == [], (name, good)
+        for text in bad:
+            assert s.beyond({name: text}) == [name], (name, text)
+
+
+def _uv_git(*pins: tuple[str, str, str]) -> str:
+    return "version = 1\n" + "".join(f'\n[[package]]\nname = "{n}"\nversion = "{v}"\n'
+                                     f'source = {{ git = "https://g/{n}?rev=main#{r * 40}" }}\n' for n, v, r in pins)
+
+
+def _cargo_git(*pins: tuple[str, str, str]) -> str:
+    return "version = 3\n" + "".join(f'\n[[package]]\nname = "{n}"\nversion = "{v}"\n'
+                                     f'source = "git+https://g/{n}?branch=main#{r * 40}"\n' for n, v, r in pins)
+
+
+def test_a_lockfile_package_pinned_by_a_git_revision_is_one_side_s_whole(tmp_path):
+    """40.3 (finding f87b11faac, the same check for packages with no hash):
+    uv.lock and Cargo.lock pin a git dependency by the revision in its
+    `source`, and Package.resolved pins a branch with no version. A
+    regenerated lock passes; c's version with d's source is named."""
+    a, c, d = ("a", "1.0.0", "a"), ("c", "1.1.0", "c"), ("d", "1.2.0", "d")
+    mixed = ("c", "1.1.0", "d")
+    branch = json.loads(_resolved("0" * 64, a))
+    branch["pins"][0]["state"] = {"branch": "main", "revision": "a" * 40}
+    branch = json.dumps(branch, indent=2) + "\n"
+    cases = {"uv.lock": (_uv_git(a), _uv_git(a, c), _uv_git(a, d), _uv_git(a, c, d),
+                         [_uv_git(a, mixed, d).replace("https://g/c?", "https://g/d?")]),
+             "Cargo.lock": (_cargo_git(a), _cargo_git(a, c), _cargo_git(a, d), _cargo_git(a, c, d),
+                            [_cargo_git(a, mixed, d).replace("https://g/c?", "https://g/d?")])}
+    for name, (base, ours, theirs, good, bad) in cases.items():
+        s = Sides(tmp_path / name, {name: base}, {name: ours}, {name: theirs})
+        assert s.plan() == merge.Plan([name], []), name
+        assert s.beyond({name: good}) == [], (name, good)
+        for text in bad:
+            assert s.beyond({name: text}) == [name], (name, text)
+    pins = [json.loads(branch)["pins"][0], *json.loads(_resolved("0" * 64, c, d))["pins"]]
+    s = Sides(tmp_path / "branch", {"Package.resolved": branch},
+              {"Package.resolved": json.dumps({"pins": pins[:2], "version": 2}, indent=2) + "\n"},
+              {"Package.resolved": json.dumps({"pins": [pins[0], pins[2]], "version": 2}, indent=2) + "\n"})
+    assert s.plan() == merge.Plan(["Package.resolved"], [])
+    assert s.beyond({"Package.resolved": json.dumps({"pins": pins, "version": 2}, indent=2) + "\n"}) == []
+
+
+def devcontainer(node: str) -> str:
+    return json.dumps({"name": "dev", "features": {"ghcr.io/devcontainers/features/node:1": {"version": node}}},
+                      indent=2) + "\n"
+
+
+def test_a_third_party_version_nested_in_json_is_not_the_package_s_own(tmp_path):
+    """40.3 (finding e90cf86b28): a devcontainer feature's `version` is not
+    the package's own. Both sides raising it alike merges cleanly at that
+    value with no agent and no next version; raising it differently is a
+    conflict the step refuses, never one it forces to a third value. A
+    marketplace's `plugins[].version` and `metadata.version` stay its own."""
+    name = ".devcontainer/devcontainer.json"
+    s = Sides(tmp_path / "alike", {name: devcontainer("20")}, {name: devcontainer("22")},
+              {name: devcontainer("22"), "main.py": ""})
+    assert s.plan() == merge.Plan([], [])
+    assert s.beyond({name: devcontainer("22"), "main.py": ""}) == []
+    assert s.beyond({name: devcontainer("23"), "main.py": ""}) == [name]
+    s = Sides(tmp_path / "differ", {name: devcontainer("20")}, {name: devcontainer("22")}, {name: devcontainer("21")})
+    assert s.plan() == merge.Plan([], [name])
+
+    def meta(v: str) -> str:
+        return json.dumps({"name": "m", "metadata": {"version": v}, "plugins": []}, indent=2) + "\n"
+
+    s = Sides(tmp_path / "meta", {"m.json": meta("1.0.0")}, {"m.json": meta("1.1.0")}, {"m.json": meta("1.0.1")})
+    assert s.plan() == merge.Plan(["m.json"], [])
+    assert s.beyond({"m.json": meta("1.1.0")}) == []
+    # YAML: a compose file's `version` is its format's; a Helm chart's is its own.
+    compose, chart = 'version: "{}"\nservices:\n  app:\n    image: x\n', "name: c\nversion: {}\n"
+    s = Sides(tmp_path / "yaml", {"docker-compose.yml": compose.format("3.7"), "Chart.yaml": chart.format("0.1.0")},
+              {"docker-compose.yml": compose.format("3.8"), "Chart.yaml": chart.format("0.2.0")},
+              {"docker-compose.yml": compose.format("3.8"), "Chart.yaml": chart.format("0.1.1")})
+    assert s.plan() == merge.Plan(["Chart.yaml"], [])
+    assert s.beyond({"docker-compose.yml": compose.format("3.8"), "Chart.yaml": chart.format("0.2.0")}) == []
+
+
+def test_the_prompt_asks_for_the_new_version_only_where_the_check_accepts_it(tmp_path):
+    """40.3 (finding f6f5c21cbe): the check accepts the new version only in
+    the version fields both sides raised (and the child's CHANGELOG lines),
+    so the prompt asks for that and nothing wider. Another plugin at the old
+    value, left as it is, passes; written over, it is named."""
+    from build_pipeline.prompts.epic_merge import MERGE_PROMPT
+
+    text = " ".join(MERGE_PROMPT.split())
+    assert "wherever that version appears" not in text
+    assert "only in the version fields both" in text
+    s = Sides(tmp_path, {"m.json": market("0.64.0", "0.65.0")}, {"m.json": market("0.65.0", "0.65.0")},
+              {"m.json": market("0.65.0", "0.65.0"), "main.py": ""})
+    assert s.plan() == merge.Plan(["m.json"], [])
+    assert s.beyond({"m.json": market("0.66.0", "0.65.0"), "main.py": ""}) == []
+    assert s.beyond({"m.json": market("0.66.0", "0.66.0"), "main.py": ""}) == ["m.json"]
 
 
 def test_a_conflict_without_markers_is_never_the_step_s_resolution(tmp_path):

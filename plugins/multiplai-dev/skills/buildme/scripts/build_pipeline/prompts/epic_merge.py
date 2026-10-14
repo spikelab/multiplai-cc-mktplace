@@ -16,8 +16,11 @@ needs the next one. Resolve by these rules only:
   and `origin/{default}` raised: write the next version after the one
   `origin/{default}` has, raising the same part the branch raised (from
   0.64.0, a branch at 0.65.0 and `origin/{default}` at 0.65.0 give 0.66.0;
-  `origin/{default}` at 0.64.1 gives 0.65.0). Write the same value wherever
-  that version appears in a listed file. Change nothing else in the file.
+  `origin/{default}` at 0.64.1 gives 0.65.0). Write it only in the version
+  fields both sides raised. Leave every other line as the merge left it,
+  even where it holds the old version: another package's version field
+  that only one side or neither side changed, a description, a line of
+  `origin/{default}`'s CHANGELOG. Change nothing else in the file.
 - A CHANGELOG: keep both entries in full. Keep every line of
   `origin/{default}`'s copy (`git show MERGE_HEAD:<file>`), in its order, and
   put every line the branch added above its entry, in their order, under a

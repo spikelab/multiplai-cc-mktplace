@@ -21,9 +21,11 @@ time, not derived from a tag.
 
 ### Added
 - Epic mode's merge step (`epic.merge: auto`) now resolves conflicts that
-  are only in version fields (a marketplace manifest's plugin versions
-  included), CHANGELOGs and lockfiles, with one agent call (model step
-  `merge`, counted against `epic.max_usd`). It also raises a version that
+  are only in the package's own version fields (a marketplace manifest's
+  plugin versions included; a nested component's, such as a devcontainer
+  feature's, or a compose file's format version, is not one), CHANGELOGs
+  and lockfiles, with one agent call (model step `merge`, counted against
+  `epic.max_usd`). It also raises a version that
   the child and the default branch both raised to the same value, which git
   merges without a conflict, to the next one after the default branch's. A
   conflict in any other file, a deleted or binary side included, still parks
@@ -34,9 +36,10 @@ time, not derived from a tag.
   both raised it, both CHANGELOG entries are kept in full with the child's
   under the version written, and a regenerated lockfile holds only either
   side's packages and values (its manifest hash aside), loads, and pins each
-  package as one side does. A merge commit holding only such resolutions is not
-  reviewed again. With `epic.max_usd` reached, only a merge that would need
-  the agent is held back. A change left in the worktree that the merge did
+  package (by hash or git revision), under its own name, as one side does.
+  A merge commit holding only such resolutions is not reviewed again. With
+  `epic.max_usd` reached, only a merge that would need the agent is held
+  back. A change left in the worktree that the merge did
   not make parks the child before the tests run.
 
 ## [0.64.0] - 2026-10-13
