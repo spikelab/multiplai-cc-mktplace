@@ -52,7 +52,7 @@ class TestRunnerOf:
 
     @pytest.mark.parametrize("command", [
         "swift test", "cargo test", "go test ./...", "make test", "yarn test", "",
-        "pytest 'unbalanced",
+        "pytest 'unbalanced", "tox -e pytest", "make pytest", "nox -s jest",
     ])
     def test_other_commands_are_unknown(self, tmp_path, command):
         assert runner_of(command, tmp_path) is None

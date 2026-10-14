@@ -35,6 +35,9 @@ _NODE_TEST_RE = re.compile(rf"(^|/)[^/]+\.(test|spec)\.{_NODE_EXT}$")
 _NODE_SOURCE_RE = re.compile(rf"\.{_NODE_EXT}$")
 _JEST_OR_VITEST_RE = re.compile(r"(^|[\s/])(jest|vitest)(\s|$)")
 _NPM_TEST = (("npm", "test"), ("npm", "t"), ("npm", "run", "test"))
+# Task runners take their own arguments, not test paths, even when a target
+# or environment is named after a test runner (`tox -e pytest`).
+_TASK_RUNNERS = ("tox", "nox", "make", "just", "invoke", "task")
 
 
 def _package_test_script(project_dir: Path) -> str:
@@ -54,6 +57,8 @@ def runner_of(test_command: str, project_dir: Path) -> str | None:
     except ValueError:
         return None
     names = [Path(t).name for t in tokens]
+    if not names or names[0] in _TASK_RUNNERS:
+        return None
     if any(n in ("pytest", "py.test") for n in names):
         return PYTEST
     if any(n in ("jest", "vitest") for n in names):
