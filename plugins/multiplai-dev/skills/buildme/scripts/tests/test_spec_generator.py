@@ -1536,3 +1536,134 @@ class TestUseCasesGeneration:
         assert (change_dir / "use-cases.md").exists()
         assert "use-cases" in order
         assert order.index("use-cases") < order.index("tasks")
+
+
+# --- Blocks that add no behaviour (epic e2e attempt 1, Defect 1) ---
+#
+# Child 2 of the 2026-10-14 live epic wrote blocks 2 and 3 as "Confirm…" and
+# "Verify…" with `Produces: (none)`: block 1 had already built what they
+# test, so their tests passed before any implementation and the RED gate failed
+# the whole build. The fixture is that tasks.md, verbatim.
+
+from build_pipeline.spec_generator import scan_no_behaviour_blocks  # noqa: E402
+
+_E2E_TASKS = Path(__file__).parent / "fixtures" / "tasks-no-behaviour-blocks.md"
+
+
+def _tasks_file(tmp_path, text: str) -> Path:
+    path = tmp_path / "tasks.md"
+    path.write_text(text)
+    return path
+
+
+class TestScanNoBehaviourBlocks:
+    def test_flags_the_confirm_and_verify_blocks_from_the_live_epic(self):
+        findings = scan_no_behaviour_blocks(_E2E_TASKS)
+
+        assert [f["block"] for f in findings] == [2, 3]
+        assert all(f["category"] == "no-new-behaviour" for f in findings)
+        assert all(f["severity"] == "critical" for f in findings)
+        assert "Line-count and empty-input edge cases" in findings[0]["description"]
+        assert "Module conventions" in findings[1]["description"]
+
+    def test_the_finding_says_where_the_criteria_go(self):
+        finding = scan_no_behaviour_blocks(_E2E_TASKS)[0]
+
+        assert "RED gate" in finding["description"]
+        # Block 2 consumes Block 1, so Block 1 is where its tests belong.
+        assert "Block 1" in finding["suggestion"]
+
+    def test_a_block_that_admits_an_earlier_block_satisfies_it_is_flagged(
+        self, tmp_path,
+    ):
+        path = _tasks_file(tmp_path, (
+            "## 1. Parse dates\n\nAdd `parse(s: str) -> date`.\n\n"
+            "Interfaces:\n- Produces: `parse(s: str) -> date`\n\n"
+            "Satisfies: dates — Parse\n\n"
+            "## 2. Leap years\n\nAdd tests for 29 February. These are already "
+            "implemented by Block 1.\n\n"
+            "Interfaces:\n- Produces: (none)\n- Consumes: Block 1: `parse(s: str) -> date`\n\n"
+            "Satisfies: dates — Leap\n"
+        ))
+
+        assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
+
+    def test_a_behaviour_block_with_no_produces_is_not_flagged(self, tmp_path):
+        """`Produces: (none)` alone is legitimate: a last slice nobody calls."""
+        path = _tasks_file(tmp_path, (
+            "## 1. Print the summary from the CLI\n\nAdd a `--summary` flag "
+            "that prints `summarize(stdin)` and exits 0.\n\n"
+            "Interfaces:\n- Produces: (none)\n\nSatisfies: cli — Summary\n"
+        ))
+
+        assert scan_no_behaviour_blocks(path) == []
+
+    def test_a_verify_block_that_produces_something_is_not_flagged(self, tmp_path):
+        path = _tasks_file(tmp_path, (
+            "## 1. Signature check\n\nVerify each upload's HMAC and reject a "
+            "mismatch with 401.\n\n"
+            "Interfaces:\n- Produces: `check_signature(body: bytes, sig: str) -> bool`\n\n"
+            "Satisfies: upload — Signature\n"
+        ))
+
+        assert scan_no_behaviour_blocks(path) == []
+
+    def test_a_checkbox_block_headed_verify_is_flagged(self, tmp_path):
+        path = _tasks_file(tmp_path, (
+            "## 1. Count words\n\n- [ ] 1.1 Add `count(s: str) -> int`\n\n"
+            "Interfaces:\n- Produces: `count(s: str) -> int`\n\n"
+            "## 2. Verify whitespace handling\n\n- [ ] 2.1 Add tests for tabs\n\n"
+            "Interfaces:\n- Produces: (none)\n"
+        ))
+
+        assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
+
+    def test_a_missing_tasks_file_yields_no_findings(self, tmp_path):
+        assert scan_no_behaviour_blocks(tmp_path / "absent.md") == []
+
+
+class TestTasksShapeAuditRejectsNoBehaviourBlocks:
+    """The scan's findings join the shape audit's ONE regeneration pass, like
+    the placeholder scan's, even when the LLM audit finds nothing."""
+
+    @pytest.mark.asyncio
+    async def test_a_no_behaviour_block_forces_the_regeneration(self, tmp_path):
+        specs_dir = tmp_path / "specs"
+        specs_dir.mkdir()
+        cm = ChangeManager(specs_dir)
+        cm.init_specs()
+        change_dir = cm.create_change("nb")
+        (change_dir / "proposal.md").write_text("# Proposal")
+        (change_dir / "design.md").write_text("# Design")
+
+        config = MagicMock()
+        config.change_name = "nb"
+        config.specs_dir = specs_dir
+        config.change_dir = change_dir
+        config.model = "test-model"
+        config.task_granularity = "blocks"
+        config.state_file_path.return_value = change_dir / ".build-state.json"
+
+        state = BuildState(
+            change_name="nb",
+            mode="scratch",
+            tier="standard",
+            state_file=str(change_dir / ".build-state.json"),
+            phase=BuildPhase.SPEC_GENERATION,
+            spec_gen=SpecGenState(),
+        )
+        rewritten = "## 1. Summarize\n\nBuilds it, edge cases included.\n"
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.side_effect = [_E2E_TASKS.read_text(), rewritten]
+            mock_audit.return_value = []
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        assert mock_gen.call_count == 2
+        assert (change_dir / "tasks.md").read_text() == rewritten
+        regen_findings = mock_gen.call_args_list[1].kwargs["audit_findings"]
+        assert "Block 2" in regen_findings
+        assert "Block 3" in regen_findings
+        assert state.spec_gen.tasks_audit_done is True

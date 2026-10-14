@@ -329,3 +329,24 @@ class TestTasksAudit:
 
         assert len(findings) == 1
         assert findings[0]["category"] == "horizontal-decomposition"
+
+
+class TestEveryBlockAddsBehaviour:
+    """Epic e2e attempt 1, Defect 1: a block whose tests pass before it is
+    built fails the TDD RED gate and the whole build. The rule is stated where
+    blocks are written, and checked where they are audited."""
+
+    def test_the_tasks_prompt_requires_behaviour_that_fails_first(self):
+        assert "Every block MUST add behaviour" in TASKS_PROMPT
+        assert "RED gate" in TASKS_PROMPT
+
+    def test_the_tasks_prompt_forbids_confirm_and_verify_blocks(self):
+        assert "Never write a block that only confirms, verifies" in TASKS_PROMPT
+
+    def test_the_shape_audit_flags_a_block_that_adds_no_behaviour(self):
+        from build_pipeline.prompts.design_audit import TASKS_AUDIT_PROMPT
+
+        assert '"no-new-behaviour"' in TASKS_AUDIT_PROMPT
+        TASKS_AUDIT_PROMPT.format(
+            design_content="", specs_content="", tasks_content="",
+        )

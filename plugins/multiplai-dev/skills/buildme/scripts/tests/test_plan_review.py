@@ -735,3 +735,45 @@ class TestPlanReviewStage:
         written = json.loads(state_path.read_text())["spec_gen"]
         assert written["plan_review_done"] is True
         assert written["plan_review_regen_done"] is False
+
+
+# --- 6. Blocks that add no behaviour (epic e2e attempt 1, Defect 1) -------
+
+_NO_BEHAVIOUR_TASKS = (
+    Path(__file__).parent / "fixtures" / "tasks-no-behaviour-blocks.md"
+).read_text()
+
+
+class TestNoBehaviourBlocks:
+    def test_the_prompt_names_the_category(self):
+        assert "`no-new-behaviour`" in PLAN_REVIEW_PROMPT
+
+    @pytest.mark.asyncio
+    async def test_the_stage_adds_the_scan_to_a_clean_review_and_regenerates(
+        self, tmp_path,
+    ):
+        """The plan review is the last check before TDD: a block the design
+        audit's rewrite brought back is caught here even when the reviewer
+        model misses it."""
+        config, state, state_path = _stage_setup(tmp_path)
+        (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
+        review = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        regen = AsyncMock(return_value="## 1. Summarize\n\nAll of it.\n")
+        with patch.object(plan_review_steps, "run_plan_review", review), \
+                patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen), \
+                patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit",
+                      AsyncMock(return_value=[])), \
+                patch("build_pipeline.spec_generator.generate_rubric",
+                      AsyncMock(return_value="## Criteria\n- fresh\n")):
+            findings = await run_plan_review_stage(
+                config.change_dir, config, state, state_path)
+
+        assert [f.category for f in findings] == ["no-new-behaviour"] * 2
+        assert [f.location for f in findings] == [
+            "Block 2 — Line-count and empty-input edge cases",
+            "Block 3 — Module conventions and no package-level re-export",
+        ]
+        assert regen.await_count == 1
+        assert "no-new-behaviour" in regen.await_args.kwargs["audit_findings"]
+        assert state.spec_gen.plan_review_regen_done is True
+        assert state.spec_gen.plan_review_done is True
