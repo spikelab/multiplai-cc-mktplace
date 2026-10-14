@@ -25,8 +25,15 @@ time, not derived from a tag.
   instead of stopping with `Branch ... already exists with N commit(s)`, so
   an epic's failed child can be relaunched too. A build that failed before
   any commit also re-runs in its own worktree, no longer in a new `-2` one.
-  The re-run stops with exit `1`, and changes nothing, when the worktree
-  holds an uncommitted change the failed run did not leave.
+  The re-run stops with exit `1`, and changes nothing, when the worktree is
+  no longer on the build's branch, or holds an uncommitted change the failed
+  run did not leave. A build that failed under 0.70.0 or earlier has no
+  record of what it left: with no commit of its own it re-runs in a new `-2`
+  worktree as before, and with a commit and uncommitted changes it stops
+  until they are stashed.
+- `/multiplai-dev:buildme`: a build resumed from inside its own worktree
+  commits its spec stage on the build's branch again; before, every
+  spec-stage commit was skipped.
 
 ## [0.70.0] - 2026-10-14
 

@@ -1082,8 +1082,8 @@ class TestFailedBuildRetry:
         assert rc == 0, capsys.readouterr().err
         assert config.pipeline_branch == branch
         assert _sh(worktree, "rev-parse", "--abbrev-ref", "HEAD") == branch
+        assert _sh(worktree, "log", "-1", "--format=%s", branch).startswith("docs(specs): csv")
         committed = set(_sh(worktree, "ls-tree", "-r", "--name-only", branch).split())
-        assert "specs/config.yaml" in committed
         assert "specs/changes/csv/.change.yaml" in committed
 
     @pytest.mark.asyncio

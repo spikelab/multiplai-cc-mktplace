@@ -26,7 +26,6 @@ from build_pipeline.epic import coordinator, records, store
 from build_pipeline.epic import lock as epic_lock
 from build_pipeline.epic.split import EpicSplitAnswer
 from build_pipeline.git_ops import GitResult
-from build_pipeline.models import BuildPhase
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState
 
@@ -408,11 +407,9 @@ def test_a_build_inside_its_own_worktree_is_not_refused_on_its_base_ref(tmp_path
     monkeypatch.setattr(orchestrator, "_setup_worktree", setup)
     config = BuildConfig(project_dir=project, change_name="c")
     config.base_ref = base
-    config.specs_dir = project / "specs"
     rebound = BuildState(change_name="c", mode="brief", tier="advanced", worktree_path=str(project))
-    # Neither refused nor sent to _setup_worktree: it keeps the worktree it is in.
-    asyncio.run(orchestrator._run_bootstrap(config, rebound, None, None))
-    assert rebound.phase == BuildPhase.BOOTSTRAP
+    with pytest.raises(Reached):
+        asyncio.run(orchestrator._run_bootstrap(config, rebound, None, None))
     with pytest.raises(intake.ConfigNotCommittedError):
         asyncio.run(orchestrator._run_bootstrap(config, BuildState(change_name="c", mode="brief",
                                                                     tier="advanced"), None, None))

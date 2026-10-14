@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from build_pipeline.orchestrator import (
+    _rebind_to_existing_worktree,
     _run_bootstrap,
     _run_publish,
     run_orchestrator,
@@ -1368,6 +1369,28 @@ class TestResumeRebinding:
 
         assert result == 0
         assert _worktree_count(repo) == before, "a resume must not create a second worktree"
+        assert config2.project_dir == worktree
+        assert config2.pipeline_branch == "buildme/resumed"
+
+    @pytest.mark.asyncio
+    async def test_a_resume_started_inside_the_worktree_owns_its_branch(
+        self, tmp_path, monkeypatch,
+    ):
+        """There the state file is found in place, so nothing re-binds; the
+        build still owns the branch, or every spec-stage commit is skipped."""
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        config1 = BuildConfig(project_dir=repo, change_name="resumed")
+        config1.specs_dir = repo / "specs"
+        state = BuildState(change_name="resumed", mode="scratch", tier="advanced",
+                           state_file=str(config1.state_file_path()))
+        await _run_bootstrap(config1, state, ChangeManager(config1.specs_dir),
+                             config1.state_file_path())
+        worktree = Path(state.worktree_path)
+
+        config2 = BuildConfig(project_dir=worktree, change_name="resumed")
+        config2.specs_dir = worktree / "specs"
+        _rebind_to_existing_worktree(config2)
         assert config2.project_dir == worktree
         assert config2.pipeline_branch == "buildme/resumed"
 

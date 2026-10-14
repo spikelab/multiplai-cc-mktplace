@@ -178,6 +178,10 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             result = await run_spec_generator(config, args)
             if result != 0:
                 log.error("FAIL phase=SPEC_GENERATION exit_code=%d", result)
+                # Reload first, for the reason given below: a re-run keeps the
+                # artifacts in its own worktree and needs their saved flags.
+                if state_path.exists():
+                    state = BuildState.load(state_path)
                 state.fail(config.project_dir, state_path)
                 board.record_failure(
                     config, state, "spec generation failed", progress=progress,
@@ -778,6 +782,14 @@ async def _run_codebase_analysis_phase(
         log.info("SKIP phase=CODEBASE_ANALYSIS reason=analysed-before-spec-extract report=%s",
                  state.spec_gen.codebase_analysis_path)
         return
+    saved = state.spec_gen.codebase_analysis_path if state.spec_gen is not None else None
+    if saved and Path(saved) == config.codebase_analysis_path and Path(saved).is_file():
+        # A FAILED build re-run in its own worktree keeps the change dir, the
+        # report in it and the design written against that report: analysing
+        # the tree again, which now holds the failed run's commits, would pay
+        # twice for a report the kept design does not match.
+        log.info("SKIP phase=CODEBASE_ANALYSIS reason=report-already-written report=%s", saved)
+        return
     if not _has_source_files(config.project_dir):
         log.info(
             "SKIP phase=CODEBASE_ANALYSIS reason=no-source-files-yet dir=%s",
@@ -981,32 +993,29 @@ async def _run_bootstrap(
     """
     import subprocess
 
-    from . import intake, stop_record
+    from . import intake
 
     previous_change_dir = config.change_dir if config.change_name else None
-    if config.git.worktree and _inside_own_worktree(config, state):
-        # A FAILED build re-run (by hand, or an epic coordinator's relaunch of
-        # a failed child with the same argv) after _rebind_to_existing_worktree
-        # keeps its own branch and worktree: _setup_worktree would refuse that
-        # branch once it holds a commit. The config.yaml checks below do not
-        # apply here: the uncommitted config.yaml is the stub bootstrap wrote
-        # itself, and the branch already exists. Anything uncommitted must be
-        # what the failed run left (`state.failed_stop`); the re-run commits
-        # whatever is in the tree, so anything else stops it untouched.
-        left = stop_record.others_work(config.project_dir, state.failed_stop)
-        if left:
-            raise git_ops.GitLifecycleError(
-                f"Did not re-run the failed build in {state.worktree_path}: {left}")
+    if (config.git.worktree and state.phase == BuildPhase.FAILED
+            and _inside_own_worktree(config, state)
+            and _keeps_failed_worktree(config, state)):
         state_path = config.state_file_path()
         cm = ChangeManager(config.specs_dir)
     elif config.git.worktree:
         # The worktree branches from HEAD, so an uncommitted config.yaml would
         # silently not exist inside it — refuse instead of building without it.
-        if intake.config_yaml_uncommitted(config.project_dir):
+        # Only the caller's source repo is checked: a build resumed at
+        # BOOTSTRAP, or a FAILED one `_keeps_failed_worktree` sends here,
+        # runs bootstrap inside its own worktree after
+        # _rebind_to_existing_worktree, where the uncommitted config.yaml is
+        # the stub bootstrap wrote itself and the user has nothing to commit.
+        if (not _inside_own_worktree(config, state)
+                and intake.config_yaml_uncommitted(config.project_dir)):
             raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_COMMITTED)
         # With --base-ref (an epic's child) it branches from that commit
         # instead, where a committed but unpushed config.yaml is missing too.
-        if config.base_ref and intake.config_yaml_off_ref(config.project_dir, config.base_ref):
+        if (config.base_ref and not _inside_own_worktree(config, state)
+                and intake.config_yaml_off_ref(config.project_dir, config.base_ref)):
             raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_ON_BASE)
         _setup_worktree(config, state)
         state_path = config.state_file_path()
@@ -1120,6 +1129,47 @@ def _inside_own_worktree(config: BuildConfig, state: BuildState) -> bool:
     return True
 
 
+def _keeps_failed_worktree(config: BuildConfig, state: BuildState) -> bool:
+    """Whether a FAILED build re-run inside its own worktree keeps it.
+
+    A re-run (by hand, or an epic coordinator's relaunch of a failed child
+    with the same argv) keeps the build's branch and worktree, with every
+    commit on it: `_setup_worktree` would refuse that branch once it holds a
+    commit. The re-run commits whatever is in the tree on whatever is checked
+    out, so it stops (raises ``git_ops.GitLifecycleError``, touching nothing)
+    when the worktree is on another branch, or holds an uncommitted change
+    the failed run did not leave (`state.failed_stop`, `stop_record`).
+
+    False sends the re-run to `_setup_worktree`, as every FAILED re-run went
+    before the failure record existed: a FAILED checkpoint with no record
+    (written before it existed, or git could not be asked), whose branch has
+    no commit of its own and whose tree holds uncommitted changes, gets a new
+    ``-2`` worktree and leaves this one as it is. With a commit,
+    `_setup_worktree` would refuse the branch, so it stops here instead.
+    """
+    from . import stop_record
+
+    worktree = state.worktree_path
+    on = git_ops.current_branch(config.project_dir)
+    if state.branch and on != state.branch:
+        where = "a detached HEAD" if on in ("", "HEAD") else f"branch '{on}'"
+        raise git_ops.GitLifecycleError(
+            f"Did not re-run the failed build in {worktree}: it is on {where}, not the "
+            f"build's branch '{state.branch}', and the re-run commits on what is checked "
+            f"out; switch back (`git -C {worktree} switch {state.branch}`), then re-run")
+    left = stop_record.others_work(config.project_dir, state.failed_stop)
+    if left and state.failed_stop is None and state.branch:
+        base = config.base_ref or git_ops.default_branch(config.project_dir)
+        if git_ops.unmerged_commit_count(config.project_dir, state.branch, base) == 0:
+            log.info("RESUME failed build has no failure record and no commit: a new "
+                     "worktree, %s left as it is (%s)", worktree, left)
+            return False
+    if left:
+        raise git_ops.GitLifecycleError(f"Did not re-run the failed build in {worktree}: {left}")
+    config.pipeline_branch = state.branch or on
+    return True
+
+
 def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
     """Create the build's own worktree + branch and re-bind the config to it.
 
@@ -1166,7 +1216,18 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
     if not config.git.worktree or not config.change_name:
         return
     if config.state_file_path().exists():
-        return  # in-place state (--no-worktree run, or already re-bound)
+        # In-place state: a --no-worktree run, or one already re-bound or
+        # started inside the build's own worktree, whose branch it still owns
+        # (without it, commit_stage skips every spec-stage commit).
+        if not config.pipeline_branch:
+            try:
+                here = BuildState.load(config.state_file_path())
+            except Exception as e:  # corrupt checkpoint — run_orchestrator reports it
+                log.warning("Ignoring unreadable state at %s: %s", config.state_file_path(), e)
+                return
+            if _inside_own_worktree(config, here):
+                config.pipeline_branch = here.branch or git_ops.current_branch(config.project_dir)
+        return
 
     repo = git_ops.repo_root(config.project_dir)
     if repo is None:
