@@ -1,5 +1,30 @@
 """Prompt templates for implementation and refactoring agents."""
 
+from ..gates import TEST_CHANGE_MARKER
+
+# How an agent that may change a test after the RED gate declares the change.
+# Built from the gate's own marker, so this text and
+# `gates.unchanged_tests_gate` cannot drift apart
+# (`tests/test_test_change_marker.py`). The engine keeps the end of a report
+# (`tdd_engine._trim_evidence`), which is why the line goes at the end. It is
+# concatenated into `.format()` templates, so it must hold no braces.
+TEST_CHANGE_DECLARATION = f"""\
+If you changed a test file, add one line per change at the very end of your
+final report, after any other slots (a `SEARCHED:` section included), each on
+its own line and starting with this exact marker:
+
+```
+{TEST_CHANGE_MARKER} <reason>
+```
+
+`<reason>` names the test and what was wrong with it, for example the spec
+line it contradicts. The pipeline re-hashes every test file after you finish.
+A changed test with no such line fails the block, and an explanation without
+the marker (under SURPRISES, say) does not count. If you changed no test, write
+no such line: a line left as `<reason>` or `none` declares nothing. The reason
+goes to the reviewer as a claim to check against the diff.
+"""
+
 IMPLEMENTER_PROMPT_CLEAN = """\
 You are an implementation agent working in a TDD pipeline (advanced tier).
 Write clean, well-structured code that passes all failing tests. A separate
@@ -23,7 +48,7 @@ it tidies, it does not rescue. Your code should be production-quality as written
    and needless indirection — write this as if it were the final code.
 3. **Treat the tests as fixed.** Modify a test only if it has a genuine bug (e.g.,
    wrong import path after you choose a module location). If you do modify a test,
-   explain why.
+   declare it in your report as the Output section below says.
 4. **Follow existing project patterns.** Match the code style, directory structure,
    and conventions already established in the project.
 5. **Run the test command below** after implementation to verify nothing is broken.
@@ -71,7 +96,8 @@ spec described the work accurately. These notes are collected into
 implementation-notes.md and become a proposed spec delta at the end of the
 build — nobody edits the spec from them automatically, so an honest note costs
 you nothing and saves the next build.
-"""
+
+""" + TEST_CHANGE_DECLARATION
 
 IMPLEMENTER_PROMPT_MINIMUM = """\
 You are an implementation agent working in a TDD pipeline (standard tier).
@@ -92,7 +118,8 @@ refactoring agent will clean up the code afterward.
 1. **Make the failing tests pass** with the simplest possible implementation.
 2. **Minimum viable code.** Hardcode values if that makes tests pass. Use simple
    data structures. Introduce an abstraction only when a test requires it.
-3. **Treat the tests as fixed.** Modify a test only if it has a genuine bug.
+3. **Treat the tests as fixed.** Modify a test only if it has a genuine bug, and
+   then declare it in your report as the Output section below says.
 4. **Run the test command below** after implementation.
 5. **Leave refactoring to the next phase.**
 
@@ -137,7 +164,8 @@ spec described the work accurately. These notes are collected into
 implementation-notes.md and become a proposed spec delta at the end of the
 build — nobody edits the spec from them automatically, so an honest note costs
 you nothing and saves the next build.
-"""
+
+""" + TEST_CHANGE_DECLARATION
 
 REFACTOR_PROMPT = """\
 You are a refactoring agent working in a TDD pipeline.

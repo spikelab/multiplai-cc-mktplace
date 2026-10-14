@@ -857,7 +857,11 @@ and re-checks them at both windows. A silent change fails the block. An
 implementer that genuinely needs a test to change declares it —
 `TEST CHANGE REQUIRED: <reason>` in its report — which downgrades the gate to a
 flag, re-baselines the hashes, and hands the reason to the reviewer as an
-unverified claim to check against the diff.
+unverified claim to check against the diff. The implementer and integration-fix
+prompts tell the agent this marker and to put one such line per changed test at
+the end of its report. Only a line that starts with the marker counts, after
+an optional bullet, number (`1.`) or quote (`>`) prefix: a sentence that
+mentions it, or a line left as `<reason>` or `none`, declares nothing.
 
 ### Reviewer panel and finding adjudication
 

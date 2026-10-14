@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 from .models import GateResult, ImplementationNote, ReviewGatePolicy, ReviewResult
@@ -453,8 +454,15 @@ def prototype_gate(prototype_dir: Path) -> GateResult:
 
 # --- Implementation notes (SURPRISES: / SPEC_IMPACT: slots) ---
 
+# The implementer's declaration that a test genuinely had to change. It is an
+# escape hatch, not an authorization: it downgrades the gate from fail to a
+# flagged claim that the reviewer (and the adjudicator) must verify — the same
+# treatment RED/GREEN evidence already gets.
+TEST_CHANGE_MARKER = "TEST CHANGE REQUIRED:"
+
 # Every REQUIRED slot label an agent report can carry — used as the stop
-# boundary when reading the free-text SURPRISES slot.
+# boundary when reading the free-text SURPRISES and SEARCHED slots, together
+# with `_TEST_CHANGE_LINE` below.
 _REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IMPACT|SEARCHED"
 
 # The colon after a slot label is MANDATORY — every legitimate slot form
@@ -467,11 +475,24 @@ _REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IM
 # closing ** of a bold label.
 _SLOT_COLON = r"(?::\*{0,2}|\*{1,2}:)"
 
+# A bullet (`-`, `*`, `+`), number (`1.`, `2)`) or quote (`>`) before a line's
+# first word, nested in any order (`> - `).
+_LIST_PREFIX = r"[ \t]*(?:(?:[-*+]|\d+[.)]|>)[ \t]*)*"
+
+# The start of a test-change declaration: the marker opens the line, after a
+# list or quote prefix and optional bold, with the colon inside or outside the
+# bold. The prompts put these lines at the end of the report, after the other
+# slots, so the free-text slots stop here too and never read one in.
+_TEST_CHANGE_LINE = (
+    r"^" + _LIST_PREFIX + r"(?:\*\*)?"
+    + re.escape(TEST_CHANGE_MARKER.removesuffix(":")) + _SLOT_COLON
+)
+
 _SURPRISES_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:\*\*)?SURPRISES" + _SLOT_COLON + r"[ \t]*"
     r"(.*?)"
     r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")"
-    + _SLOT_COLON + r"|\Z)",
+    + _SLOT_COLON + r"|" + _TEST_CHANGE_LINE + r"|\Z)",
     re.MULTILINE | re.IGNORECASE | re.DOTALL,
 )
 
@@ -545,7 +566,7 @@ _SEARCHED_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:\*\*)?SEARCHED" + _SLOT_COLON + r"[ \t]*"
     r"(.*?)"
     r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")"
-    + _SLOT_COLON + r"|\Z)",
+    + _SLOT_COLON + r"|" + _TEST_CHANGE_LINE + r"|\Z)",
     re.MULTILINE | re.IGNORECASE | re.DOTALL,
 )
 
@@ -800,25 +821,57 @@ def review_score_gate(
     )
 
 
-# The implementer's declaration that a test genuinely had to change. It is an
-# escape hatch, not an authorization: it downgrades the gate from fail to a
-# flagged claim that the reviewer (and the adjudicator) must verify — the same
-# treatment RED/GREEN evidence already gets.
-TEST_CHANGE_MARKER = "TEST CHANGE REQUIRED:"
-_TEST_CHANGE_RE = re.compile(
-    rf"{re.escape(TEST_CHANGE_MARKER)}\s*(.+)", re.IGNORECASE
+# A declaration counts only on a line that starts with the marker
+# (`_TEST_CHANGE_LINE`), as the prompts ask. Every implementer and
+# integration-fix prompt shows the marker, so prose that mentions it ("no
+# TEST CHANGE REQUIRED: line is needed") must not count as one.
+_TEST_CHANGE_RE = re.compile(_TEST_CHANGE_LINE + r"[ \t]*(.*)$", re.IGNORECASE)
+
+# A line that cannot be the reason of a marker left alone on its line: a slot
+# label, another declaration, or a code fence.
+_NOT_A_REASON_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")" + _SLOT_COLON
+    + r"|" + _TEST_CHANGE_LINE + r"|^\s*```",
+    re.IGNORECASE,
 )
 
 
 def parse_test_change_claims(report: str) -> list[str]:
-    """The reasons an implementer declared for changing a test file."""
-    return [m.strip() for m in _TEST_CHANGE_RE.findall(report or "") if m.strip()]
+    """The reasons an implementer declared for changing a test file.
+
+    A marker left alone on its line takes the next non-blank line of *report*
+    as its reason, unless that line is a slot label, another declaration or a
+    fence. So pass one agent's report at a time: in two reports joined, a bare
+    marker at the end of the first would take the second's first line.
+    An echo of the prompt's template (`<reason>`) and an empty answer
+    (`none`, `tbd`, `no` or any other `_EMPTY_SLOT_VALUES` entry, also with a
+    trailing parenthesis or full stop, as in `None (no test files modified)`)
+    declare nothing.
+    """
+    lines = (report or "").splitlines()
+    claims = []
+    for i, line in enumerate(lines):
+        m = _TEST_CHANGE_RE.match(line)
+        if not m:
+            continue
+        reason = m.group(1).strip()
+        if not reason:
+            following = next((ln for ln in lines[i + 1:] if ln.strip()), "")
+            if not _NOT_A_REASON_RE.match(following):
+                reason = re.sub(r"^" + _LIST_PREFIX, "", following).strip()
+        if reason.startswith("<") and reason.endswith(">"):
+            continue
+        bare = re.sub(r"\s*\(.*\)$", "", reason).rstrip(" .").lower()
+        if bare in _EMPTY_SLOT_VALUES or bare == "no":
+            continue
+        claims.append(reason)
+    return claims
 
 
 def unchanged_tests_gate(
     before: dict[str, str],
     after: dict[str, str],
-    implementer_report: str = "",
+    implementer_report: str | Sequence[str] = "",
 ) -> GateResult:
     """Fail when the tests that gated this block changed after they gated it.
 
@@ -838,6 +891,8 @@ def unchanged_tests_gate(
         before: {test file path: sha256} snapshotted when the RED gate passed.
         after: the same map recomputed now.
         implementer_report: checked for the TEST CHANGE REQUIRED escape hatch.
+            One report, or a list of the reports of every agent that wrote in
+            this window; each is parsed on its own (`parse_test_change_claims`).
 
     Returns a passing gate when nothing was snapshotted (no test command, or a
     checkpoint predating this gate) — an unverifiable gate reports that it did
@@ -861,7 +916,9 @@ def unchanged_tests_gate(
             metadata={"checked": True, "files": len(before)},
         )
 
-    claims = parse_test_change_claims(implementer_report)
+    reports = ([implementer_report] if isinstance(implementer_report, str)
+               else implementer_report)
+    claims = [c for r in reports for c in parse_test_change_claims(r)]
     detail = ", ".join(mutated + [f"{p} (deleted)" for p in deleted])
     if claims:
         # Declared, so not a silent mutation — but a declaration is a claim,
