@@ -311,6 +311,44 @@ def test_no_test_command_commits_and_pushes(tmp_path, monkeypatch):
     assert r.origin("plugin.json") == RESOLVED["plugin.json"]
 
 
+def _failing_git(monkeypatch, *argv: str, stderr: str) -> None:
+    """`merge.git` fails *argv* with *stderr*, running nothing; every other command runs."""
+    real = merge.git
+    monkeypatch.setattr(merge, "git", lambda w, *a: git_ops.GitResult(["git", *a], 1, "", stderr)
+                        if a == argv else real(w, *a))
+
+
+def test_a_failed_merge_commit_parks_and_pushes_nothing(tmp_path, monkeypatch):
+    """40.4: `git commit --no-edit` fails after the tests passed (a hook). The
+    child parks with git's words and the abort hint, the merge is left in
+    progress with `merge_stop` saved, and nothing is pushed."""
+    r = MergeRoot(tmp_path, monkeypatch)
+    _failing_git(monkeypatch, "commit", "--no-edit", stderr="error: pre-commit hook refused\n")
+    assert r.run() == 0
+    assert _parked_reason(r) == f"git commit failed: error: pre-commit hook refused; {merge.abort_hint(r.w)}"
+    assert r.merging() and r.status()["merge_stop"] is not None
+    assert [a.result["exit_code"] for a in r.tries("merge-tests")] == [0] and r.step_pushes() == []
+
+
+def test_a_merge_that_fails_without_starting_parks_and_leaves_nothing(tmp_path, monkeypatch):
+    """40.2: `git merge` fails and leaves no `MERGE_HEAD` (here, refused
+    outright). The child parks with git's words; nothing merged, tested or
+    pushed, and `<W>` is as it was."""
+    r = MergeRoot(tmp_path, monkeypatch)
+    _failing_git(monkeypatch, "merge", "--no-ff", "--no-commit", "origin/main",
+                 stderr="fatal: refusing to merge unrelated histories\n")
+    assert r.run() == 0
+    assert _parked_reason(r) == "git merge origin/main failed: fatal: refusing to merge unrelated histories"
+    assert not r.merging() and git(r.w, "status", "--porcelain") == ""
+    assert r.tries("merge-tests") == [] and r.step_pushes() == []
+
+
+def _parked_reason(r: MergeRoot) -> str:
+    st = r.status()
+    assert st["status"] == "parked" and st["merge_park"] == st["reason"]
+    return st["reason"]
+
+
 def test_an_agent_that_leaves_a_marker_parks(tmp_path, monkeypatch):
     r = MergeRoot(tmp_path, monkeypatch, agent=None)
     r.agent = FakeAgent(tmp_path, {"plugin.json": RESOLVED["plugin.json"]})
@@ -422,6 +460,19 @@ def test_a_failed_review_of_a_new_head_is_not_waited_on_as_passed(tmp_path, monk
     e.fakes.set_head("e-a", "1" * 40)
     assert e.run() == 1 and merge_waiting() is None
     assert e.child_status("a")["status"] == "unknown" and "EPIC: child a unknown: " in capsys.readouterr().err
+
+
+def test_a_stopped_review_of_a_new_head_is_not_waited_on_as_passed(tmp_path, monkeypatch):
+    """Item 41: a's review was clean; its PR then gets a new head, whose review
+    is killed (C.S3). a's last clean review is of the older head, so the run
+    names only b in `EPIC:MERGE_WAITING`, never a's unreviewed head."""
+    from .test_epic_review import Epic
+
+    e = Epic(tmp_path, monkeypatch, reviews={str(pr_number("e-a")): [{}, {"exit": 137}]})
+    assert e.run() == 3 and sorted(merge_waiting()) == sorted([pr_url("e-a"), pr_url("e-b")])
+    e.fakes.set_head("e-a", "1" * 40)
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
+    assert e.child_status("a")["status"] == "built" and len(e.reviews("a")) == 2
 
 
 def test_40_1_parks_a_worktree_behind_the_reviewed_head_naming_what_to_run(tmp_path, monkeypatch):

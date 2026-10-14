@@ -324,6 +324,7 @@ class Child:
     rattempt: records.Attempt | None = None
     merge_stop: stop_record.StepStop | None = None   # PR E, item 39
     merge_park: str = ""                 # why the merge step parked it; kept until <W> is clean
+    head: str | None = None              # its PR's head at the last read in this run
 
 
 @dataclass
@@ -485,7 +486,7 @@ class Coordinator:
 
         def waits(c: Child) -> bool:
             if c.status == "built":
-                return c.id in deps or self._clean_head(c) is not None
+                return c.id in deps or self._passed(c)
             if c.status != "unknown" or not c.pr or c.reason.startswith(MERGE_UNKNOWN):
                 return False
             return c.id in deps or (c.reason == PR_UNREAD and self._clean_head(c) is not None)
@@ -496,8 +497,9 @@ class Coordinator:
         """`gh pr view` each PR. A failed read is not "still open": the child is
         `unknown` until a read answers (B1.S24)."""
         for c in which:
-            got = _gh(self.repo, "pr", "view", c.pr, "--json", "state")
+            got = _gh(self.repo, "pr", "view", c.pr, "--json", "state,headRefOid")
             state = got.get("state") if isinstance(got, dict) else None
+            c.head = (got.get("headRefOid") or None) if state is not None else None
             if state == "MERGED":
                 c.status, c.reason = "merged", ""
             elif state == "CLOSED":
@@ -694,6 +696,7 @@ class Coordinator:
                     c.status, c.reason = ("merged", "") if view["state"] == "MERGED" else ("parked", PR_CLOSED)
                     return
                 number, head = view["number"], view["headRefOid"]
+                c.head = head
                 c.conflicts = review.conflicts(view)
                 pending = await self._fix_pending(c, number, head)
                 if pending is not None:       # a fixer an earlier run left (D2.S4, S5, S7, S11)
@@ -763,6 +766,7 @@ class Coordinator:
                         c.status, c.reason = "unknown", "cannot read its PR: gh pr view failed"
                         return
                     if again["headRefOid"] != head:
+                        c.head = again["headRefOid"]
                         records.finish(c.rattempt, code, interrupted=False)
                         continue
                 if fix.stopped(code):     # C.S3: killed, or 128 + signal as `uv run` reports it
@@ -990,6 +994,14 @@ class Coordinator:
         if not done or done[-1].result["blocking"] or done[-1].result.get("parked"):
             return None
         return done[-1].started.get("head_sha")
+
+    def _passed(self, c: Child) -> bool:
+        """Item 41: *c*'s PR, at the head last read, passed review: that head is
+        the last clean reviewed head, or it plus the merge step's own merges
+        (E.S8). A review of a newer head that stopped leaves an older clean
+        head; that PR has not passed review at its current head."""
+        clean = self._clean_head(c)
+        return clean is not None and c.head is not None and (c.head == clean or self._merge_head(c, c.head))
 
     def _merge_worktree(self, c: Child) -> Path | None:
         """`<W>`: the child's last `WORKTREE:` path, when it is still there."""
