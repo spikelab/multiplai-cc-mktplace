@@ -79,6 +79,8 @@ MARKER_SUMMARY = "EPIC:SUMMARY"
 MARKER_MERGE_WAITING = "EPIC:MERGE_WAITING"
 MARKER_BUDGET = "EPIC:BUDGET"
 PR_CLOSED = "PR closed without a merge"
+PR_UNREAD = "cannot read its PR's state: gh pr view failed"     # B1.S24: read again before the run ends
+MERGE_UNKNOWN = "cannot merge: "     # the merge step's fetch or push failed: `unknown` for the rest of the run
 NO_PR = "no PR opened"
 REVIEW_KINDS = ("review", "resume")
 FIX_KINDS = ("post", "fix")
@@ -475,12 +477,20 @@ class Coordinator:
     def _waited_on(self) -> list[Child]:
         """Children with a PR that a child not yet done depends on, or that
         passed review (item 41; until PR E2 under `auto` too): open, or
-        `unknown` because the last read of it failed."""
+        `unknown` because the last read of it failed. A child the merge step
+        left `unknown` (`MERGE_UNKNOWN`), or one only reviewed whose review
+        failed, stays so: a read of its PR never makes it `built` again."""
         deps = {d for c in self.children.values() if c.status in ("pending", "waiting", "failed")
                 for d in c.depends_on}
-        return [c for c in self.children.values()
-                if (c.id in deps or self._clean_head(c))
-                and (c.status == "built" or (c.status == "unknown" and c.pr))]
+
+        def waits(c: Child) -> bool:
+            if c.status == "built":
+                return c.id in deps or self._clean_head(c) is not None
+            if c.status != "unknown" or not c.pr or c.reason.startswith(MERGE_UNKNOWN):
+                return False
+            return c.id in deps or (c.reason == PR_UNREAD and self._clean_head(c) is not None)
+
+        return [c for c in self.children.values() if waits(c)]
 
     def _read_prs(self, which: list[Child]) -> None:
         """`gh pr view` each PR. A failed read is not "still open": the child is
@@ -493,7 +503,7 @@ class Coordinator:
             elif state == "CLOSED":
                 c.status, c.reason = "parked", PR_CLOSED
             elif state is None:
-                c.status, c.reason = "unknown", "cannot read its PR's state: gh pr view failed"
+                c.status, c.reason = "unknown", PR_UNREAD
             else:
                 c.status, c.reason = "built", ""
 
@@ -795,14 +805,11 @@ class Coordinator:
                         timeout: float | None = None) -> tuple[int | None, str]:
         """Run a started `post`, `fix` or `merge-tests` to its end, in its own
         session with its output in the attempt's log, as `_run_review` runs a
-        review; its exit code and output. None when it could not start, or ran
-        past *timeout* seconds and was killed."""
+        review; its exit code and output. None when it ran past *timeout*
+        seconds and was killed. A process that cannot start raises `OSError`."""
         c.rattempt = attempt
         self._save()
-        try:
-            c.rproc = _spawn_review(attempt.started["argv"], attempt.log, cwd, env)
-        except OSError as e:
-            return None, str(e)
+        c.rproc = _spawn_review(attempt.started["argv"], attempt.log, cwd, env)
         until = None if timeout is None else CLOCK.now() + timeout
         while c.rproc.poll() is None:
             if until is not None and CLOCK.now() >= until:
@@ -1062,8 +1069,8 @@ class Coordinator:
         check finds nothing in `<W>` its stop did not leave; with no
         `merge_stop` (a kill), any change parks. A refused abort parks with
         git's own words and changes nothing else."""
-        why = (stop_record.others_work(w, c.merge_stop, head=reviewed, origin_ref=origin_ref)
-               or merge.not_reviewed(w, reviewed, default))
+        why = (stop_record.others_work(w, c.merge_stop) or merge.not_reviewed(w, reviewed, default)
+               or stop_record.others_work(w, c.merge_stop, head=reviewed, origin_ref=origin_ref))
         if why:
             self._merge_park(c, f"{why}; {merge.abort_hint(w)}")
             return False
@@ -1086,8 +1093,11 @@ class Coordinator:
         c.merge_stop = None                                                                 # 40.2
         self._save()
         failed = await _fetch_origin(w)
+        if failed is None and merge.conflicts_ahead(w, default) and self._over_budget():
+            return None       # Decided 6: the agent would launch past the ceiling; nothing merged (E.S27)
         if failed is not None:
-            c.status, c.reason = "unknown", f"cannot merge: git fetch origin failed: {failed}"
+            c.status, c.reason = "unknown", f"{MERGE_UNKNOWN}git fetch origin failed: {failed}"
+            log.warning("EPIC child %s: %s", c.id, c.reason)
             return None
         res = merge.git(w, "merge", "--no-ff", "--no-commit", f"origin/{default}")
         if not merge.merging(w):
@@ -1120,9 +1130,6 @@ class Coordinator:
             self._merge_park(c, f"merging origin/{default} conflicts in {', '.join(bad)}, which the "
                                 f"merge step may not resolve{hint}")
             return False
-        if self._over_budget():           # Decided 6: before each launch
-            c.merge_stop, c.status = stop_record.record(w), "built"
-            return False
         attempt = records.start(self.epic_dir, "merge", c.id, ["merge", *files], head_sha=head,
                                 pr_round=c.pr_round)
         self._save()
@@ -1143,6 +1150,11 @@ class Coordinator:
                        extra={"spend": round(budget.process_spend().cost_usd - before, 6)})
         if why is None and not merge.git(w, "add", "--", *dict.fromkeys([*files, *changed])).ok:
             why = f"git add failed in {w}"
+        if why is None:       # by content, as `merges_onto` checks a pushed merge
+            tree = merge.git(w, "write-tree")
+            beyond = merge.not_resolutions(w, "HEAD", "MERGE_HEAD", tree.stdout.strip()) if tree.ok else None
+            why = (f"git cannot compare the merge agent's resolution in {w}" if beyond is None
+                   else f"the merge agent changed more than 40.3 allows in {', '.join(beyond)}" if beyond else None)
         if why:
             c.merge_stop = stop_record.record(w)
             self._merge_park(c, why + hint)
@@ -1165,6 +1177,8 @@ class Coordinator:
         try:
             code, out = (None, bad) if bad else await self._run_step(
                 c, attempt, project, env={**os.environ, "BUILDME_TRUST_REPO": "1"}, timeout=TESTS_TIMEOUT)
+        except OSError as e:          # it could not start (a missing binary): a failed run
+            code, out, c.rattempt = None, str(e), None
         except BaseException:      # stopped, SIGHUP included: the tests end with the step (E.S23)
             proc, c.rproc, c.rattempt = c.rproc, None, None
             if proc is not None:
@@ -1192,9 +1206,9 @@ class Coordinator:
         remote = merge.git(w, "ls-remote", "origin", f"refs/heads/{name}")
         moved = remote.stdout.split()[:1] if remote.ok else []
         if moved and merge.git(w, "merge-base", "--is-ancestor", moved[0], "HEAD").returncode != 0:
-            self._merge_park(c, f"push rejected: origin/{name} moved to {moved[0]}")
+            self._merge_park(c, f"push rejected: origin/{name} moved to {moved[0]}; {merge.move_hint(w, moved[0])}")
         else:
-            c.status, c.reason = "unknown", f"cannot push the merge: git push failed: {review.tail(res.stderr)}"
+            c.status, c.reason = "unknown", f"{MERGE_UNKNOWN}git push failed: {review.tail(res.stderr)}"
             log.warning("EPIC child %s: %s", c.id, c.reason)
         return False
 
