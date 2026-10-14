@@ -53,6 +53,7 @@ def changelog(*entries: tuple[str, str]) -> str:
 
 BASE = {"plugin.json": plugin("0.1.0"), "CHANGELOG.md": changelog(("0.1.0", "First.")),
         "uv.lock": "lock 1\n", "app.py": "x = 1\n"}
+PENDING, PASSED = [{"name": "ci", "bucket": "pending"}], [{"name": "ci", "bucket": "pass"}]
 CHILD = {"plugin.json": plugin("0.2.0"), "CHANGELOG.md": changelog(("0.2.0", "Child a."), ("0.1.0", "First."))}
 MAIN = {"plugin.json": plugin("0.1.1"), "CHANGELOG.md": changelog(("0.1.1", "Main."), ("0.1.0", "First.")),
         "uv.lock": "lock 2\n"}
@@ -178,6 +179,17 @@ class MergeRoot:
         """a's PR merged by the step (PR E2), and no PR left waiting."""
         return merge_waiting() is None and self.status()["status"] == "merged"
 
+    def set_checks(self, steps: list) -> None:
+        """a's PR's `checks` from now on, read from the first step again."""
+        self.fakes._update_prs(pr_url("e-a"), checks=steps)
+        for f in (self.root / "checks-attempts").glob(f"{pr_number('e-a')}.*"):
+            f.unlink()
+
+    def pending(self) -> None:
+        """A short `CHECKS_LIMIT`: a's check, pending (`pr={"checks": [PENDING]}`),
+        outlasts it, and the run leaves its PR open (E.S8)."""
+        self.mp.setattr(coordinator, "CHECKS_LIMIT", 3 * coordinator.CHECKS_WAIT)
+
     def tries(self, kind: str) -> list[records.Attempt]:
         return [a for a in records.attempts(self.dir) if a.child == "a" and a.kind == kind]
 
@@ -192,6 +204,9 @@ class MergeRoot:
         """`git push` calls but the fake build's own."""
         return [x for x in self.pushes() if not x["argv"].startswith("push -q -u")]
 
+    def origin_sha(self, ref: str = "buildme/e-a") -> str:
+        return git(self.root / "o" / "r.git", "rev-parse", ref).strip()
+
     def origin(self, rel: str, ref: str = "buildme/e-a") -> str:
         return git(self.root / "o" / "r.git", "show", f"{ref}:{rel}")
 
@@ -203,9 +218,12 @@ def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(tmp_path
     """40.2-40.4: main moved under a's branch with its own version and
     CHANGELOG entry. One `merge` agent call resolves both (its spend in the
     record), the tests run in <P> with BUILDME_TRUST_REPO=1, and the merge
-    commit is pushed, and `gh pr merge` merges the PR (PR E2)."""
-    r = MergeRoot(tmp_path, monkeypatch)
-    assert r.run() == 0 and r.merged()
+    commit is pushed. Its check stays pending, so the PR is left open (E.S8);
+    the next run merges it with `gh pr merge` (PR E2) and does not review the
+    step's own merge again."""
+    r = MergeRoot(tmp_path, monkeypatch, pr={"checks": [PENDING]})
+    r.pending()
+    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]      # E.S8: checks pending, the PR left open
     assert [x["files"] for x in r.calls("merge-agent")] == [["CHANGELOG.md", "plugin.json"]]
     [agent] = r.tries("merge")
     assert (agent.result["exit_code"], agent.result["spend"]) == (0, 0.5)
@@ -218,9 +236,11 @@ def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(tmp_path
     head = git(r.w, "rev-parse", "HEAD").strip()
     assert git(r.w, "rev-parse", "HEAD^2").strip() == r.moved
     assert merge.merges_onto(r.w, head, r.tries("review")[-1].started["head_sha"], "main")
-    assert r.status()["status"] == "merged" and r.status()["merge_stop"] is None
+    assert r.status()["status"] == "built" and r.status()["merge_stop"] is None
+    r.set_checks([PASSED])
     assert r.run() == 0 and r.merged()      # its own merge was not reviewed: one review
     assert len(r.tries("review")) == 1 and len(r.calls("merge-agent")) == 1 and len(r.step_pushes()) == 1
+    assert _merged_prs(r) == ["e-a", "e-b"]
     reviewed = r.tries("review")[-1].started["head_sha"]
     edits = {"app.py": "x = 'not reviewed'\n",                   # the same merge carrying a person's edit is reviewed,
              "plugin.json": RESOLVED["plugin.json"].replace('"x"', '"evil"'),   # inside a resolved file too
@@ -237,11 +257,13 @@ def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(tmp_path
 
 def test_a_clean_merge_is_tested_and_pushed_and_not_reviewed_again(tmp_path, monkeypatch):
     """40.2-40.4: main moved under a's branch without a conflict. The tests run
-    in <P> with BUILDME_TRUST_REPO=1 and the merge commit is pushed, then
-    merged (PR E2). That merge is the step's own, so it is not reviewed
-    again; the same merge with a person's edit in any file is. No agent runs."""
-    r = MergeRoot(tmp_path, monkeypatch, main={"uv.lock": "lock 2\n"})
-    assert r.run() == 0 and r.merged()
+    in <P> with BUILDME_TRUST_REPO=1 and the merge commit is pushed. Its
+    check stays pending, so the PR is left open (E.S8); the next run merges
+    it (PR E2). That merge is the step's own, so it is not reviewed again;
+    the same merge with a person's edit in any file is. No agent runs."""
+    r = MergeRoot(tmp_path, monkeypatch, main={"uv.lock": "lock 2\n"}, pr={"checks": [PENDING]})
+    r.pending()
+    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]      # E.S8: checks pending, the PR left open
     [tests] = r.calls("merge-tests")
     assert (tests["cwd"], tests["trusted"]) == ("<root>/ws/.worktrees/buildme-e-a", "1")
     assert [a.result["exit_code"] for a in r.tries("merge-tests")] == [0]
@@ -250,9 +272,11 @@ def test_a_clean_merge_is_tested_and_pushed_and_not_reviewed_again(tmp_path, mon
     head = git(r.w, "rev-parse", "HEAD").strip()
     assert git(r.w, "rev-parse", "HEAD^2").strip() == r.moved
     assert merge.merges_onto(r.w, head, r.tries("review")[-1].started["head_sha"], "main")
-    assert r.status()["status"] == "merged" and r.status()["merge_stop"] is None
+    assert r.status()["status"] == "built" and r.status()["merge_stop"] is None
+    r.set_checks([PASSED])
     assert r.run() == 0 and r.merged()      # its own merge was not reviewed: one review
     assert len(r.tries("review")) == 1 and len(r.step_pushes()) == 1 and r.calls("merge-agent") == []
+    assert _merged_prs(r) == ["e-a", "e-b"]
     reviewed = r.tries("review")[-1].started["head_sha"]
     edits = {"app.py": "x = 'not reviewed'\n", "plugin.json": CHILD["plugin.json"].replace('"x"', '"evil"'),
              "CHANGELOG.md": "anything at all\n", "uv.lock": "lock evil\n"}
@@ -1321,7 +1345,8 @@ def test_two_children_merge_in_turn_resolving_their_version_conflict(tmp_path, m
     second = "b" if first == "a" else "a"
     assert order.index(f"checks {first}") < order.index(f"start {second}")       # one merge at a time
     assert _merged_prs(r) == [f"e-{first}", f"e-{second}"]
-    assert all(x["argv"][3:] == ["--merge"] for x in r.fakes.merges())
+    assert all(x["argv"][3:5] == ["--merge", "--match-head-commit"] and len(x["argv"]) == 6
+               for x in r.fakes.merges())
     assert [x["files"] for x in r.calls("merge-agent")] == [["CHANGELOG.md", "plugin.json"]]
     assert {r.status(cid)["status"] for cid in "ab"} == {"merged"}
     assert r.origin("plugin.json", "main") == plugin("0.3.0")
@@ -1330,37 +1355,169 @@ def test_two_children_merge_in_turn_resolving_their_version_conflict(tmp_path, m
     assert len(r.calls("merge-tests")) == 1 and len(r.step_pushes()) == 1
 
 
+def _check_reads(r: MergeRoot) -> int:
+    """a's `gh pr checks --required` calls."""
+    return len(list((r.root / "checks-attempts").glob(f"{pr_number('e-a')}.*")))
+
+
 def test_pending_required_checks_are_waited_for(tmp_path, monkeypatch):
     """40.5: a pending required check is read again until it passes; then the PR merges."""
-    pending, passed = [{"name": "ci", "bucket": "pending"}], [{"name": "ci", "bucket": "pass"}]
-    r = MergeRoot(tmp_path, monkeypatch, pr={"checks": [pending, pending, passed]})
+    r = MergeRoot(tmp_path, monkeypatch, pr={"checks": [PENDING, PENDING, PASSED]})
     assert r.run() == 0 and r.status()["status"] == "merged"
-    assert len(list((r.root / "checks-attempts").glob(f"{pr_number('e-a')}.*"))) == 3
+    assert _check_reads(r) == 3
     assert _merged_prs(r) == ["e-a", "e-b"]
 
 
-@pytest.mark.parametrize("checks", [None, [[]]], ids=["no-checks", "none-required"])
-def test_a_pr_with_no_required_checks_merges(tmp_path, monkeypatch, checks):
-    """40.5: `gh pr checks --required` exits 1 when there is nothing to wait
-    for, saying "no checks reported" for a repo with no CI (gh 2.102, read on
-    spikelab/github-tests) and "no required checks reported" when none is
-    required. Neither is a failed read: the PR merges."""
-    r = MergeRoot(tmp_path, monkeypatch, pr={"checks": checks} if checks else None)
+def test_a_pr_with_no_checks_merges_once_none_appeared_after_the_push(tmp_path, monkeypatch):
+    """40.5: gh 2.102 exits 1 with "no checks reported" for a repo with no CI
+    (read on spikelab/github-tests), and also for a head GitHub has not yet
+    registered checks for. After the step's own push that counts as pending
+    for `CHECKS_APPEAR` seconds; then the PR merges."""
+    r = MergeRoot(tmp_path, monkeypatch)
     assert r.run() == 0 and r.status()["status"] == "merged"
+    assert _check_reads(r) == int(coordinator.CHECKS_APPEAR / coordinator.CHECKS_WAIT) + 1
     assert _merged_prs(r) == ["e-a", "e-b"]
 
 
-def test_a_failed_check_parks_naming_it_and_merges_nothing(tmp_path, monkeypatch):
-    """40.5: a failed required check parks, naming it. The PR stays open and
-    `<W>` clean, so a re-run reads the checks again (E.S26) and parks again."""
-    checks = [{"name": "lint", "bucket": "pass"}, {"name": "ci", "bucket": "fail"}]
+def test_a_branch_up_to_date_with_no_checks_merges_at_once(tmp_path, monkeypatch):
+    """40.5: with nothing pushed, the PR's head is the reviewed one, whose
+    checks GitHub registered long ago: "no checks reported" means none."""
+    r = MergeRoot(tmp_path, monkeypatch, main=None)
+    assert r.run() == 0 and r.merged() and _check_reads(r) == 1
+
+
+@pytest.mark.parametrize("first", [[], "late"], ids=["none-yet", "required-not-yet"])
+def test_checks_that_appear_after_the_push_are_waited_for(tmp_path, monkeypatch, first):
+    """40.5: the first read after the step's push finds no checks, or only a
+    check that is not required, because the required one is not registered
+    yet. The next read finds the required check failed: the child parks,
+    naming it, and nothing is merged."""
+    early = [] if first == [] else [{"name": "lint", "bucket": "pass", "required": False}]
+    r = MergeRoot(tmp_path, monkeypatch, pr={"checks": [early, [{"name": "ci", "bucket": "fail"}]]})
+    assert r.run() == 0
+    assert r.status()["reason"] == "required check ci failed" and r.fakes.merges() == []
+
+
+@pytest.mark.parametrize("bucket", ["pass", "fail"])
+def test_with_no_required_check_the_pr_s_own_checks_gate(tmp_path, monkeypatch, bucket):
+    """40.5: gh says "no required checks reported" in a repo with CI and no
+    branch rule (gh 2.102, read on #348 in M). The PR's own checks then gate,
+    as 40.4's "required checks still gate" means: a pending one is waited
+    for, and a failed one parks."""
+    ci = [{"name": "ci", "bucket": "pending", "required": False}]
+    r = MergeRoot(tmp_path, monkeypatch, main=None,
+                  pr={"checks": [ci, [{"name": "ci", "bucket": bucket, "required": False}]]})
+    assert r.run() == 0
+    if bucket == "pass":
+        assert r.merged() and _merged_prs(r) == ["e-a", "e-b"]
+    else:
+        assert r.status()["reason"] == "check ci failed" and r.fakes.merges() == []
+
+
+@pytest.mark.parametrize("bucket", ["fail", "cancel"])
+def test_a_failed_check_parks_naming_it_and_merges_nothing(tmp_path, monkeypatch, bucket):
+    """40.5: a failed or cancelled required check parks, naming it. The PR
+    stays open and `<W>` clean, so a re-run reads the checks again (E.S26)
+    and parks again."""
+    checks = [{"name": "lint", "bucket": "pass"}, {"name": "ci", "bucket": bucket}]
     r = MergeRoot(tmp_path, monkeypatch, pr={"checks": [checks]})
     assert r.run() == 0
     st = r.status()
     assert st["status"] == "parked" and st["reason"] == st["merge_park"] == "required check ci failed"
     assert r.fakes.merges() == [] and len(r.step_pushes()) == 1
     assert r.run() == 0 and r.status()["reason"] == "required check ci failed" and r.fakes.merges() == []
-    assert len(list((r.root / "checks-attempts").glob(f"{pr_number('e-a')}.*"))) == 2
+    assert _check_reads(r) == 2
+
+
+def test_checks_pending_past_the_limit_leave_the_pr_open_and_a_re_run_merges_it(tmp_path, monkeypatch):
+    """E.S8: a required check still pending after `CHECKS_LIMIT` seconds
+    ends the wait, so the repo's merge lock is let go: the PR is left open
+    (`built`), b waits on it, and the run exits 3 with `EPIC:MERGE_WAITING`.
+    The re-run finds the branch up to date, reads the checks again and
+    merges; nothing is tested, pushed or reviewed again."""
+    r = MergeRoot(tmp_path, monkeypatch, pr={"checks": [PENDING]})
+    r.pending()
+    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert r.status()["status"] == "built" and r.status("b")["status"] == "waiting" and r.fakes.merges() == []
+    assert _check_reads(r) == 4
+    r.set_checks([PASSED])
+    assert r.run() == 0 and r.merged() and _merged_prs(r) == ["e-a", "e-b"]
+    assert len(r.tries("review")) == 1 and len(r.tries("merge-tests")) == 1 and len(r.step_pushes()) == 1
+
+
+def test_a_check_read_that_fails_leaves_the_child_unknown(tmp_path, monkeypatch):
+    """40.5: a `gh pr checks` answer that is neither JSON nor gh's "no checks
+    reported" is a failed read, as a failed fetch is: `unknown`, nothing
+    merged, exit 1."""
+    r = MergeRoot(tmp_path, monkeypatch, main=None, pr={"checks": ["HTTP 502: Bad Gateway"]})
+    assert r.run() == 1
+    st = r.status()
+    assert st["status"] == "unknown" and st["reason"] == f"{coordinator.MERGE_UNKNOWN}gh pr checks failed: HTTP 502: Bad Gateway"
+    assert r.fakes.merges() == []
+
+
+@pytest.mark.parametrize("main", [None, MAIN], ids=["up-to-date", "pushed"])
+def test_a_commit_pushed_to_the_pr_during_the_checks_is_never_merged(tmp_path, monkeypatch, main):
+    """40.6: `gh pr merge` names the head 40.1 checked and the step pushed
+    (`--match-head-commit`), so a commit pushed to the PR's branch while the
+    checks are read is refused by GitHub, and the child parks: what the
+    review never saw does not reach main."""
+    r = MergeRoot(tmp_path, monkeypatch, main=main)
+    r.use()
+
+    def point(coord, c, name):
+        r.point(coord, c, name)
+        if name == "checks" and c.id == "a" and not (r.root / "foreign").exists():
+            (r.root / "foreign").write_text(push_files(r.root, {"evil.txt": "not reviewed\n"}, "foreign",
+                                                       branch="buildme/e-a"))
+
+    monkeypatch.setattr(coordinator, "_merge_point", point)
+    assert run_coordinator(r.config) == 0
+    st = r.status()
+    assert st["status"] == "parked" and st["reason"].startswith("gh pr merge refused: GraphQL: Head branch was modified")
+    [call] = r.fakes.merges()
+    assert call["argv"][-1] == git(r.w, "rev-parse", "HEAD").strip() != (r.root / "foreign").read_text().strip()
+    assert git(r.root / "o" / "r.git", "ls-tree", "--name-only", "main").split().count("evil.txt") == 0
+
+
+def test_a_merge_that_only_queues_the_pr_leaves_it_open(tmp_path, monkeypatch):
+    """40.6, E.S29: on a branch with a merge queue, `gh pr merge` exits 0
+    having only queued the PR (gh 2.102's help). `gh pr view` still says
+    `OPEN`, so a is not `merged`: b, which needs a's change on main, is not
+    launched, and the run exits 3 waiting on a's PR. A re-run goes through
+    40.1-40.6 again (up to date: nothing tested, pushed or reviewed again)
+    and merges it; then b is built."""
+    r = MergeRoot(tmp_path, monkeypatch, pr={"merges": [{"queue": True}, {}]})
+    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert r.status()["status"] == "built" and r.status("b")["status"] == "waiting"
+    assert _merged_prs(r) == ["e-a"] and r.fakes.attempts("b") == 0
+    assert r.run() == 0 and r.merged() and _merged_prs(r) == ["e-a", "e-a", "e-b"]
+    assert len(r.tries("review")) == 1 and len(r.tries("merge-tests")) == 1 and len(r.step_pushes()) == 1
+
+
+def test_a_failed_merge_whose_pr_merged_is_merged(tmp_path, monkeypatch):
+    """E.S10: `gh pr merge` merged the PR but exited 1 (its reply was lost);
+    `gh pr view` says `MERGED`, so a is merged and b goes on."""
+    r = MergeRoot(tmp_path, monkeypatch, main=None, pr={"merges": [{"lost": True}]})
+    assert r.run() == 0 and r.merged() and _merged_prs(r) == ["e-a", "e-b"]
+
+
+def test_a_failed_merge_whose_pr_cannot_be_read_is_unknown(tmp_path, monkeypatch):
+    """40.6: refused, and `gh pr view` then fails: neither merged nor parked,
+    but `unknown`; exit 1."""
+    r = MergeRoot(tmp_path, monkeypatch, main=None, pr={"merges": [{"refuse": "X refused", "offline": True}]})
+    assert r.run() == 1
+    st = r.status()
+    assert st["status"] == "unknown" and st["reason"] == (
+        f"{coordinator.MERGE_UNKNOWN}gh pr merge failed and its PR cannot be read: X refused")
+
+
+def test_a_long_refusal_keeps_its_last_400_characters(tmp_path, monkeypatch):
+    """40.6: the park reason holds the last 400 characters of gh's stderr."""
+    refusal = "A" * 300 + "B" * 400
+    r = MergeRoot(tmp_path, monkeypatch, main=None, pr={"merges": [{"refuse": refusal}], "merge_state": "BLOCKED"})
+    assert r.run() == 0
+    assert r.status()["reason"] == f"gh pr merge refused: {'B' * 400} (mergeStateStatus BLOCKED)"
 
 
 def test_a_refused_merge_parks_with_the_refusal_and_is_not_retried_in_the_run(tmp_path, monkeypatch):
@@ -1396,6 +1553,28 @@ def test_behind_starts_again_at_40_1_and_merges_the_new_commit(tmp_path, monkeyp
     assert _merged_prs(r) == ["e-a", "e-a", "e-b"]
     assert len(r.calls("merge-agent")) == 1 and len(r.tries("merge-tests")) == 2 and len(r.step_pushes()) == 2
     assert r.origin("y.txt", "main") == "y\n" and r.origin("plugin.json", "main") == RESOLVED["plugin.json"]
+
+
+def test_behind_runs_40_1_again_so_an_edit_left_in_w_parks(tmp_path, monkeypatch):
+    """42: `BEHIND` restarts at 40.1. A file a person left in `<W>` while
+    the checks were read is refused there, naming it: nothing is merged,
+    pushed again or discarded."""
+    r = MergeRoot(tmp_path, monkeypatch)
+    r.use()
+
+    def point(coord, c, name):
+        r.point(coord, c, name)
+        if name == "checks" and c.id == "a" and not (r.root / "moved2").exists():
+            (r.root / "moved2").write_text(push_files(r.root, {"y.txt": "y\n"}, "main moved again"))
+            (r.w / "notes.txt").write_text("mine\n")
+
+    monkeypatch.setattr(coordinator, "_merge_point", point)
+    assert run_coordinator(r.config) == 0
+    st = r.status()
+    assert st["status"] == "parked" and st["reason"].startswith(f"{r.w} has uncommitted changes (notes.txt)")
+    assert not r.merging() and git(r.w, "rev-parse", "HEAD").strip() == r.origin_sha()     # 40.2 never ran again
+    assert _merged_prs(r) == ["e-a"] and len(r.step_pushes()) == 1 and len(r.tries("merge-tests")) == 1
+    assert (r.w / "notes.txt").read_text() == "mine\n"
 
 
 def test_behind_with_nothing_new_to_merge_parks_with_the_refusal(tmp_path, monkeypatch):
