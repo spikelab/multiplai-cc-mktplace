@@ -25,6 +25,9 @@ time, not derived from a tag.
   instead of stopping with `Branch ... already exists with N commit(s)`, so
   an epic's failed child can be relaunched too. A build that failed before
   any commit also re-runs in its own worktree, no longer in a new `-2` one.
+  A re-run stopped before its interview finished resumes in that worktree
+  too, and a build that earlier moved to a new `-2` worktree re-runs there
+  (the worktree it last saved its state in) when it fails again.
   The re-run stops with exit `1`, and changes nothing, when the worktree is
   no longer on the build's branch, or holds an uncommitted change the failed
   run did not leave. A build that failed under 0.70.0 or earlier has no

@@ -993,12 +993,19 @@ async def _run_bootstrap(
     """
     import subprocess
 
-    from . import intake
+    from . import intake, stop_record
 
     previous_change_dir = config.change_dir if config.change_name else None
-    if (config.git.worktree and state.phase == BuildPhase.FAILED
-            and _inside_own_worktree(config, state)
-            and _keeps_failed_worktree(config, state)):
+    # A FAILED build, or a re-run of one that stopped before its interview
+    # finished (pointer back AT BOOTSTRAP, with the record this bootstrap
+    # saves below), keeps its own worktree: its branch may hold commits,
+    # which `_setup_worktree` refuses.
+    kept = bool(config.git.worktree
+                and (state.phase == BuildPhase.FAILED
+                     or (state.phase == BuildPhase.BOOTSTRAP and state.failed_stop is not None))
+                and _inside_own_worktree(config, state)
+                and _keeps_failed_worktree(config, state))
+    if kept:
         state_path = config.state_file_path()
         cm = ChangeManager(config.specs_dir)
     elif config.git.worktree:
@@ -1051,6 +1058,11 @@ async def _run_bootstrap(
         }
         config_yaml.write_text(yaml.dump(data, default_flow_style=False))
 
+    # What a kept re-run's bootstrap leaves is the build's own (the check
+    # above passed, then bootstrap wrote its files): a stop before the
+    # interview finishes resumes in place against this record. Any other
+    # bootstrap starts a tree that no failure record describes.
+    state.failed_stop = stop_record.record(config.project_dir) if kept else None
     state.bootstrap_done = True
     state.advance_to(BuildPhase.BOOTSTRAP, state_path)
 
@@ -1130,7 +1142,9 @@ def _inside_own_worktree(config: BuildConfig, state: BuildState) -> bool:
 
 
 def _keeps_failed_worktree(config: BuildConfig, state: BuildState) -> bool:
-    """Whether a FAILED build re-run inside its own worktree keeps it.
+    """Whether a FAILED build re-run inside its own worktree keeps it. A
+    re-run stopped before its interview finished (pointer AT BOOTSTRAP) is
+    checked the same way, against the record its bootstrap saved.
 
     A re-run (by hand, or an epic coordinator's relaunch of a failed child
     with the same argv) keeps the build's branch and worktree, with every
@@ -1210,8 +1224,8 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
 
     A build's ``.build-state.json`` lives inside its worktree, so on resume the
     default lookup (source repo → specs/changes/<name>/) finds nothing. Search
-    the worktrees root for this change's worktree(s) and adopt the first one
-    that carries a state file.
+    the worktrees root for this change's worktree(s) and adopt the one whose
+    state file was checkpointed last.
     """
     if not config.git.worktree or not config.change_name:
         return
@@ -1242,6 +1256,7 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
         p for p in root.iterdir()
         if p.is_dir() and (p.name == prefix or p.name.startswith(f"{prefix}-"))
     )
+    found: list[tuple[str, Path, BuildState]] = []
     for dest in candidates:
         probe = BuildConfig(
             mode=config.mode, project_dir=dest / offset, change_name=config.change_name,
@@ -1255,14 +1270,21 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
         except Exception as e:  # corrupt checkpoint — leave it for a fresh run
             log.warning("Ignoring unreadable state at %s: %s", probe_state, e)
             continue
-        config.rebind_project_dir(dest / offset)
-        config.pipeline_branch = prior.branch or git_ops.current_branch(dest)
-        log.info(
-            "RESUME re-bound to existing worktree %s (branch=%s) — not creating a new one",
-            dest, config.pipeline_branch,
-        )
-        print(f"WORKTREE:{dest}", flush=True)
+        found.append((prior.updated_at, dest, prior))
+    if not found:
         return
+    # A build moved to a new `-2` worktree (a stop AT BOOTSTRAP, or a FAILED
+    # checkpoint with no record and no commit) leaves the old one's checkpoint
+    # behind, and `buildme-x` sorts before `buildme-x-2`: the build lives
+    # where it last checkpointed. A tie keeps the sorted order.
+    _, dest, prior = max(found, key=lambda f: f[0])
+    config.rebind_project_dir(dest / offset)
+    config.pipeline_branch = prior.branch or git_ops.current_branch(dest)
+    log.info(
+        "RESUME re-bound to existing worktree %s (branch=%s) — not creating a new one",
+        dest, config.pipeline_branch,
+    )
+    print(f"WORKTREE:{dest}", flush=True)
 
 
 def _project_offset(project_dir: Path, repo: Path) -> Path:

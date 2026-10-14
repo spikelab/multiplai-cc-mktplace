@@ -1222,10 +1222,12 @@ class TestFailedBuildRetry:
         repo = make_repo(tmp_path / "proj")
         state = await self._fail(repo)
         worktree, branch = Path(state.worktree_path), state.branch
+        users = set()
         if not recorded:
             state.failed_stop = None
             state.checkpoint(Path(state.state_file))
-            _sh(worktree, "add", *sorted(git_ops.dirty_files(worktree)))
+            users = set(git_ops.dirty_files(worktree))
+            _sh(worktree, "add", *sorted(users))
             _sh(worktree, "commit", "-qm", "the user's commit of the leftovers")
         failed_head = _sh(worktree, "rev-parse", "HEAD")
 
@@ -1251,7 +1253,7 @@ class TestFailedBuildRetry:
         assert rc == 0
         tree = set(_sh(worktree, "ls-tree", "-r", "--name-only", "HEAD").split())
         fresh_tree = set(_sh(fresh.project_dir, "ls-tree", "-r", "--name-only", "HEAD").split())
-        assert tree == fresh_tree | {"work.txt"}
+        assert tree == fresh_tree | {"work.txt"} | users
 
     @pytest.mark.asyncio
     async def test_an_edit_made_while_a_rerun_was_stopped_stops_its_resume(

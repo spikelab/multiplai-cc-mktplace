@@ -236,7 +236,9 @@ class BuildState(BaseModel):
     # reuses its worktree and refuses an uncommitted change this record does
     # not hold (`orchestrator._run_bootstrap`). None in older checkpoints and
     # when git could not be asked; the re-run then refuses any uncommitted
-    # change.
+    # change. The re-run's bootstrap records its tree here again once it is
+    # done, so a stop before the interview finishes (pointer AT BOOTSTRAP)
+    # resumes in place too; any other bootstrap clears it.
     failed_stop: StepStop | None = None
 
     # Documentation files the DOCS_UPDATE phase reported writing (empty when it

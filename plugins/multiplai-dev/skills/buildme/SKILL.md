@@ -184,7 +184,9 @@ calling checkout:
   branch (switch back, then re-run), or holds an uncommitted change the
   failed run did not leave (an edit made after the failure): commit or stash
   it, then re-run. A build that failed under 0.70.0 or earlier, with no
-  commit of its own, re-runs in a new `-2` worktree as it did then.
+  commit of its own, re-runs in a new `-2` worktree as it did then. A re-run
+  stopped before its interview finished resumes in the same worktree, and a
+  build that moved to a `-2` worktree re-runs in that one.
 - **The worktree survives the run.** The pipeline never removes a worktree —
   including its own — never merges (except an epic child's PR under
   `epic.merge: auto`; see "Merging the children's PRs"), and never force-pushes. Deleting it is the
