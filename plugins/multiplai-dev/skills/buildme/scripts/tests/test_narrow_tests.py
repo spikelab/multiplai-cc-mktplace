@@ -322,6 +322,9 @@ class TestNarrowTestCommand:
         ("pyproject.toml", '[tool.pytest.ini_options]\naddopts = "--cov=pkg --cov-fail-under=90"\n'),
         ("pytest.ini", "[pytest]\naddopts = --cov=pkg\n"),
         ("setup.cfg", "[tool:pytest]\naddopts = --cov pkg\n"),
+        ("pytest.toml", '[pytest]\naddopts = ["--cov=pkg", "--cov-fail-under=90"]\n'),
+        (".pytest.toml", '[pytest]\naddopts = ["--cov=pkg"]\n'),
+        (".pytest.ini", "[pytest]\naddopts = --cov=pkg\n"),
     ])
     def test_pytest_with_coverage_configured_falls_back(self, project, name, text):
         # A coverage floor the whole suite meets fails a narrow run on coverage
@@ -427,6 +430,9 @@ class TestNarrowStaysInsideTheWholeRun:
         ("pyproject.toml", "[tool.pytest]\ntestpaths = [\"tests/unit\"]\n"),
         ("setup.cfg", "[tool:pytest]\ntestpaths = tests/unit\n"),
         ("tox.ini", "[pytest]\ntestpaths = tests/unit\n"),
+        ("pytest.toml", '[pytest]\ntestpaths = ["tests/unit"]\n'),
+        (".pytest.toml", '[pytest]\ntestpaths = ["tests/unit"]\n'),
+        (".pytest.ini", "[pytest]\ntestpaths = tests/unit\n"),
     ])
     def test_named_files_outside_testpaths_are_left_out(self, project, name, text):
         (project / name).write_text(text)
@@ -532,6 +538,107 @@ class TestNarrowStaysInsideTheWholeRun:
         base = _repo(project)
         self._block(project)
         assert narrow_test_command("pytest", project, base) == "pytest"
+
+    def test_pytest_toml_comes_before_pytest_ini(self, project):
+        # pytest 9 reads pytest.toml first, even an empty one, so the
+        # pytest.ini testpaths here do not apply.
+        (project / "pytest.toml").write_text("[pytest]\n")
+        (project / "pytest.ini").write_text("[pytest]\ntestpaths = tests/unit\n")
+        base = _repo(project)
+        self._block(project)
+        assert narrow_test_command("pytest -q", project, base) == \
+            "pytest -q tests/integration/test_db.py tests/unit/test_new.py"
+
+    def test_python_files_in_pytest_toml_falls_back(self, project):
+        (project / "pytest.toml").write_text('[pytest]\npython_files = ["check_*.py"]\n')
+        base = _repo(project)
+        self._block(project)
+        assert narrow_test_command("pytest", project, base) == "pytest"
+
+    @pytest.mark.parametrize("conftest", [
+        'collect_ignore = ["integration/test_db.py"]\n',
+        'collect_ignore_glob = ["integration/*"]\n',
+        "def pytest_ignore_collect(collection_path, config):\n"
+        "    return 'integration' in str(collection_path)\n",
+    ])
+    def test_a_conftest_that_ignores_files_falls_back(self, project, conftest):
+        # pytest skips collect_ignore and pytest_ignore_collect for a path
+        # named on its command line, so the narrow run could hold a file the
+        # whole run ignores.
+        (project / "tests" / "conftest.py").write_text(conftest)
+        base = _repo(project)
+        self._block(project)
+        assert narrow_test_command("pytest -q", project, base) == "pytest -q"
+        assert agent_test_command("pytest -q", project, base) == "pytest -q"
+
+    def test_a_conftest_that_ignores_files_elsewhere_still_narrows(self, project):
+        (project / "docs").mkdir()
+        (project / "docs" / "conftest.py").write_text('collect_ignore = ["x.py"]\n')
+        (project / "tests" / "conftest.py").write_text("import pytest\n")
+        base = _repo(project)
+        self._block(project)
+        assert narrow_test_command("pytest -q", project, base) == \
+            "pytest -q tests/integration/test_db.py tests/unit/test_new.py"
+
+
+class TestNarrowLoadsTheWholeRunsConfig:
+    """pytest finds its config from the common ancestor of the paths it is
+    given, so a narrow run of files below a nested config would load that
+    config instead of the whole run's."""
+
+    @pytest.fixture
+    def repo(self, tmp_path):
+        p = tmp_path / "repo"
+        (p / "packages" / "a" / "tests").mkdir(parents=True)
+        (p / "packages" / "a" / "mod.py").write_text("x = 1\n")
+        (p / "packages" / "a" / "tests" / "test_mod.py").write_text("def test_m(): pass\n")
+        return p
+
+    def _block(self, repo):
+        (repo / "packages" / "a" / "mod.py").write_text("x = 2\n")
+
+    @pytest.mark.parametrize("name,text", [
+        ("pyproject.toml", '[tool.pytest.ini_options]\naddopts = "--cov=a --cov-fail-under=90"\n'),
+        ("pytest.ini", "[pytest]\n"),
+        ("pytest.toml", "[pytest]\n"),
+        ("setup.cfg", "[tool:pytest]\naddopts = -p no:cacheprovider\n"),
+    ])
+    def test_a_config_below_the_whole_runs_config_falls_back(self, repo, name, text):
+        (repo / "pytest.ini").write_text("[pytest]\n")
+        (repo / "packages" / "a" / name).write_text(text)
+        base = _repo(repo)
+        self._block(repo)
+        assert narrow_test_command("pytest -q", repo, base) == "pytest -q"
+        assert agent_test_command("pytest -q", repo, base) == "pytest -q"
+
+    def test_a_nested_config_with_no_root_config_falls_back(self, repo):
+        (repo / "packages" / "a" / "pytest.ini").write_text("[pytest]\n")
+        base = _repo(repo)
+        self._block(repo)
+        assert narrow_test_command("pytest -q", repo, base) == "pytest -q"
+
+    def test_a_nested_setup_py_with_no_config_falls_back(self, repo):
+        # With no config, pytest takes the nearest setup.py's directory as
+        # rootdir, and loads no conftest.py above it.
+        (repo / "packages" / "a" / "setup.py").write_text("")
+        base = _repo(repo)
+        self._block(repo)
+        assert narrow_test_command("pytest -q", repo, base) == "pytest -q"
+
+    def test_a_nested_pyproject_without_pytest_settings_still_narrows(self, repo):
+        # pytest walks past it to the root's pytest.ini.
+        (repo / "pytest.ini").write_text("[pytest]\n")
+        (repo / "packages" / "a" / "pyproject.toml").write_text("[project]\nname = 'a'\n")
+        base = _repo(repo)
+        self._block(repo)
+        assert narrow_test_command("pytest -q", repo, base) == \
+            "pytest -q packages/a/tests/test_mod.py"
+
+    def test_no_config_anywhere_still_narrows(self, repo):
+        base = _repo(repo)
+        self._block(repo)
+        assert narrow_test_command("pytest -q", repo, base) == \
+            "pytest -q packages/a/tests/test_mod.py"
 
     @pytest.mark.parametrize("command,script", [
         ("npx jest src/unit", None),
