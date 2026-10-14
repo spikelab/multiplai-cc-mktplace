@@ -32,11 +32,23 @@ from .epic_row_helpers import (
     run_signalled,
 )
 from .row_helpers import assert_same_as_unstopped, repo_state
-from .test_epic_merge import CHILD, MAIN, RESOLVED, FakeAgent, MergeRoot, _stop_after_the_merge, git, push_files
+from .test_epic_merge import (
+    CHILD,
+    MAIN,
+    RESOLVED,
+    FakeAgent,
+    MergeRoot,
+    _stop_after_the_merge,
+    changelog,
+    git,
+    plugin,
+    push_files,
+)
 
 AGENT = ["merge", "CHANGELOG.md", "plugin.json"]
 TESTS = ["fake-tests"]
 MERGE_KINDS = ("merge", "merge-tests")
+ONE_MERGE = [("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False)]
 
 
 @pytest.fixture(autouse=True)
@@ -65,10 +77,10 @@ def _launches(r: MergeRoot) -> list[str]:
 
 
 def _assert_same(stopped: MergeRoot, clean: MergeRoot, merges: list[tuple], *, extra: tuple[str, ...] = (),
-                 unpaid: int = 0) -> None:
+                 unpaid: int = 0, base: list[tuple] = ONE_MERGE) -> None:
     """Equal epic files, summary, non-merge records and worktree; the stopped
     root's merge records are *merges* (kind, argv, exit code or None to skip,
-    interrupted), the clean root's the usual pair; launches equal plus one
+    interrupted), the clean root's *base* (the usual pair); launches equal plus one
     more of each kind in *extra*, and $0.50 more spent for each agent call in
     it but *unpaid* (cancelled) ones."""
     s, c = _snapshot(stopped), _snapshot(clean)
@@ -81,7 +93,7 @@ def _assert_same(stopped: MergeRoot, clean: MergeRoot, merges: list[tuple], *, e
     assert s["epic"] == c["epic"]
     assert s["summary"] == c["summary"]
     assert s["records"] == c["records"]
-    assert c["merges"] == [("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False)]
+    assert c["merges"] == base
     assert [(k, a, i) for k, a, _, i in s["merges"]] == [(k, a, i) for k, a, _, i in merges]
     assert all(w is None or e == w for (_, _, e, _), (_, _, w, _) in zip(s["merges"], merges))
     want = _launches(clean)
@@ -317,6 +329,40 @@ def test_E_S12_a_user_edit_in_the_worktree_parks_and_is_left_alone(tmp_path, mon
     assert repo_state(r.w) == before and _parked(r)
     assert where.split("/")[-1] in r.status()["reason"]
     assert r.step_pushes() == [] and len(r.calls("merge-tests")) == (1 if at == "push" else 0)
+
+
+MAIN2 = {"plugin.json": plugin("0.1.2"),
+         "CHANGELOG.md": changelog(("0.1.2", "Main again."), ("0.1.1", "Main."), ("0.1.0", "First."))}
+RESOLVED2 = {"plugin.json": plugin("0.2.0"), "CHANGELOG.md": changelog(
+    ("0.2.0", "Child a."), ("0.1.2", "Main again."), ("0.1.1", "Main."), ("0.1.0", "First."))}
+
+
+def test_E_S17_a_second_merge_stopped_before_its_commit_passes_item_38_by_origin_s_branch(tmp_path, monkeypatch):
+    """E.S17: both runs are killed while a's PR waits for its checks (E.S8),
+    the first merge pushed; main then raises the version again (E.S13), so
+    each resume merges `origin/main` a second time. The stopped run stops
+    there with conflicts, before the commit: HEAD is `origin/<branch>`, not
+    the reviewed head. Item 38 passes through `origin_ref`, the merge is
+    aborted and done again (as E.S2), and the end matches the run that never
+    stopped: two merges, each with one agent call and one test run, and one
+    `gh pr merge`. Nothing repeated."""
+    stopped, clean = _roots(tmp_path, monkeypatch)
+    for r in (stopped, clean):
+        _killed(r, _die_at_point(r, "checks"))
+        assert not r.merging() and len(r.step_pushes()) == 1 and r.fakes.merges() == []
+        push_files(r.root, MAIN2, "main moved again")
+        r.agent = FakeAgent(r.root, RESOLVED2)
+    _stop_after_the_merge(stopped)
+    st = stopped.status()
+    assert stopped.merging() and st["merge_stop"]["edits"]
+    assert git(stopped.w, "rev-parse", "HEAD") == git(stopped.w, "rev-parse", "refs/remotes/origin/buildme/e-a")
+    assert git(stopped.w, "rev-parse", "HEAD").strip() != stopped.tries("review")[-1].started["head_sha"]
+    _ends_merged(stopped, clean)
+    _assert_same(stopped, clean, ONE_MERGE * 2, base=ONE_MERGE * 2)
+    for r in (stopped, clean):
+        assert r.origin("plugin.json", "main") == RESOLVED2["plugin.json"]
+        assert r.origin("CHANGELOG.md", "main") == RESOLVED2["CHANGELOG.md"]
+        assert len(r.step_pushes()) == 2 and len(r.calls("merge-agent")) == 2
 
 
 @pytest.mark.parametrize("staged", [False, True], ids=["unstaged", "staged"])
