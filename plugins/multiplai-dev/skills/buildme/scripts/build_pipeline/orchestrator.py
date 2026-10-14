@@ -136,6 +136,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         if not state.is_phase_complete(BuildPhase.CODEBASE_ANALYSIS):
             log.info("START phase=CODEBASE_ANALYSIS")
             await _run_codebase_analysis_phase(config, state, progress)
+            rc = _run_spec_extract_step(config, state, progress)
+            if rc is not None:
+                return rc
             state.checkpoint(state_path)
             state.advance_to(BuildPhase.CODEBASE_ANALYSIS, state_path)
             log.info("DONE phase=CODEBASE_ANALYSIS")
@@ -794,6 +797,105 @@ async def _run_codebase_analysis_phase(
         return
     log.info("Wrote codebase analysis: %s (%d chars)", output, len(analysis))
     progress.log_phase("CODEBASE_ANALYSIS", f"Codebase analysis written to {output}")
+
+
+SPEC_EXTRACT_EXIT_LOCKED = 5
+
+
+def _spec_extract_skill_dir() -> Path:
+    """The spec-extract skill's script directory, ``<skills>/spec-extract/scripts``,
+    found as `_pr_skill_dir` finds the pr skill's."""
+    return Path(__file__).resolve().parents[3] / "spec-extract" / "scripts"
+
+
+def _spec_extract_argv(config: BuildConfig, sha: str) -> list[str]:
+    """`spec_extract_pipeline run --tree <sha> ... --apply` for the project.
+
+    spec-extract puts `--repo`'s own prefix in front of `--path`
+    (`target.tree_root`), so a project below the top of its checkout passes the
+    top as `--repo` and its own directory as `--path`: the path is never doubled.
+    """
+    project = Path(config.project_dir).resolve()
+    top = git_ops.repo_root(project)
+    top = top.resolve() if top else project
+    argv = ["uv", "run", "--directory", str(_spec_extract_skill_dir()), "python", "-m",
+            "spec_extract_pipeline", "run", "--repo", str(top), "--tree", sha]
+    if top != project and top in project.parents:
+        argv += ["--path", project.relative_to(top).as_posix()]
+    return argv + ["--max-usd", f"{config.spec_extract_max_usd:g}", "--trust-repo",
+                   "--apply", "--specs-dir", str(config.specs_dir)]
+
+
+def _spec_extract_last_line(res: git_ops.GitResult) -> str:
+    lines = (res.stderr or res.stdout or "").strip().splitlines()
+    return lines[-1][:300] if lines else "no output"
+
+
+def _run_spec_extract_step(
+    config: BuildConfig, state: BuildState, progress: ProgressWriter,
+) -> int | None:
+    """Run spec-extract on the project before the plan is written, and commit the
+    registry files it applies (inside CODEBASE_ANALYSIS, after the analysis).
+
+    None lets the phase complete; an int is the build's exit code, and the phase
+    is not advanced, so a re-run repeats the step. The commit read is saved in
+    `state.spec_gen.spec_extract_sha` before the launch, and a resume always
+    reads that commit, so it reaches the spec-extract run folder the stopped run
+    paid into. spec-extract's spend is outside buildme's `BuildBudget`, bounded
+    by `spec_extract_max_usd`.
+    """
+    from . import sdk, stop_record
+
+    registry = Path(config.specs_dir) / "registry"
+    saved = state.spec_gen.spec_extract_sha if state.spec_gen else None
+    reason = None
+    if config.mode == "only":
+        reason = "only-mode"
+    elif not config.spec_extract:
+        reason = "spec_extract-false"
+    elif not sdk._repo_is_trusted():
+        reason = "repo-not-trusted"
+    elif saved is None and any(registry.glob("*.md")):
+        reason = "registry-not-empty"
+    elif saved is None:
+        saved = git_ops.rev_parse_head(config.project_dir)
+        if saved is None:
+            reason = "no-git-commit"
+        else:
+            if state.spec_gen is None:
+                state.spec_gen = SpecGenState()
+            state.spec_gen.spec_extract_sha = saved
+            state.checkpoint(config.state_file_path())
+    if reason is not None:
+        log.info("SKIP phase=CODEBASE_ANALYSIS step=spec-extract reason=%s", reason)
+        return None
+
+    log.info("START phase=CODEBASE_ANALYSIS step=spec-extract sha=%s", saved)
+    progress.log_phase("CODEBASE_ANALYSIS", f"spec-extract at {saved[:12]}")
+    res = git_ops._run_spec_extract_skill(_spec_extract_argv(config, saved), cwd=config.project_dir)
+    if res.returncode == 0:
+        rel = Path(os.path.relpath(registry, config.project_dir)).as_posix()
+        git_ops.commit_stage(config, f"docs(specs): baseline registry from spec-extract at {saved[:12]}",
+                             [rel])
+        applied = next((line.split()[1] for line in reversed(res.stdout.splitlines())
+                        if line.startswith("SPEC_EXTRACT:APPLIED ") and len(line.split()) > 1), "0")
+        print(f"SPEC_EXTRACT:BASELINE {applied}", flush=True)
+        progress.log_phase("CODEBASE_ANALYSIS", f"spec-extract applied {applied} registry file(s)")
+        return None
+    last = _spec_extract_last_line(res)
+    if res.returncode == SPEC_EXTRACT_EXIT_LOCKED:
+        print(f"SPEC_EXTRACT:RUNNING {last}", flush=True)
+        log.warning("spec-extract is still running for this target: %s", last)
+        return 1
+    dirty = stop_record.others_work(registry, None) if registry.is_dir() else None
+    if dirty is None:
+        print(f"SPEC_EXTRACT:NOT_RUN exit={res.returncode} {last}", flush=True)
+        log.warning("spec-extract did not run (exit %s): %s; the build goes on without a baseline",
+                    res.returncode, last)
+        return None
+    print(f"ERROR: spec-extract exited {res.returncode} and {dirty}. Stash or commit them, or set "
+          "`spec_extract: false` in specs/config.yaml, and re-run.", file=sys.stderr, flush=True)
+    return 1
 
 
 def _print_review_context_paths(config: BuildConfig) -> None:

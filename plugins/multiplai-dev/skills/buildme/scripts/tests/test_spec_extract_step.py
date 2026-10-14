@@ -50,6 +50,7 @@ def _config(project: Path, *, branch: str | None = "buildme/c", **kw) -> BuildCo
     config = BuildConfig(project_dir=project, change_name="c", **kw)
     config.specs_dir = project / "specs"
     ChangeManager(config.specs_dir).create_change("c")
+    (config.specs_dir / "registry").mkdir(exist_ok=True)
     config.pipeline_branch = branch
     return config
 
@@ -445,7 +446,8 @@ class TestStopAndResume:
             assert _git(repo, "status", "--porcelain", "--", "specs/registry") == ""
         assert _git(project, "ls-tree", "-r", "HEAD", "--", "specs/registry") == \
             _git(ref_project, "ls-tree", "-r", "HEAD", "--", "specs/registry")
-        assert _git(project, "log", "--format=%s", "--", "specs/registry") == \
-            _git(ref_project, "log", "--format=%s", "--", "specs/registry")
+        for repo in (project, ref_project):
+            assert _git(repo, "log", "--format=%s", "--", "specs/registry") == \
+                "docs(specs): baseline registry from spec-extract at " + _git(repo, "rev-parse", "HEAD~1")[:12]
         assert (project / "specs/registry/billing.md").read_bytes() == \
             (ref_project / "specs/registry/billing.md").read_bytes()

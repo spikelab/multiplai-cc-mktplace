@@ -52,6 +52,9 @@ _REVIEW_SKILL_TIMEOUT = 4 * 3600
 # A codebase-walkthrough `check` is git only; a `run` (regenerate_walkthroughs)
 # is bounded by its own --max-usd, and this only stops one that hangs.
 _WALKTHROUGH_SKILL_TIMEOUT = 4 * 3600
+# A spec-extract run before the plan is written: bounded by its own --max-usd;
+# this only stops one that hangs.
+_SPEC_EXTRACT_SKILL_TIMEOUT = 4 * 3600
 
 
 class GitLifecycleError(RuntimeError):
@@ -253,6 +256,13 @@ def _run_walkthrough_skill(argv: list[str], cwd: Path | str | None = None,
                            timeout: int = _WALKTHROUGH_SKILL_TIMEOUT) -> GitResult:
     """Separate seam for the codebase-walkthrough skill's subprocess
     (``walkthrough_pipeline check`` and ``run``, after the build)."""
+    return _run_skill(argv, cwd, timeout)
+
+
+def _run_spec_extract_skill(argv: list[str], cwd: Path | str | None = None,
+                            timeout: int = _SPEC_EXTRACT_SKILL_TIMEOUT) -> GitResult:
+    """Separate seam for the spec-extract skill's subprocess
+    (``spec_extract_pipeline run ... --apply``, in CODEBASE_ANALYSIS)."""
     return _run_skill(argv, cwd, timeout)
 
 
