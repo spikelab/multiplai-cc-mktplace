@@ -64,12 +64,12 @@ def _git(cwd: Path, *a: str) -> str:
     return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout
 
 
-def make_project(root: Path, name: str = "r") -> Path:
-    """A clone at `<root>/p` of a bare origin at `<root>/o/<name>.git`, with one commit."""
+def make_project(root: Path, name: str = "r", dest: str = "p") -> Path:
+    """A clone at `<root>/<dest>` of a bare origin at `<root>/o/<name>.git`, with one commit."""
     origin = root / "o" / f"{name}.git"
     origin.parent.mkdir(parents=True, exist_ok=True)
     _git(root, "init", "-q", "--bare", "-b", "main", str(origin))
-    project = root / "p"
+    project = root / dest
     _git(root, "clone", "-q", str(origin), str(project))
     (project / "README.md").write_text("# r\n")
     _git(project, "add", "README.md")
@@ -350,7 +350,8 @@ if step.get("exit"):
     sys.exit(step["exit"])
 if step.get("no_pr"):
     sys.exit(0)
-url = f"https://example.invalid/o/r/pull/{{step.get('pr_number', change)}}"
+repo = pathlib.Path(git("remote", "get-url", "origin", cwd=top).stdout.strip()).stem   # PR F: `r` or another
+url = f"https://example.invalid/o/{{repo}}/pull/{{step.get('pr_number', change)}}"
 prs_file = root / "prs.json"
 import fcntl
 with (root / "prs.lock").open("a") as held:     # two builds ending at once both keep their PR
@@ -379,12 +380,12 @@ a = sys.argv[1:]
 if (root / "gh-fails").exists():
     print("fake gh: offline", file=sys.stderr)
     sys.exit(1)
-origin = root / "o" / "r.git"
 if a[:2] == ["pr", "view"]:
     pr = prs.get(a[2])
     if pr is None:
         print("no pull request found", file=sys.stderr)
         sys.exit(1)
+    origin = root / "o" / (a[2].split("/")[-3] + ".git")      # the PR's repo (PR F), `r` unless another
     change = a[2].rsplit("/", 1)[1]
     pushed = subprocess.run(["{git}", "--git-dir", str(origin), "rev-parse", "-q", "--verify",
                              "refs/heads/" + pr["branch"]], capture_output=True, text=True).stdout.strip()
@@ -451,13 +452,15 @@ data = pathlib.Path(os.environ["WORKSPACE"]) / ".multiplai" / "data" / "reviews"
 ledger = data / "ledger.jsonl"
 if cmd == "review":
     n = int(argv[argv.index("--pr") + 1])
-    target = data / "o-r" / f"pr-{{n}}"
 else:
     target = pathlib.Path(argv[argv.index("resume") + 1])
     n = int(target.name[len("pr-"):])
 prs = json.loads((root / "prs.json").read_text())
 url, pr = next((u, p) for u, p in prs.items() if number(u.rsplit("/", 1)[1]) == n)
-pushed = subprocess.run(["{git}", "--git-dir", str(root / "o" / "r.git"), "rev-parse", "-q", "--verify",
+repo = url.split("/")[-3]           # the PR's repo (PR F), `r` unless another
+if cmd == "review":
+    target = data / f"o-{{repo}}" / f"pr-{{n}}"
+pushed = subprocess.run(["{git}", "--git-dir", str(root / "o" / f"{{repo}}.git"), "rev-parse", "-q", "--verify",
                          "refs/heads/" + pr["branch"]], capture_output=True, text=True).stdout.strip()
 head = pr.get("head") or pushed or subprocess.run(       # the head `gh` reports (PR E)
     ["git", "rev-parse", "refs/heads/" + pr["branch"]], cwd=root / "p", capture_output=True, text=True).stdout.strip()
@@ -496,7 +499,7 @@ if cmd == "review" and last and last[-1] == "started" and state.exists() \
     print(f"STOPPED: interrupted run found; continue with: python -m review_pipeline resume {{target}}\n"
           "To start over instead, pass --restart.", file=sys.stderr, flush=True)
     sys.exit(4)
-slug = f"o-r--pr-{{n}}"
+slug = f"o-{{repo}}--pr-{{n}}"
 data.mkdir(parents=True, exist_ok=True)
 
 
