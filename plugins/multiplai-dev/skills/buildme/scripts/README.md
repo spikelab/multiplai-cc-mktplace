@@ -114,7 +114,7 @@ first (PR E1, `epic/merge.py`, `Coordinator._merge`), under one
 and not pushed, holding only what `merge.merges_onto` accepts, is checked (`stop_record.others_work`), tested and pushed; a
 merge left in progress is aborted only when `others_work` passes against
 `merge_stop`, else it parks with the hint `git -C <W> merge --abort, then
-re-run`, and after the abort restarts at the fetch; else `merge.ready` (the same check, no record, and HEAD must be the reviewed head or it plus merges `merge.merges_onto` accepts), `git fetch`, `git
+re-run`, and after the abort restarts at the fetch (a change the abort keeps outside the merge parks before the tests: `merge.outside_merge`); else `merge.ready` (the same check, no record, and HEAD must be the reviewed head or it plus merges `merge.merges_onto` accepts), `git fetch`, `git
 merge --no-ff --no-commit origin/<default>`, one `merge` agent for version,
 CHANGELOG and lockfile conflicts (record kind `merge`; any other conflicted file, or other file it changed, staged or not, parks),
 the tests with `BUILDME_TRUST_REPO=1` (kind `merge-tests`, killed when the step stops), `git commit` and

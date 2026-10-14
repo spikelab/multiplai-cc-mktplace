@@ -750,11 +750,11 @@ but buildme's own files and be at the reviewed head (or it plus the merge step's
 `git merge --no-ff --no-commit origin/<default>`. Conflicts only in version
 fields, CHANGELOGs and lockfiles go to one agent call (step `merge`,
 `agents/<NNN>-merge-<id>.*`, counted against `epic.max_usd`); a conflict in
-any other file, or any other file the agent changed, staged or not, parks the child. The project's tests then run in the worktree
+any other file, or any other file the agent changed, staged or not, or a change the merge did not make, parks the child. The project's tests then run in the worktree
 (`tdd.test_command`, else the command buildme discovers, with
 `BUILDME_TRUST_REPO=1`, `agents/<NNN>-merge-tests-<id>.*`; SIGHUP ends them with the run), and a failure
 parks. The merge commit is pushed, never forced; a push rejected because origin's branch moved parks naming
-where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. When `epic.max_usd` is reached and the merge would need the agent, nothing is merged. A merge commit holding only git's own merge plus such resolutions (checked line by line: only the conflicting version lines, the CHANGELOG sides' lines, and a lockfile's own lines or version fields), as the merge step's own do, is not
+where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. When `epic.max_usd` is reached and the merge would need the agent, nothing is merged. A merge commit holding only git's own merge plus such resolutions (checked line by line against git's merge: inside a conflict only version lines, the CHANGELOG sides' lines, or a lockfile's sides' lines and the new version; nothing outside one), as the merge step's own do, is not
 reviewed again; any other, such as a person's "Update branch" with other edits, is. This release does not merge the PR itself under `auto`: after
 the push it waits for a person, as under `manual`. A run stopped during the
 merge saves what the worktree held (`merge_stop` in `epic.json`); the next
