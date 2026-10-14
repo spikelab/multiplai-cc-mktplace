@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from build_pipeline.narrow_tests import (
+    agent_test_command,
     narrow_command,
     narrow_test_command,
     runner_of,
@@ -38,9 +39,17 @@ class TestRunnerOf:
         (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": script}}))
         assert runner_of("npm test", tmp_path) == "node"
         assert runner_of("npm run test", tmp_path) == "node"
+        assert runner_of("npm t", tmp_path) == "node"
 
     def test_npm_test_running_something_else_is_unknown(self, tmp_path):
         (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": "mocha"}}))
+        assert runner_of("npm test", tmp_path) is None
+
+    @pytest.mark.parametrize("script", ["jest && eslint .", "vitest run; echo done",
+                                        "jest | tee out.txt", "tox -e jest"])
+    def test_npm_test_script_that_does_not_end_in_jest_or_vitest_is_unknown(self, tmp_path, script):
+        # npm appends `-- paths` to the end of the whole script.
+        (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": script}}))
         assert runner_of("npm test", tmp_path) is None
 
     def test_npm_test_without_package_json_is_unknown(self, tmp_path):
@@ -53,6 +62,9 @@ class TestRunnerOf:
     @pytest.mark.parametrize("command", [
         "swift test", "cargo test", "go test ./...", "make test", "yarn test", "",
         "pytest 'unbalanced", "tox -e pytest", "make pytest", "nox -s jest",
+        # A task runner behind a wrapper still takes its own arguments.
+        "uv run tox -e pytest", "poetry run nox -s pytest", "python -m tox -e pytest",
+        "env X=1 tox -e pytest", "npx nox -s jest",
     ])
     def test_other_commands_are_unknown(self, tmp_path, command):
         assert runner_of(command, tmp_path) is None
@@ -97,6 +109,31 @@ class TestSelectTestPaths:
         assert select_test_paths(changed, files, "node") == [
             "src/cart.test.ts", "test/price.spec.mjs"]
 
+    @pytest.mark.parametrize("changed,files,runner", [
+        # Django: the block's tests are in shop/tests.py, which pytest-django runs.
+        (["shop/tests.py", "shop/forms.py"], ["shop/test_forms.py"], "pytest"),
+        # A helper module or conftest under a tests directory.
+        (["tests/test_new.py", "tests/conftest.py"], [], "pytest"),
+        (["tests/test_new.py", "tests/helpers.py"], [], "pytest"),
+        # jest's default __tests__ directory.
+        (["src/__tests__/foo.js", "src/foo.js"], ["src/foo.test.js"], "node"),
+    ])
+    def test_a_changed_test_file_it_cannot_name_falls_back(self, changed, files, runner):
+        # The block's own tests must always run, so a changed file the engine
+        # counts as a test but the narrow run cannot name means the whole command.
+        assert select_test_paths(changed, files, runner) == []
+
+    def test_a_test_file_of_another_language_does_not_stop_narrowing(self):
+        changed = ["tests/test_new.py", "web/src/__tests__/a.js"]
+        assert select_test_paths(changed, [], "pytest") == ["tests/test_new.py"]
+
+    def test_the_named_test_file_nearest_the_module_wins(self):
+        # A monorepo with one test_config.py per package: only the one in the
+        # changed module's own package is taken.
+        changed = ["a/pkg/config.py"]
+        files = ["a/pkg/config.py", "a/tests/test_config.py", "b/tests/test_config.py"]
+        assert select_test_paths(changed, files, "pytest") == ["a/tests/test_config.py"]
+
     def test_unknown_runner_selects_nothing(self):
         assert select_test_paths(["tests/test_a.py"], [], None) == []
 
@@ -129,6 +166,16 @@ class TestNarrowCommand:
 
     def test_unknown_runner_falls_back_to_the_whole_command(self):
         assert narrow_command("cargo test", ["tests/a.rs"], None) == "cargo test"
+
+    @pytest.mark.parametrize("path", ["src/[id].test.js", "src/(auth)/login.test.js",
+                                      "src/a+b.test.ts"])
+    def test_node_path_jest_would_read_as_a_regex_falls_back(self, path):
+        # jest reads each path as a regular expression.
+        assert narrow_command("npx jest", ["src/ok.test.js", path], "node") == "npx jest"
+
+    def test_pytest_takes_a_path_with_brackets(self):
+        assert narrow_command("pytest", ["tests/test_[a].py"], "pytest") == \
+            "pytest 'tests/test_[a].py'"
 
 
 # --- end to end against a real git repo -----------------------------------
@@ -223,6 +270,126 @@ class TestNarrowTestCommand:
     def test_not_a_git_repo_falls_back(self, project):
         assert narrow_test_command("pytest", project, "HEAD") == "pytest"
 
+    def test_a_named_test_file_deleted_but_not_staged_is_not_passed(self, project):
+        base = _repo(project)
+        (project / "pkg" / "parser.py").write_text("x = 2\n")
+        (project / "tests" / "test_parser.py").unlink()
+        assert narrow_test_command("pytest", project, base) == "pytest"
+
+    @pytest.mark.parametrize("name,text", [
+        ("pyproject.toml", '[tool.pytest.ini_options]\naddopts = "--cov=pkg --cov-fail-under=90"\n'),
+        ("pytest.ini", "[pytest]\naddopts = --cov=pkg\n"),
+        ("setup.cfg", "[tool:pytest]\naddopts = --cov pkg\n"),
+    ])
+    def test_pytest_with_coverage_configured_falls_back(self, project, name, text):
+        # A coverage floor the whole suite meets fails a narrow run on coverage
+        # alone, which RED would read as a right-reason failure.
+        (project / name).write_text(text)
+        base = _repo(project)
+        (project / "tests" / "test_new.py").write_text("def test_n(): pass\n")
+        assert narrow_test_command("pytest -xvs", project, base) == "pytest -xvs"
+
+    def test_pytest_with_coverage_in_the_command_falls_back(self, project):
+        base = _repo(project)
+        (project / "tests" / "test_new.py").write_text("def test_n(): pass\n")
+        command = "pytest --cov=pkg --cov-fail-under=90"
+        assert narrow_test_command(command, project, base) == command
+
+    def test_pytest_with_coverage_in_pytest_addopts_falls_back(self, project, monkeypatch):
+        monkeypatch.setenv("PYTEST_ADDOPTS", "--cov=pkg")
+        base = _repo(project)
+        (project / "tests" / "test_new.py").write_text("def test_n(): pass\n")
+        assert narrow_test_command("pytest", project, base) == "pytest"
+
+    def test_pytest_config_of_the_containing_repo_counts(self, tmp_path):
+        repo = tmp_path / "repo"
+        sub = repo / "app"
+        (sub / "tests").mkdir(parents=True)
+        (repo / "pytest.ini").write_text("[pytest]\naddopts = --cov=app\n")
+        base = _repo(repo)
+        (sub / "tests" / "test_new.py").write_text("def test_n(): pass\n")
+        assert narrow_test_command("pytest", sub, base) == "pytest"
+
+    @pytest.mark.parametrize("package,extra", [
+        ({"scripts": {"test": "jest --coverage"}}, None),
+        ({"scripts": {"test": "jest"}, "jest": {"coverageThreshold": {"global": {"lines": 90}}}}, None),
+        ({"scripts": {"test": "jest"}}, ("jest.config.js", "module.exports = {collectCoverage: true}\n")),
+        ({"scripts": {"test": "vitest run"}}, ("vitest.config.ts", "export default {test: {coverage: {enabled: true}}}\n")),
+    ])
+    def test_node_with_coverage_configured_falls_back(self, tmp_path, package, extra):
+        p = tmp_path / "web"
+        (p / "src").mkdir(parents=True)
+        (p / "package.json").write_text(json.dumps(package))
+        if extra:
+            (p / extra[0]).write_text(extra[1])
+        base = _repo(p)
+        (p / "src" / "cart.test.ts").write_text("test('a', () => {})\n")
+        assert narrow_test_command("npm test", p, base) == "npm test"
+
+    def test_node_coverage_script_that_npm_test_does_not_run_is_ignored(self, tmp_path):
+        p = tmp_path / "web"
+        (p / "src").mkdir(parents=True)
+        (p / "package.json").write_text(json.dumps(
+            {"scripts": {"test": "jest", "coverage": "jest --coverage"}}))
+        base = _repo(p)
+        (p / "src" / "cart.test.ts").write_text("test('a', () => {})\n")
+        assert narrow_test_command("npm test", p, base) == "npm test -- src/cart.test.ts"
+
     def test_no_test_command_stays_empty(self, project):
         base = _repo(project)
         assert narrow_test_command("", project, base) == ""
+
+
+# --- the test command an agent is given -----------------------------------
+
+class TestAgentTestCommand:
+    """An agent gets the narrow command plus how to add the test files it
+    writes and the test file named after each module it changes, because its
+    command is fixed before it changes anything."""
+
+    @pytest.fixture
+    def project(self, tmp_path):
+        p = tmp_path / "proj"
+        (p / "pkg").mkdir(parents=True)
+        (p / "tests").mkdir()
+        (p / "pkg" / "widget.py").write_text("x = 1\n")
+        (p / "tests" / "test_widget.py").write_text("def test_w(): pass\n")
+        return p
+
+    def test_narrowed_command_says_how_to_add_more_tests(self, project):
+        base = _repo(project)
+        (project / "tests" / "test_new.py").write_text("def test_n(): pass\n")
+        text = agent_test_command("pytest -xvs", project, base)
+        assert text.splitlines()[0] == "pytest -xvs tests/test_new.py"
+        assert "test_<module>.py" in text
+        assert "add" in text and "path" in text
+        assert "whole suite" in text
+
+    def test_before_the_block_has_tests_it_says_to_run_only_what_it_writes(self, project):
+        base = _repo(project)
+        text = agent_test_command("pytest -xvs", project, base)
+        assert text.splitlines()[0] == "pytest -xvs"
+        assert "runs the whole suite" in text
+        assert "test_<module>.py" in text
+
+    def test_npm_whole_command_says_paths_go_after_the_separator(self, tmp_path):
+        p = tmp_path / "web"
+        (p / "src").mkdir(parents=True)
+        (p / "package.json").write_text(json.dumps({"scripts": {"test": "jest"}}))
+        base = _repo(p)
+        text = agent_test_command("npm test", p, base)
+        assert text.splitlines()[0] == "npm test"
+        assert "`--`" in text
+        assert "<name>.test.<ext>" in text
+
+    @pytest.mark.parametrize("command,enabled", [("make test", True), ("pytest", False)])
+    def test_a_command_it_cannot_narrow_is_given_bare(self, project, command, enabled):
+        base = _repo(project)
+        (project / "tests" / "test_new.py").write_text("def test_n(): pass\n")
+        assert agent_test_command(command, project, base, enabled=enabled) == command
+
+    def test_coverage_configured_is_given_bare(self, project):
+        (project / "pytest.ini").write_text("[pytest]\naddopts = --cov=pkg\n")
+        base = _repo(project)
+        (project / "tests" / "test_new.py").write_text("def test_n(): pass\n")
+        assert agent_test_command("pytest", project, base) == "pytest"

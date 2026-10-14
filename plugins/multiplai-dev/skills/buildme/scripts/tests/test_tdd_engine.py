@@ -1538,21 +1538,24 @@ class TestNarrowTestCommandInTheBlockLoop:
             return AgentResult(success=True, output="done")
         return _run
 
-    async def _run_block(self, config, state, progress, block):
+    async def _run_block(self, config, state, progress, block, suite_results=None,
+                         test_writer=None):
         suite_calls: list[str] = []
         gate_calls: list[str] = []
+        results = list(suite_results or [])
 
         def _suite(command, _cwd, *_a, **_k):
             suite_calls.append(command)
-            return RED_SUITE_RESULT
+            return results.pop(0) if results else RED_SUITE_RESULT
 
         def _gate(command, _cwd):
             gate_calls.append(command)
             return GateResult(passed=True, reason="green")
 
         p = config.project_dir
+        writer = test_writer or self._writes(p, "tests/test_new.py", "def test_n(): assert 0\n")
         with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
-                   side_effect=self._writes(p, "tests/test_new.py", "def test_n(): assert 0\n")) as tw, \
+                   side_effect=writer) as tw, \
              patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
                    side_effect=self._writes(p, "pkg/widget.py", "x = 2\n")) as impl, \
              patch("build_pipeline.tdd_engine.run_refactorer", new_callable=AsyncMock,
@@ -1571,15 +1574,63 @@ class TestNarrowTestCommandInTheBlockLoop:
         assert ok is True
         # RED runs only the block's own new test file.
         assert suite_calls == [f"{self.WHOLE} tests/test_new.py"]
-        # The test writer starts before the block changed anything: whole command.
-        assert tw.call_args.kwargs["test_command"] == self.WHOLE
-        # The implementer works against the block's tests (GREEN while it works).
-        assert impl.call_args.kwargs["test_command"] == f"{self.WHOLE} tests/test_new.py"
+        # The test writer starts before the block changed anything: the whole
+        # command, with how to run only the test files it writes.
+        tw_text = tw.call_args.kwargs["test_command"]
+        assert tw_text.splitlines()[0] == self.WHOLE
+        assert "test_<module>.py" in tw_text
+        # The implementer works against the block's tests (GREEN while it
+        # works), and is told to add the test file named after each module it
+        # changes, which its command cannot know yet.
+        impl_text = impl.call_args.kwargs["test_command"]
+        assert impl_text.splitlines()[0] == f"{self.WHOLE} tests/test_new.py"
+        assert "test_<module>.py" in impl_text
         # After pkg/widget.py changed, tests/test_widget.py joins; test_unrelated never does.
-        assert ref.call_args.kwargs["test_command"] == \
+        assert ref.call_args.kwargs["test_command"].splitlines()[0] == \
             f"{self.WHOLE} tests/test_new.py tests/test_widget.py"
         # The refactor's verification is a gate: whole command.
         assert gate_calls == [self.WHOLE]
+
+    @pytest.mark.asyncio
+    async def test_red_retry_gets_the_narrow_command_and_reruns_with_its_new_tests(self, setup):
+        config, state, progress, block = setup
+        p = config.project_dir
+        files = iter([("tests/test_new.py", "def test_n(): pass\n"),
+                      ("tests/test_new2.py", "def test_m(): assert 0\n")])
+
+        def _writer(*_a, **_kw):
+            rel, content = next(files)
+            (p / rel).write_text(content)
+            return AgentResult(success=True, output="done")
+
+        ok, tw, _impl, _ref, suite_calls, _gates = await self._run_block(
+            config, state, progress, block,
+            suite_results=[(0, "1 passed in 0.01s"), RED_SUITE_RESULT],
+            test_writer=_writer)
+
+        assert ok is True
+        assert len(tw.call_args_list) == 2
+        retry_text = tw.call_args_list[1].kwargs["test_command"]
+        assert retry_text.splitlines()[0] == f"{self.WHOLE} tests/test_new.py"
+        assert suite_calls == [f"{self.WHOLE} tests/test_new.py",
+                               f"{self.WHOLE} tests/test_new.py tests/test_new2.py"]
+
+    @pytest.mark.asyncio
+    async def test_test_quality_retry_gets_the_narrow_command(self, setup):
+        config, state, progress, block = setup
+        scans = iter([GateResult(passed=False, reason="weak"),
+                      GateResult(passed=True, reason="ok")])
+        with patch("build_pipeline.tdd_engine.run_test_quality_check",
+                   side_effect=lambda *_a, **_k: next(scans)), \
+             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
+                   return_value=QualityAudit(passed=False)):
+            ok, tw, _impl, _ref, _suite, _gates = await self._run_block(
+                config, state, progress, block)
+
+        assert ok is True
+        assert len(tw.call_args_list) == 2
+        assert tw.call_args_list[1].kwargs["test_command"].splitlines()[0] == \
+            f"{self.WHOLE} tests/test_new.py"
 
     @pytest.mark.asyncio
     async def test_narrow_tests_false_keeps_the_whole_command(self, setup):
