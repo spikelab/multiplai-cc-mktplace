@@ -782,12 +782,17 @@ async def _run_codebase_analysis_phase(
         log.info("SKIP phase=CODEBASE_ANALYSIS reason=analysed-before-spec-extract report=%s",
                  state.spec_gen.codebase_analysis_path)
         return
+    from .code_analysis import NOT_ANALYSED_HEADING
+
     saved = state.spec_gen.codebase_analysis_path if state.spec_gen is not None else None
-    if saved and Path(saved) == config.codebase_analysis_path and Path(saved).is_file():
+    if (saved and Path(saved) == config.codebase_analysis_path and Path(saved).is_file()
+            and not Path(saved).read_text(errors="replace").startswith(NOT_ANALYSED_HEADING)):
         # A FAILED build re-run in its own worktree keeps the change dir, the
         # report in it and the design written against that report: analysing
         # the tree again, which now holds the failed run's commits, would pay
-        # twice for a report the kept design does not match.
+        # twice for a report the kept design does not match. The not-analysed
+        # report analysed nothing and asks for a commit and a re-run, so that
+        # re-run analyses.
         log.info("SKIP phase=CODEBASE_ANALYSIS reason=report-already-written report=%s", saved)
         return
     if not _has_source_files(config.project_dir):
@@ -814,8 +819,6 @@ async def _run_codebase_analysis_phase(
     if state.spec_gen is None:
         state.spec_gen = SpecGenState()
     state.spec_gen.codebase_analysis_path = str(output)
-    from .code_analysis import NOT_ANALYSED_HEADING
-
     if analysis.startswith(NOT_ANALYSED_HEADING):
         log.info("SKIP phase=CODEBASE_ANALYSIS reason=no-git-commit dir=%s report=%s", config.project_dir, output)
         progress.log_phase("CODEBASE_ANALYSIS", "skipped — the project has no git commit to read the code at; "

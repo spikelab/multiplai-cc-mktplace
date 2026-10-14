@@ -424,7 +424,9 @@ a re-run of the step never pays for the analysis twice, and an analysis that
 failed (no report) is asked again. A saved report path that is this change
 dir's `codebase-analysis.md` and still exists skips it too
 (`reason=report-already-written`): a FAILED build re-run in its own worktree
-keeps the report and the design written against it. The block checkpoints right after the
+keeps the report and the design written against it. The not-analysed report
+(`code_analysis.NOT_ANALYSED_HEADING`, no commit) is never reused: it asks for
+a commit and a re-run, and that re-run analyses. The block checkpoints right after the
 analysis, before the step, so a retried analysis's report path survives the
 step's `return 1` or a stop. Exit 0 commits `specs/registry/` with
 `commit_stage` and prints `SPEC_EXTRACT:BASELINE <n>`, with ` uncommitted`

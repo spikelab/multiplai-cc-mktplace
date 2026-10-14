@@ -1192,6 +1192,51 @@ class TestFailedBuildRetry:
         assert analysis.await_count == 1
         assert "the first one" in report.read_text()
 
+    @pytest.mark.asyncio
+    async def test_a_rerun_analyses_the_code_the_not_analysed_report_asked_to_commit(
+        self, tmp_path, capsys,
+    ):
+        """A `--no-worktree` build started before any commit saves the
+        not-analysed report, which tells the user to commit and re-run. The
+        re-run after that commit analyses the code instead of reusing it."""
+        from build_pipeline.code_analysis import NOT_ANALYSED_HEADING
+
+        project = tmp_path / "proj"
+        project.mkdir()
+        _sh(project, "init", "-q", "-b", "main")
+        (project / "app.py").write_text("print('hi')\n")
+
+        async def analyse(project_dir, config):
+            head = subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"],
+                                  cwd=project_dir, capture_output=True, text=True)
+            if head.returncode != 0:
+                return f"{NOT_ANALYSED_HEADING}\n\n- `app.py`\n"
+            return "# Codebase analysis\n\nthe analysed one\n"
+
+        analysis = AsyncMock(side_effect=analyse)
+        config = _config(project, "csv")
+        config.git.worktree = False
+        with patch("build_pipeline.llm_steps.spec_steps.run_codebase_analysis", analysis):
+            with self._failing_spec_stage(commit=False):
+                rc = await run_orchestrator(config, _args(project, "csv", interview_summary="S"))
+            assert rc == 1
+            state = BuildState.load(config.state_file_path())
+            assert state.phase == BuildPhase.FAILED
+            report = Path(state.spec_gen.codebase_analysis_path)
+            assert report.read_text().startswith(NOT_ANALYSED_HEADING)
+
+            _sh(project, "add", "-A")
+            _sh(project, "commit", "-qm", "the user's commit")
+            capsys.readouterr()
+            config = _config(project, "csv")
+            config.git.worktree = False
+            mocks = _spec_stage_mocks()
+            with mocks[0], mocks[1], mocks[2]:
+                rc = await run_orchestrator(config, _args(project, "csv", interview_summary="S"))
+        assert rc == 0, capsys.readouterr().err
+        assert analysis.await_count == 2
+        assert report.read_text() == "# Codebase analysis\n\nthe analysed one\n"
+
     async def _stop_in_interview(self, repo: Path) -> BuildState:
         """The same command, stopped by an exception in the interview: exit 1
         from the generic handler, the pointer left AT BOOTSTRAP, never FAILED
