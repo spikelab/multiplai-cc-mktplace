@@ -367,9 +367,7 @@ class TestTicketMode:
         state to FAILED and every phase re-runs. The retry must reuse the saved
         interview, not print INTERVIEW:WAITING (the wrapper would post the
         same questions a second time) or call the questioner again. That holds
-        whether the retry drops --interview-replies or repeats it: the retry
-        sets up a new worktree, where interview-questions.md is not carried
-        over, so a repeated --interview-replies has no questions to match."""
+        whether the retry drops --interview-replies or repeats it."""
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         repo = make_repo(tmp_path / "proj")
         ticket = self._ticket(tmp_path)
@@ -883,13 +881,13 @@ class TestFailedBuildRetry:
 
     @staticmethod
     def _failing_spec_stage(*, commit: bool = True, leave: str = ""):
-        """A spec stage that commits `work.py` in the build's tree, leaves
+        """A spec stage that commits `work.txt` in the build's tree, leaves
         *leave* uncommitted, then fails."""
         async def fail(config, args):
             project = Path(config.project_dir)
             if commit:
-                (project / "work.py").write_text("x = 1\n")
-                _sh(project, "add", "work.py")
+                (project / "work.txt").write_text("x = 1\n")
+                _sh(project, "add", "work.txt")
                 _sh(project, "commit", "-qm", "wip: the failed run's commit")
             if leave:
                 (project / leave).write_text("half-written\n")
@@ -957,7 +955,7 @@ class TestFailedBuildRetry:
         assert rc == 0
         tree = set(_sh(worktree, "ls-tree", "-r", "--name-only", "HEAD").split())
         fresh_tree = set(_sh(fresh.project_dir, "ls-tree", "-r", "--name-only", "HEAD").split())
-        assert tree == fresh_tree | ({"work.py"} if committed else set())
+        assert tree == fresh_tree | ({"work.txt"} if committed else set())
 
     @pytest.mark.asyncio
     async def test_an_edit_made_after_the_failure_stops_the_rerun_and_is_kept(

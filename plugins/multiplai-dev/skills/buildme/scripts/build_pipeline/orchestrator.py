@@ -178,7 +178,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             result = await run_spec_generator(config, args)
             if result != 0:
                 log.error("FAIL phase=SPEC_GENERATION exit_code=%d", result)
-                state.advance_to(BuildPhase.FAILED, state_path)
+                state.fail(config.project_dir, state_path)
                 board.record_failure(
                     config, state, "spec generation failed", progress=progress,
                 )
@@ -316,7 +316,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 state = BuildState.load(state_path)
             if result != 0:
                 log.error("FAIL phase=TDD_BUILD exit_code=%d", result)
-                state.advance_to(BuildPhase.FAILED, state_path)
+                state.fail(config.project_dir, state_path)
                 board.record_failure(config, state, "TDD build failed", progress=progress)
                 return result
             state.advance_to(BuildPhase.TDD_BUILD, state_path)
@@ -981,23 +981,32 @@ async def _run_bootstrap(
     """
     import subprocess
 
-    from . import intake
+    from . import intake, stop_record
 
     previous_change_dir = config.change_dir if config.change_name else None
-    if config.git.worktree:
+    if config.git.worktree and _inside_own_worktree(config, state):
+        # A FAILED build re-run (by hand, or an epic coordinator's relaunch of
+        # a failed child with the same argv) after _rebind_to_existing_worktree
+        # keeps its own branch and worktree: _setup_worktree would refuse that
+        # branch once it holds a commit. The config.yaml checks below do not
+        # apply here: the uncommitted config.yaml is the stub bootstrap wrote
+        # itself, and the branch already exists. Anything uncommitted must be
+        # what the failed run left (`state.failed_stop`); the re-run commits
+        # whatever is in the tree, so anything else stops it untouched.
+        left = stop_record.others_work(config.project_dir, state.failed_stop)
+        if left:
+            raise git_ops.GitLifecycleError(
+                f"Did not re-run the failed build in {state.worktree_path}: {left}")
+        state_path = config.state_file_path()
+        cm = ChangeManager(config.specs_dir)
+    elif config.git.worktree:
         # The worktree branches from HEAD, so an uncommitted config.yaml would
         # silently not exist inside it — refuse instead of building without it.
-        # Only the caller's source repo is checked: a FAILED build retried
-        # after _rebind_to_existing_worktree runs bootstrap inside its own
-        # worktree, where the uncommitted config.yaml is the stub bootstrap
-        # wrote itself and the user has nothing to commit.
-        if (not _inside_own_worktree(config, state)
-                and intake.config_yaml_uncommitted(config.project_dir)):
+        if intake.config_yaml_uncommitted(config.project_dir):
             raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_COMMITTED)
         # With --base-ref (an epic's child) it branches from that commit
         # instead, where a committed but unpushed config.yaml is missing too.
-        if (config.base_ref and not _inside_own_worktree(config, state)
-                and intake.config_yaml_off_ref(config.project_dir, config.base_ref)):
+        if config.base_ref and intake.config_yaml_off_ref(config.project_dir, config.base_ref):
             raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_ON_BASE)
         _setup_worktree(config, state)
         state_path = config.state_file_path()

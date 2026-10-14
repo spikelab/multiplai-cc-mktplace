@@ -721,3 +721,50 @@ class TestPreFindingsCheckpoint:
         assert back.rounds[0].triaged[7].verdict == Verdict.QUESTION
         assert back.rounds[0].blocks == {1: "comment:7"}
         assert back.seen_ids() == {7}
+
+
+class TestFailRecordsTheTree:
+    """`BuildState.fail` records what the tree held before it checkpoints
+    FAILED; a re-run of the FAILED build compares the tree with it."""
+
+    def test_fail_records_head_and_uncommitted_paths_and_survives_a_reload(self, tmp_path):
+        import subprocess
+
+        from tests.test_git_ops import make_repo
+
+        repo = make_repo(tmp_path / "proj")
+        (repo / "left.txt").write_text("half-written\n")
+        path = tmp_path / "state.json"
+        s = BuildState(change_name="c", mode="scratch", tier="advanced", state_file=str(path))
+        s.fail(repo, path)
+
+        back = BuildState.load(path)
+        assert back.phase == BuildPhase.FAILED
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True,
+                              text=True, check=True).stdout.strip()
+        assert back.failed_stop.head == head
+        assert list(back.failed_stop.edits) == ["left.txt"]
+
+    def test_fail_outside_a_repo_saves_no_record(self, tmp_path):
+        path = tmp_path / "state.json"
+        s = BuildState(change_name="c", mode="scratch", tier="advanced", state_file=str(path))
+        s.fail(tmp_path / "not-a-repo", path)
+        back = BuildState.load(path)
+        assert back.phase == BuildPhase.FAILED
+        assert back.failed_stop is None
+
+    def test_a_checkpoint_without_the_field_loads_with_no_record(self, tmp_path):
+        path = tmp_path / "state.json"
+        path.write_text(json.dumps({"change_name": "c", "mode": "scratch", "tier": "advanced",
+                                    "phase": "failed"}))
+        assert BuildState.load(path).failed_stop is None
+
+    def test_every_failed_checkpoint_goes_through_fail(self):
+        """A FAILED written without the record would make its re-run refuse
+        the failed run's own leftovers, or compare them with an older failure's."""
+        scripts = Path(__file__).resolve().parents[1]
+        users = sorted(p.relative_to(scripts).as_posix()
+                       for p in (scripts / "build_pipeline").rglob("*.py")
+                       if "BuildPhase.FAILED, " in p.read_text()
+                       or "phase = BuildPhase.FAILED" in p.read_text())
+        assert users == ["build_pipeline/state.py"]
