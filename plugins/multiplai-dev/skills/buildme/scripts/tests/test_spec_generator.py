@@ -1639,13 +1639,16 @@ class TestScanNoBehaviourBlocks:
 
         assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
 
-    def test_a_block_that_says_it_needs_no_code_is_flagged(self, tmp_path):
+    @pytest.mark.parametrize("says", [
+        "no code change is needed", "there is no code change in this block",
+    ])
+    def test_a_block_that_says_it_needs_no_code_is_flagged(self, tmp_path, says):
         """The no-code rule on its own: no earlier block is named, and no file."""
         path = _tasks_file(tmp_path, (
             "## 1. Count words\n\nAdd `count(s: str) -> int`.\n\n"
             "Interfaces:\n- Produces: `count(s: str) -> int`\n\n"
-            "## 2. Tabs\n\nTabs already split like spaces, so no code change "
-            "is needed. Pin it with a test for tabs.\n\n"
+            f"## 2. Tabs\n\nTabs already split like spaces, so {says}. "
+            "Pin it with a test for tabs.\n\n"
             "Interfaces:\n- Produces: (none)\n"
         ))
 

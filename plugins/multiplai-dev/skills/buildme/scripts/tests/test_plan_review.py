@@ -840,16 +840,17 @@ class TestNoBehaviourBlocks:
         ref_tmp.mkdir()
         ref_config, ref_state, ref_path = _stage_setup(ref_tmp)
         (ref_config.change_dir / "tasks.md").write_text(rewritten)
+        ref_review = AsyncMock(return_value=PlanReviewResult(findings=[contract]))
         ref_regen = AsyncMock(return_value="## 1. Final\n")
-        a, b, c, d = self._patches(
-            AsyncMock(return_value=PlanReviewResult(findings=[contract])),
-            ref_regen)
+        a, b, c, d = self._patches(ref_review, ref_regen)
         with a, b, c, d:
             await run_plan_review_stage(
                 ref_config.change_dir, ref_config, ref_state, ref_path)
 
-        # Stopped: the model call fails, the scan's rewrite runs.
+        # Stopped: the model call fails, the scan's rewrite runs. The
+        # checkpoint on disk is the one the phase before left.
         config, state, state_path = _stage_setup(tmp_path)
+        state.checkpoint(state_path)
         (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
         a, b, c, d = self._patches(
             AsyncMock(side_effect=RuntimeError("down")),
@@ -866,8 +867,9 @@ class TestNoBehaviourBlocks:
             await run_plan_review_stage(
                 config.change_dir, config, resumed, state_path)
 
-        assert review.await_count == 1
-        assert regen_again.await_count == 1
+        # The review and its report-only re-check, as in the reference run.
+        assert review.await_count == ref_review.await_count == 2
+        assert regen_again.await_count == ref_regen.await_count == 1
         assert "contract-mismatch" in regen_again.await_args.kwargs["audit_findings"]
         assert (regen_again.await_args.kwargs["audit_findings"]
                 == ref_regen.await_args.kwargs["audit_findings"])
@@ -885,6 +887,7 @@ class TestNoBehaviourBlocks:
         finds nothing in the plan the first rewrite left, so nothing is
         rewritten again."""
         config, state, state_path = _stage_setup(tmp_path)
+        state.checkpoint(state_path)
         (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
         rewritten = "## 1. Summarize\n\nAll of it.\n"
         a, b, c, d = self._patches(

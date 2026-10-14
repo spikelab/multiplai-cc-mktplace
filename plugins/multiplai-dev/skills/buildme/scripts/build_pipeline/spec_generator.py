@@ -650,27 +650,54 @@ def scan_placeholders(text: str) -> list[dict]:
     return findings
 
 
+# What a block calls its own work: "these", "this slice", "the criteria".
+# Never a noun of its own ("Authentication is already handled by Block 1's
+# middleware"): that is a side concern another block covers, which says
+# nothing about whether this block adds behaviour.
+_BLOCK_ITSELF = (
+    r"(?:these|they|them|this(?:\s+(?:block|slice|task|step|work))?"
+    r"|(?:all\s+(?:of\s+)?)?(?:these|the)\s+(?:criteria|scenarios|cases"
+    r"|requirements|behaviou?rs?|checks|assertions))"
+)
 # A block that says, in its own words, that an earlier block already does its
-# job: "satisfied by Block 1", "these are already implemented by Block 1",
+# job: "these are satisfied by Block 1", "this slice is satisfied by Block 1",
 # "Block 1's implementation already handles these". Phrases that only say the
 # block USES something an earlier block built ("the tokenizer already built in
 # Block 1") are deliberately not here: that is how an ordinary leaf block reads.
 _SATISFIED_EARLIER_RE = re.compile(
-    r"\bsatisfied\s+by\b[^.\n]{0,60}\bBlock\s+\d+"
-    r"|\b(?:is|are|was|were|been)\s+already\s+"
-    r"(?:implemented|delivered|built|covered|handled|met|satisfied)\b"
+    rf"\b{_BLOCK_ITSELF}\s+(?:is|are|was|were|has\s+been|have\s+been)\s+"
+    r"(?:already\s+)?(?:satisfied|implemented|delivered|built|covered|handled"
+    r"|met)\b[^.\n]{0,60}\bBlock\s+\d+"
+    r"|(?:^|(?<=\.))\s*(?:already\s+)?(?:satisfied|covered|delivered)\s+by\b"
     r"[^.\n]{0,60}\bBlock\s+\d+"
     r"|\bBlock\s+\d+(?:'s\s+\w+)?\s+already\s+"
-    r"(?:satisfies|covers|meets|handles\s+(?:these|this|them|it|all|every))\b",
+    rf"(?:satisfies|covers|meets|handles|implements|delivers)\s+{_BLOCK_ITSELF}\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+# A block that says it writes no code. Not "no code change to the core": a
+# "no code" scoped to anything but this block is about another part of it.
+_NO_CODE_RE = re.compile(
+    r"(?:\b(?:no|without)\s+(?:new\s+|production\s+|source\s+|further\s+)?"
+    r"(?:code|implementation)\s+(?:changes?|is\s+(?:needed|required)|needed"
+    r"|required|work)\b"
+    r"|\b(?:needs|requires)\s+no\s+(?:new\s+)?(?:code|implementation)\b"
+    r"|\bno\s+(?:new|production|source)\s+code\b)"
+    r"(?!\s+(?:to|in|for|on|outside|beyond)\s+(?!this\b|these\b|here\b))",
     re.IGNORECASE,
 )
-# A block that says it writes no code.
-_NO_CODE_RE = re.compile(
-    r"\b(?:no|without)\s+(?:new\s+|production\s+|source\s+|further\s+)?"
-    r"(?:code|implementation)\s+(?:changes?|is\s+(?:needed|required)|needed|required|work)\b"
-    r"|\b(?:needs|requires)\s+no\s+(?:new\s+)?(?:code|implementation)\b"
-    r"|\bno\s+(?:new|production|source)\s+code\b",
+# Test work: "Add tests for tabs", "Write assertions", "Assert …", "Tests for …".
+_TEST_WORK_RE = re.compile(
+    r"\b(?:add|write|extend|create|expand)\s+(?:[\w-]+\s+){0,3}?"
+    r"(?:tests?|test\s+cases?|assertions?)\b",
     re.IGNORECASE,
+)
+_TEST_WORK_START_RE = re.compile(
+    r"^\W*(?:(?:add|write|extend|create|expand)\s+(?:[\w-]+\s+){0,3}?"
+    r"(?:tests?|test\s+cases?|assertions?)\b|assert\b|tests?\b|coverage\b)",
+    re.IGNORECASE,
+)
+_ADD_FILE_START_RE = re.compile(
+    r"^\W*(?:add|write|extend|create)\s+`([^`]+)`", re.IGNORECASE,
 )
 # A backticked file path: no spaces or brackets, and a directory or a known
 # file extension (so `textkit.summary.summarize` and `str.split` are not paths).
@@ -709,10 +736,11 @@ def _left_unchanged(path: str, text: str) -> bool:
     )
 
 
-def _block_bodies(text: str) -> dict[int, str]:
-    """Each block's text, prose AND checkboxes, without its Interfaces and
-    Satisfies lines. ``parse_blocks`` keeps only the checkbox lines of a
-    checkbox block, which drops the prose where a block says what it is."""
+def _block_bodies(text: str) -> dict[int, tuple[str, str]]:
+    """Each block's heading and text, prose AND checkboxes, without its
+    Interfaces and Satisfies lines. ``parse_blocks`` keeps only the checkbox
+    lines of a checkbox block, which drops the prose where a block says what
+    it is."""
     header = re.compile(r"^##\s+(\d+)\.\s+(.+)$", re.MULTILINE)
     matches = list(header.finditer(text))
     bodies = {}
@@ -721,8 +749,34 @@ def _block_bodies(text: str) -> dict[int, str]:
         body = text[match.end():end]
         body = re.split(r"^Interfaces:\s*$", body, maxsplit=1, flags=re.MULTILINE)[0]
         body = re.sub(r"^Satisfies:.*$", "", body, flags=re.MULTILINE)
-        bodies[int(match.group(1))] = f"{match.group(2)}\n{body}"
+        bodies[int(match.group(1))] = (match.group(2), body)
     return bodies
+
+
+def _first_instruction(body: str) -> str:
+    """The first sentence of a block's first line, without a checkbox or an
+    item number (`- [ ] 2.1 `)."""
+    for line in body.splitlines():
+        line = re.sub(r"^\s*(?:[-*]\s*)?(?:\[[ xX]\]\s*)?(?:\d+(?:\.\d+)*\.?\s+)?",
+                      "", line).strip()
+        if line:
+            return re.split(r"(?<=[.!?])\s", line, maxsplit=1)[0]
+    return ""
+
+
+def _is_test_work(heading: str, body: str) -> bool:
+    """The block says it is test work: its heading names a test file or opens
+    with tests, or its first instruction adds tests or a test file. A block
+    whose tests are a side note ("Tests in `tests/test_cli.py`") is not."""
+    first = _first_instruction(body)
+    added = _ADD_FILE_START_RE.match(first)
+    heading_paths = _named_paths(heading)
+    return bool(
+        (heading_paths and all(_TEST_PATH_RE.search(p) for p in heading_paths))
+        or _TEST_WORK_START_RE.match(heading)
+        or _TEST_WORK_START_RE.match(first)
+        or (added and _TEST_PATH_RE.search(added.group(1)))
+    )
 
 
 def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
@@ -730,9 +784,17 @@ def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
 
     Such a block's tests pass before it is built, so the TDD RED gate fails it
     and the build with it. A block is flagged only when it produces nothing
-    (`Produces: (none)`) AND its own text says it adds no code: it says an
-    earlier block already satisfies it, it says it needs no code, or every
-    file it names is a test file (or one it leaves unchanged).
+    (`Produces: (none)`) AND its own text says it adds no code:
+    - it says an earlier block already satisfies it, with itself as the
+      subject ("these are satisfied by Block 1"; never a side concern such as
+      "authentication is already handled by Block 1's middleware");
+    - it says it needs no code, unscoped ("no code change", never "no code
+      change to the core");
+    - it names no file it changes but test files and is test work (its
+      heading or first instruction adds tests or a test file; a leaf block
+      need not name its source file, so "Tests in `tests/x.py`" is not
+      enough);
+    - every file it names is one it leaves unchanged, and it adds tests.
     `Produces: (none)` alone only says no later block calls it, and "Verify" or
     "Confirm" is an ordinary verb for new behaviour (verify a signature), so
     neither is ever enough. A block that names no file is never flagged on
@@ -750,20 +812,28 @@ def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
     for block in parse_blocks(tasks_path):
         if block.produces:
             continue
-        body = bodies.get(block.number, block.description)
-        if _SATISFIED_EARLIER_RE.search(body):
+        heading, body = bodies.get(block.number, (block.name, block.description))
+        text = f"{heading}\n{body}"
+        paths = _named_paths(text)
+        changed = [p for p in paths if not _left_unchanged(p, text)]
+        if _SATISFIED_EARLIER_RE.search(text):
             why = "it says an earlier block already satisfies it"
-        elif _NO_CODE_RE.search(body):
+        elif _NO_CODE_RE.search(text):
             why = "it says it needs no code"
-        else:
-            paths = _named_paths(body)
-            changed = [p for p in paths if not _left_unchanged(p, body)]
-            if not paths or any(not _TEST_PATH_RE.search(p) for p in changed):
-                continue
+        elif not paths or any(not _TEST_PATH_RE.search(p) for p in changed):
+            continue
+        elif changed and _is_test_work(heading, body):
             why = (
-                "it names no code to write (every file it names is a test "
-                "file or one it leaves unchanged)"
+                "it is test work and names no code to write (every file it "
+                "changes is a test file)"
             )
+        elif not changed and _TEST_WORK_RE.search(text):
+            why = (
+                "it adds tests and names no code to write (every file it "
+                "names is one it leaves unchanged)"
+            )
+        else:
+            continue
         source = re.search(r"Block\s+(\d+)", " ".join(block.consumes))
         home = f"Block {source.group(1)}" if source else "the earlier block that builds it"
         findings.append({

@@ -494,16 +494,14 @@ async def run_plan_review_stage(
         print(f"PHASE: plan_review_skipped — {review_err}")
         if not scanned:
             return []
-        # The scan's blocks still get the one rewrite. `plan_review_done`
-        # stays False, so a resume asks the model again; the rewrite is spent
-        # (`plan_review_regen_done`), so that resume only reports.
+        # The scan's blocks still get a rewrite. Nothing is saved, as for any
+        # failed call: a resume asks the model again, and its findings get
+        # the stage's one rewrite. A resume whose call fails again rewrites
+        # only if the scan still flags a block in the plan this one left.
         log_plan_review_findings(scanned)
-        if not state.spec_gen.plan_review_regen_done:
-            await _apply_plan_review_findings(
-                change_dir, config, state, plan_review_findings_text(scanned),
-            )
-            state.spec_gen.plan_review_regen_done = True
-            state.checkpoint(state_path)
+        await _apply_plan_review_findings(
+            change_dir, config, state, plan_review_findings_text(scanned),
+        )
         return scanned
 
     findings = list(result.findings) + scanned
@@ -540,8 +538,9 @@ def _no_behaviour_findings(change_dir: Path) -> list[PlanReviewFinding]:
     """The deterministic no-behaviour block scan, as plan review findings.
 
     The design audit's rewrite of tasks.md comes after the shape audit, so the
-    scan runs here too: a block the reviewer model misses, or a review whose
-    model call fails, still reaches the one regeneration. The prototype
+    scan runs here too: a block the reviewer model misses still reaches the
+    one regeneration, and a review whose model call fails still rewrites the
+    scan's blocks (saving nothing, so a resume reviews again). The prototype
     feedback pass, after this review, runs the same scan on what it writes.
     """
     from ..spec_generator import scan_no_behaviour_blocks
