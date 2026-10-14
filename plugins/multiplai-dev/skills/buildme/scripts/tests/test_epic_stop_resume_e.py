@@ -158,20 +158,22 @@ def test_E_S3_signalled_during_the_agent_aborts_and_pays_for_one_more_call(tmp_p
 
 
 def test_E_S3_the_agent_s_lockfile_edit_kept_by_the_abort_is_merged_again(tmp_path, monkeypatch):
-    """E.S3, the agent having rewritten `uv.lock`, which main left alone, so the
-    abort keeps it: item 38 restarts at 40.2 (40.1 would refuse it)."""
+    """E.S3, the agent having regenerated `uv.lock` (its version line), which
+    main left alone, so the abort keeps it: item 38 restarts at 40.2 (40.1
+    would refuse it)."""
     r = MergeRoot(tmp_path, monkeypatch, main={k: v for k, v in MAIN.items() if k != "uv.lock"})
+    lock = 'lock 1\nversion = "0.2.0"\n'
 
     async def lockfile_then_block(w):
-        (w / "uv.lock").write_text("lock 3\n")
+        (w / "uv.lock").write_text(lock)
         await _block(w)
 
     r.agent = FakeAgent(tmp_path, RESOLVED, stop=lockfile_then_block)
-    _signalled(r, lambda: bool(r.calls("merge-agent")) and (r.w / "uv.lock").read_text() == "lock 3\n")
+    _signalled(r, lambda: bool(r.calls("merge-agent")) and (r.w / "uv.lock").read_text() == lock)
     assert "uv.lock" in r.status()["merge_stop"]["edits"]
     r.agent = FakeAgent(tmp_path, RESOLVED)
     _ends_waiting(r)
-    assert len(r.calls("merge-agent")) == 2 and len(r.step_pushes()) == 1 and r.origin("uv.lock") == "lock 3\n"
+    assert len(r.calls("merge-agent")) == 2 and len(r.step_pushes()) == 1 and r.origin("uv.lock") == lock
 
 
 def test_E_S4_killed_during_the_agent_parks_and_touches_nothing(tmp_path, monkeypatch):
@@ -254,12 +256,12 @@ def test_E_S6_committed_not_pushed_is_retested_and_pushed(tmp_path, monkeypatch)
 
 def test_E_S7_a_rejected_push_parks_and_never_forces(tmp_path, monkeypatch):
     """E.S7: origin's branch moves just before the push, in both runs. The
-    push is rejected and the child parks naming where origin's branch is,
-    with `<W>` clean, so a re-run retries it (E.S26): the PR's new head is
-    reviewed, the unpushed merge is tested again (item 37) and its push is
-    rejected again, so it parks again with the same reason. One more review,
-    `merge-tests` pair and rejected push than the run that never re-ran;
-    no push is forced."""
+    push is rejected and the child parks naming where origin's branch is and
+    what to run. `<W>` is clean, so a re-run retries it (E.S26): the PR's new
+    head is reviewed and 40.1 parks, as <W> does not hold it; nothing is
+    tested or pushed again (one more review than the run that never re-ran).
+    After the hint's fetch and reset, the next run merges onto the new head
+    and pushes. No push is forced."""
     stopped, clean = _roots(tmp_path, monkeypatch)
     moved = {}
 
@@ -274,21 +276,26 @@ def test_E_S7_a_rejected_push_parks_and_never_forces(tmp_path, monkeypatch):
         r.use()
         monkeypatch.setattr(coordinator, "_merge_point", moving(r))
         assert run_coordinator(r.config) == 0
-        assert _parked(r)["reason"] == f"push rejected: origin/buildme/e-a moved to {moved[r.root]}"
+        assert _parked(r)["reason"] == (f"push rejected: origin/buildme/e-a moved to {moved[r.root]}; "
+                                        f"{merge.move_hint(r.w, moved[r.root])}")
+    new = moved[stopped.root]
     stopped.use()
     monkeypatch.setattr(coordinator, "_merge_point", moving(stopped))
     assert run_coordinator(stopped.config) == 0
-    assert _parked(stopped)["reason"] == f"push rejected: origin/buildme/e-a moved to {moved[stopped.root]}"
+    reason = _parked(stopped)["reason"]
+    assert reason.startswith("HEAD ") and f"the reviewed head {new[:12]}" in reason and reason.endswith("then re-run")
     s, c = _snapshot(stopped), _snapshot(clean)
-    assert s["merges"] == [*c["merges"], ("merge-tests", TESTS, 0, False)]
+    assert s["merges"] == c["merges"]
+    want = _launches(clean)
+    want.append(next(x for x in want if json.loads(x)["kind"] == "review"))
+    assert _launches(stopped) == sorted(want)
+    git(stopped.w, "fetch", "-q", "origin")
+    git(stopped.w, "reset", "-q", "--keep", new)
+    assert stopped.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert git(stopped.w, "rev-parse", "HEAD^1").strip() == new and stopped.origin("other.txt") == "someone\n"
     for r, n in ((stopped, 2), (clean, 1)):
         pushes = r.step_pushes()
         assert len(pushes) == n and not any("--force" in x["argv"] or " -f" in x["argv"] for x in pushes)
-    want = _launches(clean)
-    for kind, argv in (("merge-tests", None), ("git-push", "push -u origin buildme/e-a"), ("review", None)):
-        want.append(next(x for x in want if json.loads(x)["kind"] == kind
-                         and argv in (None, json.loads(x).get("argv"))))
-    assert _launches(stopped) == sorted(want)
 
 
 @pytest.mark.parametrize("at", ["start", "push"])
