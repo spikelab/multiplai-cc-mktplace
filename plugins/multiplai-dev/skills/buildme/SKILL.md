@@ -183,7 +183,7 @@ calling checkout:
   stops with exit `1`, touching nothing, when the worktree is on another
   branch (switch back, then re-run), or holds an uncommitted change the
   failed run did not leave (an edit made after the failure): commit or stash
-  it, then re-run. A build that failed under 0.70.0 or earlier, with no
+  it, then re-run. A build that failed under 0.70.1 or earlier, with no
   commit of its own, re-runs in a new `-2` worktree as it did then. A re-run
   stopped before its interview finished resumes in the same worktree, and a
   build that moved to a `-2` worktree re-runs in that one.

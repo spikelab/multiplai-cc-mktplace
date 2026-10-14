@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -1389,7 +1390,7 @@ def _enforce_test_integrity(
     progress: ProgressWriter,
     block_idx: int,
     window: str,
-    report: str,
+    report: str | Sequence[str],
 ) -> bool:
     """Apply `unchanged_tests_gate` at one of the two writable windows.
 
@@ -1397,8 +1398,11 @@ def _enforce_test_integrity(
     review-fix agent IS the implementer, so passing the first check only means
     the tests survived until the first review, not until the block is done.
 
-    *report* is the output of the agent that wrote during THIS window only, not
-    the accumulated `block.implementer_report`. Scanning the accumulation would
+    *report* is the output of the agents that wrote during THIS window only
+    (in the implement window, a list: the implementer's report and each
+    integration fixer's, parsed one by one so a bare marker at the end of one
+    cannot take the next one's first line as its reason), not the accumulated
+    `block.implementer_report`. Scanning the accumulation would
     let one `TEST CHANGE REQUIRED:` declared during implement silently
     authorize every later review-fix mutation for the rest of the block — the
     exact hole the per-window re-baseline exists to close.
@@ -1454,6 +1458,12 @@ async def _run_integration_and_review(
     block_idx = state.tdd.current_block if state.tdd else 0
     total = len(state.tdd.blocks) if state.tdd else 0
 
+    # Every integration fixer writes inside the implement window, so its report
+    # is where its TEST CHANGE REQUIRED declaration would appear. Kept whole
+    # and apart from `block.implementer_report`, whose trim to the last
+    # MAX_EVIDENCE_CHARS could otherwise cut the implementer's own declaration.
+    fix_reports: list[str] = []
+
     # --- Integration gate ---
     log.info("START block=%d name=%s phase=INTEGRATION_GATE", block.number, block.name)
     gate = integration_gate(config.test_command, config.project_dir)
@@ -1482,6 +1492,8 @@ async def _run_integration_and_review(
                 effort=config.agent_effort,
                 cwd=str(config.project_dir),
             )
+            if fix_result.output:
+                fix_reports.append(fix_result.output)
             # A timed-out or failed fix leaves success=False; retry until attempts run out.
             if fix_result.success:
                 fix_completed = True
@@ -1509,7 +1521,8 @@ async def _run_integration_and_review(
     # Checked BEFORE GREEN evidence is accepted. A green suite proves nothing
     # if the suite is no longer the one that went red.
     if not _enforce_test_integrity(block, config, state, progress, block_idx,
-                                   "implement", block.implementer_report):
+                                   "implement",
+                                   [block.implementer_report, *fix_reports]):
         return False
 
     # GREEN evidence: the suite passing with the implementation in place —

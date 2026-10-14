@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.70.1] - 2026-10-14
+## [0.70.2] - 2026-10-14
 
 ### Fixed
 - `/multiplai-dev:buildme`: a build that failed after its first commit can
@@ -30,13 +30,41 @@ time, not derived from a tag.
   (the worktree it last saved its state in) when it fails again.
   The re-run stops with exit `1`, and changes nothing, when the worktree is
   no longer on the build's branch, or holds an uncommitted change the failed
-  run did not leave. A build that failed under 0.70.0 or earlier has no
+  run did not leave. A build that failed under 0.70.1 or earlier has no
   record of what it left: with no commit of its own it re-runs in a new `-2`
   worktree as before, and with a commit and uncommitted changes it stops
   until they are stashed.
 - `/multiplai-dev:buildme`: a build resumed from inside its own worktree
   commits its spec stage on the build's branch again; before, every
   spec-stage commit was skipped.
+
+## [0.70.1] - 2026-10-14
+
+### Fixed
+- buildme: an implementer that correctly fixes a wrong test no longer fails
+  its block. The test-integrity gate accepts a changed test only when the
+  agent's report says `TEST CHANGE REQUIRED: <reason>`, but no prompt told
+  the agent so: in a live epic test, two builds of the same child each fixed
+  a test that no implementation could pass, explained why, and failed. The
+  implementer prompts (which also serve the review-fix and fix-on-pass
+  agents) and both integration-fix prompts now name the marker and say to
+  put one such line per changed test at the end of the report. The
+  integration fixer's report is now read by the gate too.
+- buildme: since the prompts now show the marker, only a line that starts
+  with `TEST CHANGE REQUIRED:` counts as a declaration, and a line left as
+  `<reason>`, `none`, `no` or empty does not, also with a note after it
+  (`None (no test files modified)`). Before, a sentence that only mentioned
+  the marker, or an echo of the template, passed a silent test change. The
+  line may open with a bullet, a number (`1.`, `2)`) or a quote (`>`), the
+  bold may close before the colon (`**TEST CHANGE REQUIRED**:`), and a marker
+  alone on its line takes the next non-blank line of the same agent's report
+  as its reason: the gate parses each agent's report on its own, so a marker
+  left bare at the end of the implementer's report never takes an integration
+  fixer's first line as its reason.
+- buildme: a `TEST CHANGE REQUIRED:` line after a report's `SEARCHED:` or
+  `SURPRISES:` slot is no longer read as part of that slot, so it no longer
+  shows up in the review-round record, the findings reply or
+  implementation-notes.md.
 
 ## [0.70.0] - 2026-10-14
 

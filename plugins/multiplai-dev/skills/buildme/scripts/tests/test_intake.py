@@ -1047,9 +1047,9 @@ class TestFailedBuildRetry:
     async def test_a_checkpoint_with_no_record_and_no_commit_reruns_in_a_new_worktree(
         self, tmp_path, monkeypatch, capsys,
     ):
-        """A build that failed under 0.70.0 or earlier before its first commit
+        """A build that failed under 0.70.1 or earlier before its first commit
         has no record, and its tree holds the failed run's own bootstrap
-        files. It re-runs as 0.70.0 re-ran it, in a new `-2` worktree, and
+        files. It re-runs as 0.70.1 re-ran it, in a new `-2` worktree, and
         the old worktree is left as it was."""
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         repo = make_repo(tmp_path / "proj")
@@ -1214,7 +1214,7 @@ class TestFailedBuildRetry:
         its interview leaves a build that is no longer FAILED, on a branch
         that holds commits. Its resume keeps the worktree as the re-run did,
         instead of asking `_setup_worktree` for a branch it refuses.
-        `recorded=False`: a 0.70.0 checkpoint, whose leftovers the user
+        `recorded=False`: a 0.70.1 checkpoint, whose leftovers the user
         committed before the re-run, as its refusal asked."""
         from build_pipeline import git_ops
 
