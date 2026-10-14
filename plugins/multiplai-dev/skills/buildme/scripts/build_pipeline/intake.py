@@ -127,8 +127,10 @@ def check_input_files(args, state, change_dirs) -> str | None:
 def carry_over_inputs(previous: Path, change_dir: Path) -> list[Path]:
     """Copy the saved inputs of *previous* into a new *change_dir*.
 
-    A FAILED build re-runs bootstrap, which sets up a new worktree, so the
-    change dir moves. ``check_input_files`` accepted a gone input file because
+    A FAILED build re-runs bootstrap. In its own worktree the change dir
+    stays put and this copies nothing; a build that failed with no worktree
+    recorded and is re-run with one gets a new worktree, so the change dir
+    moves. ``check_input_files`` accepted a gone input file because
     its copy was in the old change dir; that copy has to come along, or the
     retry builds without the ticket, plan, research or interview it had.
     A copy the new dir already holds is kept.
@@ -501,7 +503,7 @@ async def _ticket_interview(config, state, args, state_path, progress, contexts,
             log.error("FAILED phase=INTERVIEW reason=%s", e)
             _progress_note(progress, "INTERVIEW", f"Questioner failed: {e}")
             print(f"ERROR: interview questioner failed: {e}", flush=True)
-            state.advance_to(BuildPhase.FAILED, state_path)
+            state.fail(config.project_dir, state_path)
             board.record_failure(config, state, f"interview questioner failed: {e}",
                                  progress=progress)
             return 1

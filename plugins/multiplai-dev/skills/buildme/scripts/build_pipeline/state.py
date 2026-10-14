@@ -18,6 +18,7 @@ from . import budget
 from .findings.models import PRComment, SpecChange, Triage
 from .models import BlockInfo, BlockStatus, BuildPhase
 from .stop_record import StepStop  # noqa: F401  (moved; `from .state import StepStop` keeps working)
+from .stop_record import record as record_stop
 
 log = logging.getLogger(__name__)
 
@@ -230,6 +231,15 @@ class BuildState(BaseModel):
     # this build made stale from one that was stale before it. None in older
     # checkpoints and for --no-worktree builds.
     base_sha: str | None = None
+    # What the build's tree held when the build last failed (`fail`): HEAD and
+    # every uncommitted path with its content. A re-run of the FAILED build
+    # reuses its worktree and refuses an uncommitted change this record does
+    # not hold (`orchestrator._run_bootstrap`). None in older checkpoints and
+    # when git could not be asked; the re-run then refuses any uncommitted
+    # change. The re-run's bootstrap records its tree here again once it is
+    # done, so a stop before the interview finishes (pointer AT BOOTSTRAP)
+    # resumes in place too; any other bootstrap clears it.
+    failed_stop: StepStop | None = None
 
     # Documentation files the DOCS_UPDATE phase reported writing (empty when it
     # updated nothing). Persisted because the PR body is written later — after
@@ -311,6 +321,12 @@ class BuildState(BaseModel):
         self.phase = phase
         self.checkpoint(path)
         log.info("Advanced to phase: %s", phase.value)
+
+    def fail(self, project_dir: Path | str, path: Path | None = None) -> None:
+        """Move to FAILED and checkpoint, recording first what the tree in
+        *project_dir* holds (`failed_stop`, `stop_record.record`)."""
+        self.failed_stop = record_stop(project_dir)
+        self.advance_to(BuildPhase.FAILED, path)
 
     def cleanup(self, path: Path | None = None) -> None:
         """Delete state file on successful completion."""

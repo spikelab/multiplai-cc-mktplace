@@ -177,6 +177,16 @@ calling checkout:
 - The build refuses to start (hard failure, no silent fallback) when the repo has
   uncommitted tracked changes, or the target branch already exists with unmerged
   commits. Commit or stash first.
+- **A failed build re-runs where it failed.** Running the same command again
+  (or an epic re-running a failed child) uses the failed build's own branch
+  and worktree, keeping its commits and any commits added there since. It
+  stops with exit `1`, touching nothing, when the worktree is on another
+  branch (switch back, then re-run), or holds an uncommitted change the
+  failed run did not leave (an edit made after the failure): commit or stash
+  it, then re-run. A build that failed under 0.70.1 or earlier, with no
+  commit of its own, re-runs in a new `-2` worktree as it did then. A re-run
+  stopped before its interview finished resumes in the same worktree, and a
+  build that moved to a `-2` worktree re-runs in that one.
 - **The worktree survives the run.** The pipeline never removes a worktree —
   including its own — never merges (except an epic child's PR under
   `epic.merge: auto`; see "Merging the children's PRs"), and never force-pushes. Deleting it is the
