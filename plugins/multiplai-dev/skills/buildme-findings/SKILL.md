@@ -18,7 +18,7 @@ build runs. Each round replies on the PR and re-runs the review.
 uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
   python -m build_pipeline findings --pr <number> --project-dir "<repo>" \
   [--change <name>] [--auto] [--max-rounds <n>] [--max-usd <usd>] \
-  [--severities <list>] [--trust-repo]
+  [--severities <list>] [--code-only] [--trust-repo]
 ```
 
 - `--pr`: the PR number on the repository at `--project-dir`.
@@ -38,12 +38,18 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
 - `--max-usd <usd>`: before each round, stop once this run has spent `usd`
   US dollars: its own model calls and the pr skill's, plus the reviews of the
   PR it ran, read from the review ledger (`<data_dir>/reviews/ledger.jsonl`).
-  A round that has started always finishes, so the last round can take the
-  run past it. Reviews of the PR from before the run started do not count.
+  The check comes after the round's fetch, so a PR left with nothing to act
+  on still ends `FINDINGS:DONE`. A round that has started always finishes,
+  so the last round can take the run past it. Each run counts from 0: what
+  earlier runs spent, and reviews of the PR from before the run started, do
+  not count, so `--max-usd` is what this run may spend, not a total.
 - `--severities <list>`: with `--auto`, post only the re-review's findings of
   these severities, comma-separated, from `HIGH`, `MEDIUM` and `LOW` (default:
   every severity). The next round acts only on what was posted, so no round
   runs for the others.
+- `--code-only`: with `--auto`, post only the re-review's Code findings, not
+  its Tests findings on source files. With `--severities HIGH,MEDIUM` this
+  is what an epic blocks a merge on, which is how the epic runs the fixer.
 - `--trust-repo`: required. The triage, fix, self-check and review agents
   hold tools and run without asking; pass it only after the user says they trust the
   repository's specs and code.
@@ -103,7 +109,7 @@ never removed. A PR whose branch lives in a fork is refused.
 
 The loop stops when a round finds no new comment to act on, after
 `findings.max_rounds` rounds (default 3, or `--max-rounds`), or before a round
-once `--max-usd` is reached.
+with comments to act on once `--max-usd` is reached.
 
 ## Relay these lines
 
@@ -114,7 +120,7 @@ once `--max-usd` is reached.
 | `FINDINGS:REVIEW_READY:<dir>` (exit 3) | The re-review is done. Hand `<dir>/findings.json` to `/multiplai-dev:review-viewer`; after the user accepts findings, post them with `/multiplai-dev:review`'s `post` step on their yes, then run this command again to start the next round. |
 | `FINDINGS:DONE:<rounds>` | Nothing new to act on; the PR is ready for a human. |
 | `FINDINGS:MAX_ROUNDS:<n>` | The round cap was reached; say which comments are still open. |
-| `FINDINGS:BUDGET:<rounds>:<usd>` | `--max-usd` was reached after `<rounds>` rounds, with `<usd>` spent; say which comments are still open. A re-run with a higher `--max-usd` goes on. |
+| `FINDINGS:BUDGET:<rounds>:<usd>` | `--max-usd` was reached after `<rounds>` rounds, with `<usd>` spent, and comments are still open to act on; say which. A re-run counts from 0 again, so its `--max-usd` is what that run may spend on top of the `<usd>` already spent: ask the user how much more before re-running. |
 | `FINDINGS:FAILED:<step>:<reason>` (exit 1, or 4 for an agent timeout) | Quote the reason. Re-running the same command resumes at that step. A resumed code step first keeps the stopped attempt's edits under a wip ref, then runs that block again. When the reason says the test suite fails before any fix, the suite must pass before a re-run can get further. |
 | `FINDINGS:CODE_CHECK_FAILED:<reason>` | Every fix passed its block's gates and is committed, but a step the TDD engine runs after the fixes (the whole-change refactor's budget stop, or mutation testing) failed. The fixes are still pushed and answered, and each reply says what failed. |
 | `FINDINGS:WIP:<ref>` | A failed or stopped step's edits are kept under that git ref. |

@@ -21,27 +21,33 @@ time, not derived from a tag.
 
 ### Added
 - `/multiplai-dev:buildme-findings` takes `--max-usd <usd>`: before each round
-  it stops once the run has spent that much, counting its own model calls and
-  the reviews of the PR it ran (from the review ledger), and prints
-  `FINDINGS:BUDGET:<rounds>:<usd>`. A round that has started always finishes.
+  with comments to act on, it stops once the run has spent that much,
+  counting its own model calls and the reviews of the PR it ran (from the
+  review ledger), and prints `FINDINGS:BUDGET:<rounds>:<usd>`. A round that
+  has started always finishes. Each run counts from 0.
 - `/multiplai-dev:buildme-findings` takes `--severities <list>` (for example
-  `HIGH,MEDIUM`): with `--auto`, a re-review posts only findings of those
-  severities, so no round runs for the others.
+  `HIGH,MEDIUM`) and `--code-only`: with `--auto`, a re-review posts only
+  findings of those severities, or only Code findings, so no round runs for
+  the others.
 
 ### Fixed
 - buildme epic mode: `epic.max_usd` now bounds a fixer once it has started.
   Before, the cap was checked only before each launch, and a fixer started
   under it ran all its rounds: in a live test with `epic.max_usd: 20`, one
   child's fixer took the epic to $74. The fixer is now given what is left of
-  `epic.max_usd`, and when it stops there the run exits 3 with
-  `EPIC:BUDGET:<spent>` and launches nothing more. The child is not parked: a
-  re-run after `epic.max_usd` is raised runs the fixer again. The round that
-  crosses the cap still finishes, so an epic can end up to one fix round (a
-  fix and a review) past it.
-- buildme epic mode: the fixer no longer runs rounds for LOW findings. The
-  epic blocks a merge only on HIGH and MEDIUM Code findings, but its post
-  and its fixer's re-reviews posted every Code finding, and the fixer acted
-  on each one. Both now post only HIGH and MEDIUM findings.
+  `epic.max_usd`, less what other fixers still running were given; while
+  they hold all of it, a fixer waits and no build or review starts. When a
+  fixer stops at its share the run exits 3 with `EPIC:BUDGET:<spent>` and
+  launches nothing more. The child is not parked: a re-run after
+  `epic.max_usd` is raised runs the fixer again. A fixer whose last round
+  left nothing to act on ends as done, so its PR still merges. The round
+  that crosses a fixer's share still finishes, so an epic can end up to one
+  fix round (a fix and a review) per fixer running at once past the cap.
+- buildme epic mode: the fixer no longer runs rounds for findings the epic
+  would merge with. The epic blocks a merge only on HIGH and MEDIUM Code
+  findings, but its post and its fixer's re-reviews posted every Code
+  finding and Tests findings on source files, and the fixer acted on each
+  one. Both now post only HIGH and MEDIUM Code findings.
 
 ## [0.69.0] - 2026-10-14
 

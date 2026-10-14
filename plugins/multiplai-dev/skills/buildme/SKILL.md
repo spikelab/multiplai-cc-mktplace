@@ -770,11 +770,20 @@ its `SPEND:` ends `:incomplete`, or a review has not finished. Before each launc
 `epic.max_usd` is reached, nothing more is launched: the run waits for the
 children already running and exits `3` with `EPIC:BUDGET:<spent>`. A fixer
 runs several rounds in one launch, so it is given what is left of
-`epic.max_usd` as `findings --max-usd`, and stops before a round once its own
-spend and its reviews' reach it; the run then exits `3` with `EPIC:BUDGET`
-as well, the child is not parked, and a re-run after `epic.max_usd` is
-raised runs the fixer again. The round that crosses the ceiling finishes, so
-the epic can end up to one fix round (a fix and a review) past it.
+`epic.max_usd` as `findings --max-usd`: the cap less the epic's spend and
+less what the other fixers still running were given and have not yet spent
+on their PRs' reviews. While running fixers hold all that is left, another
+fixer waits for them and no build or review starts; once they end, their
+real spend decides. A fixer stops before a round with something to act on
+once its own spend and its reviews' reach its share; the run then exits `3`
+with `EPIC:BUDGET` as well, the child is not parked, and a re-run after
+`epic.max_usd` is raised runs the fixer again. A fixer whose last round left
+nothing to act on ends as done even past its share, so its PR goes on to
+the merge step. The round that crosses a fixer's share finishes, so the epic
+can end up to one fix round (a fix and a review) per fixer running at once
+past the cap, plus what children already running when it was reached, and a
+merge agent started while fixers ran, go on to spend. A fixer an earlier,
+stopped run left running is not counted in another fixer's share.
 
 **Reviewing the children's PRs.** Each child's open PR is reviewed with
 `/multiplai-dev:review` (`python -m review_pipeline review --repo <child
@@ -813,18 +822,17 @@ finished.
 
 **Fixing the children's PRs.** A review that leaves blockers below
 `epic.max_review_rounds` runs the fix loop. First the review's findings are
-chosen as `--auto` chooses them, at the severities the epic blocks on
-(every Code finding, and every Tests finding on a non-test source file, at
-HIGH or MEDIUM, in `buildme-decisions.json` next to the review's
+chosen as `--auto` chooses them, kept to what the epic blocks on (the Code
+findings at HIGH or MEDIUM, in `buildme-decisions.json` next to the review's
 `findings.json`, outside the worktree) and posted with `python -m
 review_pipeline post <review dir> --decisions <that file>`, run in the child's
 project directory (`agents/<NNN>-post-<id>.*`). Then the fixer runs there:
 `python -m build_pipeline findings --pr <n> --change <epic>-<id> --project-dir
 <child project dir> --auto --trust-repo --max-rounds <M> --severities
-HIGH,MEDIUM [--max-usd <left>]` (`agents/<NNN>-fix-<id>.*`; `<left>` is
-`epic.max_usd` less the epic's spend, only when `epic.max_usd` is set; its
-re-reviews post only HIGH and MEDIUM findings, so it runs no round for a
-LOW one), where `<M>` is the rounds in the change's
+HIGH,MEDIUM --code-only [--max-usd <left>]` (`agents/<NNN>-fix-<id>.*`;
+`<left>` is its share of `epic.max_usd`, above, only when `epic.max_usd` is
+set; its re-reviews post only HIGH and MEDIUM Code findings, so it runs no
+round for a finding the epic would merge with), where `<M>` is the rounds in the change's
 `.findings-state.json` whose review finished plus the review rounds the PR
 has left, so the fixer stops at the epic's cap, also when it resumes a round
 it had started. When it ends, the coordinator reads the PR again and
