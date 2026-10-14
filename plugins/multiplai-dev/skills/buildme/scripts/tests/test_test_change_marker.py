@@ -153,10 +153,21 @@ async def test_integration_fixer_declared_test_change_passes_and_reaches_reviewe
     )
     assert result is True
     assert block.status == BlockStatus.DONE
+    # The claim is what the reviewer is handed to verify.
     assert block.test_change_claims == ["the fixture path was wrong"]
-    # The declaration is kept with the block's report, so it survives a resume
-    # and the reviewer sees the fixer's own account.
-    assert f"{TEST_CHANGE_MARKER} the fixture path was wrong" in block.implementer_report
+
+
+@pytest.mark.asyncio
+async def test_long_fixer_reports_do_not_cut_the_implementers_declaration(setup):
+    """The implementer declared its change; a fixer's long report must not
+    push that declaration out of what the implement window's gate reads."""
+    config, state, progress, block = setup
+    block.implementer_report = f"STATUS: DONE\n{TEST_CHANGE_MARKER} wrong import path"
+    result = await _run_with_integration_fix(
+        config, state, progress, block, "x" * 10_000,
+    )
+    assert result is True
+    assert block.test_change_claims == ["wrong import path"]
 
 
 @pytest.mark.asyncio

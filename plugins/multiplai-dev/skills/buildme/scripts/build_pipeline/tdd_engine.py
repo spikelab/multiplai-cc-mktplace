@@ -1454,6 +1454,12 @@ async def _run_integration_and_review(
     block_idx = state.tdd.current_block if state.tdd else 0
     total = len(state.tdd.blocks) if state.tdd else 0
 
+    # Every integration fixer writes inside the implement window, so its report
+    # is where its TEST CHANGE REQUIRED declaration would appear. Kept whole
+    # and apart from `block.implementer_report`, whose trim to the last
+    # MAX_EVIDENCE_CHARS could otherwise cut the implementer's own declaration.
+    fix_reports: list[str] = []
+
     # --- Integration gate ---
     log.info("START block=%d name=%s phase=INTEGRATION_GATE", block.number, block.name)
     gate = integration_gate(config.test_command, config.project_dir)
@@ -1482,6 +1488,8 @@ async def _run_integration_and_review(
                 effort=config.agent_effort,
                 cwd=str(config.project_dir),
             )
+            if fix_result.output:
+                fix_reports.append(fix_result.output)
             # A timed-out or failed fix leaves success=False; retry until attempts run out.
             if fix_result.success:
                 fix_completed = True
@@ -1509,7 +1517,8 @@ async def _run_integration_and_review(
     # Checked BEFORE GREEN evidence is accepted. A green suite proves nothing
     # if the suite is no longer the one that went red.
     if not _enforce_test_integrity(block, config, state, progress, block_idx,
-                                   "implement", block.implementer_report):
+                                   "implement",
+                                   "\n\n".join([block.implementer_report, *fix_reports])):
         return False
 
     # GREEN evidence: the suite passing with the implementation in place —
