@@ -64,6 +64,7 @@ import yaml
 from .. import budget, git_ops, intake, stop_record
 from ..config import git_toggles
 from ..findings.decisions import write_decisions
+from ..models import AgentResult
 from . import fix, merge, records, review, spend, store
 
 log = logging.getLogger(__name__)
@@ -1105,7 +1106,7 @@ class Coordinator:
         c.merge_stop = None                                                                 # 40.2
         self._save()
         failed = await _fetch_origin(w)
-        if failed is None and merge.conflicts_ahead(w, default) and self._over_budget():
+        if failed is None and await asyncio.to_thread(merge.agent_ahead, w, default) and self._over_budget():
             return None       # Decided 6: the agent would launch past the ceiling; nothing merged (E.S27)
         if failed is not None:
             c.status, c.reason = "unknown", f"{MERGE_UNKNOWN}git fetch origin failed: {failed}"
@@ -1127,7 +1128,12 @@ class Coordinator:
             return self._merge_park(c, f"git cannot list the changes in {w}{hint}" if left is None else
                                     f"{w} holds changes the merge commit would leave out ({', '.join(left)}); "
                                     f"remove them, then {merge.abort_hint(w)}")
-        if files and not await self._resolve_conflicts(c, w, files, reviewed, name, default, hint):     # 40.3
+        todo = await asyncio.to_thread(merge.plan, w, "HEAD", "MERGE_HEAD")
+        if todo is None:
+            c.merge_stop = stop_record.record(w)
+            return self._merge_park(c, f"git cannot list the conflicts in {w}{hint}")
+        if (files or todo.files or todo.refused) and not await self._resolve_conflicts(               # 40.3
+                c, w, todo, files, reviewed, name, default, hint):
             return None
         if not await self._merge_tests(c, w, reviewed, hint=hint):                           # 40.4
             return None
@@ -1137,40 +1143,51 @@ class Coordinator:
             return self._merge_park(c, f"git commit failed: {review.tail(res.stderr)}{hint}")
         return "merged" if self._push(c, w, name) else None
 
-    async def _resolve_conflicts(self, c: Child, w: Path, files: list[str], head: str | None, name: str,
-                       default: str, hint: str) -> bool:
+    async def _resolve_conflicts(self, c: Child, w: Path, todo: merge.Plan, conflicted: list[str],
+                                 head: str | None, name: str, default: str, hint: str) -> bool:
         """40.3: one agent call resolves version fields, CHANGELOGs and
-        lockfiles; any other conflicted file, or any other file it changed,
-        parks. The resolved files are staged for the commit."""
-        bad = [f for f in files if not merge.may_resolve(w, f)]
+        lockfiles (`merge.plan`: the conflicted ones, and a version both sides
+        raised, which git merges cleanly when both wrote the same one). A
+        conflicted file it may not resolve parks before the call; a failed
+        call, a marker left, another file changed, or a resolution
+        `merge.not_resolutions` names, after it. The files are staged for the
+        commit. *conflicted*: the files git left conflicted."""
+        bad = list(dict.fromkeys([*todo.refused, *(f for f in conflicted if f not in todo.files)]))
         if bad:
             c.merge_stop = stop_record.record(w)
             self._merge_park(c, f"merging origin/{default} conflicts in {', '.join(bad)}, which the "
                                 f"merge step may not resolve{hint}")
             return False
+        files = todo.files
         attempt = records.start(self.epic_dir, "merge", c.id, ["merge", *files], head_sha=head,
                                 pr_round=c.pr_round)
         self._save()
         before, staged = budget.process_spend().cost_usd, merge.index(w)
         try:
             result = await merge.run_merge_agent(self.config, w, files, name, default)
+        except Exception as exc:   # an ordinary error, not a stop: the call failed, and its spend is known
+            result = AgentResult(success=False, error=f"{type(exc).__name__}: {exc}")
         except BaseException:      # a cancelled call records no usage: its spend is unknown
             records.finish(attempt, None, interrupted=True)
             raise
-        changed = None if staged is None else merge.changed_since(w, staged) if result.success else []
+        changed = None if staged is None else merge.changed_since(w, staged)
         left = merge.unresolved(w, files) if result.success else []
-        others = None if changed is None else [p for p in changed if p not in files and not merge.is_lockfile(p)]
+        others = None if changed is None else [p for p in changed if p not in files]
         why = (f"the merge agent failed: {review.tail(result.error or result.output or '')}" if not result.success
                else f"the merge agent left conflicts in {', '.join(left)}" if left
                else f"git cannot list what the merge agent changed in {w}" if others is None
                else f"the merge agent changed files it may not: {', '.join(others)}" if others else None)
         records.finish(attempt, 0 if result.success else 1, interrupted=False,
                        extra={"spend": round(budget.process_spend().cost_usd - before, 6)})
+        # Unstaged edits to files git did not leave conflicted would block the abort, or outlive it (E.S26).
+        stray = [p for p in changed or [] if p not in conflicted]
+        hint = f"; {merge.undo_hint(w, stray)}" if why and stray else hint
         if why is None and not merge.git(w, "add", "--", *dict.fromkeys([*files, *changed])).ok:
             why = f"git add failed in {w}"
-        if why is None:       # by content, as `merges_onto` checks a pushed merge
+        if why is None:       # by content, as `merges_onto` checks a pushed merge; staged, so the abort works
             tree = merge.git(w, "write-tree")
-            beyond = merge.not_resolutions(w, "HEAD", "MERGE_HEAD", tree.stdout.strip()) if tree.ok else None
+            beyond = (await asyncio.to_thread(merge.not_resolutions, w, "HEAD", "MERGE_HEAD", tree.stdout.strip())
+                      if tree.ok else None)
             why = (f"git cannot compare the merge agent's resolution in {w}" if beyond is None
                    else f"the merge agent changed more than 40.3 allows in {', '.join(beyond)}" if beyond else None)
         if why:

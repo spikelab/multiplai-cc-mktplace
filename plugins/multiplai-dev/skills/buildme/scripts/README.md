@@ -116,11 +116,11 @@ merge left in progress is aborted only when `others_work` passes against
 `merge_stop`, else it parks with the hint `git -C <W> merge --abort, then
 re-run`, and after the abort restarts at the fetch (a change the abort keeps outside the merge parks before the tests: `merge.outside_merge`); else `merge.ready` (the same check, no record, and HEAD must be the reviewed head or it plus merges `merge.merges_onto` accepts), `git fetch`, `git
 merge --no-ff --no-commit origin/<default>`, one `merge` agent for version,
-CHANGELOG and lockfile conflicts (record kind `merge`; any other conflicted file, or other file it changed, staged or not, parks),
+CHANGELOG and lockfile conflicts and for a version both sides raised alike (`merge.plan`; record kind `merge`; any other conflicted file, a deleted or binary side included, or other file it changed, staged or not, parks, the hint naming the `checkout`/`rm` that undoes those edits: `merge.undo_hint`),
 the tests with `BUILDME_TRUST_REPO=1` (kind `merge-tests`, killed when the step stops), `git commit` and
 `git push` (rejected: parks; other failures, and a failed fetch: `unknown` for the rest of the run, `MERGE_UNKNOWN`). An exception or signal saves `merge_stop`; any park saves
 `merge_park` in `epic.json`, which `_recover` keeps until `<W>` has no `MERGE_HEAD` and no uncommitted change, then retries (`_merge_retry`). A head that is the
-reviewed head plus merges holding only git's own merge and what the step may resolve (`merge.merges_onto`, which compares each file's content with `git merge-tree`'s, as `merge.not_resolutions` also checks the agent's resolution: a CHANGELOG conflict must keep both sides' lines, a lockfile conflict every line of each side in its order) is not reviewed again. PR E2
+reviewed head plus merges holding only git's own merge and what the step may resolve (`merge.merges_onto`, which checks each file against its three sides, as `merge.not_resolutions` also checks the agent's resolution: a version file is git's merge with its version values aside, each value the changing side's or, where both changed it, the next after main's; a CHANGELOG is main's with every line the child added; a lockfile holds only either side's lines or a written version, loads, and pins each package as one side does) is not reviewed again. PR E2
 adds waiting for checks and `gh pr merge`. A file
 changed after approval, another process holding the epic's lock, or a
 `specs/config.yaml` turning off `git.worktree` or `git.push`, exits 2.

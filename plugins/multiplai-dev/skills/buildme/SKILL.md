@@ -62,7 +62,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--approve-split` | Approve the epic split the build printed as `EPIC:SPLIT:<split.md>`, as `split.md` and `plans/` are on disk now. See [Epic mode](#epic-mode-one-input-several-changes). |
 | `--no-epic-split` | Build the input as one change: no `EPIC_SPLIT` decision, no model call. An epic's child builds pass it. |
 | `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch; a build that re-binds to its worktree ignores it. When the commit is not on the default branch, the PR targets the branch that holds it (`--base`). Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
-| `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. |
+| `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. An approved epic vouches for its own repo: it passes `--trust-repo` to each child build, review and fixer, and its merge step's one agent call (under `epic.merge: auto`) runs trusted for that call only. |
 
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: true}`,
 `prototype: {enabled: auto|true|false}`, `respec: {halt_on_contradiction: false}`,
@@ -654,7 +654,9 @@ the next run waits for them. An ignored SIGHUP or SIGTERM (SIGHUP under
 `specs/config.yaml` takes an `epic:` block: `epic.max_parallel` (default `2`),
 `epic.max_review_rounds` (default `6`), `epic.merge` (`auto` or `manual`,
 default `manual`; under `manual` a human merges each child's PR, and under
-`auto` buildme first merges the default branch into it, tests and pushes) and
+`auto` buildme first merges the default branch into it, tests and pushes;
+a version, CHANGELOG or lockfile conflict there costs one agent call, with
+Read, Edit and Bash in the child's worktree, counted against `epic.max_usd`) and
 `epic.max_usd` (one ceiling for the whole epic, default none; each child keeps
 its own `budget.max_usd` too). `build` and `findings` print
 `SPEND:<usd>:<tokens>` as their last line on every exit but a kill (SIGTERM
@@ -749,12 +751,19 @@ worktree, one merge at a time per repository. The worktree must hold nothing
 but buildme's own files and be at the reviewed head (or it plus the merge step's own merges), else the child parks naming what it found; then
 `git merge --no-ff --no-commit origin/<default>`. Conflicts only in version
 fields, CHANGELOGs and lockfiles go to one agent call (step `merge`,
-`agents/<NNN>-merge-<id>.*`, counted against `epic.max_usd`); a conflict in
-any other file, or any other file the agent changed, staged or not, or a change the merge did not make, parks the child. The project's tests then run in the worktree
+`agents/<NNN>-merge-<id>.*`, counted against `epic.max_usd`), and so does a
+version both sides raised alike, which git merges cleanly at the default
+branch's value: the agent writes the next version after the default branch's,
+keeps both CHANGELOG entries in full with the child's under that version, and
+regenerates a lockfile from the default branch's copy. A conflict in any other
+file (a deleted or binary side included), any other file the agent changed,
+staged or not, or a change the merge did not make, parks the child; when the
+agent changed other files, the hint names the `checkout` or `rm` that undoes
+them before the abort. The project's tests then run in the worktree
 (`tdd.test_command`, else the command buildme discovers, with
 `BUILDME_TRUST_REPO=1`, `agents/<NNN>-merge-tests-<id>.*`; SIGHUP ends them with the run), and a failure
 parks. The merge commit is pushed, never forced; a push rejected because origin's branch moved parks naming
-where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. When `epic.max_usd` is reached and the merge would need the agent, nothing is merged. A merge commit holding only git's own merge plus such resolutions (checked line by line against git's merge: inside a conflict only version lines, both CHANGELOG entries in full, or every line of each lockfile side in its order with a side's or the new version; nothing outside one), as the merge step's own do, is not
+where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. When `epic.max_usd` is reached and the merge would need the agent, nothing is merged. A merge commit holding only git's own merge plus such resolutions (checked against each file's three sides: a version file is git's merge with each version value the side's that changed it or, where both did, the next after the default branch's; a CHANGELOG is the default branch's with every line the child added; a lockfile holds only either side's lines or the written version, loads, and pins each package as one side does), as the merge step's own do, is not
 reviewed again; any other, such as a person's "Update branch" with other edits, is. This release does not merge the PR itself under `auto`: after
 the push it waits for a person, as under `manual`. A run stopped during the
 merge saves what the worktree held (`merge_stop` in `epic.json`); the next

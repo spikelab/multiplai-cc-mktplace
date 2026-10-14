@@ -21,17 +21,22 @@ time, not derived from a tag.
 
 ### Added
 - Epic mode's merge step (`epic.merge: auto`) now resolves conflicts that
-  are only in version fields, CHANGELOGs and lockfiles, with one agent call
-  (model step `merge`, counted against `epic.max_usd`); a conflict in any
-  other file still parks the child, as does the agent changing any other
-  file, staged or not. Its resolution is checked line by line against git's
-  own merge: a version file may change only its conflicting version lines, a
-  CHANGELOG must keep both sides' entries (renumbered at most), and a
-  lockfile every line of each side in its order, with a side's version or
-  the new one. A merge commit holding only such resolutions is not reviewed
-  again. With `epic.max_usd` reached, a merge that would need the agent is
-  not started. A change left in the worktree that the merge did not make
-  parks the child before the tests run.
+  are only in version fields (a marketplace manifest's plugin versions
+  included), CHANGELOGs and lockfiles, with one agent call (model step
+  `merge`, counted against `epic.max_usd`). It also raises a version that
+  the child and the default branch both raised to the same value, which git
+  merges without a conflict, to the next one after the default branch's. A
+  conflict in any other file, a deleted or binary side included, still parks
+  the child, as does the agent changing any other file, staged or not; the
+  park then names the `checkout` or `rm` that undoes those changes before
+  `git merge --abort`. The resolution is checked against each file's base
+  and both sides: each version is the next after the default branch's where
+  both raised it, both CHANGELOG entries are kept in full, and a regenerated
+  lockfile holds only either side's lines, loads, and pins each package as
+  one side does. A merge commit holding only such resolutions is not
+  reviewed again. With `epic.max_usd` reached, only a merge that would need
+  the agent is held back. A change left in the worktree that the merge did
+  not make parks the child before the tests run.
 
 ## [0.64.0] - 2026-10-13
 

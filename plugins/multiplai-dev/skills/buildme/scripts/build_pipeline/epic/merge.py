@@ -9,8 +9,13 @@ whole worktree too. Only `run_merge_agent` writes, through an agent.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shlex
+import tempfile
+import tomllib
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import NamedTuple
 
@@ -29,7 +34,6 @@ LOCKFILES = frozenset({
     "uv.lock", "poetry.lock", "Pipfile.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
     "bun.lock", "Cargo.lock", "Gemfile.lock", "go.sum", "Package.resolved", "composer.lock",
 })
-_MARKER = re.compile(r"^(?:<{7}|={7}|>{7}|\|{7})(?: |$)", re.MULTILINE)
 # A marker a conflict always leaves: `=======` alone is also a heading's underline.
 _LEFT = re.compile(r"^(?:<{7}|>{7}|\|{7})(?: |$)", re.MULTILINE)
 # The CHANGELOGs 40.3 lets the step resolve: by name, never a source file such as `changelog.py`.
@@ -37,7 +41,10 @@ _CHANGELOG_SUFFIXES = frozenset({"", ".md", ".markdown", ".rst", ".txt", ".adoc"
 # The tables of a TOML or INI file whose `version` is the package's own (not a dependency's).
 _PACKAGE_TABLES = frozenset({"project", "package", "tool.poetry", "workspace.package", "metadata"})
 _TABLE = re.compile(r"^\s*(\[\[?)\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$")
-_STRING = re.compile(r'"(?:\\.|[^"\\])*"')
+# JSON: a string, or a punctuation mark that opens, closes or separates.
+_TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|[{}\[\]:,]')
+# A JSON key under which a `version` is a dependency's, not the package's own.
+_DEPENDENCY_KEY = re.compile(r"depend|require|overrides|resolutions|engines|packages", re.IGNORECASE)
 # A version field and nothing else on the line: `"version": "1.2.0",`, `version = "1.2.0"`,
 # `__version__ = "1.2"`, `version: 1.2.0`. Not any line that mentions "version".
 _VERSION_FIELD = re.compile(r"""^\s*(["']?)(?:__)?version(?:__)?\1\s*[:=]\s*(["']?)v?(?P<v>\d[\w.+-]*)\2\s*,?\s*$""",
@@ -119,26 +126,100 @@ def _only_resolutions(w: Path, commit: str, first: str) -> bool:
     return not_resolutions(w, first, f"{commit}^2", commit) == []
 
 
+class Plan(NamedTuple):
+    """What merging *second* into *first* leaves the merge step (item 40.3)."""
+    files: list[str]          # what the merge agent resolves, in this order: conflicted files it may resolve;
+    #                           version files both sides raised, which git merges cleanly when both wrote the
+    #                           same version; with those, the CHANGELOGs and lockfiles both sides changed
+    refused: list[str]        # conflicted files it may not resolve
+
+
+class _Merge(NamedTuple):
+    tree: str                 # git's own merge (`git merge-tree`)
+    conflicted: list[str]
+    raised: list[str]
+    plan: Plan
+    sides: dict[str, tuple[str, str, str] | None]       # of each file in `plan.files`
+
+
+def plan(w: Path, first: str, second: str) -> Plan | None:
+    """What merging *second* into *first* leaves the merge agent, read with
+    `git merge-tree`, which changes nothing; None when git cannot tell."""
+    m = _merge(w, first, second)
+    return None if m is None else m.plan
+
+
+def agent_ahead(w: Path, default: str) -> bool:
+    """Whether merging `origin/<default>` into HEAD would launch the merge
+    agent (or git cannot tell). A conflict the step may not resolve parks
+    before any call, so it is not one."""
+    p = plan(w, "HEAD", f"refs/remotes/origin/{default}")
+    return p is None or (bool(p.files) and not p.refused)
+
+
+def _merge(w: Path, first: str, second: str) -> _Merge | None:
+    res = git(w, "merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", first, second)
+    base = git(w, "merge-base", first, second)
+    if res.returncode not in (0, 1) or not base.ok or not base.stdout.strip():
+        return None
+    tree, *paths = res.stdout.split("\0")
+    ours = _lines(git(w, "diff", "--name-only", "-z", "--no-renames", base.stdout.split()[0], first))
+    theirs = _lines(git(w, "diff", "--name-only", "-z", "--no-renames", base.stdout.split()[0], second))
+    if not tree.strip() or ours is None or theirs is None:
+        return None
+    base_sha, conflicted, both = base.stdout.split()[0], list(dict.fromkeys(p for p in paths if p)), set(theirs)
+    both_changed = [p for p in ours if p in both]
+    sides: dict[str, tuple[str, str, str] | None] = {}
+
+    def side(p: str) -> tuple[str, str, str] | None:
+        if p not in sides:
+            sides[p] = _sides(w, base_sha, first, second, p)
+        return sides[p]
+
+    refused = [p for p in conflicted if not _resolvable(p, side(p))]
+    raised = [p for p in both_changed if p not in refused and not _special(p)
+              and (s := side(p)) is not None and _raised(p, *s)]
+    extra = [p for p in both_changed if raised and _special(p) and p not in refused]
+    files = list(dict.fromkeys([*(p for p in conflicted if p not in refused), *raised, *extra]))
+    return _Merge(tree.strip(), conflicted, raised, Plan(files, refused), {p: side(p) for p in files})
+
+
 def not_resolutions(w: Path, first: str, second: str, result: str) -> list[str] | None:
-    """The files where *result* (a commit or tree) differs from git's own
-    merge of *first* and *second* in more than 40.3 lets the step resolve:
-    in a conflicted version file, only the conflicting version lines; in a
-    conflicted CHANGELOG, both sides' entries, every line of each kept in its
-    order (numbers aside) and nothing else; in a conflicted lockfile, every
-    line of each side in its order, a version taken from a side or the one
-    the result wrote in a version file. Every line outside a conflict is
-    git's own. None when git cannot tell."""
-    auto = git(w, "merge-tree", "--write-tree", "--name-only", "--no-messages", first, second)
-    if auto.returncode not in (0, 1) or not auto.stdout.strip():
+    """The files where *result* (a commit or tree), a merge of *second* into
+    *first*, holds more than 40.3 lets the step write; None when git cannot
+    tell. Every file it differs from git's own merge in, every conflicted
+    file and every version file both sides raised is checked against its
+    three sides (base, *first*, *second*), never against git's conflict
+    markers, which trim lines both sides share:
+    - a file `plan` does not give the agent (a refused conflict, a binary or
+      deleted side included) must be git's own merge;
+    - a version file must be git's merge with its version values aside, and
+      each version value the side that changed it, or, where both did, the
+      next after *second*'s, raising the part *first* raised (`_versions`);
+    - a CHANGELOG must be *second*'s, every line kept in its order, with the
+      lines *first* added (version numbers aside) in theirs (`_entries`);
+    - a lockfile may hold only lines of *first*'s or *second*'s copy, or a
+      version field written in a version file; it must load, and each
+      pinned package must be one side's whole (`_lockfile`)."""
+    m = _merge(w, first, second)
+    differ = None if m is None else _lines(git(w, "diff", "--name-only", "-z", "--no-renames", m.tree, result))
+    if m is None or differ is None:
         return None
-    tree, *conflicted = auto.stdout.splitlines()
-    differ = _lines(git(w, "diff", "--name-only", "-z", "--no-renames", tree, result))
-    if differ is None:
-        return None
-    blobs = {p: (_blob(w, tree, p), _blob(w, result, p)) for p in differ}
-    versions = {v for p, (auto, new) in blobs.items()
-                if p in conflicted and not (is_lockfile(p) or _is_changelog(p)) for v in _written(auto, new)}
-    return [p for p, (auto, new) in blobs.items() if not _allowed(p, p in conflicted, auto, new, versions)]
+    check = list(dict.fromkeys([*differ, *m.conflicted, *m.raised]))
+    allowed = {p: (m.sides.get(p), _blob(w, result, p)) for p in check if p in m.plan.files}
+    bad, written = [p for p in check if p not in allowed], set()
+    for p, (s, new) in allowed.items():
+        if not _special(p):
+            ok, wrote = _versions(p, *s, new) if s and new is not None else (False, set())
+            written |= wrote
+            if not ok:
+                bad.append(p)
+    for p, (s, new) in allowed.items():
+        if is_lockfile(p) and not (s and new is not None and _lockfile(p, s[1], s[2], new, written)):
+            bad.append(p)
+        elif _is_changelog(p) and not (s and new is not None and _entries(*s, new)):
+            bad.append(p)
+    return [p for p in check if p in bad]
 
 
 def _blob(w: Path, tree: str, path: str) -> str | None:
@@ -147,134 +228,237 @@ def _blob(w: Path, tree: str, path: str) -> str | None:
         res = git_ops._run(["git", "cat-file", "blob", f"{tree}:{path}"], cwd=w)
     except UnicodeDecodeError:
         return None
-    return res.stdout if res.ok else None
+    return res.stdout if res.ok and "\0" not in res.stdout else None
 
 
-def _written(auto: str | None, new: str | None) -> set[str]:
-    """The versions in *new*'s version fields that are not lines of *auto*
-    outside its conflicts: what a resolution wrote."""
-    if auto is None or new is None:
-        return set()
-    kept = {part for part in _segments(auto) if isinstance(part, str)}
-    return {m["v"] for line in new.splitlines() if line not in kept and (m := _VERSION_FIELD.match(line))}
+def _sides(w: Path, base: str, first: str, second: str, path: str) -> tuple[str, str, str] | None:
+    """*path*'s text at *base*, *first* and *second*: base "" when neither had
+    it (both added it); None when *first* or *second* lacks it (a deletion)
+    or any side is not text."""
+    o, t, b = _blob(w, first, path), _blob(w, second, path), _blob(w, base, path)
+    if o is None or t is None or (b is None and git(w, "cat-file", "-e", f"{base}:{path}").ok):
+        return None
+    return ("" if b is None else b, o, t)
 
 
-def _allowed(path: str, conflicted: bool, auto: str | None, new: str | None, versions: set[str]) -> bool:
-    """*new* is a resolution 40.3 allows of *auto*, git's merge of *path*;
-    *versions*: what the resolution wrote in the version files."""
-    if auto is None or new is None or not conflicted:
+def _special(path: str) -> bool:
+    return is_lockfile(path) or _is_changelog(path)
+
+
+def _resolvable(path: str, sides: tuple[str, str, str] | None) -> bool:
+    """A conflicted *path* the step may resolve (40.3): a lockfile or a
+    CHANGELOG, or a file whose conflicts are all in the package's own version
+    fields: git merges it cleanly with those values aside. Never one with a
+    deleted or binary side."""
+    if sides is None:
         return False
-    parts = _segments(auto)
-    if is_lockfile(path):
-        def kept(sides: _Conflict, span: list[str]) -> bool:
-            key = [_version_key(x) for x in span]
-            return all(_subsequence([_version_key(x) for x in side], key) for side in (sides.ours, sides.theirs))
-        return _fits(parts, new.splitlines(), lambda side, line: line in side or bool(
-            (m := _VERSION_FIELD.match(line)) and m["v"] in versions), kept)
-    if _is_changelog(path):
-        def both(sides: _Conflict, span: list[str]) -> bool:
-            return _interleaves(_entry(span), _entry(sides.ours), _entry(sides.theirs))
-        return _fits(parts, new.splitlines(),
-                     lambda side, line: not line.strip() or _digits(line) in {_digits(x) for x in side}, both)
-    return _resolvable(path, auto) and _fits(parts, new.splitlines(),
-                                             lambda side, line: bool(_VERSION_FIELD.match(line)))
+    if _special(path):
+        return True
+    b, o, t = (_normal(path, x)[0] for x in sides)
+    return _merge3(o, b, t) is not None
 
 
-def _digits(line: str) -> str:
-    return re.sub(r"\d+", "0", line)
+# --- version files ---------------------------------------------------------
+
+# Stands in for a version value while a file is merged without them: no NUL, which git reads as binary.
+_HOLE = "\x01"
 
 
-def _entry(lines: list[str]) -> list[str]:
-    """A CHANGELOG side or resolution as it is compared: no blank lines, numbers aside."""
-    return [_digits(x) for x in lines if x.strip()]
+def _normal(path: str, text: str) -> tuple[list[str], dict[int, str]]:
+    """*text*'s lines with each own version value (`_own`) replaced by
+    `_HOLE`, and those values by line."""
+    lines = text.splitlines()
+    own = _own(path, lines)
+    for i in own:
+        m = _VERSION_FIELD.match(lines[i])
+        lines[i] = lines[i][:m.start("v")] + _HOLE + lines[i][m.end("v"):]
+    return lines, own
 
 
-def _version_key(line: str) -> str:
-    """A lockfile line as it is compared: a version field with its version
-    left out, as a resolution may take either side's or the written one."""
-    m = _VERSION_FIELD.match(line)
-    return line[:m.start("v")] + line[m.end("v"):] if m else line
+def _merge3(ours: list[str], base: list[str], theirs: list[str]) -> list[str] | None:
+    """`git merge-file` of three texts' lines; None on a conflict or an error."""
+    with tempfile.TemporaryDirectory() as d:
+        names = []
+        for name, lines in (("ours", ours), ("base", base), ("theirs", theirs)):
+            (Path(d) / name).write_text("".join(x + "\n" for x in lines))
+            names.append(name)
+        res = git_ops._run(["git", "merge-file", "-p", *names], cwd=d, errors="replace")
+    return res.stdout.splitlines() if res.returncode == 0 else None
 
 
-def _subsequence(side: list[str], lines: list[str]) -> bool:
-    """Every line of *side* is in *lines*, in its order."""
-    it = iter(lines)
-    return all(x in it for x in side)
+def _matched(a: list[str], b: list[str]) -> dict[int, int]:
+    """Each line of *a* that `difflib` matches to a line of *b*."""
+    return {blk.a + k: blk.b + k for blk in SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks()
+            for k in range(blk.size)}
 
 
-def _interleaves(lines: list[str], a: list[str], b: list[str]) -> bool:
-    """*lines* are *a* and *b* merged, each in its own order, every line of
-    both kept once and nothing added."""
-    if len(lines) != len(a) + len(b):
+def _raised(path: str, b: str, o: str, t: str) -> bool:
+    """Both sides changed one of *path*'s own version values."""
+    no, vo = _normal(path, o)
+    if not vo:
         return False
-    row = [True] * (len(b) + 1)                 # row[j]: lines[:i + j] interleaves a[:i] and b[:j]
-    for j in range(1, len(b) + 1):
-        row[j] = row[j - 1] and b[j - 1] == lines[j - 1]
-    for i in range(1, len(a) + 1):
-        row[0] = row[0] and a[i - 1] == lines[i - 1]
-        for j in range(1, len(b) + 1):
-            row[j] = (row[j] and a[i - 1] == lines[i + j - 1]) or (row[j - 1] and b[j - 1] == lines[i + j - 1])
-    return row[len(b)]
+    (nb, vb), (nt, vt) = (_normal(path, x) for x in (b, t))
+    to_b, to_t = _matched(no, nb), _matched(no, nt)
+    return any(i in to_b and i in to_t and vb.get(to_b[i]) not in (None, v)
+               and vt.get(to_t[i]) not in (None, vb[to_b[i]]) for i, v in vo.items())
 
 
-class _Conflict(NamedTuple):
-    """One conflict of git's merge of a file: its sides' lines."""
-    ours: list[str]
-    base: list[str]           # empty unless the merge wrote diff3's base side
-    theirs: list[str]
-
-    @property
-    def lines(self) -> list[str]:
-        return [*self.ours, *self.base, *self.theirs]
-
-
-def _segments(text: str) -> list[str | _Conflict]:
-    """*text*, git's merge of a file, as its lines outside conflicts and, for
-    each conflict, its sides."""
-    parts: list[str | _Conflict] = []
-    sides: _Conflict | None = None
-    side: list[str] = []
-    for line in text.splitlines():
-        if line.startswith("<<<<<<<") and _MARKER.match(line):
-            sides = _Conflict([], [], [])
-            side = sides.ours
-            parts.append(sides)
-        elif sides is not None and line.startswith(">>>>>>>") and _MARKER.match(line):
-            sides = None
-        elif sides is not None and line.startswith("|||||||") and _MARKER.match(line) and side is sides.ours:
-            side = sides.base
-        elif sides is not None and line.startswith("=======") and _MARKER.match(line) and side is not sides.theirs:
-            side = sides.theirs
-        elif sides is not None and _MARKER.match(line):
-            continue
-        elif sides is not None:
-            side.append(line)
-        else:
-            parts.append(line)
-    return parts
+def _versions(path: str, b: str, o: str, t: str, r: str) -> tuple[bool, set[str]]:
+    """*r* is git's merge of *path* with its version values aside, and each
+    value is what `_expected` says; with the values *r* wrote that neither
+    side has."""
+    (nb, vb), (no, vo), (nt, vt), (nr, vr) = (_normal(path, x) for x in (b, o, t, r))
+    if _merge3(no, nb, nt) != nr:
+        return False, set()
+    to_b, to_o, to_t = _matched(nr, nb), _matched(nr, no), _matched(nr, nt)
+    written = set()
+    for i, value in vr.items():
+        ours, theirs = vo.get(to_o.get(i, -1)), vt.get(to_t.get(i, -1))
+        want = _expected(vb.get(to_b.get(i, -1)), ours, theirs)
+        if want is None or value != want:
+            return False, set()
+        if want not in (ours, theirs):
+            written.add(want)
+    return True, written
 
 
-def _fits(parts: list[str | _Conflict], lines: list[str], may, whole=None) -> bool:
-    """*lines* are *parts* with each conflict replaced by one or more lines,
-    each of which *may* allows for its sides' lines, that *whole* (when given)
-    accepts together; every other line git's own."""
-    reach = {0}
-    for part in parts:
-        nxt: set[int] = set()
-        for j in reach:
-            if isinstance(part, str):
-                if j < len(lines) and part == lines[j]:
-                    nxt.add(j + 1)
-                continue
-            side, k = part.lines, j
-            while k < len(lines) and may(side, lines[k]):
-                k += 1
-                if whole is None or whole(part, lines[j:k]):
-                    nxt.add(k)
-        if not nxt:
+def _expected(b: str | None, o: str | None, t: str | None) -> str | None:
+    """A version value of the merge: the side's that changed it; where both
+    changed it, the next after *t*'s (`_next`); None when there is none."""
+    if o is None or t is None:
+        return t if o is None else o
+    if o == b:
+        return t
+    if t == b:
+        return o
+    if b is None:
+        return t if o == t else None
+    return _next(b, o, t)
+
+
+def _next(b: str, o: str, t: str) -> str | None:
+    """*t* with the part *o* raised from *b* raised by one and every part
+    after it 0: base 0.64.0, ours 0.65.0, theirs 0.64.1 gives 0.65.0, and
+    theirs 0.65.0 gives 0.66.0. None unless all three are dotted numbers
+    and *o* raised *b*."""
+    parts = [[int(x) for x in v.split(".")] if re.fullmatch(r"\d+(?:\.\d+)*", v) else None for v in (b, o, t)]
+    if None in parts:
+        return None
+    n = max(len(p) for p in parts)
+    bp, op, tp = (p + [0] * (n - len(p)) for p in parts)
+    i = next((k for k in range(n) if op[k] != bp[k]), None)
+    if i is None or op[i] < bp[i]:
+        return None
+    return ".".join(str(x) for x in (tp[:i] + [tp[i] + 1] + [0] * (n - i - 1))[:max(len(parts[2]), i + 1)])
+
+
+# --- CHANGELOGs -------------------------------------------------------------
+
+_VERSION_TEXT = re.compile(r"\d+(?:\.\d+)+")
+# An interleaving check past this many cells parks rather than hold the run (judgment).
+_MAX_CELLS = 4_000_000
+
+
+def _entries(b: str, o: str, t: str, r: str) -> bool:
+    """*r* keeps both CHANGELOGs in full: every line of *t* in its order and,
+    among them, the lines *o* added to *b* in their order, version numbers
+    aside, and nothing else. Blank lines do not count."""
+    bl, ol = ([x for x in text.splitlines() if x.strip()] for text in (b, o))
+    added = [x for tag, _, _, j1, j2 in SequenceMatcher(None, bl, ol, autojunk=False).get_opcodes()
+             if tag in ("insert", "replace") for x in ol[j1:j2]]
+    kept = [x for x in r.splitlines() if x.strip()]
+    return _interleaves(kept, [x for x in t.splitlines() if x.strip()], [_VERSION_TEXT.sub("0", x) for x in added])
+
+
+def _interleaves(lines: list[str], theirs: list[str], ours: list[str]) -> bool:
+    """*lines* are *theirs* and *ours* merged, each in its order, every line
+    of both kept once and nothing added; a line matches *ours* with its
+    version numbers aside. Time: len(theirs) x len(ours)."""
+    if len(lines) != len(theirs) + len(ours) or len(theirs) * len(ours) > _MAX_CELLS:
+        return False
+    norm = [_VERSION_TEXT.sub("0", x) for x in lines]
+    row = [True] * (len(ours) + 1)              # row[i]: lines[:j + i] merge theirs[:j] and ours[:i]
+    for i in range(1, len(ours) + 1):
+        row[i] = row[i - 1] and ours[i - 1] == norm[i - 1]
+    for j in range(1, len(theirs) + 1):
+        row[0] = row[0] and theirs[j - 1] == lines[j - 1]
+        for i in range(1, len(ours) + 1):
+            row[i] = (row[i] and theirs[j - 1] == lines[i + j - 1]) or (row[i - 1] and ours[i - 1] == norm[i + j - 1])
+        if not any(row):
             return False
-        reach = nxt
-    return len(lines) in reach
+    return row[-1]
+
+
+# --- lockfiles --------------------------------------------------------------
+
+_TOML_LOCKS = frozenset({"uv.lock", "poetry.lock", "Cargo.lock"})
+_JSON_LOCKS = frozenset({"package-lock.json", "Pipfile.lock", "composer.lock", "Package.resolved"})
+# The keys that pin a package's content.
+_HASH_KEYS = frozenset({"hash", "hashes", "checksum", "integrity", "shasum", "sha256", "sha512"})
+_PINNED_TEXT = re.compile(r"^\s*(?:integrity|checksum|resolved)\b", re.MULTILINE)
+
+
+def _lockfile(path: str, o: str, t: str, r: str, written: set[str]) -> bool:
+    """*r*, a regenerated lockfile, holds only lines of *o* or *t*, in any
+    order (regenerating drops the losing side's), or a version field
+    holding a version in *written*. It loads, with no key twice, and each
+    package it pins by hash (a `version` with a hash below it) is a whole
+    package of *o* or *t*: never one side's version with the other's hash."""
+    known = set(o.splitlines()) | set(t.splitlines())
+    if any(line not in known and not ((m := _VERSION_FIELD.match(line)) and m["v"] in written)
+           for line in r.splitlines()):
+        return False
+    name = Path(path).name
+    try:
+        loaded = [_load(name, x) for x in (o, t, r)]
+    except (ValueError, yaml.YAMLError):         # tomllib's and json's errors are ValueErrors
+        return False
+    if loaded[2] is not None:
+        sides = {_canon(x) for d in loaded[:2] for x in _pinned(d)}
+        return all(_canon(x) in sides for x in _pinned(loaded[2]))
+    if name == "yarn.lock":                      # one package per paragraph
+        blocks = {b.strip() for x in (o, t) for b in x.split("\n\n")}
+        return all(b.strip() in blocks for b in r.split("\n\n") if _PINNED_TEXT.search(b))
+    return True
+
+
+def _load(name: str, text: str):
+    """*text* loaded, for a lockfile format read here; None for another."""
+    if name in _TOML_LOCKS:
+        return tomllib.loads(text)
+    if name in _JSON_LOCKS:
+        return json.loads(text, object_pairs_hook=_unique)
+    if name == "pnpm-lock.yaml":
+        return yaml.safe_load(text)
+    return None
+
+
+def _unique(pairs: list[tuple[str, object]]) -> dict:
+    if len({k for k, _ in pairs}) != len(pairs):
+        raise ValueError("a key appears twice")
+    return dict(pairs)
+
+
+def _pinned(data) -> list[dict]:
+    """Each mapping with a `version` and a hash key at or below it that no
+    mapping below it with a `version` claims: one locked package."""
+    found: list[dict] = []
+
+    def walk(x) -> bool:                         # True: x holds a hash no package below claims
+        if isinstance(x, dict):
+            held = [walk(v) for v in x.values()]
+            if (any(held) or any(k in _HASH_KEYS for k in x)) and "version" in x:
+                found.append(x)
+                return False
+            return any(held) or any(k in _HASH_KEYS for k in x)
+        return any([walk(v) for v in x]) if isinstance(x, list) else False
+
+    walk(data)
+    return found
+
+
+def _canon(x) -> str:
+    return json.dumps(x, sort_keys=True, default=str)
 
 
 def not_reviewed(w: Path, reviewed: str | None, default: str) -> str | None:
@@ -315,13 +499,6 @@ def ready(w: Path, reviewed: str | None, origin_ref: str, default: str) -> str |
             or stop_record.others_work(w, None, head=reviewed, origin_ref=origin_ref))
 
 
-def conflicts_ahead(w: Path, default: str) -> bool:
-    """Whether merging `origin/<default>` into HEAD would conflict (or git
-    cannot tell): `git merge-tree` reads, and leaves `<W>` as it is."""
-    return git(w, "merge-tree", "--write-tree", "--name-only", "--no-messages", "HEAD",
-               f"refs/remotes/origin/{default}").returncode != 0
-
-
 def conflicted(w: Path) -> list[str] | None:
     return _lines(git(w, "diff", "--name-only", "-z", "--diff-filter=U"))
 
@@ -330,62 +507,44 @@ def is_lockfile(path: str) -> bool:
     return Path(path).name in LOCKFILES
 
 
-def may_resolve(w: Path, path: str) -> bool:
-    """Item 40.3: a lockfile, a CHANGELOG, or a file whose every conflicting
-    line is a version field."""
-    if is_lockfile(path) or _is_changelog(path):
-        return True
-    try:
-        return _resolvable(path, (w / path).read_text())
-    except (OSError, UnicodeDecodeError):
-        return False
-
-
 def _is_changelog(path: str) -> bool:
     p = Path(path)
     return p.stem.upper() == "CHANGELOG" and p.suffix.lower() in _CHANGELOG_SUFFIXES
 
 
-def _resolvable(path: str, text: str) -> bool:
-    """*text*, the conflicted content of *path*, is one 40.3 lets the step
-    resolve: every conflicting line is the package's own version field."""
-    if is_lockfile(path) or _is_changelog(path):
-        return True
-    found, inside, before, cur, first = False, False, [], [], None
-    for line in text.splitlines():           # *before*: the lines above, a conflict's first side for it
-        if not inside:
-            if line.startswith("<<<<<<<") and _MARKER.match(line):
-                found, inside, cur, first = True, True, [], None
-            else:
-                before.append(line)
-        elif line.startswith(">>>>>>>") and _MARKER.match(line):
-            before += first if first is not None else cur
-            inside = False
-        elif _MARKER.match(line):            # `|||||||` or `=======`: the next side
-            first = cur if first is None else first
-            cur = []
-        elif line.strip() and not (_VERSION_FIELD.match(line) and _own_version(path, before + cur, line)):
-            return False
-        else:
-            cur.append(line)
+def _own(path: str, lines: list[str]) -> dict[int, str]:
+    """The package's own version fields among *lines*, by line, with their
+    values: in a JSON file any not under a dependency key (`plugins[].version`
+    in a marketplace manifest is a plugin's own), in a package table (or
+    none) of a TOML or INI file, unindented elsewhere. A dependency's
+    version requirement is not one. One pass."""
+    suffix, found = Path(path).suffix.lower(), {}
+    stack: list[str | None] = []             # JSON: the key each open container is under
+    key = last = table = None
+    for i, line in enumerate(lines):
+        m = _VERSION_FIELD.match(line)
+        if m and (bool(stack) and not any(k and _DEPENDENCY_KEY.search(k) for k in stack) if suffix == ".json"
+                  else (table is None or (table[0] == "[" and table[1] in _PACKAGE_TABLES))
+                  if suffix in (".toml", ".cfg", ".ini") else line == line.lstrip()):
+            found[i] = m["v"]
+        if suffix == ".json":
+            for tok in _TOKEN.findall(line):
+                if tok[0] == '"':
+                    last = tok
+                elif tok == ":":
+                    key = last
+                elif tok in "{[":
+                    stack.append(key)
+                    key = None
+                elif tok in "}]":
+                    stack = stack[:-1]
+                    key = None
+                else:
+                    key = None
+        elif (t := _TABLE.match(line)) and suffix in (".toml", ".cfg", ".ini"):
+            table = (t.group(1), t.group(2))
     return found
 
-
-def _own_version(path: str, before: list[str], line: str) -> bool:
-    """*line*, a version field after the lines *before*, is the package's own:
-    at the top level of a JSON file, in a package table (or none) of a TOML or
-    INI file, unindented elsewhere. A dependency's version requirement is not."""
-    suffix = Path(path).suffix.lower()
-    if suffix == ".json":
-        depth = 0
-        for x in before:
-            for ch in _STRING.sub('""', x):
-                depth += (ch in "{[") - (ch in "}]")
-        return depth == 1
-    if suffix in (".toml", ".cfg", ".ini"):
-        tables = [m for m in map(_TABLE.match, before) if m]
-        return not tables or (tables[-1].group(1) == "[" and tables[-1].group(2) in _PACKAGE_TABLES)
-    return line == line.lstrip()
 
 
 def unresolved(w: Path, files: list[str]) -> list[str]:
@@ -446,6 +605,21 @@ def abort_hint(w: Path) -> str:
     return f"git -C {w} merge --abort, then re-run"
 
 
+def undo_hint(w: Path, files: list[str]) -> str:
+    """What a person runs before re-running, when the merge agent changed
+    *files*, which git did not leave conflicted: `git merge --abort` refuses
+    over an unstaged edit to a file the merge changed, and keeps one to a
+    file it did not, which would keep the child parked (E.S26). An edit is
+    put back from the index; a new file is removed."""
+    if not files:
+        return abort_hint(w)
+    new = set(_lines(git(w, "ls-files", "--others", "--exclude-standard", "-z", "--", *files)) or [])
+    steps = [f"git -C {w} checkout -- {' '.join(shlex.quote(f) for f in files if f not in new)}"
+             if any(f not in new for f in files) else "",
+             f"rm -- {' '.join(shlex.quote(str(w / f)) for f in files if f in new)}" if new else ""]
+    return f"{', then '.join(x for x in steps if x)}, then {abort_hint(w)}"
+
+
 def test_command(p: Path) -> str | None:
     """Item 40.4: `tdd.test_command` from `<P>/specs/config.yaml`, else the first
     command `config.discover_test_command(<P>)` finds; None when neither has one."""
@@ -467,14 +641,21 @@ async def run_merge_agent(config, w: Path, files: list[str], branch_name: str, d
     The coordinator vouches for the repo here as it does for every build,
     review and fixer it launches (`--trust-repo`): without it, `agent_call`
     would raise `RepoTrustError` mid-merge in a run started without the flag."""
-    os.environ["BUILDME_TRUST_REPO"] = "1"
     prompt = MERGE_PROMPT.format(default=default, branch=branch_name,
                                  files="\n".join(f"- `{f}`" for f in files))
-    return await agent_call(
-        prompt,
-        allowed_tools=MERGE_TOOLS,
-        model=config.model_for('merge'),
-        max_turns=MERGE_MAX_TURNS,
-        cwd=str(w),
-        budget_label="merge",
-    )
+    before = os.environ.get("BUILDME_TRUST_REPO")
+    os.environ["BUILDME_TRUST_REPO"] = "1"
+    try:
+        return await agent_call(
+            prompt,
+            allowed_tools=MERGE_TOOLS,
+            model=config.model_for('merge'),
+            max_turns=MERGE_MAX_TURNS,
+            cwd=str(w),
+            budget_label="merge",
+        )
+    finally:                                     # the trust is this call's only, not the process's
+        if before is None:
+            os.environ.pop("BUILDME_TRUST_REPO", None)
+        else:
+            os.environ["BUILDME_TRUST_REPO"] = before
