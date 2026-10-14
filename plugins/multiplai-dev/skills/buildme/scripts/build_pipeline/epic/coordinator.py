@@ -833,7 +833,9 @@ class Coordinator:
     def _child_project(self, c: Child) -> Path:
         """`<P>`: the child's worktree joined with the project's offset in its repo, absolute."""
         try:
-            offset = c.project.resolve().relative_to(c.root.resolve())
+            own = c is not None and c.repo        # PR F: a child in another repo
+            project, root = (c.project, c.root) if own else (self.project_dir, self.repo)
+            offset = project.resolve().relative_to(root.resolve())
         except ValueError:
             offset = Path()
         return (self._worktree(c) / offset).absolute()
