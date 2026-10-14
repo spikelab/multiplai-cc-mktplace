@@ -1,6 +1,6 @@
 """Row tests for PR E1's "Stop and resume states" table
 (plan-buildme-epic-mode-2026-10-12.md, rows marked `Test: yes`: E.S2-E.S7,
-E.S12, E.S18, E.S21, and E.S22-E.S23, which the PR adds; E.S17 is E2's).
+E.S12, E.S18, E.S21, E.S22, E.S23 and E.S26, which the PR adds; E.S17 is E2's).
 
 Each case stops the coordinator at the row's point (an exception at a seam, a
 signal, or a forked child exiting 137), resumes, and compares with a run that
@@ -346,11 +346,12 @@ def test_E_S21_a_refused_abort_parks_with_git_s_words_and_the_hint(tmp_path, mon
     assert len(r.calls("merge-agent")) == 1 and r.calls("merge-tests") == [] and r.step_pushes() == []
 
 
-def test_E_S22_a_merge_park_is_kept_by_later_runs(tmp_path, monkeypatch):
+def test_E_S22_a_merge_park_is_kept_while_a_merge_is_in_progress(tmp_path, monkeypatch):
     """E.S22 (a row this PR adds: `merge_park` is saved state the table did not
-    list): a child the merge step parked (here, a source-file conflict) stays
-    parked on the next run, from `merge_park` alone: no check, abort, agent,
-    tests or push, and its worktree is unchanged."""
+    list): a child the merge step parked (here, a source-file conflict, which
+    leaves `MERGE_HEAD`) stays parked on the next run: only the read of
+    `MERGE_HEAD` runs, no check, abort, agent, tests or push, and its
+    worktree is unchanged."""
     r = MergeRoot(tmp_path, monkeypatch, child_files={"app.py": "x = 3\n"}, main={"app.py": "x = 2\n"})
     assert r.run() == 0
     reason = _parked(r)["reason"]
@@ -359,5 +360,41 @@ def test_E_S22_a_merge_park_is_kept_by_later_runs(tmp_path, monkeypatch):
     real = merge.git
     monkeypatch.setattr(merge, "git", lambda w, *a: ran.append(a) or real(w, *a))
     assert r.run() == 0
-    assert ran == [] and repo_state(r.w) == before and _parked(r)["reason"] == reason
+    assert ran == [("rev-parse", "-q", "--verify", "MERGE_HEAD")]
+    assert repo_state(r.w) == before and _parked(r)["reason"] == reason
     assert r.calls("merge-agent") == [] and r.calls("merge-tests") == [] and r.step_pushes() == []
+
+
+def test_E_S26_a_merge_park_retries_once_the_worktree_is_clean(tmp_path, monkeypatch):
+    """E.S26 (a row this PR adds; Spike, 2026-10-14): after `git merge --abort`,
+    as the park's hint says, a re-run retries the merge step, but only once
+    `<W>` holds no uncommitted change. A file left there keeps the child
+    parked and the worktree as it was; a merge that fails again parks again,
+    with the same reason; one that now passes is tested and pushed, and the
+    PR waits as a never-parked child's does."""
+    r = MergeRoot(tmp_path, monkeypatch, child_files={"app.py": "x = 3\n"}, main={"app.py": "x = 2\n"})
+    assert r.run() == 0
+    reason = _parked(r)["reason"]
+    assert reason.endswith(f"; git -C {r.w} merge --abort, then re-run")
+    git(r.w, "merge", "--abort")
+    (r.w / "notes.txt").write_text("mine\n")
+    before = repo_state(r.w)
+    ran: list[tuple] = []
+    real = merge.git
+    monkeypatch.setattr(merge, "git", lambda w, *a: ran.append(a) or real(w, *a))
+    assert r.run() == 0
+    assert not any(a[0] == "merge" for a in ran) and repo_state(r.w) == before
+    assert _parked(r)["reason"] == reason
+    (r.w / "notes.txt").unlink()
+    ran.clear()
+    assert r.run() == 0                      # retried: the same conflict parks it again
+    assert ("merge", "--no-ff", "--no-commit", "origin/main") in ran and r.merging()
+    assert _parked(r)["reason"] == reason
+    assert r.calls("merge-agent") == [] and r.calls("merge-tests") == [] and r.step_pushes() == []
+    git(r.w, "merge", "--abort")
+    push_files(r.root, {"app.py": "x = 3\n"}, "main takes the child's line")
+    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    st = r.status()
+    assert st["status"] == "built" and st["merge_park"] == "" and st["merge_stop"] is None
+    assert len(r.calls("merge-tests")) == 1 and len(r.step_pushes()) == 1 and not r.merging()
+    assert r.origin("app.py") == "x = 3\n"
