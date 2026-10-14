@@ -4,12 +4,12 @@ PR E, items 35-42). The step itself is `Coordinator._merge` in `coordinator.py`.
 Every git command here runs on the child's worktree root `<W>` (its
 `WORKTREE:` path), never on its project directory `<P>` (item 36): `git merge
 --abort` acts on the whole worktree, so the check before it must cover the
-whole worktree too. Until item 40.3 lands, the step resolves no conflict:
-any conflict parks the child.
+whole worktree too. Only `run_merge_agent` writes, through an agent.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -17,7 +17,30 @@ import yaml
 
 from .. import git_ops, stop_record
 from ..config import discover_test_command
+from ..models import AgentResult
+from ..prompts.epic_merge import MERGE_PROMPT
+from ..sdk import agent_call
 
+MERGE_TOOLS = ["Read", "Edit", "Bash"]
+MERGE_MAX_TURNS = 40
+# The lockfiles the merge agent may regenerate (item 40.3).
+LOCKFILES = frozenset({
+    "uv.lock", "poetry.lock", "Pipfile.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "bun.lock", "Cargo.lock", "Gemfile.lock", "go.sum", "Package.resolved", "composer.lock",
+})
+_MARKER = re.compile(r"^(?:<{7}|={7}|>{7}|\|{7})(?: |$)", re.MULTILINE)
+# A marker a conflict always leaves: `=======` alone is also a heading's underline.
+_LEFT = re.compile(r"^(?:<{7}|>{7}|\|{7})(?: |$)", re.MULTILINE)
+# The CHANGELOGs 40.3 lets the step resolve: by name, never a source file such as `changelog.py`.
+_CHANGELOG_SUFFIXES = frozenset({"", ".md", ".markdown", ".rst", ".txt", ".adoc"})
+# The tables of a TOML or INI file whose `version` is the package's own (not a dependency's).
+_PACKAGE_TABLES = frozenset({"project", "package", "tool.poetry", "workspace.package", "metadata"})
+_TABLE = re.compile(r"^\s*(\[\[?)\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$")
+_STRING = re.compile(r'"(?:\\.|[^"\\])*"')
+# A version field and nothing else on the line: `"version": "1.2.0",`, `version = "1.2.0"`,
+# `__version__ = "1.2"`, `version: 1.2.0`. Not any line that mentions "version".
+_VERSION_FIELD = re.compile(r"""^\s*(["']?)(?:__)?version(?:__)?\1\s*[:=]\s*(["']?)v?(?P<v>\d[\w.+-]*)\2\s*,?\s*$""",
+                            re.IGNORECASE)
 # The files a refused abort of the merge names (git 2.43).
 _NAMED = re.compile(r"^error: Entry '([^']+)' not uptodate|^\t(\S.*)$", re.MULTILINE)
 
@@ -90,22 +113,109 @@ def merges_onto(w: Path, head: str, reviewed: str, default: str) -> bool:
 
 
 def _only_resolutions(w: Path, commit: str, first: str) -> bool:
-    """*commit*, a merge onto *first*, is git's own merge of its parents
-    (`not_resolutions`)."""
+    """*commit*, a merge onto *first*, differs from git's own merge of its
+    parents only in what 40.3 lets the step resolve (`not_resolutions`)."""
     return not_resolutions(w, first, f"{commit}^2", commit) == []
 
 
 def not_resolutions(w: Path, first: str, second: str, result: str) -> list[str] | None:
     """The files where *result* (a commit or tree) differs from git's own
-    merge of *first* and *second*. Until item 40.3 lands, the step resolves
-    no conflict, so every such file is one it did not merge; a conflicted
-    file always differs, as git's merge of it holds the markers. None when
-    git cannot tell."""
+    merge of *first* and *second* in more than 40.3 lets the step resolve:
+    in a conflicted version file, only the conflicting version lines; in a
+    conflicted CHANGELOG, only lines from its sides (numbers aside); in a
+    conflicted lockfile, only lines from its sides or the version the result
+    wrote in a version file. Every line outside a conflict is git's own.
+    None when git cannot tell."""
     auto = git(w, "merge-tree", "--write-tree", "--name-only", "--no-messages", first, second)
     if auto.returncode not in (0, 1) or not auto.stdout.strip():
         return None
-    tree = auto.stdout.splitlines()[0]
-    return _lines(git(w, "diff", "--name-only", "-z", "--no-renames", tree, result))
+    tree, *conflicted = auto.stdout.splitlines()
+    differ = _lines(git(w, "diff", "--name-only", "-z", "--no-renames", tree, result))
+    if differ is None:
+        return None
+    blobs = {p: (_blob(w, tree, p), _blob(w, result, p)) for p in differ}
+    versions = {v for p, (auto, new) in blobs.items()
+                if p in conflicted and not (is_lockfile(p) or _is_changelog(p)) for v in _written(auto, new)}
+    return [p for p, (auto, new) in blobs.items() if not _allowed(p, p in conflicted, auto, new, versions)]
+
+
+def _blob(w: Path, tree: str, path: str) -> str | None:
+    """*path*'s text in *tree*; None when it is not there or not text."""
+    try:
+        res = git_ops._run(["git", "cat-file", "blob", f"{tree}:{path}"], cwd=w)
+    except UnicodeDecodeError:
+        return None
+    return res.stdout if res.ok else None
+
+
+def _written(auto: str | None, new: str | None) -> set[str]:
+    """The versions in *new*'s version fields that are not lines of *auto*
+    outside its conflicts: what a resolution wrote."""
+    if auto is None or new is None:
+        return set()
+    kept = {part for part in _segments(auto) if isinstance(part, str)}
+    return {m["v"] for line in new.splitlines() if line not in kept and (m := _VERSION_FIELD.match(line))}
+
+
+def _allowed(path: str, conflicted: bool, auto: str | None, new: str | None, versions: set[str]) -> bool:
+    """*new* is a resolution 40.3 allows of *auto*, git's merge of *path*;
+    *versions*: what the resolution wrote in the version files."""
+    if auto is None or new is None or not conflicted:
+        return False
+    parts = _segments(auto)
+    if is_lockfile(path):
+        return _fits(parts, new.splitlines(), str.__eq__, lambda side, line: line in side or bool(
+            (m := _VERSION_FIELD.match(line)) and m["v"] in versions))
+    if _is_changelog(path):
+        return _fits(parts, new.splitlines(), str.__eq__,
+                     lambda side, line: not line.strip() or _digits(line) in {_digits(x) for x in side})
+    return _resolvable(path, auto) and _fits(parts, new.splitlines(), str.__eq__,
+                                             lambda side, line: bool(_VERSION_FIELD.match(line)))
+
+
+def _digits(line: str) -> str:
+    return re.sub(r"\d+", "0", line)
+
+
+def _segments(text: str) -> list[str | list[str]]:
+    """*text*, git's merge of a file, as its lines outside conflicts and, for
+    each conflict, the lines of all its sides in one list."""
+    parts: list[str | list[str]] = []
+    side: list[str] | None = None
+    for line in text.splitlines():
+        if line.startswith("<<<<<<<") and _MARKER.match(line):
+            side = []
+            parts.append(side)
+        elif side is not None and line.startswith(">>>>>>>") and _MARKER.match(line):
+            side = None
+        elif side is not None and _MARKER.match(line):
+            continue
+        elif side is not None:
+            side.append(line)
+        else:
+            parts.append(line)
+    return parts
+
+
+def _fits(parts: list[str | list[str]], lines: list[str], same, may) -> bool:
+    """*lines* are *parts* with each conflict replaced by one or more lines
+    *may* allows for its sides; every other line *same* as git's."""
+    reach = {0}
+    for part in parts:
+        nxt: set[int] = set()
+        for j in reach:
+            if isinstance(part, str):
+                if j < len(lines) and same(part, lines[j]):
+                    nxt.add(j + 1)
+                continue
+            k = j
+            while k < len(lines) and may(part, lines[k]):
+                k += 1
+                nxt.add(k)
+        if not nxt:
+            return False
+        reach = nxt
+    return len(lines) in reach
 
 
 def not_reviewed(w: Path, reviewed: str | None, default: str) -> str | None:
@@ -146,8 +256,125 @@ def ready(w: Path, reviewed: str | None, origin_ref: str, default: str) -> str |
             or stop_record.others_work(w, None, head=reviewed, origin_ref=origin_ref))
 
 
+def conflicts_ahead(w: Path, default: str) -> bool:
+    """Whether merging `origin/<default>` into HEAD would conflict (or git
+    cannot tell): `git merge-tree` reads, and leaves `<W>` as it is."""
+    return git(w, "merge-tree", "--write-tree", "--name-only", "--no-messages", "HEAD",
+               f"refs/remotes/origin/{default}").returncode != 0
+
+
 def conflicted(w: Path) -> list[str] | None:
     return _lines(git(w, "diff", "--name-only", "-z", "--diff-filter=U"))
+
+
+def is_lockfile(path: str) -> bool:
+    return Path(path).name in LOCKFILES
+
+
+def may_resolve(w: Path, path: str) -> bool:
+    """Item 40.3: a lockfile, a CHANGELOG, or a file whose every conflicting
+    line is a version field."""
+    if is_lockfile(path) or _is_changelog(path):
+        return True
+    try:
+        return _resolvable(path, (w / path).read_text())
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def _is_changelog(path: str) -> bool:
+    p = Path(path)
+    return p.stem.upper() == "CHANGELOG" and p.suffix.lower() in _CHANGELOG_SUFFIXES
+
+
+def _resolvable(path: str, text: str) -> bool:
+    """*text*, the conflicted content of *path*, is one 40.3 lets the step
+    resolve: every conflicting line is the package's own version field."""
+    if is_lockfile(path) or _is_changelog(path):
+        return True
+    found, inside, before, cur, first = False, False, [], [], None
+    for line in text.splitlines():           # *before*: the lines above, a conflict's first side for it
+        if not inside:
+            if line.startswith("<<<<<<<") and _MARKER.match(line):
+                found, inside, cur, first = True, True, [], None
+            else:
+                before.append(line)
+        elif line.startswith(">>>>>>>") and _MARKER.match(line):
+            before += first if first is not None else cur
+            inside = False
+        elif _MARKER.match(line):            # `|||||||` or `=======`: the next side
+            first = cur if first is None else first
+            cur = []
+        elif line.strip() and not (_VERSION_FIELD.match(line) and _own_version(path, before + cur, line)):
+            return False
+        else:
+            cur.append(line)
+    return found
+
+
+def _own_version(path: str, before: list[str], line: str) -> bool:
+    """*line*, a version field after the lines *before*, is the package's own:
+    at the top level of a JSON file, in a package table (or none) of a TOML or
+    INI file, unindented elsewhere. A dependency's version requirement is not."""
+    suffix = Path(path).suffix.lower()
+    if suffix == ".json":
+        depth = 0
+        for x in before:
+            for ch in _STRING.sub('""', x):
+                depth += (ch in "{[") - (ch in "}]")
+        return depth == 1
+    if suffix in (".toml", ".cfg", ".ini"):
+        tables = [m for m in map(_TABLE.match, before) if m]
+        return not tables or (tables[-1].group(1) == "[" and tables[-1].group(2) in _PACKAGE_TABLES)
+    return line == line.lstrip()
+
+
+def unresolved(w: Path, files: list[str]) -> list[str]:
+    """The files that still hold a conflict marker line, or cannot be read.
+    A lone `=======` is not one: it underlines a heading too."""
+    left = []
+    for f in files:
+        try:
+            if _LEFT.search((w / f).read_text()):
+                left.append(f)
+        except (OSError, UnicodeDecodeError):
+            left.append(f)
+    return left
+
+
+def index(w: Path) -> dict[str, list[str]] | None:
+    """*w*'s index, path to its entries (mode, blob and stage), buildme's
+    bookkeeping left out; None when git cannot list it."""
+    entries = _lines(git(w, "ls-files", "--stage", "-z", "--", ".", *git_ops.BOOKKEEPING_EXCLUDES))
+    if entries is None:
+        return None
+    found: dict[str, list[str]] = {}
+    for entry in entries:
+        meta, _, path = entry.partition("\t")
+        found.setdefault(path, []).append(meta)
+    return found
+
+
+def changed_since(w: Path, before: dict[str, list[str]]) -> list[str] | None:
+    """Every path staged since the index was *before*, changed and not staged,
+    or untracked, bookkeeping left out; None when git cannot list them."""
+    now = index(w)
+    changed = _lines(git(w, "diff", "--name-only", "-z", "--", ".", *git_ops.BOOKKEEPING_EXCLUDES))
+    new = _lines(git(w, "ls-files", "--others", "--exclude-standard", "-z", "--", ".",
+                     *git_ops.BOOKKEEPING_EXCLUDES))
+    if now is None or changed is None or new is None:
+        return None
+    staged = [p for p in sorted(now.keys() | before.keys()) if now.get(p) != before.get(p)]
+    return list(dict.fromkeys(staged + changed + new))
+
+
+def outside_merge(w: Path, conflicted_files: list[str]) -> list[str] | None:
+    """During a merge, the files other than *conflicted_files* that are
+    changed and not staged, or untracked: the tests would run with them and
+    the merge commit would leave them out. None when git cannot list them."""
+    staged = index(w)
+    left = None if staged is None else changed_since(w, staged)
+    return None if left is None else [p for p in left if p not in conflicted_files]
 
 
 def abort_names(stderr: str) -> list[str]:
@@ -175,3 +402,20 @@ def test_command(p: Path) -> str | None:
     found = discover_test_command(p)
     return found[0] if found else None
 
+
+async def run_merge_agent(config, w: Path, files: list[str], branch_name: str, default: str) -> AgentResult:
+    """Item 40.3: one agent call (step `merge`) that resolves *files* in *w*.
+    The coordinator vouches for the repo here as it does for every build,
+    review and fixer it launches (`--trust-repo`): without it, `agent_call`
+    would raise `RepoTrustError` mid-merge in a run started without the flag."""
+    os.environ["BUILDME_TRUST_REPO"] = "1"
+    prompt = MERGE_PROMPT.format(default=default, branch=branch_name,
+                                 files="\n".join(f"- `{f}`" for f in files))
+    return await agent_call(
+        prompt,
+        allowed_tools=MERGE_TOOLS,
+        model=config.model_for('merge'),
+        max_turns=MERGE_MAX_TURNS,
+        cwd=str(w),
+        budget_label="merge",
+    )
