@@ -155,6 +155,11 @@ review runs once more report-only and the plan stands — the same
 one-pass rule as the design audit, recorded in
 `spec_gen.plan_review_regen_done`, with the stage itself recorded as
 `plan_review_done` and checked before the model call so a resume costs nothing.
+A failed review call records neither, so a resume asks the model again. The
+`no-new-behaviour` blocks a model-free scan finds still get one rewrite of
+`tasks.md` in that case, recorded as `spec_gen.plan_review_scan_regen_done`, so
+the stage rewrites `tasks.md` at most twice per build: once for that scan after
+a failed call, once for a completed review.
 
 `oversized-plan` is deliberately excluded from that regeneration. It names a
 proposed cut and the signature boundary the cut crosses, and stops there:
@@ -168,8 +173,8 @@ why they are knobs.
 
 The phase prints `PHASE:PLAN_REVIEW:COMPLETE` and keeps the card in the
 Planning column: this review *is* the work Planning stands for, so it does not
-move the card. It is best-effort — a failed plan review leaves the reviewed
-plan standing and never fails the build.
+move the card. It is best-effort — a failed plan review never fails the build,
+and leaves the reviewed plan standing unless the scan above flagged a block.
 
 ### Phase 5: Prototype
 

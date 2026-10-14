@@ -779,6 +779,55 @@ def _is_test_work(heading: str, body: str) -> bool:
     )
 
 
+# A step that writes code. A test-first block writes its tests and then its
+# code ("- [ ] 2.2 Implement HMAC verification", "…, then implement signature
+# checking", "Make count split on tabs"), often without naming its source file.
+# A check is not code ("Confirm", "Verify", "Assert", "Make sure", "Make no
+# change"): a block whose steps only test and check is the block the scan
+# exists to catch.
+_CODE_VERB_RE = re.compile(
+    r"^(?:implement|make(?!\s+(?:no|sure)\b)|build|wire|handle|raise|return"
+    r"|reject|accept|support|change(?!\s+nothing\b)|update|modify|fix"
+    r"|refactor|compute|calculate|parse|split|emit|print|output|store|save"
+    r"|persist|load|define|register|expose|convert|validate|enforce|route"
+    r"|send|replace|rename|move|remove|delete|strip|normali[sz]e|format"
+    r"|render|generate|introduce|extract|guard|cache|append|insert|sort"
+    r"|filter|merge|(?:de)?seriali[sz]e|encode|decode|hash|sign|wrap"
+    r"|add|write|create|extend|expand)\b",
+    re.IGNORECASE,
+)
+# "Add", "Write" and the like write code unless what they add is a test.
+_WRITE_VERB_RE = re.compile(r"^(?:add|write|create|extend|expand)\b", re.IGNORECASE)
+_TEST_WORD_RE = re.compile(
+    r"\b(?:tests?|assert\w*|fixtures?|parametri[sz]\w*)\b", re.IGNORECASE,
+)
+# Steps: sentences, clauses after ";", and "…, then …".
+_STEP_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+|,?\s+(?:and\s+)?then\s+", re.IGNORECASE)
+_STEP_LEAD_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\[[ xX]\]\s*)?(?:\d+(?:\.\d+)*\.?\s+)?"
+    r"(?:(?:then|and|also|finally|next|first)\b[,\s]*)*",
+    re.IGNORECASE,
+)
+
+
+def _has_code_step(body: str) -> bool:
+    """Some step of the block, prose or checkbox, writes code: it opens with
+    a verb that changes code, and an "add"/"write" step adds something that
+    is not a test."""
+    for line in body.splitlines():
+        for step in _STEP_SPLIT_RE.split(line):
+            step = _STEP_LEAD_RE.sub("", step).strip()
+            if not _CODE_VERB_RE.match(step):
+                continue
+            if _WRITE_VERB_RE.match(step) and (
+                _TEST_WORD_RE.search(step)
+                or any(_TEST_PATH_RE.search(p) for p in _named_paths(step))
+            ):
+                continue
+            return True
+    return False
+
+
 def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
     """Deterministic scan for blocks that add no behaviour.
 
@@ -793,8 +842,13 @@ def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
     - it names no file it changes but test files and is test work (its
       heading or first instruction adds tests or a test file; a leaf block
       need not name its source file, so "Tests in `tests/x.py`" is not
-      enough);
-    - every file it names is one it leaves unchanged, and it adds tests.
+      enough), and no step of it writes code;
+    - every file it names is one it leaves unchanged, it adds tests, and no
+      step of it writes code.
+    A step writes code when it opens with a verb that changes code
+    ("Implement …", "Make count split on tabs", "then reject …", "Add a
+    `--summary` flag"), so a test-first block (tests, then the code) is
+    never flagged on its test file.
     `Produces: (none)` alone only says no later block calls it, and "Verify" or
     "Confirm" is an ordinary verb for new behaviour (verify a signature), so
     neither is ever enough. A block that names no file is never flagged on
@@ -821,6 +875,8 @@ def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
         elif _NO_CODE_RE.search(text):
             why = "it says it needs no code"
         elif not paths or any(not _TEST_PATH_RE.search(p) for p in changed):
+            continue
+        elif _has_code_step(body):
             continue
         elif changed and _is_test_work(heading, body):
             why = (

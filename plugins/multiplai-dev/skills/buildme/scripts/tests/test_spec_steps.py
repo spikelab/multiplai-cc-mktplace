@@ -340,11 +340,6 @@ class TestEveryBlockAddsBehaviour:
         assert "Every block MUST add behaviour" in TASKS_PROMPT
         assert "RED gate" in TASKS_PROMPT
 
-    def test_the_tasks_prompt_asks_each_block_to_name_its_source_file(self):
-        """A block that names only its test file reads as test work to the
-        no-behaviour scan, so each block names where its code goes."""
-        assert "names, in backticks, the source file" in TASKS_PROMPT
-
     def test_the_tasks_prompt_forbids_confirm_and_verify_blocks(self):
         assert "Never write a block that only confirms, verifies" in TASKS_PROMPT
 

@@ -30,13 +30,15 @@ time, not derived from a tag.
   nothing and its own text says it adds no code: it says an earlier block
   already satisfies it, it says it needs no code, it is test work that
   changes only test files, or it adds tests and leaves every file it names
-  unchanged. A block that verifies a signature or confirms an overwrite is
-  not flagged for the verb, nor for naming only its test file, nor for
-  saying another block already handles a side concern. A flagged block sends `tasks.md`
+  unchanged, with no step that writes code. A block that verifies a
+  signature or confirms an overwrite is not flagged for the verb, nor for
+  naming only its test file, nor for writing its tests before its code, nor
+  for saying another block already handles a side concern. A flagged block sends `tasks.md`
   through one rewrite, which is told to fold the block into the one that
   builds the behaviour or, if it does add behaviour, to name its code. The
-  plan review still runs this check, and rewrites what it flags, when its
-  model call fails; a resumed build then asks the model again. A block still
+  plan review still runs this check, and rewrites what it flags once per
+  build, when its model call fails; a resumed build then asks the model
+  again. A block still
   flagged after the rewrite is named in the log as
   `PHASE: no_behaviour_blocks_remain`.
 

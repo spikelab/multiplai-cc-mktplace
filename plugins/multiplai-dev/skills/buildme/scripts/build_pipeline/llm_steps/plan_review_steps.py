@@ -466,8 +466,11 @@ async def run_plan_review_stage(
     that still has findings after one pass stands.
 
     Never raises: a review or regeneration failure is logged and the existing
-    plan stands. Returns the first-pass findings.
+    plan stands, except that a failed review call still sends the
+    no-behaviour scan's blocks to one rewrite per build. Returns the
+    first-pass findings.
     """
+    from ..spec_generator import report_no_behaviour_blocks_left
     from ..state import SpecGenState
 
     if state.spec_gen is None:
@@ -494,14 +497,29 @@ async def run_plan_review_stage(
         print(f"PHASE: plan_review_skipped — {review_err}")
         if not scanned:
             return []
-        # The scan's blocks still get a rewrite. Nothing is saved, as for any
-        # failed call: a resume asks the model again, and its findings get
-        # the stage's one rewrite. A resume whose call fails again rewrites
-        # only if the scan still flags a block in the plan this one left.
+        # The scan's blocks still get a rewrite, once per build: it has its
+        # own flag. The review's two flags stay false, as for any failed
+        # call, so a resume asks the model again and its findings get the
+        # review's one rewrite.
         log_plan_review_findings(scanned)
+        if state.spec_gen.plan_review_scan_regen_done:
+            log.info(
+                "SKIP phase=PLAN_REVIEW_SCAN_FEEDBACK "
+                "reason=recorded-complete-in-state"
+            )
+            print(
+                "PHASE: plan_review_feedback_skipped — "
+                "scan rewrite already applied"
+            )
+            report_no_behaviour_blocks_left(change_dir / "tasks.md")
+            return scanned
         await _apply_plan_review_findings(
             change_dir, config, state, plan_review_findings_text(scanned),
         )
+        # Recorded whether or not anything was rewritten, as for the review's
+        # own pass.
+        state.spec_gen.plan_review_scan_regen_done = True
+        state.checkpoint(state_path)
         return scanned
 
     findings = list(result.findings) + scanned
@@ -540,8 +558,9 @@ def _no_behaviour_findings(change_dir: Path) -> list[PlanReviewFinding]:
     The design audit's rewrite of tasks.md comes after the shape audit, so the
     scan runs here too: a block the reviewer model misses still reaches the
     one regeneration, and a review whose model call fails still rewrites the
-    scan's blocks (saving nothing, so a resume reviews again). The prototype
-    feedback pass, after this review, runs the same scan on what it writes.
+    scan's blocks, once per build (``plan_review_scan_regen_done``), so a
+    resume reviews again. The prototype feedback pass, after this review,
+    runs the same scan on what it writes.
     """
     from ..spec_generator import scan_no_behaviour_blocks
 
@@ -589,7 +608,9 @@ async def _apply_plan_review_findings(
     ``_generate_single_artifact``), and rubric.md (which ``ARTIFACT_DAG``
     declares requires ``tasks``, and which the per-block review scores against).
     Both are bounded by the same thing that bounds this function — it runs at
-    most once per build, behind ``plan_review_regen_done``.
+    most once per build behind ``plan_review_regen_done`` (the review's
+    findings) and at most once behind ``plan_review_scan_regen_done`` (the
+    no-behaviour scan's, after a failed review call).
     """
     from ..change_manager import ChangeManager
     from ..spec_generator import (
