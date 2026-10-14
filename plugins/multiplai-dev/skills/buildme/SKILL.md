@@ -644,7 +644,7 @@ earlier run is waited for, never started twice, and a PR a stopped child
 opened is found and kept. When `gh` or `ps` fails while checking a stopped
 child, or `gh pr view` fails for a PR another child waits on, that child is
 `unknown`: nothing is launched for it or its dependants, and the run exits
-`1`; re-run once they work. Each failed or `unknown` child is named on stderr
+`1`; re-run once they work. A failed or `unknown` child makes the run exit `1` even beside a PR that only waits for a person to merge it, and `3` while a child waits on a dependency's open PR. Each failed or `unknown` child is named on stderr
 (`EPIC: child <id> <status>: <reason>`), beside `EPIC:MERGE_WAITING` too. Ctrl-C (or SIGTERM) stops every child, those
 started by an earlier run included, and exits `130` (`143`). SIGHUP (a closed
 terminal) ends only the run, with exit `129`: the children keep running, and
@@ -653,7 +653,8 @@ the next run waits for them. An ignored SIGHUP or SIGTERM (SIGHUP under
 
 `specs/config.yaml` takes an `epic:` block: `epic.max_parallel` (default `2`),
 `epic.max_review_rounds` (default `6`), `epic.merge` (`auto` or `manual`,
-default `manual`; under `manual` a human merges each child's PR) and
+default `manual`; under `manual` a human merges each child's PR, and under
+`auto` buildme first merges the default branch into it, tests and pushes) and
 `epic.max_usd` (one ceiling for the whole epic, default none; each child keeps
 its own `budget.max_usd` too). `build` and `findings` print
 `SPEND:<usd>:<tokens>` as their last line on every exit but a kill (SIGTERM
@@ -737,8 +738,31 @@ as `findings` and `uv run` report it) is run again by the next run. Before
 each fixer launch, any `findings` on the PR's number is waited for, one
 started by hand without `--change` included. The post and the
 fixer count against `epic.max_parallel` and `epic.max_usd` like a build, and
-Ctrl-C or SIGTERM stops a fixer this run started. Merging the children's PRs
-comes in a later release.
+Ctrl-C or SIGTERM stops a fixer this run started.
+
+**Merging the children's PRs.** A PR whose last review left no blockers is
+waited on as a dependency's PR is. Under `epic.merge: manual` (the default)
+nothing more happens: the run exits `3` with `EPIC:MERGE_WAITING:<urls>`
+naming every such PR still open, and a re-run once a person merged them goes
+on. Under `auto`, the default branch is first merged into each such PR, in its
+worktree, one merge at a time per repository. The worktree must hold nothing
+but buildme's own files and be at the reviewed head (or it plus the merge step's own merges), else the child parks naming what it found; then
+`git merge --no-ff --no-commit origin/<default>`. Any conflict parks the
+child, naming the files: this release resolves none. The project's tests then run in the worktree
+(`tdd.test_command`, else the command buildme discovers, with
+`BUILDME_TRUST_REPO=1`, `agents/<NNN>-merge-tests-<id>.*`; SIGHUP ends them with the run), and a failure
+parks. The merge commit is pushed, never forced; a push rejected because origin's branch moved parks naming
+where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. A merge commit holding only git's own merge, as the merge step's own do, is not
+reviewed again; any other, such as a person's "Update branch" with other edits, is. This release does not merge the PR itself under `auto`: after
+the push it waits for a person, as under `manual`. A run stopped during the
+merge saves what the worktree held (`merge_stop` in `epic.json`); the next
+run aborts the stopped merge and merges again only when nothing else changed
+in the worktree since, and otherwise parks with `git -C <worktree> merge
+--abort, then re-run`, leaving everything as it is. A merge commit made but
+not pushed, holding only git's own merge, is tested again and pushed. A child the merge step parked is
+tried again by a later run once its worktree has no merge in progress and no
+uncommitted change (after `merge --abort`, as the hint says), and parks again
+if the merge fails again; every other parked child stays parked.
 
 ### The size gate (after plan review)
 
@@ -855,7 +879,7 @@ Parse pipeline stdout for progress lines:
   failed build
 - `RESULT:SUCCESS` — build complete
 - `EPIC:APPROVED:<epic.json>` — the epic split is approved; the children build next
-- `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown`; `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
+- `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown` (`3` while a child waits on a dependency's open PR); `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
 - `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent, the pr skill and a walkthrough run included (`:incomplete` follows when one of them printed no spend)
 - `ERROR:<message>` — failure
 
@@ -871,7 +895,7 @@ change the flags to get past it), `4` an agent timed out
 | `INTERVIEW:WAITING:<path>` | `interview: ticket` wrote its questions to `<path>` | Post them as **one** ticket comment (plane: `comment <ref> "<text>"`; github: `gh issue comment <n> --body-file <path>`), tell the user the build is waiting for replies, and stop. On the next run, fetch the comments posted after yours into a file and pass `--interview-replies <file>`. No replies yet: it prints the marker again. |
 | `RESEARCH:NEEDED:<path>` | the research decision asked for research; topics in `<path>` | Run `/deep-research` on them and re-run with `--research-path <output>` — or, without `multiplai-research`, say so and re-run with `--skip-research`. |
 | `SPLIT:REQUIRED:<path>` | the size gate wants the plan split; proposal in `<path>` | Post `<path>` on the ticket (plane `comment` / `gh issue comment --body-file`), or show it to the user for a prompt, and stop. Re-run with `--accept-size` only when the user chooses to build it as one PR. |
-| `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and stop. Re-run the same command once they are merged; a PR closed without a merge parks the children that wait on it. |
+| `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge, or a PR passed review and waits for a person to merge it (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and any child the `EPIC: child` lines on stderr name, and stop. Re-run the same command once they are merged; a PR closed without a merge parks the children that wait on it. |
 | `EPIC:BUDGET:<spent>` | the epic's spend (USD) reached `epic.max_usd`; nothing more was launched | Tell the user what was spent and which children did not start (the `EPIC:SUMMARY` file), and stop. A re-run stops again until the user raises `epic.max_usd` in `specs/config.yaml`; never raise it yourself. |
 | `EPIC:SPLIT:<path>` | the input is several changes; the split is in `<path>` (`split.md`), one plan per child in `plans/` beside it | For a GitHub ticket, post **one** comment whose body is the line `<!-- buildme-epic-split:<sha256 of split.md> -->` (`shasum -a 256 <path>`) followed by the content of `<path>`, and only when no comment on the issue already starts with that line (`gh issue view <n> --json comments --jq '.comments[].body'`): a re-run prints the same line for the same `split.md`, so it never posts twice. For any other input, show `<path>` to the user. Then stop. Re-run with `--approve-split` only when the user approves the split. Never create, close or edit a ticket for a child. |
 

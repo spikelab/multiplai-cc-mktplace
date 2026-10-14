@@ -36,8 +36,10 @@ from .epic_row_helpers import (
     last_summary,
     make_build,
     make_project,
+    merge_waiting,
     name_commits,
     pr_number,
+    pr_url,
     records_snapshot,
     run_coordinator,
     run_killed,
@@ -185,9 +187,9 @@ def test_C_S2_coordinator_killed_with_the_review_alive_waits_for_it(tmp_path, mo
             if len(looks) == 5:
                 stopped.release_and_wait()
 
-    assert stopped.run(tick) == 0
+    assert stopped.run(tick) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert len(looks) == 5
-    assert clean.run(_release_when_reviewed(clean)) == 0
+    assert clean.run(_release_when_reviewed(clean)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     _assert_same(stopped, clean, ["<build>", ("review", None, None, [], True)], [])
     old = _result(stopped, 0)
     assert (old["reused"], old["pr_round"], old["head_sha"]) == (True, 1, _result(clean, 0)["head_sha"])
@@ -207,8 +209,8 @@ def test_C_S3_review_killed_with_its_coordinator_is_resumed(tmp_path, monkeypatc
         if not stat.strip() or stat.strip().startswith("Z"):
             break
         time.sleep(0.02)
-    assert stopped.run() == 0
-    assert clean.run(_release_when_reviewed(clean)) == 0
+    assert stopped.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+    assert clean.run(_release_when_reviewed(clean)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     _assert_same(stopped, clean, ["<build>", ("review", None, None, [], True), ("review", None, 4, [], False),
                                   ("resume", None, 0, [], False)], ["review", "resume"])
     last = _result(stopped, 2)
@@ -233,8 +235,8 @@ def test_C_S4_finished_review_whose_result_was_not_recorded_is_reused(tmp_path, 
 
     stopped.killed(setup)
     assert stopped.finished() and _result(stopped, 0) is None
-    assert stopped.run() == 0
-    assert clean.run() == 0
+    assert stopped.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+    assert clean.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     _assert_same(stopped, clean, ["<build>", ("review", None, None, [], True)], [])
     got, want = _result(stopped, 0), _result(clean, 0)
     assert (got["reused"], got["pr_round"], want["pr_round"]) == (True, 1, 1)
@@ -277,9 +279,9 @@ def test_C_S19_head_moved_while_reviewed_and_stopped_before_the_reuse(tmp_path, 
     stopped.killed(setup)
     [first] = stopped.reviews()
     assert first.started["head_sha"] != moved and first.result["exit_code"] == 0
-    assert stopped.run() == 0
+    assert stopped.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     monkeypatch.setattr(coordinator.Coordinator, "_run_review", pushing(clean))
-    assert clean.run() == 0
+    assert clean.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     _assert_same(stopped, clean, ["<build>", ("review", None, 0, [], False), ("review", None, 0, [], False)], [])
     got, want = _result(stopped, 1), _result(clean, 1)
     assert (got["head_sha"], got["reused"], got["pr_round"]) == (moved, True, 1)

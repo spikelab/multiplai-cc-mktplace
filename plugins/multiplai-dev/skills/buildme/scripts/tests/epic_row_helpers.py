@@ -326,6 +326,12 @@ else:
     print(f"BRANCH:{{branch}}", flush=True)
     (root / "bases").mkdir(exist_ok=True)
     (root / "bases" / cid).write_text(git("rev-parse", "HEAD", cwd=wt).stdout.strip())
+    if step.get("commit"):      # PR E: the child's own change, pushed as a real build pushes it
+        for rel, text in step["commit"].items():
+            (wt / rel).write_text(text)
+        git("add", "--", *step["commit"], cwd=wt)
+        git("-c", "commit.gpgsign=false", "commit", "-qm", f"child {{cid}}", cwd=wt)
+        git("push", "-q", "-u", "origin", branch, cwd=wt)
 if step.get("grandchild"):      # a process in the build's group, as a real build's agents are
     kid = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
     (root / "grandchildren").mkdir(exist_ok=True)
@@ -373,13 +379,16 @@ a = sys.argv[1:]
 if (root / "gh-fails").exists():
     print("fake gh: offline", file=sys.stderr)
     sys.exit(1)
+origin = root / "o" / "r.git"
 if a[:2] == ["pr", "view"]:
     pr = prs.get(a[2])
     if pr is None:
         print("no pull request found", file=sys.stderr)
         sys.exit(1)
     change = a[2].rsplit("/", 1)[1]
-    head = pr.get("head") or subprocess.run(
+    pushed = subprocess.run(["{git}", "--git-dir", str(origin), "rev-parse", "-q", "--verify",
+                             "refs/heads/" + pr["branch"]], capture_output=True, text=True).stdout.strip()
+    head = pr.get("head") or pushed or subprocess.run(       # origin's branch once pushed (PR E)
         ["git", "rev-parse", "refs/heads/" + pr["branch"]], cwd=root / "p",
         capture_output=True, text=True).stdout.strip()
     print(json.dumps({{"state": pr["state"], "number": number(change), "headRefOid": head,
@@ -448,8 +457,10 @@ else:
     n = int(target.name[len("pr-"):])
 prs = json.loads((root / "prs.json").read_text())
 url, pr = next((u, p) for u, p in prs.items() if number(u.rsplit("/", 1)[1]) == n)
-head = pr.get("head") or subprocess.run(["git", "rev-parse", "refs/heads/" + pr["branch"]],
-                                        cwd=root / "p", capture_output=True, text=True).stdout.strip()
+pushed = subprocess.run(["{git}", "--git-dir", str(root / "o" / "r.git"), "rev-parse", "-q", "--verify",
+                         "refs/heads/" + pr["branch"]], capture_output=True, text=True).stdout.strip()
+head = pr.get("head") or pushed or subprocess.run(       # the head `gh` reports (PR E)
+    ["git", "rev-parse", "refs/heads/" + pr["branch"]], cwd=root / "p", capture_output=True, text=True).stdout.strip()
 fx = json.loads((root / "reviews.json").read_text()) if (root / "reviews.json").exists() else {{}}
 counts = root / "review-attempts"
 counts.mkdir(exist_ok=True)
@@ -611,6 +622,45 @@ print(f"FINDINGS:{{'MAX_ROUNDS' if step.get('max_rounds') else 'DONE'}}:{{len(do
 '''
 
 
+FAKE_TESTS = r'''#!{python}
+"""A fake test command (PR E's `merge-tests`), answering from `<root>/tests.json`:
+one step per launch (`exit`; `block`, waiting for `<root>/release/tests-<k>`; `die`)."""
+import json, os, pathlib, signal, sys, time
+
+root = pathlib.Path(os.environ["EPIC_FAKE_ROOT"])
+with (root / "calls.log").open("a") as f:
+    f.write(json.dumps({{"kind": "merge-tests", "cwd": os.getcwd().replace(str(root), "<root>"),
+                        "trusted": os.environ.get("BUILDME_TRUST_REPO")}}, sort_keys=True) + "\n")
+counts = root / "test-attempts"
+counts.mkdir(exist_ok=True)
+k = len(list(counts.iterdir())) + 1
+(counts / str(k)).write_text("")
+steps = json.loads((root / "tests.json").read_text()) if (root / "tests.json").exists() else []
+step = steps[k - 1] if k <= len(steps) else (steps[-1] if steps else {{}})
+while step.get("block") and not (root / "release" / f"tests-{{k}}").exists():
+    time.sleep(0.02)
+if step.get("die"):
+    os.kill(os.getpid(), signal.SIGKILL)
+print("fake tests ran", flush=True)
+sys.exit(step.get("exit", 0))
+'''
+
+# A `git` that logs only pushes (PR E's writing calls) to `<root>/pushes.log`,
+# apart from `calls.log`, whose readers expect launches only; then runs the real one.
+GIT_SHIM = """#!/bin/sh
+if [ "$1" = push ]; then printf '{{"kind": "git-push", "argv": "%s"}}\\n' "$*" >> "$EPIC_FAKE_ROOT/pushes.log"; fi
+exec {git} "$@"
+"""
+
+
+def real_git() -> str:
+    """The real `git`, skipping any fake root's shim on PATH."""
+    import shutil
+
+    path = [p for p in os.environ["PATH"].split(os.pathsep) if not (Path(p).parent / "fakes.json").exists()]
+    return shutil.which("git", path=os.pathsep.join(path))
+
+
 class Fakes:
     """The fake build and `gh` first on PATH, answering from `<root>/fakes.json`
     (per child, one step per attempt: `block`, `marker`, `exit`, `no_pr`,
@@ -639,9 +689,9 @@ class Fakes:
         (root / "reviews.json").write_text(json.dumps(reviews or {}))
         (root / "fixes.json").write_text(json.dumps(fixes or {}))
         for name, text in (("python", FAKE_BUILD), ("gh", FAKE_GH), ("uv", FAKE_UV),
-                           ("fake_findings.py", FAKE_FINDINGS)):
+                           ("fake_findings.py", FAKE_FINDINGS), ("fake-tests", FAKE_TESTS), ("git", GIT_SHIM)):
             path = self.bin / name
-            path.write_text(text.format(python=sys.executable))
+            path.write_text(text.format(python=sys.executable, git=real_git()))
             path.chmod(0o755)
         (root / "release").mkdir(exist_ok=True)
         (root / "fakes.json").write_text(json.dumps(steps or {}))
@@ -752,20 +802,46 @@ def approve(config: BuildConfig, answer: EpicSplitAnswer, log: CallLog) -> None:
     lock.release_all()
 
 
+_OUT: list[str] = []      # what the last `run_coordinator` printed
+
+
+class _Tee:
+    def __init__(self, out):
+        self.out, self.text = out, []
+
+    def write(self, s: str) -> int:
+        self.text.append(s)
+        return self.out.write(s)
+
+    def flush(self) -> None:
+        self.out.flush()
+
+
 def run_coordinator(config: BuildConfig, **over) -> int:
     """One re-run of the approved build: the coordinator runs, with the fake
     clock. Like a new process, it takes the epic lock itself and drops it at
-    the end, so a child build holding the lock would make it exit 2."""
+    the end, so a child build holding the lock would make it exit 2. What it
+    prints is kept for `merge_waiting`."""
+    import contextlib
+    import sys
     from unittest.mock import patch
 
     from build_pipeline.epic import coordinator, lock
 
     lock.release_all()
+    tee = _Tee(sys.stdout)
     try:
-        with patch.object(coordinator, "CLOCK", FakeClock()):
+        with patch.object(coordinator, "CLOCK", FakeClock()), contextlib.redirect_stdout(tee):
             return run_build(config, args_for(config, **over), coordinator=True)
     finally:
         lock.release_all()
+        _OUT[:] = "".join(tee.text).splitlines()
+
+
+def merge_waiting() -> list[str] | None:
+    """The PRs the last `run_coordinator` named on `EPIC:MERGE_WAITING:`; None without that line."""
+    found = [line for line in _OUT if line.startswith("EPIC:MERGE_WAITING:")]
+    return found[-1][len("EPIC:MERGE_WAITING:"):].split(",") if found else None
 
 
 def run_signalled(fn: Callable[[], int], ready: Callable[[], bool], sig: int) -> int:

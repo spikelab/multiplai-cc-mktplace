@@ -28,6 +28,8 @@ from .epic_row_helpers import (
     child,
     make_build,
     make_project,
+    merge_waiting,
+    pr_url,
     run_coordinator,
     use_workspace,
 )
@@ -347,7 +349,7 @@ def test_the_budget_stop_waits_for_running_children(tmp_path, monkeypatch, capsy
 def test_no_ceiling_never_stops(tmp_path, monkeypatch, capsys):
     each = [{"spend": 40.0}]
     e = Epic(tmp_path, monkeypatch, {"a": each, "b": each, "c": each}, max_usd=None)
-    assert run_coordinator(e.config) == 0
+    assert run_coordinator(e.config) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b"), pr_url("e-c")]
     assert sorted(e.launches()) == ["a", "b", "c"]
     assert e.epic_json()["spent_usd"] == pytest.approx(120.0)
     assert "EPIC:BUDGET" not in capsys.readouterr().out

@@ -12,7 +12,7 @@ SKILL.md (thin wrapper — handles interview, plan review)
         ├── tdd_engine.py      — per-block TDD with agent spawning
         ├── apply.py           — manual single-agent implementation
         ├── change_manager.py  — manages specs/ directory
-        ├── epic/              — EPIC_SPLIT: one change or several child plans, the approval, running and reviewing the children
+        ├── epic/              — EPIC_SPLIT: one change or several child plans, the approval, running, reviewing and merging the children
         └── shared: config, state, models, gates, sdk, logging, env, progress
 ```
 
@@ -106,7 +106,21 @@ stopped by SIGKILL, SIGTERM or SIGHUP (a negative exit, or 137, 143 or 129,
 `fix.stopped`); one whose log holds `FINDINGS:FAILED` parks instead. A post
 or review stopped the same way (`uv run` reports 128 + signal) gets an
 `interrupted` result, and the next run posts or reviews again. `FINDINGS:FAILED`, another failing exit, or a failed post parks the
-child. A file
+child. A PR whose last review left no blockers is waited on as a
+dependency's is (`Coordinator._waited_on`), so every run with one open exits
+3 with `EPIC:MERGE_WAITING` (1 beside a failed or `unknown` child when no child waits on a dependency's PR). Under `epic.merge: auto` the merge step runs
+first (PR E1, `epic/merge.py`, `Coordinator._merge`), under one
+`asyncio.Lock` per repository and on the worktree root: a merge commit made
+and not pushed, holding only what `merge.merges_onto` accepts, is checked (`stop_record.others_work`), tested and pushed; a
+merge left in progress is aborted only when `others_work` passes against
+`merge_stop`, else it parks with the hint `git -C <W> merge --abort, then
+re-run`, and after the abort restarts at the fetch; else `merge.ready` (the same check, no record, and HEAD must be the reviewed head or it plus merges `merge.merges_onto` accepts), `git fetch`, `git
+merge --no-ff --no-commit origin/<default>` (any conflict parks),
+the tests with `BUILDME_TRUST_REPO=1` (kind `merge-tests`, killed when the step stops), `git commit` and
+`git push` (rejected: parks; other failures, and a failed fetch: `unknown` for the rest of the run, `MERGE_UNKNOWN`). An exception or signal saves `merge_stop`; any park saves
+`merge_park` in `epic.json`, which `_recover` keeps until `<W>` has no `MERGE_HEAD` and no uncommitted change, then retries (`_merge_retry`). A head that is the
+reviewed head plus merges holding only git's own merge (`merge.merges_onto`, which compares it with `git merge-tree`'s: `merge.not_resolutions`) is not reviewed again. PR E2
+adds waiting for checks and `gh pr merge`. A file
 changed after approval, another process holding the epic's lock, or a
 `specs/config.yaml` turning off `git.worktree` or `git.push`, exits 2.
 `--no-epic-split` skips the decision.
