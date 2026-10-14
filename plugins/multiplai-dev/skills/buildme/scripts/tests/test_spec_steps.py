@@ -343,10 +343,32 @@ class TestEveryBlockAddsBehaviour:
     def test_the_tasks_prompt_forbids_confirm_and_verify_blocks(self):
         assert "Never write a block that only confirms, verifies" in TASKS_PROMPT
 
-    def test_the_shape_audit_flags_a_block_that_adds_no_behaviour(self):
-        from build_pipeline.prompts.design_audit import TASKS_AUDIT_PROMPT
-
-        assert '"no-new-behaviour"' in TASKS_AUDIT_PROMPT
-        TASKS_AUDIT_PROMPT.format(
-            design_content="", specs_content="", tasks_content="",
+    @pytest.mark.asyncio
+    async def test_the_shape_audit_asks_for_and_returns_no_new_behaviour(
+        self, tmp_path,
+    ):
+        """The audit's prompt carries the rule with its severity and remedy,
+        and a finding the model reports under it comes back to the caller,
+        which turns every finding into the one rewrite."""
+        change_dir = tmp_path / "changes" / "feat"
+        change_dir.mkdir(parents=True)
+        (change_dir / "design.md").write_text("# Design")
+        (change_dir / "tasks.md").write_text("## 1. Slice\n\n## 2. Pin it\n")
+        raw = (
+            '[{"category": "no-new-behaviour", "severity": "critical", '
+            '"description": "Block 2 pins Block 1", "suggestion": "fold it in"}]'
         )
+
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = _agent_text(raw)
+            findings = await run_tasks_audit(change_dir, config=MagicMock(model="m"))
+
+        prompt = mock_llm.call_args[0][0]
+        section = prompt[prompt.index("## Blocks That Add No Behaviour"):]
+        section = section[:section.index("\n## ", 1)]
+        assert '(category "no-new-behaviour", severity "critical")' in section
+        assert "tests would pass" in section
+        assert "into the block that builds the behaviour" in section
+        assert [f["category"] for f in findings] == ["no-new-behaviour"]

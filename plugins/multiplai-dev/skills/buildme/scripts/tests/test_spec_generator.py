@@ -1608,15 +1608,114 @@ class TestScanNoBehaviourBlocks:
 
         assert scan_no_behaviour_blocks(path) == []
 
-    def test_a_checkbox_block_headed_verify_is_flagged(self, tmp_path):
+    def test_a_checkbox_block_whose_prose_says_block_1_satisfies_it_is_flagged(
+        self, tmp_path,
+    ):
+        """Checkbox format (every standard-tier build): `parse_blocks` keeps
+        only the checkbox lines, so the scan must read the prose too, and a
+        numbered item such as `2.1 Confirm …` must not hide anything."""
         path = _tasks_file(tmp_path, (
             "## 1. Count words\n\n- [ ] 1.1 Add `count(s: str) -> int`\n\n"
             "Interfaces:\n- Produces: `count(s: str) -> int`\n\n"
-            "## 2. Verify whitespace handling\n\n- [ ] 2.1 Add tests for tabs\n\n"
+            "## 2. Line-count edge cases\n\nThis slice is satisfied by Block 1.\n\n"
+            "- [ ] 2.1 Confirm `len(text.splitlines())` handles blank lines\n"
+            "- [ ] 2.2 Add tests asserting `count(\"\") == 0`\n\n"
+            "Interfaces:\n- Produces: (none)\n"
+            "- Consumes: Block 1: `count(s: str) -> int`\n"
+        ))
+
+        assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
+
+    def test_a_block_that_says_an_earlier_block_already_handles_it_is_flagged(
+        self, tmp_path,
+    ):
+        path = _tasks_file(tmp_path, (
+            "## 1. Count words\n\nAdd `count(s: str) -> int` to `src/words.py`.\n\n"
+            "Interfaces:\n- Produces: `count(s: str) -> int`\n\n"
+            "## 2. Tabs\n\nBlock 1's implementation already handles these; "
+            "no code change. Add tests for tabs.\n\n"
             "Interfaces:\n- Produces: (none)\n"
         ))
 
         assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
+
+    def test_a_block_that_names_only_test_files_is_flagged(self, tmp_path):
+        """The block the live plan review saw before the prototype rewrite:
+        it adds a test file and names no code to write, so there is nothing
+        for its tests to wait for."""
+        path = _tasks_file(tmp_path, (
+            "## 1. Summarize\n\nCreate `src/textkit/summary.py` with "
+            "`summarize(text: str) -> str`.\n\n"
+            "Interfaces:\n- Produces: `summarize(text: str) -> str`\n\n"
+            "## 2. `tests/test_summary.py` scenario coverage\n\n"
+            "Add `tests/test_summary.py` following the `tests/test_words.py` "
+            "style. Assert every scenario verbatim: `summarize(\"hello\") == "
+            "\"1 words, 1 lines\"`, and that `textkit.summary.summarize` is "
+            "reachable.\n\n"
+            "Interfaces:\n- Produces: (none)\n"
+            "- Consumes: Block 1: `summarize(text: str) -> str`\n"
+        ))
+
+        assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
+
+    def test_a_checkbox_block_that_names_only_test_files_is_flagged(self, tmp_path):
+        path = _tasks_file(tmp_path, (
+            "## 1. Count words\n\n- [ ] 1.1 Add `count` to `src/words.py`\n\n"
+            "Interfaces:\n- Produces: `count(s: str) -> int`\n\n"
+            "## 2. Whitespace\n\n- [ ] 2.1 Add tests for tabs to `tests/test_words.py`\n\n"
+            "Interfaces:\n- Produces: (none)\n"
+        ))
+
+        assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
+
+    @pytest.mark.parametrize("block", [
+        # A domain "Verify": new behaviour, a 401 that fails before it is built.
+        "## 2. Verify webhook signatures\n\nVerify each incoming webhook's "
+        "HMAC-SHA256 header against the shared secret and reject a mismatch "
+        "with 401 before the body is stored.\n\n",
+        # Same, naming its source file and its test file.
+        "## 2. Verify webhook signatures\n\nVerify the `X-Signature` header in "
+        "`src/app/webhooks.py` and reject a mismatch with 401. Tests go in "
+        "`tests/test_webhooks.py`.\n\n",
+        # A domain "Confirm", whose "unchanged" is about the user's file.
+        "## 2. Confirm before overwriting an existing file\n\nWhen the target "
+        "exists, prompt \"Overwrite? [y/N]\" and on N leave the existing file "
+        "unchanged.\n\n",
+        # A leaf block that uses something an earlier block built.
+        "## 2. CLI word count\n\nAdd a `wc` CLI command using the tokenizer "
+        "already built in Block 1, printing the count and exiting 0.\n\n",
+        # It names one file it leaves alone, and one it changes.
+        "## 2. JSON output\n\nAdd `--json` to `src/app/cli.py`; leave "
+        "`src/app/core.py` unchanged. Tests in `tests/test_cli.py`.\n\n",
+    ])
+    def test_a_leaf_block_that_adds_behaviour_is_not_flagged(self, tmp_path, block):
+        """`Produces: (none)` only says nothing later calls the block, and
+        "Verify"/"Confirm" are ordinary verbs for new behaviour."""
+        path = _tasks_file(tmp_path, (
+            "## 1. Upload endpoint\n\nAdd `upload(body: bytes) -> Response`.\n\n"
+            "Interfaces:\n- Produces: `upload(body: bytes) -> Response`\n\n"
+            + block
+            + "Interfaces:\n- Produces: (none)\n"
+            "- Consumes: Block 1: `upload(body: bytes) -> Response`\n"
+        ))
+
+        assert scan_no_behaviour_blocks(path) == []
+
+    def test_the_suggestion_lets_a_block_that_adds_behaviour_say_so(self, tmp_path):
+        """A false positive must cost one rewrite, never the block: the rewrite
+        is told to keep a block that does add behaviour and name its code."""
+        path = _tasks_file(tmp_path, (
+            "## 1. Count words\n\n- [ ] 1.1 Add `count` to `src/words.py`\n\n"
+            "Interfaces:\n- Produces: `count(s: str) -> int`\n\n"
+            "## 2. Whitespace\n\n- [ ] 2.1 Add tests for tabs to `tests/test_words.py`\n\n"
+            "Interfaces:\n- Produces: (none)\n"
+        ))
+
+        finding = scan_no_behaviour_blocks(path)[0]
+
+        assert "the earlier block that builds it" in finding["suggestion"]
+        assert "name the code" in finding["suggestion"]
+        assert "only test files" in finding["description"]
 
     def test_a_missing_tasks_file_yields_no_findings(self, tmp_path):
         assert scan_no_behaviour_blocks(tmp_path / "absent.md") == []
@@ -1626,8 +1725,8 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
     """The scan's findings join the shape audit's ONE regeneration pass, like
     the placeholder scan's, even when the LLM audit finds nothing."""
 
-    @pytest.mark.asyncio
-    async def test_a_no_behaviour_block_forces_the_regeneration(self, tmp_path):
+    @staticmethod
+    def _setup(tmp_path):
         specs_dir = tmp_path / "specs"
         specs_dir.mkdir()
         cm = ChangeManager(specs_dir)
@@ -1652,6 +1751,11 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
             phase=BuildPhase.SPEC_GENERATION,
             spec_gen=SpecGenState(),
         )
+        return cm, change_dir, config, state
+
+    @pytest.mark.asyncio
+    async def test_a_no_behaviour_block_forces_the_regeneration(self, tmp_path):
+        cm, change_dir, config, state = self._setup(tmp_path)
         rewritten = "## 1. Summarize\n\nBuilds it, edge cases included.\n"
 
         with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
@@ -1667,3 +1771,54 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
         assert "Block 2" in regen_findings
         assert "Block 3" in regen_findings
         assert state.spec_gen.tasks_audit_done is True
+
+    @pytest.mark.asyncio
+    async def test_the_model_audits_no_new_behaviour_finding_reaches_the_regeneration(
+        self, tmp_path,
+    ):
+        """A block the deterministic scan cannot see, reported by the model
+        audit under the new category, still drives the one rewrite."""
+        cm, change_dir, config, state = self._setup(tmp_path)
+        first = (
+            "## 1. Summarize\n\nCreate `src/summary.py`.\n\n"
+            "Interfaces:\n- Produces: `summarize(text: str) -> str`\n\n"
+            "## 2. Pin plurals\n\nPin the plural nouns.\n\n"
+            "Interfaces:\n- Produces: (none)\n"
+        )
+        rewritten = "## 1. Summarize\n\nBuilds it, plurals included.\n"
+        model_finding = {
+            "category": "no-new-behaviour", "severity": "critical",
+            "description": "Block 2 only pins what Block 1 builds",
+            "suggestion": "Move its criteria into Block 1",
+        }
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.side_effect = [first, rewritten]
+            mock_audit.return_value = [model_finding]
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        assert mock_gen.call_count == 2
+        regen_findings = mock_gen.call_args_list[1].kwargs["audit_findings"]
+        assert "Block 2 only pins what Block 1 builds" in regen_findings
+        assert (change_dir / "tasks.md").read_text() == rewritten
+
+    @pytest.mark.asyncio
+    async def test_a_block_left_after_the_rewrite_is_named_in_the_log(
+        self, tmp_path, capsys,
+    ):
+        """One rewrite, then the plan stands, as every audit here: but a
+        block the scan still flags is named, so the RED-gate failure that
+        follows is not a surprise."""
+        cm, change_dir, config, state = self._setup(tmp_path)
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.side_effect = [_E2E_TASKS.read_text(), _E2E_TASKS.read_text()]
+            mock_audit.return_value = []
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        assert mock_gen.call_count == 2
+        assert "PHASE: no_behaviour_blocks_remain — Block 2, Block 3" in capsys.readouterr().out
