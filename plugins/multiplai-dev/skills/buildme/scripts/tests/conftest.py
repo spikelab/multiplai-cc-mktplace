@@ -56,3 +56,15 @@ def no_inherited_build_env(monkeypatch):
     so every test runs as in CI."""
     monkeypatch.delenv("BUILDME_TRUST_REPO", raising=False)
     monkeypatch.delenv("BUILDME_EPIC_CHILD", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def git_identity(monkeypatch):
+    """Code under test commits through `git_ops` with the process environment, and
+    a CI runner has no git identity, so such a commit fails with "Author identity
+    unknown". Every test gets one here, so none depends on the machine's. A test
+    that wants another identity sets it itself."""
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "buildme test")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "buildme-test@example.invalid")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "buildme test")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "buildme-test@example.invalid")
