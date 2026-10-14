@@ -24,6 +24,7 @@ from build_pipeline.epic.split import EpicSplitAnswer
 from build_pipeline.models import AgentResult
 
 from .epic_row_helpers import (
+    GIT_ENV,
     CallLog,
     Fakes,
     approve,
@@ -62,6 +63,14 @@ RESOLVED = {"plugin.json": plugin("0.2.0"),
 def _release_locks():
     yield
     epic_lock.release_all()
+
+
+@pytest.fixture
+def git_identity(monkeypatch):
+    """The git identity `use_workspace` pins, for a test that runs git
+    without it: a CI runner has none, so `commit` and `merge` refuse."""
+    for k, v in GIT_ENV.items():
+        monkeypatch.setenv(k, v)
 
 
 def git(cwd: Path, *a: str) -> str:
@@ -494,7 +503,7 @@ def test_a_version_both_sides_raised_alike_is_raised_past_main_and_pushed(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_the_merge_agent_runs_in_the_worktree_trusted_for_its_call_only(tmp_path, monkeypatch):
+async def test_the_merge_agent_runs_in_the_worktree_trusted_for_its_call_only(tmp_path, monkeypatch, git_identity):
     """The coordinator vouches for the repo for its merge agent as it does for
     each child it launches (`--trust-repo`): `agent_call`'s gate passes. The
     call runs in <W> with Read, Edit and Bash, its prompt names the files,
@@ -1121,14 +1130,22 @@ def test_a_conflict_without_markers_is_never_the_step_s_resolution(tmp_path):
     assert not merge.merges_onto(s.w, git(s.w, "rev-parse", "HEAD").strip(), s.ours, "x")
 
 
-def test_a_pushed_merge_s_content_is_checked_once_per_commit(tmp_path, monkeypatch):
+def _start_merge(s: Sides) -> None:
+    """Merge *theirs* into <W> without committing. It conflicts, so git
+    exits 1; the merge must still have started."""
+    done = subprocess.run([real_git(), "merge", "-q", "--no-ff", "--no-commit", s.theirs], cwd=s.w,
+                          capture_output=True, text=True)
+    assert (s.w / ".git" / "MERGE_HEAD").exists(), done.stderr
+
+
+def test_a_pushed_merge_s_content_is_checked_once_per_commit(tmp_path, monkeypatch, git_identity):
     """The coordinator asks `merges_onto` about the same PR head on every
     pass (finding 16be8d14c9): the content check runs once per merge commit,
     named by its sha; a ref such as HEAD is checked each time."""
     s = Sides(tmp_path, BASE, CHILD, MAIN)
     git(s.w, "update-ref", "refs/remotes/origin/x", s.theirs)
     git(s.w, "checkout", "-q", "--detach", s.ours)
-    subprocess.run([real_git(), "merge", "-q", "--no-ff", "--no-commit", s.theirs], cwd=s.w, capture_output=True)
+    _start_merge(s)
     for rel, text in RESOLVED.items():
         (s.w / rel).write_text(text)
     git(s.w, "add", "--", *RESOLVED)
@@ -1141,14 +1158,14 @@ def test_a_pushed_merge_s_content_is_checked_once_per_commit(tmp_path, monkeypat
     assert len(calls) == 3
 
 
-def test_a_merge_in_progress_is_checked_the_same_in_any_conflict_style(tmp_path):
+def test_a_merge_in_progress_is_checked_the_same_in_any_conflict_style(tmp_path, git_identity):
     """diff3 and zdiff3 markers carry a base side: a marker is found while it
     is left, and the resolution is checked against the three sides
     themselves, so the style changes nothing."""
     for style in ("merge", "diff3", "zdiff3"):
         s = Sides(tmp_path / style, BASE, CHILD, MAIN, f"merge.conflictStyle={style}")
         git(s.w, "checkout", "-q", "--detach", s.ours)
-        subprocess.run([real_git(), "merge", "-q", "--no-ff", "--no-commit", s.theirs], cwd=s.w, capture_output=True)
+        _start_merge(s)
         assert merge.plan(s.w, "HEAD", "MERGE_HEAD") == merge.Plan(["CHANGELOG.md", "plugin.json"], []), style
         assert merge.unresolved(s.w, ["CHANGELOG.md", "plugin.json"]) == ["CHANGELOG.md", "plugin.json"], style
         for rel, text in RESOLVED.items():
