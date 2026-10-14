@@ -570,10 +570,17 @@ class TestEpicChildrenBranchFromTheRegistryCommit:
     lands on main with the first merged child PR; a child that waits on a
     dependency branches from origin's default branch after that merge."""
 
-    def _epic(self, tmp_path, monkeypatch):
+    def _epic(self, tmp_path, monkeypatch, *, unpushed: bool = False, worktree: bool = False):
         """An approved epic (api, ui; docs waits on both) whose parent committed a
         baseline registry after the commit its spec-extract step read. The
-        registry commit is on the parent's branch only, not on origin."""
+        registry commit is on the parent's branch only, not on origin.
+
+        *unpushed*: the source checkout holds a commit origin's main does not,
+        which the parent started from. *worktree*: the parent builds in its own
+        worktree, as a real build does, so the registry commit is on that
+        worktree's branch only; the config returned is the parent's, bound to it."""
+        import copy
+
         from build_pipeline.config import EpicSettings
 
         from .epic_row_helpers import THREE, CallLog, Fakes, approve, make_build, make_project, use_workspace
@@ -586,13 +593,33 @@ class TestEpicChildrenBranchFromTheRegistryCommit:
         config.epic = EpicSettings(max_parallel=2)
         approve(config, THREE, CallLog(tmp_path / "split.log"))
         state = BuildState.load(config.state_file_path())
-        state.spec_gen = SpecGenState(spec_extract_sha=_git(project, "rev-parse", "HEAD"))
-        state.checkpoint(config.state_file_path())
-        (project / "specs" / "registry").mkdir(parents=True, exist_ok=True)
-        (project / "specs" / "registry" / "billing.md").write_text(CAPABILITY)
-        _git(project, "add", "specs/registry/billing.md")
-        _git(project, "commit", "-q", "-m", "docs(specs): baseline registry from spec-extract")
-        return config, fakes, _git(project, "rev-parse", "HEAD")
+        if unpushed:
+            (project / "local.txt").write_text("local only\n")
+            _git(project, "add", "local.txt")
+            _git(project, "commit", "-q", "-m", "local only")
+        parent = config
+        if worktree:      # a committed specs/config.yaml, on origin, which every child reads
+            (project / "specs" / "config.yaml").write_text("spec_extract: true\n")
+            _git(project, "add", "specs/config.yaml")
+            _git(project, "commit", "-q", "-m", "specs config")
+            _git(project, "push", "-q", "origin", "HEAD:main")
+            parent = copy.copy(config)
+            orchestrator._setup_worktree(parent, state)
+        state.spec_gen = SpecGenState(spec_extract_sha=_git(parent.project_dir, "rev-parse", "HEAD"))
+        for path in {config.state_file_path(), parent.state_file_path()}:
+            state.checkpoint(path)
+        (parent.specs_dir / "registry").mkdir(parents=True, exist_ok=True)
+        (parent.specs_dir / "registry" / "billing.md").write_text(CAPABILITY)
+        _git(parent.project_dir, "add", "specs/registry/billing.md")
+        _git(parent.project_dir, "commit", "-q", "-m", "docs(specs): baseline registry from spec-extract")
+        return parent, fakes, _git(parent.project_dir, "rev-parse", "HEAD")
+
+    def _coordinator(self, config):
+        from build_pipeline.epic import coordinator, store
+
+        state = BuildState.load(config.state_file_path())
+        epic_dir = Path(state.epic_dir)
+        return coordinator.Coordinator(config, state, None, epic_dir, store.load_epic(epic_dir))
 
     def test_a_child_with_no_dependency_branches_from_the_registry_commit(self, tmp_path, monkeypatch):
         from .epic_row_helpers import run_coordinator
@@ -644,6 +671,92 @@ class TestEpicChildrenBranchFromTheRegistryCommit:
         epic_dir = Path(state.epic_dir)
         coord = coordinator.Coordinator(config, state, None, epic_dir, store.load_epic(epic_dir))
         assert asyncio.run(coord._base(coord.children["api"])) == _git(project, "rev-parse", "origin/main")
+
+    def test_a_worktree_parent_s_registry_commit_is_the_base_and_passes_the_config_check(
+            self, tmp_path, monkeypatch):
+        """The baseline is on the parent's worktree branch, not in the source
+        checkout the children are placed in; `registry_commit` reads the
+        parent's worktree, and the child's specs/config.yaml check passes at it."""
+        import asyncio
+
+        from build_pipeline import intake
+
+        config, _, registry = self._epic(tmp_path, monkeypatch, worktree=True)
+        coord = self._coordinator(config)
+        source = tmp_path / "p"
+        c = coord.children["api"]
+        assert c.root.resolve() == c.project.resolve() == source.resolve() != Path(config.project_dir).resolve()
+        assert subprocess.run(["git", "merge-base", "--is-ancestor", registry, "HEAD"],
+                              cwd=source, check=False).returncode == 1    # only the worktree branch holds it
+        base = asyncio.run(coord._base(c))
+        assert base == registry
+        assert intake.config_yaml_off_ref(c.project, base) is False
+
+    def test_a_parent_started_from_commits_origin_lacks_keeps_origin(self, tmp_path, monkeypatch):
+        """The parent's worktree starts at the source checkout's HEAD. When that
+        holds a commit origin's main does not (a feature branch, unpushed work),
+        the registry commit would carry it into every child's PR to main: the
+        children branch from origin's main, without the baseline."""
+        import asyncio
+
+        config, _, registry = self._epic(tmp_path, monkeypatch, unpushed=True)
+        coord = self._coordinator(config)
+        origin = _git(Path(config.project_dir), "rev-parse", "origin/main")
+        for cid in ("api", "ui"):
+            assert asyncio.run(coord._base(coord.children[cid])) == origin != registry
+
+
+class TestSiblingsOpenTheirPrsAgainstMain:
+    """Two children with no dependency branch from one registry commit, which no
+    origin branch holds. Once the first pushes its branch, that branch is the one
+    origin branch holding the commit; the second child's PR must still target
+    main, never its sibling's branch (`_pr_base_branch` would pick it)."""
+
+    def test_two_siblings_publish_in_turn(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from build_pipeline.epic import CHILD_ENV
+
+        from .epic_row_helpers import make_project, use_workspace
+
+        use_workspace(monkeypatch, tmp_path)
+        project = make_project(tmp_path)
+        _git(project, "checkout", "-q", "-b", "buildme/e")        # the parent's branch, never pushed
+        (project / "specs" / "registry").mkdir(parents=True)
+        (project / "specs" / "registry" / "billing.md").write_text(CAPABILITY)
+        _git(project, "add", "specs/registry/billing.md")
+        _git(project, "commit", "-q", "-m", "docs(specs): baseline registry from spec-extract")
+        registry = _git(project, "rev-parse", "HEAD")
+        _git(project, "checkout", "-q", "main")
+
+        opened: dict[str, list[str]] = {}
+
+        def fake_pr(argv, cwd=None, timeout=None):
+            opened[argv[argv.index("--head") + 1]] = list(argv)
+            return git_ops.GitResult(argv, 0, f"PR:https://github.com/o/r/pull/{len(opened)}\n", "")
+
+        monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
+        monkeypatch.setenv(CHILD_ENV, "1")
+        trees = {}
+        for cid in ("api", "ui"):
+            config = BuildConfig(project_dir=project, change_name=f"e-{cid}")
+            config.specs_dir = project / "specs"
+            config.base_ref = registry
+            state = BuildState(change_name=config.change_name, mode="brief", tier="advanced",
+                               state_file=str(config.state_file_path()))
+            asyncio.run(orchestrator._run_bootstrap(config, state, ChangeManager(config.specs_dir),
+                                                    config.state_file_path()))
+            trees[cid] = Path(state.worktree_path)
+            (trees[cid] / f"{cid}.txt").write_text(f"{cid}\n")
+            _git(trees[cid], "add", f"{cid}.txt")
+            _git(trees[cid], "commit", "-q", "-m", f"child {cid}")
+            if cid == "ui":         # the trap: the one origin branch holding the commit is api's
+                assert orchestrator._pr_base_branch(trees["ui"], registry) == "buildme/e-api"
+            assert orchestrator._run_publish(config, state, ProgressWriter(tmp_path / f"{cid}.md")) is True
+
+        assert sorted(opened) == ["buildme/e-api", "buildme/e-ui"]
+        for argv in opened.values():
+            assert "--base" not in argv, argv
 
 
 class TestTheAnalysisIsNotPaidTwice:
@@ -724,6 +837,21 @@ class TestTheAnalysisIsNotPaidTwice:
 
         config, args = self._setup(tmp_path / "p")
         analysis = AsyncMock(side_effect=[RuntimeError("model down"), "## Architecture\nx"])
+        assert self._runs(config, args, monkeypatch, analysis, 5) == [1]
+        assert self._runs(config, args, monkeypatch, analysis, 0) == [0]
+        assert analysis.await_count == 2
+        assert config.codebase_analysis_path.read_text() == "## Architecture\nx"
+
+    def test_a_retried_analysis_is_kept_when_the_step_stops_again(self, tmp_path, monkeypatch):
+        """Run 1: the analysis fails, and the step returns 1. Run 2: the analysis is
+        asked again and succeeds, and the step returns 1 again. Run 3 keeps run 2's
+        report and does not ask again: two asks in all, the failed one and one more."""
+        from unittest.mock import AsyncMock
+
+        config, args = self._setup(tmp_path / "p")
+        analysis = AsyncMock(side_effect=[RuntimeError("model down"), "## Architecture\nx",
+                                          "## Architecture\npaid again"])
+        assert self._runs(config, args, monkeypatch, analysis, 5, runs=2) == [1, 1]
         assert self._runs(config, args, monkeypatch, analysis, 5) == [1]
         assert self._runs(config, args, monkeypatch, analysis, 0) == [0]
         assert analysis.await_count == 2

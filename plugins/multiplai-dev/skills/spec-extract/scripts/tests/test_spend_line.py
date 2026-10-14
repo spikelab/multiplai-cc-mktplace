@@ -75,3 +75,14 @@ def test_the_module_entry_point_is_the_command_with_its_spend_line():
                          timeout=120, check=False)
     assert res.returncode == cli.EXIT_REFUSED
     assert res.stdout.splitlines()[-1] == "SPEND:0.000000:0"
+
+
+def test_cache_tokens_count_and_usage_that_does_not_parse_is_skipped(caplog):
+    """`_record` counts cache read and cache creation tokens, and a usage it cannot
+    read is logged and left out, never raised into a call that was already paid."""
+    sdk.start_budget(80.0, None)
+    sdk._record(SimpleNamespace(cost_usd=0.5, input_tokens=10, output_tokens=2,
+                                cache_read_tokens=50_000, cache_creation_tokens=300), label="explore:a")
+    sdk._record(SimpleNamespace(cost_usd="not a number", input_tokens=1), label="explore:b")
+    assert sdk.spend_marker() == "SPEND:0.500000:50312"
+    assert "Process spend accounting failed" in caplog.text
