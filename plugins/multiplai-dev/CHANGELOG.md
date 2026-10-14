@@ -36,10 +36,11 @@ time, not derived from a tag.
   from the parent's commit that holds the baseline, so the registry reaches
   main with the first merged child PR; every child's PR targets the default
   branch. A child that waits on a dependency branches from origin's default
-  branch after that merge, as does every child when the parent started from a
-  commit origin's default branch does not hold (a feature branch, unpushed
-  commits), and a child built in another repository builds without a
-  baseline. `spec_extract_max_usd`
+  branch after that merge, as does every child once that branch holds a
+  registry, and every child when the baseline commit would carry anything
+  else origin's default branch does not hold (a feature branch, unpushed
+  commits, a commit added before a resume, other files in the same commit),
+  and a child built in another repository builds without a baseline. `spec_extract_max_usd`
   (default `80`) caps its spend; what it spends is counted in buildme's
   `SPEND:` line, but not in an epic's `epic.max_usd`, which counts only the
   children's builds, fixes, merges and reviews. A stopped build resumes

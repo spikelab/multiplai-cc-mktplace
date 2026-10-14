@@ -709,10 +709,13 @@ codebase analysis committed a `specs/registry` baseline (spec-extract), a
 child with no dependency in the epic's own repository branches from that
 commit instead, so it builds on the baseline and the registry reaches main
 with the first merged child PR; its PR still targets the default branch. It
-does so only when origin's default branch holds the commit the parent started
-from: a parent run from a feature branch or with unpushed commits gives every
-child origin's default branch, without the baseline, so no child PR carries
-those commits. A child that waits on a dependency still branches from origin's
+does so only when origin's default branch holds every commit before that one
+and the commit changes nothing outside `specs/registry`: a parent run from a
+feature branch or with unpushed commits, or a commit added before a resume,
+gives every child origin's default branch, without the baseline, so no child
+PR carries those commits. Once origin's default branch holds a registry (the
+first child PR merged), a child launched later branches from it, with main's
+newer code. A child that waits on a dependency still branches from origin's
 default branch, after that merge. A `specs/config.yaml`
 (the parent's, or that of a child's own `repo`)
 that sets `git.worktree` or `git.push` to `false` would build the children in

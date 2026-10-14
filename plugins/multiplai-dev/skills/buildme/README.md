@@ -76,10 +76,11 @@ it: the parent runs it, and each child with no dependency, in the epic's own
 repository, branches from the parent's commit that holds the baseline, so the
 registry reaches main with the first merged child PR; every child's PR
 targets the default branch. A child that waits on a dependency branches from
-origin's default branch after that merge, as does every child when the parent
-started from a commit origin's default branch does not hold (a feature branch,
-unpushed commits); a child built in another repository builds without a
-baseline. When spec-extract fails the
+origin's default branch after that merge, as does every child once that
+branch holds a registry, and every child when the baseline commit would carry
+anything else origin's default branch does not hold (a feature branch,
+unpushed commits, a commit added before a resume, other files in the same
+commit); a child built in another repository builds without a baseline. When spec-extract fails the
 build goes on without a baseline, except in two cases that end the build with
 exit `1` without leaving the phase: another spec-extract run still holds the
 same commit's run folder (`SPEC_EXTRACT:RUNNING`), or the failure left

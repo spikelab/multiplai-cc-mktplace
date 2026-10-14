@@ -214,9 +214,13 @@ def registry_commit(config, state, origin: str) -> str | None:
     `spec_gen.spec_extract_sha` that changed `<specs_dir>/registry`, read in
     the parent's project. None when the parent ran no spec-extract, or committed
     nothing from it (`SPEC_EXTRACT:NOT_RUN`, `--no-worktree`, a failed commit),
-    and None with a warning when *origin* (origin's default sha) does not hold
-    the saved commit: the parent started from a feature branch or unpushed
-    commits, which a child's PR to the default branch must not carry."""
+    and None when *origin* (origin's default sha) already holds a
+    `<specs_dir>/registry/*.md`: the registry has reached main, so a child
+    branches from origin's newer tip. None with a warning when origin does not
+    hold the commit's parents, or the commit changes files outside the registry
+    (a parent started from a feature branch or unpushed commits, a commit added
+    before a resume, a user's own commit of the baseline): a child's PR to the
+    default branch must carry the registry and nothing else."""
     spec_gen = getattr(state, "spec_gen", None)
     saved = spec_gen.spec_extract_sha if spec_gen is not None else None
     if not saved:
@@ -227,9 +231,14 @@ def registry_commit(config, state, origin: str) -> str | None:
     sha = res.stdout.strip()
     if res.returncode != 0 or not sha:
         return None
-    if _git(project, "merge-base", "--is-ancestor", saved, origin).returncode != 0:
-        log.warning("the parent's registry commit %s sits on %s, which origin's default branch does not "
-                    "hold: children branch from origin without the baseline", sha[:12], saved[:12])
+    landed = _git(project, "ls-tree", "--name-only", origin, "--", f"{registry}/")
+    if landed.returncode == 0 and any(Path(name).suffix == ".md" for name in landed.stdout.splitlines()):
+        return None
+    beyond = _git(project, "rev-list", "-1", f"{sha}^@", "--not", origin)
+    others = _git(project, "diff", "--name-only", f"{sha}^", sha, "--", ":/", f":(exclude){registry}")
+    if beyond.returncode != 0 or beyond.stdout.strip() or others.returncode != 0 or others.stdout.strip():
+        log.warning("the parent's registry commit %s carries commits or files origin's default branch does "
+                    "not hold: children branch from origin without the baseline", sha[:12])
         return None
     return sha
 
@@ -615,10 +624,11 @@ class Coordinator:
         epic's own repository, branches from the parent's commit that holds the
         `specs/registry` baseline (`registry_commit`), so it builds on that
         baseline and the registry lands on main with the first merged child PR.
-        Any other child, and every child when the parent committed no baseline
-        or started from a commit origin's default branch lacks, branches from
-        origin's default branch (`base_sha`): one that waits on a dependency does
-        so after that dependency's merge."""
+        Any other child, and every child when the parent committed no baseline,
+        when its commit would carry anything origin's default branch lacks
+        besides the registry, or once that branch holds a registry, branches
+        from origin's default branch (`base_sha`): one that waits on a
+        dependency does so after that dependency's merge."""
         origin = await base_sha(c.root, need_fetch=bool(c.depends_on))
         if not c.depends_on and c.root == self.repo and origin:
             registry = registry_commit(self.config, self.state, origin)
