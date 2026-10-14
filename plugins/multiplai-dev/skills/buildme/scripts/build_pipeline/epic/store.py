@@ -58,7 +58,7 @@ class ChildStatus(BaseModel):
     and `merge_park`, why its merge step parked it, which keeps it parked.
     PR F: `repo_park`, why it parked when its `repo` checkout was gone
     (F.S5), which keeps it parked though the checkout comes back, and `slug`,
-    the review slug of its repo while its checkout was there (F.S10)."""
+    the review slug of its repo while its checkout was there (F.S11)."""
 
     status: str = "pending"
     pr: str | None = None

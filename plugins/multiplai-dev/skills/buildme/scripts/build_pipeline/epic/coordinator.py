@@ -367,7 +367,7 @@ class Coordinator:
         """Item 43: a child with a `repo` builds in that checkout, relative to
         the epic's repository root; any other child in the epic's project.
         Once the checkout is gone, its review slug is the one saved while it
-        was there (F.S10), so its PR's reviews still count in `spent()`."""
+        was there (F.S11), so its PR's reviews still count in `spent()`."""
         if not repo:
             c.project, c.root, c.slug = self.project_dir, self.repo, self.slug
             return

@@ -1,6 +1,6 @@
 """Row tests for PR F's "Stop and resume states" table
 (plan-buildme-epic-mode-2026-10-12.md, the rows marked `Test: yes`: F.S6, and
-F.S10, which the PR's table adds for the review slug kept per child).
+F.S11, which the PR's table adds for the review slug kept per child).
 
 F.S6 is B1.S13 and E.S12 for a child in a second repository: the user edits
 files in that child's own worktree, which belongs to the second repo. As
@@ -163,8 +163,8 @@ def test_F_S6_user_edit_in_repo_2_s_worktree_parks_the_merge_and_is_left_alone(t
     assert r.step_pushes() == []
 
 
-def test_F_S10_review_spend_of_a_child_in_repo_2_still_counts_after_its_checkout_moved(tmp_path, monkeypatch):
-    """F.S10: a (second repo) opened PR 12; the review ledger holds a $4.50
+def test_F_S11_review_spend_of_a_child_in_repo_2_still_counts_after_its_checkout_moved(tmp_path, monkeypatch):
+    """F.S11: a (second repo) opened PR 12; the review ledger holds a $4.50
     review of it under r2's slug, `o-r2--pr-12`, and each build spent $1. a's
     checkout then moves: a parks (F.S5), and that review still counts in
     `spent_usd`, as `child_status.a.slug` keeps r2's slug. `spent_usd` is
