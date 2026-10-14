@@ -115,7 +115,8 @@ def resolve(args: argparse.Namespace) -> FindingsRun:
         config.findings = dataclasses.replace(config.findings, max_rounds=args.max_rounds)
     return FindingsRun(config=config, pr=args.pr, repo=repo, branch=head,
                        change_dir=config.change_dir, auto=bool(args.auto),
-                       trust_repo=bool(args.trust_repo))
+                       trust_repo=bool(args.trust_repo), max_usd=getattr(args, "max_usd", None),
+                       severities=getattr(args, "severities", None))
 
 
 def run_cli(args: argparse.Namespace) -> int:

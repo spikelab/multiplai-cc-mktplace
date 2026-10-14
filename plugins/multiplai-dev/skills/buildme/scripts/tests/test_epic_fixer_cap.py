@@ -250,7 +250,7 @@ def test_a_fixer_stopped_at_the_epics_remaining_budget_stops_the_epic(tmp_path, 
     assert _opt(fix.started["argv"], "--severities") == "HIGH,MEDIUM"
     assert (fix.result["exit_code"], fix.result["interrupted"]) == (0, True)
     assert "FINDINGS:BUDGET:1:10.000000" in fix.result["markers"]
-    assert e.status()["status"] == "built" and e.status("b")["status"] == "pending"
+    assert e.status()["status"] == "built" and e.status("b")["status"] == "waiting"
 
     assert e.run() == 3                       # still over: nothing launched
     assert "EPIC:BUDGET:25.00" in capsys.readouterr().out.splitlines()

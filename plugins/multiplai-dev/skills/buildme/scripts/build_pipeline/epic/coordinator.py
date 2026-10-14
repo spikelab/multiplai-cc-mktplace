@@ -39,8 +39,11 @@ is open. Its stop and resume rows are PR E's table.
 Spend (PR B2): before each launch, when `epic.max_usd` is set and the epic's
 spend (`spend.py`: the records' `spend` plus the review ledger) has reached
 it, nothing more is launched; the run waits for the running children and
-exits 3 with `EPIC:BUDGET:<spent>`. `epic.json` and each summary hold
-`spent_usd` and `spend_complete`.
+exits 3 with `EPIC:BUDGET:<spent>`. A fixer runs several rounds in one
+launch, so it is given what is left as `findings --max-usd`, and one that
+stopped there (`FINDINGS:BUDGET`) is a budget stop too: its result is
+`interrupted`, so a re-run after `epic.max_usd` is raised runs it again.
+`epic.json` and each summary hold `spent_usd` and `spend_complete`.
 """
 
 from __future__ import annotations
@@ -63,9 +66,9 @@ import yaml
 
 from .. import budget, git_ops, intake, stop_record
 from ..config import git_toggles
-from ..findings.decisions import write_decisions
 from ..models import AgentResult
 from . import CHILD_ENV, fix, merge, records, review, spend, store
+from .fix import write_decisions
 
 log = logging.getLogger(__name__)
 
@@ -966,15 +969,28 @@ class Coordinator:
         step reads the PR again; else the child is parked (`FINDINGS:FAILED`, or
         any other exit), `built` when the fixer was stopped by a signal (killed,
         or exit 128 + SIGTERM or SIGHUP; its result `interrupted`, so the next
-        run runs it again, D2.S5), or `unknown`."""
+        run runs it again, D2.S5), or `unknown`. It is given what is left of
+        `epic.max_usd` as `--max-usd`; when it stopped there
+        (`FINDINGS:BUDGET`), the epic's budget is reached: the child stays
+        `built`, its result is `interrupted` so a run with a higher
+        `epic.max_usd` runs it again (D2.S16), and nothing more is launched."""
         project = self._child_project(c)
         change = f"{self.epic.name}-{c.id}"
         if not await self._fixer_gone(c, number):
             return False
-        argv = fix.fix_argv(getattr(self.args, "session_id", "") or "", number, change, project, rounds)
+        ceiling = self.settings.max_usd
+        left = None if ceiling is None else ceiling - self.spent()[0]
+        argv = fix.fix_argv(getattr(self.args, "session_id", "") or "", number, change, project, rounds, left)
         c.status = "reviewing"
         attempt = records.start(self.epic_dir, "fix", c.id, argv, head_sha=head, pr_round=c.pr_round)
         code, out = await self._run_step(c, attempt, project)
+        if code == 0 and fix.budget_stopped(out):
+            records.finish(attempt, code, interrupted=True)
+            c.status, c.reason = "built", ""
+            self.budget_stop = self.spent()[0]
+            log.warning("EPIC child %s: its fixer stopped at the $%.2f left of epic.max_usd $%.2f: "
+                        "launching nothing more", c.id, left or 0.0, ceiling or 0.0)
+            return False
         if code == 0:
             records.finish(attempt, code, interrupted=False)
             return True
