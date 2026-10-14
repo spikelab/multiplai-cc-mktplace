@@ -1,6 +1,6 @@
-"""Row tests for PR E1's "Stop and resume states" table
+"""Row tests for PR E's "Stop and resume states" table
 (plan-buildme-epic-mode-2026-10-12.md, rows marked `Test: yes`: E.S2-E.S7,
-E.S12, E.S18, E.S21, E.S22, E.S23, E.S26 and E.S28, which the PR adds; E.S17 is E2's).
+E.S12, E.S17, E.S18, E.S21, and E.S22, E.S23, E.S26 and E.S28, which E1 added).
 
 Each case stops the coordinator at the row's point (an exception at a seam, a
 signal, or a forked child exiting 137), resumes, and compares with a run that
@@ -25,9 +25,7 @@ from .epic_row_helpers import (
     commit_names,
     epic_snapshot,
     last_summary,
-    merge_waiting,
     name_commits,
-    pr_url,
     records_snapshot,
     run_coordinator,
     run_killed,
@@ -62,7 +60,7 @@ def _snapshot(r: MergeRoot) -> dict:
 
 def _launches(r: MergeRoot) -> list[str]:
     calls = [*r.calls("build"), *r.calls("merge-tests"), *r.calls("merge-agent"), *r.pushes(),
-             *r.fakes.review_launches(), *r.fakes.post_launches()]
+             *r.fakes.merges(), *r.fakes.review_launches(), *r.fakes.post_launches()]
     return sorted(json.dumps(x, sort_keys=True).replace(str(r.root), "<root>") for x in calls)
 
 
@@ -93,9 +91,9 @@ def _assert_same(stopped: MergeRoot, clean: MergeRoot, merges: list[tuple], *, e
     assert_same_as_unstopped(stopped.w, clean.w)
 
 
-def _ends_waiting(*roots: MergeRoot) -> None:
+def _ends_merged(*roots: MergeRoot) -> None:
     for r in roots:
-        assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+        assert r.run() == 0 and r.merged()
 
 
 def _killed(r: MergeRoot, setup) -> None:
@@ -137,7 +135,7 @@ def test_E_S2_stopped_with_conflicts_aborts_and_merges_again(tmp_path, monkeypat
     stopped, clean = _roots(tmp_path, monkeypatch)
     _stop_after_the_merge(stopped)
     assert stopped.merging() and stopped.status()["merge_stop"]["edits"]
-    _ends_waiting(stopped, clean)
+    _ends_merged(stopped, clean)
     _assert_same(stopped, clean, [("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False)])
 
 
@@ -151,7 +149,7 @@ def test_E_S3_signalled_during_the_agent_aborts_and_pays_for_one_more_call(tmp_p
     st = stopped.status()
     assert st["status"] == "built" and "CHANGELOG.md" in st["merge_stop"]["edits"]
     stopped.agent = FakeAgent(stopped.root, RESOLVED)
-    _ends_waiting(stopped, clean)
+    _ends_merged(stopped, clean)
     _assert_same(stopped, clean, [("merge", AGENT, None, True), ("merge", AGENT, 0, False),
                                   ("merge-tests", TESTS, 0, False)], extra=("merge-agent",), unpaid=1)
     assert stopped.tries("merge")[0].result["spend"] is None
@@ -206,7 +204,7 @@ def test_E_S5_signalled_during_the_tests_merges_again(tmp_path, monkeypatch):
     clean_tests.write_text("[]")
     _signalled(stopped, lambda: (stopped.root / "test-attempts" / "1").exists())
     assert stopped.status()["merge_stop"] is not None and stopped.merging()
-    _ends_waiting(stopped, clean)
+    _ends_merged(stopped, clean)
     _assert_same(stopped, clean, [("merge", AGENT, 0, False), ("merge-tests", TESTS, None, True),
                                   ("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False)],
                  extra=("merge-agent", "merge-tests"))
@@ -223,7 +221,7 @@ def test_E_S23_sighup_during_the_tests_ends_them_with_the_run(tmp_path, monkeypa
     (stopped.root / "release").mkdir(exist_ok=True)
     (stopped.root / "release" / "tests-1").write_text("")      # ends the tests if they were left running
     assert [(t.result or {}).get("exit_code") for t in stopped.tries("merge-tests")] == [-signal.SIGKILL]
-    _ends_waiting(stopped, clean)
+    _ends_merged(stopped, clean)
     _assert_same(stopped, clean, [("merge", AGENT, 0, False), ("merge-tests", TESTS, None, True),
                                   ("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False)],
                  extra=("merge-agent", "merge-tests"))
@@ -255,7 +253,7 @@ def test_E_S6_committed_not_pushed_is_retested_and_pushed(tmp_path, monkeypatch)
     stopped, clean = _roots(tmp_path, monkeypatch)
     _killed(stopped, _die_at_point(stopped, "push"))
     assert not stopped.merging() and stopped.step_pushes() == []
-    _ends_waiting(stopped, clean)
+    _ends_merged(stopped, clean)
     _assert_same(stopped, clean, [("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False),
                                   ("merge-tests", TESTS, 0, False)], extra=("merge-tests",))
 
@@ -297,7 +295,7 @@ def test_E_S7_a_rejected_push_parks_and_never_forces(tmp_path, monkeypatch):
     assert _launches(stopped) == sorted(want)
     git(stopped.w, "fetch", "-q", "origin")
     git(stopped.w, "reset", "-q", "--keep", new)
-    assert stopped.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert stopped.run() == 0 and stopped.merged()
     assert git(stopped.w, "rev-parse", "HEAD^1").strip() == new and stopped.origin("other.txt") == "someone\n"
     for r, n in ((stopped, 2), (clean, 1)):
         pushes = r.step_pushes()
@@ -392,8 +390,8 @@ def test_E_S26_a_merge_park_retries_once_the_worktree_is_clean(tmp_path, monkeyp
     as the park's hint says, a re-run retries the merge step, but only once
     `<W>` holds no uncommitted change. A file left there keeps the child
     parked and the worktree as it was; a merge that fails again parks again,
-    with the same reason; one that now passes is tested and pushed, and the
-    PR waits as a never-parked child's does."""
+    with the same reason; one that now passes is tested, pushed and merged,
+    as a never-parked child's is."""
     r = MergeRoot(tmp_path, monkeypatch, child_files={"app.py": "x = 3\n"}, main={"app.py": "x = 2\n"})
     assert r.run() == 0
     reason = _parked(r)["reason"]
@@ -415,8 +413,8 @@ def test_E_S26_a_merge_park_retries_once_the_worktree_is_clean(tmp_path, monkeyp
     assert r.calls("merge-agent") == [] and r.calls("merge-tests") == [] and r.step_pushes() == []
     git(r.w, "merge", "--abort")
     push_files(r.root, {"app.py": "x = 3\n"}, "main takes the child's line")
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert r.run() == 0 and r.merged()
     st = r.status()
-    assert st["status"] == "built" and st["merge_park"] == "" and st["merge_stop"] is None
+    assert st["merge_park"] == "" and st["merge_stop"] is None
     assert len(r.calls("merge-tests")) == 1 and len(r.step_pushes()) == 1 and not r.merging()
     assert r.origin("app.py") == "x = 3\n"

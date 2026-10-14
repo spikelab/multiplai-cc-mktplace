@@ -1,9 +1,10 @@
-"""Epic mode, PR E1: the merge step (plan-buildme-epic-mode-2026-10-12.md,
-items 35-39, 40.1-40.4, 41 and 42). Git is real; the build, `gh`, the review
-and the test command are fakes first on PATH (`epic_row_helpers.Fakes`), and
-the merge agent is `FakeAgent`. Until PR E2 a merged and pushed PR waits for a
-human merge (`EPIC:MERGE_WAITING`, exit 3); a parked child ends its run with
-exit 0, an `unknown` one with exit 1."""
+"""Epic mode, PR E: the merge step (plan-buildme-epic-mode-2026-10-12.md,
+items 35-42). Git is real; the build, `gh`, the review and the test command
+are fakes first on PATH (`epic_row_helpers.Fakes`), and the merge agent is
+`FakeAgent`. Under `auto` a pushed PR whose checks pass is merged by the fake
+`gh pr merge` (PR E2), and b, waiting on a, is then built and merged; under
+`manual` it waits for a human merge (`EPIC:MERGE_WAITING`, exit 3). A parked
+child ends its run with exit 0, an `unknown` one with exit 1."""
 
 from __future__ import annotations
 
@@ -173,6 +174,10 @@ class MergeRoot:
     def status(self, cid: str = "a") -> dict:
         return json.loads((self.dir / "epic.json").read_text())["child_status"][cid]
 
+    def merged(self) -> bool:
+        """a's PR merged by the step (PR E2), and no PR left waiting."""
+        return merge_waiting() is None and self.status()["status"] == "merged"
+
     def tries(self, kind: str) -> list[records.Attempt]:
         return [a for a in records.attempts(self.dir) if a.child == "a" and a.kind == kind]
 
@@ -198,9 +203,9 @@ def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(tmp_path
     """40.2-40.4: main moved under a's branch with its own version and
     CHANGELOG entry. One `merge` agent call resolves both (its spend in the
     record), the tests run in <P> with BUILDME_TRUST_REPO=1, and the merge
-    commit is pushed. Until E2 the PR then waits for a human merge."""
+    commit is pushed, and `gh pr merge` merges the PR (PR E2)."""
     r = MergeRoot(tmp_path, monkeypatch)
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert r.run() == 0 and r.merged()
     assert [x["files"] for x in r.calls("merge-agent")] == [["CHANGELOG.md", "plugin.json"]]
     [agent] = r.tries("merge")
     assert (agent.result["exit_code"], agent.result["spend"]) == (0, 0.5)
@@ -213,8 +218,8 @@ def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(tmp_path
     head = git(r.w, "rev-parse", "HEAD").strip()
     assert git(r.w, "rev-parse", "HEAD^2").strip() == r.moved
     assert merge.merges_onto(r.w, head, r.tries("review")[-1].started["head_sha"], "main")
-    assert r.status()["status"] == "built" and r.status()["merge_stop"] is None
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]      # its own merge: not reviewed again
+    assert r.status()["status"] == "merged" and r.status()["merge_stop"] is None
+    assert r.run() == 0 and r.merged()      # its own merge was not reviewed: one review
     assert len(r.tries("review")) == 1 and len(r.calls("merge-agent")) == 1 and len(r.step_pushes()) == 1
     reviewed = r.tries("review")[-1].started["head_sha"]
     edits = {"app.py": "x = 'not reviewed'\n",                   # the same merge carrying a person's edit is reviewed,
@@ -232,12 +237,11 @@ def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(tmp_path
 
 def test_a_clean_merge_is_tested_and_pushed_and_not_reviewed_again(tmp_path, monkeypatch):
     """40.2-40.4: main moved under a's branch without a conflict. The tests run
-    in <P> with BUILDME_TRUST_REPO=1 and the merge commit is pushed. Until E2
-    the PR then waits for a human merge. That merge is the step's own, so the
-    next run does not review it again; the same merge with a person's edit
-    in any file is reviewed. No agent runs."""
+    in <P> with BUILDME_TRUST_REPO=1 and the merge commit is pushed, then
+    merged (PR E2). That merge is the step's own, so it is not reviewed
+    again; the same merge with a person's edit in any file is. No agent runs."""
     r = MergeRoot(tmp_path, monkeypatch, main={"uv.lock": "lock 2\n"})
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert r.run() == 0 and r.merged()
     [tests] = r.calls("merge-tests")
     assert (tests["cwd"], tests["trusted"]) == ("<root>/ws/.worktrees/buildme-e-a", "1")
     assert [a.result["exit_code"] for a in r.tries("merge-tests")] == [0]
@@ -246,8 +250,8 @@ def test_a_clean_merge_is_tested_and_pushed_and_not_reviewed_again(tmp_path, mon
     head = git(r.w, "rev-parse", "HEAD").strip()
     assert git(r.w, "rev-parse", "HEAD^2").strip() == r.moved
     assert merge.merges_onto(r.w, head, r.tries("review")[-1].started["head_sha"], "main")
-    assert r.status()["status"] == "built" and r.status()["merge_stop"] is None
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]      # its own merge: not reviewed again
+    assert r.status()["status"] == "merged" and r.status()["merge_stop"] is None
+    assert r.run() == 0 and r.merged()      # its own merge was not reviewed: one review
     assert len(r.tries("review")) == 1 and len(r.step_pushes()) == 1 and r.calls("merge-agent") == []
     reviewed = r.tries("review")[-1].started["head_sha"]
     edits = {"app.py": "x = 'not reviewed'\n", "plugin.json": CHILD["plugin.json"].replace('"x"', '"evil"'),
@@ -259,9 +263,9 @@ def test_a_clean_merge_is_tested_and_pushed_and_not_reviewed_again(tmp_path, mon
         git(r.w, "reset", "-q", "--hard", head)
 
 
-def test_a_branch_up_to_date_with_main_waits_with_no_tests_and_no_push(tmp_path, monkeypatch):
+def test_a_branch_up_to_date_with_main_merges_with_no_tests_and_no_push(tmp_path, monkeypatch):
     r = MergeRoot(tmp_path, monkeypatch, main=None)
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert r.run() == 0 and r.merged()
     assert r.calls("merge-tests") == [] and r.step_pushes() == [] and r.tries("merge") == []
 
 
@@ -350,7 +354,7 @@ def test_tests_that_outlast_the_timeout_are_killed_and_park(tmp_path, monkeypatc
 
 def test_no_test_command_commits_and_pushes(tmp_path, monkeypatch):
     r = MergeRoot(tmp_path, monkeypatch, command=None)
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert r.run() == 0 and r.merged()
     assert r.tries("merge-tests") == [] and len(r.step_pushes()) == 1 and not r.merging()
     assert r.origin("plugin.json") == RESOLVED["plugin.json"]
 
@@ -425,7 +429,7 @@ def test_an_agent_that_edits_another_file_parks_and_the_hint_lets_it_retry(tmp_p
         git(Path(step.split()[2]), *step.split()[3:])
     assert git(r.w, "status", "--porcelain") == "" and not r.merging()
     r.agent = FakeAgent(tmp_path, RESOLVED)
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert r.run() == 0 and r.merged()
     assert len(r.calls("merge-agent")) == 2 and len(r.step_pushes()) == 1
     assert r.origin("app.py") == ("x = 2\n" if main_too else "x = 1\n")
 
@@ -499,7 +503,7 @@ def test_a_version_both_sides_raised_alike_is_raised_past_main_and_pushed(tmp_pa
     assert [x["files"] for x in r.calls("merge-agent")] == [["CHANGELOG.md", "plugin.json"]] and not r.step_pushes()
     r = MergeRoot(tmp_path / "raised", monkeypatch, child_files=child, main=main, agent=None)
     r.agent = FakeAgent(r.root, resolved)
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert r.run() == 0 and r.merged()
     assert [x["files"] for x in r.calls("merge-agent")] == [["CHANGELOG.md", "plugin.json"]]
     assert r.origin("plugin.json") == resolved["plugin.json"] and r.origin("CHANGELOG.md") == resolved["CHANGELOG.md"]
     reviewed = r.tries("review")[-1].started["head_sha"]
@@ -551,7 +555,7 @@ def test_over_budget_before_a_conflicted_merge_merges_nothing(tmp_path, monkeypa
     assert r.status()["status"] == "built" and not r.status()["merge_park"] and r.status()["merge_stop"] is None
     assert r.calls("merge-agent") == [] and r.tries("merge") == [] and r.step_pushes() == []
     monkeypatch.setattr(coordinator.Coordinator, "_over_budget", real)
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")] and len(r.step_pushes()) == 1
+    assert r.run() == 0 and r.merged() and len(r.step_pushes()) == 1
 
 
 @pytest.mark.parametrize("case", ["clean", "refused"])
@@ -640,7 +644,7 @@ def test_40_1_parks_a_worktree_behind_the_reviewed_head_naming_what_to_run(tmp_p
                                          f"git -C {r.w} merge --ff-only {new}, then re-run")
     assert not r.merging() and r.calls("merge-tests") == [] and r.step_pushes() == []
     git(r.w, "merge", "-q", "--ff-only", new)
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert r.run() == 0 and r.merged()
     assert len(r.step_pushes()) == 1 and git(r.w, "rev-parse", "HEAD^1").strip() == new
 
 
@@ -677,7 +681,7 @@ def test_a_push_failing_for_another_reason_is_unknown_and_the_next_run_pushes(tm
     assert "EPIC: child a unknown: cannot merge: git push failed: remote: denied by policy" in capsys.readouterr().err
     assert r.status()["status"] == "unknown" and not r.status()["merge_park"] and r.step_pushes()
     hook.unlink()
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert r.run() == 0 and r.merged()
     assert len(r.step_pushes()) == 2 and len(r.tries("merge-tests")) == 2 and len(r.calls("merge-agent")) == 1
     assert r.origin("plugin.json") == RESOLVED["plugin.json"]
 
