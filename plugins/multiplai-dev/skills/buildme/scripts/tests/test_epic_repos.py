@@ -180,7 +180,8 @@ def test_a_child_in_another_repo_waits_for_the_merge_in_the_first(tmp_path, monk
 
 def test_merges_in_two_repos_take_one_lock_each(tmp_path, monkeypatch):
     """F.S4: under `auto`, each child's merge step holds the lock of its own
-    repo root, so merges in two repos never wait on each other."""
+    repo root, so merges in two repos never wait on each other; each PR is
+    merged in its own repo (PR E2)."""
     e = TwoRepos(tmp_path, monkeypatch, answer=APART, merge_mode="auto",
                  steps={"a": [{"commit": {"a.txt": "a\n"}}], "b": [{"commit": {"b.txt": "b\n"}}]})
     held: list[tuple[str, str, bool]] = []
@@ -192,7 +193,7 @@ def test_merges_in_two_repos_take_one_lock_each(tmp_path, monkeypatch):
         return await real(self, c, w)
 
     monkeypatch.setattr(coordinator.Coordinator, "_merge_steps", spy)
-    assert e.run() == 3 and sorted(merge_waiting()) == sorted([pr_url("e-a"), url2("e-b")])
+    assert e.run() == 0 and merge_waiting() is None and e.status() == {"a": "merged", "b": "merged"}
     assert sorted(held) == [("a", str((tmp_path / "p").resolve()), True), ("b", str((tmp_path / "q").resolve()), True)]
 
 

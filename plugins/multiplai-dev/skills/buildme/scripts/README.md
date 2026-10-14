@@ -118,7 +118,7 @@ or review stopped the same way (`uv run` reports 128 + signal) gets an
 child. A PR whose last review left no blockers is waited on as a
 dependency's is (`Coordinator._waited_on`), so every run with one open exits
 3 with `EPIC:MERGE_WAITING` (1 beside a failed or `unknown` child when no child waits on a dependency's PR). Under `epic.merge: auto` the merge step runs
-first (PR E1, `epic/merge.py`, `Coordinator._merge`), under one
+first (PRs E1 and E2, `epic/merge.py`, `Coordinator._merge`), under one
 `asyncio.Lock` per repository and on the worktree root: a merge commit made
 and not pushed, holding only what `merge.merges_onto` accepts, is checked (`stop_record.others_work`), tested and pushed; a
 merge left in progress is aborted only when `others_work` passes against
@@ -129,8 +129,23 @@ CHANGELOG and lockfile conflicts and for a version both sides raised alike (`mer
 the tests with `BUILDME_TRUST_REPO=1` (kind `merge-tests`, killed when the step stops), `git commit` and
 `git push` (rejected: parks; other failures, and a failed fetch: `unknown` for the rest of the run, `MERGE_UNKNOWN`). An exception or signal saves `merge_stop`; any park saves
 `merge_park` in `epic.json`, which `_recover` keeps until `<W>` has no `MERGE_HEAD` and no uncommitted change, then retries (`_merge_retry`). A head that is the
-reviewed head plus merges holding only git's own merge and what the step may resolve (`merge.merges_onto`, which checks each file against its three sides, as `merge.not_resolutions` also checks the agent's resolution: a version file is git's merge with its version values aside, each value the changing side's or, where both changed it, the next after main's; a CHANGELOG is main's with every line the child added, the child's old version in them replaced by the one written; a lockfile loads and holds only either side's keys and values (a manifest hash aside) or a written version, and pins each package as one side does) is not reviewed again. PR E2
-adds waiting for checks and `gh pr merge`. A file
+reviewed head plus merges holding only git's own merge and what the step may resolve (`merge.merges_onto`, which checks each file against its three sides, as `merge.not_resolutions` also checks the agent's resolution: a version file is git's merge with its version values aside, each value the changing side's or, where both changed it, the next after main's; a CHANGELOG is main's with every line the child added, the child's old version in them replaced by the one written; a lockfile loads and holds only either side's keys and values (a manifest hash aside) or a written version, and pins each package as one side does) is not reviewed again. After the push,
+or with nothing to merge, the step waits for the PR's required checks
+(`Coordinator._checks_pass`: `gh pr checks --required` every `CHECKS_WAIT`
+seconds, or every check of the PR when none is required; failed or cancelled
+parks naming it, an unreadable answer is `unknown`; checks are read only
+while `gh pr view` shows the head 40.1 checked as the PR's head, since
+GitHub shows the previous head for a moment after a push, and another head
+is pending for `CHECKS_APPEAR` seconds, then parks; after the step's own push
+"no checks reported" is pending for `CHECKS_APPEAR` seconds; still pending
+after `CHECKS_LIMIT` seconds, the PR is left open, `built`, for a re-run) and
+runs `gh pr merge <n> --merge --match-head-commit <the head 40.1 checked and
+the step pushed>` (`Coordinator._merge_pr`): merged once `gh pr view` says
+`MERGED` (exit 0 with the PR still open, as a merge queue leaves it, is
+waited on), or refused `BEHIND`, which restarts at `merge.ready` and merges the
+new commit (nothing new to merge parks with the refusal: a refused merge is
+never retried in one run), or any other refusal, which parks with GitHub's
+stderr and `mergeStateStatus` (PR E2). A file
 changed after approval, another process holding the epic's lock, or a
 `specs/config.yaml` turning off `git.worktree` or `git.push`, exits 2.
 `--no-epic-split` skips the decision.

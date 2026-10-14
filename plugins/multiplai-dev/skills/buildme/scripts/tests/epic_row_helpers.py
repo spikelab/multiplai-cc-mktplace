@@ -373,12 +373,64 @@ print(f"PR:{{url}}", flush=True)
 '''
 
 FAKE_GH = r'''#!{python}
-"""A fake `gh`: reads only, from `<root>/prs.json`."""
+"""A fake `gh`, from `<root>/prs.json`: reads, and (PR E2) `pr checks` and
+`pr merge`. A PR's `checks` is one step per `pr checks --required` call (the
+JSON list of checks, each required unless `"required": false`, which a
+`pr checks` without `--required` reads too; a string: gh fails with it; no
+`checks`, or `[]`: none at all). Its `merges` is one step per `pr merge`
+call: `refuse`, refused with that stderr; `queue`, exits 0 and only queues
+the PR; `lost`, merges and exits 1; `offline`, refused, then every later
+`gh` call fails. `pr merge` is logged to `<root>/merges.log`; it is refused
+when `--match-head-commit` is not origin's branch, or while origin's branch
+lacks origin's main (`BEHIND`, as a branch rule requiring it to be up to
+date), and otherwise merges the branch into origin's main from a scratch
+clone and marks the PR `MERGED`. A PR's `lag`: after origin's branch
+moves, the next `lag` `pr view` and `pr checks` reads still show its
+previous head, whose checks are `old_checks` (none when absent), and `pr
+merge` compares `--match-head-commit` with that head, as GitHub did on
+spikelab/github-tests for about 1.5 s after a push. A PR's pinned `head`
+gives way to origin's branch once that branch moves on top of it."""
 import hashlib, json, os, pathlib, subprocess, sys
 
 
 def number(change):
     return int(hashlib.sha1(change.encode()).hexdigest()[:4], 16) % 9000 + 1000
+
+
+def at(origin, *a):
+    return subprocess.run(["{git}", "--git-dir", str(origin), *a], capture_output=True, text=True)
+
+
+def behind(origin, pr):
+    pushed = at(origin, "rev-parse", "-q", "--verify", "refs/heads/" + pr["branch"]).stdout.strip()
+    return bool(pushed) and at(origin, "merge-base", "--is-ancestor", "refs/heads/main", pushed).returncode != 0
+
+
+def shown(url, pr, pushed, consume=True):
+    """The head GitHub shows for the PR: *pushed*, or with `lag` its previous one."""
+    if not pr.get("lag") or not pushed:
+        return pushed
+    f = root / f"shown-{{number(url.rsplit('/', 1)[1])}}.json"
+    s = json.loads(f.read_text()) if f.exists() else {{"head": pushed, "next": None, "left": 0}}
+    if pushed not in (s["head"], s["next"]):
+        s["next"], s["left"] = pushed, pr["lag"]
+    if consume and s["next"] == pushed:
+        if s["left"] > 0:
+            s["left"] -= 1
+        else:
+            s["head"], s["next"] = pushed, None
+    f.write_text(json.dumps(s))
+    return s["head"]
+
+
+def nth(url, kind, steps, advance=True):
+    counts = root / f"{{kind}}-attempts"
+    counts.mkdir(exist_ok=True)
+    key = str(number(url.rsplit("/", 1)[1]))
+    k = len(list(counts.glob(key + ".*"))) + advance
+    if advance:
+        (counts / f"{{key}}.{{k}}").write_text("")
+    return steps[min(max(k, 1), len(steps)) - 1] if steps else None
 
 
 root = pathlib.Path(os.environ["EPIC_FAKE_ROOT"])
@@ -397,13 +449,76 @@ if a[:2] == ["pr", "view"]:
     pushed = subprocess.run(["{git}", "--git-dir", str(origin), "rev-parse", "-q", "--verify",
                              "refs/heads/" + pr["branch"]], capture_output=True, text=True).stdout.strip()
     checkouts = json.loads((root / "checkouts.json").read_text()) if (root / "checkouts.json").exists() else {{}}
-    head = pr.get("head") or pushed or subprocess.run(       # origin's branch once pushed (PR E)
+    pin = pr.get("head")
+    if pin and pushed and pin != pushed and at(origin, "merge-base", "--is-ancestor", pin, pushed).returncode == 0:
+        pin = None       # a push to the PR's branch on top of a pinned head moves it, as on GitHub (PR E2)
+    head = pin or pushed or subprocess.run(       # origin's branch once pushed (PR E)
         ["git", "rev-parse", "refs/heads/" + pr["branch"]],
         cwd=root / checkouts.get(a[2].split("/")[-3], "p"),   # in the PR's repo's clone (PR F)
         capture_output=True, text=True).stdout.strip()
+    head = shown(a[2], pr, head) if pushed and not pin else head
     print(json.dumps({{"state": pr["state"], "number": number(change), "headRefOid": head,
                       "mergeable": pr.get("mergeable", "MERGEABLE"),
-                      "mergeStateStatus": pr.get("merge_state", "CLEAN")}}))
+                      "mergeStateStatus": pr.get("merge_state") or ("BEHIND" if behind(origin, pr) else "CLEAN")}}))
+elif a[:2] in (["pr", "checks"], ["pr", "merge"]):
+    url, pr = a[2], prs.get(a[2])
+    if pr is None:
+        print("no pull request found", file=sys.stderr)
+        sys.exit(1)
+    origin = root / "o" / (url.split("/")[-3] + ".git")
+    if a[1] == "checks":
+        required = "--required" in a
+        pushed = at(origin, "rev-parse", "-q", "--verify", "refs/heads/" + pr["branch"]).stdout.strip()
+        stale = shown(url, pr, pushed) != pushed
+        every = (pr.get("old_checks", []) if stale
+                 else nth(url, "checks", pr.get("checks", []), advance=required) or [])
+        if isinstance(every, str):
+            print(every, file=sys.stderr)
+            sys.exit(1)
+        checks = [x for x in every if x.get("required", True) or not required]
+        if not checks:      # gh 2.102's words: no checks at all, or none of them required
+            which = "no required checks" if every else "no checks"
+            print(f"{{which}} reported on the '{{pr['branch']}}' branch", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps([{{"name": x["name"], "bucket": x["bucket"]}} for x in checks]))
+        buckets = {{x["bucket"] for x in checks}}
+        sys.exit(8 if "pending" in buckets else 1 if buckets & {{"fail", "cancel"}} else 0)
+    with (root / "merges.log").open("a") as f:
+        f.write(json.dumps({{"kind": "gh-merge", "argv": a}}, sort_keys=True) + "\n")
+    step = nth(url, "merge", pr.get("merges", [])) or {{}}
+    match = a[a.index("--match-head-commit") + 1] if "--match-head-commit" in a else None
+    pushed = at(origin, "rev-parse", "-q", "--verify", "refs/heads/" + pr["branch"]).stdout.strip()
+    refusal = (step.get("refuse") or ("GraphQL: Head branch was modified. Review and try the merge again. "
+                                      "(mergePullRequest)" if match and match != shown(url, pr, pushed, False) else None)
+               or ("X Pull request is not mergeable: the head branch is not up to date with the base branch."
+                   if behind(origin, pr) else None))
+    if refusal:
+        print(refusal, file=sys.stderr)
+        if step.get("offline"):
+            (root / "gh-fails").write_text("")
+        sys.exit(1)
+    if step.get("queue"):
+        print(f"! Pull request #{{number(url.rsplit('/', 1)[1])}} will be added to the merge queue")
+        sys.exit(0)
+    merger = root / ("merger-" + origin.stem)
+    if not merger.exists():
+        subprocess.run(["{git}", "clone", "-q", str(origin), str(merger)], check=True, capture_output=True)
+    for cmd in (["fetch", "-q", "origin"], ["checkout", "-q", "-B", "main", "origin/main"],
+                ["-c", "commit.gpgsign=false", "merge", "-q", "--no-ff", "-m",
+                 f"Merge pull request #{{number(url.rsplit('/', 1)[1])}} from {{pr['branch']}}",
+                 "origin/" + pr["branch"]], ["push", "-q", "origin", "main"]):
+        subprocess.run(["{git}", *cmd], cwd=merger, check=True, capture_output=True)
+    import fcntl
+    with (root / "prs.lock").open("a") as held:     # as the fake build writes it
+        fcntl.flock(held, fcntl.LOCK_EX)
+        prs = json.loads((root / "prs.json").read_text())
+        prs[url]["state"] = "MERGED"
+        (root / f"prs.{{os.getpid()}}.tmp").write_text(json.dumps(prs))
+        os.replace(root / f"prs.{{os.getpid()}}.tmp", root / "prs.json")
+    if step.get("lost"):
+        print("error connecting to api.github.com", file=sys.stderr)
+        sys.exit(1)
+    print(f"Merged pull request #{{number(url.rsplit('/', 1)[1])}}")
 elif a[:2] == ["pr", "list"]:
     head = a[a.index("--head") + 1]
     print(json.dumps([{{"url": u}} for u, p in prs.items() if p["branch"] == head]))
@@ -771,6 +886,11 @@ class Fakes:
 
     def post_launches(self) -> list[dict]:
         p = self.root / "posts.log"
+        return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
+
+    def merges(self) -> list[dict]:
+        """Every `gh pr merge` (PR E2)."""
+        p = self.root / "merges.log"
         return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
 
     def fix_launches(self) -> list[dict]:
