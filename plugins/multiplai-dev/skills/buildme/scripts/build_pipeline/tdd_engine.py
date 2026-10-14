@@ -66,6 +66,7 @@ from .models import (
     TestQualityAudit,
 )
 from .mutation import changed_source_files, mutation_applies, render_report, run_mutation, score_text
+from .narrow_tests import narrow_test_command
 from .progress import ProgressWriter
 from .prompts.implementation import REVIEW_FIX_SELF_CHECK
 from .prompts.review import FINDING_ADJUDICATION_PROMPT
@@ -104,6 +105,17 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
         f"{phase}(block-{block.number}): {block.name}",
         f"block={block.number} phase={phase}",
     )
+
+
+def _block_test_command(config: BuildConfig, block: BlockInfo) -> str:
+    """The test command for the block's own loop: RED, and the block's test
+    writer, implementer and refactorer. It runs the block's own test files and
+    the tests named after the source files it changed (`narrow_tests`), or the
+    whole `test_command` when it cannot narrow it. The gates that decide
+    whether work is done (`integration_gate`, `baseline_test_gate`) keep the
+    whole `test_command`."""
+    return narrow_test_command(config.test_command, config.project_dir,
+                               block.baseline_commit, enabled=config.narrow_tests)
 
 
 # git's well-known empty-tree object. Used as the diff baseline when the
@@ -821,7 +833,7 @@ async def _enforce_test_quality(
         ),
         specs=specs,
         context_bundle=context,
-        test_command=config.test_command,
+        test_command=_block_test_command(config, block),
         model=config.model_for("test_writer"),
         effort=config.agent_effort,
         cwd=str(config.project_dir),
@@ -884,7 +896,11 @@ async def _enforce_red_gate(
         return True
 
     for attempt in (1, 2):
-        exit_code, output = run_test_suite(config.test_command, config.project_dir)
+        # The block's own test files are always in the narrow set, and an
+        # empty set falls back to the whole command, so RED cannot pass on a
+        # run that selected nothing.
+        command = _block_test_command(config, block)
+        exit_code, output = run_test_suite(command, config.project_dir)
         gate = red_gate(output, exit_code)
         if gate.passed:
             block.red_evidence = _trim_evidence(output)
@@ -927,7 +943,7 @@ async def _enforce_red_gate(
                 ),
                 specs=specs,
                 context_bundle=context,
-                test_command=config.test_command,
+                test_command=command,
                 model=config.model_for("test_writer"),
                 effort=config.agent_effort,
                 cwd=str(config.project_dir),
@@ -1107,7 +1123,7 @@ async def run_block_tdd(
         block_description=block.description,
         specs=specs,
         context_bundle=context,
-        test_command=config.test_command,
+        test_command=_block_test_command(config, block),
         model=config.model_for("test_writer"),
         effort=config.agent_effort,
         cwd=cwd,
@@ -1179,7 +1195,7 @@ async def run_block_tdd(
         block_description=block.description,
         failing_tests=test_result.output,
         context_bundle=impl_context,
-        test_command=config.test_command,
+        test_command=_block_test_command(config, block),
         prompt_style=config.implementer_prompt_style,
         model=config.model_for("implementer"),
         effort=config.agent_effort,
@@ -1252,7 +1268,7 @@ async def run_block_tdd(
             block_name=block.name,
             block_description=block.description,
             context_bundle=refactor_context,
-            test_command=config.test_command,
+            test_command=_block_test_command(config, block),
             model=config.model_for("refactor"),
             effort=config.agent_effort,
             cwd=cwd,
