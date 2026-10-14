@@ -1687,6 +1687,28 @@ class TestScanNoBehaviourBlocks:
         assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
 
     @pytest.mark.parametrize("block", [
+        # Every step tests or checks: none writes code ("Make sure" and
+        # "Make no change" are checks, not code).
+        "## 2. Tabs\n\n- [ ] 2.1 Write failing tests for tabs in "
+        "`tests/test_words.py`\n- [ ] 2.2 Confirm `count` splits on tabs\n"
+        "- [ ] 2.3 Make no change to `src/words.py`\n"
+        "- [ ] 2.4 Make sure the suite passes\n\n",
+        # Only its heading says it is test work.
+        "## 2. Tests for tabs\n\nCover tabs in `tests/test_words.py`.\n\n",
+    ])
+    def test_a_test_block_whose_steps_write_no_code_is_flagged(
+        self, tmp_path, block,
+    ):
+        path = _tasks_file(tmp_path, (
+            "## 1. Count words\n\n- [ ] 1.1 Add `count` to `src/words.py`\n\n"
+            "Interfaces:\n- Produces: `count(s: str) -> int`\n\n"
+            + block
+            + "Interfaces:\n- Produces: (none)\n"
+        ))
+
+        assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
+
+    @pytest.mark.parametrize("block", [
         # A domain "Verify": new behaviour, a 401 that fails before it is built.
         "## 2. Verify webhook signatures\n\nVerify each incoming webhook's "
         "HMAC-SHA256 header against the shared secret and reject a mismatch "
@@ -1724,6 +1746,25 @@ class TestScanNoBehaviourBlocks:
         "`src/api/limits.py`, with no code change to the core.\n\n",
         "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
         "with no code change to the core.\n\n",
+        # Test-first leaf blocks that name only their test file: the tests
+        # come first, and a later step writes the code.
+        "## 2. Webhook signatures\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_webhook.py`: a bad HMAC returns 401\n- [ ] 2.2 Implement "
+        "HMAC-SHA256 verification of the signature header in the upload "
+        "handler\n\n",
+        "## 2. Webhook signatures\n\nWrite tests for HMAC rejection in "
+        "`tests/test_webhook.py`, then implement signature checking in the "
+        "upload handler.\n\n",
+        "## 2. Tab splitting\n\n- [ ] 2.1 Write failing tests for tab "
+        "splitting in `tests/test_words.py`\n- [ ] 2.2 Make count split on "
+        "tabs\n\n",
+        # A feature whose heading opens with a test word.
+        "## 2. Coverage report subcommand\n\nAdd a `report` subcommand that "
+        "prints line coverage. Tests in `tests/test_cli.py`.\n\n",
+        # It names only a file it leaves alone, and adds tests and the code.
+        "## 2. Reject empty input\n\nMake summarize raise ValueError on an "
+        "empty string. Leave `pyproject.toml` unchanged. Add tests for the "
+        "empty case.\n\n",
     ])
     def test_a_leaf_block_that_adds_behaviour_is_not_flagged(self, tmp_path, block):
         """`Produces: (none)` only says nothing later calls the block, and
