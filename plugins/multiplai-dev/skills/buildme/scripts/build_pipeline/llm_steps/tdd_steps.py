@@ -15,6 +15,7 @@ from ..prompts.implementation import (
     IMPLEMENTER_PROMPT_MINIMUM,
     REFACTOR_ALL_PROMPT,
     REFACTOR_PROMPT,
+    TEST_CHANGE_DECLARATION,
 )
 from ..sdk import agent_call
 
@@ -274,13 +275,15 @@ approach, not just the last edit.
   the implementation's structure can satisfy it at all.
 - When the design is the root cause, restructure the block's implementation —
   you have license to rewrite it, provided the tests and specs stay satisfied.
-- Modify a test only when you can point to the exact spec line it contradicts.
+- Modify a test only when you can point to the exact spec line it contradicts,
+  and declare it in your report as the Output section below says.
 - Run the full test suite after fixing to verify.
 
 ## Output
 Report a `DIAGNOSIS:` section — the root cause, why the previous scoped fixes
 could not work, and what you changed — then confirm the suite result.
-"""
+
+{TEST_CHANGE_DECLARATION}"""
     else:
         prompt = f"""\
 You are a fix agent. The integration test suite is failing after a block was
@@ -299,12 +302,14 @@ implemented. Your job is to fix the failures without breaking other tests.
 
 ## Rules
 1. Fix the minimum code needed to make tests pass.
-2. Modify a test only when it has a genuine bug (contradicts the specs).
+2. Modify a test only when it has a genuine bug (contradicts the specs), and
+   declare it in your report as the Output section below says.
 3. Run the full test suite after fixing to verify.
 
 ## Output
 Report the root cause, what you fixed, and confirm all tests pass.
-"""
+
+{TEST_CHANGE_DECLARATION}"""
     log.info("Spawning integration fix agent%s", " (escalated)" if escalate else "")
     return await agent_call(
         prompt,
