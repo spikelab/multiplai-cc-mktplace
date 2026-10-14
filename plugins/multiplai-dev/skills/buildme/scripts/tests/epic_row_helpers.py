@@ -641,6 +641,9 @@ if step.get("block"):
     gate = root / "release" / f"review-{{n}}"
     while not gate.exists():
         time.sleep(0.02)
+if step.get("busy"):        # told another review runs now, after its `started` line
+    print(f"ERROR: a review of {{target}} is running now (pid 0); wait for it", file=sys.stderr, flush=True)
+    sys.exit(2)
 if step.get("die"):
     os.kill(os.getpid(), signal.SIGKILL)
 (target / "findings.json").write_text(json.dumps({{"mode": None, "findings": step.get("findings", [])}}))
@@ -664,7 +667,8 @@ no review), `review` after its review is in the ledger but before the round
 records it as finished. A launch that finds the last round unfinished
 finishes it with its first entry of `rounds`, as `findings` resumes a round.
 After its rounds it prints `FINDINGS:DONE:<rounds>`, or with `max_rounds`
-`FINDINGS:MAX_ROUNDS:<rounds>`, as `findings` ends. A PR with no entry in
+`FINDINGS:MAX_ROUNDS:<rounds>`, or with `budget` `FINDINGS:BUDGET:<rounds>:<budget>`
+(its `--max-usd` reached), as `findings` ends. A PR with no entry in
 `fixes.json` has no fixer under test: it exits 0 printing no `FINDINGS:` end
 line, so the coordinator neither parks nor fixes it again (PR C's tests).
 `SPEND:<spend>:0` on every exit but a kill."""
@@ -750,6 +754,9 @@ for i, r in enumerate(todo):
     rnd["finished"] = ALL
     save()
     print(f"FINDINGS:ROUND_DONE:{{rnd['number']}}", flush=True)
+if step.get("budget"):
+    print(f"FINDINGS:BUDGET:{{len(doc['findings']['rounds'])}}:{{step['budget']}}", flush=True)
+    sys.exit(0)
 print(f"FINDINGS:{{'MAX_ROUNDS' if step.get('max_rounds') else 'DONE'}}:{{len(doc['findings']['rounds'])}}",
       flush=True)
 '''
@@ -802,7 +809,8 @@ class Fakes:
     `<root>/calls.log`. `<root>/gh-fails` makes every `gh` call fail; `ps_fails`
     puts a `ps` that exits 1 first on PATH. The fake review (`uv`, PR C)
     answers from `<root>/reviews.json` (per PR number, one step per `review`
-    launch: `block`, `die`, `exit` with `stderr`, `findings`, `cost`, `stopped`
+    launch: `block`, `die`, `exit` with `stderr`, `busy` (exit 2, another review
+    runs now, its `started` line left), `findings`, `cost`, `stopped`
     (the `finished` line's value); `resume`
     has its own key) and logs its launches to `<root>/reviews.log`; by
     default each review is clean. PR D2: `review_pipeline post` answers from

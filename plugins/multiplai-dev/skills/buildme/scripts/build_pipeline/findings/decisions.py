@@ -4,9 +4,12 @@
 `buildme-decisions.json` beside it, in the format `review post --decisions`
 reads (`{<id>: {"decision": "accept"}}`): of the findings the review lists,
 every Code finding, and every Tests finding that cites a source file that is
-not a test file. A Tests finding on a test file, and every Docs finding, are
-not posted; the fix loop acts on what is posted, and those are not defects a
-code fix answers. A finding the review does not list (a repeat of one the
+not a test file; with *severities*, only those of the severities named, and
+with *code_only*, only Code findings (an epic's fixer passes both, so it
+posts what the epic blocks on, `epic.review.blockers`, and never runs a round
+for a finding the epic would merge with). A Tests finding on a test file,
+and every Docs finding, are not posted; the fix loop acts on what is
+posted, and those are not defects a code fix answers. A finding the review does not list (a repeat of one the
 person rejected, a low-value one, and in `critical` mode one not rated as
 breaking) is never posted, as it was not before the decisions file.
 
@@ -75,8 +78,11 @@ def _accepted(finding: dict, mode: str | None) -> bool:
     return section == "tests" and bool(path) and _is_source(path) and not _is_test_path(path)
 
 
-def write_decisions(review_dir: str | Path) -> Path:
-    """Write `<review_dir>/buildme-decisions.json` and return its path.
+def write_decisions(review_dir: str | Path, severities: tuple[str, ...] | None = None,
+                    code_only: bool = False) -> Path:
+    """Write `<review_dir>/buildme-decisions.json` and return its path; with
+    *severities*, a finding of another severity is not chosen, and with
+    *code_only*, a finding outside the Code section is not.
     Raises `FileNotFoundError` when `findings.json` is missing and
     `ValueError` when it cannot be read as the review's findings, each naming
     the file; nothing is written then."""
@@ -87,7 +93,8 @@ def write_decisions(review_dir: str | Path) -> Path:
         doc = json.loads(source.read_text(encoding="utf-8"))
         mode = doc.get("mode")
         chosen = {str(f["id"]): {"decision": "accept"} for f in doc["findings"]
-                  if _accepted(f, mode)}
+                  if _accepted(f, mode) and (severities is None or f.get("severity") in severities)
+                  and (not code_only or _section(f) == "code")}
     except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError, AttributeError) as e:
         raise ValueError(f"cannot read {source}: {type(e).__name__}: {e}") from e
     path = Path(review_dir) / DECISIONS_FILE

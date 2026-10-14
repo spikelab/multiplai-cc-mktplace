@@ -29,12 +29,18 @@ finished steps and restarts the first unfinished one:
   folder (`decisions.write_decisions`) and posts only what it accepts.
 
 The loop stops when a fetch finds no new comment to act on
-(`FINDINGS:DONE:<rounds>`) or after `findings.max_rounds` rounds
-(`FINDINGS:MAX_ROUNDS:<n>`).
+(`FINDINGS:DONE:<rounds>`), after `findings.max_rounds` rounds
+(`FINDINGS:MAX_ROUNDS:<n>`), or, with `--max-usd`, when a fetch finds
+something to act on once this process's spend plus the reviews of the PR it
+ran have reached it (`FINDINGS:BUDGET:<rounds>:<usd>`). Each stops between
+rounds, exit 0. With `--severities`, `--auto` posts only findings of those
+severities, and with `--code-only` only Code findings, so the next round acts
+on nothing else.
 """
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from dataclasses import dataclass, field
@@ -42,7 +48,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from .. import git_ops, stop_record
+from .. import budget, git_ops, stop_record
 from ..change_manager import normalize_change_name
 from ..config import BuildConfig
 from ..models import BlockStatus, BuildPhase
@@ -114,6 +120,9 @@ class FindingsRun:
     trust_repo: bool = False
     seams: Seams = field(default_factory=Seams)
     emit: Callable[[str], None] = print
+    max_usd: float | None = None             # `--max-usd`: stop between rounds once reached
+    severities: tuple[str, ...] | None = None    # `--severities`: what `--auto` posts
+    code_only: bool = False                  # `--code-only`: `--auto` posts Code findings only
 
     @property
     def project_dir(self) -> Path:
@@ -532,7 +541,9 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             save()
         if run.auto:
             try:
-                decisions = (seams.decisions or write_decisions)(rnd.review_run_dir)
+                choose = seams.decisions or functools.partial(write_decisions, severities=run.severities,
+                                                           code_only=run.code_only)
+                decisions = choose(rnd.review_run_dir)
             except (FileNotFoundError, ValueError) as e:
                 raise StepFailed("review", f"cannot choose what to post: {e}") from e
             ok, detail = (seams.post or post_review)(run, rnd.review_run_dir, decisions)
@@ -583,6 +594,30 @@ def _change_dir_in_project(run: FindingsRun) -> Path | None:
         return None
 
 
+def review_spend(run: FindingsRun) -> float:
+    """The USD of the PR's reviews in the review ledger, read as an epic reads
+    them (`epic.spend.review_spend`), under the review slug the epic gives the
+    PR (`<owner>-<repo>--pr-<n>` from the repository's origin). The review
+    skill prints no `SPEND:` line, so this is where a re-review's spend is."""
+    from multiplai_core.paths import get_paths
+
+    from ..epic import spend, store
+
+    root = git_ops.repo_root(run.project_dir) or run.project_dir
+    slug = store.sanitize_slug(f"{store.slug_repo_name(Path(root))}--pr-{run.pr}")
+    usd, _ = spend.review_spend(Path(get_paths().data_dir) / spend.LEDGER, {slug})
+    return usd
+
+
+def spend_meter(run: FindingsRun) -> Callable[[], float]:
+    """What this run has spent since now: this process's spend
+    (`budget.process_spend`) plus the PR's reviews in the ledger, each less
+    what it held when the meter started, so the reviews before the fixer
+    started are not its spend."""
+    process, reviews = budget.process_spend().cost_usd, review_spend(run)
+    return lambda: budget.process_spend().cost_usd - process + review_spend(run) - reviews
+
+
 async def run_findings(run: FindingsRun) -> int:
     """The loop. Returns the process exit code."""
     st = load_state(run)
@@ -594,6 +629,7 @@ async def run_findings(run: FindingsRun) -> int:
         return EXIT_FAILED
     cache: dict[str, bool] = {}
     max_rounds = run.config.findings.max_rounds
+    spent = spend_meter(run) if run.max_usd is not None else None
     while True:
         rnd = fs.rounds[-1] if fs.rounds and not _round_done(fs.rounds[-1]) else None
         # A resumed step keeps what the tree holds under a wip ref and resets
@@ -638,6 +674,15 @@ async def run_findings(run: FindingsRun) -> int:
                     log.info("findings: comment %d by %s not acted on: %s",
                              c.id, c.author, triage.should_triage(c)[1])
                 run.emit(f"FINDINGS:DONE:{done}")
+                return EXIT_OK
+            # After the fetch, which calls no model: a PR left with nothing to
+            # act on ends DONE even past the ceiling, so it is not taken for
+            # a budget stop.
+            usd = spent() if spent is not None else 0.0
+            if run.max_usd is not None and usd >= run.max_usd:
+                log.warning("findings: $%.2f spent has reached --max-usd $%.2f: no round %d",
+                            usd, run.max_usd, done + 1)
+                run.emit(f"FINDINGS:BUDGET:{done}:{usd:.2f}")
                 return EXIT_OK
             rnd = FindingsRound(number=done + 1, since=since, fetched_at=fetched_at,
                                 comments=new, started=["fetch"], finished=["fetch"])
