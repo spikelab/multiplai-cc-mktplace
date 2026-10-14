@@ -197,6 +197,11 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   which is built from `gates.TEST_CHANGE_MARKER`, so the prompts and the gate
   cannot drift (`tests/test_test_change_marker.py`). An agent never told the
   marker cannot use it, and its correct fix to a wrong test fails the block.
+  Because every such prompt shows the marker, `parse_test_change_claims`
+  counts only a line that starts with it and drops `<reason>`, `none` and
+  empty values, so an echo or a sentence that mentions it declares nothing.
+  The marker is also in `_REPORT_SLOT_LABELS`, so its lines after a
+  `SEARCHED:` or `SURPRISES:` slot are never read into that slot.
 - **A refactor window carries no test-change escape hatch.** Both refactor
   windows (per block, and the whole-change pass) call `unchanged_tests_gate`
   with an **empty report** — deliberately, so `TEST CHANGE REQUIRED:` cannot
