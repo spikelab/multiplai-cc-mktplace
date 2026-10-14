@@ -650,6 +650,61 @@ def scan_placeholders(text: str) -> list[dict]:
     return findings
 
 
+# A block that only checks what an earlier block built: it opens with one of
+# these verbs, or it says an earlier block already satisfies it.
+_CHECK_ONLY_OPENING_RE = re.compile(r"^\W*(confirm|verify)\b", re.IGNORECASE)
+_SATISFIED_EARLIER_RE = re.compile(
+    r"\b(?:satisfied|already\s+(?:implemented|delivered|built|covered|handled))"
+    r"\b[^.\n]{0,60}\bBlock\s+\d+",
+    re.IGNORECASE,
+)
+
+
+def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
+    """Deterministic scan for blocks that add no behaviour.
+
+    Such a block's tests pass before it is built, so the TDD RED gate fails it
+    and the build with it. A block is flagged when it produces nothing
+    (`Produces: (none)`) AND either its heading or description opens with
+    "Confirm"/"Verify", or it says an earlier block already satisfies it.
+    `Produces: (none)` alone is a legitimate last slice, so it is never enough.
+    Returns audit-finding dicts (same shape as ``scan_placeholders``, plus the
+    block's ``block`` number and ``name``).
+    """
+    from .tdd_engine import parse_blocks
+
+    findings = []
+    for block in parse_blocks(tasks_path):
+        if block.produces:
+            continue
+        opening = block.description.lstrip("- ").strip()
+        if not (
+            _CHECK_ONLY_OPENING_RE.match(block.name)
+            or _CHECK_ONLY_OPENING_RE.match(opening)
+            or _SATISFIED_EARLIER_RE.search(block.description)
+        ):
+            continue
+        source = re.search(r"Block\s+(\d+)", " ".join(block.consumes))
+        home = f"Block {source.group(1)}" if source else "the earlier block that builds it"
+        findings.append({
+            "category": "no-new-behaviour",
+            "severity": "critical",
+            "block": block.number,
+            "name": block.name,
+            "description": (
+                f"Block {block.number} \"{block.name}\" adds no behaviour: it "
+                "produces nothing and only checks what an earlier block "
+                "builds, so its tests pass before it is built and the TDD "
+                "RED gate fails the build."
+            ),
+            "suggestion": (
+                f"Move its acceptance criteria and tests into {home}, which "
+                "builds the behaviour, and remove this block."
+            ),
+        })
+    return findings
+
+
 async def _audit_tasks_shape(
     change_dir: Path,
     context: dict,
@@ -658,8 +713,9 @@ async def _audit_tasks_shape(
 ) -> None:
     """Audit tasks.md for horizontal decomposition; regenerate ONCE on findings.
 
-    Findings come from two sources: the deterministic placeholder scan (always
-    runs) and the LLM shape/traceability audit. Any findings trigger exactly
+    Findings come from three sources: the deterministic placeholder scan and
+    no-behaviour block scan (both always run) and the LLM shape/traceability
+    audit. Any findings trigger exactly
     one regeneration pass with the findings injected into the tasks prompt
     (no re-audit loop). LLM audit failures are non-fatal — the deterministic
     findings still count; with none, the first-pass tasks.md stands.
@@ -669,8 +725,9 @@ async def _audit_tasks_shape(
     log.info("START phase=TASKS_SHAPE_AUDIT")
     print("PHASE: tasks_shape_audit")
     findings = scan_placeholders(output_path.read_text())
+    findings += scan_no_behaviour_blocks(output_path)
     if findings:
-        log.warning("Placeholder scan found %d deterministic findings", len(findings))
+        log.warning("Deterministic scans found %d findings", len(findings))
     try:
         findings += await run_tasks_audit(change_dir, config)
     except Exception as audit_err:

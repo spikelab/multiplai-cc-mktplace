@@ -17,6 +17,19 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.65.1] - 2026-10-14
+
+### Fixed
+- buildme no longer writes a task block that only confirms or verifies what
+  an earlier block already built. Such a block's tests passed before it was
+  implemented, so the TDD RED gate failed it and the whole build stopped. The
+  task-writing rules now require every block to add behaviour its tests can
+  fail on, and both the tasks-shape audit and the plan review flag a block
+  that produces nothing and opens with "Confirm" or "Verify", or says an
+  earlier block satisfies it, as `no-new-behaviour`. A flagged block sends
+  `tasks.md` through the existing single rewrite, with the finding saying
+  which block its criteria belong in.
+
 ## [0.65.0] - 2026-10-14
 
 ### Added

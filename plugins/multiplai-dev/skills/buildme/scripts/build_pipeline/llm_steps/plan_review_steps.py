@@ -491,7 +491,7 @@ async def run_plan_review_stage(
         print(f"PHASE: plan_review_skipped — {review_err}")
         return []
 
-    findings = list(result.findings)
+    findings = list(result.findings) + _no_behaviour_findings(change_dir)
     log_plan_review_findings(findings)
 
     findings_text = plan_review_findings_text(findings)
@@ -519,6 +519,28 @@ async def run_plan_review_stage(
         await _rereview_after_plan_feedback(change_dir, config)
     _mark_plan_review_done(state, state_path)
     return findings
+
+
+def _no_behaviour_findings(change_dir: Path) -> list[PlanReviewFinding]:
+    """The deterministic no-behaviour block scan, as plan review findings.
+
+    This review is the last check before the TDD build, and the design audit's
+    rewrite of tasks.md comes after the shape audit, so the scan runs here too:
+    a block the reviewer model misses still reaches the one regeneration.
+    """
+    from ..spec_generator import scan_no_behaviour_blocks
+
+    return [
+        PlanReviewFinding(
+            category=f["category"],
+            severity=f["severity"],
+            file_path="tasks.md",
+            location=f"Block {f['block']} — {f['name']}",
+            claim=f["description"],
+            reason=f["suggestion"],
+        )
+        for f in scan_no_behaviour_blocks(change_dir / "tasks.md")
+    ]
 
 
 def _mark_plan_review_done(state, state_path: Path) -> None:
