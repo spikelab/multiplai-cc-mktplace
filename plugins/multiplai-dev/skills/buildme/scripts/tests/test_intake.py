@@ -426,7 +426,13 @@ class TestTicketMode:
                 repo, "csv", ticket_file=str(ticket), ticket_ref="#12"))
         assert rc == 1
         assert "interview questioner failed" in capsys.readouterr().out
-        assert BuildState.load(config.state_file_path()).phase == BuildPhase.FAILED
+        failed = BuildState.load(config.state_file_path())
+        assert failed.phase == BuildPhase.FAILED
+        # The failure recorded the build's tree, bootstrap's own files included,
+        # so the retry below goes on in the same worktree.
+        assert failed.failed_stop is not None
+        assert "specs/config.yaml" in failed.failed_stop.edits
+        assert failed.failed_stop.head == _sh(Path(failed.worktree_path), "rev-parse", "HEAD")
         record_failure.assert_called_once()
         assert "questioner" in record_failure.call_args.args[2]
 
@@ -1036,6 +1042,155 @@ class TestFailedBuildRetry:
         assert rc == 1
         assert "draft.md" in err
         assert (Path(state.worktree_path) / "draft.md").read_text() == "half-written\n"
+
+    @pytest.mark.asyncio
+    async def test_a_checkpoint_with_no_record_and_no_commit_reruns_in_a_new_worktree(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """A build that failed under 0.70.0 or earlier before its first commit
+        has no record, and its tree holds the failed run's own bootstrap
+        files. It re-runs as 0.70.0 re-ran it, in a new `-2` worktree, and
+        the old worktree is left as it was."""
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        state = await self._fail(repo, commit=False, leave="draft.md")
+        state.failed_stop = None
+        state.checkpoint(Path(state.state_file))
+        worktree = Path(state.worktree_path)
+        capsys.readouterr()
+
+        rc, config = await self._run(repo)
+        assert rc == 0, capsys.readouterr().err
+        assert self._worktrees(tmp_path) == [worktree.name, f"{worktree.name}-2"]
+        assert (worktree / "draft.md").read_text() == "half-written\n"
+        assert Path(config.project_dir).name == f"{worktree.name}-2"
+
+    @pytest.mark.asyncio
+    async def test_a_rerun_started_inside_the_worktree_commits_on_the_branch(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """Started from inside the worktree, the state is found in place, so
+        nothing re-binds; the re-run must still own the branch, or every
+        spec-stage commit is skipped."""
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        state = await self._fail(repo)
+        worktree, branch = Path(state.worktree_path), state.branch
+        capsys.readouterr()
+
+        rc, config = await self._run(worktree)
+        assert rc == 0, capsys.readouterr().err
+        assert config.pipeline_branch == branch
+        assert _sh(worktree, "rev-parse", "--abbrev-ref", "HEAD") == branch
+        committed = set(_sh(worktree, "ls-tree", "-r", "--name-only", branch).split())
+        assert "specs/config.yaml" in committed
+        assert "specs/changes/csv/.change.yaml" in committed
+
+    @pytest.mark.asyncio
+    async def test_a_worktree_switched_off_the_builds_branch_stops_the_rerun(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """The re-run commits on whatever is checked out, and publish pushes
+        `state.branch`: on another branch the build's work would miss its PR."""
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        state = await self._fail(repo)
+        worktree, branch = Path(state.worktree_path), state.branch
+        tip = _sh(worktree, "rev-parse", branch)
+        _sh(worktree, "switch", "-qc", "elsewhere")
+        capsys.readouterr()
+
+        rc, _ = await self._run(repo)
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert "elsewhere" in err and branch in err
+        assert _sh(worktree, "rev-parse", "--abbrev-ref", "HEAD") == "elsewhere"
+        assert _sh(worktree, "rev-parse", "elsewhere") == tip
+        assert _sh(worktree, "rev-parse", branch) == tip
+        assert BuildState.load(Path(state.state_file)).phase == BuildPhase.FAILED
+
+        _sh(worktree, "switch", "-q", branch)
+        rc, _ = await self._run(repo)
+        assert rc == 0, capsys.readouterr().err
+
+    @pytest.mark.asyncio
+    async def test_a_stop_at_bootstrap_that_never_failed_still_resumes(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """A run stopped during the interview (an exception, a signal) leaves
+        the pointer AT BOOTSTRAP with no failure record, and bootstrap's own
+        files uncommitted. Its resume is not a FAILED re-run and completes as
+        it did before (in a new `-2` worktree), never refused over those files."""
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        config = _config(repo, "csv")
+        with patch("build_pipeline.intake.run_interview_phase",
+                   AsyncMock(side_effect=RuntimeError("stopped"))):
+            rc = await run_orchestrator(config, _args(repo, "csv", interview_summary="S"))
+        assert rc == 1
+        state = BuildState.load(config.state_file_path())
+        assert state.phase == BuildPhase.BOOTSTRAP and state.failed_stop is None
+        capsys.readouterr()
+
+        rc, _ = await self._run(repo)
+        err = capsys.readouterr().err
+        assert rc == 0, err
+        assert "Did not re-run" not in err
+
+    @pytest.mark.asyncio
+    async def test_a_spec_stage_failure_keeps_the_progress_the_stage_saved(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """run_spec_generator checkpoints its own copy of the state. Failing
+        must not write the orchestrator's older copy over it, or the re-run,
+        which keeps the artifacts, pays for the explainer gate and the tasks
+        audit again."""
+        from build_pipeline.state import SpecGenState
+
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+
+        async def stage(config, args):
+            saved = BuildState.load(config.state_file_path())
+            saved.spec_gen = SpecGenState(completed_artifacts=["proposal"],
+                                          explainers_done=True, tasks_audit_done=True)
+            saved.checkpoint(config.state_file_path())
+            return 1
+
+        config = _config(repo, "csv")
+        with patch("build_pipeline.spec_generator.run_spec_generator",
+                   AsyncMock(side_effect=stage)):
+            rc = await run_orchestrator(config, _args(repo, "csv", interview_summary="S"))
+        assert rc == 1
+        state = BuildState.load(config.state_file_path())
+        assert state.phase == BuildPhase.FAILED
+        assert state.failed_stop is not None
+        assert state.spec_gen is not None
+        assert state.spec_gen.completed_artifacts == ["proposal"]
+        assert state.spec_gen.explainers_done and state.spec_gen.tasks_audit_done
+
+    @pytest.mark.asyncio
+    async def test_a_rerun_keeps_the_codebase_analysis_it_already_wrote(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """The report is in the change dir the re-run keeps, and the kept
+        design was written against it: analysing again pays twice."""
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        (repo / "app.py").write_text("print('hi')\n")
+        _sh(repo, "add", "app.py")
+        _sh(repo, "commit", "-qm", "app")
+        analysis = AsyncMock(return_value="# Codebase analysis\n\nthe first one\n")
+        with patch("build_pipeline.llm_steps.spec_steps.run_codebase_analysis", analysis):
+            state = await self._fail(repo)
+            assert analysis.await_count == 1
+            report = Path(state.spec_gen.codebase_analysis_path)
+            capsys.readouterr()
+
+            rc, _ = await self._run(repo)
+        assert rc == 0, capsys.readouterr().err
+        assert analysis.await_count == 1
+        assert "the first one" in report.read_text()
 
 
 # --- input file paths -----------------------------------------------------------

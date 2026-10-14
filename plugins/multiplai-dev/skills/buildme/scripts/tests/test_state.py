@@ -1,5 +1,6 @@
 """Tests for state management — checkpoint, resume, phase transitions."""
 
+import ast
 import json
 import os
 import pytest
@@ -723,6 +724,55 @@ class TestPreFindingsCheckpoint:
         assert back.seen_ids() == {7}
 
 
+def _is_build_phase(node) -> bool:
+    return ((isinstance(node, ast.Name) and node.id == "BuildPhase")
+            or (isinstance(node, ast.Attribute) and node.attr == "BuildPhase"))
+
+
+def _failed_writes(source: str) -> list[tuple[str, int]]:
+    """Every place in *source* that could put a build at FAILED, as
+    (enclosing function, line): `BuildPhase.FAILED` anywhere but a comparison
+    or a dict key, `BuildPhase("failed")`, and "failed" given as a `phase`."""
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+    def func_of(node) -> str:
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return node.name
+        return "<module>"
+
+    def only_read(node) -> bool:
+        up = parents.get(node)
+        while isinstance(up, (ast.Tuple, ast.List, ast.Set)):
+            node, up = up, parents.get(up)
+        if isinstance(up, ast.Compare):
+            return True
+        return isinstance(up, ast.Dict) and any(k is node for k in up.keys)
+
+    def is_failed_text(node) -> bool:
+        return isinstance(node, ast.Constant) and node.value == "failed"
+
+    hits = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Attribute) and node.attr == "FAILED"
+                and _is_build_phase(node.value) and not only_read(node)):
+            hits.append(node)
+        elif (isinstance(node, ast.Call) and _is_build_phase(node.func)
+                and any(is_failed_text(a) for a in node.args)):
+            hits.append(node)
+        elif isinstance(node, ast.keyword) and node.arg == "phase" and is_failed_text(node.value):
+            hits.append(node.value)
+        elif (isinstance(node, ast.Assign) and is_failed_text(node.value)
+                and any(isinstance(t, ast.Attribute) and t.attr == "phase" for t in node.targets)):
+            hits.append(node)
+        elif isinstance(node, ast.Dict):
+            hits.extend(v for k, v in zip(node.keys, node.values)
+                        if isinstance(k, ast.Constant) and k.value == "phase" and is_failed_text(v))
+    return sorted((func_of(n), n.lineno) for n in hits)
+
+
 class TestFailRecordsTheTree:
     """`BuildState.fail` records what the tree held before it checkpoints
     FAILED; a re-run of the FAILED build compares the tree with it."""
@@ -763,8 +813,34 @@ class TestFailRecordsTheTree:
         """A FAILED written without the record would make its re-run refuse
         the failed run's own leftovers, or compare them with an older failure's."""
         scripts = Path(__file__).resolve().parents[1]
-        users = sorted(p.relative_to(scripts).as_posix()
-                       for p in (scripts / "build_pipeline").rglob("*.py")
-                       if "BuildPhase.FAILED, " in p.read_text()
-                       or "phase = BuildPhase.FAILED" in p.read_text())
-        assert users == ["build_pipeline/state.py"]
+        users = sorted({(p.relative_to(scripts).as_posix(), func)
+                        for p in (scripts / "build_pipeline").rglob("*.py")
+                        for func, _ in _failed_writes(p.read_text())})
+        assert users == [("build_pipeline/state.py", "fail")]
+
+    @pytest.mark.parametrize("body", [
+        "state.advance_to(BuildPhase.FAILED)",
+        "state.advance_to(BuildPhase.FAILED, path)",
+        "state.advance_to(phase=BuildPhase.FAILED)",
+        "state.phase = BuildPhase.FAILED; state.checkpoint(path)",
+        "failed = BuildPhase.FAILED\nstate.advance_to(failed)",
+        "state = state.model_copy(update={'phase': BuildPhase.FAILED})",
+        "state.advance_to(models.BuildPhase.FAILED)",
+        "state.advance_to(BuildPhase('failed'))",
+        "state.phase = 'failed'",
+        "BuildState(change_name='c', phase='failed')",
+        "BuildState.model_validate({'phase': 'failed'})",
+    ])
+    def test_the_scan_finds_each_way_of_writing_failed(self, body):
+        hits = _failed_writes("def bypass(state, path):\n    " + body.replace("\n", "\n    "))
+        assert hits and {func for func, _ in hits} == {"bypass"}
+
+    def test_the_scan_leaves_reads_of_failed_alone(self):
+        source = (
+            "def read(state, phase):\n"
+            "    if state.phase == BuildPhase.FAILED: pass\n"
+            "    if phase in (BuildPhase.FAILED, BuildPhase.COMPLETE): pass\n"
+            "    column = {BuildPhase.FAILED: 'Cancelled'}\n"
+            "    return state.phase != 'failed'\n"
+        )
+        assert _failed_writes(source) == []
