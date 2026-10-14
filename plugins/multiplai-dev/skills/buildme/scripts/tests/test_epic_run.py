@@ -408,6 +408,7 @@ def test_a_build_inside_its_own_worktree_is_not_refused_on_its_base_ref(tmp_path
     monkeypatch.setattr(orchestrator, "_setup_worktree", setup)
     config = BuildConfig(project_dir=project, change_name="c")
     config.base_ref = base
+    config.specs_dir = project / "specs"
     rebound = BuildState(change_name="c", mode="brief", tier="advanced", worktree_path=str(project))
     # Neither refused nor sent to _setup_worktree: it keeps the worktree it is in.
     asyncio.run(orchestrator._run_bootstrap(config, rebound, None, None))
