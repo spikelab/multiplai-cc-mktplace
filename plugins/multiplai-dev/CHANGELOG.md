@@ -27,8 +27,10 @@ time, not derived from a tag.
   the PR's own checks gate instead) and runs
   `gh pr merge <n> --merge --match-head-commit <sha>`, never `--admin`, so a
   commit pushed to the PR after the merge step checked it is never merged.
-  Right after its own push it waits up to two minutes for GitHub to report
-  the new commit's checks. Checks still pending after an hour leave the PR
+  Right after its own push it waits up to two minutes for GitHub to show
+  the new commit as the PR's head and report its checks, and reads no
+  checks of an earlier commit; a PR whose head is still another commit
+  after that parks the child. Checks still pending after an hour leave the PR
   open: the run exits 3 with `EPIC:MERGE_WAITING`, and the next run waits
   again. A failed or cancelled check parks the child, naming the check. The
   child counts as merged only once GitHub says the PR is `MERGED`, so a PR

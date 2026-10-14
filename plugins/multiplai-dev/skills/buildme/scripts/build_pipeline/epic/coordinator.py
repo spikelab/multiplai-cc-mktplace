@@ -1191,7 +1191,7 @@ class Coordinator:
             head = git_ops.rev_parse_head(w)     # what 40.1 checked and the step pushed: the only head 40.6 merges
             if head is None:
                 return self._merge_park(c, f"cannot read HEAD in {w}")
-            if not await self._checks_pass(c, pushed=pushed):                               # 40.5
+            if not await self._checks_pass(c, head, pushed=pushed):                         # 40.5
                 return
             refused = self._merge_pr(c, head)                                               # 40.6
             if refused is None:
@@ -1373,21 +1373,39 @@ class Coordinator:
             log.warning("EPIC child %s: %s", c.id, c.reason)
         return False
 
-    async def _checks_pass(self, c: Child, *, pushed: bool) -> bool:
-        """40.5: True once no check that gates *c*'s PR is pending: its
-        required checks or, when none is required, every check it has, so a
-        repo with CI and no branch rule still waits for its CI (judgment). A
-        failed or cancelled one parks, naming it. Right after the step's own
-        push (*pushed*) gh reports no checks until GitHub registers them, so
-        none counts as pending for `CHECKS_APPEAR` seconds. Still pending
-        after `CHECKS_LIMIT` seconds: False with the PR left open, which the
-        run waits on (item 41) and a re-run reads again (E.S8). A read that
-        fails leaves the child `unknown`, as a failed fetch does."""
+    async def _checks_pass(self, c: Child, head: str, *, pushed: bool) -> bool:
+        """40.5: True once no check that gates *c*'s PR at *head* is pending:
+        its required checks or, when none is required, every check it has,
+        so a repo with CI and no branch rule still waits for its CI
+        (judgment). A failed or cancelled one parks, naming it. Checks are
+        read only while `gh pr view` shows *head* as the PR's head: for about
+        1.5 s after a push GitHub still shows the previous head, whose checks
+        `gh pr checks` reads (measured on spikelab/github-tests), so another
+        head counts as pending for `CHECKS_APPEAR` seconds and then parks.
+        Right after the step's own push (*pushed*) gh reports no checks until
+        GitHub registers them, so none counts as pending for `CHECKS_APPEAR`
+        seconds. Still pending after `CHECKS_LIMIT` seconds: False with the
+        PR left open, which the run waits on (item 41) and a re-run reads
+        again (E.S8). A read that fails leaves the child `unknown`, as a
+        failed fetch does."""
         start = CLOCK.now()
         while True:
             _merge_point(self, c, "checks")
             waited = CLOCK.now() - start
             appearing = pushed and waited < CHECKS_APPEAR
+            view = _gh(self.repo, "pr", "view", c.pr, "--json", "headRefOid")
+            shown = view.get("headRefOid") if isinstance(view, dict) else None
+            if not shown:
+                c.status, c.reason = "unknown", f"{MERGE_UNKNOWN}gh pr view failed"
+                log.warning("EPIC child %s: %s", c.id, c.reason)
+                return False
+            if shown != head:
+                if waited >= CHECKS_APPEAR:
+                    self._merge_park(c, f"its PR's head on GitHub is {shown}, not {head}, the head the "
+                                        f"merge step checked")
+                    return False
+                await CLOCK.sleep(CHECKS_WAIT)
+                continue
             checks, which = self._read_checks(c, required=True), "required check"
             if checks == [] and not appearing:
                 checks, which = self._read_checks(c, required=False), "check"

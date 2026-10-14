@@ -133,7 +133,10 @@ reviewed head plus merges holding only git's own merge and what the step may res
 or with nothing to merge, the step waits for the PR's required checks
 (`Coordinator._checks_pass`: `gh pr checks --required` every `CHECKS_WAIT`
 seconds, or every check of the PR when none is required; failed or cancelled
-parks naming it, an unreadable answer is `unknown`; after the step's own push
+parks naming it, an unreadable answer is `unknown`; checks are read only
+while `gh pr view` shows the head 40.1 checked as the PR's head, since
+GitHub shows the previous head for a moment after a push, and another head
+is pending for `CHECKS_APPEAR` seconds, then parks; after the step's own push
 "no checks reported" is pending for `CHECKS_APPEAR` seconds; still pending
 after `CHECKS_LIMIT` seconds, the PR is left open, `built`, for a re-run) and
 runs `gh pr merge <n> --merge --match-head-commit <the head 40.1 checked and

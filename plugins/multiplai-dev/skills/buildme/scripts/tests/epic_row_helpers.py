@@ -384,7 +384,12 @@ the PR; `lost`, merges and exits 1; `offline`, refused, then every later
 when `--match-head-commit` is not origin's branch, or while origin's branch
 lacks origin's main (`BEHIND`, as a branch rule requiring it to be up to
 date), and otherwise merges the branch into origin's main from a scratch
-clone and marks the PR `MERGED`."""
+clone and marks the PR `MERGED`. A PR's `lag`: after origin's branch
+moves, the next `lag` `pr view` and `pr checks` reads still show its
+previous head, whose checks are `old_checks` (none when absent), and `pr
+merge` compares `--match-head-commit` with that head, as GitHub did on
+spikelab/github-tests for about 1.5 s after a push. A PR's pinned `head`
+gives way to origin's branch once that branch moves on top of it."""
 import hashlib, json, os, pathlib, subprocess, sys
 
 
@@ -399,6 +404,23 @@ def at(origin, *a):
 def behind(origin, pr):
     pushed = at(origin, "rev-parse", "-q", "--verify", "refs/heads/" + pr["branch"]).stdout.strip()
     return bool(pushed) and at(origin, "merge-base", "--is-ancestor", "refs/heads/main", pushed).returncode != 0
+
+
+def shown(url, pr, pushed, consume=True):
+    """The head GitHub shows for the PR: *pushed*, or with `lag` its previous one."""
+    if not pr.get("lag") or not pushed:
+        return pushed
+    f = root / f"shown-{{number(url.rsplit('/', 1)[1])}}.json"
+    s = json.loads(f.read_text()) if f.exists() else {{"head": pushed, "next": None, "left": 0}}
+    if pushed not in (s["head"], s["next"]):
+        s["next"], s["left"] = pushed, pr["lag"]
+    if consume and s["next"] == pushed:
+        if s["left"] > 0:
+            s["left"] -= 1
+        else:
+            s["head"], s["next"] = pushed, None
+    f.write_text(json.dumps(s))
+    return s["head"]
 
 
 def nth(url, kind, steps, advance=True):
@@ -427,10 +449,14 @@ if a[:2] == ["pr", "view"]:
     pushed = subprocess.run(["{git}", "--git-dir", str(origin), "rev-parse", "-q", "--verify",
                              "refs/heads/" + pr["branch"]], capture_output=True, text=True).stdout.strip()
     checkouts = json.loads((root / "checkouts.json").read_text()) if (root / "checkouts.json").exists() else {{}}
-    head = pr.get("head") or pushed or subprocess.run(       # origin's branch once pushed (PR E)
+    pin = pr.get("head")
+    if pin and pushed and pin != pushed and at(origin, "merge-base", "--is-ancestor", pin, pushed).returncode == 0:
+        pin = None       # a push to the PR's branch on top of a pinned head moves it, as on GitHub (PR E2)
+    head = pin or pushed or subprocess.run(       # origin's branch once pushed (PR E)
         ["git", "rev-parse", "refs/heads/" + pr["branch"]],
         cwd=root / checkouts.get(a[2].split("/")[-3], "p"),   # in the PR's repo's clone (PR F)
         capture_output=True, text=True).stdout.strip()
+    head = shown(a[2], pr, head) if pushed and not pin else head
     print(json.dumps({{"state": pr["state"], "number": number(change), "headRefOid": head,
                       "mergeable": pr.get("mergeable", "MERGEABLE"),
                       "mergeStateStatus": pr.get("merge_state") or ("BEHIND" if behind(origin, pr) else "CLEAN")}}))
@@ -442,7 +468,10 @@ elif a[:2] in (["pr", "checks"], ["pr", "merge"]):
     origin = root / "o" / (url.split("/")[-3] + ".git")
     if a[1] == "checks":
         required = "--required" in a
-        every = nth(url, "checks", pr.get("checks", []), advance=required) or []
+        pushed = at(origin, "rev-parse", "-q", "--verify", "refs/heads/" + pr["branch"]).stdout.strip()
+        stale = shown(url, pr, pushed) != pushed
+        every = (pr.get("old_checks", []) if stale
+                 else nth(url, "checks", pr.get("checks", []), advance=required) or [])
         if isinstance(every, str):
             print(every, file=sys.stderr)
             sys.exit(1)
@@ -460,7 +489,7 @@ elif a[:2] in (["pr", "checks"], ["pr", "merge"]):
     match = a[a.index("--match-head-commit") + 1] if "--match-head-commit" in a else None
     pushed = at(origin, "rev-parse", "-q", "--verify", "refs/heads/" + pr["branch"]).stdout.strip()
     refusal = (step.get("refuse") or ("GraphQL: Head branch was modified. Review and try the merge again. "
-                                      "(mergePullRequest)" if match and match != pushed else None)
+                                      "(mergePullRequest)" if match and match != shown(url, pr, pushed, False) else None)
                or ("X Pull request is not mergeable: the head branch is not up to date with the base branch."
                    if behind(origin, pr) else None))
     if refusal:

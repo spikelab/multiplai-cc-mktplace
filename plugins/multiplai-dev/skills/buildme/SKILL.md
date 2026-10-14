@@ -864,8 +864,12 @@ reviewed again; any other, such as a person's "Update branch" with other edits, 
 buildme waits for the PR's required checks (`gh pr checks --required`, read
 every 30 seconds while one is pending; when no check is required, the PR's
 own checks gate instead; a failed or cancelled check parks the child, naming
-it). Right after its own push it treats "no checks reported" as pending for
-two minutes, since GitHub has not registered the new commit's checks yet.
+it). It reads the checks only once GitHub shows the commit it checked as
+the PR's head: for a moment after a push GitHub still shows the previous
+commit and its checks. Another commit still shown after two minutes, such
+as one someone else pushed, parks the child. Right after its own push it
+treats "no checks reported" as pending for two minutes, since GitHub has
+not registered the new commit's checks yet.
 Checks still pending after an hour leave the PR open: the run exits 3 with
 `EPIC:MERGE_WAITING`, and the next run reads them again. Then it runs
 `gh pr merge <n> --merge --match-head-commit <sha>`, never `--admin`, so a

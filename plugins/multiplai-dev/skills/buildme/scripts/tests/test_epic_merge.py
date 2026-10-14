@@ -1368,6 +1368,20 @@ def test_pending_required_checks_are_waited_for(tmp_path, monkeypatch):
     assert _merged_prs(r) == ["e-a", "e-b"]
 
 
+def test_checks_are_read_only_once_github_shows_the_pushed_head(tmp_path, monkeypatch):
+    """40.5: for about 1.5 s after a push, GitHub still shows the PR's
+    previous head (measured on spikelab/github-tests), and `gh pr checks`
+    reads that head's checks, which passed before the review. Until `gh pr
+    view` shows the head the step pushed, the checks count as pending; then
+    the new head's pending check is waited for, and the PR merges once it
+    passes."""
+    r = MergeRoot(tmp_path, monkeypatch, pr={"lag": 2, "old_checks": PASSED, "checks": [PENDING, PASSED]})
+    assert r.run() == 0 and r.status()["status"] == "merged"
+    assert _check_reads(r) == 2 and len(r.step_pushes()) == 1
+    [call] = [x for x in r.fakes.merges() if x["argv"][2] == pr_url("e-a")]
+    assert call["argv"][-1] == git(r.w, "rev-parse", "HEAD").strip()
+
+
 def test_a_pr_with_no_checks_merges_once_none_appeared_after_the_push(tmp_path, monkeypatch):
     """40.5: gh 2.102 exits 1 with "no checks reported" for a repo with no CI
     (read on spikelab/github-tests), and also for a head GitHub has not yet
@@ -1456,27 +1470,69 @@ def test_a_check_read_that_fails_leaves_the_child_unknown(tmp_path, monkeypatch)
     assert r.fakes.merges() == []
 
 
+def test_a_head_read_that_fails_leaves_the_child_unknown(tmp_path, monkeypatch):
+    """40.5: `gh pr view --json headRefOid` failing is a failed read, as a
+    failed `gh pr checks` is: `unknown`, no checks read, nothing merged,
+    exit 1."""
+    r = MergeRoot(tmp_path, monkeypatch, main=None)
+    gh = coordinator._gh
+    monkeypatch.setattr(coordinator, "_gh", lambda repo, *a: None if a[-1] == "headRefOid" else gh(repo, *a))
+    assert r.run() == 1
+    st = r.status()
+    assert st["status"] == "unknown" and st["reason"] == f"{coordinator.MERGE_UNKNOWN}gh pr view failed"
+    assert _check_reads(r) == 0 and r.fakes.merges() == []
+
+
+@pytest.mark.parametrize("when", ["during-the-checks", "after-the-checks"])
 @pytest.mark.parametrize("main", [None, MAIN], ids=["up-to-date", "pushed"])
-def test_a_commit_pushed_to_the_pr_during_the_checks_is_never_merged(tmp_path, monkeypatch, main):
-    """40.6: `gh pr merge` names the head 40.1 checked and the step pushed
-    (`--match-head-commit`), so a commit pushed to the PR's branch while the
-    checks are read is refused by GitHub, and the child parks: what the
-    review never saw does not reach main."""
+def test_a_commit_pushed_to_the_pr_during_the_checks_is_never_merged(tmp_path, monkeypatch, main, when):
+    """40.5 and 40.6: a commit pushed to the PR's branch never reaches main
+    unreviewed. Pushed while 40.5 waits, the PR's head it reads is not the
+    one 40.1 checked: after `CHECKS_APPEAR` the child parks, and no `gh pr
+    merge` runs. Pushed after the checks passed, `gh pr merge` names the
+    checked head (`--match-head-commit`), GitHub refuses it, and the child
+    parks. E.S30: a re-run reviews the foreign head, and 40.1 parks because
+    `<W>`'s HEAD is not that reviewed head; nothing is merged, tested or
+    pushed again."""
     r = MergeRoot(tmp_path, monkeypatch, main=main)
     r.use()
+    foreign = r.root / "foreign"
+
+    def push_foreign(c) -> None:
+        if c.id == "a" and not foreign.exists():
+            foreign.write_text(push_files(r.root, {"evil.txt": "not reviewed\n"}, "foreign", branch="buildme/e-a"))
 
     def point(coord, c, name):
         r.point(coord, c, name)
-        if name == "checks" and c.id == "a" and not (r.root / "foreign").exists():
-            (r.root / "foreign").write_text(push_files(r.root, {"evil.txt": "not reviewed\n"}, "foreign",
-                                                       branch="buildme/e-a"))
+        if name == "checks" and when == "during-the-checks":
+            push_foreign(c)
+
+    merge_pr = coordinator.Coordinator._merge_pr
+
+    def merging(coord, c, head):
+        if when == "after-the-checks":
+            push_foreign(c)
+        return merge_pr(coord, c, head)
 
     monkeypatch.setattr(coordinator, "_merge_point", point)
+    monkeypatch.setattr(coordinator.Coordinator, "_merge_pr", merging)
     assert run_coordinator(r.config) == 0
-    st = r.status()
-    assert st["status"] == "parked" and st["reason"].startswith("gh pr merge refused: GraphQL: Head branch was modified")
-    [call] = r.fakes.merges()
-    assert call["argv"][-1] == git(r.w, "rev-parse", "HEAD").strip() != (r.root / "foreign").read_text().strip()
+    st, head = r.status(), git(r.w, "rev-parse", "HEAD").strip()
+    assert st["status"] == "parked" and head != foreign.read_text().strip()
+    if when == "during-the-checks":
+        assert st["reason"] == (f"its PR's head on GitHub is {foreign.read_text().strip()}, not {head}, "
+                                "the head the merge step checked")
+        assert r.fakes.merges() == []
+        # E.S30: the re-run reviews the foreign head, the one head never reviewed, then 40.1 parks.
+        tested, pushed = len(r.tries("merge-tests")), len(r.step_pushes())
+        assert r.run() == 0 and r.status()["status"] == "parked" and r.fakes.merges() == []
+        assert f"is not the reviewed head {foreign.read_text().strip()[:12]}" in r.status()["reason"]
+        assert len(r.tries("review")) == 2
+        assert (len(r.tries("merge-tests")), len(r.step_pushes())) == (tested, pushed)
+    else:
+        assert st["reason"].startswith("gh pr merge refused: GraphQL: Head branch was modified")
+        [call] = r.fakes.merges()
+        assert call["argv"][-1] == head
     assert git(r.root / "o" / "r.git", "ls-tree", "--name-only", "main").split().count("evil.txt") == 0
 
 
