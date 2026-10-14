@@ -120,11 +120,14 @@ class MergeRoot:
     *child_files*; test command `fake-tests` (answering *tests*) unless
     *command* is None. *main* is pushed onto origin's main at the `start`
     seam. *sub*: the project's subdirectory, holding every path above;
-    *outside* is pushed with *main* at the repo root."""
+    *outside* is pushed with *main* at the repo root. PR E2: *answer*
+    replaces the chain, b's build commits *b_files*, and a's PR starts with
+    the fields *pr* (`checks`, `merges`, `merge_state`)."""
 
     def __init__(self, root: Path, monkeypatch, *, child_files=CHILD, main=MAIN, tests=None, agent=None,
                  merge_mode="auto", command="fake-tests", sub: str | None = None,
-                 outside: dict[str, str] | None = None):
+                 outside: dict[str, str] | None = None, answer: EpicSplitAnswer = CHAIN,
+                 b_files: dict[str, str] | None = None, pr: dict | None = None):
         at = (lambda files: {f"{sub}/{k}": v for k, v in files.items()}) if sub else dict
         self.root, self.mp, self.main = root, monkeypatch, main and {**at(main), **(outside or {})}
         self.data = use_workspace(monkeypatch, root)
@@ -132,12 +135,13 @@ class MergeRoot:
         monkeypatch.setenv("PATH", os.pathsep.join(
             p for p in os.environ["PATH"].split(os.pathsep) if not (Path(p).parent / "fakes.json").exists()))
         self.repo = repo = make_project(root)
-        self.fakes = Fakes(root, monkeypatch, {"a": [{"commit": at(child_files)}]})
+        self.fakes = Fakes(root, monkeypatch, {"a": [{"commit": at(child_files), **({"pr": pr} if pr else {})}],
+                                               "b": [{"commit": at(b_files or {"b.txt": "b\n"})}]})
         self.project = repo / sub if sub else repo
         self.project.mkdir(exist_ok=True)
         self.config = make_build(self.project)
         self.config.epic = EpicSettings(max_parallel=2, merge=merge_mode)
-        approve(self.config, CHAIN, CallLog(root / "split.log"))
+        approve(self.config, answer, CallLog(root / "split.log"))
         files = {**BASE, **({"specs/config.yaml": f"tdd:\n  test_command: {command}\n"} if command else {})}
         push_files(root, at(files), "base")
         git(repo, "pull", "-q", "origin", "main")        # the source checkout holds origin's config.yaml
@@ -166,8 +170,8 @@ class MergeRoot:
         self.use()
         return run_coordinator(self.config)
 
-    def status(self) -> dict:
-        return json.loads((self.dir / "epic.json").read_text())["child_status"]["a"]
+    def status(self, cid: str = "a") -> dict:
+        return json.loads((self.dir / "epic.json").read_text())["child_status"][cid]
 
     def tries(self, kind: str) -> list[records.Attempt]:
         return [a for a in records.attempts(self.dir) if a.child == "a" and a.kind == kind]
@@ -1266,3 +1270,124 @@ def test_a_fixer_that_cannot_start_ends_the_run_and_the_next_run_relaunches_it(t
     monkeypatch.setattr(coordinator, "_spawn_review", real)
     assert e.run() == 3 and e.status()["status"] == "built"
     assert e.fixes()[-1].result["exit_code"] == 0
+
+
+# --- 40.5 and 40.6: the required checks, then `gh pr merge` (PR E2) ------------------
+
+TWO = EpicSplitAnswer(single=False, reason="Two parts.", children=[child("a"), child("b")])
+
+
+class SecondMerger(FakeAgent):
+    """The merge agent for two children that both raised 0.1.0 to 0.2.0: the
+    one merged second takes 0.3.0, its entry above the other's."""
+
+    def __init__(self, root: Path):
+        super().__init__(root, {})
+
+    async def __call__(self, config, w, files, name, default):
+        me = name.rsplit("-", 1)[1]
+        other = "b" if me == "a" else "a"
+        self.resolve = {"plugin.json": plugin("0.3.0"), "CHANGELOG.md": changelog(
+            ("0.3.0", f"Child {me}."), ("0.2.0", f"Child {other}."), ("0.1.0", "First."))}
+        return await super().__call__(config, w, files, name, default)
+
+
+def _merged_prs(r: MergeRoot) -> list[str]:
+    """The PRs `gh pr merge` was called on, in order: `e-a`, `e-b`."""
+    return [x["argv"][2].rsplit("/", 1)[1] for x in r.fakes.merges()]
+
+
+def test_two_children_merge_in_turn_resolving_their_version_conflict(tmp_path, monkeypatch):
+    """Done means 7: two independent children in one repo both raise the
+    version to 0.2.0. Their merge steps take the repo's lock in turn: the
+    first is up to date and merges; the second then merges main, one agent
+    call resolves the version and CHANGELOG, and it is tested, pushed and
+    merged with `gh pr merge --merge`."""
+    b_files = {"plugin.json": plugin("0.2.0"), "CHANGELOG.md": changelog(("0.2.0", "Child b."), ("0.1.0", "First."))}
+    r = MergeRoot(tmp_path, monkeypatch, main=None, answer=TWO, b_files=b_files, agent=SecondMerger(tmp_path))
+    order: list[str] = []
+
+    def point(coord, c, name):
+        order.append(f"{name} {c.id}")
+
+    r.use()
+    monkeypatch.setattr(coordinator, "_merge_point", point)
+    assert run_coordinator(r.config) == 0 and merge_waiting() is None
+    first = order[0].split()[1]
+    second = "b" if first == "a" else "a"
+    assert order.index(f"checks {first}") < order.index(f"start {second}")       # one merge at a time
+    assert _merged_prs(r) == [f"e-{first}", f"e-{second}"]
+    assert all(x["argv"][3:] == ["--merge"] for x in r.fakes.merges())
+    assert [x["files"] for x in r.calls("merge-agent")] == [["CHANGELOG.md", "plugin.json"]]
+    assert {r.status(cid)["status"] for cid in "ab"} == {"merged"}
+    assert r.origin("plugin.json", "main") == plugin("0.3.0")
+    assert r.origin("CHANGELOG.md", "main") == changelog(
+        ("0.3.0", f"Child {second}."), ("0.2.0", f"Child {first}."), ("0.1.0", "First."))
+    assert len(r.calls("merge-tests")) == 1 and len(r.step_pushes()) == 1
+
+
+def test_pending_required_checks_are_waited_for(tmp_path, monkeypatch):
+    """40.5: a pending required check is read again until it passes; then the PR merges."""
+    pending, passed = [{"name": "ci", "bucket": "pending"}], [{"name": "ci", "bucket": "pass"}]
+    r = MergeRoot(tmp_path, monkeypatch, pr={"checks": [pending, pending, passed]})
+    assert r.run() == 0 and r.status()["status"] == "merged"
+    assert len(list((r.root / "checks-attempts").glob(f"{pr_number('e-a')}.*"))) == 3
+    assert _merged_prs(r) == ["e-a", "e-b"]
+
+
+def test_a_failed_check_parks_naming_it_and_merges_nothing(tmp_path, monkeypatch):
+    """40.5: a failed required check parks, naming it. The PR stays open and
+    `<W>` clean, so a re-run reads the checks again (E.S26) and parks again."""
+    checks = [{"name": "lint", "bucket": "pass"}, {"name": "ci", "bucket": "fail"}]
+    r = MergeRoot(tmp_path, monkeypatch, pr={"checks": [checks]})
+    assert r.run() == 0
+    st = r.status()
+    assert st["status"] == "parked" and st["reason"] == st["merge_park"] == "required check ci failed"
+    assert r.fakes.merges() == [] and len(r.step_pushes()) == 1
+    assert r.run() == 0 and r.status()["reason"] == "required check ci failed" and r.fakes.merges() == []
+    assert len(list((r.root / "checks-attempts").glob(f"{pr_number('e-a')}.*"))) == 2
+
+
+def test_a_refused_merge_parks_with_the_refusal_and_is_not_retried_in_the_run(tmp_path, monkeypatch):
+    """40.6, E.S20: refused for another reason than `BEHIND`, the child parks
+    with GitHub's words and the merge state, and b, waiting on it, is
+    skipped. A re-run retries it once (E.S26: `<W>` is clean): one more
+    `gh pr merge`, refused again, parked again."""
+    refusal = "X Pull request is not mergeable: the base branch policy prohibits the merge."
+    r = MergeRoot(tmp_path, monkeypatch, pr={"merges": [{"refuse": refusal}], "merge_state": "BLOCKED"})
+    assert r.run() == 0
+    st = r.status()
+    assert st["status"] == "parked" and st["reason"] == st["merge_park"] == \
+        f"gh pr merge refused: {refusal} (mergeStateStatus BLOCKED)"
+    assert _merged_prs(r) == ["e-a"] and r.status("b")["status"] == "skipped"
+    assert r.run() == 0 and r.status()["reason"] == st["reason"] and _merged_prs(r) == ["e-a", "e-a"]
+
+
+def test_behind_starts_again_at_40_1_and_merges_the_new_commit(tmp_path, monkeypatch):
+    """40.6: main moves while the checks are read, so `gh pr merge` is
+    refused `BEHIND`. The step starts again at 40.1, merges the new commit
+    (no conflict, so no agent call), tests and pushes it; the second
+    `gh pr merge` merges."""
+    r = MergeRoot(tmp_path, monkeypatch)
+    r.use()
+
+    def point(coord, c, name):
+        r.point(coord, c, name)
+        if name == "checks" and c.id == "a" and not (r.root / "moved2").exists():
+            (r.root / "moved2").write_text(push_files(r.root, {"y.txt": "y\n"}, "main moved again"))
+
+    monkeypatch.setattr(coordinator, "_merge_point", point)
+    assert run_coordinator(r.config) == 0 and r.status()["status"] == "merged"
+    assert _merged_prs(r) == ["e-a", "e-a", "e-b"]
+    assert len(r.calls("merge-agent")) == 1 and len(r.tries("merge-tests")) == 2 and len(r.step_pushes()) == 2
+    assert r.origin("y.txt", "main") == "y\n" and r.origin("plugin.json", "main") == RESOLVED["plugin.json"]
+
+
+def test_behind_with_nothing_new_to_merge_parks_with_the_refusal(tmp_path, monkeypatch):
+    """40.6: refused `BEHIND`, yet 40.2 finds the branch up to date with
+    main: a refused merge is never tried again in one invocation, so it parks."""
+    refusal = "X Pull request is not mergeable: the head branch is not up to date with the base branch."
+    r = MergeRoot(tmp_path, monkeypatch, pr={"merges": [{"refuse": refusal}], "merge_state": "BEHIND"})
+    assert r.run() == 0
+    assert r.status()["reason"] == f"gh pr merge refused: {refusal} (mergeStateStatus BEHIND)"
+    assert _merged_prs(r) == ["e-a"] and len(r.step_pushes()) == 1

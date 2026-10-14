@@ -373,12 +373,37 @@ print(f"PR:{{url}}", flush=True)
 '''
 
 FAKE_GH = r'''#!{python}
-"""A fake `gh`: reads only, from `<root>/prs.json`."""
+"""A fake `gh`, from `<root>/prs.json`: reads, and (PR E2) `pr checks` and
+`pr merge`. A PR's `checks` is one step per `pr checks` call (the JSON list
+it prints; none: no required checks), its `merges` one step per `pr merge`
+call (`refuse`: refused with that stderr). `pr merge` is logged to
+`<root>/merges.log`; it is refused while origin's branch lacks origin's main
+(`BEHIND`, as a branch rule requiring it to be up to date), and otherwise
+merges the branch into origin's main from a scratch clone and marks the PR
+`MERGED`."""
 import hashlib, json, os, pathlib, subprocess, sys
 
 
 def number(change):
     return int(hashlib.sha1(change.encode()).hexdigest()[:4], 16) % 9000 + 1000
+
+
+def at(origin, *a):
+    return subprocess.run(["{git}", "--git-dir", str(origin), *a], capture_output=True, text=True)
+
+
+def behind(origin, pr):
+    pushed = at(origin, "rev-parse", "-q", "--verify", "refs/heads/" + pr["branch"]).stdout.strip()
+    return bool(pushed) and at(origin, "merge-base", "--is-ancestor", "refs/heads/main", pushed).returncode != 0
+
+
+def nth(url, kind, steps):
+    counts = root / f"{{kind}}-attempts"
+    counts.mkdir(exist_ok=True)
+    key = str(number(url.rsplit("/", 1)[1]))
+    k = len(list(counts.glob(key + ".*"))) + 1
+    (counts / f"{{key}}.{{k}}").write_text("")
+    return steps[k - 1] if k <= len(steps) else (steps[-1] if steps else None)
 
 
 root = pathlib.Path(os.environ["EPIC_FAKE_ROOT"])
@@ -403,7 +428,44 @@ if a[:2] == ["pr", "view"]:
         capture_output=True, text=True).stdout.strip()
     print(json.dumps({{"state": pr["state"], "number": number(change), "headRefOid": head,
                       "mergeable": pr.get("mergeable", "MERGEABLE"),
-                      "mergeStateStatus": pr.get("merge_state", "CLEAN")}}))
+                      "mergeStateStatus": pr.get("merge_state") or ("BEHIND" if behind(origin, pr) else "CLEAN")}}))
+elif a[:2] in (["pr", "checks"], ["pr", "merge"]):
+    url, pr = a[2], prs.get(a[2])
+    if pr is None:
+        print("no pull request found", file=sys.stderr)
+        sys.exit(1)
+    origin = root / "o" / (url.split("/")[-3] + ".git")
+    if a[1] == "checks":
+        checks = nth(url, "checks", pr.get("checks", []))
+        if not checks:
+            print(f"No required checks reported on the '{{pr['branch']}}' branch", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(checks))
+        buckets = {{x["bucket"] for x in checks}}
+        sys.exit(8 if "pending" in buckets else 1 if buckets & {{"fail", "cancel"}} else 0)
+    with (root / "merges.log").open("a") as f:
+        f.write(json.dumps({{"kind": "gh-merge", "argv": a}}, sort_keys=True) + "\n")
+    step = nth(url, "merge", pr.get("merges", [])) or {{}}
+    if step.get("refuse") or behind(origin, pr):
+        print(step.get("refuse") or "X Pull request is not mergeable: the head branch is not up to date "
+              "with the base branch.", file=sys.stderr)
+        sys.exit(1)
+    merger = root / ("merger-" + origin.stem)
+    if not merger.exists():
+        subprocess.run(["{git}", "clone", "-q", str(origin), str(merger)], check=True, capture_output=True)
+    for cmd in (["fetch", "-q", "origin"], ["checkout", "-q", "-B", "main", "origin/main"],
+                ["-c", "commit.gpgsign=false", "merge", "-q", "--no-ff", "-m",
+                 f"Merge pull request #{{number(url.rsplit('/', 1)[1])}} from {{pr['branch']}}",
+                 "origin/" + pr["branch"]], ["push", "-q", "origin", "main"]):
+        subprocess.run(["{git}", *cmd], cwd=merger, check=True, capture_output=True)
+    import fcntl
+    with (root / "prs.lock").open("a") as held:     # as the fake build writes it
+        fcntl.flock(held, fcntl.LOCK_EX)
+        prs = json.loads((root / "prs.json").read_text())
+        prs[url]["state"] = "MERGED"
+        (root / f"prs.{{os.getpid()}}.tmp").write_text(json.dumps(prs))
+        os.replace(root / f"prs.{{os.getpid()}}.tmp", root / "prs.json")
+    print(f"Merged pull request #{{number(url.rsplit('/', 1)[1])}}")
 elif a[:2] == ["pr", "list"]:
     head = a[a.index("--head") + 1]
     print(json.dumps([{{"url": u}} for u, p in prs.items() if p["branch"] == head]))
@@ -771,6 +833,11 @@ class Fakes:
 
     def post_launches(self) -> list[dict]:
         p = self.root / "posts.log"
+        return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
+
+    def merges(self) -> list[dict]:
+        """Every `gh pr merge` (PR E2)."""
+        p = self.root / "merges.log"
         return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
 
     def fix_launches(self) -> list[dict]:
