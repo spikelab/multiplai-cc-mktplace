@@ -17,6 +17,25 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.68.0] - 2026-10-14
+
+### Added
+- buildme epic mode, `epic.merge: auto`: buildme now merges each child's PR
+  itself. After merging the default branch into the PR's branch, testing and
+  pushing, it waits for the PR's required checks (`gh pr checks --required`,
+  re-read every 30 seconds while one is pending) and runs
+  `gh pr merge <n> --merge`, never `--admin`. A failed or cancelled required
+  check parks the child, naming the check. A merge GitHub refuses as
+  `BEHIND` starts the merge step over and merges the default branch's new
+  commit in; any other refusal parks the child with GitHub's message and the
+  PR's `mergeStateStatus`, and a refused merge is not tried again within one
+  run. Merges in one repository still run one at a time, so two children
+  that both raised the version merge in turn: the second merges the first's
+  change in, and one agent call raises its version past it and keeps both
+  CHANGELOG entries. Under `manual` (still the
+  default) nothing changes: the run exits 3 with `EPIC:MERGE_WAITING` until
+  a person merges.
+
 ## [0.67.0] - 2026-10-14
 
 ### Changed

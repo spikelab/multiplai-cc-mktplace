@@ -734,7 +734,8 @@ the next run waits for them. An ignored SIGHUP or SIGTERM (SIGHUP under
 `specs/config.yaml` takes an `epic:` block: `epic.max_parallel` (default `2`),
 `epic.max_review_rounds` (default `6`), `epic.merge` (`auto` or `manual`,
 default `manual`; under `manual` a human merges each child's PR, and under
-`auto` buildme first merges the default branch into it, tests and pushes;
+`auto` buildme merges the default branch into it, tests and pushes, waits for
+the PR's required checks, and merges it with `gh pr merge --merge`;
 a version, CHANGELOG or lockfile conflict there costs one agent call, with
 Read, Edit and Bash in the child's worktree, counted against `epic.max_usd`) and
 `epic.max_usd` (one ceiling for the whole epic, default none; each child keeps
@@ -844,8 +845,14 @@ them before the abort. The project's tests then run in the worktree
 `BUILDME_TRUST_REPO=1`, `agents/<NNN>-merge-tests-<id>.*`; SIGHUP ends them with the run), and a failure
 parks. The merge commit is pushed, never forced; a push rejected because origin's branch moved parks naming
 where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. When `epic.max_usd` is reached and the merge would need the agent, nothing is merged. A merge commit holding only git's own merge plus such resolutions (checked against each file's three sides: a version file is git's merge with each version value the side's that changed it or, where both did, the next after the default branch's; a CHANGELOG is the default branch's with every line the child added; a lockfile in a format read as data (TOML, JSON, pnpm's YAML) loads with no key twice, holds only either side's keys and values, the written version or a new hex manifest hash, and pins each package, under its own name, as one side does; another lockfile holds only either side's lines or the written version), as the merge step's own do, is not
-reviewed again; any other, such as a person's "Update branch" with other edits, is. This release does not merge the PR itself under `auto`: after
-the push it waits for a person, as under `manual`. A run stopped during the
+reviewed again; any other, such as a person's "Update branch" with other edits, is. Then
+buildme waits for the PR's required checks (`gh pr checks --required`, read
+every 30 seconds while one is pending; a failed or cancelled check parks the
+child, naming it) and runs `gh pr merge <n> --merge`, never `--admin`. A merge
+GitHub refuses as `BEHIND` (the default branch moved again) starts the merge
+step over, merging the new commit in; any other refusal parks the child with
+GitHub's message and `mergeStateStatus`, and a refused merge is never retried
+within one run. A merged child's dependants then start. A run stopped during the
 merge saves what the worktree held (`merge_stop` in `epic.json`); the next
 run aborts the stopped merge and merges again only when nothing else changed
 in the worktree since, and otherwise parks with `git -C <worktree> merge
