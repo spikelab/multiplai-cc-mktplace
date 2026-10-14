@@ -254,8 +254,12 @@ def test_E_S6_committed_not_pushed_is_retested_and_pushed(tmp_path, monkeypatch)
 
 def test_E_S7_a_rejected_push_parks_and_never_forces(tmp_path, monkeypatch):
     """E.S7: origin's branch moves just before the push, in both runs. The
-    push is rejected and the child parks naming where origin's branch is; the
-    resume leaves it parked. One rejected push each, never forced."""
+    push is rejected and the child parks naming where origin's branch is,
+    with `<W>` clean, so a re-run retries it (E.S26): the PR's new head is
+    reviewed, the unpushed merge is tested again (item 37) and its push is
+    rejected again, so it parks again with the same reason. One more review,
+    `merge-tests` pair and rejected push than the run that never re-ran;
+    no push is forced."""
     stopped, clean = _roots(tmp_path, monkeypatch)
     moved = {}
 
@@ -274,12 +278,17 @@ def test_E_S7_a_rejected_push_parks_and_never_forces(tmp_path, monkeypatch):
     stopped.use()
     monkeypatch.setattr(coordinator, "_merge_point", moving(stopped))
     assert run_coordinator(stopped.config) == 0
+    assert _parked(stopped)["reason"] == f"push rejected: origin/buildme/e-a moved to {moved[stopped.root]}"
     s, c = _snapshot(stopped), _snapshot(clean)
-    assert (s["epic"], s["records"], s["merges"]) == (c["epic"], c["records"], c["merges"])
-    for r in (stopped, clean):
-        [push] = r.step_pushes()
-        assert "--force" not in push["argv"] and " -f" not in push["argv"]
-    assert _launches(stopped) == _launches(clean)
+    assert s["merges"] == [*c["merges"], ("merge-tests", TESTS, 0, False)]
+    for r, n in ((stopped, 2), (clean, 1)):
+        pushes = r.step_pushes()
+        assert len(pushes) == n and not any("--force" in x["argv"] or " -f" in x["argv"] for x in pushes)
+    want = _launches(clean)
+    for kind, argv in (("merge-tests", None), ("git-push", "push -u origin buildme/e-a"), ("review", None)):
+        want.append(next(x for x in want if json.loads(x)["kind"] == kind
+                         and argv in (None, json.loads(x).get("argv"))))
+    assert _launches(stopped) == sorted(want)
 
 
 @pytest.mark.parametrize("at", ["start", "push"])

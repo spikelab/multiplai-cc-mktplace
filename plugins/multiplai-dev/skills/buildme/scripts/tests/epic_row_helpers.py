@@ -457,8 +457,10 @@ else:
     n = int(target.name[len("pr-"):])
 prs = json.loads((root / "prs.json").read_text())
 url, pr = next((u, p) for u, p in prs.items() if number(u.rsplit("/", 1)[1]) == n)
-head = pr.get("head") or subprocess.run(["git", "rev-parse", "refs/heads/" + pr["branch"]],
-                                        cwd=root / "p", capture_output=True, text=True).stdout.strip()
+pushed = subprocess.run(["{git}", "--git-dir", str(root / "o" / "r.git"), "rev-parse", "-q", "--verify",
+                         "refs/heads/" + pr["branch"]], capture_output=True, text=True).stdout.strip()
+head = pr.get("head") or pushed or subprocess.run(       # the head `gh` reports (PR E)
+    ["git", "rev-parse", "refs/heads/" + pr["branch"]], cwd=root / "p", capture_output=True, text=True).stdout.strip()
 fx = json.loads((root / "reviews.json").read_text()) if (root / "reviews.json").exists() else {{}}
 counts = root / "review-attempts"
 counts.mkdir(exist_ok=True)
