@@ -768,7 +768,13 @@ review run once, its resumes in it, a fresh review of the same head added);
 `spend_complete: false` when an attempt was killed before it printed `SPEND:`,
 its `SPEND:` ends `:incomplete`, or a review has not finished. Before each launch, once
 `epic.max_usd` is reached, nothing more is launched: the run waits for the
-children already running and exits `3` with `EPIC:BUDGET:<spent>`.
+children already running and exits `3` with `EPIC:BUDGET:<spent>`. A fixer
+runs several rounds in one launch, so it is given what is left of
+`epic.max_usd` as `findings --max-usd`, and stops before a round once its own
+spend and its reviews' reach it; the run then exits `3` with `EPIC:BUDGET`
+as well, the child is not parked, and a re-run after `epic.max_usd` is
+raised runs the fixer again. The round that crosses the ceiling finishes, so
+the epic can end up to one fix round (a fix and a review) past it.
 
 **Reviewing the children's PRs.** Each child's open PR is reviewed with
 `/multiplai-dev:review` (`python -m review_pipeline review --repo <child
@@ -807,14 +813,18 @@ finished.
 
 **Fixing the children's PRs.** A review that leaves blockers below
 `epic.max_review_rounds` runs the fix loop. First the review's findings are
-chosen as `--auto` chooses them (every Code finding, and every Tests finding
-on a non-test source file, in `buildme-decisions.json` next to the review's
+chosen as `--auto` chooses them, at the severities the epic blocks on
+(every Code finding, and every Tests finding on a non-test source file, at
+HIGH or MEDIUM, in `buildme-decisions.json` next to the review's
 `findings.json`, outside the worktree) and posted with `python -m
 review_pipeline post <review dir> --decisions <that file>`, run in the child's
 project directory (`agents/<NNN>-post-<id>.*`). Then the fixer runs there:
 `python -m build_pipeline findings --pr <n> --change <epic>-<id> --project-dir
-<child project dir> --auto --trust-repo --max-rounds <M>`
-(`agents/<NNN>-fix-<id>.*`), where `<M>` is the rounds in the change's
+<child project dir> --auto --trust-repo --max-rounds <M> --severities
+HIGH,MEDIUM [--max-usd <left>]` (`agents/<NNN>-fix-<id>.*`; `<left>` is
+`epic.max_usd` less the epic's spend, only when `epic.max_usd` is set; its
+re-reviews post only HIGH and MEDIUM findings, so it runs no round for a
+LOW one), where `<M>` is the rounds in the change's
 `.findings-state.json` whose review finished plus the review rounds the PR
 has left, so the fixer stops at the epic's cap, also when it resumes a round
 it had started. When it ends, the coordinator reads the PR again and
