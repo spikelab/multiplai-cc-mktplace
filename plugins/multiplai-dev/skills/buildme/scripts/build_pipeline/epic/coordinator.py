@@ -321,7 +321,7 @@ class Child:
     rproc: subprocess.Popen | None = None        # the review or resume process
     rattempt: records.Attempt | None = None
     merge_stop: stop_record.StepStop | None = None   # PR E, item 39
-    merge_park: str = ""                 # why the merge step parked it; it stays parked
+    merge_park: str = ""                 # why the merge step parked it; kept until <W> is clean
 
 
 @dataclass
@@ -466,8 +466,8 @@ class Coordinator:
             c = self.children.get(a.child)
             if c is not None and a.kind in (*REVIEW_KINDS, *FIX_KINDS) and (a.result or {}).get("parked"):
                 c.status, c.reason = "parked", a.result["parked"]
-        for c in self.children.values():             # and a merge step's (PR E)
-            if c.merge_park:
+        for c in self.children.values():             # and a merge step's (PR E), until <W> is clean (E.S26)
+            if c.merge_park and not self._merge_retry(c):
                 c.status, c.reason = "parked", c.merge_park
 
     # -- dependencies and merges -------------------------------------------------
@@ -1000,6 +1000,18 @@ class Coordinator:
         """Item 40: under `auto`, a PR whose review at *head* left no blocker is merged."""
         if self.settings.merge == "auto" and c.status == "built" and self._clean_head(c) == head:
             await self._merge(c)
+
+    def _merge_retry(self, c: Child) -> bool:
+        """E.S26 (Spike, 2026-10-14): a child the merge step parked is tried
+        again once `<W>` has no merge in progress and no uncommitted change,
+        as the park's hint `merge --abort, then re-run` promises. Every other
+        park stays. Clears `merge_park` when it retries."""
+        w = self._merge_worktree(c)
+        if w is None or not w.is_dir() or merge.merging(w) or stop_record.others_work(w, None):
+            return False
+        log.info("EPIC child %s: its worktree is clean; retrying the merge step it parked in: %s", c.id, c.merge_park)
+        c.merge_park = ""
+        return True
 
     def _merge_park(self, c: Child, why: str) -> None:
         c.merge_park = why
