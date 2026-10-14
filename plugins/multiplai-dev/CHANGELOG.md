@@ -17,6 +17,33 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-10-14
+
+### Added
+- buildme writes a baseline of what the code already does before it plans a
+  change. On a project whose `specs/registry/` is empty, the codebase analysis
+  phase now runs `/multiplai-dev:spec-extract` on the project's Python code at
+  the build's starting commit, with `--apply`, and commits the capability files
+  it writes to the build branch as `docs(specs): baseline registry from
+  spec-extract at <sha12>`, printing `SPEC_EXTRACT:BASELINE <n>`. It needs a
+  trusted repository (`--trust-repo`), never runs in `only` mode, and is turned
+  off with `spec_extract: false` in `specs/config.yaml`; `spec_extract_max_usd`
+  (default `80`) caps its spend, which spec-extract counts itself and buildme's
+  own budget does not. A stopped build resumes spec-extract at the same commit,
+  so it pays only for the calls that had not returned. When spec-extract fails
+  the build goes on without a baseline (`SPEC_EXTRACT:NOT_RUN exit=<n>`); when
+  another spec-extract run still holds the folder (`SPEC_EXTRACT:RUNNING`), or
+  `specs/registry/` holds uncommitted changes after a failure, the build exits
+  `1` without leaving the phase.
+- Spec generation reads `specs/registry/`. When the registry holds any
+  capability, the requirements prompt gets the registry file of the same name
+  and is told to write a changed requirement under `## MODIFIED Requirements`
+  and a removed one under `## REMOVED Requirements`; the design and tasks
+  prompts get the registry files of the change's own capabilities. Each names
+  the other capabilities, and the registry text is capped at 60,000
+  characters, dropping whole files and naming them. With an empty registry the
+  prompts are unchanged.
+
 ## [0.66.1] - 2026-10-14
 
 ### Fixed

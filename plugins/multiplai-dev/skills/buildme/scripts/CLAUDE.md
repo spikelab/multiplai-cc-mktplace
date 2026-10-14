@@ -382,6 +382,32 @@ the project has no source files yet (explore agents reporting "(new
 project)" is pure spend), and non-fatal on failure (the design falls back to
 "(new project)", exactly the pre-phase behavior). Every skip logs its reason.
 
+The same phase then runs spec-extract (`orchestrator._run_spec_extract_step`,
+not a phase of its own, so the enum, the board and the resume fixtures are
+unchanged): `uv run --directory ../../spec-extract/scripts python -m
+spec_extract_pipeline run --repo <checkout top> --tree <sha> [--path <project
+prefix>] --max-usd <spec_extract_max_usd> --trust-repo --apply --specs-dir
+<specs_dir>` through `git_ops._run_spec_extract_skill`. It is skipped, with
+`SKIP phase=CODEBASE_ANALYSIS step=spec-extract reason=<r>`, in `only` mode,
+with `spec_extract: false`, for an untrusted repo, for a project with no
+commit, and, while no commit is saved, when `specs/registry/` already holds a
+`*.md`. The commit is saved as `SpecGenState.spec_extract_sha` before the
+launch, and a resume always uses it, so it reaches the same spec-extract run
+folder. Exit 0 commits `specs/registry/` with `commit_stage` and prints
+`SPEC_EXTRACT:BASELINE <n>`; exit 5 (another run holds the folder) prints
+`SPEC_EXTRACT:RUNNING` and the build returns 1 without advancing; any other
+exit goes on without a baseline (`SPEC_EXTRACT:NOT_RUN`) unless
+`stop_record.others_work(<registry>, None)` finds uncommitted changes there,
+which also returns 1. The spend is spec-extract's own, outside `BuildBudget`
+and outside `SPEND_REPORTING` (spec-extract prints no `SPEND:` line). Its stop
+and resume rows are S1-S7 in the reverse-specs plan; `tests/test_spec_extract_step.py`
+tests S1, S3 and S5. With a non-empty registry, `artifact_context` lists its
+stems as `registry`, and `spec_steps._registry_section` appends
+`## Current behaviour (specs/registry)` to the requirements prompt (the
+same-name file, and the MODIFIED/REMOVED/ADDED rule) and to the design and
+tasks prompts (the files of the change's own capabilities), capped at
+`REGISTRY_TEXT_LIMIT`; an empty registry leaves every prompt unchanged.
+
 `EPIC_SPLIT` sits after `CODEBASE_ANALYSIS`, whose report it reads, and before
 `SPEC_GENERATION`, which a split build never reaches. It is the one phase
 whose pointer counts as done: the orchestrator skips it when `state.phase` is
