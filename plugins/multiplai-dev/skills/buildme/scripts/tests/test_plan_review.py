@@ -802,8 +802,9 @@ class TestNoBehaviourBlocks:
     @pytest.mark.asyncio
     async def test_the_scan_runs_when_the_review_model_fails(self, tmp_path):
         """The scan needs no model, so a failed model call does not skip it:
-        its blocks still drive the one rewrite. The stage is not recorded
-        done, so a resume asks the model again."""
+        its blocks still get a rewrite. Nothing is saved, as on main for a
+        failed call, so a resume asks the model again and the model's
+        findings still get the stage's one rewrite."""
         config, state, state_path = _stage_setup(tmp_path)
         (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
         review = AsyncMock(side_effect=RuntimeError("overloaded"))
@@ -816,40 +817,93 @@ class TestNoBehaviourBlocks:
         assert [f.category for f in findings] == ["no-new-behaviour"] * 2
         assert regen.await_count == 1
         assert "Block 2" in regen.await_args.kwargs["audit_findings"]
-        written = json.loads(state_path.read_text())["spec_gen"]
-        assert written["plan_review_regen_done"] is True
-        assert written["plan_review_done"] is False
+        assert state.spec_gen.plan_review_regen_done is False
+        assert state.spec_gen.plan_review_done is False
 
     @pytest.mark.asyncio
-    async def test_a_resume_after_the_scan_rewrite_pays_for_no_second_rewrite(
+    async def test_a_resume_after_the_scan_rewrite_applies_the_models_findings(
         self, tmp_path,
     ):
-        """Stop/resume row "Plan review — model failed, scan rewrite saved":
-        the resumed review runs (the failed call is retried), the rewrite is
-        not paid for again, and the result matches a run that never stopped:
-        tasks.md as rewritten, both flags set."""
+        """Stop/resume row "Plan review — model failed, scan rewrite done":
+        the resumed review asks the model again, and its critical finding
+        reaches tasks.md through the stage's one rewrite, as in a run whose
+        model call never failed: same rewrite input, same flags."""
+        contract = _finding(
+            category="contract-mismatch", severity="critical",
+            location="Block 1", claim="Block 1 names `summarise`.",
+        )
+
+        # The run whose model call never failed, on the plan the scan's
+        # rewrite left.
+        rewritten = "## 1. Summarize\n\nAll of it.\n"
+        ref_tmp = tmp_path / "ref"
+        ref_tmp.mkdir()
+        ref_config, ref_state, ref_path = _stage_setup(ref_tmp)
+        (ref_config.change_dir / "tasks.md").write_text(rewritten)
+        ref_regen = AsyncMock(return_value="## 1. Final\n")
+        a, b, c, d = self._patches(
+            AsyncMock(return_value=PlanReviewResult(findings=[contract])),
+            ref_regen)
+        with a, b, c, d:
+            await run_plan_review_stage(
+                ref_config.change_dir, ref_config, ref_state, ref_path)
+
+        # Stopped: the model call fails, the scan's rewrite runs.
         config, state, state_path = _stage_setup(tmp_path)
         (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
-        rewritten = "## 1. Summarize\n\nAll of it.\n"
-        regen = AsyncMock(return_value=rewritten)
-        a, b, c, d = self._patches(AsyncMock(side_effect=RuntimeError("down")), regen)
+        a, b, c, d = self._patches(
+            AsyncMock(side_effect=RuntimeError("down")),
+            AsyncMock(return_value=rewritten))
         with a, b, c, d:
             await run_plan_review_stage(config.change_dir, config, state, state_path)
 
+        # Resumed: the model answers.
         resumed = BuildState.load(state_path)
-        review = AsyncMock(return_value=PlanReviewResult(findings=[]))
-        regen_again = AsyncMock(return_value="## 1. Other\n")
+        review = AsyncMock(return_value=PlanReviewResult(findings=[contract]))
+        regen_again = AsyncMock(return_value="## 1. Final\n")
         a, b, c, d = self._patches(review, regen_again)
         with a, b, c, d:
             await run_plan_review_stage(
                 config.change_dir, config, resumed, state_path)
 
         assert review.await_count == 1
+        assert regen_again.await_count == 1
+        assert "contract-mismatch" in regen_again.await_args.kwargs["audit_findings"]
+        assert (regen_again.await_args.kwargs["audit_findings"]
+                == ref_regen.await_args.kwargs["audit_findings"])
+        assert (config.change_dir / "tasks.md").read_text() == "## 1. Final\n"
+        written = json.loads(state_path.read_text())["spec_gen"]
+        reference = json.loads(ref_path.read_text())["spec_gen"]
+        for flag in ("plan_review_regen_done", "plan_review_done"):
+            assert written[flag] is reference[flag] is True
+
+    @pytest.mark.asyncio
+    async def test_a_second_failed_call_pays_for_no_rewrite_the_first_settled(
+        self, tmp_path,
+    ):
+        """The same step stopped twice: the model fails again, and the scan
+        finds nothing in the plan the first rewrite left, so nothing is
+        rewritten again."""
+        config, state, state_path = _stage_setup(tmp_path)
+        (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
+        rewritten = "## 1. Summarize\n\nAll of it.\n"
+        a, b, c, d = self._patches(
+            AsyncMock(side_effect=RuntimeError("down")),
+            AsyncMock(return_value=rewritten))
+        with a, b, c, d:
+            await run_plan_review_stage(config.change_dir, config, state, state_path)
+
+        resumed = BuildState.load(state_path)
+        regen_again = AsyncMock(return_value="## 1. Other\n")
+        a, b, c, d = self._patches(
+            AsyncMock(side_effect=RuntimeError("down")), regen_again)
+        with a, b, c, d:
+            findings = await run_plan_review_stage(
+                config.change_dir, config, resumed, state_path)
+
+        assert findings == []
         assert regen_again.await_count == 0
         assert (config.change_dir / "tasks.md").read_text() == rewritten
-        written = json.loads(state_path.read_text())["spec_gen"]
-        assert written["plan_review_regen_done"] is True
-        assert written["plan_review_done"] is True
 
     @pytest.mark.asyncio
     async def test_the_model_failing_with_nothing_scanned_is_unchanged(self, tmp_path):

@@ -1639,6 +1639,21 @@ class TestScanNoBehaviourBlocks:
 
         assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
 
+    def test_a_block_that_says_it_needs_no_code_is_flagged(self, tmp_path):
+        """The no-code rule on its own: no earlier block is named, and no file."""
+        path = _tasks_file(tmp_path, (
+            "## 1. Count words\n\nAdd `count(s: str) -> int`.\n\n"
+            "Interfaces:\n- Produces: `count(s: str) -> int`\n\n"
+            "## 2. Tabs\n\nTabs already split like spaces, so no code change "
+            "is needed. Pin it with a test for tabs.\n\n"
+            "Interfaces:\n- Produces: (none)\n"
+        ))
+
+        findings = scan_no_behaviour_blocks(path)
+
+        assert [f["block"] for f in findings] == [2]
+        assert "it says it needs no code" in findings[0]["description"]
+
     def test_a_block_that_names_only_test_files_is_flagged(self, tmp_path):
         """The block the live plan review saw before the prototype rewrite:
         it adds a test file and names no code to write, so there is nothing
@@ -1687,6 +1702,25 @@ class TestScanNoBehaviourBlocks:
         # It names one file it leaves alone, and one it changes.
         "## 2. JSON output\n\nAdd `--json` to `src/app/cli.py`; leave "
         "`src/app/core.py` unchanged. Tests in `tests/test_cli.py`.\n\n",
+        # A domain "Verify" that names only its test file: the block need not
+        # name its source file (TASKS_PROMPT does not ask it to).
+        "## 2. Verify webhook signatures\n\nVerify each incoming webhook's "
+        "HMAC signature and reject a mismatch with 401. Tests in "
+        "`tests/test_webhook.py`.\n\n",
+        "## 2. Summary flag\n\nAdd a `--summary` flag that prints the word "
+        "count and exits 0. Tests in `tests/test_cli.py`.\n\n",
+        # A side concern another block satisfies, with and without the file
+        # this block changes.
+        "## 2. Rate limits\n\nAdd a token-bucket limiter to "
+        "`src/api/limits.py`. Authentication is already handled by Block 1's "
+        "middleware.\n\n",
+        "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429. "
+        "Authentication is already handled by Block 1's middleware.\n\n",
+        # "No code change" scoped to another part of the code.
+        "## 2. Rate limits\n\nAdd a token-bucket limiter to "
+        "`src/api/limits.py`, with no code change to the core.\n\n",
+        "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
+        "with no code change to the core.\n\n",
     ])
     def test_a_leaf_block_that_adds_behaviour_is_not_flagged(self, tmp_path, block):
         """`Produces: (none)` only says nothing later calls the block, and
