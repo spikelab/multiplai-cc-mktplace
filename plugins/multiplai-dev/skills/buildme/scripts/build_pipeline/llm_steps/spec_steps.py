@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import re
 from pathlib import Path
 
 from code_facts import CallFn
@@ -36,6 +37,27 @@ AUDITOR_TOOLS = ["Read", "Grep", "Glob"]
 # Enough turns to open the artifacts' neighbours and grep the codebase for a
 # name the design claims exists; not enough to go wandering.
 AUDITOR_MAX_TURNS = 30
+
+# The most registry text one prompt carries; whole files are dropped from the
+# end, and named, to stay under it (judgment).
+REGISTRY_TEXT_LIMIT = 60_000
+REGISTRY_HEADING = "## Current behaviour (specs/registry)"
+REGISTRY_REQUIREMENTS_RULE = (
+    "These files are what the code does today. A requirement this change alters goes under "
+    "`## MODIFIED Requirements` with the same `### Requirement:` name as here; a requirement it "
+    "removes goes under `## REMOVED Requirements` with that name; only new requirements go under "
+    "`## ADDED Requirements`."
+)
+REGISTRY_PROPOSAL_RULE = (
+    "These capabilities are what the code does today, one file each in specs/registry/. A "
+    "capability this change alters goes under `### Modified Capabilities` with exactly the name "
+    "listed here, so its requirements are written against that file; a new capability goes under "
+    "`### New Capabilities` with a name not listed here."
+)
+REGISTRY_PLAN_RULE = (
+    "These files are what the code does today, for the capabilities this change's requirements "
+    "name. Keep that behaviour unless a requirement above changes it."
+)
 
 
 async def _audit_agent_text(prompt: str, config, *, budget_label: str) -> str:
@@ -139,13 +161,15 @@ def _build_prompt(
     project_context = context.get("context", "")
 
     if artifact_id == "proposal":
+        names = ", ".join(context.get("registry") or [])
         return PROPOSAL_PROMPT.format(
             project_context=project_context,
             interview_summary=interview_summary or "(none provided)",
             research=research or "(no research conducted)",
             instruction=instruction,
             template=template,
-        )
+        ) + (f"\n\n{REGISTRY_HEADING}\n\n{REGISTRY_PROPOSAL_RULE}\n\n"
+             f"{_cap(f'Capabilities in specs/registry: {names}')}\n" if names else "")
     elif artifact_id == "requirements":
         # Requirements generation needs proposal content
         proposal_content = _read_dep(context, "proposal", config)
@@ -155,7 +179,8 @@ def _build_prompt(
             capability_name=context.get("capability_name", "unknown"),
             instruction=instruction,
             template=template,
-        )
+        ) + _registry_section(config, context, [context.get("capability_name", "unknown")],
+                              REGISTRY_REQUIREMENTS_RULE)
     elif artifact_id == "design":
         proposal_content = _read_dep(context, "proposal", config)
         specs_content = _read_specs(config)
@@ -168,7 +193,7 @@ def _build_prompt(
             audit_findings=audit_findings or "(none — first pass)",
             instruction=instruction,
             template=template,
-        )
+        ) + _registry_section(config, context, _change_capabilities(config), REGISTRY_PLAN_RULE)
     elif artifact_id == "tasks":
         proposal_content = _read_dep(context, "proposal", config)
         specs_content = _read_specs(config)
@@ -184,7 +209,7 @@ def _build_prompt(
             audit_findings=audit_findings or "(none — first pass)",
             instruction=instruction,
             template=template,
-        )
+        ) + _registry_section(config, context, _change_capabilities(config), REGISTRY_PLAN_RULE)
     elif artifact_id == "unknowns":
         # Regeneration pass only — the first pass is one run_explainer call per
         # dependency (see spec_generator._generate_unknowns).
@@ -227,6 +252,64 @@ def _read_specs(config) -> str:
         cap_name = req_file.stem
         parts.append(f"### {cap_name}\n{req_file.read_text()}")
     return "\n\n".join(parts) if parts else "(no specs yet)"
+
+
+def _change_capabilities(config) -> list[str]:
+    """The stems of the change's own `requirements/*.md`, sorted."""
+    return sorted(p.stem for p in (config.change_dir / "requirements").glob("*.md"))
+
+
+_REGISTRY_REQUIREMENT = re.compile(r"^###\s+Requirement:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _read_registry(config, context: dict, names: list[str]) -> str:
+    """The text of `specs/registry/<name>.md` for each of *names* that exists, each
+    under `### <name> (specs/registry/<name>.md)`, then one line naming every other
+    registry capability. Over `REGISTRY_TEXT_LIMIT` characters, whole files are
+    dropped from the end and named instead, with their requirement names; names
+    still over it are cut (`_cap`)."""
+    registry = config.specs_dir / "registry"
+    shown = [n for n in names if (registry / f"{n}.md").is_file()]
+    others = [n for n in context.get("registry") or [] if n not in shown]
+    tail = f"Other capabilities in specs/registry: {', '.join(others)}" if others else ""
+    texts = {n: (registry / f"{n}.md").read_text() for n in shown}
+    parts = [f"### {n} (specs/registry/{n}.md)\n{texts[n]}" for n in shown]
+    dropped: list[str] = []
+
+    def named(n: str) -> str:
+        """A left-out file, with its requirement names, which a MODIFIED or REMOVED
+        requirement must reuse."""
+        reqs = _REGISTRY_REQUIREMENT.findall(texts[n])
+        return f"{n} (specs/registry/{n}.md; requirements: {', '.join(reqs)})" if reqs \
+            else f"{n} (specs/registry/{n}.md)"
+
+    def render() -> str:
+        left_out = (f"Left out to stay under {REGISTRY_TEXT_LIMIT:,} characters: "
+                    + ", ".join(named(n) for n in dropped)) if dropped else ""
+        return "\n\n".join(p for p in (*parts, left_out, tail) if p)
+
+    while parts and len(render()) > REGISTRY_TEXT_LIMIT:
+        parts.pop()
+        dropped.insert(0, shown[len(parts)])
+    return _cap(render())
+
+
+def _cap(text: str) -> str:
+    """*text* within `REGISTRY_TEXT_LIMIT` characters: cut at the end, saying so,
+    when the names alone (left-out files' requirements, other capabilities) are
+    over it."""
+    if len(text) <= REGISTRY_TEXT_LIMIT:
+        return text
+    note = f"\n(cut at {REGISTRY_TEXT_LIMIT:,} characters)"
+    return text[:REGISTRY_TEXT_LIMIT - len(note)] + note
+
+
+def _registry_section(config, context: dict, names: list[str], rule: str) -> str:
+    """The `## Current behaviour (specs/registry)` section appended to a prompt,
+    or "" when the registry is empty, so the prompt is then today's byte for byte."""
+    if not context.get("registry"):
+        return ""
+    return f"\n\n{REGISTRY_HEADING}\n\n{rule}\n\n{_read_registry(config, context, names)}\n"
 
 
 async def run_explainer(dep, config, usage_context: str = "") -> str:

@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.68.0] - 2026-10-14
+## [0.69.0] - 2026-10-14
 
 ### Added
 - buildme epic mode, `epic.merge: auto`: buildme now merges each child's PR
@@ -35,6 +35,52 @@ time, not derived from a tag.
   CHANGELOG entries. Under `manual` (still the
   default) nothing changes: the run exits 3 with `EPIC:MERGE_WAITING` until
   a person merges.
+
+## [0.68.0] - 2026-10-14
+
+### Added
+- buildme writes a baseline of what the code already does before it plans a
+  change. On a project whose `specs/registry/` is empty, the codebase analysis
+  phase now runs `/multiplai-dev:spec-extract` on the project's Python code at
+  the build's starting commit, with `--apply`, and commits the capability files
+  it writes to the build branch as `docs(specs): baseline registry from
+  spec-extract at <sha12>`, printing `SPEC_EXTRACT:BASELINE <n>` (with
+  `uncommitted` after it when there is no build branch to commit to, as with
+  `--no-worktree`, or the commit failed; a spec-only build then leaves the
+  files for you to commit, and a full build commits them with its first
+  block's commit). It needs a trusted repository (`--trust-repo`), never
+  runs in `only` mode or in an epic's child builds, and is turned off with
+  `spec_extract: false` in `specs/config.yaml`. In an epic the parent runs it,
+  and each child with no dependency, in the epic's own repository, branches
+  from the parent's commit that holds the baseline, so the registry reaches
+  main with the first merged child PR; every child's PR targets the default
+  branch. A child that waits on a dependency branches from origin's default
+  branch after that merge, as does every child once that branch holds a
+  registry, and every child when the baseline commit would carry anything
+  else origin's default branch does not hold (a feature branch, unpushed
+  commits, a commit added before a resume, other files in the same commit),
+  and a child built in another repository builds without a baseline. `spec_extract_max_usd`
+  (default `80`) caps its spend; what it spends is counted in buildme's
+  `SPEND:` line, but not in an epic's `epic.max_usd`, which counts only the
+  children's builds, fixes, merges and reviews. A stopped build resumes
+  spec-extract at the same commit, so it pays only for the calls that had not
+  returned, and does not run the codebase analysis again. When spec-extract
+  fails the build goes on without a baseline (`SPEC_EXTRACT:NOT_RUN exit=<n>`);
+  when another spec-extract run still holds the folder
+  (`SPEC_EXTRACT:RUNNING`), or `specs/registry/` holds uncommitted changes
+  after a failure, the build exits `1` without leaving the phase.
+- spec-extract prints `SPEND:<usd>:<tokens>` last: what that invocation's model
+  calls cost.
+- Spec generation reads `specs/registry/`. When the registry holds any
+  capability, the proposal prompt gets the registry's capability names and is
+  told to list a capability the change alters under Modified Capabilities with
+  exactly that name; the requirements prompt gets the registry file of the
+  same name and is told to write a changed requirement under
+  `## MODIFIED Requirements` and a removed one under `## REMOVED Requirements`;
+  the design and tasks prompts get the registry files of the change's own
+  capabilities. Each names the other capabilities, and the registry text is
+  capped at 60,000 characters, dropping whole files and naming them with their
+  requirement names. With an empty registry the prompts are unchanged.
 
 ## [0.67.0] - 2026-10-14
 

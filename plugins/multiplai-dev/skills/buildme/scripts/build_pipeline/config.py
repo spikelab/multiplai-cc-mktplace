@@ -775,6 +775,11 @@ class BuildConfig:
     block_facts: bool = False
     regenerate_walkthroughs: bool = False
     walkthrough_max_usd: float = 10.0
+    # `spec_extract` / `spec_extract_max_usd`: run spec-extract inside
+    # CODEBASE_ANALYSIS when specs/registry/ is empty, so the change has a
+    # baseline to diff against; its spend is capped by its own --max-usd.
+    spec_extract: bool = True
+    spec_extract_max_usd: float = 80.0
 
     # Runtime marker, not user-configurable: set to the branch name once the
     # pipeline has created its own worktree+branch (or re-bound to one on
@@ -1141,10 +1146,11 @@ class BuildConfig:
         self._load_code_facts_settings(data)
 
     def _load_code_facts_settings(self, data: dict) -> None:
-        """`codebase_analysis_max_units`, `block_facts`, `regenerate_walkthroughs`
-        and `walkthrough_max_usd`. An invalid value logs a warning and keeps the
-        default, the same contract as `git.pr`. The two switches take only a
-        YAML boolean, so a typo never turns one on."""
+        """`codebase_analysis_max_units`, `block_facts`, `regenerate_walkthroughs`,
+        `walkthrough_max_usd`, `spec_extract` and `spec_extract_max_usd`. An
+        invalid value logs a warning and keeps the default, the same contract as
+        `git.pr`. The switches take only a YAML boolean, so a typo never turns one
+        on (or, for `spec_extract`, off)."""
         self.codebase_analysis_max_units = _cfg_int(
             data.get("codebase_analysis_max_units", 12), "codebase_analysis_max_units", 12)
         for key in ("block_facts", "regenerate_walkthroughs"):
@@ -1160,6 +1166,16 @@ class BuildConfig:
             log.warning("Invalid walkthrough_max_usd value %r in config.yaml — using 10", usd)
             usd = 10.0
         self.walkthrough_max_usd = float(usd)
+        on = data.get("spec_extract", True)
+        if not isinstance(on, bool):
+            log.warning("Invalid spec_extract value %r in config.yaml — want true | false; using true", on)
+            on = True
+        self.spec_extract = on
+        usd = data.get("spec_extract_max_usd", 80.0)
+        if isinstance(usd, bool) or not isinstance(usd, (int, float)) or usd <= 0:
+            log.warning("Invalid spec_extract_max_usd value %r in config.yaml — using 80", usd)
+            usd = 80.0
+        self.spec_extract_max_usd = float(usd)
 
     def _load_intake_and_stage_settings(self, data: dict) -> None:
         """`intake`, `interview`, `architecture`, `pr`, `findings` and

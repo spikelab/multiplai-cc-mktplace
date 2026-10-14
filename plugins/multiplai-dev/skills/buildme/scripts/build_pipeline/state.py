@@ -27,6 +27,10 @@ class SpecGenState(BaseModel):
     completed_artifacts: list[str] = Field(default_factory=list)
     research_path: str | None = None
     codebase_analysis_path: str | None = None
+    # The commit buildme's spec-extract step reads, saved before the launch so a
+    # resume reaches the same spec-extract run folder (the plan's rows S1, S5)
+    # and runs even when the registry now holds the files that run applied (S3).
+    spec_extract_sha: str | None = None
     # The tasks-shape audit runs AFTER tasks.md is written, so its completion
     # can't be inferred from file existence (a crash mid-audit leaves the
     # artifact DONE and the DAG loop never re-enters it). Recorded here so a
