@@ -17,6 +17,18 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.66.0] - 2026-10-14
+
+### Added
+- Epic mode builds children in other repositories. A child's `repo` in
+  `split.md` is the path of a local checkout, absolute or relative to the
+  epic's repository root. `--approve-split` exits `1` naming the child when
+  that path is not a directory with an `origin` remote. The child builds,
+  is reviewed, fixed and merged in that repository; merges in two
+  repositories run at the same time; a child that depends on one in another
+  repository waits for its merge. A checkout gone after approval parks its
+  child with `repo <path> not found`, for good.
+
 ## [0.65.0] - 2026-10-14
 
 ### Added

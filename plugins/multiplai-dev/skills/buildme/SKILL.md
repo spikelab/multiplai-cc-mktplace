@@ -619,10 +619,24 @@ again under a new `--change` name.
 Only one process at a time writes an epic's directory. A second one exits `2`
 with `epic <name> is running now (pid <n> on <host>, since <time>)`.
 
+**Children in other repositories.** The `repo` column of `split.md`'s table
+is empty (`—`) for a child of the epic's own repository. For a child that
+belongs in another one, it is the path of that repository's local checkout,
+absolute or relative to the epic's repository root (`../billing`). Approval
+exits `1` naming the child and its repo when the path is not a directory or
+has no `origin` remote, and approves nothing. The child builds in that
+checkout (`--project-dir <checkout>`, based on that repository's origin
+default branch); its own preflight refuses tracked uncommitted changes there,
+as for any build. Its PR is reviewed, fixed and merged in its own worktree,
+and merges in different repositories never wait on each other. A child that
+depends on a child in another repository waits for that PR to merge. A
+checkout that is gone when a run starts, or before its child launches, parks
+that child with `repo <path> not found`, and it stays parked on later runs.
+
 **Running the children.** The approved build runs each child as its own
 `build --mode brief --change <epic>-<id> --plan-file <epic dir>/plans/<id>.md`
 subprocess with `--auto --trust-repo --no-epic-split --pr-ready`, in the
-parent's project directory, from origin's default branch (`--base-ref`), so
+parent's project directory (or the child's own `repo`, above), from origin's default branch (`--base-ref`), so
 each child gets its own worktree, branch and ready PR. A `specs/config.yaml`
 that sets `git.worktree` or `git.push` to `false` would build the children in
 place or open no PR, so the build exits `2` before launching any. The parent's
