@@ -233,9 +233,55 @@ async def apply_prototype_findings(config) -> int:
         output_path.write_text(content)
         regenerated += 1
         log.info("Rewrote %s from prototype findings", output_path)
+        if artifact_id == "tasks":
+            await _rewrite_no_behaviour_blocks(
+                output_path, context, config, findings_text, codebase_analysis,
+            )
 
     print(f"PHASE: prototype_feedback_applied — {regenerated} artifact(s)", flush=True)
     return regenerated
+
+
+async def _rewrite_no_behaviour_blocks(
+    output_path: Path, context: dict, config, findings_text: str,
+    codebase_analysis: str,
+) -> None:
+    """Scan the tasks.md this pass wrote; on a no-behaviour block, rewrite ONCE.
+
+    This pass runs after the plan review, so it is the last writer of tasks.md
+    before TDD, and nothing else checks what it writes. The rewrite carries the
+    prototype's findings too, so it does not undo them. Non-fatal like the pass
+    itself; whatever the scan still flags afterwards is named in the log.
+    """
+    from ..spec_generator import (
+        report_no_behaviour_blocks_left,
+        scan_no_behaviour_blocks,
+        tasks_findings_text,
+    )
+    from .spec_steps import generate_artifact
+
+    blocks = scan_no_behaviour_blocks(output_path)
+    if not blocks:
+        return
+    log.warning(
+        "Prototype rewrite of tasks.md has %d no-behaviour block(s) — one more "
+        "rewrite", len(blocks),
+    )
+    try:
+        content = await generate_artifact(
+            "tasks", context, config,
+            codebase_analysis=codebase_analysis,
+            reference_docs=config.reference_docs_text(),
+            audit_findings=f"{findings_text}\n{tasks_findings_text(blocks)}",
+        )
+    except Exception as regen_err:  # non-fatal: the prototype's rewrite stands
+        log.warning(
+            "No-behaviour rewrite of tasks.md failed (non-fatal): %s", regen_err,
+        )
+    else:
+        output_path.write_text(content)
+        log.info("Rewrote %s for no-behaviour blocks", output_path)
+    report_no_behaviour_blocks_left(output_path)
 
 
 def _read(path: Path) -> str:

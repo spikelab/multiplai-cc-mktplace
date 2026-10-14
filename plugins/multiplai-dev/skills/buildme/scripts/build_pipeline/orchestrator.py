@@ -227,7 +227,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # eng"). Reads tasks.md against rubric.md, the constraints and the use
         # cases; critical/major findings drive ONE regeneration of tasks.md,
         # recorded in spec_gen.plan_review_regen_done. Best-effort — a review
-        # failure leaves the reviewed plan standing and never fails the build.
+        # failure never fails the build, and leaves the reviewed plan standing
+        # unless the no-behaviour scan flagged a block, which gets one rewrite
+        # (spec_gen.plan_review_scan_regen_done).
         if not state.is_phase_complete(BuildPhase.PLAN_REVIEW):
             log.info("START phase=PLAN_REVIEW")
             from .llm_steps.plan_review_steps import run_plan_review_stage

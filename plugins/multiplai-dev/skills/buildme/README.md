@@ -138,7 +138,7 @@ reports but never regenerates a second time.
 The second pair of eyes the board's Planning column has always claimed. A
 read-only reviewer (`Read`/`Grep`/`Glob`, 30 turns) reads `tasks.md` against
 `rubric.md`, the design's global constraints and `use-cases.md`, and reports
-findings under six categories:
+findings under seven categories:
 
 | Category | What it means |
 |----------|---------------|
@@ -147,6 +147,7 @@ findings under six categories:
 | `constraint-violation` | A block breaks a constraint the design stated |
 | `over-prescription` | The plan dictates a block-internal choice that belongs to the implementer |
 | `use-case-coverage` | A use case no block delivers |
+| `no-new-behaviour` | A block adds nothing an earlier block has not built, so its tests pass before it is built and the TDD RED gate fails it |
 | `oversized-plan` | The change should be several changes |
 
 Critical and major findings drive **one** regeneration of `tasks.md`, then the
@@ -154,6 +155,11 @@ review runs once more report-only and the plan stands — the same
 one-pass rule as the design audit, recorded in
 `spec_gen.plan_review_regen_done`, with the stage itself recorded as
 `plan_review_done` and checked before the model call so a resume costs nothing.
+A failed review call records neither, so a resume asks the model again. The
+`no-new-behaviour` blocks a model-free scan finds still get one rewrite of
+`tasks.md` in that case, recorded as `spec_gen.plan_review_scan_regen_done`, so
+the stage rewrites `tasks.md` at most twice per build: once for that scan after
+a failed call, once for a completed review.
 
 `oversized-plan` is deliberately excluded from that regeneration. It names a
 proposed cut and the signature boundary the cut crosses, and stops there:
@@ -167,8 +173,8 @@ why they are knobs.
 
 The phase prints `PHASE:PLAN_REVIEW:COMPLETE` and keeps the card in the
 Planning column: this review *is* the work Planning stands for, so it does not
-move the card. It is best-effort — a failed plan review leaves the reviewed
-plan standing and never fails the build.
+move the card. It is best-effort — a failed plan review never fails the build,
+and leaves the reviewed plan standing unless the scan above flagged a block.
 
 ### Phase 5: Prototype
 
@@ -192,6 +198,10 @@ only in the prompt.
 - **Feedback into the spec:** non-empty `DISPROVES:` / `OPEN_QUESTIONS:` triggers
   exactly **one** regeneration pass of `design.md` and `tasks.md` with the notes
   injected as audit findings. Recorded as `spec_gen.prototype_done` for resume.
+  This pass is the last writer of `tasks.md` before the build, so the
+  `no-new-behaviour` scan runs on what it writes: a flagged block gets one
+  more `tasks.md` rewrite, and a block still flagged after it is named in the
+  log (`PHASE: no_behaviour_blocks_remain`).
 
 ### Phase 6: Review Checkpoint
 

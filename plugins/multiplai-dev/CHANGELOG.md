@@ -43,6 +43,31 @@ time, not derived from a tag.
   change, since their command is fixed before they start. The implementer
   prompts now say to run the given test command, not "the full test suite".
 
+## [0.66.1] - 2026-10-14
+
+### Fixed
+- buildme now tells the task writer not to write a block that only confirms
+  or verifies what an earlier block already built, and catches such blocks
+  before the TDD build. Such a block's tests passed before it was implemented,
+  so the TDD RED gate failed it and the whole build stopped. Every block must
+  now add behaviour its tests can fail on. The tasks-shape audit, the plan
+  review and the prototype feedback pass (the last rewrite of `tasks.md`
+  before the build) flag a block as `no-new-behaviour` when it produces
+  nothing and its own text says it adds no code: it says an earlier block
+  already satisfies it, it says it needs no code, it is test work that
+  changes only test files, or it adds tests and leaves every file it names
+  unchanged, with no step that writes code. A block that verifies a
+  signature or confirms an overwrite is not flagged for the verb, nor for
+  naming only its test file, nor for writing its tests before its code, nor
+  for saying another block already handles a side concern. A flagged block sends `tasks.md`
+  through one rewrite, which is told to fold the block into the one that
+  builds the behaviour or, if it does add behaviour, to name its code. The
+  plan review still runs this check, and rewrites what it flags once per
+  build, when its model call fails; a resumed build then asks the model
+  again. A block still
+  flagged after the rewrite is named in the log as
+  `PHASE: no_behaviour_blocks_remain`.
+
 ## [0.66.0] - 2026-10-14
 
 ### Added

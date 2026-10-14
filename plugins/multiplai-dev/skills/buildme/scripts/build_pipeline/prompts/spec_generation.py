@@ -161,6 +161,13 @@ Rules:
   runnable until the very end. Slice by behavior, not by layer.
 - Wiring happens inside each slice; a final integration block is a smell. Every
   block leaves the system integrated and demonstrable.
+- Every block MUST add behaviour the code does not have before the block is
+  built: its tests must fail until its own code is written. The build's TDD
+  RED gate runs each block's tests before implementing it, and a block whose
+  tests already pass fails the whole build.
+- Never write a block that only confirms, verifies, pins or re-tests what an
+  earlier block delivers (edge cases, conventions, "no change to X"). Put
+  those criteria and their tests in the block that builds the behaviour.
 - Block descriptions: 2-4 sentences covering what it delivers, key behaviors,
   acceptance criteria, and how to exercise the slice end-to-end once it's done
 - "Satisfies:" line MUST reference specific spec files or scenarios

@@ -71,6 +71,12 @@ class SpecGenState(BaseModel):
     # re-run a five-artifact review purely to rediscover there is nothing to
     # do. Checked BEFORE the model call. Old checkpoints default to False.
     plan_review_done: bool = False
+    # When the plan-review model call fails, the no-behaviour scan's blocks
+    # still get a rewrite of tasks.md. This records that rewrite, apart from
+    # plan_review_regen_done, so a resume whose model answers still gives the
+    # review's findings their one rewrite, and a resume whose call fails again
+    # pays for no second scan rewrite. Old checkpoints default to False.
+    plan_review_scan_regen_done: bool = False
 
 
 class TDDState(BaseModel):

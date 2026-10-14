@@ -1,6 +1,7 @@
 """Tests for the prototype-first stage — agent run, write boundary, feedback pass."""
 
 import pytest
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from build_pipeline.change_manager import ChangeManager
@@ -33,6 +34,11 @@ NOTES_WITH_QUESTIONS = (
     "OPEN_QUESTIONS: should --json be the default output mode?\n"
     "STATUS: DONE\n"
 )
+
+
+NO_BEHAVIOUR_TASKS = (
+    Path(__file__).parent / "fixtures" / "tasks-no-behaviour-blocks.md"
+).read_text()
 
 
 def make_config(tmp_path, change_name="proto-change"):
@@ -202,6 +208,53 @@ class TestPrototypeFeedback:
 
         assert regenerated == 0
         assert config.design_path.read_text() == before
+
+    @pytest.mark.asyncio
+    async def test_a_no_behaviour_block_the_rewrite_writes_is_rewritten_once(
+        self, tmp_path, capsys,
+    ):
+        """The prototype rewrite runs after the plan review, so it is the
+        last writer of tasks.md before TDD: the live epic's Confirm/Verify
+        blocks came from it. The scan runs on what it wrote and drives one
+        more tasks rewrite, which keeps the prototype's findings."""
+        config = make_config(tmp_path)
+        config.prototype_dir.mkdir(parents=True, exist_ok=True)
+        (config.prototype_dir / "NOTES.md").write_text(NOTES_WITH_DISPROVES)
+        fixed = "## 1. Summarize\n\nAll of it.\n"
+
+        mock_gen = AsyncMock(side_effect=["# design\n", NO_BEHAVIOUR_TASKS, fixed])
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", mock_gen):
+            regenerated = await apply_prototype_findings(config)
+
+        assert regenerated == 2
+        assert [c.args[0] for c in mock_gen.await_args_list] == ["design", "tasks", "tasks"]
+        findings = mock_gen.await_args_list[2].kwargs["audit_findings"]
+        assert "tax rate" in findings
+        assert "Block 2" in findings and "Block 3" in findings
+        assert "adds no behaviour" in findings
+        assert config.tasks_path.read_text() == fixed
+        assert "no_behaviour_blocks_remain" not in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_a_failed_no_behaviour_rewrite_leaves_the_plan_and_says_so(
+        self, tmp_path, capsys,
+    ):
+        config = make_config(tmp_path)
+        config.prototype_dir.mkdir(parents=True, exist_ok=True)
+        (config.prototype_dir / "NOTES.md").write_text(NOTES_WITH_DISPROVES)
+
+        mock_gen = AsyncMock(side_effect=[
+            "# design\n", NO_BEHAVIOUR_TASKS, RuntimeError("LLM down"),
+        ])
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", mock_gen):
+            regenerated = await apply_prototype_findings(config)
+
+        assert regenerated == 2
+        assert config.tasks_path.read_text() == NO_BEHAVIOUR_TASKS
+        assert (
+            "PHASE: no_behaviour_blocks_remain — Block 2, Block 3"
+            in capsys.readouterr().out
+        )
 
     def test_findings_text_is_empty_for_clean_notes(self, tmp_path):
         proto = tmp_path / "prototype"

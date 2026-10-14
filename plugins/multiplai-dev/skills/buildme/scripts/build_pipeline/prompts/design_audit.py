@@ -146,6 +146,15 @@ completes, cutting through all the layers that behavior needs.
 - Blocks that complete without anything runnable or testable end-to-end
 - A block whose deliverable can only be exercised after a LATER block lands
 
+## Blocks That Add No Behaviour
+
+Report (category "no-new-behaviour", severity "critical") a block whose
+acceptance criteria an earlier block already delivers, so its tests would pass
+before the block is built: one that only confirms, verifies or pins earlier
+behaviour, adds tests and no code, or says an earlier block satisfies it. The
+build's TDD RED gate fails such a block, and the build with it. Suggest moving
+its criteria and tests into the block that builds the behaviour.
+
 ## Spec-Coverage Traceability
 
 Walk every WHEN/THEN scenario in the specs and name the block that implements
