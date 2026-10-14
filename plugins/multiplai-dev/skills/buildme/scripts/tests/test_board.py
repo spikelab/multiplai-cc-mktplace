@@ -50,6 +50,14 @@ def _epic_split_is_one_change(monkeypatch):
     monkeypatch.setattr(epic_split, "epic_split", AsyncMock(return_value=answer))
 
 
+@pytest.fixture(autouse=True)
+def _no_spec_extract(monkeypatch):
+    """No build here runs spec-extract: its step inside CODEBASE_ANALYSIS lets the phase complete."""
+    from build_pipeline import orchestrator
+
+    monkeypatch.setattr(orchestrator, "_run_spec_extract_step", lambda config, state, progress: None)
+
+
 # --- 1. The pure mapping --------------------------------------------------
 
 # Written out independently of board.py's own table: if the mapping changes,
