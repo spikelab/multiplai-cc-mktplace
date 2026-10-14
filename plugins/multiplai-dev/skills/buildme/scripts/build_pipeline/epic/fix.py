@@ -7,14 +7,15 @@ of records each:
 
 1. `post`: `write_decisions(<review_dir>)` chooses what to post (what
    `--auto` posts, at the severities the epic blocks on,
-   `review.BLOCKING_SEVERITIES`), then `uv run --directory <review scripts> python -m review_pipeline
-   post <review_dir> --decisions <review_dir>/buildme-decisions.json`, cwd the
+   `review.BLOCKING_SEVERITIES`), then `uv run --directory <review scripts>
+   python -m review_pipeline post <review_dir> --decisions
+   <review_dir>/buildme-decisions.json`, cwd the
    child's project directory. `post` skips a finding already on the PR, so a
    second post is safe.
 2. `fix`: `python -m build_pipeline findings --pr <n> --change <epic>-<id>
-   --project-dir <P> --auto --trust-repo --max-rounds <M> --severities HIGH,MEDIUM
-   [--max-usd <left>]`, cwd `<P>`, the
-   child's worktree joined with the project's offset. `<M>` is the rounds in
+   --project-dir <P> --auto --trust-repo --max-rounds <M> --severities
+   HIGH,MEDIUM [--max-usd <left>]`, cwd `<P>`, the child's worktree joined
+   with the project's offset. `<M>` is the rounds in
    the change's `.findings-state.json` whose review finished plus the review
    rounds the PR has left (`epic.max_review_rounds` less `pr_round`), so
    `findings`, which counts its own rounds from its state, stops where the

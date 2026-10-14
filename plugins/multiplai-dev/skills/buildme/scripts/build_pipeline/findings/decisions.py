@@ -7,8 +7,8 @@ every Code finding, and every Tests finding that cites a source file that is
 not a test file; with *severities*, only those of the severities named (an
 epic's fixer passes the ones the epic blocks on, so it never runs a round
 for a finding the epic would merge with). A Tests finding on a test file,
-and every Docs finding, are not posted; the fix loop acts on what is posted, and those are not defects a
-code fix answers. A finding the review does not list (a repeat of one the
+and every Docs finding, are not posted; the fix loop acts on what is
+posted, and those are not defects a code fix answers. A finding the review does not list (a repeat of one the
 person rejected, a low-value one, and in `critical` mode one not rated as
 breaking) is never posted, as it was not before the decisions file.
 
