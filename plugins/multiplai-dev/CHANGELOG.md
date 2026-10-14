@@ -17,6 +17,24 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-10-14
+
+### Changed
+- buildme no longer runs the project's whole test command inside each
+  block's TDD loop. The RED check, and the test writer, implementer and
+  refactorer for a block, now run only the test files the block added or
+  changed, plus the test file named after each source file it changed
+  (`test_<module>.py` / `<module>_test.py` for pytest, `<name>.test.<ext>` /
+  `<name>.spec.<ext>` for jest and vitest). Tests are never picked by what
+  they import. The integration gate, the baseline gate and the epic merge
+  step still run the whole command, so a block is still only done when the
+  whole suite passes.
+- The narrow run applies only when the test command is pytest, or jest or
+  vitest (directly or through `npm test`, whose paths go after `--`). Any
+  other command, or a block that selects no test file, runs the whole
+  command as before. Set `tdd.narrow_tests: false` in `specs/config.yaml` to
+  always run the whole command.
+
 ## [0.66.0] - 2026-10-14
 
 ### Added

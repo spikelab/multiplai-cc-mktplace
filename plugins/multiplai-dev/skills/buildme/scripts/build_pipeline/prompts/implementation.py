@@ -32,6 +32,9 @@ it tidies, it does not rescue. Your code should be production-quality as written
 
 ## Test Command
 {test_command}
+It may run only this block's own test files and the tests named after the
+modules the block changed, not the whole suite. Run it while you work; buildme
+runs the whole suite itself after you finish.
 
 ## When the block cannot be implemented as specified
 
@@ -98,6 +101,9 @@ refactoring agent will clean up the code afterward.
 
 ## Test Command
 {test_command}
+It may run only this block's own test files and the tests named after the
+modules the block changed, not the whole suite. Run it while you work; buildme
+runs the whole suite itself after you finish.
 
 ## When the block cannot be implemented as specified
 
@@ -164,6 +170,9 @@ Your job is to clean up the code without breaking any tests.
 
 ## Test Command
 {test_command}
+It may run only this block's own test files and the tests named after the
+modules the block changed, not the whole suite. Run it while you work; buildme
+runs the whole suite itself after you finish.
 
 ## Verification you should expect
 

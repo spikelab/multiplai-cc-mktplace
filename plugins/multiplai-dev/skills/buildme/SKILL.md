@@ -242,6 +242,33 @@ deliberately, plus the PR URL (or, on `PUBLISH_DIAGNOSIS:<reason>`, the manual
 push/PR commands from `build-progress.md`). The PR's description comes from the
 pr skill and follows the repo's PR template; these lines are unchanged by it.
 
+## Which tests a block runs
+
+Inside each block's TDD loop, buildme runs a **narrow test command** instead of
+the project's whole test command. The RED check, and the block's test writer,
+implementer and refactorer, run:
+
+1. the test files the block added or changed (its git diff since the block
+   started, untracked files included);
+2. for each source file the block changed, the test file named after it:
+   `test_<module>.py` or `<module>_test.py` for pytest, `<name>.test.<ext>` or
+   `<name>.spec.<ext>` for jest and vitest.
+
+Tests are never picked by what they import. The paths are appended to the test
+command (`tdd.test_command`, else the discovered one) only when its runner
+accepts them: pytest, or jest or vitest run directly or through `npm test`
+(the paths go after `--`). Any other command, or a block that selects no test
+file, runs the whole command, so RED can never pass on an empty run.
+
+The checks that decide whether work is done still run the **whole** command:
+the baseline gate, the integration gate after each block (which also checks a
+block's refactor), the whole-change refactor, mutation testing and epic mode's
+merge step.
+
+| Key | Values | Default |
+|---|---|---|
+| `tdd.narrow_tests` | `true` / `false` | `true`; `false` runs the whole command in the loop too |
+
 ## Mutation testing
 
 Python projects only: one of `pyproject.toml`, `setup.py`, `setup.cfg`,

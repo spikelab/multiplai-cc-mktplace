@@ -53,6 +53,9 @@ For each test you wrote, confirm:
 
 ## Test Command
 {test_command}
+It may run only this block's own test files and the tests named after the
+modules the block changed, not the whole suite. Run it while you work; buildme
+runs the whole suite itself after you finish.
 
 ## When the block is not writable as specified
 
