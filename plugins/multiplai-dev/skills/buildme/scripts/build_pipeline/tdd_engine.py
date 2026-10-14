@@ -1397,8 +1397,9 @@ def _enforce_test_integrity(
     review-fix agent IS the implementer, so passing the first check only means
     the tests survived until the first review, not until the block is done.
 
-    *report* is the output of the agent that wrote during THIS window only, not
-    the accumulated `block.implementer_report`. Scanning the accumulation would
+    *report* is the output of the agents that wrote during THIS window only
+    (in the implement window, the implementer and every integration fixer),
+    not the accumulated `block.implementer_report`. Scanning the accumulation would
     let one `TEST CHANGE REQUIRED:` declared during implement silently
     authorize every later review-fix mutation for the rest of the block — the
     exact hole the per-window re-baseline exists to close.

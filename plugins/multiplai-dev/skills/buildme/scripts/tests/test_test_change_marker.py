@@ -274,3 +274,33 @@ async def test_review_fix_prompt_orders_searched_before_the_declaration():
     assert "SEARCHED:" in prompt
     assert TEST_CHANGE_MARKER in prompt
     assert "`SEARCHED:` section included" in prompt
+
+
+@pytest.mark.asyncio
+async def test_a_failed_fixers_declaration_still_counts(setup):
+    """A fixer that times out leaves its edits on disk. When it changed a test
+    and declared it, a later fixer that turns the suite green does not have to
+    declare that change again: the gate reads every fixer's report."""
+    config, state, progress, block = setup
+    gates = iter([
+        GateResult(passed=False, reason="failing", metadata={"stdout": "FAILED"}),
+        GateResult(passed=True, reason="all green", metadata={"stdout": "3 passed"}),
+    ])
+    fixes = [
+        AgentResult(success=False,
+                    output=f"partial\n{TEST_CHANGE_MARKER} the fixture path was wrong\n"),
+        AgentResult(success=True, output="fixed the import\n"),
+    ]
+    review = ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])
+    with patch("build_pipeline.tdd_engine.integration_gate",
+               side_effect=lambda *a, **k: next(gates)), \
+         patch("build_pipeline.tdd_engine.run_integration_fix",
+               new_callable=AsyncMock, side_effect=fixes) as fix_call, \
+         patch("build_pipeline.tdd_engine._snapshot_test_files",
+               return_value={TEST_FILE: "changed-by-fixer"}), \
+         patch("build_pipeline.tdd_engine._run_quality_review",
+               new_callable=AsyncMock, return_value=review):
+        result = await _run_integration_and_review(block, config, state, progress)
+    assert fix_call.await_count == 2
+    assert result is True
+    assert block.test_change_claims == ["the fixture path was wrong"]
