@@ -27,12 +27,19 @@ time, not derived from a tag.
   it writes to the build branch as `docs(specs): baseline registry from
   spec-extract at <sha12>`, printing `SPEC_EXTRACT:BASELINE <n>` (with
   `uncommitted` after it when there is no build branch to commit to, as with
-  `--no-worktree`, or the commit failed). It needs a trusted repository
-  (`--trust-repo`), never runs in `only` mode or in an epic's child builds
-  (their parent ran it before writing their plans), and is turned off with
-  `spec_extract: false` in `specs/config.yaml`. `spec_extract_max_usd`
+  `--no-worktree`, or the commit failed; a spec-only build then leaves the
+  files for you to commit, and a full build commits them with its first
+  block's commit). It needs a trusted repository (`--trust-repo`), never
+  runs in `only` mode or in an epic's child builds, and is turned off with
+  `spec_extract: false` in `specs/config.yaml`. In an epic the parent runs it,
+  and each child with no dependency, in the epic's own repository, branches
+  from the parent's commit that holds the baseline, so the registry reaches
+  main with the first merged child PR; a child that waits on a dependency
+  branches from origin's default branch after that merge, and a child built
+  in another repository builds without a baseline. `spec_extract_max_usd`
   (default `80`) caps its spend; what it spends is counted in buildme's
-  `SPEND:` line, and so in an epic's `epic.max_usd`. A stopped build resumes
+  `SPEND:` line, but not in an epic's `epic.max_usd`, which counts only the
+  children's builds, fixes, merges and reviews. A stopped build resumes
   spec-extract at the same commit, so it pays only for the calls that had not
   returned, and does not run the codebase analysis again. When spec-extract
   fails the build goes on without a baseline (`SPEC_EXTRACT:NOT_RUN exit=<n>`);

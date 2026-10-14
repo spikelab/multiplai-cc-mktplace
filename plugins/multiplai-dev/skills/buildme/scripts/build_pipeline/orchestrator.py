@@ -766,10 +766,12 @@ async def _run_codebase_analysis_phase(
     if config.mode == "only":
         log.info("SKIP phase=CODEBASE_ANALYSIS reason=only-mode-generates-no-specs")
         return
-    if state.spec_gen is not None and state.spec_gen.spec_extract_sha:
+    if (state.spec_gen is not None and state.spec_gen.spec_extract_sha
+            and state.spec_gen.codebase_analysis_path):
         # Saved by the spec-extract step, which runs after this analysis: an
         # earlier process already analysed the code and saved where the report is,
-        # and a re-run of the step must not pay for the analysis again.
+        # and a re-run of the step must not pay for the analysis again. One that
+        # failed saved no report, and is asked again.
         log.info("SKIP phase=CODEBASE_ANALYSIS reason=analysed-before-spec-extract report=%s",
                  state.spec_gen.codebase_analysis_path)
         return
@@ -831,8 +833,11 @@ def _spec_extract_argv(config: BuildConfig, sha: str) -> list[str]:
             "spec_extract_pipeline", "run", "--repo", str(top), "--tree", sha]
     if top != project and top in project.parents:
         argv += ["--path", project.relative_to(top).as_posix()]
+    # The cap exactly as configured: `repr` keeps every digit a float holds.
+    cap = float(config.spec_extract_max_usd)
+    max_usd = str(int(cap)) if cap.is_integer() else repr(cap)
     # Absolute: `uv run --directory` runs spec-extract in its own scripts directory.
-    return argv + ["--max-usd", f"{config.spec_extract_max_usd:g}", "--trust-repo",
+    return argv + ["--max-usd", max_usd, "--trust-repo",
                    "--apply", "--specs-dir", str(Path(config.specs_dir).resolve())]
 
 
@@ -853,7 +858,8 @@ def _run_spec_extract_step(
     reads that commit, so it reaches the spec-extract run folder the stopped run
     paid into. spec-extract's spend is outside buildme's `BuildBudget`, bounded
     by `spec_extract_max_usd`; its `SPEND:` line is added to buildme's
-    (`git_ops.SPEND_REPORTING`). Skipped in an epic's child build.
+    (`git_ops.SPEND_REPORTING`), not to an epic's `epic.max_usd`. Skipped in an
+    epic's child build.
     """
     from . import sdk, stop_record
     from .epic import CHILD_ENV
@@ -864,8 +870,10 @@ def _run_spec_extract_step(
     if config.mode == "only":
         reason = "only-mode"
     elif os.environ.get(CHILD_ENV) == "1":
-        # An epic's child builds the plan its parent wrote after running
-        # spec-extract; siblings at one commit would also race for its lock.
+        # The parent ran spec-extract, and a child with no dependency in the
+        # epic's repo branches from the parent's registry commit
+        # (`coordinator.registry_commit`); siblings at one commit would also
+        # race for its lock. A child in another repo builds without a baseline.
         reason = "epic-child"
     elif not config.spec_extract:
         reason = "spec_extract-false"

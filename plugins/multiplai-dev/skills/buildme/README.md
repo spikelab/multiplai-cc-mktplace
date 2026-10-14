@@ -69,9 +69,14 @@ The same phase then writes a baseline of what the code already does: when
 `/multiplai-dev:spec-extract` on the project's Python code at the build's
 starting commit with `--apply`, and commits the capability files it writes to
 the build branch (`SPEC_EXTRACT:BASELINE <n>`; `uncommitted` follows when there
-is no build branch to commit to). Spec generation then reads them. Turn it off
+is no build branch to commit to, and a full build then commits them with its
+first block's commit). Spec generation then reads them. Turn it off
 with `spec_extract: false` in `specs/config.yaml`. An epic's child builds skip
-it: their parent ran it before writing their plans. When spec-extract fails the
+it: the parent runs it, and each child with no dependency, in the epic's own
+repository, branches from the parent's commit that holds the baseline, so the
+registry reaches main with the first merged child PR. A child that waits on a
+dependency branches from origin's default branch after that merge; a child
+built in another repository builds without a baseline. When spec-extract fails the
 build goes on without a baseline, except in two cases that end the build with
 exit `1` without leaving the phase: another spec-extract run still holds the
 same commit's run folder (`SPEC_EXTRACT:RUNNING`), or the failure left

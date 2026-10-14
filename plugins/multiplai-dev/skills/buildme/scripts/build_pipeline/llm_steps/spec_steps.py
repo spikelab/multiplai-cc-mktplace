@@ -169,7 +169,7 @@ def _build_prompt(
             instruction=instruction,
             template=template,
         ) + (f"\n\n{REGISTRY_HEADING}\n\n{REGISTRY_PROPOSAL_RULE}\n\n"
-             f"Capabilities in specs/registry: {names}\n" if names else "")
+             f"{_cap(f'Capabilities in specs/registry: {names}')}\n" if names else "")
     elif artifact_id == "requirements":
         # Requirements generation needs proposal content
         proposal_content = _read_dep(context, "proposal", config)
@@ -266,7 +266,8 @@ def _read_registry(config, context: dict, names: list[str]) -> str:
     """The text of `specs/registry/<name>.md` for each of *names* that exists, each
     under `### <name> (specs/registry/<name>.md)`, then one line naming every other
     registry capability. Over `REGISTRY_TEXT_LIMIT` characters, whole files are
-    dropped from the end and named instead, with their requirement names."""
+    dropped from the end and named instead, with their requirement names; names
+    still over it are cut (`_cap`)."""
     registry = config.specs_dir / "registry"
     shown = [n for n in names if (registry / f"{n}.md").is_file()]
     others = [n for n in context.get("registry") or [] if n not in shown]
@@ -290,7 +291,17 @@ def _read_registry(config, context: dict, names: list[str]) -> str:
     while parts and len(render()) > REGISTRY_TEXT_LIMIT:
         parts.pop()
         dropped.insert(0, shown[len(parts)])
-    return render()
+    return _cap(render())
+
+
+def _cap(text: str) -> str:
+    """*text* within `REGISTRY_TEXT_LIMIT` characters: cut at the end, saying so,
+    when the names alone (left-out files' requirements, other capabilities) are
+    over it."""
+    if len(text) <= REGISTRY_TEXT_LIMIT:
+        return text
+    note = f"\n(cut at {REGISTRY_TEXT_LIMIT:,} characters)"
+    return text[:REGISTRY_TEXT_LIMIT - len(note)] + note
 
 
 def _registry_section(config, context: dict, names: list[str], rule: str) -> str:
