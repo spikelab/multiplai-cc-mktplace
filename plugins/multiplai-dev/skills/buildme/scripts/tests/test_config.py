@@ -796,6 +796,24 @@ class TestFixOnPassConfig:
         assert config.fix_on_pass is False
 
 
+class TestNarrowTestsConfig:
+    def test_on_by_default(self, tmp_path):
+        assert BuildConfig().narrow_tests is True
+        assert _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n").narrow_tests is True
+
+    def test_can_be_disabled(self, tmp_path):
+        config = _config_from_yaml(tmp_path, "tdd:\n  narrow_tests: false\n")
+        assert config.narrow_tests is False
+
+    @pytest.mark.parametrize("value", ['"false"', "'no'", '"off"', '"0"'])
+    def test_a_quoted_false_disables_it(self, tmp_path, value):
+        config = _config_from_yaml(tmp_path, f"tdd:\n  narrow_tests: {value}\n")
+        assert config.narrow_tests is False
+
+    def test_a_quoted_true_keeps_it_on(self, tmp_path):
+        assert _config_from_yaml(tmp_path, 'tdd:\n  narrow_tests: "true"\n').narrow_tests is True
+
+
 class TestBudgetConfig:
     def test_unlimited_by_default(self):
         config = BuildConfig()

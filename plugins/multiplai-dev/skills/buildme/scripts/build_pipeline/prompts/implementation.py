@@ -26,7 +26,7 @@ it tidies, it does not rescue. Your code should be production-quality as written
    explain why.
 4. **Follow existing project patterns.** Match the code style, directory structure,
    and conventions already established in the project.
-5. **Run the full test suite** after implementation to verify nothing is broken.
+5. **Run the test command below** after implementation to verify nothing is broken.
 6. **Implement exactly what the tests require.** Build for today's tests, not
    imagined future needs.
 
@@ -93,7 +93,7 @@ refactoring agent will clean up the code afterward.
 2. **Minimum viable code.** Hardcode values if that makes tests pass. Use simple
    data structures. Introduce an abstraction only when a test requires it.
 3. **Treat the tests as fixed.** Modify a test only if it has a genuine bug.
-4. **Run the full test suite** after implementation.
+4. **Run the test command below** after implementation.
 5. **Leave refactoring to the next phase.**
 
 ## Test Command

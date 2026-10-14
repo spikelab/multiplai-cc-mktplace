@@ -716,6 +716,10 @@ class BuildConfig:
     # discovery took `test_command` from ("package.json", ...). Empty when the
     # command was configured (tdd.test_command) or set by the caller.
     test_command_discovered_from: str = ""
+    # tdd.narrow_tests: inside a block's loop, run only the block's own test
+    # files and the tests named after its changed modules (narrow_tests.py);
+    # the gates that decide whether work is done keep `test_command`.
+    narrow_tests: bool = True
 
     # Memory files
     core_memory_files: list[str] = field(default_factory=lambda: ["technical-pref.md"])
@@ -1087,6 +1091,14 @@ class BuildConfig:
         tdd = data.get("tdd", {})
         if tdd.get("test_command"):
             self.test_command = tdd["test_command"]
+        narrow = tdd.get("narrow_tests", True)
+        text = str(narrow).strip().lower()
+        if isinstance(narrow, bool):
+            self.narrow_tests = narrow
+        elif text in ("no", "off", "0", "false"):
+            self.narrow_tests = False
+        elif text not in ("yes", "on", "1", "true"):
+            log.warning("Unrecognized tdd.narrow_tests value %r in config.yaml — using true", narrow)
 
         # Reviewer context: coding standards + optional stronger review model
         self.standards_files = data.get("standards_files") or []
