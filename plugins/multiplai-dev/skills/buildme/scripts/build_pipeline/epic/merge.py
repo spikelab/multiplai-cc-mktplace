@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 import yaml
 
@@ -122,10 +123,11 @@ def not_resolutions(w: Path, first: str, second: str, result: str) -> list[str] 
     """The files where *result* (a commit or tree) differs from git's own
     merge of *first* and *second* in more than 40.3 lets the step resolve:
     in a conflicted version file, only the conflicting version lines; in a
-    conflicted CHANGELOG, only lines from its sides (numbers aside); in a
-    conflicted lockfile, only lines from its sides or the version the result
-    wrote in a version file. Every line outside a conflict is git's own.
-    None when git cannot tell."""
+    conflicted CHANGELOG, both sides' entries, every line of each kept in its
+    order (numbers aside) and nothing else; in a conflicted lockfile, every
+    line of each side in its order, a version taken from a side or the one
+    the result wrote in a version file. Every line outside a conflict is
+    git's own. None when git cannot tell."""
     auto = git(w, "merge-tree", "--write-tree", "--name-only", "--no-messages", first, second)
     if auto.returncode not in (0, 1) or not auto.stdout.strip():
         return None
@@ -164,12 +166,17 @@ def _allowed(path: str, conflicted: bool, auto: str | None, new: str | None, ver
         return False
     parts = _segments(auto)
     if is_lockfile(path):
-        return _fits(parts, new.splitlines(), str.__eq__, lambda side, line: line in side or bool(
-            (m := _VERSION_FIELD.match(line)) and m["v"] in versions))
+        def kept(sides: _Conflict, span: list[str]) -> bool:
+            key = [_version_key(x) for x in span]
+            return all(_subsequence([_version_key(x) for x in side], key) for side in (sides.ours, sides.theirs))
+        return _fits(parts, new.splitlines(), lambda side, line: line in side or bool(
+            (m := _VERSION_FIELD.match(line)) and m["v"] in versions), kept)
     if _is_changelog(path):
-        return _fits(parts, new.splitlines(), str.__eq__,
-                     lambda side, line: not line.strip() or _digits(line) in {_digits(x) for x in side})
-    return _resolvable(path, auto) and _fits(parts, new.splitlines(), str.__eq__,
+        def both(sides: _Conflict, span: list[str]) -> bool:
+            return _interleaves(_entry(span), _entry(sides.ours), _entry(sides.theirs))
+        return _fits(parts, new.splitlines(),
+                     lambda side, line: not line.strip() or _digits(line) in {_digits(x) for x in side}, both)
+    return _resolvable(path, auto) and _fits(parts, new.splitlines(),
                                              lambda side, line: bool(_VERSION_FIELD.match(line)))
 
 
@@ -177,41 +184,93 @@ def _digits(line: str) -> str:
     return re.sub(r"\d+", "0", line)
 
 
-def _segments(text: str) -> list[str | list[str]]:
+def _entry(lines: list[str]) -> list[str]:
+    """A CHANGELOG side or resolution as it is compared: no blank lines, numbers aside."""
+    return [_digits(x) for x in lines if x.strip()]
+
+
+def _version_key(line: str) -> str:
+    """A lockfile line as it is compared: a version field with its version
+    left out, as a resolution may take either side's or the written one."""
+    m = _VERSION_FIELD.match(line)
+    return line[:m.start("v")] + line[m.end("v"):] if m else line
+
+
+def _subsequence(side: list[str], lines: list[str]) -> bool:
+    """Every line of *side* is in *lines*, in its order."""
+    it = iter(lines)
+    return all(x in it for x in side)
+
+
+def _interleaves(lines: list[str], a: list[str], b: list[str]) -> bool:
+    """*lines* are *a* and *b* merged, each in its own order, every line of
+    both kept once and nothing added."""
+    if len(lines) != len(a) + len(b):
+        return False
+    row = [True] * (len(b) + 1)                 # row[j]: lines[:i + j] interleaves a[:i] and b[:j]
+    for j in range(1, len(b) + 1):
+        row[j] = row[j - 1] and b[j - 1] == lines[j - 1]
+    for i in range(1, len(a) + 1):
+        row[0] = row[0] and a[i - 1] == lines[i - 1]
+        for j in range(1, len(b) + 1):
+            row[j] = (row[j] and a[i - 1] == lines[i + j - 1]) or (row[j - 1] and b[j - 1] == lines[i + j - 1])
+    return row[len(b)]
+
+
+class _Conflict(NamedTuple):
+    """One conflict of git's merge of a file: its sides' lines."""
+    ours: list[str]
+    base: list[str]           # empty unless the merge wrote diff3's base side
+    theirs: list[str]
+
+    @property
+    def lines(self) -> list[str]:
+        return [*self.ours, *self.base, *self.theirs]
+
+
+def _segments(text: str) -> list[str | _Conflict]:
     """*text*, git's merge of a file, as its lines outside conflicts and, for
-    each conflict, the lines of all its sides in one list."""
-    parts: list[str | list[str]] = []
-    side: list[str] | None = None
+    each conflict, its sides."""
+    parts: list[str | _Conflict] = []
+    sides: _Conflict | None = None
+    side: list[str] = []
     for line in text.splitlines():
         if line.startswith("<<<<<<<") and _MARKER.match(line):
-            side = []
-            parts.append(side)
-        elif side is not None and line.startswith(">>>>>>>") and _MARKER.match(line):
-            side = None
-        elif side is not None and _MARKER.match(line):
+            sides = _Conflict([], [], [])
+            side = sides.ours
+            parts.append(sides)
+        elif sides is not None and line.startswith(">>>>>>>") and _MARKER.match(line):
+            sides = None
+        elif sides is not None and line.startswith("|||||||") and _MARKER.match(line) and side is sides.ours:
+            side = sides.base
+        elif sides is not None and line.startswith("=======") and _MARKER.match(line) and side is not sides.theirs:
+            side = sides.theirs
+        elif sides is not None and _MARKER.match(line):
             continue
-        elif side is not None:
+        elif sides is not None:
             side.append(line)
         else:
             parts.append(line)
     return parts
 
 
-def _fits(parts: list[str | list[str]], lines: list[str], same, may) -> bool:
-    """*lines* are *parts* with each conflict replaced by one or more lines
-    *may* allows for its sides; every other line *same* as git's."""
+def _fits(parts: list[str | _Conflict], lines: list[str], may, whole=None) -> bool:
+    """*lines* are *parts* with each conflict replaced by one or more lines,
+    each of which *may* allows for its sides' lines, that *whole* (when given)
+    accepts together; every other line git's own."""
     reach = {0}
     for part in parts:
         nxt: set[int] = set()
         for j in reach:
             if isinstance(part, str):
-                if j < len(lines) and same(part, lines[j]):
+                if j < len(lines) and part == lines[j]:
                     nxt.add(j + 1)
                 continue
-            k = j
-            while k < len(lines) and may(part, lines[k]):
+            side, k = part.lines, j
+            while k < len(lines) and may(side, lines[k]):
                 k += 1
-                nxt.add(k)
+                if whole is None or whole(part, lines[j:k]):
+                    nxt.add(k)
         if not nxt:
             return False
         reach = nxt

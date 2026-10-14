@@ -17,6 +17,22 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.65.0] - 2026-10-14
+
+### Added
+- Epic mode's merge step (`epic.merge: auto`) now resolves conflicts that
+  are only in version fields, CHANGELOGs and lockfiles, with one agent call
+  (model step `merge`, counted against `epic.max_usd`); a conflict in any
+  other file still parks the child, as does the agent changing any other
+  file, staged or not. Its resolution is checked line by line against git's
+  own merge: a version file may change only its conflicting version lines, a
+  CHANGELOG must keep both sides' entries (renumbered at most), and a
+  lockfile every line of each side in its order, with a side's version or
+  the new one. A merge commit holding only such resolutions is not reviewed
+  again. With `epic.max_usd` reached, a merge that would need the agent is
+  not started. A change left in the worktree that the merge did not make
+  parks the child before the tests run.
+
 ## [0.64.0] - 2026-10-13
 
 ### Added

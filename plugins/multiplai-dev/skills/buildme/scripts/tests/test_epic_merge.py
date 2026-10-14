@@ -215,6 +215,35 @@ def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(tmp_path
     assert not merge.merges_onto(r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "main")
 
 
+def test_a_clean_merge_is_tested_and_pushed_and_not_reviewed_again(tmp_path, monkeypatch):
+    """40.2-40.4: main moved under a's branch without a conflict. The tests run
+    in <P> with BUILDME_TRUST_REPO=1 and the merge commit is pushed. Until E2
+    the PR then waits for a human merge. That merge is the step's own, so the
+    next run does not review it again; the same merge with a person's edit
+    in any file is reviewed. No agent runs."""
+    r = MergeRoot(tmp_path, monkeypatch, main={"uv.lock": "lock 2\n"})
+    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    [tests] = r.calls("merge-tests")
+    assert (tests["cwd"], tests["trusted"]) == ("<root>/ws/.worktrees/buildme-e-a", "1")
+    assert [a.result["exit_code"] for a in r.tries("merge-tests")] == [0]
+    assert len(r.step_pushes()) == 1
+    assert r.origin("plugin.json") == CHILD["plugin.json"] and r.origin("uv.lock") == "lock 2\n"
+    head = git(r.w, "rev-parse", "HEAD").strip()
+    assert git(r.w, "rev-parse", "HEAD^2").strip() == r.moved
+    assert merge.merges_onto(r.w, head, r.tries("review")[-1].started["head_sha"], "main")
+    assert r.status()["status"] == "built" and r.status()["merge_stop"] is None
+    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]      # its own merge: not reviewed again
+    assert len(r.tries("review")) == 1 and len(r.step_pushes()) == 1 and r.calls("merge-agent") == []
+    reviewed = r.tries("review")[-1].started["head_sha"]
+    edits = {"app.py": "x = 'not reviewed'\n", "plugin.json": CHILD["plugin.json"].replace('"x"', '"evil"'),
+             "CHANGELOG.md": "anything at all\n", "uv.lock": "lock evil\n"}
+    for rel, text in edits.items():
+        (r.w / rel).write_text(text)
+        git(r.w, "-c", "commit.gpgsign=false", "commit", "-q", "--amend", "--no-edit", "--", rel)
+        assert not merge.merges_onto(r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "main"), rel
+        git(r.w, "reset", "-q", "--hard", head)
+
+
 def test_a_branch_up_to_date_with_main_waits_with_no_tests_and_no_push(tmp_path, monkeypatch):
     r = MergeRoot(tmp_path, monkeypatch, main=None)
     assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
@@ -597,6 +626,43 @@ def test_a_resolution_is_checked_by_content_lockfiles_and_binaries_included(tmp_
     for want, change in cases.items():
         result = commit({**good, **change}, at=ours)
         assert merge.not_resolutions(w, ours, theirs, result) == ([want.strip()] if want else []), want
+
+
+def test_a_resolution_keeps_both_sides_of_a_changelog_and_a_lockfile(tmp_path):
+    """40.3, by content: both sides added a CHANGELOG entry and a lockfile
+    package at the same place. A resolution keeps both entries (numbers
+    aside, in either order) and every lockfile line of each side in its
+    order; one that keeps one side's entry, or drops or reorders a side's
+    lockfile lines, is named."""
+    w = tmp_path / "m"
+    w.mkdir()
+
+    def commit(files: dict, at: str | None = None) -> str:
+        if at:
+            git(w, "checkout", "-q", "--detach", at)
+        for rel, text in files.items():
+            (w / rel).write_text(text)
+        git(w, "add", "--", *files)
+        git(w, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "c")
+        return git(w, "rev-parse", "HEAD").strip()
+
+    def lock(*names: str) -> str:
+        return "version = 1\n" + "".join(f"{n}==1.0.0\n" for n in names)
+
+    git(w, "init", "-q")
+    base = commit({"CHANGELOG.md": changelog(("0.1.0", "First.")), "uv.lock": lock("base")})
+    ours = commit({"CHANGELOG.md": CHILD["CHANGELOG.md"], "uv.lock": lock("base", "a", "b")})
+    theirs = commit({"CHANGELOG.md": MAIN["CHANGELOG.md"], "uv.lock": lock("base", "c", "d")}, at=base)
+    both = changelog(("0.2.1", "Child a."), ("0.1.1", "Main."), ("0.1.0", "First."))
+    good = {"CHANGELOG.md": both, "uv.lock": lock("base", "a", "b", "c", "d")}
+    cases = {"": {}, " ": {"CHANGELOG.md": changelog(("0.1.1", "Main."), ("0.2.1", "Child a."), ("0.1.0", "First."))},
+             "CHANGELOG.md": {"CHANGELOG.md": changelog(("0.2.1", "Child a."), ("0.1.0", "First."))},
+             " CHANGELOG.md": {"CHANGELOG.md": both.replace("- Main.", "- Child a.")},
+             "uv.lock": {"uv.lock": lock("base", "a", "b", "c")},           # d dropped
+             " uv.lock": {"uv.lock": lock("base", "b", "a", "c", "d")}}     # a and b reordered
+    for want, change in cases.items():
+        result = commit({**good, **change}, at=ours)
+        assert merge.not_resolutions(w, ours, theirs, result) == ([want.strip()] if want.strip() else []), want
 
 
 def test_the_merge_tests_fall_back_to_discovery(tmp_path):
