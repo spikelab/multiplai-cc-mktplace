@@ -1487,6 +1487,133 @@ class TestRedGateWiring:
         assert block.red_evidence == ""
 
 
+class TestNarrowTestCommandInTheBlockLoop:
+    """Inside a block's TDD loop, RED and the block's agents use the narrow
+    command (the block's own test files plus the test file named after each
+    changed source file); the integration gate keeps the whole command."""
+
+    WHOLE = "pytest -xvs"
+
+    @pytest.fixture(autouse=True)
+    def _quality(self, quality_audit_overturns):
+        yield
+
+    @pytest.fixture
+    def setup(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        project_dir = tmp_path / "project"
+        (project_dir / "pkg").mkdir(parents=True)
+        (project_dir / "tests").mkdir()
+        (project_dir / "pkg" / "widget.py").write_text("x = 1\n")
+        (project_dir / "tests" / "test_widget.py").write_text("def test_w(): pass\n")
+        (project_dir / "tests" / "test_unrelated.py").write_text("def test_u(): pass\n")
+        (project_dir / "specs" / "changes" / "test").mkdir(parents=True)
+        _git_init_project(project_dir)
+
+        config = BuildConfig(
+            project_dir=project_dir,
+            change_name="test",
+            tier="advanced",
+            test_command=self.WHOLE,
+            config_dir=tmp_path / "config",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
+        )
+        config.specs_dir = project_dir / "specs"
+        block = BlockInfo(number=1, name="Block1", description="Test block")
+        state = BuildState(
+            change_name="test", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress = ProgressWriter(tmp_path / "progress.md")
+        progress.initialize("test", "only", "advanced", 1)
+        return config, state, progress, block
+
+    @staticmethod
+    def _writes(project_dir: Path, rel: str, content: str):
+        def _run(*_a, **_kw):
+            (project_dir / rel).write_text(content)
+            return AgentResult(success=True, output="done")
+        return _run
+
+    async def _run_block(self, config, state, progress, block):
+        suite_calls: list[str] = []
+        gate_calls: list[str] = []
+
+        def _suite(command, _cwd, *_a, **_k):
+            suite_calls.append(command)
+            return RED_SUITE_RESULT
+
+        def _gate(command, _cwd):
+            gate_calls.append(command)
+            return GateResult(passed=True, reason="green")
+
+        p = config.project_dir
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
+                   side_effect=self._writes(p, "tests/test_new.py", "def test_n(): assert 0\n")) as tw, \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
+                   side_effect=self._writes(p, "pkg/widget.py", "x = 2\n")) as impl, \
+             patch("build_pipeline.tdd_engine.run_refactorer", new_callable=AsyncMock,
+                   return_value=AgentResult(success=True, output="nothing")) as ref, \
+             patch("build_pipeline.tdd_engine.run_test_suite", side_effect=_suite), \
+             patch("build_pipeline.tdd_engine.integration_gate", side_effect=_gate):
+            ok = await run_block_tdd(block, config, state, progress)
+        return ok, tw, impl, ref, suite_calls, gate_calls
+
+    @pytest.mark.asyncio
+    async def test_red_and_agents_use_the_narrow_command(self, setup):
+        config, state, progress, block = setup
+        ok, tw, impl, ref, suite_calls, gate_calls = await self._run_block(
+            config, state, progress, block)
+
+        assert ok is True
+        # RED runs only the block's own new test file.
+        assert suite_calls == [f"{self.WHOLE} tests/test_new.py"]
+        # The test writer starts before the block changed anything: whole command.
+        assert tw.call_args.kwargs["test_command"] == self.WHOLE
+        # The implementer works against the block's tests (GREEN while it works).
+        assert impl.call_args.kwargs["test_command"] == f"{self.WHOLE} tests/test_new.py"
+        # After pkg/widget.py changed, tests/test_widget.py joins; test_unrelated never does.
+        assert ref.call_args.kwargs["test_command"] == \
+            f"{self.WHOLE} tests/test_new.py tests/test_widget.py"
+        # The refactor's verification is a gate: whole command.
+        assert gate_calls == [self.WHOLE]
+
+    @pytest.mark.asyncio
+    async def test_narrow_tests_false_keeps_the_whole_command(self, setup):
+        config, state, progress, block = setup
+        config.narrow_tests = False
+        ok, _tw, impl, ref, suite_calls, _gates = await self._run_block(
+            config, state, progress, block)
+
+        assert ok is True
+        assert suite_calls == [self.WHOLE]
+        assert impl.call_args.kwargs["test_command"] == self.WHOLE
+        assert ref.call_args.kwargs["test_command"] == self.WHOLE
+
+    @pytest.mark.asyncio
+    async def test_integration_gate_and_its_fixer_use_the_whole_command(self, setup):
+        config, state, progress, block = setup
+        block.baseline_commit = git_ops.rev_parse_head(config.project_dir)
+        (config.project_dir / "tests" / "test_new.py").write_text("def test_n(): pass\n")
+        gate_calls: list[str] = []
+
+        def _gate(command, _cwd):
+            gate_calls.append(command)
+            return GateResult(passed=False, reason="red", metadata={"stdout": "1 failed"})
+
+        with patch("build_pipeline.tdd_engine.integration_gate", side_effect=_gate), \
+             patch("build_pipeline.tdd_engine.run_integration_fix", new_callable=AsyncMock,
+                   return_value=AgentResult(success=True, output="tried")) as fixer:
+            ok = await _run_integration_and_review(block, config, state, progress)
+
+        assert ok is False
+        assert gate_calls and set(gate_calls) == {self.WHOLE}
+        assert {c.kwargs["test_command"] for c in fixer.call_args_list} == {self.WHOLE}
+
+
 class TestEvidenceBasedReview:
     """The per-block quality review must see the block's actual diff."""
 

@@ -796,6 +796,16 @@ class TestFixOnPassConfig:
         assert config.fix_on_pass is False
 
 
+class TestNarrowTestsConfig:
+    def test_on_by_default(self, tmp_path):
+        assert BuildConfig().narrow_tests is True
+        assert _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n").narrow_tests is True
+
+    def test_can_be_disabled(self, tmp_path):
+        config = _config_from_yaml(tmp_path, "tdd:\n  narrow_tests: false\n")
+        assert config.narrow_tests is False
+
+
 class TestBudgetConfig:
     def test_unlimited_by_default(self):
         config = BuildConfig()
