@@ -64,7 +64,14 @@ def test_the_command_prints_the_spend_line_last_on_every_exit(capsys):
 
 
 def test_the_module_entry_point_is_the_command_with_its_spend_line():
-    import inspect
+    """`python -m spec_extract_pipeline` itself, as buildme runs it: a refused run
+    still ends with the SPEND line, and exits with the command's code."""
+    import subprocess
+    import sys
+    from pathlib import Path
 
-    source = inspect.getsource(cli)
-    assert source.rstrip().endswith("sys.exit(cli())")
+    res = subprocess.run([sys.executable, "-m", "spec_extract_pipeline", "run", "--tree", "--dir", "x"],
+                         cwd=Path(cli.__file__).resolve().parents[1], capture_output=True, text=True,
+                         timeout=120, check=False)
+    assert res.returncode == cli.EXIT_REFUSED
+    assert res.stdout.splitlines()[-1] == "SPEND:0.000000:0"

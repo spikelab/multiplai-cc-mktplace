@@ -159,6 +159,14 @@ class TestArgv:
         assert "--trust-repo" in argv and "--apply" in argv
         assert _flag(argv, "--specs-dir") == str(config.specs_dir)
 
+    @pytest.mark.parametrize("cap, passed", [(1234.567, "1234.567"), (1234567.0, "1234567"), (0.25, "0.25")])
+    def test_the_spend_cap_is_passed_exactly(self, cap, passed, tmp_path, monkeypatch):
+        config = _config(_repo(tmp_path / "proj"), spec_extract_max_usd=cap)
+        fake = FakeSpecExtract(0)
+        monkeypatch.setattr(git_ops, "_run_spec_extract_skill", fake)
+        assert _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        assert _flag(fake.calls[0], "--max-usd") == passed
+
     def test_a_subdirectory_project_reads_only_its_path(self, tmp_path, monkeypatch):
         """spec-extract puts `--repo`'s own prefix in front of `--path`
         (`target.tree_root`), so the subdirectory goes in `--path` and `--repo`
@@ -529,8 +537,9 @@ def test_a_relative_specs_dir_is_passed_absolute(tmp_path, monkeypatch):
 
 
 class TestEpicChildren:
-    """An epic's child builds from the plan its parent wrote, after the parent ran
-    spec-extract; siblings at one commit would also race for spec-extract's lock."""
+    """An epic's child skips spec-extract: the parent ran it, and the child branches
+    from the parent's registry commit (below); siblings at one commit would also
+    race for spec-extract's lock."""
 
     def test_a_child_build_skips_spec_extract(self, tmp_path, monkeypatch, caplog):
         from build_pipeline.epic import CHILD_ENV
@@ -553,6 +562,88 @@ class TestEpicChildren:
         coordinator._spawn(["python", "-m", "build_pipeline"], tmp_path / "log")
         assert seen["env"][CHILD_ENV] == "1"
         assert seen["env"]["PATH"] == os.environ["PATH"]
+
+
+class TestEpicChildrenBranchFromTheRegistryCommit:
+    """Spike, 2026-10-14 (run-decisions-2026-10-11.md): a child with no dependency
+    branches from the parent's commit that holds `specs/registry`, so the registry
+    lands on main with the first merged child PR; a child that waits on a
+    dependency branches from origin's default branch after that merge."""
+
+    def _epic(self, tmp_path, monkeypatch):
+        """An approved epic (api, ui; docs waits on both) whose parent committed a
+        baseline registry after the commit its spec-extract step read. The
+        registry commit is on the parent's branch only, not on origin."""
+        from build_pipeline.config import EpicSettings
+
+        from .epic_row_helpers import THREE, CallLog, Fakes, approve, make_build, make_project, use_workspace
+
+        monkeypatch.delenv("BUILDME_TRUST_REPO")      # the parent's own step is not under test
+        use_workspace(monkeypatch, tmp_path)
+        project = make_project(tmp_path)
+        fakes = Fakes(tmp_path, monkeypatch)
+        config = make_build(project)
+        config.epic = EpicSettings(max_parallel=2)
+        approve(config, THREE, CallLog(tmp_path / "split.log"))
+        state = BuildState.load(config.state_file_path())
+        state.spec_gen = SpecGenState(spec_extract_sha=_git(project, "rev-parse", "HEAD"))
+        state.checkpoint(config.state_file_path())
+        (project / "specs" / "registry").mkdir(parents=True, exist_ok=True)
+        (project / "specs" / "registry" / "billing.md").write_text(CAPABILITY)
+        _git(project, "add", "specs/registry/billing.md")
+        _git(project, "commit", "-q", "-m", "docs(specs): baseline registry from spec-extract")
+        return config, fakes, _git(project, "rev-parse", "HEAD")
+
+    def test_a_child_with_no_dependency_branches_from_the_registry_commit(self, tmp_path, monkeypatch):
+        from .epic_row_helpers import run_coordinator
+
+        config, _, registry = self._epic(tmp_path, monkeypatch)
+        assert run_coordinator(config) == 3
+        for cid in ("api", "ui"):
+            assert (tmp_path / "bases" / cid).read_text() == registry
+        assert not (tmp_path / "bases" / "docs").exists()
+
+    def test_a_child_waiting_on_a_dependency_branches_from_origin_after_the_merge(self, tmp_path, monkeypatch):
+        from .epic_row_helpers import pr_url, run_coordinator
+
+        config, fakes, registry = self._epic(tmp_path, monkeypatch)
+        assert run_coordinator(config) == 3
+        fakes.set_pr(pr_url("e-api"), "MERGED")
+        fakes.set_pr(pr_url("e-ui"), "MERGED")
+        run_coordinator(config)
+        origin = _git(tmp_path / "o" / "r.git", "rev-parse", "main")
+        assert (tmp_path / "bases" / "docs").read_text() == origin != registry
+
+    def test_a_child_in_another_repository_branches_from_its_origin(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from build_pipeline.epic import coordinator, store
+
+        from .epic_row_helpers import make_project
+
+        config, _, registry = self._epic(tmp_path, monkeypatch)
+        state = BuildState.load(config.state_file_path())
+        epic_dir = Path(state.epic_dir)
+        coord = coordinator.Coordinator(config, state, None, epic_dir, store.load_epic(epic_dir))
+        other = make_project(tmp_path, "q", "q")
+        c = coord.children["api"]
+        c.repo, c.project, c.root = "../q", other, other
+        assert asyncio.run(coord._base(c)) == _git(other, "rev-parse", "HEAD") != registry
+
+    def test_no_registry_commit_keeps_origin(self, tmp_path, monkeypatch):
+        """The parent's spec-extract step committed nothing (`NOT_RUN`, `--no-worktree`,
+        a failed commit): every child branches from origin's default branch."""
+        import asyncio
+
+        from build_pipeline.epic import coordinator, store
+
+        config, _, _ = self._epic(tmp_path, monkeypatch)
+        project = Path(config.project_dir)
+        _git(project, "reset", "-q", "--hard", "HEAD~1")
+        state = BuildState.load(config.state_file_path())
+        epic_dir = Path(state.epic_dir)
+        coord = coordinator.Coordinator(config, state, None, epic_dir, store.load_epic(epic_dir))
+        assert asyncio.run(coord._base(coord.children["api"])) == _git(project, "rev-parse", "origin/main")
 
 
 class TestTheAnalysisIsNotPaidTwice:
@@ -627,6 +718,17 @@ class TestTheAnalysisIsNotPaidTwice:
         assert analysis.await_count == ref_analysis.await_count == 1
         assert config.codebase_analysis_path.read_text() == ref_config.codebase_analysis_path.read_text()
 
+    def test_an_analysis_that_failed_is_asked_again_on_the_re_run(self, tmp_path, monkeypatch):
+        """No report was saved, so the re-run retries the analysis, as before the step."""
+        from unittest.mock import AsyncMock
+
+        config, args = self._setup(tmp_path / "p")
+        analysis = AsyncMock(side_effect=[RuntimeError("model down"), "## Architecture\nx"])
+        assert self._runs(config, args, monkeypatch, analysis, 5) == [1]
+        assert self._runs(config, args, monkeypatch, analysis, 0) == [0]
+        assert analysis.await_count == 2
+        assert config.codebase_analysis_path.read_text() == "## Architecture\nx"
+
     def test_S1_stopped_twice_during_spec_extract_asks_the_analysis_once(self, tmp_path, monkeypatch):
         ref_analysis, _ = self._reference(tmp_path, monkeypatch)
         config, args = self._setup(tmp_path / "p")
@@ -647,7 +749,8 @@ def test_no_test_can_start_a_real_spec_extract():
 
 class TestSpend:
     """spec-extract prints `SPEND:<usd>:<tokens>` last, as a walkthrough run does, and
-    buildme adds it to its own `SPEND:` line, which an epic sums against `epic.max_usd`."""
+    buildme adds it to its own `SPEND:` line. Only an epic's parent runs it, and an
+    epic's `epic.max_usd` counts only its children's records, so it is not in that."""
 
     @pytest.fixture(autouse=True)
     def _fresh_total(self, monkeypatch):

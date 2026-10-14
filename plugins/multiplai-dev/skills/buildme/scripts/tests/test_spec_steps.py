@@ -528,3 +528,27 @@ def test_a_file_left_out_by_the_cap_still_names_its_requirements(tmp_path):
     text = _read_registry(config, _registry_context(config), ["billing"])
     assert len(text) <= 60_000 and "BODY-END" not in text
     assert "billing (specs/registry/billing.md; requirements: Billing totals, Refunds)" in text
+
+
+def test_the_cap_holds_when_the_names_alone_are_over_it(tmp_path):
+    """Thousands of requirement names in a left-out file, and thousands of other
+    capabilities: the text still stays within the cap, and says it was cut."""
+    from build_pipeline.llm_steps.spec_steps import REGISTRY_TEXT_LIMIT, _read_registry
+
+    big = "".join(f"### Requirement: Requirement number {i}\nx\n" for i in range(4_000))
+    others = {f"capability-{i:05d}": "### Requirement: R\n" for i in range(3_000)}
+    config = _registry_config(tmp_path, {}, {"billing": big, **others})
+    text = _read_registry(config, _registry_context(config), ["billing"])
+    assert len(text) <= REGISTRY_TEXT_LIMIT
+    assert text.endswith(f"(cut at {REGISTRY_TEXT_LIMIT:,} characters)")
+
+
+def test_the_proposal_list_of_capabilities_is_capped_too(tmp_path):
+    from build_pipeline.llm_steps.spec_steps import REGISTRY_TEXT_LIMIT
+
+    config = _registry_config(tmp_path, {}, {f"capability-{i:05d}": "x\n" for i in range(5_000)})
+    prompt = _build_prompt("proposal", _registry_context(config), config)
+    section = prompt.split("## Current behaviour (specs/registry)", 1)[1]
+    names = section.split("Capabilities in specs/registry: ", 1)[1]
+    assert len(names) <= REGISTRY_TEXT_LIMIT + 1
+    assert names.rstrip("\n").endswith(f"(cut at {REGISTRY_TEXT_LIMIT:,} characters)")
