@@ -592,9 +592,9 @@ state = project / "specs" / "changes" / change / ".findings-state.json"
 doc = json.loads(state.read_text()) if state.exists() else {{"findings": {{"rounds": []}}}}
 reviews = pathlib.Path(os.environ["WORKSPACE"]) / ".multiplai" / "data" / "reviews"
 import hashlib
-prs = json.loads((root / "prs.json").read_text())
-repo = next(u for u in prs if int(hashlib.sha1(u.rsplit("/", 1)[1].encode()).hexdigest()[:4], 16) % 9000 + 1000 == n
-            ).split("/")[-3]      # the PR's repo (PR F), `r` unless another
+prs = json.loads((root / "prs.json").read_text()) if (root / "prs.json").exists() else {{}}
+repo = next((u for u in prs if int(hashlib.sha1(u.rsplit("/", 1)[1].encode()).hexdigest()[:4], 16) % 9000 + 1000 == n),
+            "o/r/pull/0").split("/")[-3]      # the PR's repo (PR F), `r` unless another
 target = reviews / f"o-{{repo}}" / f"pr-{{n}}"
 ALL = ["fetch", "triage", "spec", "code", "publish", "review"]
 rounds = doc["findings"]["rounds"]

@@ -165,17 +165,18 @@ def test_F_S6_user_edit_in_repo_2_s_worktree_parks_the_merge_and_is_left_alone(t
 
 def test_F_S10_review_spend_of_a_child_in_repo_2_still_counts_after_its_checkout_moved(tmp_path, monkeypatch):
     """F.S10: a (second repo) opened PR 12; the review ledger holds a $4.50
-    review of it under r2's slug, `o-r2--pr-12`. a's checkout then moves: a
-    parks (F.S5), and that review still counts in `spent_usd`, as
-    `child_status.a.slug` keeps r2's slug. `spent_usd` is that of a run whose
-    checkout never moved."""
-    steps = {"a": [{"pr_number": 12}]}
+    review of it under r2's slug, `o-r2--pr-12`, and each build spent $1. a's
+    checkout then moves: a parks (F.S5), and that review still counts in
+    `spent_usd`, as `child_status.a.slug` keeps r2's slug. `spent_usd` is
+    that of a run whose checkout never moved."""
+    steps = {"a": [{"pr_number": 12, "commit": {"a.txt": "a\n"}, "spend": 1.0}],    # pushed: `gh` reads origin
+             "b": [{"spend": 1.0}]}
     stopped, clean = FRoot(tmp_path / "stopped", monkeypatch, steps), FRoot(tmp_path / "clean", monkeypatch, steps)
     for r in (stopped, clean):
         _ledger(r.data / "reviews" / "ledger.jsonl", _finished("o-r2--pr-12", "h1", 4.5, target="/r2/pr-12"))
         assert r.run() == 3 and merge_waiting() == ["https://example.invalid/o/r2/pull/12", pr_url("e-b")]
     epic = json.loads((stopped.dir / "epic.json").read_text())
-    assert epic["spent_usd"] == 4.5
+    assert epic["spent_usd"] == 6.5 and epic["spend_complete"] is True
     assert epic["child_status"]["a"]["slug"] == "o-r2" and epic["child_status"]["b"]["slug"] == "o-r"
 
     (stopped.root / "q").rename(stopped.root / "q-moved")
@@ -184,4 +185,4 @@ def test_F_S10_review_spend_of_a_child_in_repo_2_still_counts_after_its_checkout
     moved, kept = (json.loads((r.dir / "epic.json").read_text()) for r in (stopped, clean))
     assert moved["child_status"]["a"]["status"] == "parked"
     assert moved["child_status"]["a"]["slug"] == "o-r2"
-    assert moved["spent_usd"] == kept["spent_usd"] == 4.5 and moved["spend_complete"] is True
+    assert moved["spent_usd"] == kept["spent_usd"] == 6.5 and moved["spend_complete"] is kept["spend_complete"] is True

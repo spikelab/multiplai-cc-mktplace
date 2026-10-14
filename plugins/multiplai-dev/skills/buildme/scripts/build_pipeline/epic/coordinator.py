@@ -208,7 +208,8 @@ async def base_sha(repo: Path, *, need_fetch: bool) -> str | None:
 
 def in_place_reason(project_dir: Path) -> str | None:
     """Why a child would not build in its own worktree and open a PR: the
-    project's specs/config.yaml, which every child reads, turns off
+    project's specs/config.yaml, which every child building in that project
+    reads (the epic's, or a child's own `repo`, PR F), turns off
     `git.worktree` or `git.push` (B1.S23). None when neither is off."""
     path = Path(project_dir) / "specs" / "config.yaml"
     try:
@@ -355,29 +356,37 @@ class Coordinator:
         self.slug = store.slug_repo_name(self.repo)
         for c in self.epic.children:
             self.children[c.id] = Child(c.id, list(c.depends_on))
-            self._place(self.children[c.id], c.repo)
             cached = self.epic.child_status.get(c.id)
+            self._place(self.children[c.id], c.repo, cached.slug if cached is not None else "")
             if cached is not None:
                 self.children[c.id].pr_round, self.children[c.id].conflicts = cached.pr_round, cached.conflicts
                 self.children[c.id].merge_stop, self.children[c.id].merge_park = cached.merge_stop, cached.merge_park
                 self.children[c.id].repo_park = cached.repo_park
 
-    def _place(self, c: Child, repo: str | None) -> None:
+    def _place(self, c: Child, repo: str | None, saved_slug: str = "") -> None:
         """Item 43: a child with a `repo` builds in that checkout, relative to
-        the epic's repository root; any other child in the epic's project."""
+        the epic's repository root; any other child in the epic's project.
+        Once the checkout is gone, its review slug is the one saved while it
+        was there (F.S10), so its PR's reviews still count in `spent()`."""
         if not repo:
             c.project, c.root, c.slug = self.project_dir, self.repo, self.slug
             return
         c.repo, c.project = repo, store.checkout_path(repo, self.repo)
-        c.root = git_ops.repo_root(c.project) or c.project
-        c.slug = store.slug_repo_name(c.root)
+        top = store.checkout_root(c.project)
+        c.root = top or c.project
+        c.slug = store.slug_repo_name(top) if top else (saved_slug or store.slug_repo_name(c.project))
 
     def _park_missing(self, c: Child) -> bool:
-        """F.S5: a child whose checkout is gone parks, and stays parked
-        (`repo_park`). True when it parked."""
-        if not c.repo or c.project.is_dir():
+        """F.S5: a child whose checkout is gone, or is no longer the top of a
+        checkout, parks, and stays parked (`repo_park`). True when it parked."""
+        if not c.repo:
             return False
-        c.repo_park = f"repo {c.project} not found"
+        if not c.project.is_dir():
+            c.repo_park = f"repo {c.project} not found"
+        elif store.checkout_root(c.project) is None:
+            c.repo_park = f"repo {c.project} is not a git checkout"
+        else:
+            return False
         self._park(c, c.repo_park)
         self._save()
         return True
@@ -652,7 +661,8 @@ class Coordinator:
 
     def _worktree(self, c: Child) -> Path:
         """The child's worktree: the last `WORKTREE:` line of its builds; the
-        source repo when there is none or it is gone (removed by hand)."""
+        child's repo root (the source repo's, or its own `repo`'s, PR F) when
+        there is none or it is gone (removed by hand)."""
         found = [m for a in records.attempts(self.epic_dir) if a.kind == "build" and a.child == c.id
                  for m in records.markers(a.log)]
         trees = records.marker(found, "WORKTREE")
@@ -1289,7 +1299,7 @@ class Coordinator:
         self.epic.child_status = {cid: store.ChildStatus(status=c.status, pr=c.pr, reason=c.reason,
                                                          pr_round=c.pr_round, conflicts=c.conflicts,
                                                          merge_stop=c.merge_stop, merge_park=c.merge_park,
-                                                         repo_park=c.repo_park)
+                                                         repo_park=c.repo_park, slug=c.slug)
                                   for cid, c in self.children.items()}
         self.epic.spent_usd, self.epic.spend_complete = self.spent()
         store.save_epic(self.epic_dir, self.epic)
@@ -1383,7 +1393,8 @@ class Coordinator:
     # -- the run ------------------------------------------------------------------
 
     async def run(self) -> int:
-        refused = in_place_reason(self.project_dir)
+        projects = [self.project_dir, *dict.fromkeys(c.project for c in self.children.values() if c.repo)]
+        refused = next((r for r in map(in_place_reason, projects) if r), None)    # B1.S23, each child's project
         if refused:
             log.error("EPIC %s", refused)
             print(f"ERROR:{refused}", file=sys.stderr, flush=True)
