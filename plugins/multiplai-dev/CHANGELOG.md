@@ -17,6 +17,30 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.66.0] - 2026-10-14
+
+### Added
+- Epic mode builds children in other repositories. A child's `repo` in
+  `split.md` is the path of a local checkout, absolute or relative to the
+  epic's repository root. `--approve-split` exits `1` naming the child when
+  that path is not the top of a checkout with an `origin` remote. The child
+  builds, is reviewed, fixed and merged in that repository, and its
+  repository's `specs/config.yaml` is refused (exit `2`) when it turns off
+  `git.worktree` or `git.push`, as the epic's own is; merges in two
+  repositories run at the same time; a child that depends on one in another
+  repository waits for its merge. A checkout gone after approval parks its
+  child with `repo <path> not found`, for good; the reviews its PR already
+  had still count in the epic's spend.
+
+### Changed
+- Epic mode: a child's `repo` is now a local checkout's path, no longer
+  `owner/name`. 0.65.0 asked the split for `owner/name` and ignored it,
+  building every child in the epic's own repository. An epic approved on
+  0.65.0 with an `owner/name` repo parks that child on its next run with
+  `repo <path> not found`; split it again under a new `--change` name.
+  The reviews that child's PR already had, which ran in the epic's own
+  repository, still count in the epic's spend.
+
 ## [0.65.0] - 2026-10-14
 
 ### Added

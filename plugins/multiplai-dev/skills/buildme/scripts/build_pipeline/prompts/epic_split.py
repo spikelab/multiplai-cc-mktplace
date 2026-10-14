@@ -22,7 +22,9 @@ For several, give each child:
 - `depends_on`: the ids of the children that must be merged before this one
   can start. Leave it empty when the child can start at once. No cycles.
 - `repo`: leave it out unless the child belongs in a different repository,
-  then name it `owner/name`.
+  then give the path of that repository's local checkout as the inputs name
+  it, absolute or relative to this repository's root (`../billing`). The
+  child builds there.
 - `plan`: a complete implementation plan in Markdown, in the
   `/multiplai-dev:plan` format, with every one of these sections (short is
   fine, missing is not): `# Plan: <title>`, the line
@@ -39,7 +41,7 @@ For several, give each child:
 Return ONLY JSON matching this schema:
 {{"single": true|false, "reason": "<one or two sentences>",
   "children": [{{"id": "...", "title": "...", "depends_on": ["..."],
-                 "repo": "owner/name or omitted", "plan": "# Plan: ..."}}]}}
+                 "repo": "path to a local checkout, or omitted", "plan": "# Plan: ..."}}]}}
 `children` is empty when `single` is true.
 """
 

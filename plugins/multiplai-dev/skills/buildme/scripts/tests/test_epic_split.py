@@ -368,6 +368,10 @@ class TestApproval:
         text = split_md.read_text()
         assert "| api | Child api | — | — |" in text
         split_md.write_text(text.replace("| api | Child api | — | — |", "| api | Child api | — | org/other |"))
+        other = config.project_dir / "org" / "other"                   # PR F: a repo is a checkout with origin
+        other.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=other, check=True)
+        subprocess.run(["git", "remote", "add", "origin", "https://example.invalid/org/other.git"], cwd=other, check=True)
         assert run_build(config, args_for(config, approve_split=True)) == 0
         saved = json.loads((epic / "epic.json").read_text())
         assert [c["repo"] for c in saved["children"]] == ["org/other", None, None]

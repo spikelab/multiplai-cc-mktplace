@@ -157,6 +157,9 @@ async def continue_epic(config, state, args, *, just_split: bool = False) -> int
     epic_json = epic_dir / store.EPIC_FILE
     if epic.state == "proposed":
         children, errors = store.read_children(epic_dir)
+        if not errors:            # item 43: a child's repo is a checkout with origin
+            from .coordinator import _source_repo
+            errors = store.repo_errors(children, _source_repo(config, state))
         if errors:
             _error("the split cannot be approved: " + "; ".join(errors))
             return EXIT_FAILED
