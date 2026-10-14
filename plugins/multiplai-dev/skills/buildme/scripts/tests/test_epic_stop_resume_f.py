@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from build_pipeline.config import EpicSettings
-from build_pipeline.epic import coordinator, records
+from build_pipeline.epic import coordinator, records, store
 from build_pipeline.epic import lock as epic_lock
 from build_pipeline.epic.split import EpicSplitAnswer
 
@@ -186,3 +186,34 @@ def test_F_S11_review_spend_of_a_child_in_repo_2_still_counts_after_its_checkout
     assert moved["child_status"]["a"]["status"] == "parked"
     assert moved["child_status"]["a"]["slug"] == "o-r2"
     assert moved["spent_usd"] == kept["spent_usd"] == 6.5 and moved["spend_complete"] is kept["spend_complete"] is True
+
+
+def test_F_S11_review_spend_of_a_child_approved_on_0_65_still_counts(tmp_path, monkeypatch):
+    """F.S11 for an epic approved on 0.65.0: its split prompt asked for
+    `repo: owner/name`, but every child was built and reviewed in the epic's
+    own repo, so a's PR 12 has its $4.50 review under the epic's slug,
+    `o-r--pr-12`, and its `child_status` has no `slug`. On this version
+    `o/r2` is read as a path that does not exist: a parks (F.S5), its slug
+    falls back to the epic's, and that review still counts in `spent_usd`."""
+    steps = {"a": [{"pr_number": 12, "commit": {"a.txt": "a\n"}, "spend": 1.0}], "b": [{"spend": 1.0}]}
+    r = FRoot(tmp_path, monkeypatch, steps, answer=EpicSplitAnswer(single=False, reason="One repo.",
+                                                                    children=[child("a"), child("b")]))
+    _ledger(r.data / "reviews" / "ledger.jsonl", _finished("o-r--pr-12", "h1", 4.5, target="/r/pr-12"))
+    assert r.run() == 3
+    assert json.loads((r.dir / "epic.json").read_text())["spent_usd"] == 6.5
+
+    epic = store.load_epic(r.dir)                         # as 0.65.0 approved and saved it
+    epic.children[0].repo = "o/r2"
+    for status in epic.child_status.values():
+        status.slug = ""
+    store.write_split(r.dir, epic)
+    epic.hashes = store.file_hashes(r.dir, epic.children)
+    store.save_epic(r.dir, epic)
+    assert json.loads((r.dir / "epic.json").read_text())["child_status"]["a"].get("slug", "") == ""
+
+    r.run()
+    after = json.loads((r.dir / "epic.json").read_text())
+    assert after["child_status"]["a"]["status"] == "parked"
+    assert after["child_status"]["a"]["repo_park"] == f"repo {r.project / 'o' / 'r2'} not found"
+    assert after["child_status"]["a"]["slug"] == "o-r"
+    assert after["spent_usd"] == 6.5 and after["spend_complete"] is True
