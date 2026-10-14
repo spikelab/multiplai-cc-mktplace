@@ -27,11 +27,13 @@ of records each:
    re-reviews post, so its rounds act on, only what the epic blocks on.
    `<left>` is `epic.max_usd` less the epic's spend at the launch and less
    what the fixers still running were given and have not yet spent on their
-   PRs' reviews (none without `epic.max_usd`; while they hold all of it, the
-   fixer waits for them): `findings` stops before a round once its own spend
-   and its reviews' have reached it and a fetch found something to act on,
-   exit 0 with `FINDINGS:BUDGET:<rounds>:<usd>`, and the coordinator takes
-   that as the epic's budget reached.
+   PRs' reviews, rounded to 6 decimals (none without `epic.max_usd`; while
+   they hold all of it, the fixer waits for them): `findings` stops before a
+   round once its own spend and its reviews' have reached it and a fetch
+   found something to act on, exit 0 with `FINDINGS:BUDGET:<rounds>:<usd>`.
+   The coordinator takes that as the epic's budget reached when the epic's
+   spend is at `epic.max_usd`; under it, the fixer used up only its share,
+   and it runs again once the others end.
 
 Then the coordinator's review step reads the PR's head again and reuses the
 fixer's last review. The steps that run these are `Coordinator._fix` and

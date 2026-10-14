@@ -516,3 +516,44 @@ def test_the_merge_agent_waits_while_running_fixers_hold_what_is_left(tmp_path, 
     r.point, r.agent = point, timed
     assert r.run() == 0 and r.merged()
     assert len(r.calls("merge-agent")) == 1 and early == []
+
+
+def _holding(monkeypatch, spent: float, share: float, at_launch: float, now: float):
+    """A coordinator under a $20 cap with one running fixer (child a) given
+    *share*, its PR's reviews *at_launch* when launched and *now* since:
+    `spent` and the PR's reviews are fakes, the rest is the real code."""
+    from build_pipeline.epic import coordinator
+
+    coord = object.__new__(coordinator.Coordinator)
+    coord.settings = EpicSettings(max_parallel=2, max_review_rounds=6, max_usd=20.0)
+    coord.children = {"a": None, "b": None}
+    coord.shares = {"a": coordinator.Share(share, at_launch)}
+    coord.budget_stop = None
+    monkeypatch.setattr(coordinator.Coordinator, "spent", lambda self: (spent, True))
+    monkeypatch.setattr(coordinator.Coordinator, "_pr_reviews", lambda self, c: now)
+    return coord
+
+
+def test_float_noise_never_lifts_the_hold_or_gives_a_share_of_zero(monkeypatch):
+    """Ledger costs have 6 decimals, but adding them leaves noise. Here $20
+    was the cap, $0.697137 spent when a's fixer was given $19.302863 with its
+    PR's reviews at $3.414154; another $2.639316 of its reviews has since
+    finished, so $3.336453 is spent and a still holds $16.663547: all that is
+    left. Unrounded, spent + held is about 4e-15 under the cap, so the hold
+    lifted while a held its share, and b's fixer was given about 4e-15,
+    passed as `--max-usd 0.000000`, which stopped at once (`FINDINGS:BUDGET`)
+    and was relaunched at once, in a loop, until a ended."""
+    coord = _holding(monkeypatch, 3.336453, 19.302863, 3.414154, 3.414154 + 2.639316)
+    assert coord._held_back()
+    assert coord._left("b") == 0.0
+    assert not coord._over_budget()
+
+
+def test_a_share_under_a_millionth_of_a_dollar_counts_as_none(monkeypatch):
+    """What is left is rounded to the 6 decimals `--max-usd` is passed with:
+    $0.0000004 left is $0, so the fixer waits instead of being launched with
+    `--max-usd 0.000000`; $0.000001 is a share."""
+    coord = _holding(monkeypatch, 10.0, 9.9999996, 0.0, 0.0)
+    assert coord._left("b") == 0.0 and coord._held_back()
+    coord = _holding(monkeypatch, 10.0, 9.999999, 0.0, 0.0)
+    assert coord._left("b") == 0.000001 and not coord._held_back()

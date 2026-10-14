@@ -1559,14 +1559,18 @@ class Coordinator:
         """What the running fixers (but *but*'s) were given and have not yet
         spent on their PRs' reviews. `spent` does not count a running fixer's
         own spend until it ends, and counts its PR's reviews as they finish,
-        so this is the part of the cap they may still spend."""
-        return sum(max(s.usd - (self._pr_reviews(self.children[cid]) - s.reviews), 0.0)
-                   for cid, s in self.shares.items() if cid != but)
+        so this is the part of the cap they may still spend. Rounded to 6
+        decimals, as `spent` is, so adding ledger costs leaves no float noise."""
+        return round(sum(max(s.usd - (self._pr_reviews(self.children[cid]) - s.reviews), 0.0)
+                         for cid, s in self.shares.items() if cid != but), 6)
 
-    def _left(self, cid: str) -> float:
+    def _left(self, cid: str | None = None) -> float:
         """What a fixer for *cid* may be given: `epic.max_usd` less the spend
-        and less what the other running fixers hold (`_held`)."""
-        return self.settings.max_usd - self.spent()[0] - self._held(cid)
+        and less what the other running fixers hold (`_held`; with no *cid*,
+        all of them). Rounded to the 6 decimals `--max-usd` is passed with, so
+        a share under half a millionth of a dollar is 0 and the fixer waits
+        rather than being launched with `--max-usd 0.000000`."""
+        return round(self.settings.max_usd - self.spent()[0] - self._held(cid), 6)
 
     def _held_back(self) -> bool:
         """True while running fixers hold all that is left of `epic.max_usd`:
@@ -1574,7 +1578,7 @@ class Coordinator:
         merge agent), as it would spend their share. Not a budget stop: once
         they end, their real spend decides."""
         ceiling = self.settings.max_usd
-        return ceiling is not None and bool(self.shares) and self.spent()[0] + self._held() >= ceiling
+        return ceiling is not None and bool(self.shares) and self._left() <= 0
 
     async def _unheld(self) -> bool:
         """Before a launch from inside a step (a review, a resume, the merge
