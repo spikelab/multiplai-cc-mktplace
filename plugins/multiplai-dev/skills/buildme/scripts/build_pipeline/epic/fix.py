@@ -86,10 +86,10 @@ STOPPED_EXITS = frozenset(128 + s for s in (signal.SIGHUP, signal.SIGKILL, signa
 ENDED = re.compile(r"^FINDINGS:(?:DONE|MAX_ROUNDS):\d+$", re.MULTILINE)
 
 
-def stopped(code: int) -> bool:
+def stopped(code: int | None) -> bool:
     """Whether exit *code* is a fixer, review or post stopped by a signal:
-    killed (< 0) or one of STOPPED_EXITS."""
-    return code < 0 or code in STOPPED_EXITS
+    killed (< 0) or one of STOPPED_EXITS. None (it could not start) is not."""
+    return code is not None and (code < 0 or code in STOPPED_EXITS)
 
 
 def ended(text: str) -> str | None:

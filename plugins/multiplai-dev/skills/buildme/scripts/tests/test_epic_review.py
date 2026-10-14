@@ -501,7 +501,7 @@ def test_a_review_that_cannot_read_git_or_github_leaves_the_child_unknown(tmp_pa
     as the coordinator's own: the child is `unknown`, the run exits 1, nothing
     is parked, and the next run reviews the head."""
     e = Epic(tmp_path, monkeypatch, reviews={str(N): [{"exit": 2, "stderr": stderr}, {"findings": [high()]}]})
-    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
+    assert e.run() == 1
     st = e.child_status("a")
     assert st["status"] == "unknown" and stderr.splitlines()[0] in st["reason"]
     assert "EPIC: child a unknown: " in capsys.readouterr().err

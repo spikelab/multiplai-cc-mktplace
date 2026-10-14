@@ -38,7 +38,7 @@ CHAIN = EpicSplitAnswer(single=False, reason="Two parts.", children=[child("a"),
 
 
 def plugin(version: str) -> str:
-    return json.dumps({"name": "x", "version": version}) + "\n"
+    return json.dumps({"name": "x", "version": version}, indent=2) + "\n"
 
 
 def changelog(*entries: tuple[str, str]) -> str:
@@ -103,12 +103,10 @@ class FakeAgent:
 
 
 class MergeRoot:
-    """A repo whose main holds BASE, an approved chain (b waits on a), a's
-    build committing *child*, and a test command (`fake-tests`, answering
-    *tests*) unless *command* is None. *main* is pushed onto origin's main
-    when a's merge step starts (the `start` seam), so its merge has something
-    to merge. *sub*: the project is that subdirectory of the repo, and every
-    path in *child_files*, *main* and the default agent's answers is under it;
+    """Main holds BASE; an approved chain (b waits on a); a's build commits
+    *child_files*; test command `fake-tests` (answering *tests*) unless
+    *command* is None. *main* is pushed onto origin's main at the `start`
+    seam. *sub*: the project's subdirectory, holding every path above;
     *outside* is pushed with *main* at the repo root."""
 
     def __init__(self, root: Path, monkeypatch, *, child_files=CHILD, main=MAIN, tests=None, agent=None,
@@ -201,6 +199,10 @@ def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(tmp_path
     assert r.status()["status"] == "built" and r.status()["merge_stop"] is None
     assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]      # its own merge: not reviewed again
     assert len(r.tries("review")) == 1 and len(r.calls("merge-agent")) == 1 and len(r.step_pushes()) == 1
+    (r.w / "app.py").write_text("x = 'not reviewed'\n")      # the same merge carrying a person's edit is reviewed
+    git(r.w, "-c", "commit.gpgsign=false", "commit", "-q", "--amend", "--no-edit", "--", "app.py")
+    assert not merge.merges_onto(r.w, git(r.w, "rev-parse", "HEAD").strip(), r.tries("review")[-1].started["head_sha"],
+                                 "main")
 
 
 def test_a_branch_up_to_date_with_main_waits_with_no_tests_and_no_push(tmp_path, monkeypatch):
@@ -287,22 +289,75 @@ def test_no_test_command_commits_and_pushes(tmp_path, monkeypatch):
     assert r.origin("plugin.json") == RESOLVED["plugin.json"]
 
 
-def test_an_agent_that_leaves_a_marker_or_edits_another_file_parks(tmp_path, monkeypatch):
+def test_an_agent_that_leaves_a_marker_parks(tmp_path, monkeypatch):
     r = MergeRoot(tmp_path, monkeypatch, agent=None)
-    r.agent = FakeAgent(tmp_path, {"plugin.json": RESOLVED["plugin.json"]},
-                        stop=lambda w: (w / "app.py").write_text("x = 9\n") and None)
+    r.agent = FakeAgent(tmp_path, {"plugin.json": RESOLVED["plugin.json"]})
     assert r.run() == 0
     assert r.status()["reason"] == ("the merge agent left conflicts in CHANGELOG.md; "
                                     f"git -C {r.w} merge --abort, then re-run")
     assert r.step_pushes() == [] and r.tries("merge-tests") == []
 
 
+@pytest.mark.parametrize("staged", [False, True], ids=["unstaged", "staged"])
+def test_an_agent_that_edits_another_file_parks_staged_or_not(tmp_path, monkeypatch, staged):
+    """40.3: the agent resolves every conflict and also changes `app.py`,
+    staging it itself (it has Bash) or not. Parks; nothing pushed."""
+    def edit(w):
+        (w / "app.py").write_text("x = 9\n")
+        staged and git(w, "add", "--", "app.py")
+
+    r = MergeRoot(tmp_path, monkeypatch, agent=None)
+    r.agent = FakeAgent(tmp_path, RESOLVED, stop=edit)
+    assert r.run() == 0
+    assert r.status()["reason"] == f"the merge agent changed files it may not: app.py; {merge.abort_hint(r.w)}"
+    assert r.step_pushes() == [] and r.tries("merge-tests") == []
+
+
+def test_40_1_parks_a_worktree_behind_the_reviewed_head(tmp_path, monkeypatch):
+    """40.1: the review passed at a head pushed from another clone, which <W>
+    lacks; its HEAD, older, is on `origin/<branch>`. Parks; nothing merged."""
+    r = MergeRoot(tmp_path, monkeypatch, merge_mode="manual")
+    assert r.run() == 3
+    prs = json.loads((r.root / "prs.json").read_text())
+    prs[pr_url("e-a")]["head"] = push_files(r.root, {"other.py": "y = 1\n"}, "another clone", branch="buildme/e-a")
+    (r.root / "prs.json").write_text(json.dumps(prs))
+    r.config.epic = EpicSettings(max_parallel=2, merge="auto")
+    assert r.run() == 0
+    assert "is not the reviewed head" in r.status()["reason"] and r.status()["merge_park"]
+    assert not r.merging() and r.calls("merge-tests") == [] and r.step_pushes() == []
+
+
+def test_a_push_failing_for_another_reason_is_not_parked_and_the_next_run_pushes(tmp_path, monkeypatch, caplog):
+    """Origin's hook refuses the push, its branch unmoved: git's words, no park
+    (the PR stays waited on); the next run retests and pushes (item 37, E.S6)."""
+    r = MergeRoot(tmp_path, monkeypatch)
+    hook = r.root / "o" / "r.git" / "hooks" / "pre-receive"
+
+    def refusing(coord, c, name):
+        r.point(coord, c, name)
+        name == "push" and hook.write_text("#!/bin/sh\necho 'denied by policy' >&2\nexit 1\n") and hook.chmod(0o755)
+
+    r.use()
+    monkeypatch.setattr(coordinator, "_merge_point", refusing)
+    assert run_coordinator(r.config) == 3 and merge_waiting() == [pr_url("e-a")]
+    assert "child a: cannot push the merge: git push failed: remote: denied by policy" in caplog.text
+    assert r.status()["status"] == "built" and not r.status()["merge_park"] and r.step_pushes()
+    hook.unlink()
+    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert len(r.step_pushes()) == 2 and len(r.tries("merge-tests")) == 2 and len(r.calls("merge-agent")) == 1
+    assert r.origin("plugin.json") == RESOLVED["plugin.json"]
+
+
 def test_may_resolve_only_versions_changelogs_and_lockfiles(tmp_path):
-    (tmp_path / "pyproject.toml").write_text('<<<<<<< HEAD\nversion = "0.2.0"\n=======\nversion = "0.1.1"\n>>>>>>> x\n')
-    (tmp_path / "app.py").write_text("<<<<<<< HEAD\nx = 3\n=======\nx = 2\n>>>>>>> x\n")
+    sides = {"pyproject.toml": 'version = "0.2.0"|version = "0.1.1"', "p.json": '"version": "2",|"version": "1",',
+             "v.py": '__version__ = "2.0"|__version__ = "1.9"', "app.py": "x = 3|x = 2",
+             "rate.py": "r = conversion(3)|r = conversion(2)", "changelog_tool.py": "x = 3|x = 2",
+             "compat.py": "if sys.version_info < (3, 10):|if sys.version_info < (3, 9):"}
+    for name, both in sides.items():
+        (tmp_path / name).write_text("<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> x\n".format(*both.split("|")))
     (tmp_path / "clean.json").write_text('{"version": "1"}\n')
-    assert [merge.may_resolve(tmp_path, f) for f in ("pyproject.toml", "app.py", "clean.json", "a/uv.lock",
-                                                     "docs/CHANGELOG.md")] == [True, False, False, True, True]
+    assert [f for f in (*sides, "clean.json", "a/uv.lock", "docs/CHANGELOG.md") if merge.may_resolve(tmp_path, f)] \
+        == ["pyproject.toml", "p.json", "v.py", "a/uv.lock", "docs/CHANGELOG.md"]
 
 
 # --- 40.1 after a real fix round (item 42) ------------------------------------------
@@ -338,7 +393,7 @@ async def test_a_child_that_had_a_fix_round_passes_40_1_and_an_extra_file_parks_
     with _Stubs(block_stubs(repo)):
         assert await loop.run_findings(run) == 0, lines
     head = git(repo, "rev-parse", "HEAD").strip()
-    assert merge.ready(repo, head, "refs/remotes/origin/buildme/calc") is None
+    assert merge.ready(repo, head, "refs/remotes/origin/buildme/calc", "main") is None
     (repo / "notes.txt").write_text("mine\n")
-    assert "notes.txt" in merge.ready(repo, head, "refs/remotes/origin/buildme/calc")
+    assert "notes.txt" in merge.ready(repo, head, "refs/remotes/origin/buildme/calc", "main")
     assert os.path.exists(repo / "notes.txt")

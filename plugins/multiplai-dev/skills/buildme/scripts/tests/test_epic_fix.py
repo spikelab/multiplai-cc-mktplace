@@ -599,7 +599,7 @@ def test_ps_failing_while_a_fixer_may_still_run_launches_nothing(tmp_path, monke
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     e.fixes()[0].result_path.unlink()
     e.fakes.ps_fails(monkeypatch)
-    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
+    assert e.run() == 1
     assert len(e.fakes.fix_launches()) == 1
     st = e.status()
     assert st["status"] == "unknown" and st["reason"].startswith("cannot tell whether its fixer is still running")

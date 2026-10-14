@@ -188,9 +188,9 @@ def test_children_never_build_in_place(tmp_path, monkeypatch, capsys, key):
 
 def test_a_failure_is_relaunched_once_per_invocation(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit": 1}]})
-    assert e.run() == 3 and merge_waiting() == [pr_url("e-b"), pr_url("e-c")]
+    assert e.run() == 1
     assert e.launches().count("a") == 2 and e.status()["a"] == "failed"
-    assert e.run() == 3 and merge_waiting() == [pr_url("e-b"), pr_url("e-c")]
+    assert e.run() == 1
     assert e.launches().count("a") == 3
 
 

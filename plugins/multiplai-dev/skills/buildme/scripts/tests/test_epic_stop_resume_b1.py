@@ -350,7 +350,7 @@ def test_B1_S21_a_failing_ps_never_counts_a_live_child_as_gone(tmp_path, monkeyp
     launch for it, status `unknown`, exit 1. The next run checks again: as B1.S4."""
     stopped, clean = _roots(tmp_path, monkeypatch, {"a": [{"block": True}, {}]})
     stopped.killed(die_at(coordinator, "_tick"))
-    assert stopped.run(ps_fails=True) == 3 and merge_waiting() == [pr_url("e-b")]
+    assert stopped.run(ps_fails=True) == 1
     assert stopped.fakes.attempts("a") == 1 and stopped.status()["a"] == "unknown"
     assert records_snapshot(stopped.dir, stopped.root)["a"][0][2] == "no result"
     assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
@@ -364,7 +364,7 @@ def test_B1_S21_a_failing_ps_while_polling_an_adopted_child(tmp_path, monkeypatc
     `unknown`, exit 1. The next run checks again: as B1.S4."""
     stopped, clean = _roots(tmp_path, monkeypatch, {"a": [{"block": True}, {}]})
     stopped.killed(die_at(coordinator, "_tick"))
-    assert stopped.run(lambda coord: stopped.fakes.ps_fails(monkeypatch)) == 3 and merge_waiting() == [pr_url("e-b")]
+    assert stopped.run(lambda coord: stopped.fakes.ps_fails(monkeypatch)) == 1
     assert stopped.fakes.attempts("a") == 1 and stopped.status()["a"] == "unknown"
     reason = json.loads((stopped.dir / "epic.json").read_text())["child_status"]["a"]["reason"]
     assert reason.startswith("cannot tell whether its build is still running")

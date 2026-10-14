@@ -1,16 +1,12 @@
 """Row tests for PR E1's "Stop and resume states" table
 (plan-buildme-epic-mode-2026-10-12.md, rows marked `Test: yes`: E.S2-E.S7,
-E.S12, E.S18 and E.S21; E.S17 is PR E2's).
+E.S12, E.S18, E.S21, and E.S22-E.S23, which the PR adds; E.S17 is E2's).
 
 Each case stops the coordinator at the row's point (an exception at a seam, a
-signal, or a forked child exiting 137 as SIGKILL would), resumes, and either
-compares with the same scenario run without a stop in a second temporary root
-(the epic directory, the records per child, the last summary, the launches
-and writing calls, and the child's worktree), allowing only the differences
-the row's "Resume does" names, or, for a refusal, checks that the resume left
-the worktree as it found it (`row_helpers.repo_state`). Git is real; the build,
-`gh`, the review and the test command are fakes first on PATH and the merge
-agent is `test_epic_merge.FakeAgent`.
+signal, or a forked child exiting 137), resumes, and compares with a run that
+never stopped, allowing only what the row's "Resume does" names, or, for a
+refusal, checks the worktree is as it was (`row_helpers.repo_state`). Fakes
+as in `test_epic_merge`.
 """
 
 from __future__ import annotations
@@ -38,7 +34,7 @@ from .epic_row_helpers import (
     run_signalled,
 )
 from .row_helpers import assert_same_as_unstopped, repo_state
-from .test_epic_merge import RESOLVED, FakeAgent, MergeRoot, _stop_after_the_merge, git, push_files
+from .test_epic_merge import MAIN, RESOLVED, FakeAgent, MergeRoot, _stop_after_the_merge, git, push_files
 
 AGENT = ["merge", "CHANGELOG.md", "plugin.json"]
 TESTS = ["fake-tests"]
@@ -70,13 +66,15 @@ def _launches(r: MergeRoot) -> list[str]:
     return sorted(json.dumps(x, sort_keys=True).replace(str(r.root), "<root>") for x in calls)
 
 
-def _assert_same(stopped: MergeRoot, clean: MergeRoot, merges: list[tuple], *, extra: tuple[str, ...] = ()) -> None:
+def _assert_same(stopped: MergeRoot, clean: MergeRoot, merges: list[tuple], *, extra: tuple[str, ...] = (),
+                 unpaid: int = 0) -> None:
     """Equal epic files, summary, non-merge records and worktree; the stopped
     root's merge records are *merges* (kind, argv, exit code or None to skip,
     interrupted), the clean root's the usual pair; launches equal plus one
-    more of each kind in *extra*, and $0.50 more spent for each agent call in it."""
+    more of each kind in *extra*, and $0.50 more spent for each agent call in
+    it but *unpaid* (cancelled) ones."""
     s, c = _snapshot(stopped), _snapshot(clean)
-    paid = 0.5 * extra.count("merge-agent")          # each agent call spends $0.50 (FakeAgent)
+    paid = 0.5 * (extra.count("merge-agent") - unpaid)          # each agent call spends $0.50 (FakeAgent)
     for spent in (s["epic"]["epic.json"], s["summary"]):
         assert spent["spent_usd"] == c["summary"]["spent_usd"] + paid
         spent["spent_usd"] -= paid
@@ -145,7 +143,8 @@ def test_E_S2_stopped_with_conflicts_aborts_and_merges_again(tmp_path, monkeypat
 
 def test_E_S3_signalled_during_the_agent_aborts_and_pays_for_one_more_call(tmp_path, monkeypatch):
     """E.S3: SIGTERM while the merge agent runs, its edits on disk. As E.S2;
-    one more agent call and `merge` pair, the first `interrupted`."""
+    one more agent call and `merge` pair, the first `interrupted` with its
+    spend unknown (a cancelled call records none), never counted as $0."""
     stopped, clean = _roots(tmp_path, monkeypatch)
     stopped.agent = FakeAgent(stopped.root, RESOLVED, stop=_block)
     _signalled(stopped, lambda: bool(stopped.calls("merge-agent")))
@@ -154,7 +153,25 @@ def test_E_S3_signalled_during_the_agent_aborts_and_pays_for_one_more_call(tmp_p
     stopped.agent = FakeAgent(stopped.root, RESOLVED)
     _ends_waiting(stopped, clean)
     _assert_same(stopped, clean, [("merge", AGENT, None, True), ("merge", AGENT, 0, False),
-                                  ("merge-tests", TESTS, 0, False)], extra=("merge-agent",))
+                                  ("merge-tests", TESTS, 0, False)], extra=("merge-agent",), unpaid=1)
+    assert stopped.tries("merge")[0].result["spend"] is None
+
+
+def test_E_S3_the_agent_s_lockfile_edit_kept_by_the_abort_is_merged_again(tmp_path, monkeypatch):
+    """E.S3, the agent having rewritten `uv.lock`, which main left alone, so the
+    abort keeps it: item 38 restarts at 40.2 (40.1 would refuse it)."""
+    r = MergeRoot(tmp_path, monkeypatch, main={k: v for k, v in MAIN.items() if k != "uv.lock"})
+
+    async def lockfile_then_block(w):
+        (w / "uv.lock").write_text("lock 3\n")
+        await _block(w)
+
+    r.agent = FakeAgent(tmp_path, RESOLVED, stop=lockfile_then_block)
+    _signalled(r, lambda: bool(r.calls("merge-agent")) and (r.w / "uv.lock").read_text() == "lock 3\n")
+    assert "uv.lock" in r.status()["merge_stop"]["edits"]
+    r.agent = FakeAgent(tmp_path, RESOLVED)
+    _ends_waiting(r)
+    assert len(r.calls("merge-agent")) == 2 and len(r.step_pushes()) == 1 and r.origin("uv.lock") == "lock 3\n"
 
 
 def test_E_S4_killed_during_the_agent_parks_and_touches_nothing(tmp_path, monkeypatch):
@@ -181,6 +198,23 @@ def test_E_S5_signalled_during_the_tests_merges_again(tmp_path, monkeypatch):
     clean_tests.write_text("[]")
     _signalled(stopped, lambda: (stopped.root / "test-attempts" / "1").exists())
     assert stopped.status()["merge_stop"] is not None and stopped.merging()
+    _ends_waiting(stopped, clean)
+    _assert_same(stopped, clean, [("merge", AGENT, 0, False), ("merge-tests", TESTS, None, True),
+                                  ("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False)],
+                 extra=("merge-agent", "merge-tests"))
+
+
+def test_E_S23_sighup_during_the_tests_ends_them_with_the_run(tmp_path, monkeypatch):
+    """E.S23 (a row this PR adds): SIGHUP while the tests run. Unlike a build,
+    they are killed with the run, so the resume (E.S5) never runs two at once."""
+    stopped, clean = _roots(tmp_path, monkeypatch, tests=[{"block": True}, {}])
+    (clean.root / "tests.json").write_text("[]")
+    stopped.use()
+    started = stopped.root / "test-attempts" / "1"
+    assert run_signalled(lambda: run_coordinator(stopped.config), started.exists, signal.SIGHUP) == 128 + signal.SIGHUP
+    (stopped.root / "release").mkdir(exist_ok=True)
+    (stopped.root / "release" / "tests-1").write_text("")      # ends the tests if they were left running
+    assert [(t.result or {}).get("exit_code") for t in stopped.tries("merge-tests")] == [-signal.SIGKILL]
     _ends_waiting(stopped, clean)
     _assert_same(stopped, clean, [("merge", AGENT, 0, False), ("merge-tests", TESTS, None, True),
                                   ("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False)],

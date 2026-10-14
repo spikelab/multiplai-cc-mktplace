@@ -27,8 +27,8 @@ time, not derived from a tag.
   lockfiles are resolved by one agent call (model step `merge`, counted
   against `epic.max_usd`); a conflict in any other file parks the child. The
   project's tests then run (`tdd.test_command`, else the discovered command),
-  and the merge commit is pushed, never forced. A failed test run, a rejected
-  push or a refused check parks the child, which stays parked. A run stopped
+  and the merge commit is pushed, never forced. A failed test run, a push
+  rejected because the branch moved, or a refused check parks the child, which stays parked; any other failed push is tried again by the next run. A merge commit holding more than git's own merge and those resolutions, such as a person's, is reviewed again. A run stopped
   during the merge saves the worktree's state; the next run aborts and merges
   again only when nothing else changed there, and otherwise parks with the
   command to run. The PR itself is not merged yet: it waits for a person.
@@ -37,7 +37,7 @@ time, not derived from a tag.
 - Under `epic.merge: manual` (the default), a child PR whose review left no
   blockers is now waited on: the run exits `3` with
   `EPIC:MERGE_WAITING:<urls>` naming every such PR still open, where it
-  used to exit `0` (or `1` beside a failed child) with the PR open.
+  used to exit `0` with the PR open. A failed or `unknown` child still exits `1`.
 
 ## [0.63.0] - 2026-10-13
 
