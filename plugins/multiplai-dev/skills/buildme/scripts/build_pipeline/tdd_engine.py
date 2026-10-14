@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -1389,7 +1390,7 @@ def _enforce_test_integrity(
     progress: ProgressWriter,
     block_idx: int,
     window: str,
-    report: str,
+    report: str | Sequence[str],
 ) -> bool:
     """Apply `unchanged_tests_gate` at one of the two writable windows.
 
@@ -1398,8 +1399,10 @@ def _enforce_test_integrity(
     the tests survived until the first review, not until the block is done.
 
     *report* is the output of the agents that wrote during THIS window only
-    (in the implement window, the implementer and every integration fixer),
-    not the accumulated `block.implementer_report`. Scanning the accumulation would
+    (in the implement window, a list: the implementer's report and each
+    integration fixer's, parsed one by one so a bare marker at the end of one
+    cannot take the next one's first line as its reason), not the accumulated
+    `block.implementer_report`. Scanning the accumulation would
     let one `TEST CHANGE REQUIRED:` declared during implement silently
     authorize every later review-fix mutation for the rest of the block — the
     exact hole the per-window re-baseline exists to close.
@@ -1519,7 +1522,7 @@ async def _run_integration_and_review(
     # if the suite is no longer the one that went red.
     if not _enforce_test_integrity(block, config, state, progress, block_idx,
                                    "implement",
-                                   "\n\n".join([block.implementer_report, *fix_reports])):
+                                   [block.implementer_report, *fix_reports]):
         return False
 
     # GREEN evidence: the suite passing with the implementation in place —

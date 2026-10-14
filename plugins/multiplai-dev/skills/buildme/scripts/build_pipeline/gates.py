@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 from .models import GateResult, ImplementationNote, ReviewGatePolicy, ReviewResult
@@ -838,10 +839,14 @@ _NOT_A_REASON_RE = re.compile(
 def parse_test_change_claims(report: str) -> list[str]:
     """The reasons an implementer declared for changing a test file.
 
-    A marker left alone on its line takes the next non-blank line as its
-    reason, unless that line is a slot label, another declaration or a fence.
+    A marker left alone on its line takes the next non-blank line of *report*
+    as its reason, unless that line is a slot label, another declaration or a
+    fence. So pass one agent's report at a time: in two reports joined, a bare
+    marker at the end of the first would take the second's first line.
     An echo of the prompt's template (`<reason>`) and an empty answer
-    (`none`, `tbd` or any other `_EMPTY_SLOT_VALUES` entry) declare nothing.
+    (`none`, `tbd`, `no` or any other `_EMPTY_SLOT_VALUES` entry, also with a
+    trailing parenthesis or full stop, as in `None (no test files modified)`)
+    declare nothing.
     """
     lines = (report or "").splitlines()
     claims = []
@@ -856,7 +861,8 @@ def parse_test_change_claims(report: str) -> list[str]:
                 reason = re.sub(r"^" + _LIST_PREFIX, "", following).strip()
         if reason.startswith("<") and reason.endswith(">"):
             continue
-        if reason.lower() in _EMPTY_SLOT_VALUES:
+        bare = re.sub(r"\s*\(.*\)$", "", reason).rstrip(" .").lower()
+        if bare in _EMPTY_SLOT_VALUES or bare == "no":
             continue
         claims.append(reason)
     return claims
@@ -865,7 +871,7 @@ def parse_test_change_claims(report: str) -> list[str]:
 def unchanged_tests_gate(
     before: dict[str, str],
     after: dict[str, str],
-    implementer_report: str = "",
+    implementer_report: str | Sequence[str] = "",
 ) -> GateResult:
     """Fail when the tests that gated this block changed after they gated it.
 
@@ -885,6 +891,8 @@ def unchanged_tests_gate(
         before: {test file path: sha256} snapshotted when the RED gate passed.
         after: the same map recomputed now.
         implementer_report: checked for the TEST CHANGE REQUIRED escape hatch.
+            One report, or a list of the reports of every agent that wrote in
+            this window; each is parsed on its own (`parse_test_change_claims`).
 
     Returns a passing gate when nothing was snapshotted (no test command, or a
     checkpoint predating this gate) — an unverifiable gate reports that it did
@@ -908,7 +916,9 @@ def unchanged_tests_gate(
             metadata={"checked": True, "files": len(before)},
         )
 
-    claims = parse_test_change_claims(implementer_report)
+    reports = ([implementer_report] if isinstance(implementer_report, str)
+               else implementer_report)
+    claims = [c for r in reports for c in parse_test_change_claims(r)]
     detail = ", ".join(mutated + [f"{p} (deleted)" for p in deleted])
     if claims:
         # Declared, so not a silent mutation — but a declaration is a claim,

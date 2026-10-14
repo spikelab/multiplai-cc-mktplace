@@ -20,6 +20,7 @@ import pytest
 
 from build_pipeline.config import BuildConfig
 from build_pipeline.gates import (
+    _EMPTY_SLOT_VALUES,
     TEST_CHANGE_MARKER,
     parse_implementation_note,
     parse_searched,
@@ -216,6 +217,10 @@ NOT_DECLARATIONS = {
     "echoed fenced template": (
         f"STATUS: DONE\nSPEC_IMPACT: none\n```\n{TEST_CHANGE_MARKER} <reason>\n```\n"),
     "none": f"STATUS: DONE\n{TEST_CHANGE_MARKER} none\n",
+    "none, explained": (
+        f"STATUS: DONE\n{TEST_CHANGE_MARKER} None (no test files modified)\n"),
+    "no": f"STATUS: DONE\n{TEST_CHANGE_MARKER} no\n",
+    "no, explained": f"STATUS: DONE\n{TEST_CHANGE_MARKER} No. (all edits in src/)\n",
     "empty": f"STATUS: DONE\n{TEST_CHANGE_MARKER}\n",
     "prose mention": (
         f"I changed no test, so no {TEST_CHANGE_MARKER} line is needed.\n"),
@@ -239,6 +244,20 @@ def test_a_mention_or_echo_is_not_a_declaration(name):
     gate = unchanged_tests_gate({TEST_FILE: "a"}, {TEST_FILE: "b"}, report)
     assert not gate.passed
     assert gate.action == "restore_tests"
+
+
+@pytest.mark.parametrize("value", sorted(_EMPTY_SLOT_VALUES))
+def test_an_empty_answer_is_not_a_declaration(value):
+    assert parse_test_change_claims(f"STATUS: DONE\n{TEST_CHANGE_MARKER} {value}\n") == []
+
+
+@pytest.mark.parametrize("reason", [
+    "None of the old assertions could pass: tests/test_a.py asserted the wrong default",
+    "no longer valid: tests/test_a.py asserted the wrong default",
+])
+def test_a_reason_that_starts_like_an_empty_answer_still_counts(reason):
+    assert parse_test_change_claims(f"STATUS: DONE\n{TEST_CHANGE_MARKER} {reason}\n") == [
+        reason]
 
 
 @pytest.mark.parametrize("line", [
@@ -359,3 +378,68 @@ async def test_a_failed_fixers_declaration_still_counts(setup):
     assert fix_call.await_count == 2
     assert result is True
     assert block.test_change_claims == ["the fixture path was wrong"]
+
+
+# --- Each report is parsed on its own ---
+#
+# The implement window's gate reads the implementer's report and every
+# integration fixer's report. A marker alone at the end of one report must not
+# take its reason from the start of the next one.
+
+BARE_MARKER_REPORT = f"STATUS: DONE\n{TEST_CHANGE_MARKER}"
+
+
+def test_a_bare_marker_does_not_take_its_reason_from_the_next_report():
+    gate = unchanged_tests_gate({TEST_FILE: "a"}, {TEST_FILE: "b"},
+                                [BARE_MARKER_REPORT, "fixed the import\n"])
+    assert not gate.passed
+    assert gate.action == "restore_tests"
+
+
+def test_each_reports_declaration_counts():
+    gate = unchanged_tests_gate(
+        {TEST_FILE: "a"}, {TEST_FILE: "b"},
+        [f"STATUS: DONE\n{TEST_CHANGE_MARKER} wrong import path",
+         "fixed it\n", f"{TEST_CHANGE_MARKER} the fixture path was wrong\n"])
+    assert gate.passed
+    assert gate.metadata["claims"] == ["wrong import path", "the fixture path was wrong"]
+
+
+@pytest.mark.asyncio
+async def test_a_bare_marker_in_the_implementers_report_does_not_read_the_fixers(setup):
+    """The implementer ended its report with a bare marker; the fixer's first
+    line is not the implementer's reason, so the test change is undeclared."""
+    config, state, progress, block = setup
+    block.implementer_report = BARE_MARKER_REPORT
+    result = await _run_with_integration_fix(
+        config, state, progress, block, "fixed the import\n",
+    )
+    assert result is False
+    assert block.status == BlockStatus.FAILED
+    assert block.test_change_claims == []
+
+
+@pytest.mark.asyncio
+async def test_a_bare_marker_in_one_fixers_report_does_not_read_the_next(setup):
+    config, state, progress, block = setup
+    gates = iter([
+        GateResult(passed=False, reason="failing", metadata={"stdout": "FAILED"}),
+        GateResult(passed=True, reason="all green", metadata={"stdout": "3 passed"}),
+    ])
+    fixes = [
+        AgentResult(success=False, output=f"partial\n{TEST_CHANGE_MARKER}"),
+        AgentResult(success=True, output="fixed the import\n"),
+    ]
+    review = ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])
+    with patch("build_pipeline.tdd_engine.integration_gate",
+               side_effect=lambda *a, **k: next(gates)), \
+         patch("build_pipeline.tdd_engine.run_integration_fix",
+               new_callable=AsyncMock, side_effect=fixes), \
+         patch("build_pipeline.tdd_engine._snapshot_test_files",
+               return_value={TEST_FILE: "changed-by-fixer"}), \
+         patch("build_pipeline.tdd_engine._run_quality_review",
+               new_callable=AsyncMock, return_value=review):
+        result = await _run_integration_and_review(block, config, state, progress)
+    assert result is False
+    assert block.status == BlockStatus.FAILED
+    assert block.test_change_claims == []

@@ -199,11 +199,14 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   marker cannot use it, and its correct fix to a wrong test fails the block.
   Because every such prompt shows the marker, `parse_test_change_claims`
   counts only a line that starts with it (`gates._TEST_CHANGE_LINE`: after a
-  bullet, number or `>` prefix and optional bold) and drops `<reason>`, `none`
-  and empty values, so an echo or a sentence that mentions it declares
-  nothing. A marker alone on its line takes the next non-blank line as its
-  reason. The `SEARCHED:` and `SURPRISES:` slots stop at `_TEST_CHANGE_LINE`,
-  so a declaration after them is never read into them.
+  bullet, number or `>` prefix and optional bold) and drops `<reason>`,
+  `none`, `no` and empty values, so an echo or a sentence that mentions it
+  declares nothing. A marker alone on its line takes the next non-blank line
+  as its reason, so `unchanged_tests_gate` takes the window's reports as a
+  list and parses each on its own: joined, a bare marker ending one report
+  would take the next report's first line as its reason. The `SEARCHED:` and
+  `SURPRISES:` slots stop at `_TEST_CHANGE_LINE`, so a declaration after them
+  is never read into them.
 - **A refactor window carries no test-change escape hatch.** Both refactor
   windows (per block, and the whole-change pass) call `unchanged_tests_gate`
   with an **empty report** — deliberately, so `TEST CHANGE REQUIRED:` cannot
