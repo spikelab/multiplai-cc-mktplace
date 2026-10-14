@@ -61,7 +61,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--accept-size` | Build a plan the size gate says should be split, as one PR. The build remembers it, so a later retry or resume does not stop on size again. |
 | `--approve-split` | Approve the epic split the build printed as `EPIC:SPLIT:<split.md>`, as `split.md` and `plans/` are on disk now. See [Epic mode](#epic-mode-one-input-several-changes). |
 | `--no-epic-split` | Build the input as one change: no `EPIC_SPLIT` decision, no model call. An epic's child builds pass it. |
-| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch; a build that re-binds to its worktree ignores it. When the commit is not on the default branch, the PR targets the branch that holds it (`--base`). Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
+| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch, or the parent's commit that holds its `specs/registry` baseline (below); a build that re-binds to its worktree ignores it. When the commit is not on the default branch, the PR targets the branch that holds it (`--base`). Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
 | `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. An approved epic vouches for its own repo: it passes `--trust-repo` to each child build, review and fixer, and its merge step's one agent call (under `epic.merge: auto`) runs trusted for that call only. |
 
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: true}`,
@@ -94,6 +94,8 @@ keeps the default.
 | `block_facts` | bool | `false` | the TDD engine: the test writer and implementer of each block also get the facts from `facts.json` about the files the block's tasks name, each re-checked at the current HEAD (a fact whose quoted lines changed is dropped, and counted). Off until real builds show it helps |
 | `regenerate_walkthroughs` | bool | `false` | after the build: re-run each walkthrough the build made stale under `docs/walkthroughs/` (see [Step 4](#step-4-report-results)) and commit it to the build branch. Only with `--trust-repo`, and only for a walkthrough that read the project's repo alone |
 | `walkthrough_max_usd` | number | `10` | the spend limit of each walkthrough `regenerate_walkthroughs` re-runs; a run that reaches it leaves the old file in place |
+| `spec_extract` | bool | `true` | the codebase analysis phase: when `specs/registry/` is empty, run `/multiplai-dev:spec-extract` on the project's Python code at the build's starting commit with `--apply`, and commit the registry files it writes (`SPEC_EXTRACT:` lines in [Step 4](#step-4-report-results)). Only with `--trust-repo`; never in `only` mode or in an epic's child build (the parent runs it; a child with no dependency, in the epic's own repository, branches from the parent's commit that holds the baseline, and a child in another repository builds without one) |
+| `spec_extract_max_usd` | number | `80` | spec-extract's `--max-usd`: its spend limit for the run folder, across every resume. Capped by spec-extract, not by buildme's budget; what it spends is in buildme's `SPEND:` line |
 
 **Commit `specs/config.yaml`.** The build's worktree branches from `HEAD`, so an
 uncommitted config never reaches it. With `git.worktree` on, the pipeline stops
@@ -702,7 +704,19 @@ the reviews its PR already had still count toward `epic.max_usd`.
 `build --mode brief --change <epic>-<id> --plan-file <epic dir>/plans/<id>.md`
 subprocess with `--auto --trust-repo --no-epic-split --pr-ready`, in the
 parent's project directory (or the child's own `repo`, above), from origin's default branch (`--base-ref`), so
-each child gets its own worktree, branch and ready PR. A `specs/config.yaml`
+each child gets its own worktree, branch and ready PR. When the parent's
+codebase analysis committed a `specs/registry` baseline (spec-extract), a
+child with no dependency in the epic's own repository branches from that
+commit instead, so it builds on the baseline and the registry reaches main
+with the first merged child PR; its PR still targets the default branch. It
+does so only when origin's default branch holds every commit before that one
+and the commit changes nothing outside `specs/registry`: a parent run from a
+feature branch or with unpushed commits, or a commit added before a resume,
+gives every child origin's default branch, without the baseline, so no child
+PR carries those commits. Once origin's default branch holds a registry (the
+first child PR merged), a child launched later branches from it, with main's
+newer code. A child that waits on a dependency still branches from origin's
+default branch, after that merge. A `specs/config.yaml`
 (the parent's, or that of a child's own `repo`)
 that sets `git.worktree` or `git.push` to `false` would build the children in
 place or open no PR, so the build exits `2` before launching any. The parent's
@@ -968,10 +982,26 @@ Parse pipeline stdout for progress lines:
   It shows in `build-progress.md` as a `MUTATION` entry (`SKIPPED — …`,
   `PASSED — score …` or `FAILED: …`); a failure ends with `ERROR:` like any
   failed build
+- `SPEC_EXTRACT:BASELINE <n>` — the codebase analysis phase ran
+  `/multiplai-dev:spec-extract` on a project whose `specs/registry/` was empty
+  and committed the `<n>` capability files it applied to the build branch;
+  spec generation reads them. `SPEC_EXTRACT:BASELINE <n> uncommitted` — the
+  files are in `specs/registry/` but not committed yet (no build branch under
+  `--no-worktree`, or the commit failed): after a spec-only build, tell the
+  user they are left for them to commit; a build that went on to the TDD build
+  committed them with its first block's commit, so tell the user that commit
+  holds them. `SPEC_EXTRACT:NOT_RUN exit=<n> <last line>` —
+  spec-extract failed and the build went on without a baseline: report the
+  line. `SPEC_EXTRACT:RUNNING <message>` — another spec-extract run still holds
+  this commit's run folder (often one a killed build left running) and the
+  build exited `1` without leaving the phase: re-run the same command once that
+  run has ended. An `ERROR:` naming uncommitted changes in `specs/registry/`
+  after a failed spec-extract also exits `1`: tell the user to stash or commit
+  them, or set `spec_extract: false`, and re-run
 - `RESULT:SUCCESS` — build complete
 - `EPIC:APPROVED:<epic.json>` — the epic split is approved; the children build next
 - `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown` (`3` while a child waits on a dependency's open PR); `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
-- `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent, the pr skill and a walkthrough run included (`:incomplete` follows when one of them printed no spend)
+- `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent, the pr skill, a walkthrough run and spec-extract included (`:incomplete` follows when one of them printed no spend)
 - `ERROR:<message>` — failure
 
 **Exit codes.** `0` done, `1` failure, `2` usage error or a refusal that wrote

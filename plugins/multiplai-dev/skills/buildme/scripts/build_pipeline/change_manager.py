@@ -391,7 +391,8 @@ class ChangeManager:
         """Assemble context for LLM generation of an artifact.
 
         Returns dict with: template, instruction, context (from config.yaml),
-        dependencies (paths to completed dependency artifacts).
+        dependencies (paths to completed dependency artifacts), registry (the
+        sorted capability names in specs/registry/).
         """
         spec = ARTIFACT_DAG.get(artifact_id, {})
 
@@ -421,6 +422,7 @@ class ChangeManager:
             "context": project_context,
             "dependencies": dep_paths,
             "output_path": spec.get("generates", ""),
+            "registry": sorted(p.stem for p in self.registry_dir.glob("*.md")),
         }
 
     def list_changes(self) -> list[dict]:

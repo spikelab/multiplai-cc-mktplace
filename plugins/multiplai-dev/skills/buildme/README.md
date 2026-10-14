@@ -60,8 +60,32 @@ already has instead of proposing a parallel structure beside them. At the
 review checkpoint the pipeline prints `REVIEW:CODEBASE_ANALYSIS:<path>`.
 
 The phase is skipped, with the reason logged, when the project has no source
-files yet and for `--only` runs (which generate no specs). A failure is never
-a build failure — the design falls back to treating the project as new.
+files yet and for `--only` runs (which generate no specs). A failure of the
+analysis is never a build failure — the design falls back to treating the
+project as new.
+
+The same phase then writes a baseline of what the code already does: when
+`specs/registry/` is empty and the repo is trusted (`--trust-repo`), it runs
+`/multiplai-dev:spec-extract` on the project's Python code at the build's
+starting commit with `--apply`, and commits the capability files it writes to
+the build branch (`SPEC_EXTRACT:BASELINE <n>`; `uncommitted` follows when there
+is no build branch to commit to, and a full build then commits them with its
+first block's commit). Spec generation then reads them. Turn it off
+with `spec_extract: false` in `specs/config.yaml`. An epic's child builds skip
+it: the parent runs it, and each child with no dependency, in the epic's own
+repository, branches from the parent's commit that holds the baseline, so the
+registry reaches main with the first merged child PR; every child's PR
+targets the default branch. A child that waits on a dependency branches from
+origin's default branch after that merge, as does every child once that
+branch holds a registry, and every child when the baseline commit would carry
+anything else origin's default branch does not hold (a feature branch,
+unpushed commits, a commit added before a resume, other files in the same
+commit); a child built in another repository builds without a baseline. When spec-extract fails the
+build goes on without a baseline, except in two cases that end the build with
+exit `1` without leaving the phase: another spec-extract run still holds the
+same commit's run folder (`SPEC_EXTRACT:RUNNING`), or the failure left
+uncommitted changes in `specs/registry/`. A re-run then repeats only
+spec-extract, not the analysis.
 
 ### Phase 3: Spec Generation
 

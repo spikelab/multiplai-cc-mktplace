@@ -70,7 +70,7 @@ TRUST_MESSAGE = (
 
 __all__ = ["BackendUnavailable", "BudgetExceededError", "CallFailed", "DEFAULT_MAX_USD", "RepoTrustError",
            "SpecExtractBudget", "TRUST_MESSAGE", "agent_call_structured", "model_for", "repo_is_trusted", "require_trusted_repo",
-           "start_budget"]
+           "spend_marker", "start_budget"]
 
 
 class CallFailed(Exception):
@@ -108,6 +108,38 @@ def start_budget(max_usd: float | None, saved: dict | None) -> SpendLedger:
     invocation's, so re-running never gets a fresh cap (plan, Decided 19).
     """
     return core_budget.start(max_usd, saved, ledger_cls=SpecExtractBudget)
+
+
+@dataclass
+class ProcessSpend:
+    """What this process's calls cost: every recorded call, never a ledger a resume
+    restored. The command prints it as `SPEND:<usd>:<tokens>` on exit, which buildme
+    adds to its own spend when it runs spec-extract."""
+
+    cost_usd: float = 0.0
+    tokens: int = 0
+
+
+_process = ProcessSpend()
+
+
+def spend_marker() -> str:
+    """`SPEND:<usd>:<tokens>`, the line the command prints last."""
+    return f"SPEND:{_process.cost_usd:.6f}:{_process.tokens}"
+
+
+def _record(usage, label: str) -> None:
+    """Record a call's spend into the run folder's ledger and this process's total."""
+    core_budget.record(usage, label=label)
+    try:
+        cost = float(getattr(usage, "cost_usd", 0.0) or 0.0)
+        tokens = sum(int(getattr(usage, name, 0) or 0) for name in (
+            "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"))
+    except Exception as e:  # recording never raises, as the ledger's own does not
+        log.warning("Process spend accounting failed for a call (ignored): %s", e)
+        return
+    _process.cost_usd += cost
+    _process.tokens += tokens
 
 
 def repo_is_trusted() -> bool:
@@ -149,7 +181,7 @@ async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effo
             raise BackendUnavailable(f"no model call can run: {e.reason}") from e
         partial = getattr(e, "partial", None)
         if partial is not None:
-            core_budget.record(partial.usage, label=budget_label)
+            _record(partial.usage, budget_label)
         kind = "timeout" if isinstance(e, AgentRunTimeout) else e.reason
         raise CallFailed(f"agent call failed ({kind})\n{e.stderr_tail}") from e
     except Exception as e:
@@ -157,7 +189,7 @@ async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effo
         # outside its try (multiplai_core/pi/backend.py, usage_from_events). Escaping explore's
         # task, it would cancel every unit in flight; it is a failed call like any other.
         raise CallFailed(f"agent call failed ({type(e).__name__}: {e})") from e
-    core_budget.record(result.usage, label=budget_label)
+    _record(result.usage, budget_label)
     return result.text
 
 

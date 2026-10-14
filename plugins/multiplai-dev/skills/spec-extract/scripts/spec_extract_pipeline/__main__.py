@@ -11,7 +11,8 @@ Running the same command again resumes the run in the same folder. Exit codes:
 scopes, explores, groups, writes and renders, then prints
 `SPEC_EXTRACT:RENDERED <files> <run>/registry`; with `--apply` it then copies
 the new registry files into `<specs-dir>/registry/` and prints
-`SPEC_EXTRACT:APPLIED <n>`.
+`SPEC_EXTRACT:APPLIED <n>`. The last line is `SPEND:<usd>:<tokens>`, what this
+process's model calls cost, which buildme adds to its own spend.
 """
 
 from __future__ import annotations
@@ -247,5 +248,14 @@ def main(argv: Sequence[str] | None = None, *, now: Callable[[], datetime] | Non
         return EXIT_FAILED
 
 
+def cli(argv: Sequence[str] | None = None) -> int:
+    """`main`, then `SPEND:<usd>:<tokens>` last, on every exit but a kill: what this
+    process's model calls cost (`sdk.spend_marker`)."""
+    try:
+        return main(argv)
+    finally:
+        print(sdk.spend_marker(), flush=True)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(cli())
