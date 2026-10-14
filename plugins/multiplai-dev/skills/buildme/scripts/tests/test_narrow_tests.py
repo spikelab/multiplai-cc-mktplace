@@ -144,6 +144,35 @@ class TestSelectTestPaths:
     def test_unknown_runner_selects_nothing(self):
         assert select_test_paths(["tests/test_a.py"], [], None) == []
 
+    def test_paths_under_tool_and_environment_dirs_are_never_selected(self):
+        # Untracked files count as changed, and a .venv or node_modules that no
+        # .gitignore covers holds third-party tests the whole run never collects.
+        changed = ["tests/test_new.py", "pkg/config.py",
+                   ".venv/lib/python3.11/site-packages/foo/tests/test_foo.py",
+                   "venv/lib/x/config_test.py"]
+        files = ["pkg/config.py", ".venv/lib/python3.11/site-packages/foo/test_config.py"]
+        assert select_test_paths(changed, files, "pytest") == ["tests/test_new.py"]
+        assert select_test_paths(["src/a.test.ts", "node_modules/x/b.test.js"], [],
+                                 "node") == ["src/a.test.ts"]
+
+    def test_a_tests_dir_inside_a_venv_does_not_stop_narrowing(self):
+        changed = ["tests/test_new.py", ".venv/lib/foo/tests/helpers.py"]
+        assert select_test_paths(changed, [], "pytest") == ["tests/test_new.py"]
+
+    def test_only_paths_the_whole_run_collects_are_selected(self):
+        changed = ["pkg/db.py", "tests/unit/test_new.py", "tests/integration/test_api.py"]
+        files = ["pkg/db.py", "tests/integration/test_db.py", "tests/unit/test_db.py"]
+        collected = lambda p: p.startswith("tests/unit/")  # noqa: E731
+        assert select_test_paths(changed, files, "pytest", collected) == [
+            "tests/unit/test_db.py", "tests/unit/test_new.py"]
+
+    def test_the_nearest_named_file_is_chosen_among_those_collected(self):
+        # The nearest test_config.py is outside the run; the collected one wins.
+        changed = ["a/pkg/config.py"]
+        files = ["a/tests/test_config.py", "b/tests/test_config.py"]
+        assert select_test_paths(changed, files, "pytest",
+                                 lambda p: p.startswith("b/")) == ["b/tests/test_config.py"]
+
 
 # --- the command itself ---------------------------------------------------
 
@@ -183,6 +212,12 @@ class TestNarrowCommand:
     def test_pytest_takes_a_path_with_brackets(self):
         assert narrow_command("pytest", ["tests/test_[a].py"], "pytest") == \
             "pytest 'tests/test_[a].py'"
+
+    def test_a_very_long_selection_falls_back(self):
+        # One argv string past the OS limit would raise in run_test_suite, and
+        # the command is also pasted into agents' prompts.
+        paths = [f"tests/test_{i:05d}_{'x' * 40}.py" for i in range(1000)]
+        assert narrow_command("pytest", paths, "pytest") == "pytest"
 
 
 # --- end to end against a real git repo -----------------------------------
@@ -345,6 +380,187 @@ class TestNarrowTestCommand:
     def test_no_test_command_stays_empty(self, project):
         base = _repo(project)
         assert narrow_test_command("", project, base) == ""
+
+
+class TestNarrowStaysInsideTheWholeRun:
+    """pytest runs any file named on its command line, so the narrow run must
+    pick only files the whole command collects; jest and vitest OR every
+    pattern given, so a command that already names some is never narrowed."""
+
+    @pytest.fixture
+    def project(self, tmp_path):
+        p = tmp_path / "proj"
+        for d in ("pkg", "tests/unit", "tests/integration"):
+            (p / d).mkdir(parents=True)
+        (p / "pkg" / "db.py").write_text("x = 1\n")
+        (p / "tests" / "unit" / "test_old.py").write_text("def test_o(): pass\n")
+        (p / "tests" / "integration" / "test_db.py").write_text(
+            "def test_db(): raise ConnectionError\n")
+        return p
+
+    def _block(self, project):
+        (project / "pkg" / "db.py").write_text("x = 2\n")
+        (project / "tests" / "unit" / "test_new.py").write_text("def test_n(): pass\n")
+
+    def test_an_untracked_venv_is_never_selected(self, project):
+        base = _repo(project)
+        venv_test = project / ".venv/lib/python3.11/site-packages/foo/tests/test_foo.py"
+        venv_test.parent.mkdir(parents=True)
+        venv_test.write_text("def test_f(): pass\n")
+        (project / "tests" / "unit" / "test_new.py").write_text("def test_n(): pass\n")
+        assert narrow_test_command("pytest -q", project, base) == \
+            "pytest -q tests/unit/test_new.py"
+
+    def test_an_untracked_node_modules_is_never_selected(self, tmp_path):
+        p = tmp_path / "web"
+        (p / "src").mkdir(parents=True)
+        (p / "node_modules" / "lib").mkdir(parents=True)
+        base = _repo(p)
+        (p / "node_modules" / "lib" / "a.test.js").write_text("test('a', () => {})\n")
+        (p / "src" / "cart.test.ts").write_text("test('c', () => {})\n")
+        assert narrow_test_command("npx jest", p, base) == "npx jest src/cart.test.ts"
+
+    @pytest.mark.parametrize("name,text", [
+        ("pytest.ini", "[pytest]\ntestpaths = tests/unit\n"),
+        ("pytest.ini", "[pytest]\ntestpaths =\n    tests/u*\n"),
+        ("pyproject.toml", "[tool.pytest.ini_options]\ntestpaths = [\"tests/unit\"]\n"),
+        ("pyproject.toml", "[tool.pytest]\ntestpaths = [\"tests/unit\"]\n"),
+        ("setup.cfg", "[tool:pytest]\ntestpaths = tests/unit\n"),
+        ("tox.ini", "[pytest]\ntestpaths = tests/unit\n"),
+    ])
+    def test_named_files_outside_testpaths_are_left_out(self, project, name, text):
+        (project / name).write_text(text)
+        base = _repo(project)
+        self._block(project)
+        assert narrow_test_command("pytest -q", project, base) == \
+            "pytest -q tests/unit/test_new.py"
+
+    def test_testpaths_that_match_nothing_scope_nothing(self, project):
+        # pytest then collects from where it runs.
+        (project / "pytest.ini").write_text("[pytest]\ntestpaths = nowhere\n")
+        base = _repo(project)
+        self._block(project)
+        assert narrow_test_command("pytest -q", project, base) == \
+            "pytest -q tests/integration/test_db.py tests/unit/test_new.py"
+
+    def test_testpaths_of_a_parent_config_do_not_apply_to_a_subdirectory(self, tmp_path):
+        # pytest uses testpaths only when it runs in the config's own directory.
+        repo = tmp_path / "repo"
+        sub = repo / "app"
+        (sub / "tests").mkdir(parents=True)
+        (repo / "pytest.ini").write_text("[pytest]\ntestpaths = other\n")
+        base = _repo(repo)
+        (sub / "tests" / "test_new.py").write_text("def test_n(): pass\n")
+        assert narrow_test_command("pytest", sub, base) == "pytest tests/test_new.py"
+
+    def test_a_tie_at_the_root_keeps_only_the_collected_file(self, tmp_path):
+        p = tmp_path / "proj"
+        for d in ("a/tests", "b/tests"):
+            (p / d).mkdir(parents=True)
+        (p / "config.py").write_text("x = 1\n")
+        (p / "a" / "tests" / "test_config.py").write_text("def test_a(): pass\n")
+        (p / "b" / "tests" / "test_config.py").write_text("def test_b(): pass\n")
+        (p / "pytest.ini").write_text("[pytest]\ntestpaths = a/tests\n")
+        base = _repo(p)
+        (p / "config.py").write_text("x = 2\n")
+        assert narrow_test_command("pytest", p, base) == "pytest a/tests/test_config.py"
+
+    @pytest.mark.parametrize("ini,dirname", [
+        (None, "build"),
+        ("[pytest]\nnorecursedirs = legacy\n", "legacy"),
+    ])
+    def test_files_under_norecursedirs_are_left_out(self, project, ini, dirname):
+        if ini:
+            (project / "pytest.ini").write_text(ini)
+        (project / dirname).mkdir()
+        (project / dirname / "test_db.py").write_text("def test_x(): pass\n")
+        base = _repo(project)
+        self._block(project)
+        command = narrow_test_command("pytest", project, base)
+        assert f"{dirname}/test_db.py" not in command
+        assert "tests/unit/test_new.py" in command
+
+    @pytest.mark.parametrize("command", [
+        "pytest --ignore=tests/integration", "pytest --ignore tests/integration",
+        "pytest --ignore-glob=tests/integ*",
+    ])
+    def test_files_the_command_ignores_are_left_out(self, project, command):
+        base = _repo(project)
+        self._block(project)
+        assert narrow_test_command(command, project, base) == \
+            f"{command} tests/unit/test_new.py"
+
+    def test_an_option_value_that_is_not_a_path_still_narrows(self, project):
+        base = _repo(project)
+        self._block(project)
+        assert narrow_test_command("pytest -k db", project, base) == \
+            "pytest -k db tests/integration/test_db.py tests/unit/test_new.py"
+
+    @pytest.mark.parametrize("command,ini", [
+        # The command already names what to run; appending would only add.
+        ("pytest -q tests/unit", None),
+        ("pytest -x tests/unit/test_old.py::test_o", None),
+        ("pytest .", None),
+        ("pytest", "[pytest]\naddopts = tests/unit\n"),
+        # Another config or root than the one read here.
+        ("pytest -c pytest.ini", "[pytest]\n"),
+        ("pytest --rootdir=tests", None),
+        ("pytest --config-file=other.ini", None),
+        ("pytest --pyargs pkg", None),
+        # The project names its own test files.
+        ("pytest", "[pytest]\npython_files = check_*.py\n"),
+        # A config that cannot be read.
+        ("pytest", "[pytest\n"),
+    ])
+    def test_a_command_whose_collection_it_cannot_tell_falls_back(self, project, command, ini):
+        if ini:
+            (project / "pytest.ini").write_text(ini)
+        base = _repo(project)
+        self._block(project)
+        assert narrow_test_command(command, project, base) == command
+        assert agent_test_command(command, project, base) == command
+
+    def test_pytest_addopts_naming_paths_falls_back(self, project, monkeypatch):
+        monkeypatch.setenv("PYTEST_ADDOPTS", "tests/unit")
+        base = _repo(project)
+        self._block(project)
+        assert narrow_test_command("pytest", project, base) == "pytest"
+
+    def test_unreadable_pyproject_falls_back(self, project):
+        (project / "pyproject.toml").write_text("[tool.pytest.ini_options\n")
+        base = _repo(project)
+        self._block(project)
+        assert narrow_test_command("pytest", project, base) == "pytest"
+
+    @pytest.mark.parametrize("command,script", [
+        ("npx jest src/unit", None),
+        ("npx vitest run src", None),
+        ("npx vitest related src/cart.ts", None),
+        ("npx jest --testPathPattern=unit", None),
+        ("npx jest --findRelatedTests src/cart.ts", None),
+        ("npm test -- src", "jest"),
+        ("npm test", "jest src"),
+        ("npm test", "vitest run unit"),
+    ])
+    def test_node_command_with_its_own_filter_falls_back(self, tmp_path, command, script):
+        p = tmp_path / "web"
+        (p / "src" / "unit").mkdir(parents=True)
+        if script:
+            (p / "package.json").write_text(json.dumps({"scripts": {"test": script}}))
+        base = _repo(p)
+        (p / "src" / "cart.test.ts").write_text("test('c', () => {})\n")
+        assert narrow_test_command(command, p, base) == command
+
+    @pytest.mark.parametrize("command", [
+        "npx jest --config jest.config.js", "npx vitest run --maxWorkers 2", "npx jest -t cart",
+    ])
+    def test_node_option_values_do_not_stop_narrowing(self, tmp_path, command):
+        p = tmp_path / "web"
+        (p / "src").mkdir(parents=True)
+        (p / "jest.config.js").write_text("module.exports = {}\n")
+        base = _repo(p)
+        (p / "src" / "cart.test.ts").write_text("test('c', () => {})\n")
+        assert narrow_test_command(command, p, base) == f"{command} src/cart.test.ts"
 
 
 # --- the test command an agent is given -----------------------------------
