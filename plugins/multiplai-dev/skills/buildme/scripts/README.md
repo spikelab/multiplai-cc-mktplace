@@ -119,7 +119,7 @@ merge --no-ff --no-commit origin/<default>`, one `merge` agent for version,
 CHANGELOG and lockfile conflicts (record kind `merge`; any other conflicted file, or other file it changed, staged or not, parks),
 the tests with `BUILDME_TRUST_REPO=1` (kind `merge-tests`, killed when the step stops), `git commit` and
 `git push` (rejected: parks; other failures: `unknown`). An exception or signal saves `merge_stop`; any park saves
-`merge_park` in `epic.json`, which `_recover` keeps. A head that is the
+`merge_park` in `epic.json`, which `_recover` keeps until `<W>` has no `MERGE_HEAD` and no uncommitted change, then retries (`_merge_retry`). A head that is the
 reviewed head plus merges holding only git's own merge and what the step may resolve (`merge.merges_onto`) is not reviewed again. PR E2
 adds waiting for checks and `gh pr merge`. A file
 changed after approval, another process holding the epic's lock, or a

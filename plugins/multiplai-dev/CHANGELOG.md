@@ -28,7 +28,7 @@ time, not derived from a tag.
   against `epic.max_usd`); a conflict in any other file parks the child. The
   project's tests then run (`tdd.test_command`, else the discovered command),
   and the merge commit is pushed, never forced. A failed test run, a push
-  rejected because the branch moved, or a refused check parks the child, which stays parked; any other failed push is tried again by the next run. A merge commit holding more than git's own merge and those resolutions, such as a person's, is reviewed again. A run stopped
+  rejected because the branch moved, or a refused check parks the child; a later run tries it again once its worktree has no merge in progress and no uncommitted change. Any other failed push is tried again by the next run. A merge commit holding more than git's own merge and those resolutions, such as a person's, is reviewed again. A run stopped
   during the merge saves the worktree's state; the next run aborts and merges
   again only when nothing else changed there, and otherwise parks with the
   command to run. The PR itself is not merged yet: it waits for a person.

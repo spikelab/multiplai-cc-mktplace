@@ -761,8 +761,10 @@ merge saves what the worktree held (`merge_stop` in `epic.json`); the next
 run aborts the stopped merge and merges again only when nothing else changed
 in the worktree since, and otherwise parks with `git -C <worktree> merge
 --abort, then re-run`, leaving everything as it is. A merge commit made but
-not pushed is tested again and pushed. A child the merge step parked stays
-parked on later runs, as every parked child does.
+not pushed is tested again and pushed. A child the merge step parked is
+tried again by a later run once its worktree has no merge in progress and no
+uncommitted change (after `merge --abort`, as the hint says), and parks again
+if the merge fails again; every other parked child stays parked.
 
 ### The size gate (after plan review)
 
