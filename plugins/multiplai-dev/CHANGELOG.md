@@ -37,8 +37,13 @@ time, not derived from a tag.
   (Django's `tests.py`, `__tests__/`), a run that collects coverage, a Node path
   jest would read as a regex, a command that already names what to run
   (paths, a jest or vitest filter, pytest `addopts` paths, another pytest
-  config or rootdir, a project `python_files`), or a pytest config that cannot
-  be read runs the whole command as before. Set
+  config or rootdir, a project `python_files`), a pytest config that cannot
+  be read, a selected pytest file below another pytest config or `setup.py`
+  than the whole run's, or a selected pytest file under a `conftest.py` that
+  sets `collect_ignore` or `pytest_ignore_collect` runs the whole command as
+  before. pytest's config is read from `pytest.toml`, `.pytest.toml`,
+  `pytest.ini`, `.pytest.ini`, `pyproject.toml`, `tox.ini` or `setup.cfg`, in
+  pytest's own order. Set
   `tdd.narrow_tests: false` in `specs/config.yaml` to always run the whole
   command.
 - The narrow run takes only files the whole command collects: never one under

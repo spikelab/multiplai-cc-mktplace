@@ -20,7 +20,11 @@ known to accept them: pytest, or jest / vitest run directly or through
 runner such as tox, even behind `uv run`, or a chained command); a command
 that already names what to run (paths, a jest / vitest filter, pytest
 `addopts` paths, another pytest config or rootdir, `python_files`); a pytest
-config it cannot read; a selection too long for one command; an empty
+config it cannot read; a selected pytest file below another pytest config or
+`setup.py` than the whole run's (pytest finds its config from the paths it is
+given), or under a `conftest.py` that sets `collect_ignore` or
+`pytest_ignore_collect` (pytest skips those for paths it is given); a
+selection too long for one command; an empty
 selection; a changed file the engine counts as a test but this module cannot
 name (Django's `tests.py`, a `__tests__/` file, a helper under `tests/`); a
 coverage setting (a narrow run misses a coverage floor the whole suite meets);
@@ -67,12 +71,17 @@ _CHAINED_RE = re.compile(r"[;&|]")
 # jest reads each path as a regular expression. `.` is left out: it also
 # matches itself, so a dotted path still selects its own file.
 _REGEX_CHARS_RE = re.compile(r"[\[\](){}+*?^$|\\]")
-_PYTEST_CONFIG_FILES = ("pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini")
-# The order pytest looks for its config in each directory, and the section
-# each file needs (pytest.ini counts even without one).
-_PYTEST_INI_ORDER = (("pytest.ini", "pytest"), (".pytest.ini", "pytest"),
+# The order pytest (9) looks for its config in each directory, and the INI
+# section each file needs (None for a TOML file). pytest.toml and pytest.ini
+# count even without one.
+_PYTEST_INI_ORDER = (("pytest.toml", None), (".pytest.toml", None),
+                     ("pytest.ini", "pytest"), (".pytest.ini", "pytest"),
                      ("pyproject.toml", None), ("tox.ini", "pytest"),
                      ("setup.cfg", "tool:pytest"))
+_PYTEST_CONFIG_FILES = tuple(name for name, _ in _PYTEST_INI_ORDER)
+# What in a conftest.py makes pytest skip files the whole run would collect.
+# pytest never applies it to a path named on its command line.
+_CONFTEST_IGNORES = ("collect_ignore", "pytest_ignore_collect")
 _PYTEST_DEFAULT_NORECURSE = ("*.egg", ".*", "_darcs", "build", "CVS", "dist",
                              "node_modules", "venv", "{arch}")
 # Options whose value is a path that is not a test to run.
@@ -291,9 +300,13 @@ def _pytest_section(path: Path, section: str | None) -> dict | None:
     text = _read(path)
     if section is None:
         try:
-            tool = tomllib.loads(text).get("tool", {})
+            data = tomllib.loads(text)
         except tomllib.TOMLDecodeError as e:
             raise _UnreadableConfig(f"{path}: {e}") from e
+        if path.name in ("pytest.toml", ".pytest.toml"):
+            table = data.get("pytest")
+            return table if isinstance(table, dict) else {}
+        tool = data.get("tool", {})
         table = tool.get("pytest") if isinstance(tool, dict) else None
         if not isinstance(table, dict):
             return None
@@ -320,6 +333,45 @@ def _pytest_config(project_dir: Path) -> tuple[Path, dict] | None:
                 options = _pytest_section(d / name, section)
                 if options is not None:
                     return d, options
+    return None
+
+
+def _pytest_setup(start: Path) -> Path | None:
+    """What sets pytest's config and rootdir when its search starts in
+    *start*: the first config file with pytest settings from there up, else
+    the first `pyproject.toml`, else the nearest `setup.py` (whose directory
+    becomes the rootdir, and no conftest.py above it is loaded)."""
+    dirs = _config_dirs(start)
+    pyproject = None
+    for d in dirs:
+        for name, section in _PYTEST_INI_ORDER:
+            path = d / name
+            if path.is_file():
+                if name == "pyproject.toml" and pyproject is None:
+                    pyproject = path
+                if _pytest_section(path, section) is not None:
+                    return path
+    if pyproject is not None:
+        return pyproject
+    return next((d / "setup.py" for d in dirs if (d / "setup.py").is_file()), None)
+
+
+def _pytest_runs_alike(paths: list[str], project_dir: Path) -> str | None:
+    """Why the narrow pytest run of *paths* could behave unlike the whole
+    run, or None. pytest finds its config from the directories of the paths
+    it is given (the whole run starts from *project_dir*), and skips
+    `collect_ignore` and `pytest_ignore_collect` for those paths."""
+    try:
+        whole = _pytest_setup(project_dir)
+        for path in paths:
+            start = (project_dir / path).parent
+            if _pytest_setup(start) != whole:
+                return f"{path} is below another pytest config or setup.py"
+            for d in _config_dirs(start):
+                if any(word in _read(d / "conftest.py") for word in _CONFTEST_IGNORES):
+                    return f"{d / 'conftest.py'} sets which files pytest ignores"
+    except _UnreadableConfig as e:
+        return f"cannot read the pytest config ({e})"
     return None
 
 
@@ -508,6 +560,11 @@ def _narrow(test_command: str, project_dir: Path, base: str | None,
                               tracked + untracked, runner, collected)
     # `ls-files` still lists a tracked file deleted but not staged.
     paths = [p for p in paths if (project_dir / p).is_file()]
+    if paths and runner == PYTEST:
+        reason = _pytest_runs_alike(paths, project_dir)
+        if reason is not None:
+            log.info("Narrow tests: %s — running the whole test command", reason)
+            return test_command, None
     command = narrow_command(test_command, paths, runner)
     if command == test_command:
         log.info("Narrow tests: no test file selected — running the whole test command")

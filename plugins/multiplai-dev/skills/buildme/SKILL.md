@@ -284,6 +284,11 @@ The whole command runs instead when:
   option that points at another config or root (`-c`, `--rootdir`,
   `--config-file`, `--pyargs`), because appended paths would only add to it;
 - the project sets pytest's `python_files`, or its pytest config cannot be read;
+- a selected pytest file sits below another pytest config file or `setup.py`
+  than the one the whole run uses, because pytest finds its config from the
+  paths it is given; or under a `conftest.py` that sets `collect_ignore`,
+  `collect_ignore_glob` or `pytest_ignore_collect`, because pytest skips those
+  for paths it is given;
 - the selection would make the command longer than 20,000 characters.
 
 So RED never passes on a run that left out the block's own tests. The agents'
