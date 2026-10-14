@@ -17,6 +17,19 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.70.1] - 2026-10-14
+
+### Fixed
+- buildme: an implementer that correctly fixes a wrong test no longer fails
+  its block. The test-integrity gate accepts a changed test only when the
+  agent's report says `TEST CHANGE REQUIRED: <reason>`, but no prompt told
+  the agent so: in a live epic test, two builds of the same child each fixed
+  a test that no implementation could pass, explained why, and failed. The
+  implementer prompts (which also serve the review-fix and fix-on-pass
+  agents) and both integration-fix prompts now name the marker and say to
+  put one such line per changed test at the end of the report. The
+  integration fixer's report is now read by the gate too.
+
 ## [0.70.0] - 2026-10-14
 
 ### Added

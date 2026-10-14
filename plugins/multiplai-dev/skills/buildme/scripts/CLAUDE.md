@@ -188,7 +188,15 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   each `_enforce_test_integrity` call is given only the report of the agent that
   wrote during that window, never the accumulated `block.implementer_report` —
   otherwise the re-baseline is defeated by a single implement-phase declaration
-  authorizing every later review-fix mutation.
+  authorizing every later review-fix mutation. The implement window's agents
+  are the implementer and any integration fixers, so that call reads the
+  implementer's report and each fixer's whole report. Every prompt for an
+  agent that writes in a window with the hatch (the two implementer prompts,
+  which also serve the review-fix and fix-on-pass agents, and both
+  integration-fix prompts) carries `prompts.implementation.TEST_CHANGE_DECLARATION`,
+  which is built from `gates.TEST_CHANGE_MARKER`, so the prompts and the gate
+  cannot drift (`tests/test_test_change_marker.py`). An agent never told the
+  marker cannot use it, and its correct fix to a wrong test fails the block.
 - **A refactor window carries no test-change escape hatch.** Both refactor
   windows (per block, and the whole-change pass) call `unchanged_tests_gate`
   with an **empty report** — deliberately, so `TEST CHANGE REQUIRED:` cannot
