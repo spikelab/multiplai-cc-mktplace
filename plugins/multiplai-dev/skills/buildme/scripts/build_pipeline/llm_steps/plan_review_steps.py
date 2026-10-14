@@ -480,6 +480,9 @@ async def run_plan_review_stage(
         print("PHASE: plan_review_skipped — already run for this build")
         return []
 
+    # The no-behaviour scan needs no model, so it runs before the model call
+    # and whatever that call does.
+    scanned = _no_behaviour_findings(change_dir)
     try:
         result = await run_plan_review(
             change_dir, config, split_context=_split_context(config, change_dir),
@@ -489,9 +492,21 @@ async def run_plan_review_stage(
         # again on a resume, unlike a completed review.
         log.warning("Plan review LLM call failed (non-fatal): %s", review_err)
         print(f"PHASE: plan_review_skipped — {review_err}")
-        return []
+        if not scanned:
+            return []
+        # The scan's blocks still get the one rewrite. `plan_review_done`
+        # stays False, so a resume asks the model again; the rewrite is spent
+        # (`plan_review_regen_done`), so that resume only reports.
+        log_plan_review_findings(scanned)
+        if not state.spec_gen.plan_review_regen_done:
+            await _apply_plan_review_findings(
+                change_dir, config, state, plan_review_findings_text(scanned),
+            )
+            state.spec_gen.plan_review_regen_done = True
+            state.checkpoint(state_path)
+        return scanned
 
-    findings = list(result.findings) + _no_behaviour_findings(change_dir)
+    findings = list(result.findings) + scanned
     log_plan_review_findings(findings)
 
     findings_text = plan_review_findings_text(findings)
@@ -524,9 +539,10 @@ async def run_plan_review_stage(
 def _no_behaviour_findings(change_dir: Path) -> list[PlanReviewFinding]:
     """The deterministic no-behaviour block scan, as plan review findings.
 
-    This review is the last check before the TDD build, and the design audit's
-    rewrite of tasks.md comes after the shape audit, so the scan runs here too:
-    a block the reviewer model misses still reaches the one regeneration.
+    The design audit's rewrite of tasks.md comes after the shape audit, so the
+    scan runs here too: a block the reviewer model misses, or a review whose
+    model call fails, still reaches the one regeneration. The prototype
+    feedback pass, after this review, runs the same scan on what it writes.
     """
     from ..spec_generator import scan_no_behaviour_blocks
 
@@ -668,6 +684,7 @@ async def _rereview_after_plan_feedback(change_dir: Path, config) -> None:
     No second regeneration follows this, whatever it says; its only job is to
     put the answer in the build log.
     """
+    scanned = _no_behaviour_findings(change_dir)
     try:
         result = await run_plan_review(
             change_dir, config, split_context=_split_context(config, change_dir),
@@ -675,10 +692,12 @@ async def _rereview_after_plan_feedback(change_dir: Path, config) -> None:
     except Exception as review_err:
         log.warning("Plan review re-check failed (non-fatal): %s", review_err)
         print(f"PHASE: plan_review_recheck_skipped — {review_err}")
+        if scanned:
+            print(f"PHASE: plan_review_recheck — {len(scanned)} still open")
         return
 
     still_open = [
-        f for f in result.findings
+        f for f in list(result.findings) + scanned
         if f.severity in PLAN_REVIEW_ACTIONABLE
         and f.category not in PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES
     ]

@@ -20,15 +20,22 @@ time, not derived from a tag.
 ## [0.65.1] - 2026-10-14
 
 ### Fixed
-- buildme no longer writes a task block that only confirms or verifies what
-  an earlier block already built. Such a block's tests passed before it was
-  implemented, so the TDD RED gate failed it and the whole build stopped. The
-  task-writing rules now require every block to add behaviour its tests can
-  fail on, and both the tasks-shape audit and the plan review flag a block
-  that produces nothing and opens with "Confirm" or "Verify", or says an
-  earlier block satisfies it, as `no-new-behaviour`. A flagged block sends
-  `tasks.md` through the existing single rewrite, with the finding saying
-  which block its criteria belong in.
+- buildme now tells the task writer not to write a block that only confirms
+  or verifies what an earlier block already built, and catches such blocks
+  before the TDD build. Such a block's tests passed before it was implemented,
+  so the TDD RED gate failed it and the whole build stopped. Every block must
+  now add behaviour its tests can fail on. The tasks-shape audit, the plan
+  review and the prototype feedback pass (the last rewrite of `tasks.md`
+  before the build) flag a block as `no-new-behaviour` when it produces
+  nothing and its own text says it adds no code: an earlier block already
+  satisfies it, it needs no code, or every file it names is a test file or
+  one it leaves unchanged. A block that verifies a signature or confirms an
+  overwrite is not flagged for the verb. A flagged block sends `tasks.md`
+  through one rewrite, which is told to fold the block into the one that
+  builds the behaviour or, if it does add behaviour, to name its code. The
+  plan review still runs this check when its model call fails. A block still
+  flagged after the rewrite is named in the log as
+  `PHASE: no_behaviour_blocks_remain`.
 
 ## [0.65.0] - 2026-10-14
 

@@ -138,7 +138,7 @@ reports but never regenerates a second time.
 The second pair of eyes the board's Planning column has always claimed. A
 read-only reviewer (`Read`/`Grep`/`Glob`, 30 turns) reads `tasks.md` against
 `rubric.md`, the design's global constraints and `use-cases.md`, and reports
-findings under six categories:
+findings under seven categories:
 
 | Category | What it means |
 |----------|---------------|
@@ -147,6 +147,7 @@ findings under six categories:
 | `constraint-violation` | A block breaks a constraint the design stated |
 | `over-prescription` | The plan dictates a block-internal choice that belongs to the implementer |
 | `use-case-coverage` | A use case no block delivers |
+| `no-new-behaviour` | A block adds nothing an earlier block has not built, so its tests pass before it is built and the TDD RED gate fails it |
 | `oversized-plan` | The change should be several changes |
 
 Critical and major findings drive **one** regeneration of `tasks.md`, then the
@@ -192,6 +193,10 @@ only in the prompt.
 - **Feedback into the spec:** non-empty `DISPROVES:` / `OPEN_QUESTIONS:` triggers
   exactly **one** regeneration pass of `design.md` and `tasks.md` with the notes
   injected as audit findings. Recorded as `spec_gen.prototype_done` for resume.
+  This pass is the last writer of `tasks.md` before the build, so the
+  `no-new-behaviour` scan runs on what it writes: a flagged block gets one
+  more `tasks.md` rewrite, and a block still flagged after it is named in the
+  log (`PHASE: no_behaviour_blocks_remain`).
 
 ### Phase 6: Review Checkpoint
 

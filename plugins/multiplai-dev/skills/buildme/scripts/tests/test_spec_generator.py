@@ -1715,7 +1715,7 @@ class TestScanNoBehaviourBlocks:
 
         assert "the earlier block that builds it" in finding["suggestion"]
         assert "name the code" in finding["suggestion"]
-        assert "only test files" in finding["description"]
+        assert "names no code to write" in finding["description"]
 
     def test_a_missing_tasks_file_yields_no_findings(self, tmp_path):
         assert scan_no_behaviour_blocks(tmp_path / "absent.md") == []

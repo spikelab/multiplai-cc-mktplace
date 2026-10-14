@@ -650,40 +650,120 @@ def scan_placeholders(text: str) -> list[dict]:
     return findings
 
 
-# A block that only checks what an earlier block built: it opens with one of
-# these verbs, or it says an earlier block already satisfies it.
-_CHECK_ONLY_OPENING_RE = re.compile(r"^\W*(confirm|verify)\b", re.IGNORECASE)
+# A block that says, in its own words, that an earlier block already does its
+# job: "satisfied by Block 1", "these are already implemented by Block 1",
+# "Block 1's implementation already handles these". Phrases that only say the
+# block USES something an earlier block built ("the tokenizer already built in
+# Block 1") are deliberately not here: that is how an ordinary leaf block reads.
 _SATISFIED_EARLIER_RE = re.compile(
-    r"\b(?:satisfied|already\s+(?:implemented|delivered|built|covered|handled))"
-    r"\b[^.\n]{0,60}\bBlock\s+\d+",
+    r"\bsatisfied\s+by\b[^.\n]{0,60}\bBlock\s+\d+"
+    r"|\b(?:is|are|was|were|been)\s+already\s+"
+    r"(?:implemented|delivered|built|covered|handled|met|satisfied)\b"
+    r"[^.\n]{0,60}\bBlock\s+\d+"
+    r"|\bBlock\s+\d+(?:'s\s+\w+)?\s+already\s+"
+    r"(?:satisfies|covers|meets|handles\s+(?:these|this|them|it|all|every))\b",
     re.IGNORECASE,
 )
+# A block that says it writes no code.
+_NO_CODE_RE = re.compile(
+    r"\b(?:no|without)\s+(?:new\s+|production\s+|source\s+|further\s+)?"
+    r"(?:code|implementation)\s+(?:changes?|is\s+(?:needed|required)|needed|required|work)\b"
+    r"|\b(?:needs|requires)\s+no\s+(?:new\s+)?(?:code|implementation)\b"
+    r"|\bno\s+(?:new|production|source)\s+code\b",
+    re.IGNORECASE,
+)
+# A backticked file path: no spaces or brackets, and a directory or a known
+# file extension (so `textkit.summary.summarize` and `str.split` are not paths).
+_PATH_TOKEN_RE = re.compile(r"`([\w./-]+)`")
+_PATH_EXTENSIONS = frozenset((
+    "py pyi js jsx ts tsx mjs cjs go rs rb java kt kts swift c h cc cpp hpp cs "
+    "php scala sh bash sql html htm css scss vue svelte toml json yaml yml cfg "
+    "ini md txt lock xml gradle"
+).split())
+_TEST_PATH_RE = re.compile(
+    r"(?:^|/)(?:tests?|spec|__tests__)/"
+    r"|(?:^|/)(?:test_[^/]*|[^/]*_test\.[^/]+|[^/]*\.(?:test|spec)\.[^/]+|conftest\.py)$"
+)
+
+
+def _named_paths(text: str) -> list[str]:
+    paths = []
+    for token in _PATH_TOKEN_RE.findall(text):
+        name = token.rsplit("/", 1)[-1]
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ("/" in token and not token.startswith("/")) or ext in _PATH_EXTENSIONS:
+            paths.append(token)
+    return paths
+
+
+def _left_unchanged(path: str, text: str) -> bool:
+    """The block says it leaves this file alone."""
+    p = re.escape(path)
+    return bool(
+        re.search(rf"`{p}`[^.;\n]{{0,40}}\bunchanged\b", text, re.IGNORECASE)
+        or re.search(
+            rf"\b(?:no\s+changes?\s+to|(?:do\s+not|don't|never)\s+"
+            rf"(?:modify|change|touch|edit))\s+(?:the\s+)?`{p}`",
+            text, re.IGNORECASE,
+        )
+    )
+
+
+def _block_bodies(text: str) -> dict[int, str]:
+    """Each block's text, prose AND checkboxes, without its Interfaces and
+    Satisfies lines. ``parse_blocks`` keeps only the checkbox lines of a
+    checkbox block, which drops the prose where a block says what it is."""
+    header = re.compile(r"^##\s+(\d+)\.\s+(.+)$", re.MULTILINE)
+    matches = list(header.finditer(text))
+    bodies = {}
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[match.end():end]
+        body = re.split(r"^Interfaces:\s*$", body, maxsplit=1, flags=re.MULTILINE)[0]
+        body = re.sub(r"^Satisfies:.*$", "", body, flags=re.MULTILINE)
+        bodies[int(match.group(1))] = f"{match.group(2)}\n{body}"
+    return bodies
 
 
 def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
     """Deterministic scan for blocks that add no behaviour.
 
     Such a block's tests pass before it is built, so the TDD RED gate fails it
-    and the build with it. A block is flagged when it produces nothing
-    (`Produces: (none)`) AND either its heading or description opens with
-    "Confirm"/"Verify", or it says an earlier block already satisfies it.
-    `Produces: (none)` alone is a legitimate last slice, so it is never enough.
-    Returns audit-finding dicts (same shape as ``scan_placeholders``, plus the
-    block's ``block`` number and ``name``).
+    and the build with it. A block is flagged only when it produces nothing
+    (`Produces: (none)`) AND its own text says it adds no code: it says an
+    earlier block already satisfies it, it says it needs no code, or every
+    file it names is a test file (or one it leaves unchanged).
+    `Produces: (none)` alone only says no later block calls it, and "Verify" or
+    "Confirm" is an ordinary verb for new behaviour (verify a signature), so
+    neither is ever enough. A block that names no file is never flagged on
+    files. The suggestion tells the rewrite to keep a block that does add
+    behaviour and name its code, so a false positive costs one rewrite, never
+    the block. Returns audit-finding dicts (same shape as
+    ``scan_placeholders``, plus the block's ``block`` number and ``name``).
     """
     from .tdd_engine import parse_blocks
 
+    if not tasks_path.exists():
+        return []
+    bodies = _block_bodies(tasks_path.read_text())
     findings = []
     for block in parse_blocks(tasks_path):
         if block.produces:
             continue
-        opening = block.description.lstrip("- ").strip()
-        if not (
-            _CHECK_ONLY_OPENING_RE.match(block.name)
-            or _CHECK_ONLY_OPENING_RE.match(opening)
-            or _SATISFIED_EARLIER_RE.search(block.description)
-        ):
-            continue
+        body = bodies.get(block.number, block.description)
+        if _SATISFIED_EARLIER_RE.search(body):
+            why = "it says an earlier block already satisfies it"
+        elif _NO_CODE_RE.search(body):
+            why = "it says it needs no code"
+        else:
+            paths = _named_paths(body)
+            changed = [p for p in paths if not _left_unchanged(p, body)]
+            if not paths or any(not _TEST_PATH_RE.search(p) for p in changed):
+                continue
+            why = (
+                "it names no code to write (every file it names is a test "
+                "file or one it leaves unchanged)"
+            )
         source = re.search(r"Block\s+(\d+)", " ".join(block.consumes))
         home = f"Block {source.group(1)}" if source else "the earlier block that builds it"
         findings.append({
@@ -693,16 +773,43 @@ def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
             "name": block.name,
             "description": (
                 f"Block {block.number} \"{block.name}\" adds no behaviour: it "
-                "produces nothing and only checks what an earlier block "
-                "builds, so its tests pass before it is built and the TDD "
-                "RED gate fails the build."
+                f"produces nothing and {why}, so its tests would pass before "
+                "it is built and the TDD RED gate would fail the build."
             ),
             "suggestion": (
-                f"Move its acceptance criteria and tests into {home}, which "
-                "builds the behaviour, and remove this block."
+                f"If {home} already delivers these criteria, move them and "
+                f"their tests into {home} and remove this block. If this block "
+                "does add behaviour, keep it and name the code it changes and "
+                "what that code does, so its tests fail until it is built."
             ),
         })
     return findings
+
+
+def tasks_findings_text(findings: list[dict]) -> str:
+    """Audit findings as the ``audit_findings`` text of a tasks rewrite."""
+    return "\n".join(
+        f"- [{f.get('severity', '?')}] {f.get('description', '')}"
+        + (f" Fix: {f['suggestion']}" if f.get("suggestion") else "")
+        for f in findings
+    )
+
+
+def report_no_behaviour_blocks_left(tasks_path: Path) -> list[dict]:
+    """After a rewrite, name any block the scan still flags.
+
+    Every audit here rewrites once and lets the plan stand, so this only
+    reports: a block named here will most likely fail the TDD RED gate.
+    """
+    left = scan_no_behaviour_blocks(tasks_path)
+    if left:
+        names = ", ".join(f"Block {f['block']}" for f in left)
+        log.warning(
+            "No-behaviour blocks remain after the rewrite (the TDD RED gate "
+            "will likely fail them): %s", names,
+        )
+        print(f"PHASE: no_behaviour_blocks_remain — {names}", flush=True)
+    return left
 
 
 async def _audit_tasks_shape(
@@ -751,11 +858,7 @@ async def _audit_tasks_shape(
             finding.get("description", "?"),
         )
 
-    findings_text = "\n".join(
-        f"- [{f.get('severity', '?')}] {f.get('description', '')}"
-        + (f" Fix: {f['suggestion']}" if f.get("suggestion") else "")
-        for f in findings
-    )
+    findings_text = tasks_findings_text(findings)
     try:
         content = await generate_artifact(
             "tasks", context, config,
@@ -776,6 +879,7 @@ async def _audit_tasks_shape(
         config, change_dir, "docs(specs): regenerate tasks.md after shape audit",
     )
     print(f"PHASE: tasks_regenerated_after_shape_audit — {len(findings)} findings")
+    report_no_behaviour_blocks_left(output_path)
 
 
 def _commit_change_dir(config, change_dir: Path, message: str) -> None:

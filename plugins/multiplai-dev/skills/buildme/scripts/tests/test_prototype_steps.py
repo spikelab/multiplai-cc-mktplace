@@ -230,8 +230,8 @@ class TestPrototypeFeedback:
         assert [c.args[0] for c in mock_gen.await_args_list] == ["design", "tasks", "tasks"]
         findings = mock_gen.await_args_list[2].kwargs["audit_findings"]
         assert "tax rate" in findings
-        assert "no-new-behaviour" in findings
         assert "Block 2" in findings and "Block 3" in findings
+        assert "adds no behaviour" in findings
         assert config.tasks_path.read_text() == fixed
         assert "no_behaviour_blocks_remain" not in capsys.readouterr().out
 
