@@ -708,8 +708,12 @@ each child gets its own worktree, branch and ready PR. When the parent's
 codebase analysis committed a `specs/registry` baseline (spec-extract), a
 child with no dependency in the epic's own repository branches from that
 commit instead, so it builds on the baseline and the registry reaches main
-with the first merged child PR; a child that waits on a dependency still
-branches from origin's default branch, after that merge. A `specs/config.yaml`
+with the first merged child PR; its PR still targets the default branch. It
+does so only when origin's default branch holds the commit the parent started
+from: a parent run from a feature branch or with unpushed commits gives every
+child origin's default branch, without the baseline, so no child PR carries
+those commits. A child that waits on a dependency still branches from origin's
+default branch, after that merge. A `specs/config.yaml`
 (the parent's, or that of a child's own `repo`)
 that sets `git.worktree` or `git.push` to `false` would build the children in
 place or open no PR, so the build exits `2` before launching any. The parent's

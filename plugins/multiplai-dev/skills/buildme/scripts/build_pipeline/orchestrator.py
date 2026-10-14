@@ -138,6 +138,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         if not state.is_phase_complete(BuildPhase.CODEBASE_ANALYSIS):
             log.info("START phase=CODEBASE_ANALYSIS")
             await _run_codebase_analysis_phase(config, state, progress)
+            # Save the analysis's report path before the step, which may return 1
+            # or be stopped: a re-run then skips the analysis (row S8).
+            state.checkpoint(state_path)
             rc = _run_spec_extract_step(config, state, progress)
             if rc is not None:
                 return rc
@@ -1415,7 +1418,12 @@ def _run_publish(
 
     sections = [p for p in [_worktree_section(state, docs_dir)] if p is not None]
     sections += _pre_publish_sections(config, state, docs_dir)
-    base = _pr_base_branch(worktree, config.base_ref)
+    # An epic's child opens its PR against the default branch. Its --base-ref is
+    # origin's default sha, or the parent's registry commit, which no origin
+    # branch holds until a sibling built on it pushes its own branch.
+    from .epic import CHILD_ENV
+
+    base = None if os.environ.get(CHILD_ENV) == "1" else _pr_base_branch(worktree, config.base_ref)
     pr_argv = _pr_open_argv(
         config.project_dir, docs_dir, state.branch, title, draft=draft, sections=sections,
         ticket_url=state.ticket_url, base=base,

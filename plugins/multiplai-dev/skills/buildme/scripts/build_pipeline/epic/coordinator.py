@@ -208,12 +208,15 @@ async def base_sha(repo: Path, *, need_fetch: bool) -> str | None:
     return None
 
 
-def registry_commit(config, state) -> str | None:
+def registry_commit(config, state, origin: str) -> str | None:
     """The parent's commit that holds the `specs/registry` baseline its
     spec-extract step committed: the last commit after the saved
     `spec_gen.spec_extract_sha` that changed `<specs_dir>/registry`, read in
     the parent's project. None when the parent ran no spec-extract, or committed
-    nothing from it (`SPEC_EXTRACT:NOT_RUN`, `--no-worktree`, a failed commit)."""
+    nothing from it (`SPEC_EXTRACT:NOT_RUN`, `--no-worktree`, a failed commit),
+    and None with a warning when *origin* (origin's default sha) does not hold
+    the saved commit: the parent started from a feature branch or unpushed
+    commits, which a child's PR to the default branch must not carry."""
     spec_gen = getattr(state, "spec_gen", None)
     saved = spec_gen.spec_extract_sha if spec_gen is not None else None
     if not saved:
@@ -222,7 +225,13 @@ def registry_commit(config, state) -> str | None:
     registry = os.path.relpath(Path(config.specs_dir) / "registry", project)
     res = _git(project, "rev-list", "-1", f"{saved}..HEAD", "--", registry)
     sha = res.stdout.strip()
-    return sha if res.returncode == 0 and sha else None
+    if res.returncode != 0 or not sha:
+        return None
+    if _git(project, "merge-base", "--is-ancestor", saved, origin).returncode != 0:
+        log.warning("the parent's registry commit %s sits on %s, which origin's default branch does not "
+                    "hold: children branch from origin without the baseline", sha[:12], saved[:12])
+        return None
+    return sha
 
 
 def in_place_reason(project_dir: Path) -> str | None:
@@ -606,14 +615,16 @@ class Coordinator:
         epic's own repository, branches from the parent's commit that holds the
         `specs/registry` baseline (`registry_commit`), so it builds on that
         baseline and the registry lands on main with the first merged child PR.
-        Any other child, and every child when the parent committed no baseline,
-        branches from origin's default branch (`base_sha`): one that waits on a
-        dependency does so after that dependency's merge."""
-        if not c.depends_on and c.root == self.repo:
-            registry = registry_commit(self.config, self.state)
+        Any other child, and every child when the parent committed no baseline
+        or started from a commit origin's default branch lacks, branches from
+        origin's default branch (`base_sha`): one that waits on a dependency does
+        so after that dependency's merge."""
+        origin = await base_sha(c.root, need_fetch=bool(c.depends_on))
+        if not c.depends_on and c.root == self.repo and origin:
+            registry = registry_commit(self.config, self.state, origin)
             if registry:
                 return registry
-        return await base_sha(c.root, need_fetch=bool(c.depends_on))
+        return origin
 
     async def _launch(self, c: Child) -> bool:
         """Start *c*. False when it was not started, with nothing written for
