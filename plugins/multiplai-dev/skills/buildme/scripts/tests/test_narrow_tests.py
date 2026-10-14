@@ -65,6 +65,8 @@ class TestRunnerOf:
         # A task runner behind a wrapper still takes its own arguments.
         "uv run tox -e pytest", "poetry run nox -s pytest", "python -m tox -e pytest",
         "env X=1 tox -e pytest", "npx nox -s jest",
+        # Appended paths would go to the last command of a chain.
+        "pytest && ruff check .", "pytest; echo done", "pytest | tee out.txt",
     ])
     def test_other_commands_are_unknown(self, tmp_path, command):
         assert runner_of(command, tmp_path) is None
@@ -112,8 +114,8 @@ class TestSelectTestPaths:
     @pytest.mark.parametrize("changed,files,runner", [
         # Django: the block's tests are in shop/tests.py, which pytest-django runs.
         (["shop/tests.py", "shop/forms.py"], ["shop/test_forms.py"], "pytest"),
-        # A helper module or conftest under a tests directory.
-        (["tests/test_new.py", "tests/conftest.py"], [], "pytest"),
+        # A helper module under a tests directory, which a project's
+        # `python_files` may collect.
         (["tests/test_new.py", "tests/helpers.py"], [], "pytest"),
         # jest's default __tests__ directory.
         (["src/__tests__/foo.js", "src/foo.js"], ["src/foo.test.js"], "node"),
@@ -122,6 +124,11 @@ class TestSelectTestPaths:
         # The block's own tests must always run, so a changed file the engine
         # counts as a test but the narrow run cannot name means the whole command.
         assert select_test_paths(changed, files, runner) == []
+
+    def test_conftest_and_init_do_not_stop_narrowing(self):
+        # pytest never collects tests from these.
+        changed = ["tests/test_new.py", "tests/conftest.py", "tests/__init__.py"]
+        assert select_test_paths(changed, [], "pytest") == ["tests/test_new.py"]
 
     def test_a_test_file_of_another_language_does_not_stop_narrowing(self):
         changed = ["tests/test_new.py", "web/src/__tests__/a.js"]
@@ -365,12 +372,13 @@ class TestAgentTestCommand:
         assert "add" in text and "path" in text
         assert "whole suite" in text
 
-    def test_before_the_block_has_tests_it_says_to_run_only_what_it_writes(self, project):
+    def test_before_the_block_has_tests_it_says_how_to_check_one_file(self, project):
         base = _repo(project)
         text = agent_test_command("pytest -xvs", project, base)
         assert text.splitlines()[0] == "pytest -xvs"
         assert "runs the whole suite" in text
         assert "test_<module>.py" in text
+        assert "run the command as given before you finish" in text
 
     def test_npm_whole_command_says_paths_go_after_the_separator(self, tmp_path):
         p = tmp_path / "web"

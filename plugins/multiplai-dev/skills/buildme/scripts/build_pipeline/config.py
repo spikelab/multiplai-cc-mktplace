@@ -1091,7 +1091,14 @@ class BuildConfig:
         tdd = data.get("tdd", {})
         if tdd.get("test_command"):
             self.test_command = tdd["test_command"]
-        self.narrow_tests = bool(tdd.get("narrow_tests", True))
+        narrow = tdd.get("narrow_tests", True)
+        text = str(narrow).strip().lower()
+        if isinstance(narrow, bool):
+            self.narrow_tests = narrow
+        elif text in ("no", "off", "0", "false"):
+            self.narrow_tests = False
+        elif text not in ("yes", "on", "1", "true"):
+            log.warning("Unrecognized tdd.narrow_tests value %r in config.yaml — using true", narrow)
 
         # Reviewer context: coding standards + optional stronger review model
         self.standards_files = data.get("standards_files") or []

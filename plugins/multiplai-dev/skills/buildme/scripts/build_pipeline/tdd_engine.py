@@ -66,7 +66,7 @@ from .models import (
     TestQualityAudit,
 )
 from .mutation import changed_source_files, mutation_applies, render_report, run_mutation, score_text
-from .narrow_tests import narrow_test_command
+from .narrow_tests import agent_test_command, narrow_test_command
 from .progress import ProgressWriter
 from .prompts.implementation import REVIEW_FIX_SELF_CHECK
 from .prompts.review import FINDING_ADJUDICATION_PROMPT
@@ -108,14 +108,22 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
 
 
 def _block_test_command(config: BuildConfig, block: BlockInfo) -> str:
-    """The test command for the block's own loop: RED, and the block's test
-    writer, implementer and refactorer. It runs the block's own test files and
-    the tests named after the source files it changed (`narrow_tests`), or the
-    whole `test_command` when it cannot narrow it. The gates that decide
-    whether work is done (`integration_gate`, `baseline_test_gate`) keep the
-    whole `test_command`."""
+    """The test command for the block's RED check. It runs the block's own
+    test files and the tests named after the source files it changed
+    (`narrow_tests`), or the whole `test_command` when it cannot narrow it.
+    The gates that decide whether work is done (`integration_gate`,
+    `baseline_test_gate`) keep the whole `test_command`."""
     return narrow_test_command(config.test_command, config.project_dir,
                                block.baseline_commit, enabled=config.narrow_tests)
+
+
+def _block_agent_test_command(config: BuildConfig, block: BlockInfo) -> str:
+    """What the block's test writer, implementer and refactorer are given as
+    their test command: `_block_test_command`, plus how to add the test files
+    they write and the tests named after the modules they change, which the
+    command, fixed before they start, cannot list."""
+    return agent_test_command(config.test_command, config.project_dir,
+                              block.baseline_commit, enabled=config.narrow_tests)
 
 
 # git's well-known empty-tree object. Used as the diff baseline when the
@@ -833,7 +841,7 @@ async def _enforce_test_quality(
         ),
         specs=specs,
         context_bundle=context,
-        test_command=_block_test_command(config, block),
+        test_command=_block_agent_test_command(config, block),
         model=config.model_for("test_writer"),
         effort=config.agent_effort,
         cwd=str(config.project_dir),
@@ -943,7 +951,7 @@ async def _enforce_red_gate(
                 ),
                 specs=specs,
                 context_bundle=context,
-                test_command=command,
+                test_command=_block_agent_test_command(config, block),
                 model=config.model_for("test_writer"),
                 effort=config.agent_effort,
                 cwd=str(config.project_dir),
@@ -1123,7 +1131,7 @@ async def run_block_tdd(
         block_description=block.description,
         specs=specs,
         context_bundle=context,
-        test_command=_block_test_command(config, block),
+        test_command=_block_agent_test_command(config, block),
         model=config.model_for("test_writer"),
         effort=config.agent_effort,
         cwd=cwd,
@@ -1195,7 +1203,7 @@ async def run_block_tdd(
         block_description=block.description,
         failing_tests=test_result.output,
         context_bundle=impl_context,
-        test_command=_block_test_command(config, block),
+        test_command=_block_agent_test_command(config, block),
         prompt_style=config.implementer_prompt_style,
         model=config.model_for("implementer"),
         effort=config.agent_effort,
@@ -1268,7 +1276,7 @@ async def run_block_tdd(
             block_name=block.name,
             block_description=block.description,
             context_bundle=refactor_context,
-            test_command=_block_test_command(config, block),
+            test_command=_block_agent_test_command(config, block),
             model=config.model_for("refactor"),
             effort=config.agent_effort,
             cwd=cwd,

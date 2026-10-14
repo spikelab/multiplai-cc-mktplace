@@ -30,10 +30,18 @@ time, not derived from a tag.
   step still run the whole command, so a block is still only done when the
   whole suite passes.
 - The narrow run applies only when the test command is pytest, or jest or
-  vitest (directly or through `npm test`, whose paths go after `--`). Any
-  other command, or a block that selects no test file, runs the whole
-  command as before. Set `tdd.narrow_tests: false` in `specs/config.yaml` to
-  always run the whole command.
+  vitest (directly or through an `npm test` script that is a single jest or
+  vitest command, whose paths go after `--`). Any other command (a task
+  runner such as tox, even behind `uv run`, or a chained command), a block
+  that selects no test file, a changed test file the naming cannot pick out
+  (Django's `tests.py`, `__tests__/`), a run that collects coverage, or a Node path
+  jest would read as a regex runs the whole command as before. Set
+  `tdd.narrow_tests: false` in `specs/config.yaml` to always run the whole
+  command.
+- The test writer, implementer and refactorer are also told how to add the
+  test files they write and the test file named after each module they
+  change, since their command is fixed before they start. The implementer
+  prompts now say to run the given test command, not "the full test suite".
 
 ## [0.66.0] - 2026-10-14
 

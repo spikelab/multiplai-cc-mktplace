@@ -252,13 +252,31 @@ implementer and refactorer, run:
    started, untracked files included);
 2. for each source file the block changed, the test file named after it:
    `test_<module>.py` or `<module>_test.py` for pytest, `<name>.test.<ext>` or
-   `<name>.spec.<ext>` for jest and vitest.
+   `<name>.spec.<ext>` for jest and vitest. When several packages have a test
+   file of that name, the one nearest the source file is taken.
 
 Tests are never picked by what they import. The paths are appended to the test
 command (`tdd.test_command`, else the discovered one) only when its runner
-accepts them: pytest, or jest or vitest run directly or through `npm test`
-(the paths go after `--`). Any other command, or a block that selects no test
-file, runs the whole command, so RED can never pass on an empty run.
+accepts them: pytest, or jest or vitest run directly or through an `npm test`
+script that is a single jest or vitest command (the paths go after `--`).
+The whole command runs instead when:
+
+- the command is anything else, including a task runner such as tox or nox,
+  even behind `uv run` or `python -m`, or a chain (`pytest && ruff check .`);
+- the block selects no test file;
+- the block changed a file in tests that this naming cannot pick out (Django's
+  `tests.py`, a file under `__tests__/`, a helper module under `tests/`), so its
+  own tests are never left out;
+- the run collects coverage (`--cov` in the command, `PYTEST_ADDOPTS` or the
+  pytest config; for Node, `coverage` in the command, the `npm test` script,
+  package.json's `jest` key or a jest, vitest or vite config), because a narrow
+  run can miss a coverage floor the whole suite meets;
+- a Node test path holds a character jest reads as a regex (`[id]`, `(auth)`).
+
+So RED never passes on a run that left out the block's own tests. The agents'
+command is fixed before they change anything, so each agent is also told to
+add the test files it writes and the test file named after each module it
+changes.
 
 The checks that decide whether work is done still run the **whole** command:
 the baseline gate, the integration gate after each block (which also checks a
