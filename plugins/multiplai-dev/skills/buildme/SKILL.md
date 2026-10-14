@@ -62,7 +62,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--approve-split` | Approve the epic split the build printed as `EPIC:SPLIT:<split.md>`, as `split.md` and `plans/` are on disk now. See [Epic mode](#epic-mode-one-input-several-changes). |
 | `--no-epic-split` | Build the input as one change: no `EPIC_SPLIT` decision, no model call. An epic's child builds pass it. |
 | `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch; a build that re-binds to its worktree ignores it. When the commit is not on the default branch, the PR targets the branch that holds it (`--base`). Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
-| `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. |
+| `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. An approved epic vouches for its own repo: it passes `--trust-repo` to each child build, review and fixer, and its merge step's one agent call (under `epic.merge: auto`) runs trusted for that call only. |
 
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: true}`,
 `prototype: {enabled: auto|true|false}`, `respec: {halt_on_contradiction: false}`,
@@ -370,7 +370,7 @@ the test-quality audit.
 | Stage | Steps |
 |---|---|
 | `spec` | `spec_artifact` (every spec artifact, use-cases included), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `interview`, `research`, `findings_spec` (the findings stage's spec delta) |
-| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `prototype` |
+| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `prototype`, `merge` |
 | `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt), `findings_triage` (the findings stage's one read-only agent per PR comment), `findings_self_check` (the findings stage's one read-only check of a round's fix commits) |
 
 The tier (advanced or standard) comes from the default model: Fable, or Opus
@@ -654,7 +654,9 @@ the next run waits for them. An ignored SIGHUP or SIGTERM (SIGHUP under
 `specs/config.yaml` takes an `epic:` block: `epic.max_parallel` (default `2`),
 `epic.max_review_rounds` (default `6`), `epic.merge` (`auto` or `manual`,
 default `manual`; under `manual` a human merges each child's PR, and under
-`auto` buildme first merges the default branch into it, tests and pushes) and
+`auto` buildme first merges the default branch into it, tests and pushes;
+a version, CHANGELOG or lockfile conflict there costs one agent call, with
+Read, Edit and Bash in the child's worktree, counted against `epic.max_usd`) and
 `epic.max_usd` (one ceiling for the whole epic, default none; each child keeps
 its own `budget.max_usd` too). `build` and `findings` print
 `SPEND:<usd>:<tokens>` as their last line on every exit but a kill (SIGTERM
@@ -747,19 +749,28 @@ naming every such PR still open, and a re-run once a person merged them goes
 on. Under `auto`, the default branch is first merged into each such PR, in its
 worktree, one merge at a time per repository. The worktree must hold nothing
 but buildme's own files and be at the reviewed head (or it plus the merge step's own merges), else the child parks naming what it found; then
-`git merge --no-ff --no-commit origin/<default>`. Any conflict parks the
-child, naming the files: this release resolves none. The project's tests then run in the worktree
+`git merge --no-ff --no-commit origin/<default>`. Conflicts only in version
+fields, CHANGELOGs and lockfiles go to one agent call (step `merge`,
+`agents/<NNN>-merge-<id>.*`, counted against `epic.max_usd`), and so does a
+version both sides raised alike, which git merges cleanly at the default
+branch's value: the agent writes the next version after the default branch's,
+keeps both CHANGELOG entries in full with the child's under that version, and
+regenerates a lockfile from the default branch's copy. A conflict in any other
+file (a deleted or binary side included), any other file the agent changed,
+staged or not, or a change the merge did not make, parks the child; when the
+agent changed other files, the hint names the `checkout` or `rm` that undoes
+them before the abort. The project's tests then run in the worktree
 (`tdd.test_command`, else the command buildme discovers, with
 `BUILDME_TRUST_REPO=1`, `agents/<NNN>-merge-tests-<id>.*`; SIGHUP ends them with the run), and a failure
 parks. The merge commit is pushed, never forced; a push rejected because origin's branch moved parks naming
-where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. A merge commit holding only git's own merge, as the merge step's own do, is not
+where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. When `epic.max_usd` is reached and the merge would need the agent, nothing is merged. A merge commit holding only git's own merge plus such resolutions (checked against each file's three sides: a version file is git's merge with each version value the side's that changed it or, where both did, the next after the default branch's; a CHANGELOG is the default branch's with every line the child added; a lockfile in a format read as data (TOML, JSON, pnpm's YAML) loads with no key twice, holds only either side's keys and values, the written version or a new hex manifest hash, and pins each package, under its own name, as one side does; another lockfile holds only either side's lines or the written version), as the merge step's own do, is not
 reviewed again; any other, such as a person's "Update branch" with other edits, is. This release does not merge the PR itself under `auto`: after
 the push it waits for a person, as under `manual`. A run stopped during the
 merge saves what the worktree held (`merge_stop` in `epic.json`); the next
 run aborts the stopped merge and merges again only when nothing else changed
 in the worktree since, and otherwise parks with `git -C <worktree> merge
 --abort, then re-run`, leaving everything as it is. A merge commit made but
-not pushed, holding only git's own merge, is tested again and pushed. A child the merge step parked is
+not pushed, holding only such resolutions, is tested again and pushed. A child the merge step parked is
 tried again by a later run once its worktree has no merge in progress and no
 uncommitted change (after `merge --abort`, as the hint says), and parks again
 if the merge fails again; every other parked child stays parked.

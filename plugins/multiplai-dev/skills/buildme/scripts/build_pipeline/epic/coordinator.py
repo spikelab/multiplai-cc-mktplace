@@ -29,9 +29,9 @@ Its stop and resume rows are PR D2's table.
 
 A child whose review left no blocker gets ready to merge (PR E1, items
 35-41; `_merge`, `merge.py`). Under `epic.merge: auto` the merge step merges
-`origin/<default>` into the child's branch in its worktree, runs the tests
-and pushes, one merge per repo at a time; a conflict parks the child, until
-item 40.3 lands. Under `manual` (the default) it does
+`origin/<default>` into the child's branch in its worktree, has an agent
+resolve version, CHANGELOG and lockfile conflicts, runs the tests and
+pushes, one merge per repo at a time. Under `manual` (the default) it does
 nothing. Either way the PR is then waited on, and the run exits 3 with
 `EPIC:MERGE_WAITING` while it is open: until PR E2 (items 40.5, 40.6) a
 human merges it. Its stop and resume rows are PR E's table.
@@ -61,9 +61,10 @@ from pathlib import Path
 
 import yaml
 
-from .. import git_ops, intake, stop_record
+from .. import budget, git_ops, intake, stop_record
 from ..config import git_toggles
 from ..findings.decisions import write_decisions
+from ..models import AgentResult
 from . import fix, merge, records, review, spend, store
 
 log = logging.getLogger(__name__)
@@ -1062,7 +1063,7 @@ class Coordinator:
             return self._merge_park(c, f"cannot read the branch checked out in {w}")
         default, origin_ref = git_ops.default_branch(w), f"refs/remotes/origin/{name}"
         _merge_point(self, c, "start")
-        if not merge.merging(w) and merge.unpushed_merge(w, reviewed, name, default):     # item 37
+        if not merge.merging(w) and await asyncio.to_thread(merge.unpushed_merge, w, reviewed, name, default):  # 37
             head = git_ops.rev_parse_head(w)
             why = stop_record.others_work(w, None, head=head)
             if why:
@@ -1096,7 +1097,7 @@ class Coordinator:
 
     async def _merge_default(self, c: Child, w: Path, reviewed: str | None, name: str, default: str,
                              origin_ref: str, *, check: bool = True) -> str | None:
-        """40.1-40.4: check, merge `origin/<default>`, test, commit and
+        """40.1-40.4: check, merge `origin/<default>`, resolve, test, commit and
         push. "merged" or "up to date"; None when the child parked or is
         `unknown`. *check* False: item 38 aborted a merge, so restart at 40.2."""
         why = merge.ready(w, reviewed, origin_ref, default) if check else None             # 40.1
@@ -1105,6 +1106,8 @@ class Coordinator:
         c.merge_stop = None                                                                 # 40.2
         self._save()
         failed = await _fetch_origin(w)
+        if failed is None and await asyncio.to_thread(merge.agent_ahead, w, default) and self._over_budget():
+            return None       # Decided 6: the agent would launch past the ceiling; nothing merged (E.S27)
         if failed is not None:
             c.status, c.reason = "unknown", f"{MERGE_UNKNOWN}git fetch origin failed: {failed}"
             log.warning("EPIC child %s: %s", c.id, c.reason)
@@ -1119,10 +1122,19 @@ class Coordinator:
         files = merge.conflicted(w)
         if files is None:
             return self._merge_park(c, f"git cannot list the conflicts in {w}{hint}")
-        if files:         # until item 40.3 lands, the step resolves no conflict
+        left = merge.outside_merge(w, files)          # kept by item 38's abort: tested, never committed (E.S28)
+        if left is None or left:
             c.merge_stop = stop_record.record(w)
-            return self._merge_park(c, f"merging origin/{default} conflicts in {', '.join(files)}, which the "
-                                       f"merge step may not resolve{hint}")
+            return self._merge_park(c, f"git cannot list the changes in {w}{hint}" if left is None else
+                                    f"{w} holds changes the merge commit would leave out ({', '.join(left)}); "
+                                    f"remove them, then {merge.abort_hint(w)}")
+        todo = await asyncio.to_thread(merge.plan, w, "HEAD", "MERGE_HEAD")
+        if todo is None:
+            c.merge_stop = stop_record.record(w)
+            return self._merge_park(c, f"git cannot list the conflicts in {w}{hint}")
+        if (files or todo.files or todo.refused) and not await self._resolve_conflicts(               # 40.3
+                c, w, todo, files, reviewed, name, default, hint):
+            return None
         if not await self._merge_tests(c, w, reviewed, hint=hint):                           # 40.4
             return None
         res = merge.git(w, "commit", "--no-edit")
@@ -1130,6 +1142,59 @@ class Coordinator:
             c.merge_stop = stop_record.record(w)
             return self._merge_park(c, f"git commit failed: {review.tail(res.stderr)}{hint}")
         return "merged" if self._push(c, w, name) else None
+
+    async def _resolve_conflicts(self, c: Child, w: Path, todo: merge.Plan, conflicted: list[str],
+                                 head: str | None, name: str, default: str, hint: str) -> bool:
+        """40.3: one agent call resolves version fields, CHANGELOGs and
+        lockfiles (`merge.plan`: the conflicted ones, and a version both sides
+        raised, which git merges cleanly when both wrote the same one). A
+        conflicted file it may not resolve parks before the call; a failed
+        call, a marker left, another file changed, or a resolution
+        `merge.not_resolutions` names, after it. The files are staged for the
+        commit. *conflicted*: the files git left conflicted."""
+        bad = list(dict.fromkeys([*todo.refused, *(f for f in conflicted if f not in todo.files)]))
+        if bad:
+            c.merge_stop = stop_record.record(w)
+            self._merge_park(c, f"merging origin/{default} conflicts in {', '.join(bad)}, which the "
+                                f"merge step may not resolve{hint}")
+            return False
+        files = todo.files
+        attempt = records.start(self.epic_dir, "merge", c.id, ["merge", *files], head_sha=head,
+                                pr_round=c.pr_round)
+        self._save()
+        before, staged = budget.process_spend().cost_usd, merge.index(w)
+        try:
+            result = await merge.run_merge_agent(self.config, w, files, name, default)
+        except Exception as exc:   # an ordinary error, not a stop: the call failed, and its spend is known
+            result = AgentResult(success=False, error=f"{type(exc).__name__}: {exc}")
+        except BaseException:      # a cancelled call records no usage: its spend is unknown
+            records.finish(attempt, None, interrupted=True)
+            raise
+        changed = None if staged is None else merge.changed_since(w, staged)
+        left = merge.unresolved(w, files) if result.success else []
+        others = None if changed is None else [p for p in changed if p not in files]
+        why = (f"the merge agent failed: {review.tail(result.error or result.output or '')}" if not result.success
+               else f"the merge agent left conflicts in {', '.join(left)}" if left
+               else f"git cannot list what the merge agent changed in {w}" if others is None
+               else f"the merge agent changed files it may not: {', '.join(others)}" if others else None)
+        records.finish(attempt, 0 if result.success else 1, interrupted=False,
+                       extra={"spend": round(budget.process_spend().cost_usd - before, 6)})
+        # Unstaged edits to files git did not leave conflicted would block the abort, or outlive it (E.S26).
+        stray = [p for p in changed or [] if p not in conflicted]
+        hint = f"; {merge.undo_hint(w, stray)}" if why and stray else hint
+        if why is None and not merge.git(w, "add", "--", *dict.fromkeys([*files, *changed])).ok:
+            why = f"git add failed in {w}"
+        if why is None:       # by content, as `merges_onto` checks a pushed merge; staged, so the abort works
+            tree = merge.git(w, "write-tree")
+            beyond = (await asyncio.to_thread(merge.not_resolutions, w, "HEAD", "MERGE_HEAD", tree.stdout.strip())
+                      if tree.ok else None)
+            why = (f"git cannot compare the merge agent's resolution in {w}" if beyond is None
+                   else f"the merge agent changed more than 40.3 allows in {', '.join(beyond)}" if beyond else None)
+        if why:
+            c.merge_stop = stop_record.record(w)
+            self._merge_park(c, why + hint)
+            return False
+        return True
 
     async def _merge_tests(self, c: Child, w: Path, head: str | None, *, hint: str) -> bool:
         """40.4: the project's test command in `<P>`, with `BUILDME_TRUST_REPO=1`,
