@@ -43,9 +43,11 @@ exits 3 with `EPIC:BUDGET:<spent>`. A fixer runs several rounds in one
 launch, so it is given what is left as `findings --max-usd`: the cap less
 the spend and less what fixers still running were given and have not yet
 spent on their PRs' reviews. While those hold all that is left, a fixer
-waits for them and nothing new is launched. One that stopped at its share
-(`FINDINGS:BUDGET`) is a budget stop too: its result is `interrupted`, so a
-re-run after `epic.max_usd` is raised runs it again.
+waits for them and nothing new is launched, by `_loop` or inside a step
+(`_unheld`). One that stopped at its share (`FINDINGS:BUDGET`) has an
+`interrupted` result: with the spend at `epic.max_usd` it is a budget stop,
+and a re-run after `epic.max_usd` is raised runs it again; under it, it runs
+again with its share recomputed once the others end.
 `epic.json` and each summary hold `spent_usd` and `spend_complete`.
 """
 
@@ -846,7 +848,7 @@ class Coordinator:
                         continue
                     await self._after_review(c, head)
                     return
-                if self._over_budget():           # Decided 6: before each launch
+                if not await self._unheld():      # Decided 6, D2.S18: before each launch
                     c.status, c.reason = "built", ""
                     return
                 stale = [a for a in records.attempts(self.epic_dir)
@@ -861,7 +863,7 @@ class Coordinator:
                 hint = review.INTERRUPTED.search(out) if code == 4 else None
                 if hint:                  # C.S3
                     records.finish(c.rattempt, code, interrupted=False)
-                    if self._over_budget():
+                    if not await self._unheld():
                         c.status, c.reason = "built", ""
                         return
                     code, out = await self._run_review(c, "resume", review.resume_argv(hint.group(1).strip()), head)
@@ -984,10 +986,13 @@ class Coordinator:
         or exit 128 + SIGTERM or SIGHUP; its result `interrupted`, so the next
         run runs it again, D2.S5), or `unknown`. It is given what is left of
         `epic.max_usd` (`_left`) as `--max-usd`, after waiting while other
-        running fixers hold all of it (D2.S18); when it stopped there
-        (`FINDINGS:BUDGET`), the epic's budget is reached: the child stays
-        `built`, its result is `interrupted` so a run with a higher
-        `epic.max_usd` runs it again (D2.S16), and nothing more is launched."""
+        running fixers hold all of it (D2.S18). When it stopped there
+        (`FINDINGS:BUDGET`) its result is `interrupted`. With the epic's spend
+        at `epic.max_usd`, the budget is reached: the child stays `built`, a
+        run with a higher `epic.max_usd` runs it again (D2.S16), and nothing
+        more is launched. Under it, the fixer used up only its share while
+        others held the rest: True, so the review step runs it again with
+        its share recomputed (D2.S19)."""
         project = self._child_project(c)
         change = f"{self.epic.name}-{c.id}"
         if not await self._fixer_gone(c, number):
@@ -995,11 +1000,11 @@ class Coordinator:
         ceiling = self.settings.max_usd
         c.status = "reviewing"
         left = None if ceiling is None else self._left(c.id)
-        while left is not None and left <= 0 and any(cid != c.id for cid in self.shares):
-            await CLOCK.sleep(POLL)           # D2.S18: wait for the fixers that hold it
+        while left is not None and left <= 0:
             if self._over_budget():
                 c.status, c.reason = "built", ""
                 return False
+            await CLOCK.sleep(POLL)           # D2.S18: wait for the fixers that hold it
             left = self._left(c.id)
         argv = fix.fix_argv(getattr(self.args, "session_id", "") or "", number, change, project, rounds, left)
         attempt = records.start(self.epic_dir, "fix", c.id, argv, head_sha=head, pr_round=c.pr_round)
@@ -1011,8 +1016,11 @@ class Coordinator:
             self.shares.pop(c.id, None)
         if code == 0 and fix.budget_stopped(out):
             records.finish(attempt, code, interrupted=True)
+            if not self._over_budget():       # D2.S19: only its share; the others' real spend decides
+                log.info("EPIC child %s: its fixer stopped at its $%.2f share of epic.max_usd $%.2f; "
+                         "it runs again once the other fixers end", c.id, left or 0.0, ceiling or 0.0)
+                return True
             c.status, c.reason = "built", ""
-            self.budget_stop = self.spent()[0]
             log.warning("EPIC child %s: its fixer stopped at the $%.2f left of epic.max_usd $%.2f: "
                         "launching nothing more", c.id, left or 0.0, ceiling or 0.0)
             return False
@@ -1273,7 +1281,7 @@ class Coordinator:
         c.merge_stop = None                                                                 # 40.2
         self._save()
         failed = await _fetch_origin(w)
-        if failed is None and await asyncio.to_thread(merge.agent_ahead, w, default) and self._over_budget():
+        if failed is None and await asyncio.to_thread(merge.agent_ahead, w, default) and not await self._unheld():
             return None       # Decided 6: the agent would launch past the ceiling; nothing merged (E.S27)
         if failed is not None:
             c.status, c.reason = "unknown", f"{MERGE_UNKNOWN}git fetch origin failed: {failed}"
@@ -1562,10 +1570,20 @@ class Coordinator:
 
     def _held_back(self) -> bool:
         """True while running fixers hold all that is left of `epic.max_usd`:
-        no build or review is started then, as it would spend their share.
-        Not a budget stop: once they end, their real spend decides."""
+        nothing paid is launched then (a build, a review or its resume, the
+        merge agent), as it would spend their share. Not a budget stop: once
+        they end, their real spend decides."""
         ceiling = self.settings.max_usd
         return ceiling is not None and bool(self.shares) and self.spent()[0] + self._held() >= ceiling
+
+    async def _unheld(self) -> bool:
+        """Before a launch from inside a step (a review, a resume, the merge
+        agent): wait while running fixers hold all that is left (`_held_back`),
+        as `_loop` does for builds and reviews. False once `epic.max_usd` is
+        reached."""
+        while self._held_back() and not self._over_budget():
+            await CLOCK.sleep(POLL)
+        return not self._over_budget()
 
     def _over_budget(self) -> bool:
         """True once `epic.max_usd` is set and reached; then for the rest of the run."""

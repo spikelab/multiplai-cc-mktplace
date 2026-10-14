@@ -641,6 +641,9 @@ if step.get("block"):
     gate = root / "release" / f"review-{{n}}"
     while not gate.exists():
         time.sleep(0.02)
+if step.get("busy"):        # told another review runs now, after its `started` line
+    print(f"ERROR: a review of {{target}} is running now (pid 0); wait for it", file=sys.stderr, flush=True)
+    sys.exit(2)
 if step.get("die"):
     os.kill(os.getpid(), signal.SIGKILL)
 (target / "findings.json").write_text(json.dumps({{"mode": None, "findings": step.get("findings", [])}}))
@@ -806,7 +809,8 @@ class Fakes:
     `<root>/calls.log`. `<root>/gh-fails` makes every `gh` call fail; `ps_fails`
     puts a `ps` that exits 1 first on PATH. The fake review (`uv`, PR C)
     answers from `<root>/reviews.json` (per PR number, one step per `review`
-    launch: `block`, `die`, `exit` with `stderr`, `findings`, `cost`, `stopped`
+    launch: `block`, `die`, `exit` with `stderr`, `busy` (exit 2, another review
+    runs now, its `started` line left), `findings`, `cost`, `stopped`
     (the `finished` line's value); `resume`
     has its own key) and logs its launches to `<root>/reviews.log`; by
     default each review is clean. PR D2: `review_pipeline post` answers from

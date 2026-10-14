@@ -6,10 +6,12 @@
    ledger) reaches the ceiling and the fetch found something to act on,
    printing `FINDINGS:BUDGET:<rounds>:<spent>`; with nothing to act on it
    ends `FINDINGS:DONE` as before. The coordinator passes the epic's
-   remaining budget less what fixers still running were given, waits while
-   they hold all of it, and a fixer that stopped there is a budget stop: the
-   run exits 3 with `EPIC:BUDGET`, and a re-run relaunches it only once
-   `epic.max_usd` is raised.
+   remaining budget less what fixers still running were given, and waits,
+   as every other paid launch does, while they hold all of it. A fixer that
+   stopped there with the epic's spend at the cap is a budget stop: the run
+   exits 3 with `EPIC:BUDGET`, and a re-run relaunches it only once
+   `epic.max_usd` is raised. Under the cap, it runs again once the others
+   end.
 2. `findings --severities HIGH,MEDIUM --code-only`: under `--auto` a
    re-review posts, so the fixer acts on, only Code findings of those
    severities. The epic passes what it blocks on, and its own post keeps the
@@ -406,3 +408,111 @@ def test_nothing_new_launches_while_running_fixers_hold_what_is_left(tmp_path, m
     assert sorted(merge_waiting()) == sorted(pr_url(f"e-{c}") for c in "abc")
     assert early == []
     assert len(builds_of_c()) == 1
+
+
+def test_a_fixer_stopped_at_its_share_runs_again_once_the_others_end(tmp_path, monkeypatch, capsys):
+    """A fixer launched with a small share ($1 of the $20 cap: $10 spent, the
+    other fixer holding $9) stops there with `FINDINGS:BUDGET` while the
+    epic's spend ($14) is under the cap. That is not a budget stop: once the
+    other fixer has ended ($18 spent), it runs again with the $2 left, and
+    both PRs wait for their merge. Before the fix the run stopped with
+    `EPIC:BUDGET` under the cap. The launch hold is off, so b's review and
+    post go ahead while a's fixer runs."""
+    from build_pipeline.epic import coordinator, records
+
+    monkeypatch.setattr(coordinator.Coordinator, "_held_back", lambda self: False)
+    # a running fixer's PR has $1 of reviews since its launch: a's share of $10 holds $9
+    monkeypatch.setattr(coordinator.Coordinator, "_pr_reviews", lambda self, c: 1.0 if c.id in self.shares else 0.0)
+    na, nb = pr_number("e-a"), pr_number("e-b")
+    reviews = {str(na): [{"findings": [high("f1")]}], str(nb): [{"block": True, "findings": [high("g1")]}]}
+    fixes = {str(na): [{"block": True, "rounds": [{}]}], str(nb): [{"rounds": [{}], "budget": "1.000000"}, {}]}
+    e = Epic(tmp_path, monkeypatch, answer=TWO, reviews=reviews, fixes=fixes, max_usd=20.0)
+    _fake_spend(monkeypatch, e, 10.0, 4.0)
+
+    def b_fixes() -> list[records.Attempt]:
+        return [a for a in records.attempts(e.dir) if a.child == "b" and a.kind == "fix"]
+
+    def tick(coord):
+        if na not in [_fix_of(x) for x in e.fakes.fix_launches()]:
+            return
+        (e.root / "release").mkdir(exist_ok=True)
+        (e.root / "release" / f"review-{nb}").write_text("")      # b is reviewed once a's fixer runs
+        if any(a.result for a in b_fixes()):
+            (e.root / "release" / f"fix-{na}").write_text("")
+
+    monkeypatch.setattr(coordinator, "_tick", tick)
+    assert e.run() == 3 and sorted(merge_waiting()) == sorted([pr_url("e-a"), pr_url("e-b")])
+    assert not [x for x in capsys.readouterr().out.splitlines() if x.startswith("EPIC:BUDGET")]
+    usd = {n: [_opt(x["argv"], "--max-usd") for x in e.fakes.fix_launches() if _fix_of(x) == n] for n in (na, nb)}
+    assert usd == {na: ["10.000000"], nb: ["1.000000", "2.000000"]}
+    first, again = b_fixes()
+    assert (first.result["exit_code"], first.result["interrupted"]) == (0, True)
+    assert (again.result["exit_code"], again.result["interrupted"]) == (0, False)
+    assert e.status("b")["status"] != "parked"
+
+
+def _hold_after(monkeypatch, hold: dict) -> None:
+    """`_held_back` is True until the coordinator's clock reaches `hold["until"]`."""
+    from build_pipeline.epic import coordinator
+
+    monkeypatch.setattr(coordinator.Coordinator, "_held_back",
+                        lambda self: hold["until"] is not None and coordinator.CLOCK.now() < hold["until"])
+
+
+def test_a_running_review_step_launches_nothing_while_fixers_hold_what_is_left(tmp_path, monkeypatch):
+    """A review step that is already running launches no review and no
+    resume while running fixers hold all that is left (`_held_back`). Its
+    first review is told another runs now (exit 2), so it asks again; the
+    second finds that one interrupted (exit 4) and it is resumed. After each
+    of those answers a fixer is made to hold all that is left for 120 s of
+    the coordinator's clock (longer than the 60 s it waits after exit 2): the
+    next launch waits for it. Before the fix only `_loop`'s launches waited."""
+    from build_pipeline.epic import coordinator
+
+    hold: dict = {"until": None}
+    _hold_after(monkeypatch, hold)
+    early: list[str] = []
+    real = coordinator.Coordinator._run_review
+
+    async def run_review(self, c, kind, argv, head):
+        if self._held_back():
+            early.append(kind)
+        code, out = await real(self, c, kind, argv, head)
+        if code in (2, 4):
+            hold["until"] = coordinator.CLOCK.now() + 120.0
+        return code, out
+
+    monkeypatch.setattr(coordinator.Coordinator, "_run_review", run_review)
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, reviews={str(N): [{"busy": True}, {}]})
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    assert e.kinds() == ["build", "review", "review", "resume"]
+    assert early == []
+
+
+def test_the_merge_agent_waits_while_running_fixers_hold_what_is_left(tmp_path, monkeypatch):
+    """The merge step's agent is a paid launch too: while running fixers hold
+    all that is left (`_held_back`, here for 120 s of the coordinator's clock
+    from the merge step's start), it waits, then resolves and the PR merges.
+    Before the fix it was launched at once."""
+    from build_pipeline.epic import coordinator
+
+    from .test_epic_merge import MergeRoot
+
+    r = MergeRoot(tmp_path, monkeypatch)
+    hold: dict = {"until": None}
+    _hold_after(monkeypatch, hold)
+    real_point, agent, early = r.point, r.agent, []
+
+    def point(coord, c, name):
+        real_point(coord, c, name)
+        if name == "start" and hold["until"] is None:
+            hold["until"] = coordinator.CLOCK.now() + 120.0
+
+    async def timed(config, w, files, name, default):
+        if coordinator.CLOCK.now() < hold["until"]:
+            early.append(files)
+        return await agent(config, w, files, name, default)
+
+    r.point, r.agent = point, timed
+    assert r.run() == 0 and r.merged()
+    assert len(r.calls("merge-agent")) == 1 and early == []

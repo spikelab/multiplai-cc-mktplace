@@ -773,16 +773,19 @@ runs several rounds in one launch, so it is given what is left of
 `epic.max_usd` as `findings --max-usd`: the cap less the epic's spend and
 less what the other fixers still running were given and have not yet spent
 on their PRs' reviews. While running fixers hold all that is left, another
-fixer waits for them and no build or review starts; once they end, their
-real spend decides. A fixer stops before a round with something to act on
-once its own spend and its reviews' reach its share; the run then exits `3`
-with `EPIC:BUDGET` as well, the child is not parked, and a re-run after
-`epic.max_usd` is raised runs the fixer again. A fixer whose last round left
+fixer waits for them, and no build, review, review resume or merge agent
+starts; once they end, their real spend decides. A fixer stops before a
+round with something to act on once its own spend and its reviews' reach
+its share. If the epic's spend is still under the cap, other fixers held the
+rest: it runs again with its share recomputed once they end. Once the spend
+has reached the cap, the run exits `3` with `EPIC:BUDGET` as well, the child
+is not parked, and a re-run after `epic.max_usd` is raised runs the fixer
+again. A fixer whose last round left
 nothing to act on ends as done even past its share, so its PR goes on to
 the merge step. The round that crosses a fixer's share finishes, so the epic
 can end up to one fix round (a fix and a review) per fixer running at once
-past the cap, plus what children already running when it was reached, and a
-merge agent started while fixers ran, go on to spend. A fixer an earlier,
+past the cap, plus what children already running when it was reached go on
+to spend. A fixer an earlier,
 stopped run left running is not counted in another fixer's share.
 
 **Reviewing the children's PRs.** Each child's open PR is reviewed with

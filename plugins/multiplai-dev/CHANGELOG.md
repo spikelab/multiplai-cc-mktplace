@@ -36,10 +36,13 @@ time, not derived from a tag.
   under it ran all its rounds: in a live test with `epic.max_usd: 20`, one
   child's fixer took the epic to $74. The fixer is now given what is left of
   `epic.max_usd`, less what other fixers still running were given; while
-  they hold all of it, a fixer waits and no build or review starts. When a
-  fixer stops at its share the run exits 3 with `EPIC:BUDGET:<spent>` and
-  launches nothing more. The child is not parked: a re-run after
-  `epic.max_usd` is raised runs the fixer again. A fixer whose last round
+  they hold all of it, a fixer waits, and no build, review or merge agent
+  starts, including a review step's own next review or resume. A fixer that
+  stops at its share while the epic's spend is under the cap runs again,
+  with its share recomputed, once the other fixers end. When the spend has
+  reached the cap the run exits 3 with `EPIC:BUDGET:<spent>` and launches
+  nothing more. The child is not parked: a re-run after `epic.max_usd` is
+  raised runs the fixer again. A fixer whose last round
   left nothing to act on ends as done, so its PR still merges. The round
   that crosses a fixer's share still finishes, so an epic can end up to one
   fix round (a fix and a review) per fixer running at once past the cap.
