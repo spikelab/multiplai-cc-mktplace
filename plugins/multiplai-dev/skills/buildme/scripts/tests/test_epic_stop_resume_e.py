@@ -1,6 +1,7 @@
 """Row tests for PR E1's "Stop and resume states" table
-(plan-buildme-epic-mode-2026-10-12.md, rows marked `Test: yes`: E.S2-E.S7,
-E.S12, E.S18, E.S21, E.S22, E.S23, E.S26 and E.S28, which the PR adds; E.S17 is E2's).
+(plan-buildme-epic-mode-2026-10-12.md, rows marked `Test: yes`: E.S2, E.S5-E.S7,
+E.S12, E.S18, E.S21, E.S22, E.S23 and E.S26, which the PR adds; E.S3, E.S4 and
+E.S28 come with item 40.3's merge agent; E.S17 is E2's).
 
 Each case stops the coordinator at the row's point (an exception at a seam, a
 signal, or a forked child exiting 137), resumes, and compares with a run that
@@ -11,7 +12,6 @@ as in `test_epic_merge`.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import signal
@@ -34,9 +34,8 @@ from .epic_row_helpers import (
     run_signalled,
 )
 from .row_helpers import assert_same_as_unstopped, repo_state
-from .test_epic_merge import CHILD, MAIN, RESOLVED, FakeAgent, MergeRoot, _stop_after_the_merge, git, push_files
+from .test_epic_merge import MergeRoot, _stop_after_the_merge, git, push_files
 
-AGENT = ["merge", "CHANGELOG.md", "plugin.json"]
 TESTS = ["fake-tests"]
 MERGE_KINDS = ("merge", "merge-tests")
 
@@ -61,29 +60,23 @@ def _snapshot(r: MergeRoot) -> dict:
 
 
 def _launches(r: MergeRoot) -> list[str]:
-    calls = [*r.calls("build"), *r.calls("merge-tests"), *r.calls("merge-agent"), *r.pushes(),
+    calls = [*r.calls("build"), *r.calls("merge-tests"), *r.pushes(),
              *r.fakes.review_launches(), *r.fakes.post_launches()]
     return sorted(json.dumps(x, sort_keys=True).replace(str(r.root), "<root>") for x in calls)
 
 
-def _assert_same(stopped: MergeRoot, clean: MergeRoot, merges: list[tuple], *, extra: tuple[str, ...] = (),
-                 unpaid: int = 0) -> None:
+def _assert_same(stopped: MergeRoot, clean: MergeRoot, merges: list[tuple], *, extra: tuple[str, ...] = ()) -> None:
     """Equal epic files, summary, non-merge records and worktree; the stopped
     root's merge records are *merges* (kind, argv, exit code or None to skip,
-    interrupted), the clean root's the usual pair; launches equal plus one
-    more of each kind in *extra*, and $0.50 more spent for each agent call in
-    it but *unpaid* (cancelled) ones."""
+    interrupted), the clean root's one `merge-tests` pair; launches equal plus
+    one more of each kind in *extra*."""
     s, c = _snapshot(stopped), _snapshot(clean)
-    paid = 0.5 * (extra.count("merge-agent") - unpaid)          # each agent call spends $0.50 (FakeAgent)
-    for spent in (s["epic"]["epic.json"], s["summary"]):
-        assert spent["spent_usd"] == c["summary"]["spent_usd"] + paid
-        spent["spent_usd"] -= paid
     for k in ("spent_usd", "spend_complete", "child_status"):          # the likeliest to differ, named first
         assert s["epic"]["epic.json"].get(k) == c["epic"]["epic.json"].get(k), k
     assert s["epic"] == c["epic"]
     assert s["summary"] == c["summary"]
     assert s["records"] == c["records"]
-    assert c["merges"] == [("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False)]
+    assert c["merges"] == [("merge-tests", TESTS, 0, False)]
     assert [(k, a, i) for k, a, _, i in s["merges"]] == [(k, a, i) for k, a, _, i in merges]
     assert all(w is None or e == w for (_, _, e, _), (_, _, w, _) in zip(s["merges"], merges))
     want = _launches(clean)
@@ -114,11 +107,6 @@ def _die_at_point(r: MergeRoot, name: str):
     return setup
 
 
-async def _block(w) -> None:
-    while True:
-        await asyncio.sleep(0.02)
-
-
 def _signalled(r: MergeRoot, ready) -> None:
     r.use()
     assert run_signalled(lambda: run_coordinator(r.config), ready, signal.SIGTERM) == 128 + signal.SIGTERM
@@ -130,86 +118,28 @@ def _parked(r: MergeRoot) -> dict:
     return st
 
 
-def test_E_S2_stopped_with_conflicts_aborts_and_merges_again(tmp_path, monkeypatch):
-    """E.S2: the merge stopped with conflicts (an exception; a signal takes the
+def test_E_S2_stopped_during_the_merge_aborts_and_merges_again(tmp_path, monkeypatch):
+    """E.S2: the merge stopped in progress (an exception; a signal takes the
     same `except BaseException`). `merge_stop` holds the tree; item 38 passes,
     the merge is aborted and 40.2 runs again. Nothing repeated."""
     stopped, clean = _roots(tmp_path, monkeypatch)
     _stop_after_the_merge(stopped)
     assert stopped.merging() and stopped.status()["merge_stop"]["edits"]
     _ends_waiting(stopped, clean)
-    _assert_same(stopped, clean, [("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False)])
-
-
-def test_E_S3_signalled_during_the_agent_aborts_and_pays_for_one_more_call(tmp_path, monkeypatch):
-    """E.S3: SIGTERM while the merge agent runs, its edits on disk. As E.S2;
-    one more agent call and `merge` pair, the first `interrupted` with its
-    spend unknown (a cancelled call records none), never counted as $0."""
-    stopped, clean = _roots(tmp_path, monkeypatch)
-    stopped.agent = FakeAgent(stopped.root, RESOLVED, stop=_block)
-    _signalled(stopped, lambda: bool(stopped.calls("merge-agent")))
-    st = stopped.status()
-    assert st["status"] == "built" and "CHANGELOG.md" in st["merge_stop"]["edits"]
-    stopped.agent = FakeAgent(stopped.root, RESOLVED)
-    _ends_waiting(stopped, clean)
-    _assert_same(stopped, clean, [("merge", AGENT, None, True), ("merge", AGENT, 0, False),
-                                  ("merge-tests", TESTS, 0, False)], extra=("merge-agent",), unpaid=1)
-    assert stopped.tries("merge")[0].result["spend"] is None
-
-
-def test_E_S28_edits_the_abort_keeps_park_before_the_merge_is_tested(tmp_path, monkeypatch):
-    """E.S28 (a row this PR adds): as E.S3, the agent having edited `app.py`
-    and `uv.lock`, which the merge never touched, so `merge --abort` keeps
-    them. The re-run's merge is clean (main took the child's lines), so no
-    agent runs: the step parks naming them before any test, as the tests
-    would see them and the merge commit would leave them out."""
-    r = MergeRoot(tmp_path, monkeypatch, main={k: v for k, v in MAIN.items() if k != "uv.lock"})
-    stray = {"app.py": "x = 'stray'\n", "uv.lock": 'lock 1\nversion = "0.2.0"\n'}
-
-    async def edit_then_block(w):
-        for rel, text in stray.items():
-            (w / rel).write_text(text)
-        await _block(w)
-
-    r.agent = FakeAgent(tmp_path, RESOLVED, stop=edit_then_block)
-    _signalled(r, lambda: bool(r.calls("merge-agent")) and (r.w / "uv.lock").read_text() == stray["uv.lock"])
-    assert set(stray) <= set(r.status()["merge_stop"]["edits"])
-    push_files(r.root, CHILD, "main takes the child's lines")
-    assert r.run() == 0
-    assert _parked(r)["reason"] == (f"{r.w} holds changes the merge commit would leave out (app.py, uv.lock); "
-                                    f"remove them, then {merge.abort_hint(r.w)}")
-    assert all((r.w / rel).read_text() == text for rel, text in stray.items())
-    assert len(r.calls("merge-agent")) == 1 and r.calls("merge-tests") == [] and r.step_pushes() == []
-
-
-def test_E_S4_killed_during_the_agent_parks_and_touches_nothing(tmp_path, monkeypatch):
-    """E.S4: the coordinator killed while the agent runs: partial files and no
-    `merge_stop`. The check refuses, the child parks, the tree is untouched."""
-    r = MergeRoot(tmp_path, monkeypatch)
-    r.agent = FakeAgent(tmp_path, RESOLVED, stop=lambda w: os._exit(137))
-    _killed(r, lambda: None)
-    assert r.merging() and r.status()["merge_stop"] is None
-    before = repo_state(r.w)
-    r.agent = FakeAgent(tmp_path, RESOLVED)
-    assert r.run() == 0
-    assert repo_state(r.w) == before and r.merging()
-    assert _parked(r)["reason"].endswith(f"; git -C {r.w} merge --abort, then re-run")
-    assert len(r.calls("merge-agent")) == 1 and r.calls("merge-tests") == [] and r.step_pushes() == []
+    _assert_same(stopped, clean, [("merge-tests", TESTS, 0, False)])
 
 
 def test_E_S5_signalled_during_the_tests_merges_again(tmp_path, monkeypatch):
     """E.S5, with a record: SIGTERM while the tests run. As E.S2: one more
-    `merge-tests` launch and pair (the first `interrupted`) and, the merge
-    being conflicted, one more agent call and pair."""
+    `merge-tests` launch and pair (the first `interrupted`)."""
     stopped, clean = _roots(tmp_path, monkeypatch, tests=[{"block": True}, {}])
     clean_tests = clean.root / "tests.json"
     clean_tests.write_text("[]")
     _signalled(stopped, lambda: (stopped.root / "test-attempts" / "1").exists())
     assert stopped.status()["merge_stop"] is not None and stopped.merging()
     _ends_waiting(stopped, clean)
-    _assert_same(stopped, clean, [("merge", AGENT, 0, False), ("merge-tests", TESTS, None, True),
-                                  ("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False)],
-                 extra=("merge-agent", "merge-tests"))
+    _assert_same(stopped, clean, [("merge-tests", TESTS, None, True), ("merge-tests", TESTS, 0, False)],
+                 extra=("merge-tests",))
 
 
 def test_E_S23_sighup_during_the_tests_ends_them_with_the_run(tmp_path, monkeypatch):
@@ -224,9 +154,8 @@ def test_E_S23_sighup_during_the_tests_ends_them_with_the_run(tmp_path, monkeypa
     (stopped.root / "release" / "tests-1").write_text("")      # ends the tests if they were left running
     assert [(t.result or {}).get("exit_code") for t in stopped.tries("merge-tests")] == [-signal.SIGKILL]
     _ends_waiting(stopped, clean)
-    _assert_same(stopped, clean, [("merge", AGENT, 0, False), ("merge-tests", TESTS, None, True),
-                                  ("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False)],
-                 extra=("merge-agent", "merge-tests"))
+    _assert_same(stopped, clean, [("merge-tests", TESTS, None, True), ("merge-tests", TESTS, 0, False)],
+                 extra=("merge-tests",))
 
 
 def test_E_S5_killed_during_the_tests_parks_as_E_S4(tmp_path, monkeypatch):
@@ -245,19 +174,19 @@ def test_E_S5_killed_during_the_tests_parks_as_E_S4(tmp_path, monkeypatch):
     before = repo_state(r.w)
     assert r.run() == 0
     assert repo_state(r.w) == before and r.merging() and _parked(r)
-    assert len(r.calls("merge-agent")) == 1 and len(r.calls("merge-tests")) == 1 and r.step_pushes() == []
+    assert len(r.calls("merge-tests")) == 1 and r.step_pushes() == []
 
 
 def test_E_S6_committed_not_pushed_is_retested_and_pushed(tmp_path, monkeypatch):
     """E.S6: killed after the merge commit, before the push. Item 37: the
     check passes, the tests run again (one more `merge-tests` pair), the
-    commit is pushed. No second merge or agent call."""
+    commit is pushed. No second merge."""
     stopped, clean = _roots(tmp_path, monkeypatch)
     _killed(stopped, _die_at_point(stopped, "push"))
     assert not stopped.merging() and stopped.step_pushes() == []
     _ends_waiting(stopped, clean)
-    _assert_same(stopped, clean, [("merge", AGENT, 0, False), ("merge-tests", TESTS, 0, False),
-                                  ("merge-tests", TESTS, 0, False)], extra=("merge-tests",))
+    _assert_same(stopped, clean, [("merge-tests", TESTS, 0, False), ("merge-tests", TESTS, 0, False)],
+                 extra=("merge-tests",))
 
 
 def test_E_S7_a_rejected_push_parks_and_never_forces(tmp_path, monkeypatch):
@@ -344,28 +273,30 @@ def test_E_S18_an_edit_outside_the_project_during_a_stopped_merge_is_never_abort
 
 
 def test_E_S21_a_refused_abort_parks_with_git_s_words_and_the_hint(tmp_path, monkeypatch):
-    """E.S21: the agent rewrote the conflicted `plugin.json` and the cleanly
-    merged `uv.lock`, unstaged, then SIGTERM. Item 38 passes (both edits are
-    in `merge_stop`), but git refuses the abort over `uv.lock` (`MM`): the
-    child parks with git's stderr and the hint, and nothing else runs."""
+    """E.S21: the step stopped with the cleanly merged `uv.lock` also changed
+    and not staged (`MM`). Item 38 passes (the edit is in `merge_stop`), but
+    git refuses the abort over `uv.lock`: the child parks with git's stderr
+    and the hint, and nothing else runs."""
     r = MergeRoot(tmp_path, monkeypatch)
 
-    async def lockfile_then_block(w):
-        (w / "uv.lock").write_text("lock 3\n")
-        await _block(w)
+    def edit_then_stop(coord, c, name):
+        r.point(coord, c, name)
+        if name == "merged":
+            (r.w / "uv.lock").write_text("lock 3\n")
+            raise RuntimeError("stopped at the merge")
 
-    r.agent = FakeAgent(tmp_path, RESOLVED, stop=lockfile_then_block)
-    _signalled(r, lambda: bool(r.calls("merge-agent")) and (r.w / "uv.lock").read_text() == "lock 3\n")
-    assert r.status()["merge_stop"]["edits"].keys() >= {"CHANGELOG.md", "uv.lock"}   # plugin.json: as at HEAD
+    r.use()
+    monkeypatch.setattr(coordinator, "_merge_point", edit_then_stop)
+    assert run_coordinator(r.config) == 1
+    assert "uv.lock" in r.status()["merge_stop"]["edits"]
     assert git(r.w, "status", "--porcelain", "--", "uv.lock").startswith("MM")
     before = repo_state(r.w)
-    r.agent = FakeAgent(tmp_path, RESOLVED)
     assert r.run() == 0
     assert repo_state(r.w) == before and r.merging()
     reason = _parked(r)["reason"]
     assert reason.startswith("git merge --abort failed: ") and "uv.lock" in reason
     assert reason.endswith(f"git -C {r.w} checkout -- uv.lock, then git -C {r.w} merge --abort")
-    assert len(r.calls("merge-agent")) == 1 and r.calls("merge-tests") == [] and r.step_pushes() == []
+    assert r.calls("merge-tests") == [] and r.step_pushes() == []
 
 
 def test_E_S22_a_merge_park_is_kept_while_a_merge_is_in_progress(tmp_path, monkeypatch):
@@ -384,7 +315,7 @@ def test_E_S22_a_merge_park_is_kept_while_a_merge_is_in_progress(tmp_path, monke
     assert r.run() == 0
     assert ran == [("rev-parse", "-q", "--verify", "MERGE_HEAD")]
     assert repo_state(r.w) == before and _parked(r)["reason"] == reason
-    assert r.calls("merge-agent") == [] and r.calls("merge-tests") == [] and r.step_pushes() == []
+    assert r.calls("merge-tests") == [] and r.step_pushes() == []
 
 
 def test_E_S26_a_merge_park_retries_once_the_worktree_is_clean(tmp_path, monkeypatch):
@@ -412,7 +343,7 @@ def test_E_S26_a_merge_park_retries_once_the_worktree_is_clean(tmp_path, monkeyp
     assert r.run() == 0                      # retried: the same conflict parks it again
     assert ("merge", "--no-ff", "--no-commit", "origin/main") in ran and r.merging()
     assert _parked(r)["reason"] == reason
-    assert r.calls("merge-agent") == [] and r.calls("merge-tests") == [] and r.step_pushes() == []
+    assert r.calls("merge-tests") == [] and r.step_pushes() == []
     git(r.w, "merge", "--abort")
     push_files(r.root, {"app.py": "x = 3\n"}, "main takes the child's line")
     assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]

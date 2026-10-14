@@ -1,9 +1,9 @@
 """Epic mode, PR E1: the merge step (plan-buildme-epic-mode-2026-10-12.md,
 items 35-39, 40.1-40.4, 41 and 42). Git is real; the build, `gh`, the review
 and the test command are fakes first on PATH (`epic_row_helpers.Fakes`), and
-the merge agent is `FakeAgent`. Until PR E2 a merged and pushed PR waits for a
-human merge (`EPIC:MERGE_WAITING`, exit 3); a parked child ends its run with
-exit 0, an `unknown` one with exit 1."""
+until item 40.3 lands any conflict parks. Until PR E2 a merged and pushed PR
+waits for a human merge (`EPIC:MERGE_WAITING`, exit 3); a parked child ends
+its run with exit 0, an `unknown` one with exit 1."""
 
 from __future__ import annotations
 
@@ -14,12 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from build_pipeline import budget, git_ops, stop_record
+from build_pipeline import git_ops, stop_record
 from build_pipeline.config import EpicSettings, discover_test_command
 from build_pipeline.epic import coordinator, merge, records
 from build_pipeline.epic import lock as epic_lock
 from build_pipeline.epic.split import EpicSplitAnswer
-from build_pipeline.models import AgentResult
 
 from .epic_row_helpers import (
     CallLog,
@@ -50,10 +49,7 @@ def changelog(*entries: tuple[str, str]) -> str:
 BASE = {"plugin.json": plugin("0.1.0"), "CHANGELOG.md": changelog(("0.1.0", "First.")),
         "uv.lock": "lock 1\n", "app.py": "x = 1\n"}
 CHILD = {"plugin.json": plugin("0.2.0"), "CHANGELOG.md": changelog(("0.2.0", "Child a."), ("0.1.0", "First."))}
-MAIN = {"plugin.json": plugin("0.1.1"), "CHANGELOG.md": changelog(("0.1.1", "Main."), ("0.1.0", "First.")),
-        "uv.lock": "lock 2\n"}
-RESOLVED = {"plugin.json": plugin("0.2.0"),
-            "CHANGELOG.md": changelog(("0.2.0", "Child a."), ("0.1.1", "Main."), ("0.1.0", "First."))}
+MAIN = {"uv.lock": "lock 2\n"}          # merges cleanly into CHILD
 
 
 @pytest.fixture(autouse=True)
@@ -83,27 +79,6 @@ def push_files(root: Path, files: dict[str, str], message: str, branch: str = "m
     return git(clone, "rev-parse", "HEAD").strip()
 
 
-class FakeAgent:
-    """The merge agent: writes *resolve*'s content for each conflicted file it
-    has, spends $0.50, logs the call; *stop(w)* runs after the writes."""
-
-    def __init__(self, root: Path, resolve: dict[str, str], stop=None):
-        self.root, self.resolve, self.stop = root, resolve, stop
-
-    async def __call__(self, config, w, files, name, default):
-        with (self.root / "calls.log").open("a") as f:
-            f.write(json.dumps({"kind": "merge-agent", "files": files}, sort_keys=True) + "\n")
-        for rel in files:
-            if rel in self.resolve:
-                (Path(w) / rel).write_text(self.resolve[rel])
-        budget.add_process_spend(0.5, 10)
-        if self.stop is not None:
-            out = self.stop(Path(w))
-            if out is not None:
-                await out
-        return AgentResult(success=True, output="\n".join(f"RESOLVED: {f}" for f in files))
-
-
 class MergeRoot:
     """Main holds BASE; an approved chain (b waits on a); a's build commits
     *child_files*; test command `fake-tests` (answering *tests*) unless
@@ -111,7 +86,7 @@ class MergeRoot:
     seam. *sub*: the project's subdirectory, holding every path above;
     *outside* is pushed with *main* at the repo root."""
 
-    def __init__(self, root: Path, monkeypatch, *, child_files=CHILD, main=MAIN, tests=None, agent=None,
+    def __init__(self, root: Path, monkeypatch, *, child_files=CHILD, main=MAIN, tests=None,
                  merge_mode="auto", command="fake-tests", sub: str | None = None,
                  outside: dict[str, str] | None = None):
         at = (lambda files: {f"{sub}/{k}": v for k, v in files.items()}) if sub else dict
@@ -131,14 +106,12 @@ class MergeRoot:
         push_files(root, at(files), "base")
         git(repo, "pull", "-q", "origin", "main")        # the source checkout holds origin's config.yaml
         (root / "tests.json").write_text(json.dumps(tests or []))
-        self.agent = agent or FakeAgent(root, at(RESOLVED))
         self.dir = self.data / "buildme" / "epics" / "o-r--e"
         self.w = root / "ws" / ".worktrees" / "buildme-e-a"
 
     def use(self) -> None:
         use_workspace(self.mp, self.root)
         self.fakes.use(self.mp)
-        self.mp.setattr(merge, "run_merge_agent", self.agent)
         self.mp.setattr(coordinator, "_merge_point", self.point)
 
     @property
@@ -179,59 +152,62 @@ class MergeRoot:
         return merge.merging(self.w)
 
 
-def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(tmp_path, monkeypatch):
-    """40.2-40.4: main moved under a's branch with its own version and
-    CHANGELOG entry. One `merge` agent call resolves both (its spend in the
-    record), the tests run in <P> with BUILDME_TRUST_REPO=1, and the merge
-    commit is pushed. Until E2 the PR then waits for a human merge."""
+def test_a_clean_merge_is_tested_and_pushed_and_not_reviewed_again(tmp_path, monkeypatch):
+    """40.2-40.4: main moved under a's branch without a conflict. The tests run
+    in <P> with BUILDME_TRUST_REPO=1 and the merge commit is pushed. Until E2
+    the PR then waits for a human merge. That merge is the step's own, so the
+    next run does not review it again; the same merge with a person's edit
+    in any file is reviewed."""
     r = MergeRoot(tmp_path, monkeypatch)
     assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
-    assert [x["files"] for x in r.calls("merge-agent")] == [["CHANGELOG.md", "plugin.json"]]
-    [agent] = r.tries("merge")
-    assert (agent.result["exit_code"], agent.result["spend"]) == (0, 0.5)
     [tests] = r.calls("merge-tests")
     assert (tests["cwd"], tests["trusted"]) == ("<root>/ws/.worktrees/buildme-e-a", "1")
     assert [a.result["exit_code"] for a in r.tries("merge-tests")] == [0]
     assert len(r.step_pushes()) == 1
-    assert r.origin("plugin.json") == RESOLVED["plugin.json"]
-    assert r.origin("CHANGELOG.md") == RESOLVED["CHANGELOG.md"] and r.origin("uv.lock") == "lock 2\n"
+    assert r.origin("plugin.json") == CHILD["plugin.json"] and r.origin("uv.lock") == "lock 2\n"
     head = git(r.w, "rev-parse", "HEAD").strip()
     assert git(r.w, "rev-parse", "HEAD^2").strip() == r.moved
     assert merge.merges_onto(r.w, head, r.tries("review")[-1].started["head_sha"], "main")
     assert r.status()["status"] == "built" and r.status()["merge_stop"] is None
     assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]      # its own merge: not reviewed again
-    assert len(r.tries("review")) == 1 and len(r.calls("merge-agent")) == 1 and len(r.step_pushes()) == 1
+    assert len(r.tries("review")) == 1 and len(r.step_pushes()) == 1
     reviewed = r.tries("review")[-1].started["head_sha"]
-    edits = {"app.py": "x = 'not reviewed'\n",                   # the same merge carrying a person's edit is reviewed,
-             "plugin.json": RESOLVED["plugin.json"].replace('"x"', '"evil"'),   # inside a resolved file too
+    edits = {"app.py": "x = 'not reviewed'\n", "plugin.json": CHILD["plugin.json"].replace('"x"', '"evil"'),
              "CHANGELOG.md": "anything at all\n", "uv.lock": "lock evil\n"}
     for rel, text in edits.items():
         (r.w / rel).write_text(text)
         git(r.w, "-c", "commit.gpgsign=false", "commit", "-q", "--amend", "--no-edit", "--", rel)
         assert not merge.merges_onto(r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "main"), rel
         git(r.w, "reset", "-q", "--hard", head)
-    (r.w / "uv.lock").write_text('lock 2\nversion = "0.2.0"\n')     # an unconflicted lockfile is git's own
-    git(r.w, "-c", "commit.gpgsign=false", "commit", "-q", "--amend", "--no-edit", "--", "uv.lock")
-    assert not merge.merges_onto(r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "main")
+
+
+def test_a_version_and_changelog_conflict_parks_until_40_3(tmp_path, monkeypatch):
+    """Until item 40.3 lands the step resolves no conflict: main raising the
+    version and adding a CHANGELOG entry parks the child, listing both."""
+    main = {"plugin.json": plugin("0.1.1"), "CHANGELOG.md": changelog(("0.1.1", "Main."), ("0.1.0", "First."))}
+    r = MergeRoot(tmp_path, monkeypatch, main=main)
+    assert r.run() == 0
+    assert r.status()["reason"] == ("merging origin/main conflicts in CHANGELOG.md, plugin.json, which the merge "
+                                    f"step may not resolve; {merge.abort_hint(r.w)}")
+    assert r.merging() and r.calls("merge-tests") == [] and r.step_pushes() == []
 
 
 def test_a_branch_up_to_date_with_main_waits_with_no_tests_and_no_push(tmp_path, monkeypatch):
     r = MergeRoot(tmp_path, monkeypatch, main=None)
     assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
-    assert r.calls("merge-tests") == [] and r.step_pushes() == [] and r.tries("merge") == []
+    assert r.calls("merge-tests") == [] and r.step_pushes() == []
 
 
 def test_a_source_file_conflict_parks_listing_it_and_stays_parked(tmp_path, monkeypatch):
-    """40.3: a conflicted file that is neither a version field, a CHANGELOG nor
-    a lockfile parks before any agent call, with the merge left for a person
-    to abort; nothing is pushed, and the next run does not touch it."""
+    """A conflicted source file parks, with the merge left for a person to
+    abort; nothing is pushed, and the next run does not touch it."""
     r = MergeRoot(tmp_path, monkeypatch, child_files={"app.py": "x = 3\n"}, main={"app.py": "x = 2\n"})
     assert r.run() == 0
     st = r.status()
     assert st["status"] == "parked" and st["merge_park"] == st["reason"]
     assert st["reason"].startswith("merging origin/main conflicts in app.py, which the merge step may not resolve; "
                                    f"git -C {r.w} merge --abort, then re-run")
-    assert r.calls("merge-agent") == [] and r.step_pushes() == [] and r.merging()
+    assert r.step_pushes() == [] and r.merging()
     assert st["merge_stop"]["edits"].keys() == {"app.py"}
     before = git(r.w, "status", "--porcelain")
     assert r.run() == 0 and r.status()["status"] == "parked"
@@ -250,7 +226,7 @@ def test_manual_merges_nothing_exits_3_and_continues_after_a_human_merge(tmp_pat
 
 
 def _stop_after_the_merge(r: MergeRoot) -> None:
-    """Run a until its merge has conflicts, then stop it by an exception there."""
+    """Run a until its merge is in progress, then stop it by an exception there."""
     def boom(coord, c, name):
         r.point(coord, c, name)
         if name == "merged":
@@ -308,7 +284,7 @@ def test_no_test_command_commits_and_pushes(tmp_path, monkeypatch):
     r = MergeRoot(tmp_path, monkeypatch, command=None)
     assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
     assert r.tries("merge-tests") == [] and len(r.step_pushes()) == 1 and not r.merging()
-    assert r.origin("plugin.json") == RESOLVED["plugin.json"]
+    assert r.origin("uv.lock") == "lock 2\n"
 
 
 def _failing_git(monkeypatch, *argv: str, stderr: str) -> None:
@@ -347,91 +323,6 @@ def _parked_reason(r: MergeRoot) -> str:
     st = r.status()
     assert st["status"] == "parked" and st["merge_park"] == st["reason"]
     return st["reason"]
-
-
-def test_an_agent_that_leaves_a_marker_parks(tmp_path, monkeypatch):
-    r = MergeRoot(tmp_path, monkeypatch, agent=None)
-    r.agent = FakeAgent(tmp_path, {"plugin.json": RESOLVED["plugin.json"]})
-    assert r.run() == 0
-    assert r.status()["reason"] == ("the merge agent left conflicts in CHANGELOG.md; "
-                                    f"git -C {r.w} merge --abort, then re-run")
-    assert r.step_pushes() == [] and r.tries("merge-tests") == []
-
-
-@pytest.mark.parametrize("staged", [False, True], ids=["unstaged", "staged"])
-def test_an_agent_that_edits_another_file_parks_staged_or_not(tmp_path, monkeypatch, staged):
-    """40.3: the agent resolves every conflict and also changes `app.py`,
-    staging it itself (it has Bash) or not. Parks; nothing pushed."""
-    def edit(w):
-        (w / "app.py").write_text("x = 9\n")
-        staged and git(w, "add", "--", "app.py")
-
-    r = MergeRoot(tmp_path, monkeypatch, agent=None)
-    r.agent = FakeAgent(tmp_path, RESOLVED, stop=edit)
-    assert r.run() == 0
-    assert r.status()["reason"] == f"the merge agent changed files it may not: app.py; {merge.abort_hint(r.w)}"
-    assert r.step_pushes() == [] and r.tries("merge-tests") == []
-
-
-def test_a_failed_agent_call_parks_and_commits_no_marker(tmp_path, monkeypatch):
-    class Failing(FakeAgent):
-        async def __call__(self, config, w, files, name, default):
-            await super().__call__(config, w, files, name, default)
-            return AgentResult(success=False, output="", error="rate limited")
-
-    r = MergeRoot(tmp_path, monkeypatch, agent=Failing(tmp_path, {}))
-    assert r.run() == 0
-    assert r.status()["reason"] == f"the merge agent failed: rate limited; {merge.abort_hint(r.w)}"
-    assert [a.result["exit_code"] for a in r.tries("merge")] == [1] and r.merging()
-    assert r.tries("merge-tests") == [] and r.step_pushes() == []
-
-
-def test_an_agent_edit_beyond_the_version_lines_of_a_resolved_file_parks(tmp_path, monkeypatch):
-    """40.3, by content: the agent resolves `plugin.json`'s version and also
-    renames the plugin in it. Parks, naming the file; nothing pushed."""
-    r = MergeRoot(tmp_path, monkeypatch, agent=None)
-    r.agent = FakeAgent(tmp_path, {**RESOLVED, "plugin.json": RESOLVED["plugin.json"].replace('"x"', '"evil"')})
-    assert r.run() == 0
-    assert r.status()["reason"] == ("the merge agent changed more than 40.3 allows in plugin.json; "
-                                    f"{merge.abort_hint(r.w)}")
-    assert r.tries("merge-tests") == [] and r.step_pushes() == [] and r.merging()
-
-
-@pytest.mark.asyncio
-async def test_the_merge_agent_runs_in_a_run_started_without_trust_repo(tmp_path, monkeypatch):
-    """The coordinator vouches for the repo for its merge agent as it does for
-    each child it launches (`--trust-repo`): `agent_call`'s gate passes."""
-    from build_pipeline import sdk
-
-    async def agent_call(prompt, **kw):
-        sdk._require_trusted_repo()
-        return AgentResult(success=True, output="RESOLVED: plugin.json")
-
-    monkeypatch.delenv("BUILDME_TRUST_REPO", raising=False)
-    monkeypatch.setattr(merge, "agent_call", agent_call)
-    config = make_build(make_project(tmp_path))
-    assert (await merge.run_merge_agent(config, tmp_path, ["plugin.json"], "b", "main")).success
-
-
-def test_over_budget_before_a_conflicted_merge_merges_nothing(tmp_path, monkeypatch):
-    """Decided 6, E.S27: `epic.max_usd` reached when the merge would need the
-    agent. Nothing is merged (no `MERGE_HEAD`, nothing changed in <W>), the
-    child stays `built`, and a run with the ceiling raised merges."""
-    r = MergeRoot(tmp_path, monkeypatch)
-    real = coordinator.Coordinator._over_budget
-
-    def over(self):
-        if r.moved:           # after the review, at the merge step
-            self.budget_stop = 1.0
-        return real(self)
-
-    monkeypatch.setattr(coordinator.Coordinator, "_over_budget", over)
-    assert r.run() == 3
-    assert not r.merging() and git(r.w, "status", "--porcelain") == ""
-    assert r.status()["status"] == "built" and not r.status()["merge_park"] and r.status()["merge_stop"] is None
-    assert r.calls("merge-agent") == [] and r.tries("merge") == [] and r.step_pushes() == []
-    monkeypatch.setattr(coordinator.Coordinator, "_over_budget", real)
-    assert r.run() == 3 and merge_waiting() == [pr_url("e-a")] and len(r.step_pushes()) == 1
 
 
 def test_a_failed_fetch_leaves_the_child_unknown_and_the_run_exits_1(tmp_path, monkeypatch, capsys, caplog):
@@ -533,81 +424,13 @@ def test_a_push_failing_for_another_reason_is_unknown_and_the_next_run_pushes(tm
     assert r.status()["status"] == "unknown" and not r.status()["merge_park"] and r.step_pushes()
     hook.unlink()
     assert r.run() == 3 and merge_waiting() == [pr_url("e-a")]
-    assert len(r.step_pushes()) == 2 and len(r.tries("merge-tests")) == 2 and len(r.calls("merge-agent")) == 1
-    assert r.origin("plugin.json") == RESOLVED["plugin.json"]
-
-
-def test_may_resolve_only_versions_changelogs_and_lockfiles(tmp_path):
-    """40.3: the package's own version field, never a dependency's; a
-    CHANGELOG by name, never a source file whose stem is `changelog`."""
-    sides = {"pyproject.toml": '[project]|version = "0.2.0"|version = "0.1.1"',
-             "p.json": '{|  "version": "2",|  "version": "1",', "v.py": '|__version__ = "2.0"|__version__ = "1.9"',
-             "app.py": "|x = 3|x = 2", "rate.py": "|r = conversion(3)|r = conversion(2)",
-             "changelog_tool.py": "|x = 3|x = 2", "changelog.py": "|x = 3|x = 2", "src/Changelog.ts": "|x = 3|x = 2",
-             "compat.py": "|if sys.version_info < (3, 10):|if sys.version_info < (3, 9):",
-             "Cargo.toml": '[dependencies.serde]|version = "1.0.150"|version = "1.0.200"',
-             "CHANGELOG.rst": "|- b|- a", "pubspec.yaml": "dependencies:|    version: 1.3.0|    version: 1.2.0"}
-    for name, parts in sides.items():
-        above, ours, theirs = parts.split("|")
-        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / name).write_text(f"{above}\n<<<<<<< HEAD\n{ours}\n=======\n{theirs}\n>>>>>>> x\n")
-    sides["dep.json"] = ""
-    (tmp_path / "dep.json").write_text('{\n  "dependencies": {\n<<<<<<< HEAD\n    "version": "2",\n=======\n'
-                                       '    "version": "1",\n>>>>>>> x\n  }\n}\n')
-    (tmp_path / "clean.json").write_text('{"version": "1"}\n')
-    assert [f for f in (*sides, "clean.json", "a/uv.lock", "docs/CHANGELOG.md") if merge.may_resolve(tmp_path, f)] \
-        == ["pyproject.toml", "p.json", "v.py", "CHANGELOG.rst", "a/uv.lock", "docs/CHANGELOG.md"]
-
-
-def _lock(version: str, dep: str = "1.0.0", tail: str = 'hash = "h1"\n') -> str:
-    return f'version = "{version}"\n\n[[package]]\nname = "dep"\nversion = "{dep}"\n{tail}'
-
-
-def test_a_resolution_is_checked_by_content_lockfiles_and_binaries_included(tmp_path):
-    """40.3, by content: both sides raised the version in `plugin.json`, in
-    `uv.lock` and in the CHANGELOG. A lockfile may take only lines of its
-    conflict's sides, or the version the result wrote in a version file; any
-    line outside a conflict, in any file, is git's own. A binary file that
-    differs is named, never a crash."""
-    w = tmp_path / "m"
-    w.mkdir()
-
-    def commit(files: dict, at: str | None = None) -> str:
-        if at:
-            git(w, "checkout", "-q", "--detach", at)
-        for rel, text in files.items():
-            (w / rel).write_bytes(text if isinstance(text, bytes) else text.encode())
-        git(w, "add", "--", *files)
-        git(w, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "c")
-        return git(w, "rev-parse", "HEAD").strip()
-
-    git(w, "init", "-q")
-    base = commit({"plugin.json": plugin("0.1.0"), "uv.lock": _lock("0.1.0"), "img.png": b"\x89PNG\xff1",
-                   "CHANGELOG.md": changelog(("0.1.0", "First."))})
-    ours = commit({"plugin.json": plugin("0.2.0"), "uv.lock": _lock("0.2.0"), "CHANGELOG.md": CHILD["CHANGELOG.md"]})
-    theirs = commit({"plugin.json": plugin("0.1.1"), "uv.lock": _lock("0.1.1"), "CHANGELOG.md": MAIN["CHANGELOG.md"]},
-                    at=base)
-    good = {"plugin.json": plugin("0.2.1"), "uv.lock": _lock("0.2.1"),
-            "CHANGELOG.md": changelog(("0.2.1", "Child a."), ("0.1.1", "Main."), ("0.1.0", "First."))}
-    cases = {"": {}, "uv.lock": {"uv.lock": _lock("0.2.1", tail="")},          # a hash line dropped
-             "uv.lock ": {"uv.lock": _lock("0.2.1", dep="6.6.6")},           # a dependency's version
-             " uv.lock": {"uv.lock": _lock("0.9.9")},                       # a version plugin.json does not hold
-             "img.png": {"img.png": b"\x89PNG\xff2"},
-             "CHANGELOG.md": {"CHANGELOG.md": good["CHANGELOG.md"].replace("## [0.1.0]", "## [9.9.9]")}}
-    for want, change in cases.items():
-        result = commit({**good, **change}, at=ours)
-        assert merge.not_resolutions(w, ours, theirs, result) == ([want.strip()] if want else []), want
+    assert len(r.step_pushes()) == 2 and len(r.tries("merge-tests")) == 2
+    assert r.origin("uv.lock") == "lock 2\n"
 
 
 def test_the_merge_tests_fall_back_to_discovery(tmp_path):
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
     assert merge.test_command(tmp_path) == discover_test_command(tmp_path)[0]
-
-
-def test_a_heading_underline_left_in_a_resolved_changelog_is_no_conflict(tmp_path):
-    (tmp_path / "CHANGELOG.rst").write_text("Changes\n=======\n\n0.2.0\n-----\n\n- Child.\n")
-    (tmp_path / "CHANGELOG.md").write_text("<<<<<<< HEAD\n- a\n=======\n- b\n>>>>>>> x\n")
-    assert merge.unresolved(tmp_path, ["CHANGELOG.rst", "CHANGELOG.md"]) == ["CHANGELOG.md"]
 
 
 # --- 40.1 after a real fix round (item 42) ------------------------------------------

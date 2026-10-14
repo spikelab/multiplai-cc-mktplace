@@ -23,15 +23,18 @@ time, not derived from a tag.
 - Epic mode merges the default branch into each child's PR once its review
   leaves no blockers, under `epic.merge: auto`: in the child's worktree, one
   merge at a time per repository, only when the worktree holds nothing but
-  buildme's own files. Conflicts only in version fields, CHANGELOGs and
-  lockfiles are resolved by one agent call (model step `merge`, counted
-  against `epic.max_usd`); a conflict in any other file parks the child. The
-  project's tests then run (`tdd.test_command`, else the discovered command),
-  and the merge commit is pushed, never forced. A failed test run, a push
-  rejected because the branch moved, or a refused check parks the child; a later run tries it again once its worktree has no merge in progress and no uncommitted change. Any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`) for the next run to try again. A merge commit holding more than git's own merge and those resolutions, such as a person's, is reviewed again: each resolved file is compared line by line with git's own merge (a lockfile may take only its conflict's lines and the new version), the merge agent's output too. A change in the worktree that the merge did not make parks the child before the tests run. With `epic.max_usd` reached, a merge that would need the agent is not started. A run stopped
-  during the merge saves the worktree's state; the next run aborts and merges
-  again only when nothing else changed there, and otherwise parks with the
-  command to run. The PR itself is not merged yet: it waits for a person.
+  buildme's own files. Any conflict parks the child, naming the files; this
+  release resolves none. The project's tests then run (`tdd.test_command`,
+  else the discovered command), and the merge commit is pushed, never forced.
+  A failed test run, a push rejected because the branch moved, or a refused
+  check parks the child; a later run tries it again once its worktree has no
+  merge in progress and no uncommitted change. Any other failed push, or a
+  failed fetch, leaves the child `unknown` (exit `1`) for the next run to try
+  again. A merge commit holding more than git's own merge, such as a
+  person's, is reviewed again. A run stopped during the merge saves the
+  worktree's state; the next run aborts and merges again only when nothing
+  else changed there, and otherwise parks with the command to run. The PR
+  itself is not merged yet: it waits for a person.
 
 ### Changed
 - Under `epic.merge: manual` (the default), a child PR whose review left no
