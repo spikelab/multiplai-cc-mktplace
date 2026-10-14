@@ -1,6 +1,6 @@
 """Row tests for PR E1's "Stop and resume states" table
 (plan-buildme-epic-mode-2026-10-12.md, rows marked `Test: yes`: E.S2-E.S7,
-E.S12, E.S18, E.S21, E.S22, E.S23 and E.S26, which the PR adds; E.S17 is E2's).
+E.S12, E.S18, E.S21, E.S22, E.S23, E.S26 and E.S28, which the PR adds; E.S17 is E2's).
 
 Each case stops the coordinator at the row's point (an exception at a seam, a
 signal, or a forked child exiting 137), resumes, and compares with a run that
@@ -34,7 +34,7 @@ from .epic_row_helpers import (
     run_signalled,
 )
 from .row_helpers import assert_same_as_unstopped, repo_state
-from .test_epic_merge import MAIN, RESOLVED, FakeAgent, MergeRoot, _stop_after_the_merge, git, push_files
+from .test_epic_merge import CHILD, MAIN, RESOLVED, FakeAgent, MergeRoot, _stop_after_the_merge, git, push_files
 
 AGENT = ["merge", "CHANGELOG.md", "plugin.json"]
 TESTS = ["fake-tests"]
@@ -157,23 +157,29 @@ def test_E_S3_signalled_during_the_agent_aborts_and_pays_for_one_more_call(tmp_p
     assert stopped.tries("merge")[0].result["spend"] is None
 
 
-def test_E_S3_the_agent_s_lockfile_edit_kept_by_the_abort_is_merged_again(tmp_path, monkeypatch):
-    """E.S3, the agent having regenerated `uv.lock` (its version line), which
-    main left alone, so the abort keeps it: item 38 restarts at 40.2 (40.1
-    would refuse it)."""
+def test_E_S28_edits_the_abort_keeps_park_before_the_merge_is_tested(tmp_path, monkeypatch):
+    """E.S28 (a row this PR adds): as E.S3, the agent having edited `app.py`
+    and `uv.lock`, which the merge never touched, so `merge --abort` keeps
+    them. The re-run's merge is clean (main took the child's lines), so no
+    agent runs: the step parks naming them before any test, as the tests
+    would see them and the merge commit would leave them out."""
     r = MergeRoot(tmp_path, monkeypatch, main={k: v for k, v in MAIN.items() if k != "uv.lock"})
-    lock = 'lock 1\nversion = "0.2.0"\n'
+    stray = {"app.py": "x = 'stray'\n", "uv.lock": 'lock 1\nversion = "0.2.0"\n'}
 
-    async def lockfile_then_block(w):
-        (w / "uv.lock").write_text(lock)
+    async def edit_then_block(w):
+        for rel, text in stray.items():
+            (w / rel).write_text(text)
         await _block(w)
 
-    r.agent = FakeAgent(tmp_path, RESOLVED, stop=lockfile_then_block)
-    _signalled(r, lambda: bool(r.calls("merge-agent")) and (r.w / "uv.lock").read_text() == lock)
-    assert "uv.lock" in r.status()["merge_stop"]["edits"]
-    r.agent = FakeAgent(tmp_path, RESOLVED)
-    _ends_waiting(r)
-    assert len(r.calls("merge-agent")) == 2 and len(r.step_pushes()) == 1 and r.origin("uv.lock") == lock
+    r.agent = FakeAgent(tmp_path, RESOLVED, stop=edit_then_block)
+    _signalled(r, lambda: bool(r.calls("merge-agent")) and (r.w / "uv.lock").read_text() == stray["uv.lock"])
+    assert set(stray) <= set(r.status()["merge_stop"]["edits"])
+    push_files(r.root, CHILD, "main takes the child's lines")
+    assert r.run() == 0
+    assert _parked(r)["reason"] == (f"{r.w} holds changes the merge commit would leave out (app.py, uv.lock); "
+                                    f"remove them, then {merge.abort_hint(r.w)}")
+    assert all((r.w / rel).read_text() == text for rel, text in stray.items())
+    assert len(r.calls("merge-agent")) == 1 and r.calls("merge-tests") == [] and r.step_pushes() == []
 
 
 def test_E_S4_killed_during_the_agent_parks_and_touches_nothing(tmp_path, monkeypatch):

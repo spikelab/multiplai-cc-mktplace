@@ -1109,6 +1109,12 @@ class Coordinator:
         files = merge.conflicted(w)
         if files is None:
             return self._merge_park(c, f"git cannot list the conflicts in {w}{hint}")
+        left = merge.outside_merge(w, files)          # kept by item 38's abort: tested, never committed (E.S28)
+        if left is None or left:
+            c.merge_stop = stop_record.record(w)
+            return self._merge_park(c, f"git cannot list the changes in {w}{hint}" if left is None else
+                                    f"{w} holds changes the merge commit would leave out ({', '.join(left)}); "
+                                    f"remove them, then {merge.abort_hint(w)}")
         if files and not await self._resolve_conflicts(c, w, files, reviewed, name, default, hint):     # 40.3
             return None
         if not await self._merge_tests(c, w, reviewed, hint=hint):                           # 40.4

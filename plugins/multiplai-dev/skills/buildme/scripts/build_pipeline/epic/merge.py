@@ -39,14 +39,15 @@ _TABLE = re.compile(r"^\s*(\[\[?)\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$")
 _STRING = re.compile(r'"(?:\\.|[^"\\])*"')
 # A version field and nothing else on the line: `"version": "1.2.0",`, `version = "1.2.0"`,
 # `__version__ = "1.2"`, `version: 1.2.0`. Not any line that mentions "version".
-_VERSION_FIELD = re.compile(r"""^\s*(["']?)(?:__)?version(?:__)?\1\s*[:=]\s*(["']?)v?\d[\w.+-]*\2\s*,?\s*$""",
+_VERSION_FIELD = re.compile(r"""^\s*(["']?)(?:__)?version(?:__)?\1\s*[:=]\s*(["']?)v?(?P<v>\d[\w.+-]*)\2\s*,?\s*$""",
                             re.IGNORECASE)
 # The files a refused abort of the merge names (git 2.43).
 _NAMED = re.compile(r"^error: Entry '([^']+)' not uptodate|^\t(\S.*)$", re.MULTILINE)
 
 
 def git(w: Path, *args: str) -> git_ops.GitResult:
-    return git_ops._run(["git", *args], cwd=w)
+    """Undecodable output (a non-UTF-8 file name) is replaced, never raised."""
+    return git_ops._run(["git", *args], cwd=w, errors="replace")
 
 
 def _lines(res: git_ops.GitResult) -> list[str] | None:
@@ -122,8 +123,9 @@ def not_resolutions(w: Path, first: str, second: str, result: str) -> list[str] 
     merge of *first* and *second* in more than 40.3 lets the step resolve:
     in a conflicted version file, only the conflicting version lines; in a
     conflicted CHANGELOG, only lines from its sides (numbers aside); in a
-    lockfile, only lines git's merge held or version fields. None when git
-    cannot tell."""
+    conflicted lockfile, only lines from its sides or the version the result
+    wrote in a version file. Every line outside a conflict is git's own.
+    None when git cannot tell."""
     auto = git(w, "merge-tree", "--write-tree", "--name-only", "--no-messages", first, second)
     if auto.returncode not in (0, 1) or not auto.stdout.strip():
         return None
@@ -131,26 +133,41 @@ def not_resolutions(w: Path, first: str, second: str, result: str) -> list[str] 
     differ = _lines(git(w, "diff", "--name-only", "-z", "--no-renames", tree, result))
     if differ is None:
         return None
-    return [p for p in differ if not _allowed(p, p in conflicted, _blob(w, tree, p), _blob(w, result, p))]
+    blobs = {p: (_blob(w, tree, p), _blob(w, result, p)) for p in differ}
+    versions = {v for p, (auto, new) in blobs.items()
+                if p in conflicted and not (is_lockfile(p) or _is_changelog(p)) for v in _written(auto, new)}
+    return [p for p, (auto, new) in blobs.items() if not _allowed(p, p in conflicted, auto, new, versions)]
 
 
 def _blob(w: Path, tree: str, path: str) -> str | None:
-    res = git(w, "cat-file", "blob", f"{tree}:{path}")
+    """*path*'s text in *tree*; None when it is not there or not text."""
+    try:
+        res = git_ops._run(["git", "cat-file", "blob", f"{tree}:{path}"], cwd=w)
+    except UnicodeDecodeError:
+        return None
     return res.stdout if res.ok else None
 
 
-def _allowed(path: str, conflicted: bool, auto: str | None, new: str | None) -> bool:
-    """*new* is a resolution 40.3 allows of *auto*, git's merge of *path*."""
+def _written(auto: str | None, new: str | None) -> set[str]:
+    """The versions in *new*'s version fields that are not lines of *auto*
+    outside its conflicts: what a resolution wrote."""
     if auto is None or new is None:
+        return set()
+    kept = {part for part in _segments(auto) if isinstance(part, str)}
+    return {m["v"] for line in new.splitlines() if line not in kept and (m := _VERSION_FIELD.match(line))}
+
+
+def _allowed(path: str, conflicted: bool, auto: str | None, new: str | None, versions: set[str]) -> bool:
+    """*new* is a resolution 40.3 allows of *auto*, git's merge of *path*;
+    *versions*: what the resolution wrote in the version files."""
+    if auto is None or new is None or not conflicted:
         return False
     parts = _segments(auto)
     if is_lockfile(path):
-        known = {x for part in parts for x in ([part] if isinstance(part, str) else part)}
-        return all(line in known or _VERSION_FIELD.match(line) for line in new.splitlines())
-    if not conflicted:
-        return False
+        return _fits(parts, new.splitlines(), str.__eq__, lambda side, line: line in side or bool(
+            (m := _VERSION_FIELD.match(line)) and m["v"] in versions))
     if _is_changelog(path):
-        return _fits(parts, new.splitlines(), lambda a, b: _digits(a) == _digits(b),
+        return _fits(parts, new.splitlines(), str.__eq__,
                      lambda side, line: not line.strip() or _digits(line) in {_digits(x) for x in side})
     return _resolvable(path, auto) and _fits(parts, new.splitlines(), str.__eq__,
                                              lambda side, line: bool(_VERSION_FIELD.match(line)))
@@ -349,6 +366,15 @@ def changed_since(w: Path, before: dict[str, list[str]]) -> list[str] | None:
         return None
     staged = [p for p in sorted(now.keys() | before.keys()) if now.get(p) != before.get(p)]
     return list(dict.fromkeys(staged + changed + new))
+
+
+def outside_merge(w: Path, conflicted_files: list[str]) -> list[str] | None:
+    """During a merge, the files other than *conflicted_files* that are
+    changed and not staged, or untracked: the tests would run with them and
+    the merge commit would leave them out. None when git cannot list them."""
+    staged = index(w)
+    left = None if staged is None else changed_since(w, staged)
+    return None if left is None else [p for p in left if p not in conflicted_files]
 
 
 def abort_names(stderr: str) -> list[str]:

@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from build_pipeline import budget, git_ops, stop_record
-from build_pipeline.config import EpicSettings
+from build_pipeline.config import EpicSettings, discover_test_command
 from build_pipeline.epic import coordinator, merge, records
 from build_pipeline.epic import lock as epic_lock
 from build_pipeline.epic.split import EpicSplitAnswer
@@ -210,9 +210,9 @@ def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(tmp_path
         git(r.w, "-c", "commit.gpgsign=false", "commit", "-q", "--amend", "--no-edit", "--", rel)
         assert not merge.merges_onto(r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "main"), rel
         git(r.w, "reset", "-q", "--hard", head)
-    (r.w / "uv.lock").write_text('lock 2\nversion = "0.2.0"\n')     # a regenerated lockfile: git's lines, versions
+    (r.w / "uv.lock").write_text('lock 2\nversion = "0.2.0"\n')     # an unconflicted lockfile is git's own
     git(r.w, "-c", "commit.gpgsign=false", "commit", "-q", "--amend", "--no-edit", "--", "uv.lock")
-    assert merge.merges_onto(r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "main")
+    assert not merge.merges_onto(r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "main")
 
 
 def test_a_branch_up_to_date_with_main_waits_with_no_tests_and_no_push(tmp_path, monkeypatch):
@@ -495,7 +495,7 @@ def test_may_resolve_only_versions_changelogs_and_lockfiles(tmp_path):
              "changelog_tool.py": "|x = 3|x = 2", "changelog.py": "|x = 3|x = 2", "src/Changelog.ts": "|x = 3|x = 2",
              "compat.py": "|if sys.version_info < (3, 10):|if sys.version_info < (3, 9):",
              "Cargo.toml": '[dependencies.serde]|version = "1.0.150"|version = "1.0.200"',
-             "CHANGELOG.rst": "|- b|- a"}
+             "CHANGELOG.rst": "|- b|- a", "pubspec.yaml": "dependencies:|    version: 1.3.0|    version: 1.2.0"}
     for name, parts in sides.items():
         above, ours, theirs = parts.split("|")
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
@@ -506,6 +506,51 @@ def test_may_resolve_only_versions_changelogs_and_lockfiles(tmp_path):
     (tmp_path / "clean.json").write_text('{"version": "1"}\n')
     assert [f for f in (*sides, "clean.json", "a/uv.lock", "docs/CHANGELOG.md") if merge.may_resolve(tmp_path, f)] \
         == ["pyproject.toml", "p.json", "v.py", "CHANGELOG.rst", "a/uv.lock", "docs/CHANGELOG.md"]
+
+
+def _lock(version: str, dep: str = "1.0.0", tail: str = 'hash = "h1"\n') -> str:
+    return f'version = "{version}"\n\n[[package]]\nname = "dep"\nversion = "{dep}"\n{tail}'
+
+
+def test_a_resolution_is_checked_by_content_lockfiles_and_binaries_included(tmp_path):
+    """40.3, by content: both sides raised the version in `plugin.json`, in
+    `uv.lock` and in the CHANGELOG. A lockfile may take only lines of its
+    conflict's sides, or the version the result wrote in a version file; any
+    line outside a conflict, in any file, is git's own. A binary file that
+    differs is named, never a crash."""
+    w = tmp_path / "m"
+    w.mkdir()
+
+    def commit(files: dict, at: str | None = None) -> str:
+        if at:
+            git(w, "checkout", "-q", "--detach", at)
+        for rel, text in files.items():
+            (w / rel).write_bytes(text if isinstance(text, bytes) else text.encode())
+        git(w, "add", "--", *files)
+        git(w, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "c")
+        return git(w, "rev-parse", "HEAD").strip()
+
+    git(w, "init", "-q")
+    base = commit({"plugin.json": plugin("0.1.0"), "uv.lock": _lock("0.1.0"), "img.png": b"\x89PNG\xff1",
+                   "CHANGELOG.md": changelog(("0.1.0", "First."))})
+    ours = commit({"plugin.json": plugin("0.2.0"), "uv.lock": _lock("0.2.0"), "CHANGELOG.md": CHILD["CHANGELOG.md"]})
+    theirs = commit({"plugin.json": plugin("0.1.1"), "uv.lock": _lock("0.1.1"), "CHANGELOG.md": MAIN["CHANGELOG.md"]},
+                    at=base)
+    good = {"plugin.json": plugin("0.2.1"), "uv.lock": _lock("0.2.1"),
+            "CHANGELOG.md": changelog(("0.2.1", "Child a."), ("0.1.1", "Main."), ("0.1.0", "First."))}
+    cases = {"": {}, "uv.lock": {"uv.lock": _lock("0.2.1", tail="")},          # a hash line dropped
+             "uv.lock ": {"uv.lock": _lock("0.2.1", dep="6.6.6")},           # a dependency's version
+             " uv.lock": {"uv.lock": _lock("0.9.9")},                       # a version plugin.json does not hold
+             "img.png": {"img.png": b"\x89PNG\xff2"},
+             "CHANGELOG.md": {"CHANGELOG.md": good["CHANGELOG.md"].replace("## [0.1.0]", "## [9.9.9]")}}
+    for want, change in cases.items():
+        result = commit({**good, **change}, at=ours)
+        assert merge.not_resolutions(w, ours, theirs, result) == ([want.strip()] if want else []), want
+
+
+def test_the_merge_tests_fall_back_to_discovery(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    assert merge.test_command(tmp_path) == discover_test_command(tmp_path)[0]
 
 
 def test_a_heading_underline_left_in_a_resolved_changelog_is_no_conflict(tmp_path):
