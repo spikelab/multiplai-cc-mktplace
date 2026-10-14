@@ -27,6 +27,10 @@ from build_pipeline.gates import (
     unchanged_tests_gate,
 )
 from build_pipeline.llm_steps.tdd_steps import run_implementer, run_integration_fix
+from build_pipeline.prompts.implementation import (
+    REVIEW_FIX_SELF_CHECK,
+    TEST_CHANGE_DECLARATION,
+)
 from build_pipeline.models import (
     AgentResult,
     BlockInfo,
@@ -205,6 +209,8 @@ async def test_integration_fixer_echoing_the_template_still_fails(setup):
 # or mention the marker in prose. Neither is a declaration: the gate must
 # still fail the silent test change (hashing is the enforcement).
 
+_LABEL = TEST_CHANGE_MARKER.removesuffix(":")
+
 NOT_DECLARATIONS = {
     "echoed template": f"STATUS: DONE\n{TEST_CHANGE_MARKER} <reason>\n",
     "echoed fenced template": (
@@ -216,6 +222,13 @@ NOT_DECLARATIONS = {
     "negated, lower case": "No test change required: all edits were in src/.\n",
     "inline code mention": (
         f"I changed no tests, so no `{TEST_CHANGE_MARKER} <reason>` line applies.\n"),
+    "numbered prose mention": (
+        f"1. I changed no test, so no {TEST_CHANGE_MARKER} line is needed.\n"),
+    "quoted prose mention": f"> No {TEST_CHANGE_MARKER} line is needed here.\n",
+    "marker alone before a slot": f"{TEST_CHANGE_MARKER}\nSTATUS: DONE\n",
+    "marker alone in a fence": f"STATUS: DONE\n```\n{TEST_CHANGE_MARKER}\n```\n",
+    "marker alone, template on the next line": (
+        f"STATUS: DONE\n{TEST_CHANGE_MARKER}\n<reason>\n"),
 }
 
 
@@ -233,9 +246,38 @@ def test_a_mention_or_echo_is_not_a_declaration(name):
     f"- {TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default",
     f"  **{TEST_CHANGE_MARKER}** tests/test_a.py asserted the wrong default",
     f"{TEST_CHANGE_MARKER.lower()} tests/test_a.py asserted the wrong default",
+    # A numbered or quoted list, which "one line per change" invites.
+    f"1. {TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default",
+    f"2) {TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default",
+    f"> {TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default",
+    f"> - {TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default",
+    # Bold closed before the colon, a label form `_SLOT_COLON` accepts.
+    f"**{_LABEL}**: tests/test_a.py asserted the wrong default",
+    f"- **{_LABEL}**: tests/test_a.py asserted the wrong default",
 ])
 def test_a_line_that_starts_with_the_marker_is_a_declaration(line):
     assert parse_test_change_claims(f"STATUS: DONE\n{line}\n") == [
+        "tests/test_a.py asserted the wrong default"]
+
+
+def test_each_numbered_declaration_counts():
+    report = (f"STATUS: DONE\n1. {TEST_CHANGE_MARKER} tests/test_a.py wrong default\n"
+              f"2. {TEST_CHANGE_MARKER} tests/test_b.py wrong import path\n")
+    assert parse_test_change_claims(report) == [
+        "tests/test_a.py wrong default", "tests/test_b.py wrong import path"]
+    gate = unchanged_tests_gate({TEST_FILE: "a"}, {TEST_FILE: "b"}, report)
+    assert gate.passed
+    assert gate.action == "flag_test_change_claim"
+
+
+@pytest.mark.parametrize("after", [
+    "tests/test_a.py asserted the wrong default",
+    "- tests/test_a.py asserted the wrong default",
+    "\n  tests/test_a.py asserted the wrong default",
+])
+def test_a_reason_on_the_next_line_is_read(after):
+    report = f"STATUS: DONE\n{TEST_CHANGE_MARKER}\n{after}\n"
+    assert parse_test_change_claims(report) == [
         "tests/test_a.py asserted the wrong default"]
 
 
@@ -244,21 +286,27 @@ def test_a_line_that_starts_with_the_marker_is_a_declaration(line):
 DECLARATION = f"{TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default"
 
 
-def test_a_declaration_after_searched_is_not_a_searched_entry():
+DECLARATIONS = [DECLARATION, f"1. {DECLARATION}", f"> {DECLARATION}",
+                f"**{_LABEL}**: tests/test_a.py asserted the wrong default"]
+
+
+@pytest.mark.parametrize("declaration", DECLARATIONS)
+def test_a_declaration_after_searched_is_not_a_searched_entry(declaration):
     report = (f"STATUS: DONE\nSPEC_IMPACT: none\n\nSEARCHED:\n"
-              f"- finding 1: checked parse() and both branches\n\n{DECLARATION}\n")
+              f"- finding 1: checked parse() and both branches\n\n{declaration}\n")
     assert parse_searched(report) == ["finding 1: checked parse() and both branches"]
     assert parse_test_change_claims(report) == [
         "tests/test_a.py asserted the wrong default"]
 
 
-def test_a_declaration_after_surprises_is_not_part_of_the_note():
+@pytest.mark.parametrize("declaration", DECLARATIONS)
+def test_a_declaration_after_surprises_is_not_part_of_the_note(declaration):
     report = (f"STATUS: DONE\nSURPRISES: the spec named the wrong module\n"
-              f"SPEC_IMPACT: clarify\n{DECLARATION}\n")
+              f"SPEC_IMPACT: clarify\n{declaration}\n")
     note = parse_implementation_note(report, block_number=1, block_name="B",
                                      role="implementer")
     assert note.surprises == "the spec named the wrong module"
-    report = f"STATUS: DONE\nSURPRISES: the spec named the wrong module\n{DECLARATION}\n"
+    report = f"STATUS: DONE\nSURPRISES: the spec named the wrong module\n{declaration}\n"
     note = parse_implementation_note(report, block_number=1, block_name="B",
                                      role="implementer")
     assert note.surprises == "the spec named the wrong module"
@@ -271,9 +319,16 @@ async def test_review_fix_prompt_orders_searched_before_the_declaration():
     must say it goes after that section, not contradict it."""
     prompt = await _rendered(run_implementer, "Block", _review_fix_description("fix x"),
                              "FAILED test_a", "ctx", "pytest", prompt_style="clean")
-    assert "SEARCHED:" in prompt
-    assert TEST_CHANGE_MARKER in prompt
-    assert "`SEARCHED:` section included" in prompt
+    # The self-check asks for SEARCHED: at the end and never mentions the
+    # marker, so it cannot ask for SEARCHED: after the declaration.
+    assert REVIEW_FIX_SELF_CHECK in prompt
+    assert "End your report with a `SEARCHED:` section" in REVIEW_FIX_SELF_CHECK
+    assert _LABEL.lower() not in REVIEW_FIX_SELF_CHECK.lower()
+    # The declaration, which follows it, puts its lines after that section.
+    assert TEST_CHANGE_DECLARATION in prompt
+    assert prompt.index(REVIEW_FIX_SELF_CHECK) < prompt.index(TEST_CHANGE_DECLARATION)
+    assert "after any other slots (a `SEARCHED:` section included)" in " ".join(
+        TEST_CHANGE_DECLARATION.split())
 
 
 @pytest.mark.asyncio

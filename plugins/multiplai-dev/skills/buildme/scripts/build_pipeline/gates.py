@@ -460,13 +460,9 @@ def prototype_gate(prototype_dir: Path) -> GateResult:
 TEST_CHANGE_MARKER = "TEST CHANGE REQUIRED:"
 
 # Every REQUIRED slot label an agent report can carry — used as the stop
-# boundary when reading the free-text SURPRISES and SEARCHED slots. The
-# test-change marker is one too: the prompts put its lines at the end of the
-# report, after these slots, and they must not be read as part of the last one.
-_REPORT_SLOT_LABELS = (
-    "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IMPACT|SEARCHED|"
-    + re.escape(TEST_CHANGE_MARKER.removesuffix(":"))
-)
+# boundary when reading the free-text SURPRISES and SEARCHED slots, together
+# with `_TEST_CHANGE_LINE` below.
+_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IMPACT|SEARCHED"
 
 # The colon after a slot label is MANDATORY — every legitimate slot form
 # carries one (`SURPRISES: x`, `- **SURPRISES:** x`, `**SURPRISES**: x`).
@@ -478,11 +474,24 @@ _REPORT_SLOT_LABELS = (
 # closing ** of a bold label.
 _SLOT_COLON = r"(?::\*{0,2}|\*{1,2}:)"
 
+# A bullet (`-`, `*`, `+`), number (`1.`, `2)`) or quote (`>`) before a line's
+# first word, nested in any order (`> - `).
+_LIST_PREFIX = r"[ \t]*(?:(?:[-*+]|\d+[.)]|>)[ \t]*)*"
+
+# The start of a test-change declaration: the marker opens the line, after a
+# list or quote prefix and optional bold, with the colon inside or outside the
+# bold. The prompts put these lines at the end of the report, after the other
+# slots, so the free-text slots stop here too and never read one in.
+_TEST_CHANGE_LINE = (
+    r"^" + _LIST_PREFIX + r"(?:\*\*)?"
+    + re.escape(TEST_CHANGE_MARKER.removesuffix(":")) + _SLOT_COLON
+)
+
 _SURPRISES_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:\*\*)?SURPRISES" + _SLOT_COLON + r"[ \t]*"
     r"(.*?)"
     r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")"
-    + _SLOT_COLON + r"|\Z)",
+    + _SLOT_COLON + r"|" + _TEST_CHANGE_LINE + r"|\Z)",
     re.MULTILINE | re.IGNORECASE | re.DOTALL,
 )
 
@@ -556,7 +565,7 @@ _SEARCHED_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:\*\*)?SEARCHED" + _SLOT_COLON + r"[ \t]*"
     r"(.*?)"
     r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")"
-    + _SLOT_COLON + r"|\Z)",
+    + _SLOT_COLON + r"|" + _TEST_CHANGE_LINE + r"|\Z)",
     re.MULTILINE | re.IGNORECASE | re.DOTALL,
 )
 
@@ -811,26 +820,40 @@ def review_score_gate(
     )
 
 
-# A declaration counts only on a line that starts with the marker (after an
-# optional bullet or bold), as the prompts ask. Every implementer and
+# A declaration counts only on a line that starts with the marker
+# (`_TEST_CHANGE_LINE`), as the prompts ask. Every implementer and
 # integration-fix prompt shows the marker, so prose that mentions it ("no
 # TEST CHANGE REQUIRED: line is needed") must not count as one.
-_TEST_CHANGE_RE = re.compile(
-    r"^[ \t]*(?:[-*][ \t]*)?(?:\*\*)?" + re.escape(TEST_CHANGE_MARKER)
-    + r"(?:\*\*)?[ \t]*(.*)$",
-    re.MULTILINE | re.IGNORECASE,
+_TEST_CHANGE_RE = re.compile(_TEST_CHANGE_LINE + r"[ \t]*(.*)$", re.IGNORECASE)
+
+# A line that cannot be the reason of a marker left alone on its line: a slot
+# label, another declaration, or a code fence.
+_NOT_A_REASON_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")" + _SLOT_COLON
+    + r"|" + _TEST_CHANGE_LINE + r"|^\s*```",
+    re.IGNORECASE,
 )
 
 
 def parse_test_change_claims(report: str) -> list[str]:
     """The reasons an implementer declared for changing a test file.
 
+    A marker left alone on its line takes the next non-blank line as its
+    reason, unless that line is a slot label, another declaration or a fence.
     An echo of the prompt's template (`<reason>`) and an empty answer
-    (`none`) declare nothing, as `_clean_surprises` treats the SURPRISES slot.
+    (`none`, `tbd` or any other `_EMPTY_SLOT_VALUES` entry) declare nothing.
     """
+    lines = (report or "").splitlines()
     claims = []
-    for m in _TEST_CHANGE_RE.findall(report or ""):
-        reason = m.strip()
+    for i, line in enumerate(lines):
+        m = _TEST_CHANGE_RE.match(line)
+        if not m:
+            continue
+        reason = m.group(1).strip()
+        if not reason:
+            following = next((ln for ln in lines[i + 1:] if ln.strip()), "")
+            if not _NOT_A_REASON_RE.match(following):
+                reason = re.sub(r"^" + _LIST_PREFIX, "", following).strip()
         if reason.startswith("<") and reason.endswith(">"):
             continue
         if reason.lower() in _EMPTY_SLOT_VALUES:

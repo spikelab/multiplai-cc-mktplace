@@ -32,7 +32,10 @@ time, not derived from a tag.
 - buildme: since the prompts now show the marker, only a line that starts
   with `TEST CHANGE REQUIRED:` counts as a declaration, and a line left as
   `<reason>`, `none` or empty does not. Before, a sentence that only mentioned
-  the marker, or an echo of the template, passed a silent test change.
+  the marker, or an echo of the template, passed a silent test change. The
+  line may open with a bullet, a number (`1.`, `2)`) or a quote (`>`), the
+  bold may close before the colon (`**TEST CHANGE REQUIRED**:`), and a marker
+  alone on its line takes the next non-blank line as its reason.
 - buildme: a `TEST CHANGE REQUIRED:` line after a report's `SEARCHED:` or
   `SURPRISES:` slot is no longer read as part of that slot, so it no longer
   shows up in the review-round record, the findings reply or
