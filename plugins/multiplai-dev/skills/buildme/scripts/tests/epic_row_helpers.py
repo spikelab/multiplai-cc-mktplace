@@ -375,7 +375,7 @@ print(f"PR:{{url}}", flush=True)
 FAKE_GH = r'''#!{python}
 """A fake `gh`, from `<root>/prs.json`: reads, and (PR E2) `pr checks` and
 `pr merge`. A PR's `checks` is one step per `pr checks` call (the JSON list
-it prints; none: no required checks), its `merges` one step per `pr merge`
+it prints; `[]`: none required; no `checks`: none at all), its `merges` one step per `pr merge`
 call (`refuse`: refused with that stderr). `pr merge` is logged to
 `<root>/merges.log`; it is refused while origin's branch lacks origin's main
 (`BEHIND`, as a branch rule requiring it to be up to date), and otherwise
@@ -437,8 +437,9 @@ elif a[:2] in (["pr", "checks"], ["pr", "merge"]):
     origin = root / "o" / (url.split("/")[-3] + ".git")
     if a[1] == "checks":
         checks = nth(url, "checks", pr.get("checks", []))
-        if not checks:
-            print(f"No required checks reported on the '{{pr['branch']}}' branch", file=sys.stderr)
+        if not checks:      # gh 2.102's words: no checks at all (no `checks`), or none required (`[]`)
+            which = "no required checks" if checks == [] else "no checks"
+            print(f"{{which}} reported on the '{{pr['branch']}}' branch", file=sys.stderr)
             sys.exit(1)
         print(json.dumps(checks))
         buckets = {{x["bucket"] for x in checks}}

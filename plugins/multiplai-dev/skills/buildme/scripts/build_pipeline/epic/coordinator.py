@@ -1320,7 +1320,7 @@ class Coordinator:
             except ValueError:
                 checks = None
             if not isinstance(checks, list) or not all(isinstance(x, dict) for x in checks):
-                if re.search(r"no required checks reported", res.stderr, re.IGNORECASE):
+                if re.search(r"no (required )?checks reported", res.stderr, re.IGNORECASE):     # none at all, or none required
                     return True
                 c.status, c.reason = "unknown", f"{MERGE_UNKNOWN}gh pr checks failed: {review.tail(res.stderr)}"
                 log.warning("EPIC child %s: %s", c.id, c.reason)

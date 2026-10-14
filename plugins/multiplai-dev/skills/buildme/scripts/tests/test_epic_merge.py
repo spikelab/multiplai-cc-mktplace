@@ -1339,6 +1339,17 @@ def test_pending_required_checks_are_waited_for(tmp_path, monkeypatch):
     assert _merged_prs(r) == ["e-a", "e-b"]
 
 
+@pytest.mark.parametrize("checks", [None, [[]]], ids=["no-checks", "none-required"])
+def test_a_pr_with_no_required_checks_merges(tmp_path, monkeypatch, checks):
+    """40.5: `gh pr checks --required` exits 1 when there is nothing to wait
+    for, saying "no checks reported" for a repo with no CI (gh 2.102, read on
+    spikelab/github-tests) and "no required checks reported" when none is
+    required. Neither is a failed read: the PR merges."""
+    r = MergeRoot(tmp_path, monkeypatch, pr={"checks": checks} if checks else None)
+    assert r.run() == 0 and r.status()["status"] == "merged"
+    assert _merged_prs(r) == ["e-a", "e-b"]
+
+
 def test_a_failed_check_parks_naming_it_and_merges_nothing(tmp_path, monkeypatch):
     """40.5: a failed required check parks, naming it. The PR stays open and
     `<W>` clean, so a re-run reads the checks again (E.S26) and parks again."""
