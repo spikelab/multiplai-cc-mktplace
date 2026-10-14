@@ -664,7 +664,8 @@ no review), `review` after its review is in the ledger but before the round
 records it as finished. A launch that finds the last round unfinished
 finishes it with its first entry of `rounds`, as `findings` resumes a round.
 After its rounds it prints `FINDINGS:DONE:<rounds>`, or with `max_rounds`
-`FINDINGS:MAX_ROUNDS:<rounds>`, as `findings` ends. A PR with no entry in
+`FINDINGS:MAX_ROUNDS:<rounds>`, or with `budget` `FINDINGS:BUDGET:<rounds>:<budget>`
+(its `--max-usd` reached), as `findings` ends. A PR with no entry in
 `fixes.json` has no fixer under test: it exits 0 printing no `FINDINGS:` end
 line, so the coordinator neither parks nor fixes it again (PR C's tests).
 `SPEND:<spend>:0` on every exit but a kill."""
@@ -750,6 +751,9 @@ for i, r in enumerate(todo):
     rnd["finished"] = ALL
     save()
     print(f"FINDINGS:ROUND_DONE:{{rnd['number']}}", flush=True)
+if step.get("budget"):
+    print(f"FINDINGS:BUDGET:{{len(doc['findings']['rounds'])}}:{{step['budget']}}", flush=True)
+    sys.exit(0)
 print(f"FINDINGS:{{'MAX_ROUNDS' if step.get('max_rounds') else 'DONE'}}:{{len(doc['findings']['rounds'])}}",
       flush=True)
 '''
