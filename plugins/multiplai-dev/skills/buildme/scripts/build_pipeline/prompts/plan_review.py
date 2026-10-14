@@ -78,6 +78,13 @@ provided, fall back to the user-visible outcomes stated in the proposal, and
 say in the reason that you reviewed against the proposal because no use-case
 document was available.
 
+### `no-new-behaviour`
+A block that adds nothing the code lacks before it is built: it only confirms,
+verifies or pins what an earlier block delivers, adds tests and no code, or
+says an earlier block satisfies it. The TDD build runs each block's tests
+before implementing it and fails the build when they already pass, so this is
+**critical**. Name the earlier block its criteria belong in.
+
 ### `oversized-plan`
 The ticket is too big for one branch. Three checks, in this order:
 
@@ -108,7 +115,8 @@ split as done, and do not suggest the plan be edited to reflect it.
 ## Severity
 
 - **critical** — the plan cannot be built as written: two blocks contradict, a
-  named contract does not exist, or a block breaks a stated constraint outright.
+  named contract does not exist, a block breaks a stated constraint outright,
+  or a block adds no behaviour (its tests pass before it is built).
 - **major** — the plan will produce the wrong thing or leave a stated outcome
   unbuilt: an uncovered use case, a block the rubric will score down, a plan
   too big to review or revert as one branch.
