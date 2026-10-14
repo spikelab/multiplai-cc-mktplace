@@ -3,13 +3,17 @@
 
 1. `findings --max-usd <usd>`: the loop stops between rounds once what this
    process spent plus the reviews of its PR it ran (read from the review
-   ledger) reaches the ceiling, printing `FINDINGS:BUDGET:<rounds>:<spent>`.
-   The coordinator passes the epic's remaining budget, and a fixer that
-   stopped there is a budget stop: the run exits 3 with `EPIC:BUDGET`, and a
-   re-run relaunches it only once `epic.max_usd` is raised.
-2. `findings --severities HIGH,MEDIUM`: under `--auto` a re-review posts, so
-   the fixer acts on, only findings of those severities. The epic passes the
-   severities it blocks on, and its own post uses them too.
+   ledger) reaches the ceiling and the fetch found something to act on,
+   printing `FINDINGS:BUDGET:<rounds>:<spent>`; with nothing to act on it
+   ends `FINDINGS:DONE` as before. The coordinator passes the epic's
+   remaining budget less what fixers still running were given, waits while
+   they hold all of it, and a fixer that stopped there is a budget stop: the
+   run exits 3 with `EPIC:BUDGET`, and a re-run relaunches it only once
+   `epic.max_usd` is raised.
+2. `findings --severities HIGH,MEDIUM --code-only`: under `--auto` a
+   re-review posts, so the fixer acts on, only Code findings of those
+   severities. The epic passes what it blocks on, and its own post keeps the
+   same findings.
 
 Git is real; every model call, review and GitHub call is a fake.
 """
@@ -18,6 +22,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -36,8 +41,8 @@ from tests.test_findings_round import (  # noqa: F401  (fixtures)
     fake_pr,
 )
 
-from .epic_row_helpers import merge_waiting, pr_url, use_workspace
-from .test_epic_fix import CHAIN, N, Epic, high
+from .epic_row_helpers import CallLog, child, merge_waiting, pr_number, pr_url, use_workspace
+from .test_epic_fix import CHAIN, TWO, N, Epic, high
 
 # --- findings: --max-usd ------------------------------------------------------------------
 
@@ -96,6 +101,23 @@ class TestSpendCeiling:
         assert [r.number for r in loop.load_state(run).findings.rounds] == [1, 2]
 
     @pytest.mark.asyncio
+    async def test_a_round_that_leaves_nothing_to_act_on_ends_done_past_the_ceiling(self, built, fake_pr):
+        """Round 1 costs $0.70, past the $0.50 ceiling, and its re-review posts
+        nothing new: the fetch finds nothing to act on, so the loop ends
+        `FINDINGS:DONE`, not `FINDINGS:BUDGET`, and the epic can use its
+        clean review."""
+        repo, change, config = built
+        config.findings.max_rounds = 5
+        fake_pr.add_thread("alice", "first finding", fid="f0")
+        review = CostlyReview(fake_pr, repo, self.ledger, cost=0.6, own=0.1)
+        review.new = 0
+        run, lines = _run(config, change, triage_call=FakeTriage({}), review=review)
+        run.max_usd = 0.5
+        assert await loop.run_findings(run) == 0
+        assert lines[-1] == "FINDINGS:DONE:1"
+        assert review.calls == 1
+
+    @pytest.mark.asyncio
     async def test_without_a_ceiling_it_runs_to_its_round_cap(self, built, fake_pr):
         repo, change, config = built
         config.findings.max_rounds = 3
@@ -136,17 +158,36 @@ class TestSeverities:
         got = json.loads(decisions.write_decisions(tmp_path, severities=("HIGH", "MEDIUM")).read_text())
         assert set(got) == {"c-high", "c-medium", "t-high"}
 
+    def test_code_only_leaves_out_tests_findings(self, tmp_path):
+        """What the epic blocks on (`epic.review.blockers`): Code findings at
+        HIGH or MEDIUM, never a Tests finding, even one on a source file."""
+        _findings_json(tmp_path)
+        got = json.loads(decisions.write_decisions(tmp_path, severities=("HIGH", "MEDIUM"),
+                                                   code_only=True).read_text())
+        assert set(got) == {"c-high", "c-medium"}
+        got = json.loads(decisions.write_decisions(tmp_path, code_only=True).read_text())
+        assert set(got) == {"c-high", "c-medium", "c-low"}
+
+    def test_the_epics_choice_matches_what_it_blocks_on(self, tmp_path):
+        from build_pipeline.epic import fix, review
+
+        _findings_json(tmp_path)
+        assert set(json.loads(fix.write_decisions(tmp_path).read_text())) == {"c-high", "c-medium"}
+        assert len(review.blockers(tmp_path)) == 2
+
     def test_without_severities_every_severity_is_kept(self, tmp_path):
         _findings_json(tmp_path)
         assert set(json.loads(decisions.write_decisions(tmp_path).read_text())) == {
             "c-high", "c-medium", "c-low", "t-low", "t-high"}
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("severities,posted", [
-        (("HIGH", "MEDIUM"), {"c-high", "c-medium", "t-high"}),
-        (None, {"c-high", "c-medium", "c-low", "t-low", "t-high"}),
-    ], ids=["blocking", "all"])
-    async def test_the_rereview_posts_only_those_severities(self, built, fake_pr, tmp_path, severities, posted):
+    @pytest.mark.parametrize("severities,code_only,posted", [
+        (("HIGH", "MEDIUM"), True, {"c-high", "c-medium"}),
+        (("HIGH", "MEDIUM"), False, {"c-high", "c-medium", "t-high"}),
+        (None, False, {"c-high", "c-medium", "c-low", "t-low", "t-high"}),
+    ], ids=["epic", "blocking", "all"])
+    async def test_the_rereview_posts_only_those_severities(self, built, fake_pr, tmp_path, severities,
+                                                           code_only, posted):
         repo, change, config = built
         config.findings.max_rounds = 1
         review_dir = tmp_path / "reviews" / "r1"
@@ -164,7 +205,7 @@ class TestSeverities:
                 return True, ""
 
         run, lines = _run(config, change, triage_call=FakeTriage({}), review=Review(fake_pr), decisions=None)
-        run.severities = severities
+        run.severities, run.code_only = severities, code_only
         assert await loop.run_findings(run) == 0
         assert [set(s) for s in seen] == [posted]
 
@@ -177,14 +218,14 @@ class TestCli:
         with pytest.raises(SystemExit):
             build_parser().parse_args(["findings", "--help"])
         out = capsys.readouterr().out
-        assert "--max-usd" in out and "--severities" in out
+        assert "--max-usd" in out and "--severities" in out and "--code-only" in out
 
     def test_they_parse(self):
         args = build_parser().parse_args(["findings", "--pr", "1", "--max-usd", "3.5",
-                                          "--severities", "high,MEDIUM"])
-        assert (args.max_usd, args.severities) == (3.5, ("HIGH", "MEDIUM"))
+                                          "--severities", "high,MEDIUM", "--code-only"])
+        assert (args.max_usd, args.severities, args.code_only) == (3.5, ("HIGH", "MEDIUM"), True)
         args = build_parser().parse_args(["findings", "--pr", "1"])
-        assert (args.max_usd, args.severities) == (None, None)
+        assert (args.max_usd, args.severities, args.code_only) == (None, None, False)
 
     @pytest.mark.parametrize("argv", [["--max-usd", "-1"], ["--max-usd", "abc"], ["--max-usd", "nan"],
                                       ["--severities", "CRITICAL"], ["--severities", ""]])
@@ -204,10 +245,10 @@ class TestCli:
         monkeypatch.setattr(git_ops, "_run_gh", gh)
         run = cli.resolve(build_parser().parse_args(
             ["findings", "--pr", str(PR), "--project-dir", str(repo), "--max-usd", "2.25",
-             "--severities", "HIGH,MEDIUM"]))
-        assert (run.max_usd, run.severities) == (2.25, ("HIGH", "MEDIUM"))
+             "--severities", "HIGH,MEDIUM", "--code-only"]))
+        assert (run.max_usd, run.severities, run.code_only) == (2.25, ("HIGH", "MEDIUM"), True)
         run = cli.resolve(build_parser().parse_args(["findings", "--pr", str(PR), "--project-dir", str(repo)]))
-        assert (run.max_usd, run.severities) == (None, None)
+        assert (run.max_usd, run.severities, run.code_only) == (None, None, False)
 
 
 # --- the epic -----------------------------------------------------------------------------------
@@ -218,14 +259,16 @@ def _opt(argv: list[str], name: str) -> str | None:
 
 
 def test_the_epics_post_holds_only_the_severities_it_blocks_on(tmp_path, monkeypatch):
-    """Defect 2: the first post, which the fixer acts on, leaves a LOW Code
-    finding out; the fixer is told the same severities for its re-reviews."""
-    reviews = {str(N): [{"findings": [high("f1"), high("f8", "MEDIUM"), high("f9", "LOW")]}]}
+    """Defect 2: the first post, which the fixer acts on, leaves out a LOW
+    Code finding and a Tests finding on a source file, neither of which the
+    epic blocks on; the fixer is told the same for its re-reviews."""
+    tests_high = {**high("f7"), "topic": "tests"}
+    reviews = {str(N): [{"findings": [high("f1"), high("f8", "MEDIUM"), high("f9", "LOW"), tests_high]}]}
     e = Epic(tmp_path, monkeypatch, reviews=reviews, fixes={str(N): [{"rounds": [{}]}]})
     assert e.run() == 3
     assert e.posted() == [{"f1": {"decision": "accept"}, "f8": {"decision": "accept"}}]
     [fixer] = e.fakes.fix_launches()
-    assert _opt(fixer["argv"], "--severities") == "HIGH,MEDIUM"
+    assert _opt(fixer["argv"], "--severities") == "HIGH,MEDIUM" and "--code-only" in fixer["argv"]
     assert _opt(fixer["argv"], "--max-usd") is None          # no epic.max_usd: no ceiling
 
 
@@ -265,3 +308,101 @@ def test_a_fixer_stopped_at_the_epics_remaining_budget_stops_the_epic(tmp_path, 
     assert (again.result["exit_code"], again.result["interrupted"]) == (0, False)
     assert len(e.fakes.post_launches()) == 1
     assert e.tries()[-1].result["reused"] is True
+
+
+def _fake_spend(monkeypatch, e: Epic, start: float, per_fix: float) -> None:
+    """The epic's spend: *start*, plus *per_fix* for each `fix` of any child
+    that has its result (a running fixer's spend is not counted yet, as
+    `spend.attempts_spend` does not count it)."""
+    from build_pipeline.epic import coordinator, records
+
+    monkeypatch.setattr(coordinator.Coordinator, "spent", lambda self: (
+        start + per_fix * sum(1 for a in records.attempts(e.dir) if a.kind == "fix" and a.result), True))
+
+
+def _fix_of(launch: dict) -> int:
+    return int(_opt(launch["argv"], "--pr"))
+
+
+def test_two_fixers_at_once_share_what_is_left(tmp_path, monkeypatch):
+    """Two children's fixers under one `epic.max_usd` (max_parallel 2). The
+    first is given all that is left ($10 of $20), so the second waits for it
+    instead of being given the same $10; once the first has ended ($4
+    spent), the second is given the $6 left. Without that, the two could
+    spend the remainder twice. The launch hold (the next test) is off here,
+    so the second child's review and post go ahead and its fixer is the one
+    that waits."""
+    from build_pipeline.epic import coordinator
+
+    monkeypatch.setattr(coordinator.Coordinator, "_held_back", lambda self: False)
+    na, nb = pr_number("e-a"), pr_number("e-b")
+    reviews = {str(na): [{"findings": [high("f1")]}], str(nb): [{"findings": [high("g1")]}]}
+    fixes = {str(na): [{"block": True, "rounds": [{}]}], str(nb): [{"block": True, "rounds": [{}]}]}
+    e = Epic(tmp_path, monkeypatch, answer=TWO, reviews=reviews, fixes=fixes, max_usd=20.0)
+    _fake_spend(monkeypatch, e, 10.0, 4.0)
+    released: dict[int, float] = {}
+    overlap: list[list[int]] = []
+    first: list[float] = []
+
+    def tick(coord):
+        launched = [_fix_of(x) for x in e.fakes.fix_launches()]
+        if not launched:
+            return
+        (e.root / "release").mkdir(exist_ok=True)
+        if len(launched) > 1 and launched[0] not in released:
+            overlap.append(launched)
+        first.append(first[0] if first else time.monotonic())
+        if launched[0] not in released and time.monotonic() - first[0] > 2.0:
+            (e.root / "release" / f"fix-{launched[0]}").write_text("")
+            released[launched[0]] = time.monotonic()
+        for n in launched[1:]:
+            if n not in released:
+                (e.root / "release" / f"fix-{n}").write_text("")
+                released[n] = time.monotonic()
+
+    monkeypatch.setattr(coordinator, "_tick", tick)
+    assert e.run() == 3 and sorted(merge_waiting()) == sorted([pr_url("e-a"), pr_url("e-b")])
+    assert overlap == []
+    one, two = e.fakes.fix_launches()
+    assert (_opt(one["argv"], "--max-usd"), _opt(two["argv"], "--max-usd")) == ("10.000000", "6.000000")
+    assert len(e.fakes.post_launches()) == 2
+
+
+def test_nothing_new_launches_while_running_fixers_hold_what_is_left(tmp_path, monkeypatch):
+    """Child a's fixer holds all that is left of `epic.max_usd`; child c,
+    ready once b's review ends, is not built until a's fixer has ended, as
+    its build would spend what a's fixer was given."""
+    from build_pipeline.epic import coordinator
+    from build_pipeline.epic.split import EpicSplitAnswer
+
+    answer = EpicSplitAnswer(single=False, reason="Three parts.", children=[child("a"), child("b"), child("c")])
+    na, nb = pr_number("e-a"), pr_number("e-b")
+    reviews = {str(na): [{"findings": [high("f1")]}], str(nb): [{"block": True}]}
+    fixes = {str(na): [{"block": True, "rounds": [{}]}]}
+    e = Epic(tmp_path, monkeypatch, answer=answer, reviews=reviews, fixes=fixes, max_usd=20.0)
+    _fake_spend(monkeypatch, e, 10.0, 4.0)
+    early: list[str] = []
+    since: list[float] = []
+
+    def builds_of_c() -> list[dict]:
+        return [x for x in CallLog(e.root / "calls.log").calls() if x["kind"] == "build" and "e-c" in x["argv"]]
+
+    def tick(coord):
+        if not e.fakes.fix_launches():
+            return
+        (e.root / "release").mkdir(exist_ok=True)
+        (e.root / "release" / f"review-{nb}").write_text("")
+        since.append(since[0] if since else time.monotonic())
+        gate = e.root / "release" / f"fix-{na}"
+        if gate.exists():
+            return
+        if builds_of_c():
+            early.append("c built while a's fixer held what was left")
+        if time.monotonic() - since[0] > 2.0:
+            gate.write_text("")
+
+    monkeypatch.setattr(coordinator, "_tick", tick)
+    assert e.run() == 3
+    assert sorted(merge_waiting()) == sorted(pr_url(f"e-{c}") for c in "abc")
+    assert early == []
+    assert len(builds_of_c()) == 1

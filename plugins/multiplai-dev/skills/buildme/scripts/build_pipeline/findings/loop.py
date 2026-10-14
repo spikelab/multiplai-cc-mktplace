@@ -30,11 +30,12 @@ finished steps and restarts the first unfinished one:
 
 The loop stops when a fetch finds no new comment to act on
 (`FINDINGS:DONE:<rounds>`), after `findings.max_rounds` rounds
-(`FINDINGS:MAX_ROUNDS:<n>`), or, with `--max-usd`, before a round once this
-process's spend plus the reviews of the PR it ran have reached it
-(`FINDINGS:BUDGET:<rounds>:<usd>`). Each stops between rounds, exit 0. With
-`--severities`, `--auto` posts only findings of those severities, so the next
-round acts on nothing else.
+(`FINDINGS:MAX_ROUNDS:<n>`), or, with `--max-usd`, when a fetch finds
+something to act on once this process's spend plus the reviews of the PR it
+ran have reached it (`FINDINGS:BUDGET:<rounds>:<usd>`). Each stops between
+rounds, exit 0. With `--severities`, `--auto` posts only findings of those
+severities, and with `--code-only` only Code findings, so the next round acts
+on nothing else.
 """
 
 from __future__ import annotations
@@ -121,6 +122,7 @@ class FindingsRun:
     emit: Callable[[str], None] = print
     max_usd: float | None = None             # `--max-usd`: stop between rounds once reached
     severities: tuple[str, ...] | None = None    # `--severities`: what `--auto` posts
+    code_only: bool = False                  # `--code-only`: `--auto` posts Code findings only
 
     @property
     def project_dir(self) -> Path:
@@ -539,7 +541,8 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             save()
         if run.auto:
             try:
-                choose = seams.decisions or functools.partial(write_decisions, severities=run.severities)
+                choose = seams.decisions or functools.partial(write_decisions, severities=run.severities,
+                                                           code_only=run.code_only)
                 decisions = choose(rnd.review_run_dir)
             except (FileNotFoundError, ValueError) as e:
                 raise StepFailed("review", f"cannot choose what to post: {e}") from e
@@ -647,12 +650,6 @@ async def run_findings(run: FindingsRun) -> int:
             if done >= max_rounds:
                 run.emit(f"FINDINGS:MAX_ROUNDS:{done}")
                 return EXIT_OK
-            usd = spent() if spent is not None else 0.0
-            if run.max_usd is not None and usd >= run.max_usd:
-                log.warning("findings: $%.2f spent has reached --max-usd $%.2f: no round %d",
-                            usd, run.max_usd, done + 1)
-                run.emit(f"FINDINGS:BUDGET:{done}:{usd:.2f}")
-                return EXIT_OK
             if not git_ops.tree_is_clean(run.project_dir):
                 # A failed step keeps the tree's edits under a wip ref and
                 # resets it; never do that to work this pipeline did not make.
@@ -677,6 +674,15 @@ async def run_findings(run: FindingsRun) -> int:
                     log.info("findings: comment %d by %s not acted on: %s",
                              c.id, c.author, triage.should_triage(c)[1])
                 run.emit(f"FINDINGS:DONE:{done}")
+                return EXIT_OK
+            # After the fetch, which calls no model: a PR left with nothing to
+            # act on ends DONE even past the ceiling, so it is not taken for
+            # a budget stop.
+            usd = spent() if spent is not None else 0.0
+            if run.max_usd is not None and usd >= run.max_usd:
+                log.warning("findings: $%.2f spent has reached --max-usd $%.2f: no round %d",
+                            usd, run.max_usd, done + 1)
+                run.emit(f"FINDINGS:BUDGET:{done}:{usd:.2f}")
                 return EXIT_OK
             rnd = FindingsRound(number=done + 1, since=since, fetched_at=fetched_at,
                                 comments=new, started=["fetch"], finished=["fetch"])

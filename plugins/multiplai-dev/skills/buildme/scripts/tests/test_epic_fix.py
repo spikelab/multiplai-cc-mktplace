@@ -111,7 +111,7 @@ def test_blockers_lead_to_a_post_then_a_fix_and_round_counts_add_up(tmp_path, mo
     session = e.tries()[0].started["argv"][4]           # the build's own --session-id
     assert first == ["python", "-m", "build_pipeline", "--session-id", session, "findings", "--pr", str(N),
                      "--change", "e-a", "--project-dir", str(e.worktree), "--auto", "--trust-repo",
-                     "--max-rounds", "5", "--severities", "HIGH,MEDIUM"]
+                     "--max-rounds", "5", "--severities", "HIGH,MEDIUM", "--code-only"]
     assert (_rounds(first), _rounds(second)) == (0 + 6 - 1, 2 + 6 - 3)
     assert [x["cwd"] for x in e.fakes.fix_launches()] == ["<root>/ws/.worktrees/buildme-e-a"] * 2
     posts = [a for a in e.tries() if a.kind == "post"]

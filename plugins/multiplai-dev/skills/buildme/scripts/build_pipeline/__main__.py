@@ -225,10 +225,13 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Fix rounds before the loop stops (overrides findings.max_rounds)")
     findings.add_argument("--max-usd", type=_usd_limit, default=None,
                           help="Stop before the next round once this process and the PR's reviews "
-                               "it ran have spent this many US dollars")
+                               "it ran have spent this many US dollars (counted from 0 in each run)")
     findings.add_argument("--severities", type=_severity_list, default=None,
                           help="With --auto, post only the re-review's findings of these "
                                "severities, e.g. HIGH,MEDIUM (default: every severity)")
+    findings.add_argument("--code-only", action="store_true",
+                          help="With --auto, post only the re-review's Code findings, not its "
+                               "Tests findings on source files")
     _add_trust_repo_flag(findings)
 
     # --- archive ---

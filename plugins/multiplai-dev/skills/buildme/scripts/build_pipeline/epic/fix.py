@@ -6,7 +6,7 @@ MEDIUM, `review.blockers`) runs the fix loop, as two subprocesses with a pair
 of records each:
 
 1. `post`: `write_decisions(<review_dir>)` chooses what to post (what
-   `--auto` posts, at the severities the epic blocks on,
+   `--auto` posts, kept to what the epic blocks on: Code findings at
    `review.BLOCKING_SEVERITIES`), then `uv run --directory <review scripts>
    python -m review_pipeline post <review_dir> --decisions
    <review_dir>/buildme-decisions.json`, cwd the
@@ -14,7 +14,7 @@ of records each:
    second post is safe.
 2. `fix`: `python -m build_pipeline findings --pr <n> --change <epic>-<id>
    --project-dir <P> --auto --trust-repo --max-rounds <M> --severities
-   HIGH,MEDIUM [--max-usd <left>]`, cwd `<P>`, the child's worktree joined
+   HIGH,MEDIUM --code-only [--max-usd <left>]`, cwd `<P>`, the child's worktree joined
    with the project's offset. `<M>` is the rounds in
    the change's `.findings-state.json` whose review finished plus the review
    rounds the PR has left (`epic.max_review_rounds` less `pr_round`), so
@@ -23,12 +23,15 @@ of records each:
    in `pr_round`) is one of the rounds left: `findings` finishes it first.
    `findings` resumes itself, so an interrupted one is run again with the same
    command; `findings` exits 128 + the signal on SIGTERM or SIGHUP, which is a
-   stop like a kill, not a failure. `--severities` makes its re-reviews post,
-   so its rounds act on, only what the epic blocks on. `<left>` is
-   `epic.max_usd` less the epic's spend at the launch (none without
-   `epic.max_usd`): `findings` stops before a round once its own spend and its
-   reviews' have reached it, exit 0 with `FINDINGS:BUDGET:<rounds>:<usd>`,
-   and the coordinator takes that as the epic's budget reached.
+   stop like a kill, not a failure. `--severities` and `--code-only` make its
+   re-reviews post, so its rounds act on, only what the epic blocks on.
+   `<left>` is `epic.max_usd` less the epic's spend at the launch and less
+   what the fixers still running were given and have not yet spent on their
+   PRs' reviews (none without `epic.max_usd`; while they hold all of it, the
+   fixer waits for them): `findings` stops before a round once its own spend
+   and its reviews' have reached it and a fetch found something to act on,
+   exit 0 with `FINDINGS:BUDGET:<rounds>:<usd>`, and the coordinator takes
+   that as the epic's budget reached.
 
 Then the coordinator's review step reads the PR's head again and reuses the
 fixer's last review. The steps that run these are `Coordinator._fix` and
@@ -56,9 +59,10 @@ FAILED = re.compile(r"^FINDINGS:FAILED:([^:\n]*):(.*)$", re.MULTILINE)
 
 
 def write_decisions(review_dir: str | Path) -> Path:
-    """32.1: `findings.decisions.write_decisions`, keeping only the severities
-    the epic blocks on, so the fixer acts on nothing the epic would merge with."""
-    return decisions.write_decisions(review_dir, severities=review.BLOCKING_SEVERITIES)
+    """32.1: `findings.decisions.write_decisions`, keeping only the Code
+    findings at the severities the epic blocks on (`review.blockers`), so the
+    fixer acts on nothing the epic would merge with."""
+    return decisions.write_decisions(review_dir, severities=review.BLOCKING_SEVERITIES, code_only=True)
 
 
 def post_argv(review_dir: str) -> list[str]:
@@ -127,7 +131,8 @@ def fix_argv(session_id: str, number: int, change: str, project: Path, max_round
              max_usd: float | None = None) -> list[str]:
     argv = ["python", "-m", "build_pipeline", "--session-id", session_id, "findings", "--pr", str(number),
             "--change", change, "--project-dir", str(project), "--auto", "--trust-repo",
-            "--max-rounds", str(max_rounds), "--severities", ",".join(review.BLOCKING_SEVERITIES)]
+            "--max-rounds", str(max_rounds), "--severities", ",".join(review.BLOCKING_SEVERITIES),
+            "--code-only"]
     if max_usd is not None:
         argv += ["--max-usd", f"{max(max_usd, 0.0):.6f}"]
     return argv

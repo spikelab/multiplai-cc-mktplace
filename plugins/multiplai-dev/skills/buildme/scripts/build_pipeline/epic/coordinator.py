@@ -40,9 +40,12 @@ Spend (PR B2): before each launch, when `epic.max_usd` is set and the epic's
 spend (`spend.py`: the records' `spend` plus the review ledger) has reached
 it, nothing more is launched; the run waits for the running children and
 exits 3 with `EPIC:BUDGET:<spent>`. A fixer runs several rounds in one
-launch, so it is given what is left as `findings --max-usd`, and one that
-stopped there (`FINDINGS:BUDGET`) is a budget stop too: its result is
-`interrupted`, so a re-run after `epic.max_usd` is raised runs it again.
+launch, so it is given what is left as `findings --max-usd`: the cap less
+the spend and less what fixers still running were given and have not yet
+spent on their PRs' reviews. While those hold all that is left, a fixer
+waits for them and nothing new is launched. One that stopped at its share
+(`FINDINGS:BUDGET`) is a budget stop too: its result is `interrupted`, so a
+re-run after `epic.max_usd` is raised runs it again.
 `epic.json` and each summary hold `spent_usd` and `spend_complete`.
 """
 
@@ -352,6 +355,15 @@ def _plan_of(argv: list[str]) -> Path | None:
 # --- the coordinator ---------------------------------------------------------------
 
 @dataclass
+class Share:
+    """What a running fixer was given of `epic.max_usd` (its `--max-usd`), and
+    its PR's review spend in the ledger when it was launched. Kept in memory
+    only, for the run that launched it."""
+    usd: float
+    reviews: float
+
+
+@dataclass
 class Child:
     id: str
     depends_on: list[str]
@@ -391,6 +403,7 @@ class Coordinator:
     children: dict[str, Child] = field(default_factory=dict)
     signal_sent: int | None = None
     budget_stop: float | None = None     # the spend that stopped launches, once reached
+    shares: dict[str, Share] = field(default_factory=dict)   # running fixers' --max-usd, per child
     merge_locks: dict[str, asyncio.Lock] = field(default_factory=dict)   # item 35, per repo root
 
     def __post_init__(self) -> None:
@@ -970,7 +983,8 @@ class Coordinator:
         any other exit), `built` when the fixer was stopped by a signal (killed,
         or exit 128 + SIGTERM or SIGHUP; its result `interrupted`, so the next
         run runs it again, D2.S5), or `unknown`. It is given what is left of
-        `epic.max_usd` as `--max-usd`; when it stopped there
+        `epic.max_usd` (`_left`) as `--max-usd`, after waiting while other
+        running fixers hold all of it (D2.S18); when it stopped there
         (`FINDINGS:BUDGET`), the epic's budget is reached: the child stays
         `built`, its result is `interrupted` so a run with a higher
         `epic.max_usd` runs it again (D2.S16), and nothing more is launched."""
@@ -979,11 +993,22 @@ class Coordinator:
         if not await self._fixer_gone(c, number):
             return False
         ceiling = self.settings.max_usd
-        left = None if ceiling is None else ceiling - self.spent()[0]
-        argv = fix.fix_argv(getattr(self.args, "session_id", "") or "", number, change, project, rounds, left)
         c.status = "reviewing"
+        left = None if ceiling is None else self._left(c.id)
+        while left is not None and left <= 0 and any(cid != c.id for cid in self.shares):
+            await CLOCK.sleep(POLL)           # D2.S18: wait for the fixers that hold it
+            if self._over_budget():
+                c.status, c.reason = "built", ""
+                return False
+            left = self._left(c.id)
+        argv = fix.fix_argv(getattr(self.args, "session_id", "") or "", number, change, project, rounds, left)
         attempt = records.start(self.epic_dir, "fix", c.id, argv, head_sha=head, pr_round=c.pr_round)
-        code, out = await self._run_step(c, attempt, project)
+        if left is not None:
+            self.shares[c.id] = Share(max(left, 0.0), self._pr_reviews(c))
+        try:
+            code, out = await self._run_step(c, attempt, project)
+        finally:
+            self.shares.pop(c.id, None)
         if code == 0 and fix.budget_stopped(out):
             records.finish(attempt, code, interrupted=True)
             c.status, c.reason = "built", ""
@@ -1515,6 +1540,33 @@ class Coordinator:
                                                        self._review_slugs())
         return round(usd + reviews, 6), complete and reviews_complete
 
+    def _pr_reviews(self, c: Child) -> float:
+        """The USD of *c*'s PR's reviews in the ledger, as `spent` counts them."""
+        from multiplai_core.paths import get_paths
+
+        usd, _ = spend.review_spend(Path(get_paths().data_dir) / spend.LEDGER, spend.review_slugs(c.slug, [c.pr]))
+        return usd
+
+    def _held(self, but: str | None = None) -> float:
+        """What the running fixers (but *but*'s) were given and have not yet
+        spent on their PRs' reviews. `spent` does not count a running fixer's
+        own spend until it ends, and counts its PR's reviews as they finish,
+        so this is the part of the cap they may still spend."""
+        return sum(max(s.usd - (self._pr_reviews(self.children[cid]) - s.reviews), 0.0)
+                   for cid, s in self.shares.items() if cid != but)
+
+    def _left(self, cid: str) -> float:
+        """What a fixer for *cid* may be given: `epic.max_usd` less the spend
+        and less what the other running fixers hold (`_held`)."""
+        return self.settings.max_usd - self.spent()[0] - self._held(cid)
+
+    def _held_back(self) -> bool:
+        """True while running fixers hold all that is left of `epic.max_usd`:
+        no build or review is started then, as it would spend their share.
+        Not a budget stop: once they end, their real spend decides."""
+        ceiling = self.settings.max_usd
+        return ceiling is not None and bool(self.shares) and self.spent()[0] + self._held() >= ceiling
+
     def _over_budget(self) -> bool:
         """True once `epic.max_usd` is set and reached; then for the rest of the run."""
         if self.budget_stop is not None:
@@ -1668,12 +1720,12 @@ class Coordinator:
             ready = self._resolve()
             running = sum(c.status in ("running", "reviewing") for c in self.children.values())
             for c in self._review_due():        # a review before a new build: it unblocks dependants
-                if running >= self.settings.max_parallel or self._over_budget():
+                if running >= self.settings.max_parallel or self._over_budget() or self._held_back():
                     break
                 self._start_review(c)
                 running += 1
             for c in ready:
-                if running >= self.settings.max_parallel or self._over_budget():
+                if running >= self.settings.max_parallel or self._over_budget() or self._held_back():
                     break
                 if await self._launch(c):
                     running += 1
