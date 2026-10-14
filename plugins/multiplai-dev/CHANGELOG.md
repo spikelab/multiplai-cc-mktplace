@@ -17,6 +17,17 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.70.1] - 2026-10-14
+
+### Fixed
+- `/multiplai-dev:buildme`: a build that failed after its first commit can
+  be run again. The re-run uses the failed build's own branch and worktree
+  instead of stopping with `Branch ... already exists with N commit(s)`, so
+  an epic's failed child can be relaunched too. A build that failed before
+  any commit also re-runs in its own worktree, no longer in a new `-2` one.
+  The re-run stops with exit `1`, and changes nothing, when the worktree
+  holds an uncommitted change the failed run did not leave.
+
 ## [0.70.0] - 2026-10-14
 
 ### Added
