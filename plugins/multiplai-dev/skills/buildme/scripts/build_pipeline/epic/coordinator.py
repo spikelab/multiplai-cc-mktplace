@@ -367,14 +367,16 @@ class Coordinator:
         """Item 43: a child with a `repo` builds in that checkout, relative to
         the epic's repository root; any other child in the epic's project.
         Once the checkout is gone, its review slug is the one saved while it
-        was there (F.S11), so its PR's reviews still count in `spent()`."""
+        was there (F.S11), so its PR's reviews still count in `spent()`. With
+        none saved, the child was approved before PR F, when every child was
+        built and reviewed in the epic's repo: the slug is the epic's."""
         if not repo:
             c.project, c.root, c.slug = self.project_dir, self.repo, self.slug
             return
         c.repo, c.project = repo, store.checkout_path(repo, self.repo)
         top = store.checkout_root(c.project)
         c.root = top or c.project
-        c.slug = store.slug_repo_name(top) if top else (saved_slug or store.slug_repo_name(c.project))
+        c.slug = store.slug_repo_name(top) if top else (saved_slug or self.slug)
 
     def _park_missing(self, c: Child) -> bool:
         """F.S5: a child whose checkout is gone, or is no longer the top of a

@@ -38,6 +38,8 @@ time, not derived from a tag.
   building every child in the epic's own repository. An epic approved on
   0.65.0 with an `owner/name` repo parks that child on its next run with
   `repo <path> not found`; split it again under a new `--change` name.
+  The reviews that child's PR already had, which ran in the epic's own
+  repository, still count in the epic's spend.
 
 ## [0.65.0] - 2026-10-14
 

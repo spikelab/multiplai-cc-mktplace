@@ -65,7 +65,8 @@ an `origin` remote, `store.repo_errors`) builds there instead: its
 that repository's (`Coordinator._place`), its `specs/config.yaml` gets the same
 `git.worktree`/`git.push` check as the epic's, and a checkout gone later parks
 it for good (`repo_park` in `epic.json`) while its saved review slug keeps its
-reviews in the epic's spend. Records go to
+reviews in the epic's spend (with none saved, the child predates PR F and
+was built in the epic's repository, so the slug is the epic's). Records go to
 `agents/<NNN>-build-<id>.{started.json,result.json,log}` (`epic/records.py`)
 and each run ends with `runs/<NN>/summary.json` (`EPIC:SUMMARY:<path>`). A
 child waiting on an open PR exits 3 with `EPIC:MERGE_WAITING:<urls>`. `build`
