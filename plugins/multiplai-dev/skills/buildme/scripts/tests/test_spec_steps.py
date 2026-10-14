@@ -398,6 +398,7 @@ class TestRegistryInTheContext:
 
         cm = ChangeManager(tmp_path / "specs")
         change = cm.create_change("feat")
+        cm.registry_dir.mkdir(parents=True, exist_ok=True)
         for name in ("users", "auth", "billing"):
             (cm.registry_dir / f"{name}.md").write_text("x")
         (cm.registry_dir / "notes.txt").write_text("not a capability")
