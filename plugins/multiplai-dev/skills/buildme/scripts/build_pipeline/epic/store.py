@@ -55,7 +55,9 @@ class ChildStatus(BaseModel):
     rounds, item 23) and `conflicts` (its last mergeability read) are cached
     here; the review ledger and `gh` are the truth. PR E: `merge_stop`, the
     tree of the child's worktree when its merge step last stopped (item 39),
-    and `merge_park`, why its merge step parked it, which keeps it parked."""
+    and `merge_park`, why its merge step parked it, which keeps it parked.
+    PR F: `repo_park`, why it parked when its `repo` checkout was gone
+    (F.S5), which keeps it parked though the checkout comes back."""
 
     status: str = "pending"
     pr: str | None = None
@@ -64,6 +66,7 @@ class ChildStatus(BaseModel):
     conflicts: bool | None = None
     merge_stop: StepStop | None = None
     merge_park: str = ""
+    repo_park: str = ""
 
 
 class Epic(BaseModel):
@@ -123,6 +126,30 @@ def epic_dir_for(repo: Path, change_name: str) -> Path:
     """`<data_dir>/buildme/epics/<owner>-<repo>--<change>/`."""
     repo = Path(repo)
     return get_paths().data_dir / "buildme" / "epics" / sanitize_slug(f"{slug_repo_name(repo)}--{change_name}")
+
+
+# --- a child in another repo (PR F, item 43) ------------------------------------------
+
+def checkout_path(repo: str, base: Path) -> Path:
+    """Where a child's `repo` points: the path as written (`~` expanded),
+    relative to *base*, the epic's repository root, when it is not absolute."""
+    path = Path(repo).expanduser()
+    return Path(os.path.normpath(path if path.is_absolute() else Path(base).absolute() / path))
+
+
+def repo_errors(children: list[EpicChild], base: Path) -> list[str]:
+    """Item 43, at approval: each child's `repo` must be a directory with an
+    `origin` remote. One error per child that fails, naming it and its repo."""
+    errors = []
+    for c in children:
+        if not c.repo:
+            continue
+        path = checkout_path(c.repo, base)
+        if not path.is_dir():
+            errors.append(f"child {c.id}: repo {c.repo} not found ({path})")
+        elif _remote_url(path) is None:
+            errors.append(f"child {c.id}: repo {c.repo} has no origin remote ({path})")
+    return errors
 
 
 # --- epic.json -----------------------------------------------------------------

@@ -176,16 +176,17 @@ def test_merges_in_two_repos_take_one_lock_each(tmp_path, monkeypatch):
     repo root, so merges in two repos never wait on each other."""
     e = TwoRepos(tmp_path, monkeypatch, answer=APART, merge_mode="auto",
                  steps={"a": [{"commit": {"a.txt": "a\n"}}], "b": [{"commit": {"b.txt": "b\n"}}]})
-    held: list[tuple[str, str]] = []
+    held: list[tuple[str, str, bool]] = []
     real = coordinator.Coordinator._merge_steps
 
     async def spy(self, c, w):
-        held.append((c.id, next(k for k, lk in self.merge_locks.items() if lk.locked())))
+        key = str(c.root.resolve())
+        held.append((c.id, key, key in self.merge_locks and self.merge_locks[key].locked()))
         return await real(self, c, w)
 
     monkeypatch.setattr(coordinator.Coordinator, "_merge_steps", spy)
     assert e.run() == 3 and sorted(merge_waiting()) == sorted([pr_url("e-a"), url2("e-b")])
-    assert sorted(held) == [("a", str((tmp_path / "p").resolve())), ("b", str((tmp_path / "q").resolve()))]
+    assert sorted(held) == [("a", str((tmp_path / "p").resolve()), True), ("b", str((tmp_path / "q").resolve()), True)]
 
 
 def test_a_checkout_moved_after_approval_parks_its_child(tmp_path, monkeypatch):
@@ -196,6 +197,10 @@ def test_a_checkout_moved_after_approval_parks_its_child(tmp_path, monkeypatch):
     assert e.status() == {"a": "built", "b": "parked"}
     assert e.child_status()["b"]["reason"] == f"repo {tmp_path / 'q'} not found"
     assert [Path(_opt(x, "--plan-file")).stem for x in e.launches()] == ["a"]
+    (tmp_path / "q-moved").rename(tmp_path / "q")         # put back: the park stays (repo_park)
+    assert e.run() == 3 and e.status() == {"a": "built", "b": "parked"}
+    assert e.child_status()["b"]["repo_park"] == f"repo {tmp_path / 'q'} not found"
+    assert len(e.launches()) == 1
 
 
 def test_tracked_changes_in_the_second_repo_are_refused_by_the_child_build(tmp_path, monkeypatch):

@@ -368,6 +368,7 @@ class TestApproval:
         text = split_md.read_text()
         assert "| api | Child api | — | — |" in text
         split_md.write_text(text.replace("| api | Child api | — | — |", "| api | Child api | — | org/other |"))
+        (config.project_dir / "org" / "other").mkdir(parents=True)     # PR F: a repo is a checkout with origin
         assert run_build(config, args_for(config, approve_split=True)) == 0
         saved = json.loads((epic / "epic.json").read_text())
         assert [c["repo"] for c in saved["children"]] == ["org/other", None, None]
