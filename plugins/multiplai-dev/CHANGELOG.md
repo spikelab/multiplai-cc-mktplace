@@ -34,10 +34,17 @@ time, not derived from a tag.
   vitest command, whose paths go after `--`). Any other command (a task
   runner such as tox, even behind `uv run`, or a chained command), a block
   that selects no test file, a changed test file the naming cannot pick out
-  (Django's `tests.py`, `__tests__/`), a run that collects coverage, or a Node path
-  jest would read as a regex runs the whole command as before. Set
+  (Django's `tests.py`, `__tests__/`), a run that collects coverage, a Node path
+  jest would read as a regex, a command that already names what to run
+  (paths, a jest or vitest filter, pytest `addopts` paths, another pytest
+  config or rootdir, a project `python_files`), or a pytest config that cannot
+  be read runs the whole command as before. Set
   `tdd.narrow_tests: false` in `specs/config.yaml` to always run the whole
   command.
+- The narrow run takes only files the whole command collects: never one under
+  `.venv`, `venv`, `node_modules` or another tool directory, and for pytest
+  only one under its `testpaths` and outside its `norecursedirs` and
+  `--ignore`, because pytest runs any file named on its command line.
 - The test writer, implementer and refactorer are also told how to add the
   test files they write and the test file named after each module they
   change, since their command is fixed before they start. The implementer

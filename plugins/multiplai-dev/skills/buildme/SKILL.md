@@ -255,6 +255,12 @@ implementer and refactorer, run:
    `<name>.spec.<ext>` for jest and vitest. When several packages have a test
    file of that name, the one nearest the source file is taken.
 
+Only files the whole command collects are taken: never one under `.venv`,
+`venv`, `node_modules` or another tool directory, and for pytest only one under
+the config's `testpaths` (when pytest runs in the config's own directory) and
+outside its `norecursedirs` and any `--ignore` / `--ignore-glob`, because pytest
+runs any file named on its command line even when the whole run skips it.
+
 Tests are never picked by what they import. The paths are appended to the test
 command (`tdd.test_command`, else the discovered one) only when its runner
 accepts them: pytest, or jest or vitest run directly or through an `npm test`
@@ -271,7 +277,14 @@ The whole command runs instead when:
   pytest config; for Node, `coverage` in the command, the `npm test` script,
   package.json's `jest` key or a jest, vitest or vite config), because a narrow
   run can miss a coverage floor the whole suite meets;
-- a Node test path holds a character jest reads as a regex (`[id]`, `(auth)`).
+- a Node test path holds a character jest reads as a regex (`[id]`, `(auth)`);
+- the command already names what to run: a path in the command, in pytest's
+  `addopts` or in `PYTEST_ADDOPTS`, a jest or vitest filter (`jest src/unit`,
+  `vitest run unit`, `--testPathPattern`, `--findRelatedTests`), or a pytest
+  option that points at another config or root (`-c`, `--rootdir`,
+  `--config-file`, `--pyargs`), because appended paths would only add to it;
+- the project sets pytest's `python_files`, or its pytest config cannot be read;
+- the selection would make the command longer than 20,000 characters.
 
 So RED never passes on a run that left out the block's own tests. The agents'
 command is fixed before they change anything, so each agent is also told to

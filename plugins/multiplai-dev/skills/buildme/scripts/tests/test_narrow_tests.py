@@ -468,11 +468,12 @@ class TestNarrowStaysInsideTheWholeRun:
     @pytest.mark.parametrize("ini,dirname", [
         (None, "build"),
         ("[pytest]\nnorecursedirs = legacy\n", "legacy"),
+        ("[pytest]\nnorecursedirs = old/legacy\n", "old/legacy"),
     ])
     def test_files_under_norecursedirs_are_left_out(self, project, ini, dirname):
         if ini:
             (project / "pytest.ini").write_text(ini)
-        (project / dirname).mkdir()
+        (project / dirname).mkdir(parents=True)
         (project / dirname / "test_db.py").write_text("def test_x(): pass\n")
         base = _repo(project)
         self._block(project)
@@ -561,6 +562,15 @@ class TestNarrowStaysInsideTheWholeRun:
         base = _repo(p)
         (p / "src" / "cart.test.ts").write_text("test('c', () => {})\n")
         assert narrow_test_command(command, p, base) == f"{command} src/cart.test.ts"
+
+    def test_npm_exec_jest_is_read_as_jest_not_the_test_script(self, tmp_path):
+        p = tmp_path / "web"
+        (p / "src").mkdir(parents=True)
+        (p / "package.json").write_text(json.dumps({"scripts": {"test": "mocha"}}))
+        base = _repo(p)
+        (p / "src" / "cart.test.ts").write_text("test('c', () => {})\n")
+        assert narrow_test_command("npm exec jest", p, base) == \
+            "npm exec jest -- src/cart.test.ts"
 
 
 # --- the test command an agent is given -----------------------------------

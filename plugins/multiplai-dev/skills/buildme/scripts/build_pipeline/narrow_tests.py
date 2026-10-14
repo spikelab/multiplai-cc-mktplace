@@ -9,17 +9,25 @@ Inside a block, buildme runs (and tells its agents to run) only:
    `<name>.spec.<ext>` for Node), the one nearest the source file when the
    project has several.
 
-Tests are never selected by import. The paths are appended to the project's
-test command only when its runner is known to accept them: pytest, or jest /
-vitest run directly or through `npm test --`. Any other command (a task runner
-such as tox, even behind `uv run`, or a chained command), an empty selection, a
-changed file the engine counts as a test but this module cannot name (Django's
-`tests.py`, a `__tests__/` file, a helper under `tests/`), a coverage setting (a narrow run misses a
-coverage floor the whole suite meets), a Node path jest would read as a regex,
-`tdd.narrow_tests: false`, no recorded block start, or a git error gives back
-the whole command, so the RED gate never passes on a run that left out the
-block's own tests. The gates that decide whether work is done keep the whole
-command.
+Only files the whole command collects are taken: never one under a tool or
+environment directory (`.venv`, `node_modules`), and for pytest only one under
+its `testpaths` and outside its `norecursedirs` and `--ignore`, because pytest
+runs any file named on its command line. Tests are never selected by import.
+
+The paths are appended to the project's test command only when its runner is
+known to accept them: pytest, or jest / vitest run directly or through
+`npm test --`. The whole command is given back for: any other command (a task
+runner such as tox, even behind `uv run`, or a chained command); a command
+that already names what to run (paths, a jest / vitest filter, pytest
+`addopts` paths, another pytest config or rootdir, `python_files`); a pytest
+config it cannot read; a selection too long for one command; an empty
+selection; a changed file the engine counts as a test but this module cannot
+name (Django's `tests.py`, a `__tests__/` file, a helper under `tests/`); a
+coverage setting (a narrow run misses a coverage floor the whole suite meets);
+a Node path jest would read as a regex; `tdd.narrow_tests: false`; no recorded
+block start; or a git error. So the RED gate never passes on a run that left
+out the block's own tests. The gates that decide whether work is done keep the
+whole command.
 
 An agent's command is fixed before it changes anything, so `agent_test_command`
 adds how to run the test files it writes and the test file named after each
@@ -27,13 +35,17 @@ module it changes.
 """
 from __future__ import annotations
 
+import configparser
+import fnmatch
 import json
 import logging
 import os
 import re
 import shlex
 import subprocess
-from pathlib import Path
+import tomllib
+from collections.abc import Callable
+from pathlib import Path, PurePosixPath
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +68,32 @@ _CHAINED_RE = re.compile(r"[;&|]")
 # matches itself, so a dotted path still selects its own file.
 _REGEX_CHARS_RE = re.compile(r"[\[\](){}+*?^$|\\]")
 _PYTEST_CONFIG_FILES = ("pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini")
+# The order pytest looks for its config in each directory, and the section
+# each file needs (pytest.ini counts even without one).
+_PYTEST_INI_ORDER = (("pytest.ini", "pytest"), (".pytest.ini", "pytest"),
+                     ("pyproject.toml", None), ("tox.ini", "pytest"),
+                     ("setup.cfg", "tool:pytest"))
+_PYTEST_DEFAULT_NORECURSE = ("*.egg", ".*", "_darcs", "build", "CVS", "dist",
+                             "node_modules", "venv", "{arch}")
+# Options whose value is a path that is not a test to run.
+_PYTEST_PATH_VALUE_OPTS = ("--ignore", "--ignore-glob", "--deselect")
+# Options that point pytest at another config or root than the one read here,
+# or read the arguments as package names.
+_PYTEST_OTHER_ROOT_OPTS = ("--rootdir", "--config-file", "--inifile", "--pyargs", "-c")
+# vitest subcommands that take no test filter themselves.
+_VITEST_SUBCOMMANDS = ("run", "watch", "dev", "bench")
+# jest / vitest options whose value is not a test filter.
+_NODE_VALUE_OPTS = frozenset({
+    "--config", "-c", "--maxWorkers", "-w", "--reporters", "--reporter", "--shard",
+    "--environment", "--env", "--testTimeout", "--pool", "--root", "-r", "--dir",
+    "--mode", "--project", "--selectProjects", "--outputFile", "--testNamePattern", "-t",
+})
+# jest / vitest options that already choose which test files run.
+_NODE_FILTER_OPTS = ("--testPathPattern", "--testPathPatterns", "--findRelatedTests",
+                     "--related")
+# A longer command is not narrowed: it goes into agents' prompts, and one argv
+# string past the OS limit would make run_test_suite raise.
+_MAX_COMMAND_CHARS = 20_000
 _NODE_CONFIG_PREFIXES = ("jest.config.", "vitest.config.", "vite.config.", "vitest.workspace.")
 
 
@@ -151,24 +189,35 @@ def _named_test_files(source: str, files: list[str], runner: str) -> list[str]:
     return [f for f in found if _shared_dirs(source, f) == nearest]
 
 
-def select_test_paths(changed: list[str], files: list[str], runner: str | None) -> list[str]:
+def select_test_paths(changed: list[str], files: list[str], runner: str | None,
+                      collected: Callable[[str], bool] | None = None) -> list[str]:
     """Sorted test paths for *runner*: the changed test files, plus the test
-    file named after each changed source file found among *files*. Empty, so
-    the whole command runs, when a changed file in the runner's language is
-    one the engine counts as a test but this module cannot name: the block's
-    own tests would otherwise be left out."""
+    file named after each changed source file found among *files*. Only paths
+    the whole command collects count: never one under a tool or environment
+    directory, and none that *collected* rejects. Empty, so the whole command
+    runs, when a collected changed file in the runner's language is one the
+    engine counts as a test but this module cannot name: the block's own
+    tests would otherwise be left out."""
     if runner not in (PYTEST, NODE):
         return []
-    from .tdd_engine import _TEST_PATH_RE
+    from .tdd_engine import _TEST_PATH_RE, _is_tool_cache
 
+    def runs(path: str) -> bool:
+        return not _is_tool_cache(path) and (collected is None or collected(path))
+
+    pool = [f for f in files if runs(f)]
     selected: set[str] = set()
     for path in changed:
+        if _is_tool_cache(path):
+            continue
         if _is_test(path, runner):
-            selected.add(path)
+            if runs(path):
+                selected.add(path)
         elif _may_hold_tests(path, runner) and _TEST_PATH_RE.search(path):
-            return []
+            if runs(path):
+                return []
         else:
-            selected.update(_named_test_files(path, files, runner))
+            selected.update(_named_test_files(path, pool, runner))
     return sorted(selected)
 
 
@@ -187,8 +236,10 @@ def narrow_command(test_command: str, paths: list[str], runner: str | None) -> s
         return test_command
     quoted = " ".join(shlex.quote(p) for p in paths)
     if runner == NODE and _needs_separator(test_command):
-        return f"{test_command} -- {quoted}"
-    return f"{test_command} {quoted}"
+        command = f"{test_command} -- {quoted}"
+    else:
+        command = f"{test_command} {quoted}"
+    return command if len(command) <= _MAX_COMMAND_CHARS else test_command
 
 
 def _config_dirs(project_dir: Path) -> list[Path]:
@@ -231,8 +282,181 @@ def _coverage_configured(test_command: str, runner: str, project_dir: Path) -> b
                for n in names)
 
 
-def _narrowable_runner(test_command: str, project_dir: Path, base: str | None,
-                       enabled: bool) -> str | None:
+class _UnreadableConfig(Exception):
+    pass
+
+
+def _pytest_section(path: Path, section: str | None) -> dict | None:
+    """The pytest options in *path*, or None when it holds no pytest section."""
+    text = _read(path)
+    if section is None:
+        try:
+            tool = tomllib.loads(text).get("tool", {})
+        except tomllib.TOMLDecodeError as e:
+            raise _UnreadableConfig(f"{path}: {e}") from e
+        table = tool.get("pytest") if isinstance(tool, dict) else None
+        if not isinstance(table, dict):
+            return None
+        ini = table.get("ini_options")
+        if isinstance(ini, dict):
+            return ini
+        return {k: v for k, v in table.items() if k != "ini_options"} or None
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(text)
+    except configparser.Error as e:
+        raise _UnreadableConfig(f"{path}: {e}") from e
+    if parser.has_section(section):
+        return dict(parser[section])
+    return {} if path.name in ("pytest.ini", ".pytest.ini") else None
+
+
+def _pytest_config(project_dir: Path) -> tuple[Path, dict] | None:
+    """The directory and options of the config pytest picks when run in
+    *project_dir*: the first one found from there up to the repo root."""
+    for d in _config_dirs(project_dir):
+        for name, section in _PYTEST_INI_ORDER:
+            if (d / name).is_file():
+                options = _pytest_section(d / name, section)
+                if options is not None:
+                    return d, options
+    return None
+
+
+def _words(value: object, *, shell: bool = False) -> list[str]:
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    if not isinstance(value, str):
+        return []
+    return shlex.split(value) if shell else value.split()
+
+
+def _option_values(tokens: list[str], option: str) -> list[str]:
+    values = []
+    for i, token in enumerate(tokens):
+        if token == option and i + 1 < len(tokens):
+            values.append(tokens[i + 1])
+        elif token.startswith(option + "="):
+            values.append(token[len(option) + 1:])
+    return values
+
+
+def _relative(value: str, project_dir: Path) -> str | None:
+    path = Path(value)
+    if path.is_absolute():
+        try:
+            path = path.relative_to(project_dir)
+        except ValueError:
+            return None
+    parts = PurePosixPath(path.as_posix()).parts
+    return "/".join(p for p in parts if p != ".")
+
+
+def _under(parts: tuple[str, ...], root: str) -> int | None:
+    """How many leading parts of *parts* *root* covers, or None if it does not."""
+    root_parts = PurePosixPath(root).parts if root else ()
+    return len(root_parts) if parts[:len(root_parts)] == root_parts else None
+
+
+def _norecurse(parts: tuple[str, ...], depth: int, patterns: list[str]) -> bool:
+    """True when a directory of *parts* below the first *depth* matches one of
+    pytest's `norecursedirs` patterns: by name, or by path when the pattern
+    holds a `/`."""
+    for j in range(depth, len(parts) - 1):
+        for pattern in patterns:
+            if "/" in pattern:
+                if fnmatch.fnmatch("/" + "/".join(parts[:j + 1]), "*/" + pattern.strip("/")):
+                    return True
+            elif fnmatch.fnmatch(parts[j], pattern):
+                return True
+    return False
+
+
+def _pytest_collects(test_command: str, project_dir: Path) -> Callable[[str], bool] | None:
+    """Which project-relative paths the whole pytest command collects, or None
+    when it cannot tell: the command (or `addopts`) already names paths, or
+    points pytest at another config or root, the project sets its own
+    `python_files`, or its config cannot be read."""
+    tokens = shlex.split(test_command)
+    at = next(i for i, t in enumerate(tokens) if Path(t).name in ("pytest", "py.test"))
+    try:
+        found = _pytest_config(project_dir)
+        config_dir, options = found if found else (None, {})
+        args = (_words(options.get("addopts"), shell=True)
+                + shlex.split(os.environ.get("PYTEST_ADDOPTS", "")) + tokens[at + 1:])
+    except (_UnreadableConfig, ValueError) as e:
+        log.info("Narrow tests: cannot read the pytest config (%s) — running the whole "
+                 "test command", e)
+        return None
+    if options.get("python_files"):
+        return None
+    if any(t.startswith(_PYTEST_OTHER_ROOT_OPTS) for t in args):
+        return None
+    skip = False
+    for token in args:
+        if skip:
+            skip = False
+        elif token in _PYTEST_PATH_VALUE_OPTS:
+            skip = True
+        elif token and not token.startswith("-") and (project_dir / token.split("::")[0]).exists():
+            return None
+    # pytest uses testpaths only when it runs in the config's own directory,
+    # and falls back to that directory when none of them exists.
+    roots = [""]
+    if config_dir is not None and config_dir.resolve() == project_dir.resolve():
+        try:
+            matched = sorted({p.relative_to(project_dir).as_posix()
+                              for pattern in _words(options.get("testpaths"))
+                              for p in project_dir.glob(pattern)})
+        except (ValueError, NotImplementedError):
+            return None
+        roots = matched or roots
+    norecurse = _words(options.get("norecursedirs")) or list(_PYTEST_DEFAULT_NORECURSE)
+    ignored = [r for r in (_relative(v, project_dir) for v in _option_values(args, "--ignore"))
+               if r is not None]
+    ignore_globs = _option_values(args, "--ignore-glob")
+
+    def collects(path: str) -> bool:
+        parts = PurePosixPath(path).parts
+        if any(_under(parts, i) is not None for i in ignored if i):
+            return False
+        if any(fnmatch.fnmatch(path, g) for g in ignore_globs):
+            return False
+        for root in roots:
+            depth = _under(parts, root)
+            if depth is not None and not _norecurse(parts, depth, norecurse):
+                return True
+        return False
+
+    return collects
+
+
+def _node_names_tests(test_command: str, project_dir: Path) -> bool:
+    """True when the jest / vitest command already filters which test files
+    run: appended paths would widen that filter, not narrow the run."""
+    tokens = shlex.split(test_command)
+    if any(tuple(tokens[:len(npm)]) == npm for npm in _NPM_TEST):
+        extra = tokens[tokens.index("--") + 1:] if "--" in tokens else []
+        tokens = shlex.split(_package_test_script(project_dir)) + extra
+    at = next(i for i, t in enumerate(tokens) if Path(t).name in ("jest", "vitest"))
+    args = tokens[at + 1:]
+    if Path(tokens[at]).name == "vitest" and args[:1] and args[0] in _VITEST_SUBCOMMANDS:
+        args = args[1:]
+    skip = False
+    for token in args:
+        if skip:
+            skip = False
+        elif token in _NODE_VALUE_OPTS:
+            skip = True
+        elif token.startswith(_NODE_FILTER_OPTS) or not token.startswith("-"):
+            return True
+    return False
+
+
+def _narrowable_runner(test_command: str, project_dir: Path, base: str | None, enabled: bool,
+                       ) -> tuple[str, Callable[[str], bool] | None] | None:
+    """The runner, and which paths its whole command collects (None when
+    any path it runs counts), or None when the command is not narrowed."""
     if not test_command or not enabled or not base:
         return None
     runner = runner_of(test_command, project_dir)
@@ -241,7 +465,17 @@ def _narrowable_runner(test_command: str, project_dir: Path, base: str | None,
     if _coverage_configured(test_command, runner, project_dir):
         log.info("Narrow tests: the test run collects coverage — running the whole test command")
         return None
-    return runner
+    if runner == NODE:
+        if _node_names_tests(test_command, project_dir):
+            log.info("Narrow tests: the command already filters its tests — running it whole")
+            return None
+        return runner, None
+    collected = _pytest_collects(test_command, project_dir)
+    if collected is None:
+        log.info("Narrow tests: cannot tell which files the whole pytest command collects "
+                 "— running it whole")
+        return None
+    return runner, collected
 
 
 def _git_lines(project_dir: Path, *args: str) -> list[str]:
@@ -255,9 +489,10 @@ def _git_lines(project_dir: Path, *args: str) -> list[str]:
 def _narrow(test_command: str, project_dir: Path, base: str | None,
             enabled: bool) -> tuple[str, str | None]:
     """The command, and the runner when narrowing applies (None otherwise)."""
-    runner = _narrowable_runner(test_command, project_dir, base, enabled)
-    if runner is None:
+    narrowable = _narrowable_runner(test_command, project_dir, base, enabled)
+    if narrowable is None:
         return test_command, None
+    runner, collected = narrowable
     try:
         # Paths relative to the project, which may be a repo subdirectory;
         # deleted files are left out because a runner rejects a missing path.
@@ -270,7 +505,7 @@ def _narrow(test_command: str, project_dir: Path, base: str | None,
                     "running the whole test command", e)
         return test_command, None
     paths = select_test_paths(sorted(set(changed) | set(untracked)),
-                              tracked + untracked, runner)
+                              tracked + untracked, runner, collected)
     # `ls-files` still lists a tracked file deleted but not staged.
     paths = [p for p in paths if (project_dir / p).is_file()]
     command = narrow_command(test_command, paths, runner)
