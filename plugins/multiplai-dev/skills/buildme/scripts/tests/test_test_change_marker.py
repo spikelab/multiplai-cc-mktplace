@@ -19,7 +19,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from build_pipeline.config import BuildConfig
-from build_pipeline.gates import TEST_CHANGE_MARKER, parse_test_change_claims
+from build_pipeline.gates import (
+    TEST_CHANGE_MARKER,
+    parse_implementation_note,
+    parse_searched,
+    parse_test_change_claims,
+    unchanged_tests_gate,
+)
 from build_pipeline.llm_steps.tdd_steps import run_implementer, run_integration_fix
 from build_pipeline.models import (
     AgentResult,
@@ -31,7 +37,7 @@ from build_pipeline.models import (
 )
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState, TDDState
-from build_pipeline.tdd_engine import _run_integration_and_review
+from build_pipeline.tdd_engine import _review_fix_description, _run_integration_and_review
 
 
 async def _rendered(step, *args, **kwargs) -> str:
@@ -179,3 +185,92 @@ async def test_integration_fixer_silent_test_change_still_fails(setup):
     assert result is False
     assert block.status == BlockStatus.FAILED
     assert block.test_change_claims == []
+
+
+@pytest.mark.asyncio
+async def test_integration_fixer_echoing_the_template_still_fails(setup):
+    """The prompt shows `TEST CHANGE REQUIRED: <reason>`; an agent that echoes
+    it has declared nothing, so its test change is still silent."""
+    config, state, progress, block = setup
+    result = await _run_with_integration_fix(
+        config, state, progress, block, f"fixed it\n{TEST_CHANGE_MARKER} <reason>\n",
+    )
+    assert result is False
+    assert block.status == BlockStatus.FAILED
+
+
+# --- Only a real declaration counts ---
+#
+# Now that every such prompt shows the marker, an agent can echo the template
+# or mention the marker in prose. Neither is a declaration: the gate must
+# still fail the silent test change (hashing is the enforcement).
+
+NOT_DECLARATIONS = {
+    "echoed template": f"STATUS: DONE\n{TEST_CHANGE_MARKER} <reason>\n",
+    "echoed fenced template": (
+        f"STATUS: DONE\nSPEC_IMPACT: none\n```\n{TEST_CHANGE_MARKER} <reason>\n```\n"),
+    "none": f"STATUS: DONE\n{TEST_CHANGE_MARKER} none\n",
+    "empty": f"STATUS: DONE\n{TEST_CHANGE_MARKER}\n",
+    "prose mention": (
+        f"I changed no test, so no {TEST_CHANGE_MARKER} line is needed.\n"),
+    "negated, lower case": "No test change required: all edits were in src/.\n",
+    "inline code mention": (
+        f"I changed no tests, so no `{TEST_CHANGE_MARKER} <reason>` line applies.\n"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(NOT_DECLARATIONS))
+def test_a_mention_or_echo_is_not_a_declaration(name):
+    report = NOT_DECLARATIONS[name]
+    assert parse_test_change_claims(report) == []
+    gate = unchanged_tests_gate({TEST_FILE: "a"}, {TEST_FILE: "b"}, report)
+    assert not gate.passed
+    assert gate.action == "restore_tests"
+
+
+@pytest.mark.parametrize("line", [
+    f"{TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default",
+    f"- {TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default",
+    f"  **{TEST_CHANGE_MARKER}** tests/test_a.py asserted the wrong default",
+    f"{TEST_CHANGE_MARKER.lower()} tests/test_a.py asserted the wrong default",
+])
+def test_a_line_that_starts_with_the_marker_is_a_declaration(line):
+    assert parse_test_change_claims(f"STATUS: DONE\n{line}\n") == [
+        "tests/test_a.py asserted the wrong default"]
+
+
+# --- The declaration ends a report without joining the slot before it ---
+
+DECLARATION = f"{TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default"
+
+
+def test_a_declaration_after_searched_is_not_a_searched_entry():
+    report = (f"STATUS: DONE\nSPEC_IMPACT: none\n\nSEARCHED:\n"
+              f"- finding 1: checked parse() and both branches\n\n{DECLARATION}\n")
+    assert parse_searched(report) == ["finding 1: checked parse() and both branches"]
+    assert parse_test_change_claims(report) == [
+        "tests/test_a.py asserted the wrong default"]
+
+
+def test_a_declaration_after_surprises_is_not_part_of_the_note():
+    report = (f"STATUS: DONE\nSURPRISES: the spec named the wrong module\n"
+              f"SPEC_IMPACT: clarify\n{DECLARATION}\n")
+    note = parse_implementation_note(report, block_number=1, block_name="B",
+                                     role="implementer")
+    assert note.surprises == "the spec named the wrong module"
+    report = f"STATUS: DONE\nSURPRISES: the spec named the wrong module\n{DECLARATION}\n"
+    note = parse_implementation_note(report, block_number=1, block_name="B",
+                                     role="implementer")
+    assert note.surprises == "the spec named the wrong module"
+
+
+@pytest.mark.asyncio
+async def test_review_fix_prompt_orders_searched_before_the_declaration():
+    """The review-fix agent gets the implementer prompt with the self-check
+    appended, which asks for a `SEARCHED:` section at the end. The declaration
+    must say it goes after that section, not contradict it."""
+    prompt = await _rendered(run_implementer, "Block", _review_fix_description("fix x"),
+                             "FAILED test_a", "ctx", "pytest", prompt_style="clean")
+    assert "SEARCHED:" in prompt
+    assert TEST_CHANGE_MARKER in prompt
+    assert "`SEARCHED:` section included" in prompt

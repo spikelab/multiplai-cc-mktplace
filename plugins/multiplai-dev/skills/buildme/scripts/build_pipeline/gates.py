@@ -453,9 +453,20 @@ def prototype_gate(prototype_dir: Path) -> GateResult:
 
 # --- Implementation notes (SURPRISES: / SPEC_IMPACT: slots) ---
 
+# The implementer's declaration that a test genuinely had to change. It is an
+# escape hatch, not an authorization: it downgrades the gate from fail to a
+# flagged claim that the reviewer (and the adjudicator) must verify — the same
+# treatment RED/GREEN evidence already gets.
+TEST_CHANGE_MARKER = "TEST CHANGE REQUIRED:"
+
 # Every REQUIRED slot label an agent report can carry — used as the stop
-# boundary when reading the free-text SURPRISES slot.
-_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IMPACT|SEARCHED"
+# boundary when reading the free-text SURPRISES and SEARCHED slots. The
+# test-change marker is one too: the prompts put its lines at the end of the
+# report, after these slots, and they must not be read as part of the last one.
+_REPORT_SLOT_LABELS = (
+    "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IMPACT|SEARCHED|"
+    + re.escape(TEST_CHANGE_MARKER.removesuffix(":"))
+)
 
 # The colon after a slot label is MANDATORY — every legitimate slot form
 # carries one (`SURPRISES: x`, `- **SURPRISES:** x`, `**SURPRISES**: x`).
@@ -800,19 +811,32 @@ def review_score_gate(
     )
 
 
-# The implementer's declaration that a test genuinely had to change. It is an
-# escape hatch, not an authorization: it downgrades the gate from fail to a
-# flagged claim that the reviewer (and the adjudicator) must verify — the same
-# treatment RED/GREEN evidence already gets.
-TEST_CHANGE_MARKER = "TEST CHANGE REQUIRED:"
+# A declaration counts only on a line that starts with the marker (after an
+# optional bullet or bold), as the prompts ask. Every implementer and
+# integration-fix prompt shows the marker, so prose that mentions it ("no
+# TEST CHANGE REQUIRED: line is needed") must not count as one.
 _TEST_CHANGE_RE = re.compile(
-    rf"{re.escape(TEST_CHANGE_MARKER)}\s*(.+)", re.IGNORECASE
+    r"^[ \t]*(?:[-*][ \t]*)?(?:\*\*)?" + re.escape(TEST_CHANGE_MARKER)
+    + r"(?:\*\*)?[ \t]*(.*)$",
+    re.MULTILINE | re.IGNORECASE,
 )
 
 
 def parse_test_change_claims(report: str) -> list[str]:
-    """The reasons an implementer declared for changing a test file."""
-    return [m.strip() for m in _TEST_CHANGE_RE.findall(report or "") if m.strip()]
+    """The reasons an implementer declared for changing a test file.
+
+    An echo of the prompt's template (`<reason>`) and an empty answer
+    (`none`) declare nothing, as `_clean_surprises` treats the SURPRISES slot.
+    """
+    claims = []
+    for m in _TEST_CHANGE_RE.findall(report or ""):
+        reason = m.strip()
+        if reason.startswith("<") and reason.endswith(">"):
+            continue
+        if reason.lower() in _EMPTY_SLOT_VALUES:
+            continue
+        claims.append(reason)
+    return claims
 
 
 def unchanged_tests_gate(

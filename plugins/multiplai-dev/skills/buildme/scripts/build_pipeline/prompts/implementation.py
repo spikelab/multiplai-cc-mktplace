@@ -10,8 +10,8 @@ from ..gates import TEST_CHANGE_MARKER
 # concatenated into `.format()` templates, so it must hold no braces.
 TEST_CHANGE_DECLARATION = f"""\
 If you changed a test file, add one line per change at the very end of your
-final report, after any other slots, each on its own line and starting with
-this exact marker:
+final report, after any other slots (a `SEARCHED:` section included), each on
+its own line and starting with this exact marker:
 
 ```
 {TEST_CHANGE_MARKER} <reason>
@@ -20,8 +20,9 @@ this exact marker:
 `<reason>` names the test and what was wrong with it, for example the spec
 line it contradicts. The pipeline re-hashes every test file after you finish.
 A changed test with no such line fails the block, and an explanation without
-the marker (under SURPRISES, say) does not count. The reason goes to the
-reviewer as a claim to check against the diff.
+the marker (under SURPRISES, say) does not count. If you changed no test, write
+no such line: a line left as `<reason>` or `none` declares nothing. The reason
+goes to the reviewer as a claim to check against the diff.
 """
 
 IMPLEMENTER_PROMPT_CLEAN = """\

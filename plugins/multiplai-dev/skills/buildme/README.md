@@ -859,7 +859,9 @@ implementer that genuinely needs a test to change declares it —
 flag, re-baselines the hashes, and hands the reason to the reviewer as an
 unverified claim to check against the diff. The implementer and integration-fix
 prompts tell the agent this marker and to put one such line per changed test at
-the end of its report.
+the end of its report. Only a line that starts with the marker counts: a
+sentence that mentions it, or a line left as `<reason>` or `none`, declares
+nothing.
 
 ### Reviewer panel and finding adjudication
 
