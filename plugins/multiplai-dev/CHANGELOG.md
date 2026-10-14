@@ -23,9 +23,16 @@ time, not derived from a tag.
 - buildme epic mode, `epic.merge: auto`: buildme now merges each child's PR
   itself. After merging the default branch into the PR's branch, testing and
   pushing, it waits for the PR's required checks (`gh pr checks --required`,
-  re-read every 30 seconds while one is pending) and runs
-  `gh pr merge <n> --merge`, never `--admin`. A failed or cancelled required
-  check parks the child, naming the check. A merge GitHub refuses as
+  re-read every 30 seconds while one is pending; when no check is required,
+  the PR's own checks gate instead) and runs
+  `gh pr merge <n> --merge --match-head-commit <sha>`, never `--admin`, so a
+  commit pushed to the PR after the merge step checked it is never merged.
+  Right after its own push it waits up to two minutes for GitHub to report
+  the new commit's checks. Checks still pending after an hour leave the PR
+  open: the run exits 3 with `EPIC:MERGE_WAITING`, and the next run waits
+  again. A failed or cancelled check parks the child, naming the check. The
+  child counts as merged only once GitHub says the PR is `MERGED`, so a PR
+  a merge queue only queued is waited on. A merge GitHub refuses as
   `BEHIND` starts the merge step over and merges the default branch's new
   commit in; any other refusal parks the child with GitHub's message and the
   PR's `mergeStateStatus`, and a refused merge is not tried again within one

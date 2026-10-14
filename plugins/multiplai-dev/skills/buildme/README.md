@@ -388,7 +388,9 @@ manual commands in `build-progress.md`, and the build still reports success for
 the code it produced.
 
 **Never auto-merge, never delete.** Nothing merges to `main` or staging,
-force-pushes, or removes a worktree — including its own. The worktree survives
+force-pushes, or removes a worktree — including its own. The one exception is
+epic mode under `epic.merge: auto`, which merges each child's PR with
+`gh pr merge --merge` once its review left no blocker and its checks passed. The worktree survives
 the run and its path is printed (`WORKTREE:<path>`); deleting it is the calling
 session's decision, from the workspace root.
 

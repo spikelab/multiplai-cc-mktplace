@@ -132,9 +132,14 @@ the tests with `BUILDME_TRUST_REPO=1` (kind `merge-tests`, killed when the step 
 reviewed head plus merges holding only git's own merge and what the step may resolve (`merge.merges_onto`, which checks each file against its three sides, as `merge.not_resolutions` also checks the agent's resolution: a version file is git's merge with its version values aside, each value the changing side's or, where both changed it, the next after main's; a CHANGELOG is main's with every line the child added, the child's old version in them replaced by the one written; a lockfile loads and holds only either side's keys and values (a manifest hash aside) or a written version, and pins each package as one side does) is not reviewed again. After the push,
 or with nothing to merge, the step waits for the PR's required checks
 (`Coordinator._checks_pass`: `gh pr checks --required` every `CHECKS_WAIT`
-seconds; failed or cancelled parks naming it, an unreadable answer is
-`unknown`) and runs `gh pr merge <n> --merge` (`Coordinator._merge_pr`):
-merged, or refused `BEHIND`, which restarts at `merge.ready` and merges the
+seconds, or every check of the PR when none is required; failed or cancelled
+parks naming it, an unreadable answer is `unknown`; after the step's own push
+"no checks reported" is pending for `CHECKS_APPEAR` seconds; still pending
+after `CHECKS_LIMIT` seconds, the PR is left open, `built`, for a re-run) and
+runs `gh pr merge <n> --merge --match-head-commit <the head 40.1 checked and
+the step pushed>` (`Coordinator._merge_pr`): merged once `gh pr view` says
+`MERGED` (exit 0 with the PR still open, as a merge queue leaves it, is
+waited on), or refused `BEHIND`, which restarts at `merge.ready` and merges the
 new commit (nothing new to merge parks with the refusal: a refused merge is
 never retried in one run), or any other refusal, which parks with GitHub's
 stderr and `mergeStateStatus` (PR E2). A file

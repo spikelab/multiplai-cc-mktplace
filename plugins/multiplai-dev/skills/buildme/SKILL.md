@@ -178,7 +178,8 @@ calling checkout:
   uncommitted tracked changes, or the target branch already exists with unmerged
   commits. Commit or stash first.
 - **The worktree survives the run.** The pipeline never removes a worktree —
-  including its own — never merges, and never force-pushes. Deleting it is the
+  including its own — never merges (except an epic child's PR under
+  `epic.merge: auto`; see "Merging the children's PRs"), and never force-pushes. Deleting it is the
   calling session's decision, made from the workspace root.
 - PUBLISH pushes the branch and opens a **draft** PR through the pr skill
   (`/multiplai-dev:pr`, run as `pr_pipeline open --no-push`), so the PR's
@@ -861,8 +862,16 @@ parks. The merge commit is pushed, never forced; a push rejected because origin'
 where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. When `epic.max_usd` is reached and the merge would need the agent, nothing is merged. A merge commit holding only git's own merge plus such resolutions (checked against each file's three sides: a version file is git's merge with each version value the side's that changed it or, where both did, the next after the default branch's; a CHANGELOG is the default branch's with every line the child added; a lockfile in a format read as data (TOML, JSON, pnpm's YAML) loads with no key twice, holds only either side's keys and values, the written version or a new hex manifest hash, and pins each package, under its own name, as one side does; another lockfile holds only either side's lines or the written version), as the merge step's own do, is not
 reviewed again; any other, such as a person's "Update branch" with other edits, is. Then
 buildme waits for the PR's required checks (`gh pr checks --required`, read
-every 30 seconds while one is pending; a failed or cancelled check parks the
-child, naming it) and runs `gh pr merge <n> --merge`, never `--admin`. A merge
+every 30 seconds while one is pending; when no check is required, the PR's
+own checks gate instead; a failed or cancelled check parks the child, naming
+it). Right after its own push it treats "no checks reported" as pending for
+two minutes, since GitHub has not registered the new commit's checks yet.
+Checks still pending after an hour leave the PR open: the run exits 3 with
+`EPIC:MERGE_WAITING`, and the next run reads them again. Then it runs
+`gh pr merge <n> --merge --match-head-commit <sha>`, never `--admin`, so a
+commit pushed to the PR after the step checked it is refused, not merged.
+The child counts as merged only when `gh pr view` says `MERGED`: a merge
+queue that only queued the PR leaves it open and waited on. A merge
 GitHub refuses as `BEHIND` (the default branch moved again) starts the merge
 step over, merging the new commit in; any other refusal parks the child with
 GitHub's message and `mergeStateStatus`, and a refused merge is never retried
