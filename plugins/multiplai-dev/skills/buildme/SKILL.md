@@ -370,7 +370,7 @@ the test-quality audit.
 | Stage | Steps |
 |---|---|
 | `spec` | `spec_artifact` (every spec artifact, use-cases included), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `interview`, `research`, `findings_spec` (the findings stage's spec delta) |
-| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `prototype` |
+| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `prototype`, `merge` |
 | `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt), `findings_triage` (the findings stage's one read-only agent per PR comment), `findings_self_check` (the findings stage's one read-only check of a round's fix commits) |
 
 The tier (advanced or standard) comes from the default model: Fable, or Opus
@@ -754,14 +754,14 @@ any other file, or any other file the agent changed, staged or not, parks the ch
 (`tdd.test_command`, else the command buildme discovers, with
 `BUILDME_TRUST_REPO=1`, `agents/<NNN>-merge-tests-<id>.*`; SIGHUP ends them with the run), and a failure
 parks. The merge commit is pushed, never forced; a push rejected because origin's branch moved parks naming
-where it now is, and any other failed push is tried again by the next run. A merge commit holding only git's own merge plus such resolutions, as the merge step's own do, is not
+where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. When `epic.max_usd` is reached and the merge would need the agent, nothing is merged. A merge commit holding only git's own merge plus such resolutions (checked line by line: only the conflicting version lines, the CHANGELOG sides' lines, and a lockfile's own lines or version fields), as the merge step's own do, is not
 reviewed again; any other, such as a person's "Update branch" with other edits, is. This release does not merge the PR itself under `auto`: after
 the push it waits for a person, as under `manual`. A run stopped during the
 merge saves what the worktree held (`merge_stop` in `epic.json`); the next
 run aborts the stopped merge and merges again only when nothing else changed
 in the worktree since, and otherwise parks with `git -C <worktree> merge
 --abort, then re-run`, leaving everything as it is. A merge commit made but
-not pushed is tested again and pushed. A child the merge step parked is
+not pushed, holding only such resolutions, is tested again and pushed. A child the merge step parked is
 tried again by a later run once its worktree has no merge in progress and no
 uncommitted change (after `merge --abort`, as the hint says), and parks again
 if the merge fails again; every other parked child stays parked.
