@@ -312,8 +312,10 @@ async def test_the_assess_agent_is_never_shown_a_trim_finding(target_info, tmp_p
     code = high_finding()
     other = code.with_location(claim="a second code finding", line_start=1, line_end=1)
     trim = trimmed(code.with_location(claim="Shorten the comment over the keyword"))
-    state = ReviewState(target=target_info, stage="repeats", findings=[code, other, trim],
+    must_stay = trimmed(medium_finding().with_location(claim="Remove the test of the keyword match"))
+    state = ReviewState(target=target_info, stage="repeats", findings=[code, other, trim, must_stay],
                         verdicts={f.id: confirmed("code", "hygiene", f.citations[0]) for f in (code, other, trim)})
+    state.verdicts[must_stay.id] = confirmed("tests", "breaks-users", must_stay.citations[0])
     prompts: list[str] = []
 
     async def assess_agent(prompt, schema, **kwargs):
@@ -327,6 +329,123 @@ async def test_the_assess_agent_is_never_shown_a_trim_finding(target_info, tmp_p
     assert len(prompts) == 1
     assert code.id in prompts[0] and trim.id not in prompts[0] and trim.claim not in prompts[0]
     assert trim.id not in state.assessments
+    assert state.assessments[must_stay.id].label == "important"  # kept when the agent labels the others
+
+
+async def test_a_trim_finding_merged_with_one_on_an_important_test_is_not_listed_either(target_info, tmp_path,
+                                                                                      monkeypatch):
+    # Two suggestions on overlapping lines; the first in order survives the merge, the second's test must stay.
+    survivor = trimmed(high_finding().with_location(claim="Merge the keyword test into the title test"))
+    must_stay = trimmed(medium_finding().with_location(claim="Remove the test of the keyword match"))
+    assert linked(survivor, must_stay)
+    state = ReviewState(target=target_info, stage="verify", findings=[survivor, must_stay], verdicts={
+        survivor.id: confirmed("tests", "hygiene", survivor.citations[0]),
+        must_stay.id: confirmed("tests", "breaks-users", must_stay.citations[0])})
+    state.assessments = important_assessments(state)  # what the verify stage leaves
+    assert list(state.assessments) == [must_stay.id]
+
+    async def agent(prompt, schema, *, budget_label="", **kwargs):
+        assert budget_label == "merge"
+        return MergeOutput(duplicate_sets=[DuplicateSet(finding_ids=[survivor.id, must_stay.id])])
+
+    monkeypatch.setattr(sdk, "agent_call_structured", agent)
+    snapshot = tmp_path / "snap"
+    snapshot.mkdir()
+    ctx = RunContext(config=ReviewConfig(), snapshot=snapshot, diff="")
+    state = await run_merge(state, ctx)
+    assert [f.id for f in state.findings] == [survivor.id]
+    state.stage = "repeats"
+    state = await run_assess(state, ctx)
+    assert state.assessments[survivor.id].label == "important"
+    assert "breaks-users" in state.assessments[survivor.id].reason
+    listed_part = render_review(state).split("## Appendix", 1)[0]
+    assert survivor.claim not in listed_part and must_stay.claim not in listed_part
+
+
+def test_a_comment_finding_is_never_labelled_important_whatever_its_topic(trim_repo):
+    repo, base, head = trim_repo
+    info = target_mod.build_target(target_mod.resolve(repo, range_=f"{base}..{head}"))
+    # A comment in a file under the `billing/*` critical path, labelled `code` against the verifier's rules.
+    comment = trimmed(Finding(
+        claim="Shorten the comment at billing/charge.py:1", severity="LOW", file="billing/charge.py",
+        line_start=1, line_end=1, failure_scenario="nothing breaks",
+        citations=[cite("billing/charge.py", 1, "def charge(cents):")]))
+    # A test labelled `code`: the code line it exercises, its second citation, is on the critical path.
+    test = trimmed(critical_test_finding())
+    # Labelled `docs`, it is a comment even when rated breaks-users.
+    docs = trimmed(critical_test_finding().with_location(claim="Remove the comment over test_negative_is_zero"))
+    state = ReviewState(target=info, findings=[comment, test, docs], verdicts={
+        comment.id: confirmed("code", "hygiene", comment.citations[0]),
+        test.id: confirmed("code", "correctness-only", test.citations[1]),
+        docs.id: confirmed("docs", "breaks-users", docs.citations[0])})
+    labels = important_assessments(state)
+    assert list(labels) == [test.id]
+    assert "billing/*" in labels[test.id].reason
+
+
+# --- the advisory trim finder never stands in for the defect finders ----------------------------------
+
+
+async def test_every_defect_finder_failing_fails_the_find_stage_even_when_trim_returns(target_info, tmp_path,
+                                                                                      monkeypatch):
+    snapshot = tmp_path / "tree"
+    snapshot.mkdir()
+    diff = Path(target_info.diff_path).read_text()
+
+    def ctx() -> RunContext:
+        return RunContext(config=ReviewConfig(concurrency=1, dimensions=("diff-bugs", "callers")),
+                          snapshot=snapshot, diff=diff)
+
+    trim = high_finding().with_location(claim="Shorten the comment over the keyword")
+    failing = {"find:diff-bugs", "find:callers"}
+    calls: list[str] = []
+
+    async def finder(prompt, schema, *, budget_label="", **kwargs):
+        calls.append(budget_label)
+        if budget_label in failing:
+            raise sdk.AgentCallError("timed out")
+        return FinderOutput(findings=[trim if budget_label == f"find:{TRIM_DIMENSION}" else high_finding()])
+
+    monkeypatch.setattr(sdk, "agent_call_structured", finder)
+    state = ReviewState(target=target_info)
+    with pytest.raises(sdk.AgentCallError, match="every finder failed"):
+        await run_find(state, ctx())
+    assert state.finder_results == {} and state.findings == []  # a later run asks every finder again
+    # Resumed once the finders answer, it ends as a run that never failed did.
+    failing.clear()
+    calls.clear()
+    state = await run_find(state, ctx())
+    resumed, calls[:] = list(calls), []
+    whole = await run_find(ReviewState(target=target_info), ctx())
+    assert sorted(resumed) == sorted(calls) == ["find:callers", "find:diff-bugs", f"find:{TRIM_DIMENSION}"]
+    assert [f.id for f in state.findings] == [f.id for f in whole.findings] == [high_finding().id, trim.id]
+
+
+async def test_a_trim_finding_word_for_word_another_finders_is_folded_into_it(target_info, tmp_path, monkeypatch):
+    """Both copies would share one id (file, line and claim), and verdicts are keyed by id."""
+    snapshot = tmp_path / "tree"
+    snapshot.mkdir()
+
+    async def finder(prompt, schema, *, budget_label="", **kwargs):
+        return FinderOutput(findings=[high_finding()] if budget_label in ("find:diff-bugs", f"find:{TRIM_DIMENSION}")
+                            else [])
+
+    monkeypatch.setattr(sdk, "agent_call_structured", finder)
+    state = await run_find(ReviewState(target=target_info), RunContext(
+        config=ReviewConfig(dimensions=("diff-bugs", "callers")), snapshot=snapshot,
+        diff=Path(target_info.diff_path).read_text()))
+    assert [f.id for f in state.findings] == [high_finding().id]
+    assert state.findings[0].finders == ["diff-bugs", TRIM_DIMENSION]
+    assert section_of("code", state.findings[0].finders) == "code"  # a defect finder reported it too
+
+
+def test_the_low_rollup_marks_trim_findings_advisory(canned_state):
+    trim = trimmed(comment_finding()).with_location(severity="LOW")
+    canned_state.findings.append(trim)
+    canned_state.verdicts[trim.id] = confirmed("docs", "hygiene", trim.citations[0]).model_copy(
+        update={"finding_id": trim.id})
+    text = render_rollup("LOW", [to_findings_file(canned_state)])
+    assert "**Trim (advisory: never blocks a merge)**" in text and trim.claim in text
 
 
 # --- sections ----------------------------------------------------------------------------------------
@@ -382,6 +501,27 @@ def test_trim_goes_with_tree_or_dir(trim_repo, tmp_path, capsys):
     repo, base, head = trim_repo
     assert _review(repo, base, head, tmp_path / "out", "--trim") == 2
     assert "--trim goes with --tree or --dir" in capsys.readouterr().err
+
+
+def test_plan_only_counts_the_trim_calls_of_a_tree_or_dir_review(trim_repo, tmp_path, capsys):
+    import re
+    import shutil
+
+    repo, _, _ = trim_repo
+    plain = tmp_path / "plain"  # a directory not under git, for --dir
+    shutil.copytree(repo, plain, ignore=shutil.ignore_patterns(".git"))
+
+    def plan(*args: str) -> tuple[int, int]:
+        assert main(["--out", str(tmp_path / "out"), "review", *args, "--plan-only"]) == 0
+        m = re.search(r"groups: (\d+)  finder calls: (\d+)", capsys.readouterr().out)
+        return int(m.group(1)), int(m.group(2))
+
+    per_group = len([d for d in DIMENSIONS if d != "history"])  # history does not run on a tree
+    groups, calls = plan("--repo", str(repo), "--tree")
+    assert calls == groups * per_group
+    assert plan("--repo", str(repo), "--tree", "--trim") == (groups, groups * (per_group + 1))
+    groups, calls = plan("--dir", str(plain), "--trim")
+    assert calls == groups * (per_group + 1)
 
 
 # --- row S4: a tree review with --trim, stopped and resumed without the flag -----------------------------

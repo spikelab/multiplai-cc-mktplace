@@ -264,7 +264,9 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     results = [state.finder_results[key] for key, _, _ in pairs]
     failures = [r.error for r in results if r.error]
-    if len(failures) == len(results):
+    # The trim finder is advisory: its answer alone is not a review.
+    defects = [r for (_, d, _), r in zip(pairs, results) if d != TRIM_DIMENSION] or results
+    if all(r.error for r in defects):
         for key, _, _ in pairs:
             del state.finder_results[key]  # a later run tries every finder again
         raise sdk.AgentCallError("every finder failed: " + "; ".join(failures))
@@ -273,15 +275,14 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
     # finder_results): the last successful call (a failed earlier attempt has no findings).
     entries = {c.subject: c.findings for c in state.checks if c.stage == "find" and not c.error}
 
-    seen: dict[tuple[str, int, str, bool], Finding] = {}
+    seen: dict[tuple[str, int, str], Finding] = {}
     kept: list[Finding] = []
     for (pair_key, _, _), result in zip(pairs, results):
         recorded = entries.get(pair_key, [])
         for i, finding in enumerate(result.findings):
             entry = recorded[i] if i < len(recorded) else {}
             finding = finding.model_copy(deep=True)  # `finders` grows below; the stored result stays as returned
-            # A trim finding is never folded into another finder's, or it would leave the Trim section.
-            key = (*dedupe_key(finding), finding.finder == TRIM_DIMENSION)
+            key = dedupe_key(finding)
             if key in seen:
                 first = seen[key]
                 if finding.finder not in first.finders:

@@ -533,7 +533,7 @@ def render_rollup(severity: str, files: list[dict]) -> str:
         for name in SECTIONS:
             part = [f for f in group if section(f) == name]
             if part:
-                sections.append(f"**{SECTION_TITLES[name]}**\n")
+                sections.append(f"**{SECTION_TITLES[name]}{SECTION_NOTES.get(name, '')}**\n")
                 sections += [finding_section(fd, web_base=web, head_sha=t["head_sha"]) for fd in part]
     head = [f"# {severity} findings — {total} across {targets} of {len(files)} targets", ""]
     if not sections:

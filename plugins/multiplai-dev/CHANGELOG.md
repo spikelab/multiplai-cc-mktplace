@@ -29,13 +29,17 @@ time, not derived from a tag.
   when the verifier rates what would break without it `breaks-users` or
   `breaks-business`, or when it cites a path listed under `## Critical paths`
   in a `coding-standards.md`; those suggestions go to the appendix, labelled
-  `important`. A change review runs the finder unless `review.yaml` sets
+  `important`, also when the merge stage folded such a suggestion into
+  another. A trim finding never stands in for the other finders: when every
+  one of them fails, the review fails as before. A change review runs the
+  finder unless `review.yaml` sets
   `trim: false`; `--tree --trim` and `--dir --trim` run it over the existing
   tests and comments.
 - `findings.json` carries a `section` field (`code`, `tests`, `docs` or
   `trim`) on every finding, and the assessment label `important`
-  (`review-viewer/schema/findings.v1.schema.json`), which review-viewer's
-  help explains. Older files have neither.
+  (`review-viewer/schema/findings.v1.schema.json`). review-viewer never shows
+  or counts an `important` finding, as with `low-value`, and its help explains
+  the label. Older files have neither.
 
 ### Changed
 - `/multiplai-dev:buildme`: an epic reads each finding's `section`, so a trim

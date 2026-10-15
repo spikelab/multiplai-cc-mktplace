@@ -72,7 +72,9 @@ Python between them:
 
 Findings are listed in three sections, **Code**, **Tests** and **Docs**, by
 the verifier's topic, with severity read within each section: a HIGH under
-Tests is a serious test gap, not a serious defect in the code.
+Tests is a serious test gap, not a serious defect in the code. What only the
+`trim` finder reported goes to a fourth, advisory section, **Trim**, whatever
+its topic (see "Trim" below).
 
 The review proposes no fixes. Fixing a finding is a separate step that
 changes the code and runs the tests.
@@ -184,7 +186,11 @@ unverifiable trim finding about a test is left out of the list, labelled
 `important` and kept in the review's appendix with the reason, when the
 verifier rates what would break
 without it `breaks-users` or `breaks-business`, or when any of its citations is
-under a critical path. List critical paths in a `coding-standards.md` (any of
+under a critical path. A suggestion the merge stage folded another into counts
+the other's verdict and citations too. A finding the verifier labels `docs` is
+a comment and never `important`; under a topic other than `tests` or `docs`,
+only a citation of another file than the finding's own (the code a test
+exercises) is matched against the critical paths. List critical paths in a `coding-standards.md` (any of
 those the `conventions` finder reads), one glob per bullet in backticks, under
 a `## Critical paths` heading. Globs are relative to the repository root, and
 `*` also matches across `/`:
@@ -487,14 +493,15 @@ What it posts:
 - **With `--decisions`:** every finding the user accepted that the review
   shows (confirmed or unverifiable), at any severity and in any section.
 - **Without `--decisions`:** the findings the review lists (`render.listed`:
-  no `repeat` or `low-value`, and in critical mode only `breaks-*`), at these
-  severities per section:
+  no `repeat`, `low-value` or `important`, and in critical mode only
+  `breaks-*`), at these severities per section:
 
   | Section | Posted severities |
   |---|---|
   | Code (any topic other than tests or docs, or none) | HIGH, MEDIUM, LOW |
   | Tests | HIGH, MEDIUM |
   | Docs | HIGH |
+  | Trim | none |
 
 How it posts: one GitHub review on the PR's head commit, with event
 `COMMENT` (never `APPROVE` or `REQUEST_CHANGES`), sent in a single

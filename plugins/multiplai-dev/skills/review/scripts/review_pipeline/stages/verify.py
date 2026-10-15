@@ -67,27 +67,50 @@ class VerifyIncomplete(Exception):
 
 
 def important_assessments(state: ReviewState) -> dict[str, Assessment]:
-    """`important` for each shown trim finding about a test (its topic is not `docs`) that is rated
-    `breaks-users`/`breaks-business`, or that cites a path under a `## Critical paths` glob. An
-    unverifiable one counts too: it would otherwise be listed, suggesting the removal."""
-    candidates = [f for f in state.findings if is_trim(f) and (v := state.verdicts.get(f.id))
-                  and v.status in ("confirmed", "unverifiable") and v.topic != "docs"]
-    if not candidates:
-        return {}
-    paths = sorted({c.path for f in candidates for c in f.citations if not c.is_web})
-    globs = critical_paths(state.target, paths)
+    """`important` for each shown (confirmed or unverifiable) trim finding that suggests removing a test
+    that must stay: the test's behaviour is rated `breaks-users`/`breaks-business`, or it covers a path
+    under a `## Critical paths` glob. An unverifiable one counts too: it would otherwise be listed.
+
+    A finding the merge stage folded into one counts as part of it, since the survivor keeps only its own
+    verdict. The verifier labels a test `tests` and a comment `docs`; under any other topic the finding
+    may be a comment, which cites only its own file, so only a citation of another file (the code a test
+    exercises) is matched against the globs.
+    """
+    into = {m.finding.id: m.into for m in state.merged}
+
+    def survivor(fid: str) -> str:
+        seen: set[str] = set()
+        while fid in into and fid not in seen:
+            seen.add(fid)
+            fid = into[fid]
+        return fid
+
+    candidates = [f for f in state.findings if is_trim(f)
+                  and getattr(state.verdicts.get(f.id), "status", "") in ("confirmed", "unverifiable")]
+    members = {f.id: [f] for f in candidates}
+    for m in state.merged:
+        members.get(survivor(m.finding.id), []).append(m.finding)
+    judged = [(f.id, m, v) for f in candidates for m in members[f.id]
+              if (v := state.verdicts.get(m.id)) and v.topic != "docs"]
+    cited = {(fid, m.id): [c for c in m.citations if not c.is_web and (v.topic == "tests" or c.path != m.file)]
+             for fid, m, v in judged}
+    paths = sorted({c.path for cs in cited.values() for c in cs})
+    globs = critical_paths(state.target, paths) if paths else []
     out: dict[str, Assessment] = {}
-    for f in candidates:
-        impact = state.verdicts[f.id].impact
-        hit = next(((c.path, glob, where) for c in f.citations if not c.is_web
+    for fid, m, v in judged:
+        if fid in out:
+            continue
+        hit = next(((c.path, glob, where) for c in cited[(fid, m.id)]
                     for glob, where in globs if fnmatchcase(c.path, glob)), None)
-        if impact in CRITICAL_IMPACTS:
-            reason = f"the behaviour this test checks is rated {impact}; it is never suggested for removal"
+        if v.impact in CRITICAL_IMPACTS:
+            reason = f"the behaviour this test checks is rated {v.impact}; it is never suggested for removal"
         elif hit:
             reason = f"{hit[0]} is a critical path (`{hit[1]}` in {hit[2]}); its tests always count as important"
         else:
             continue
-        out[f.id] = Assessment(label="important", reason=reason)
+        if m.id != fid:
+            reason = f"{m.id}, merged into this suggestion: {reason}"
+        out[fid] = Assessment(label="important", reason=reason)
     return out
 
 
