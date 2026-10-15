@@ -37,6 +37,16 @@ def test_a_file_with_the_fix_older_reviews_wrote_still_loads():
     assert ff.findings[0].expected_behaviour is None
 
 
+def test_a_finding_in_the_trim_section_loads_and_an_unknown_section_does_not():
+    data = fixture_data()
+    data["findings"][0]["section"] = "trim"
+    assert FindingsFile.model_validate(data).findings[0].section == "trim"
+    jsonschema.validate(data, json.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
+    data["findings"][0]["section"] = "nits"
+    with pytest.raises(ValidationError):
+        FindingsFile.model_validate(data)
+
+
 def test_fixture_ids_are_stable_hashes():
     for f in load_findings(FIXTURE).findings:
         assert f.id == finding_id(f.file, f.line_start, f.claim)

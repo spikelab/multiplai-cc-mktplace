@@ -248,7 +248,7 @@
     <section id="help-finders" class="help-sec" tabindex="-1" aria-labelledby="help-h-finders">
       <h3 id="help-h-finders">Finders</h3>
       <p>A finder is one agent with one job. It reads a copy of the reviewed commit with read and search
-        tools, and may look things up on the web. Five finders run on a change:</p>
+        tools, and may look things up on the web. Six finders run on a change:</p>
       <dl>
         <dt><code>diff-bugs</code></dt><dd>Reads the diff and the changed files, and nothing else. Looks for
           bugs the change brings in: wrong conditions or values, missed cases, broken error handling, lost data.</dd>
@@ -265,11 +265,16 @@
         <dt><code>tests</code></dt><dd>Looks for changed behaviour that no test would catch breaking, and
           for added or changed tests that cannot fail: tests that compare a value copied from the code, read
           source code as text, or replace with a stub the very thing whose failure the code must handle.</dd>
+        <dt><code>trim</code></dt><dd>Judges the tests and comments the change adds or edits: tests worth
+          removing, merging into another or shortening, and comments longer than their code, that say what
+          the code does instead of why, or that describe history. Its findings are under Trim (see
+          <a href="#help-findings">Findings</a>). A review may turn it off.</dd>
       </dl>
       <p>A review of a whole repository or folder, rather than a change, splits the files into groups and
         runs each finder once per group. The Checked tab names those runs <code>diff-bugs@0</code>,
         <code>diff-bugs@1</code> and so on, counting groups from 0. <code>history</code> does not run there:
-        there are no commits to compare with.</p>
+        there are no commits to compare with, and <code>trim</code> runs only when the review was started
+        with <code>--trim</code>.</p>
     </section>
 
     <section id="help-checked" class="help-sec" tabindex="-1" aria-labelledby="help-h-checked">
@@ -426,6 +431,10 @@
       <p>The verifier also labels each finding's <strong>topic</strong>, what it is about, which sets its
         section: <code>tests</code> and <code>docs</code> have their own, every other topic is under Code. A
         topic in italics was guessed from the file's path, for a review older than topics.</p>
+      <p>A finding only the <code>trim</code> finder reported is under <strong>Trim</strong>, whatever its
+        topic. Trim is advisory: it never blocks a merge, buildme never counts it as a Code finding, and the
+        review posts it to a PR only when it is accepted, here or in a decisions file. Its findings are
+        always LOW.</p>
       <dl>
         <dt><code>code</code></dt><dd>The behaviour of the program.</dd>
         <dt><code>tests</code></dt><dd>A missing, weak or wrong test.</dd>

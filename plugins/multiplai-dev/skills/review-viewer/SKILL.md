@@ -11,7 +11,8 @@ The page shows each changed file in full at the head commit with the diff
 marked, a **walkthrough** you write (an overview, then ordered steps, each
 pointing at the lines it explains), and — when a `/multiplai-dev:review` run
 exists for the same commits — its findings in Code, Tests and Docs sections,
-by severity within each. Questions and
+plus an advisory Trim section that never blocks a merge when the review has
+trim findings, by severity within each. Questions and
 decisions typed into the page are appended to a mailbox file this session
 watches; you answer with one command and the answer appears in the page.
 
