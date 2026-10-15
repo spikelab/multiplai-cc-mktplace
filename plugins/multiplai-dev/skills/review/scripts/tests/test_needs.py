@@ -196,6 +196,7 @@ async def test_finder_needs_are_stored_as_blocking_the_review(target_info, ctx, 
     prompts = use(monkeypatch, {
         "find:diff-bugs": [FinderOutput(findings=[], needs=[TAVILY_NEED])],
         "find:callers": [FinderOutput(findings=[])],
+        "find:trim": [FinderOutput(findings=[])],
     })
     state = await run_find(ReviewState(target=target_info), ctx)
     assert "Never write a finding to say you could not check something" in prompts[0]

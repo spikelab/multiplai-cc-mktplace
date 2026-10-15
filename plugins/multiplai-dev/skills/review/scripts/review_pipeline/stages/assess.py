@@ -22,6 +22,10 @@ The agent may also name duplicates; they are merged with the merge stage's
 finder. The stage never deletes a finding and never changes a verdict or a
 severity. It is skipped when fewer than two findings are shown and there are
 no earlier rounds.
+
+Trim findings (`models.is_trim`) are never sent to the agent and get no label
+from it: they sit in their own advisory section. The `important` labels the
+verify stage gives some of them are recomputed and kept.
 """
 
 from __future__ import annotations
@@ -30,11 +34,12 @@ import logging
 import re
 
 from .. import checks, rounds, sdk
-from ..models import AgentCheck, AssessItem, AssessOutput, Assessment, Finding, ReviewState
+from ..models import AgentCheck, AssessItem, AssessOutput, Assessment, Finding, ReviewState, is_trim
 from ..prompts import assess as prompt
 from . import RunContext
 from .merge import apply_duplicate_sets, mark_merged
 from .repeats import earlier_findings, shown_findings
+from .verify import important_assessments
 
 log = logging.getLogger(__name__)
 
@@ -99,10 +104,11 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
     target, cfg = state.target, ctx.config
     earlier = earlier_findings(state, ctx)
     repeats = _repeat_assessments(state)
-    candidates = [f for f in shown_findings(state) if f.id not in repeats]
+    candidates = [f for f in shown_findings(state) if f.id not in repeats and not is_trim(f)]
+    important = important_assessments(state)
 
     if not candidates or (len(candidates) < 2 and not earlier):
-        state.assessments = {**{f.id: Assessment(label="useful") for f in candidates}, **repeats}
+        state.assessments = {**{f.id: Assessment(label="useful") for f in candidates}, **repeats, **important}
         ctx.counts = {"skipped": 1, "repeats": len(repeats)}
         state.stage = "assess"
         return state
@@ -149,7 +155,7 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
         state.errors.extend(f"assess: {line}" for line in errors)
 
     removed = apply_duplicate_sets(state, [(candidates, answer.duplicate_sets)], by="assess")
-    state.assessments = {**{k: v for k, v in labels.items() if k not in removed}, **repeats}
+    state.assessments = {**{k: v for k, v in labels.items() if k not in removed}, **repeats, **important}
     mark_merged(state)
     if check is not None and not check.error:
         counts = {}

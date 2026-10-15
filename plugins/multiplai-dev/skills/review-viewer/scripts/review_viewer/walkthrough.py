@@ -21,10 +21,10 @@ from .mailbox import atomic_write
 from .models import ASSESSMENT_TITLE_MAX, FindingsFile, Walkthrough
 
 # Findings a walkthrough must link when it says it is complete: confirmed and
-# unverifiable ones the page shows. It never shows those labelled low-value or
-# repeat (logic.js shownFindings), so they need no step.
+# unverifiable ones the page shows. It never shows those labelled low-value,
+# repeat or important (logic.js shownFindings), so they need no step.
 MUST_LINK = ("confirmed", "unverifiable")
-NOT_SHOWN_LABELS = ("low-value", "repeat")
+NOT_SHOWN_LABELS = ("low-value", "repeat", "important")
 # A `critical` review shows only these impacts (logic.js shownFindings).
 CRITICAL_IMPACTS = ("breaks-users", "breaks-business")
 # Assessments a walkthrough must carry when it says it is complete.

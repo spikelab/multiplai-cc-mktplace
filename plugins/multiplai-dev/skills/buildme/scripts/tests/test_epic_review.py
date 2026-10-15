@@ -627,3 +627,14 @@ def test_blockers_follows_what_the_review_lists(tmp_path):
         {**high("f3"), "assessment": {"label": "repeat"}}]}))
     assert [b.split()[1] for b in review.blockers(tmp_path)] == ["f1"]
     assert review.blockers(tmp_path / "missing") is None
+
+
+def test_a_trim_finding_never_blocks_but_the_same_finding_without_a_section_still_does(tmp_path):
+    trim = {**high("t1", topic="code", severity="MEDIUM"), "section": "trim"}
+    important = {**high("t2", topic="code"), "section": "trim", "assessment": {"label": "important"}}
+    (tmp_path / "findings.json").write_text(json.dumps({"findings": [trim, important]}))
+    assert review.blockers(tmp_path) == []
+    # A findings.json written before the review wrote `section`: the topic rule, as before.
+    old = {k: v for k, v in trim.items() if k != "section"}
+    (tmp_path / "findings.json").write_text(json.dumps({"findings": [old]}))
+    assert [b.split()[1] for b in review.blockers(tmp_path)] == ["t1"]

@@ -91,6 +91,7 @@ class TargetSpec:
     dir: str | None = None   # a directory not under git, copied and reviewed as a tree
     mode: str = "full"  # `full` or `critical` (models.MODES)
     restart: bool = False  # start over even when the ledger shows an interrupted run
+    trim: bool = False  # a tree review also runs the trim finder (`--trim`)
 
 
 def _count_line(counts: dict[str, int]) -> str:
@@ -331,7 +332,7 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
     if kept is not None:
         log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
-    return ReviewState(target=info, mode=spec.mode, needs=[gated_need(n) for n in needs]), target_dir
+    return ReviewState(target=info, mode=spec.mode, trim=spec.trim, needs=[gated_need(n) for n in needs]), target_dir
 
 
 def _same_remote(url: str | None, here: tuple[str, str] | None) -> bool:
@@ -440,7 +441,7 @@ def plan_text(state: ReviewState, config: ReviewConfig) -> str:
     """What a review of this target would run: one line per file group, then the total line."""
     t = state.target
     groups = file_groups(t)
-    dims = finder_dimensions(t, config)
+    dims = finder_dimensions(t, config, tree_trim=state.trim)
     lines = []
     for i, group in enumerate(groups, 1):
         chars = sum(file_chars(t, f) for f in group)

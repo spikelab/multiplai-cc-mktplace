@@ -48,6 +48,23 @@ def facts_block(facts: list[Fact] | None) -> str:
         total += len(line) + 1
     return FACTS_INTRO + "\n" + fence("\n".join(lines), "explain stage facts")
 
+# The trim finder's rules, shared by its change and tree wording.
+TRIM_RULES = (
+    "For each test, work out three things: what breaks if it is removed (the behaviour no other test "
+    "would then catch, or nothing), whether another test already covers it, and what it costs to keep "
+    "(mocks, fixtures, lines). Report only tests worth removing, merging or shortening. The `claim` "
+    "starts with the verb: \"Remove ...\", \"Merge <test> into <test> ...\" or \"Shorten ...\". The "
+    "`failure_scenario` says what breaks if the test is removed, or \"nothing\". Cite the test, then the "
+    "code line it exercises as a second citation, and cite any other test that already covers it.\n"
+    "For comments (docstrings included, module docstrings excluded), report a comment that is longer "
+    "than the code it explains, that narrates what the code does instead of why, or that describes "
+    "history (\"previously this...\"). The `claim` starts with \"Shorten ...\" or \"Remove ...\" and "
+    "names the comment's length against the code's. Cite the comment.\n"
+    "Do not report a test that cannot catch a change in behaviour (a value copied from the "
+    "implementation, a source file read as text, the dependency under test mocked away): another "
+    "reviewer reports those. Rate every finding LOW. An empty list is a valid answer."
+)
+
 DIMENSION_TASKS = {
     "diff-bugs": (
         "Read the diff and the changed files, and nothing else. Find correctness bugs the change "
@@ -97,6 +114,10 @@ DIMENSION_TASKS = {
         "behaviour: then it is the untested-behaviour finding above, rated by the severity guide.\n"
         "Do not describe what the tests cover."
     ),
+    "trim": (
+        "Judge only the tests and comments this diff adds or edits, and report the ones worth "
+        "removing, merging or shortening. " + TRIM_RULES
+    ),
 }
 
 # The same jobs, for a tree review: the files below are not a change. `history`
@@ -132,6 +153,10 @@ DIMENSION_TASKS_TREE = {
         "the only test touching that behaviour: then it is the untested-behaviour finding above, rated by "
         "the severity guide.\n"
         "Do not describe what the tests cover."
+    ),
+    "trim": (
+        "Judge the tests and comments in the files listed below, and report the ones worth removing, "
+        "merging or shortening. " + TRIM_RULES
     ),
 }
 

@@ -8,10 +8,12 @@ not a test file; with *severities*, only those of the severities named, and
 with *code_only*, only Code findings (an epic's fixer passes both, so it
 posts what the epic blocks on, `epic.review.blockers`, and never runs a round
 for a finding the epic would merge with). A Tests finding on a test file,
-and every Docs finding, are not posted; the fix loop acts on what is
+every Docs finding, and every Trim finding (the review's advisory
+suggestions to remove a test or shorten a comment) are not posted; the fix loop acts on what is
 posted, and those are not defects a code fix answers. A finding the review does not list (a repeat of one the
 person rejected, a low-value one, and in `critical` mode one not rated as
-breaking) is never posted, as it was not before the decisions file.
+breaking, and a trim suggestion labelled `important`) is never posted, as it
+was not before the decisions file.
 
 The file lives in the review's own folder under the data directory, never in
 the PR's worktree, so it is never committed and never blocks a later round.
@@ -31,7 +33,7 @@ DECISIONS_FILE = "buildme-decisions.json"
 # review_pipeline. Statuses shown, assess labels hidden, and the impacts
 # `--mode critical` keeps.
 _SHOWN_STATUSES = ("confirmed", "unverifiable")
-_HIDDEN_LABELS = ("repeat", "low-value")
+_HIDDEN_LABELS = ("repeat", "low-value", "important")
 _CRITICAL_IMPACTS = ("breaks-users", "breaks-business")
 
 # Test files by name or directory. The engine's `_TEST_PATH_RE`
@@ -48,8 +50,12 @@ _MORE_TEST_PATHS = re.compile(
 
 
 def _section(finding: dict) -> str:
-    """`code`, `tests` or `docs`, as the review skill files a finding
+    """The finding's `section` as the review wrote it (`code`, `tests`, `docs`
+    or `trim`); a findings.json written before the field has none, and then
+    `code`, `tests` or `docs` from the topic, as the review skill files it
     (`review_pipeline.models.section_of`): no topic is `code`."""
+    if finding.get("section"):
+        return str(finding["section"])
     topic = finding.get("topic")
     return topic if topic in ("tests", "docs") else "code"
 

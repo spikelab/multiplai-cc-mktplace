@@ -25,7 +25,10 @@ finding with no verdict, such as a gate-rejected one, has no such key.
 (optional, 0.32+) is what the verifier says breaks in production if the
 change is merged as is, one of `models.IMPACTS`; a refuted finding has none.
 `mode` (top level, optional, 0.32+) is the mode the review ran in: `full` or
-`critical`.
+`critical`. `section` (0.71+) is the section the finding is listed in
+(`models.section_of`: `trim` for what only the trim finder reported, else by
+topic), written on every finding so readers need not repeat the rule; files
+written before it have none, and readers fall back to the topic rule.
 
 `checks.json` (the `checks.v1` contract beside it) is the record of every
 agent call: `AgentCheck` and `GateCheck` from the state, mapped the same way.
@@ -47,7 +50,7 @@ from pathlib import Path
 from . import timings
 from .budget import TOKEN_FIELDS, empty_stage
 from .config import DIMENSIONS
-from .models import SEVERITIES, STAGES, AgentCheck, Assessment, Citation, Finding, Need, ReviewState
+from .models import SEVERITIES, STAGES, AgentCheck, Assessment, Citation, Finding, Need, ReviewState, section_of
 
 log = logging.getLogger(__name__)
 
@@ -222,6 +225,7 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
                 row["topic"] = verdict.topic
             if verdict.impact and status in ("confirmed", "unverifiable"):
                 row["impact"] = verdict.impact
+        row["section"] = section_of(verdict.topic if verdict else None, f.finders)
         assessment = state.assessments.get(f.id)
         if assessment is not None and status in ("confirmed", "unverifiable"):
             row["assessment"] = _assessment(assessment)
@@ -230,7 +234,8 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
     order = {"confirmed": 0, "unverifiable": 1, "refuted": 2}
     rows.sort(key=lambda r: (order[r["status"]], rank[r["severity"]]))
     for r in state.rejected:
-        rows.append(_finding(r.finding, "rejected", r.reason, None))
+        rows.append({**_finding(r.finding, "rejected", r.reason, None),
+                     "section": section_of(None, r.finding.finders)})
 
     seen, unique = set(), []
     for row in rows:

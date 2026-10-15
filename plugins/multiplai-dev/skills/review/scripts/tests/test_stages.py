@@ -65,6 +65,7 @@ async def test_find_dedupes_gates_and_normalises_paths(target_info, ctx, monkeyp
     canned = use(monkeypatch, {
         "find:diff-bugs": [FinderOutput(findings=[absolute, bad])],
         "find:callers": [FinderOutput(findings=[high])],  # duplicate of the first
+        "find:trim": [FinderOutput()],
     })
     state = await run_find(ReviewState(target=target_info), ctx)
     assert [f.id for f in state.findings] == [high.id]
@@ -73,15 +74,17 @@ async def test_find_dedupes_gates_and_normalises_paths(target_info, ctx, monkeyp
     assert state.findings[0].finder == "diff-bugs"
     assert state.findings[0].finders == ["diff-bugs", "callers"]  # the copy's finder is kept
     assert len(state.rejected) == 1 and "quote not at cited lines" in state.rejected[0].reason
-    assert state.stage == "find" and len(canned.calls) == 2
+    assert state.stage == "find" and len(canned.calls) == 3
 
 
 async def test_find_survives_one_failed_finder_but_not_all(target_info, ctx, monkeypatch):
-    use(monkeypatch, {"find:diff-bugs": [sdk.AgentCallError("x")], "find:callers": [FinderOutput(findings=[])]})
+    use(monkeypatch, {"find:diff-bugs": [sdk.AgentCallError("x")], "find:callers": [FinderOutput(findings=[])],
+                      "find:trim": [FinderOutput()]})
     state = await run_find(ReviewState(target=target_info), ctx)
     assert state.stage == "find" and state.errors and "finder diff-bugs" in state.errors[0]
 
-    use(monkeypatch, {"find:diff-bugs": [sdk.AgentCallError("x")], "find:callers": [sdk.AgentCallError("y")]})
+    use(monkeypatch, {"find:diff-bugs": [sdk.AgentCallError("x")], "find:callers": [sdk.AgentCallError("y")],
+                      "find:trim": [sdk.AgentCallError("z")]})
     with pytest.raises(sdk.AgentCallError):
         await run_find(ReviewState(target=target_info), ctx)
 
@@ -99,11 +102,11 @@ async def test_a_budget_stop_during_find_keeps_finished_finders_and_resume_runs_
     ctx.config.concurrency = 1
     state = ReviewState(target=target_info)
     use(monkeypatch, {"find:diff-bugs": [FinderOutput(findings=[high_finding()])],
-                      "find:callers": [budget.BudgetExceededError("stop")]})
+                      "find:callers": [budget.BudgetExceededError("stop")], "find:trim": [FinderOutput()]})
     with pytest.raises(budget.BudgetExceededError):
         await run_find(state, ctx)
     assert state.stage == "target" and state.findings == []
-    assert list(state.finder_results) == ["diff-bugs"]
+    assert list(state.finder_results) == ["diff-bugs", "trim"]
     assert [f.id for f in state.finder_results["diff-bugs"].findings] == [high_finding().id]
 
     canned = use(monkeypatch, {"find:callers": [FinderOutput(findings=[high_finding()])]})
@@ -118,14 +121,14 @@ async def test_a_failed_finder_is_not_asked_again_on_resume_unless_every_finder_
         target_info, ctx, monkeypatch):
     state = ReviewState(target=target_info, finder_results={
         "diff-bugs": FinderResult(error="finder diff-bugs: bad answer")})
-    canned = use(monkeypatch, {"find:callers": [FinderOutput()]})
+    canned = use(monkeypatch, {"find:callers": [FinderOutput()], "find:trim": [FinderOutput()]})
     state = await run_find(state, ctx)
-    assert [label for label, _ in canned.calls] == ["find:callers"]
+    assert [label for label, _ in canned.calls] == ["find:callers", "find:trim"]
     assert state.errors == ["finder diff-bugs: bad answer"]
 
     state = ReviewState(target=target_info, finder_results={
         "diff-bugs": FinderResult(error="finder diff-bugs: bad answer")})
-    use(monkeypatch, {"find:callers": [sdk.AgentCallError("y")]})
+    use(monkeypatch, {"find:callers": [sdk.AgentCallError("y")], "find:trim": [sdk.AgentCallError("z")]})
     with pytest.raises(sdk.AgentCallError, match="every finder failed"):
         await run_find(state, ctx)
     assert state.finder_results == {}  # the next run asks every finder again

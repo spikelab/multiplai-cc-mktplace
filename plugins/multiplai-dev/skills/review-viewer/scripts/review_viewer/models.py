@@ -78,8 +78,10 @@ class Assessment(_Strict):
     round (`earlier_*` say which, with the decision and note). `still-open`:
     the same defect as an earlier finding that was accepted or not decided.
     `low-value`: true, but not worth acting on, for the reason given.
+    `important` (multiplai-dev 0.71+): a trim suggestion about a test that must
+    stay, given by the verify stage, not the assess agent.
     `useful`: everything else. A label never removes a finding."""
-    label: Literal["useful", "still-open", "low-value", "repeat"]
+    label: Literal["useful", "still-open", "low-value", "repeat", "important"]
     reason: str = ""
     earlier_id: str | None = None
     earlier_round: str | None = None  # head_sha of the earlier round
@@ -116,6 +118,10 @@ class Finding(_Strict):
     # rated it (multiplai-dev 0.32+). Absent on refuted and rejected findings
     # and in older files. A `critical` review lists only the two `breaks-*`.
     impact: Literal["breaks-users", "breaks-business", "correctness-only", "hygiene"] | None = None
+    # The section the review lists the finding in (multiplai-dev 0.71+): `trim`
+    # for what only the trim finder reported, else from the topic. Absent in
+    # older files; readers then use the topic.
+    section: Literal["code", "tests", "docs", "trim"] | None = None
 
 
 class Target(_Strict):

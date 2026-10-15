@@ -125,6 +125,14 @@ def test_rule4_a_finding_the_page_never_shows_need_not_be_linked(complete, ff, l
     assert walkthrough.coverage(Walkthrough.model_validate(complete), ff) == ([], [])
 
 
+def test_rule4_a_trim_suggestion_labelled_important_need_not_be_linked(complete, ff):
+    i = next(i for i, f in enumerate(ff.findings) if f.id == MEDIUM)
+    f = ff.findings[i]
+    ff.findings[i] = type(f).model_validate({**f.model_dump(), "assessment": {"label": "important"}})
+    complete["steps"][1]["finding_ids"] = []
+    assert errors_for(complete, ff) == []
+
+
 def test_rule4_a_critical_review_needs_only_its_breaks_findings_linked(complete, ff):
     ff.mode = "critical"
     for fid, impact in ((HIGH, "breaks-users"), (MEDIUM, "hygiene")):

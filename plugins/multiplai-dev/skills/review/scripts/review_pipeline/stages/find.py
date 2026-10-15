@@ -9,12 +9,13 @@ commits, so `history` does not run.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import PurePosixPath
 
 from code_facts import Fact
 
 from .. import checks, sdk, timings
-from ..config import ReviewConfig
+from ..config import TRIM_DIMENSION, ReviewConfig
 from ..gates import file_at_head, finding_gate, gated_need, reason_kind
 from ..models import (AgentCheck, Finding, FinderOutput, FinderResult, GateCheck, Need, Rejected, ReviewState,
                       TargetInfo)
@@ -72,11 +73,26 @@ def file_groups(target: TargetInfo, max_chars: int = GROUP_MAX_CHARS) -> list[li
     return groups
 
 
-def finder_dimensions(target: TargetInfo, config: ReviewConfig) -> tuple[str, ...]:
-    """The dimensions the finders run for this target."""
+def finder_dimensions(target: TargetInfo, config: ReviewConfig, *, tree_trim: bool = False) -> tuple[str, ...]:
+    """The dimensions the finders run for this target, the trim finder last when it runs:
+    on a change unless `config.trim` is off, on a tree only with *tree_trim* (`--trim`)."""
     if not target.is_tree:
-        return tuple(config.dimensions)
-    return tuple(d for d in config.dimensions if d not in TREE_SKIPPED_DIMENSIONS)
+        dims = tuple(config.dimensions)
+    else:
+        dims = tuple(d for d in config.dimensions if d not in TREE_SKIPPED_DIMENSIONS)
+    if tree_trim if target.is_tree else config.trim:
+        dims += (TRIM_DIMENSION,)
+    return dims
+
+
+def _dir_chain(target: TargetInfo, files: list[str] | None) -> list[str]:
+    """The repository root, then every directory down to each of *files* (default: every changed file)."""
+    dirs: list[str] = [""]
+    for f in (target.files if files is None else files):
+        parts = PurePosixPath(f).parent.parts
+        for i in range(1, len(parts) + 1):
+            dirs.append("/".join(parts[:i]))
+    return list(dict.fromkeys(dirs))
 
 
 def conventions_blocks(target: TargetInfo, files: list[str] | None = None) -> list[tuple[str, bool, str]]:
@@ -87,12 +103,7 @@ def conventions_blocks(target: TargetInfo, files: list[str] | None = None) -> li
     coding-standards.md holds rules written for the reviewer only, so its blocks
     come first: when the text passes CONVENTIONS_MAX_CHARS, CLAUDE.md is skipped first.
     """
-    dirs: list[str] = [""]
-    for f in (target.files if files is None else files):
-        parts = PurePosixPath(f).parent.parts
-        for i in range(1, len(parts) + 1):
-            dirs.append("/".join(parts[:i]))
-    chain = list(dict.fromkeys(dirs))
+    chain = _dir_chain(target, files)
     blocks, total = [], 0
     for name in ("coding-standards.md", "CLAUDE.md"):
         for d in chain:
@@ -108,6 +119,32 @@ def conventions_blocks(target: TargetInfo, files: list[str] | None = None) -> li
             blocks.append((path, True, block))
             total += len(block)
     return blocks
+
+
+_CRITICAL_HEADING = re.compile(r"^##\s+critical paths\s*$", re.IGNORECASE)
+_HEADING = re.compile(r"^#{1,2}\s")
+_BULLET_GLOB = re.compile(r"^\s*[-*+]\s.*?`([^`]+)`")
+
+
+def critical_paths(target: TargetInfo, files: list[str] | None = None) -> list[tuple[str, str]]:
+    """(glob, coding-standards.md path) for each bullet under a `## Critical paths` heading, in every
+    coding-standards.md `conventions_blocks` reads for *files*. One glob per bullet, the first text in
+    backticks; globs are relative to the repository root."""
+    found: list[tuple[str, str]] = []
+    for d in _dir_chain(target, files):
+        path = f"{d}/coding-standards.md" if d else "coding-standards.md"
+        text = file_at_head(target, path)
+        if text is None:
+            continue
+        inside = False
+        for line in text.splitlines():
+            if _CRITICAL_HEADING.match(line.strip()):
+                inside = True
+            elif _HEADING.match(line):
+                inside = False
+            elif inside and (m := _BULLET_GLOB.match(line)):
+                found.append((m.group(1).strip(), path))
+    return found
 
 
 def conventions_chain(target: TargetInfo, files: list[str] | None = None) -> str:
@@ -152,7 +189,7 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
     if state.past("find"):
         return state
     target, cfg = state.target, ctx.config
-    dims = finder_dimensions(target, cfg)
+    dims = finder_dimensions(target, cfg, tree_trim=state.trim)
     if target.is_tree:
         groups = file_groups(target)
         # (key, dimension, group index): "<dimension>@<group>" so a resumed run asks only the missing pairs.
@@ -227,7 +264,9 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     results = [state.finder_results[key] for key, _, _ in pairs]
     failures = [r.error for r in results if r.error]
-    if len(failures) == len(results):
+    # The trim finder is advisory: its answer alone is not a review.
+    defects = [r for (_, d, _), r in zip(pairs, results) if d != TRIM_DIMENSION] or results
+    if all(r.error for r in defects):
         for key, _, _ in pairs:
             del state.finder_results[key]  # a later run tries every finder again
         raise sdk.AgentCallError("every finder failed: " + "; ".join(failures))

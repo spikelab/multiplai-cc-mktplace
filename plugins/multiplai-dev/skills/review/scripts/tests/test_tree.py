@@ -12,7 +12,7 @@ import pytest
 from conftest import SCHEMA
 from review_pipeline import gates, orchestrator, sdk, target
 from review_pipeline.__main__ import main
-from review_pipeline.config import DIMENSIONS, ReviewConfig
+from review_pipeline.config import DIMENSIONS, TRIM_DIMENSION, ReviewConfig
 from review_pipeline.models import Citation, Finding, FinderOutput, MergeOutput, ReviewState, Verdict
 from review_pipeline.prompts import find as find_prompt
 from review_pipeline.prompts import merge as merge_prompt
@@ -348,8 +348,8 @@ async def test_a_change_review_still_makes_five_finder_calls(target_info, tmp_pa
     monkeypatch.setattr(sdk, "agent_call_structured", fake)
     state = ReviewState(target=target_info)
     await run_find(state, _ctx(tmp_path))
-    assert sorted(label for label, _ in fake.calls) == sorted(f"find:{d}" for d in DIMENSIONS)
-    assert sorted(state.finder_results) == sorted(DIMENSIONS)
+    assert sorted(label for label, _ in fake.calls) == sorted(f"find:{d}" for d in (*DIMENSIONS, TRIM_DIMENSION))
+    assert sorted(state.finder_results) == sorted((*DIMENSIONS, TRIM_DIMENSION))
 
 
 # --- prompts ---------------------------------------------------------------------

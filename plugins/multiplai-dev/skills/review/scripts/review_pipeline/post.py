@@ -42,6 +42,7 @@ from .target import _DIFF_FLAGS, TargetError, git, github_web_base
 log = logging.getLogger(__name__)
 
 # Keyed by the names `render.section` returns. Applies only without --decisions.
+# A section left out (`trim`, advisory) posts nothing unless accepted in a decisions file.
 POSTED_SEVERITIES_BY_SECTION: dict[str, tuple[str, ...]] = {
     "code": ("HIGH", "MEDIUM", "LOW"),
     "tests": ("HIGH", "MEDIUM"),
@@ -63,7 +64,8 @@ def select(findings: list[dict], decisions: dict | None, mode: str | None = None
         chosen = [f for f in findings if f["status"] in SHOWN_STATUSES
                   and (decisions.get(f["id"]) or {}).get("decision") == "accept"]
     else:
-        chosen = [f for f in listed(findings, mode) if f["severity"] in POSTED_SEVERITIES_BY_SECTION[section(f)]]
+        chosen = [f for f in listed(findings, mode)
+                  if f["severity"] in POSTED_SEVERITIES_BY_SECTION.get(section(f), ())]
     return sorted(chosen, key=lambda f: (SEVERITY_ORDER.get(f["severity"], len(SEVERITY_ORDER)),
                                          f.get("file") or "", f.get("line_start") or 0))
 

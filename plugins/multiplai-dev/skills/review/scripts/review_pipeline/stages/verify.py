@@ -24,18 +24,29 @@ verifiers finish, keeps their verdicts, then raises `VerifyIncomplete`, and
 review unverified or with no impact or topic. A finding about `tests` never
 breaks users or the business: a `breaks-*` impact on one is lowered to
 `correctness-only`, with a line in `state.errors`.
+
+A trim finding (`models.is_trim`) is a suggestion to remove, merge or shorten
+a test or comment: its impact rates what removing the test risks, so it is
+never lowered, and its severity is set to LOW once the stage ends.
+`important_assessments` then labels `important` each shown (confirmed or
+unverifiable) trim finding whose test must stay (impact `breaks-*`, or a citation under a `## Critical
+paths` glob), which takes it out of the list. Both are recomputed from the
+verdicts whenever the stage ends, never stored on their own, so a resume
+cannot apply them twice.
 """
 
 from __future__ import annotations
 
 import logging
+from fnmatch import fnmatchcase
 
 from .. import checks, sdk
 from ..gates import gated_need, reason_kind, verdict_gate
-from ..models import (CRITICAL_IMPACTS, SEVERITIES, AgentCheck, Finding, GateCheck, Need, ReviewState, Verdict,
-                      VerifierAnswer, lower_severity)
+from ..models import (CRITICAL_IMPACTS, SEVERITIES, AgentCheck, Assessment, Finding, GateCheck, Need, ReviewState,
+                      Verdict, VerifierAnswer, is_trim, lower_severity)
 from ..prompts import verify as prompt
 from . import RunContext, bounded, fix_citation
+from .find import critical_paths
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +64,54 @@ class VerifyIncomplete(Exception):
             f"the verifier gave no usable answer for {n} finding{'' if n == 1 else 's'} after "
             f"{VERIFY_TRIES} tries each ({', '.join(finding_ids)}); last error: {last_error}")
         self.finding_ids = finding_ids
+
+
+def important_assessments(state: ReviewState) -> dict[str, Assessment]:
+    """`important` for each shown (confirmed or unverifiable) trim finding that suggests removing a test
+    that must stay: the test's behaviour is rated `breaks-users`/`breaks-business`, or it covers a path
+    under a `## Critical paths` glob. An unverifiable one counts too: it would otherwise be listed.
+
+    A finding the merge stage folded into one counts as part of it, since the survivor keeps only its own
+    verdict. The verifier labels a test `tests` and a comment `docs`; under any other topic the finding
+    may be a comment, which cites only its own file, so only a citation of another file (the code a test
+    exercises) is matched against the globs.
+    """
+    into = {m.finding.id: m.into for m in state.merged}
+
+    def survivor(fid: str) -> str:
+        seen: set[str] = set()
+        while fid in into and fid not in seen:
+            seen.add(fid)
+            fid = into[fid]
+        return fid
+
+    candidates = [f for f in state.findings if is_trim(f)
+                  and getattr(state.verdicts.get(f.id), "status", "") in ("confirmed", "unverifiable")]
+    members = {f.id: [f] for f in candidates}
+    for m in state.merged:
+        members.get(survivor(m.finding.id), []).append(m.finding)
+    judged = [(f.id, m, v) for f in candidates for m in members[f.id]
+              if (v := state.verdicts.get(m.id)) and v.topic != "docs"]
+    cited = {(fid, m.id): [c for c in m.citations if not c.is_web and (v.topic == "tests" or c.path != m.file)]
+             for fid, m, v in judged}
+    paths = sorted({c.path for cs in cited.values() for c in cs})
+    globs = critical_paths(state.target, paths) if paths else []
+    out: dict[str, Assessment] = {}
+    for fid, m, v in judged:
+        if fid in out:
+            continue
+        hit = next(((c.path, glob, where) for c in cited[(fid, m.id)]
+                    for glob, where in globs if fnmatchcase(c.path, glob)), None)
+        if v.impact in CRITICAL_IMPACTS:
+            reason = f"the behaviour this test checks is rated {v.impact}; it is never suggested for removal"
+        elif hit:
+            reason = f"{hit[0]} is a critical path (`{hit[1]}` in {hit[2]}); its tests always count as important"
+        else:
+            continue
+        if m.id != fid:
+            reason = f"{m.id}, merged into this suggestion: {reason}"
+        out[fid] = Assessment(label="important", reason=reason)
+    return out
 
 
 def unverifiable_severity(severity: str, *, has_need: bool) -> str:
@@ -105,7 +164,7 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
             "finding_id": finding.id,
             "citations": [fix_citation(c, target, ctx.snapshot) for c in answer.citations],
         })
-        if verdict.topic == "tests" and verdict.impact in CRITICAL_IMPACTS:
+        if verdict.topic == "tests" and verdict.impact in CRITICAL_IMPACTS and not is_trim(finding):
             state.errors.append(f"verify: {finding.id} is about tests; impact {verdict.impact} lowered to "
                                 "correctness-only")
             verdict = verdict.model_copy(update={"impact": "correctness-only"})
@@ -160,6 +219,10 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
             lowered.append(finding.id)
             severity = unverifiable_severity(finding.severity, has_need=finding.id in waiting)
             state.findings[i] = finding.model_copy(update={"severity": severity})
+    for i, finding in enumerate(state.findings):
+        if is_trim(finding) and finding.severity != "LOW":
+            state.findings[i] = finding.model_copy(update={"severity": "LOW"})
+    state.assessments.update(important_assessments(state))
 
     statuses = [state.verdicts[f.id].status for f in state.findings if f.id in state.verdicts]
     ctx.counts = {s: statuses.count(s) for s in ("confirmed", "refuted", "unverifiable")}

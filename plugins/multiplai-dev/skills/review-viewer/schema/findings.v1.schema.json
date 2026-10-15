@@ -2,7 +2,7 @@
   "$defs": {
     "Assessment": {
       "additionalProperties": false,
-      "description": "The review's own judgement of a finding against the rest of the review\nand earlier rounds (multiplai-dev 0.27+). Older files have none.\n\n`repeat`: the same defect as a finding the person rejected in an earlier\nround (`earlier_*` say which, with the decision and note). `still-open`:\nthe same defect as an earlier finding that was accepted or not decided.\n`low-value`: true, but not worth acting on, for the reason given.\n`useful`: everything else. A label never removes a finding.",
+      "description": "The review's own judgement of a finding against the rest of the review\nand earlier rounds (multiplai-dev 0.27+). Older files have none.\n\n`repeat`: the same defect as a finding the person rejected in an earlier\nround (`earlier_*` say which, with the decision and note). `still-open`:\nthe same defect as an earlier finding that was accepted or not decided.\n`low-value`: true, but not worth acting on, for the reason given.\n`important` (multiplai-dev 0.71+): a trim suggestion about a test that must\nstay, given by the verify stage, not the assess agent.\n`useful`: everything else. A label never removes a finding.",
       "properties": {
         "earlier_decision": {
           "anyOf": [
@@ -62,7 +62,8 @@
             "useful",
             "still-open",
             "low-value",
-            "repeat"
+            "repeat",
+            "important"
           ],
           "title": "Label",
           "type": "string"
@@ -206,6 +207,24 @@
           },
           "title": "Needs",
           "type": "array"
+        },
+        "section": {
+          "anyOf": [
+            {
+              "enum": [
+                "code",
+                "tests",
+                "docs",
+                "trim"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Section"
         },
         "severity": {
           "enum": [
