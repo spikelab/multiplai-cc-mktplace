@@ -40,10 +40,12 @@ fixer's last review.
 
 The final fix (plan-review-rounds-and-finders-2026-10-15.md, item 2): when
 the review's recorded decision (`review.decide`) is `final_fix`, the same
-`findings` runs with `--max-rounds` one more than `rounds_done` and
-`--no-review`, so its one round fixes, pushes and replies and nothing reviews
-it. A relaunch keeps the `--max-rounds` it was launched with (`saved_rounds`):
-recomputed after its round finished, it would run, and pay for, another. Its
+`findings` runs with `--max-rounds` one more than `rounds_started` (every
+round in its state, finished or not: an open round an earlier fixer left is
+resumed first) and `--no-review`, so its fresh round fetches the blockers just
+posted, fixes, pushes and replies, and nothing reviews it. A relaunch keeps
+the `--max-rounds` it was launched with (`saved_rounds`): recomputed after its
+round started or finished, it would run, and pay for, another. Its
 result keeps `final_head`, the HEAD it left, which the merge step takes as
 the PR's approved head. The steps that run these are `Coordinator._fix` and
 `Coordinator._fix_pending` in `coordinator.py`.
@@ -80,29 +82,39 @@ def post_argv(review_dir: str) -> list[str]:
     return review._skill("post", review_dir, "--decisions", str(Path(review_dir) / DECISIONS_FILE))
 
 
-def rounds_done(project: Path, change: str) -> int:
-    """The fix rounds `findings` has finished for *change*: the rounds in its
-    `<change dir>/.findings-state.json` with `review` among their finished
-    steps. The change directory is the one `findings` resolves, under the
-    normalised change name. 0 when there is no change directory or no state
-    file, or the file holds no list of rounds."""
+def _state_rounds(project: Path, change: str) -> list:
+    """The rounds in *change*'s `<change dir>/.findings-state.json`. The
+    change directory is the one `findings` resolves, under the normalised
+    change name. Empty when there is no change directory or no state file,
+    or the file holds no list of rounds."""
     try:
         path = change_dir_for(project / "specs", change_name_for(change, "")) / STATE_FILE
     except (ResolveError, ValueError):
-        return 0
+        return []
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return 0
+        return []
     except (OSError, ValueError) as e:
         log.warning("cannot read %s: %s", path, e)
-        return 0
+        return []
     found = doc.get("findings") if isinstance(doc, dict) else None
     rounds = found.get("rounds") if isinstance(found, dict) else None
-    if not isinstance(rounds, list):
-        return 0
-    return sum(1 for r in rounds if isinstance(r, dict) and isinstance(r.get("finished"), list)
-               and "review" in r["finished"])
+    return rounds if isinstance(rounds, list) else []
+
+
+def rounds_done(project: Path, change: str) -> int:
+    """The fix rounds `findings` has finished for *change*: the rounds in its
+    state (`_state_rounds`) with `review` among their finished steps."""
+    return sum(1 for r in _state_rounds(project, change) if isinstance(r, dict)
+               and isinstance(r.get("finished"), list) and "review" in r["finished"])
+
+
+def rounds_started(project: Path, change: str) -> int:
+    """Every round in *change*'s findings state, finished or not. `findings`
+    resumes an open round first and then stops once this many rounds reach
+    its `--max-rounds`, so a fresh round needs `--max-rounds` one more."""
+    return len(_state_rounds(project, change))
 
 
 # A stop, which the next run resumes, not a failure: `findings` turns SIGTERM

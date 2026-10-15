@@ -206,7 +206,7 @@ def _die_after_the_fixer() -> None:
     coordinator.Coordinator._run_step = dying
 
 
-def test_r2_a_final_fixer_killed_mid_way_runs_again_once_with_the_same_argv(tmp_path, monkeypatch):
+def test_r2_a_final_fixer_killed_before_its_round_runs_again_once_with_the_same_argv(tmp_path, monkeypatch):
     plain = _never_stopped(tmp_path, monkeypatch)
     r = Rounds(tmp_path / "stopped", monkeypatch, [{"findings": [medium("m1")]}], [{"die": True}, FINAL])
     assert r.run() == 3
@@ -215,6 +215,47 @@ def test_r2_a_final_fixer_killed_mid_way_runs_again_once_with_the_same_argv(tmp_
     first, again = r.fixers()
     assert first == again and "--no-review" in first
     assert _outcome(r) == {**plain, "fixers": ["1", "1"]}
+
+
+def test_r2_a_final_fixer_killed_mid_round_with_its_commit_pushed_finishes_that_round_only(tmp_path, monkeypatch):
+    """Row R2 as the plan states it: killed after its round's commit is on the
+    child branch and before the round is recorded finished. The relaunch
+    keeps `--max-rounds` 1, so `findings` finishes the open round and stops;
+    recounted from the state (one round, open), it would allow a second."""
+    plain = _never_stopped(tmp_path, monkeypatch)
+    killed = {"rounds": [{"stop": "review"}], "push": True}
+    r = Rounds(tmp_path / "stopped", monkeypatch, [{"findings": [medium("m1")]}], [killed, FINAL])
+    assert r.run() == 3
+    assert r.status()["status"] == "built" and r.issues() == [] and r.fix_rounds() == 1
+    assert r.run() == 0
+    first, again = r.fixers()
+    assert first == again and "--no-review" in first
+    assert _outcome(r) == {**plain, "fixers": ["1", "1"]}
+
+
+def test_a_final_fix_after_a_fixer_stopped_in_its_review_at_round_3_gets_a_fresh_round(tmp_path, monkeypatch):
+    """A fixer killed after its review 3 reached the ledger and before its
+    round was recorded finished leaves that round open, and no review round
+    left, so the review step decides on review 3: `final_fix`. `findings`
+    resumes the open round first, so the final fix's `--max-rounds` counts
+    every round in the state, finished or not, plus one: the fresh round
+    that fetches and fixes the blockers just posted. Compared with the run
+    that never stopped."""
+    def fixes(stop: bool) -> list[dict]:
+        last = {"findings": [medium("m3")], **({"stop": "review"} if stop else {})}
+        normal = {"rounds": [{"findings": [high("h2")]}, last], "max_rounds": True, "push": True}
+        final = {"rounds": [{}, {}] if stop else [{}], "max_rounds": True, "push": True}
+        return [normal, final]
+
+    plain = Rounds(tmp_path / "plain", monkeypatch, [{"findings": [high("h1")]}], fixes(False))
+    assert plain.run() == 0
+    r = Rounds(tmp_path / "stopped", monkeypatch, [{"findings": [high("h1")]}], fixes(True))
+    assert r.run() == 3
+    assert r.status()["status"] == "built" and r.fix_rounds() == 2
+    assert r.run() == 0
+    assert [(x["pr_round"], x.get("next")) for x in r.reviewed()] == [(1, "round"), (3, "final_fix")]
+    assert "--no-review" in r.fixers()[1]
+    assert _outcome(r) == _outcome(plain) == {**_outcome(plain), "fixers": ["2", "3"], "fix_rounds": 3}
 
 
 def test_r2_a_final_fixer_that_ended_before_its_result_was_written_is_not_paid_twice(tmp_path, monkeypatch):

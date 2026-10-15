@@ -1093,7 +1093,7 @@ class Coordinator:
         follows it that exited 0 saying it is done (`FINDINGS:DONE` or
         `FINDINGS:MAX_ROUNDS`), the head it left is this one and nothing will
         fix its blockers: the child parks (D2.S15). A review whose `next` is
-        `final_fix` runs the final fix: one more round, `--no-review`."""
+        `final_fix` runs the final fix: one fresh round, `--no-review`."""
         if c.status != "built":
             return False
         tries = [a for a in records.attempts(self.epic_dir) if a.child == c.id]
@@ -1122,8 +1122,10 @@ class Coordinator:
                 return False
         project = self._child_project(c)
         if rec.result.get("next") == "final_fix":
-            return await self._run_fix(c, head, number, fix.rounds_done(project, f"{self.epic.name}-{c.id}") + 1,
-                                       final=True)
+            # One fresh round past every round in the state, finished or not:
+            # `findings` resumes an open one first, and stops at the count.
+            return await self._run_fix(c, head, number,
+                                       fix.rounds_started(project, f"{self.epic.name}-{c.id}") + 1, final=True)
         return await self._run_fix(c, head, number, self._rounds_for_fixer(c, project))
 
     async def _fix_pending(self, c: Child, number: int, head: str) -> bool | None:
