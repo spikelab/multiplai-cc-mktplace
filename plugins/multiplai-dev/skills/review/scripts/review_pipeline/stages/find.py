@@ -4,6 +4,10 @@ A tree target (a whole repository or a directory, not a change) does not fit
 in one prompt, so its files are split into groups by `file_groups` and each
 dimension runs once per group, keyed `"<dimension>@<group index>"`. It has no
 commits, so `history` does not run.
+
+With `ReviewState.extra_finders` (a change's first round, `--extra-finders`),
+one extra finder per chunk of the diff (`chunks.finder_chunks`) runs beside the
+dimensions, keyed `"extra@<chunk index>"`.
 """
 
 from __future__ import annotations
@@ -15,7 +19,8 @@ from pathlib import PurePosixPath
 from code_facts import Fact
 
 from .. import checks, sdk, timings
-from ..config import TRIM_DIMENSION, ReviewConfig
+from ..chunks import diff_files, finder_chunks
+from ..config import EXTRA_DIMENSION, TRIM_DIMENSION, ReviewConfig
 from ..gates import file_at_head, finding_gate, gated_need, reason_kind
 from ..models import (AgentCheck, Finding, FinderOutput, FinderResult, GateCheck, Need, Rejected, ReviewState,
                       TargetInfo)
@@ -197,6 +202,9 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
     else:
         groups = [None]  # the change path: every changed file, one prompt per dimension, as before
         pairs = [(d, d, 0) for d in dims]
+    # Recomputed from the same diff on a resume, so `extra@<i>` names the same chunk.
+    chunks = finder_chunks(diff_files(ctx.diff)) if state.extra_finders and not target.is_tree else []
+    pairs += [(f"{EXTRA_DIMENSION}@{i}", EXTRA_DIMENSION, i) for i in range(len(chunks))]
     rules: dict[int, list[tuple[str, bool, str]]] = {}
     if "conventions" in dims:
         for i, group in enumerate(groups):
@@ -207,22 +215,34 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
     facts = state.facts.facts if cfg.find_with_facts and state.facts else []
 
     async def _one(key: str, dimension: str, index: int) -> tuple[FinderResult, AgentCheck]:
-        group_rules = rules.get(index, [])
-        conventions = "\n".join(block for _, _, block in group_rules)
-        extra = [f"files ({len(groups[index])}, group {index + 1} of {len(groups)})"] if target.is_tree else []
-        given_facts = group_facts(facts, groups[index])
-        if given_facts:
-            extra.append(f"checked facts ({len(given_facts)})")
-        given = checks.prompt_labels(
-            target, diff=None if target.is_tree else ctx.diff, diff_limit=DIFF_PROMPT_CHARS,
-            rules=[(path, included) for path, included, _ in group_rules] if dimension == "conventions" else None,
-            extra=extra or None)
+        shown = hunks
+        if dimension == EXTRA_DIMENSION:
+            chunk = chunks[index]
+            given_facts = group_facts(facts, chunk.files)
+            labels = [f"chunk {index + 1} of {len(chunks)} ({len(chunk.files)} files, {chunk.lines} changed lines)"]
+            if given_facts:
+                labels.append(f"checked facts ({len(given_facts)})")
+            given = checks.prompt_labels(target, diff=chunk.text, diff_limit=DIFF_PROMPT_CHARS, extra=labels)
+            text = prompt.build_extra(target, chunk.files, chunk.lines, index, len(chunks), chunk.text,
+                                      facts=given_facts)
+            shown = checks.diff_hunks(chunk.text[:DIFF_PROMPT_CHARS])
+        else:
+            group_rules = rules.get(index, [])
+            conventions = "\n".join(block for _, _, block in group_rules)
+            extra = [f"files ({len(groups[index])}, group {index + 1} of {len(groups)})"] if target.is_tree else []
+            given_facts = group_facts(facts, groups[index])
+            if given_facts:
+                extra.append(f"checked facts ({len(given_facts)})")
+            given = checks.prompt_labels(
+                target, diff=None if target.is_tree else ctx.diff, diff_limit=DIFF_PROMPT_CHARS,
+                rules=[(path, included) for path, included, _ in group_rules] if dimension == "conventions" else None,
+                extra=extra or None)
+            text = prompt.build(target, dimension, ctx.diff, conventions, files=groups[index], facts=given_facts)
         started = checks.now()
         with sdk.recording() as rec:
             try:
                 out = await sdk.agent_call_structured(
-                    prompt.build(target, dimension, ctx.diff, conventions, files=groups[index], facts=given_facts),
-                    FinderOutput,
+                    text, FinderOutput,
                     allowed_tools=sdk.FINDER_TOOLS, model=cfg.finder_model, effort=cfg.effort,
                     max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label=f"find:{dimension}",
                 )
@@ -244,7 +264,7 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
             ctx.progress.line(f"  finder {key}: {len(out.findings)} findings")
         findings = [_normalise(f, dimension, target, ctx) for f in out.findings]
         check.outcome = f"{len(findings)} finding{'' if len(findings) == 1 else 's'}"
-        check.findings = [finding_entry(f, rec.tool_calls, hunks, target, ctx) for f in findings]
+        check.findings = [finding_entry(f, rec.tool_calls, shown, target, ctx) for f in findings]
         return FinderResult(findings=findings, needs=[n for n in out.needs if n.what.strip()]), check
 
     async def one(pair: tuple[str, str, int]) -> None:

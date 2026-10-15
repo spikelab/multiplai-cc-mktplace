@@ -12,7 +12,7 @@ import hashlib
 import logging
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
@@ -92,6 +92,7 @@ class TargetSpec:
     mode: str = "full"  # `full` or `critical` (models.MODES)
     restart: bool = False  # start over even when the ledger shows an interrupted run
     trim: bool = False  # a tree review also runs the trim finder (`--trim`)
+    extra_finders: bool = False  # a change review's first round adds the extra finders
 
 
 def _count_line(counts: dict[str, int]) -> str:
@@ -332,7 +333,10 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
     if kept is not None:
         log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
-    return ReviewState(target=info, mode=spec.mode, trim=spec.trim, needs=[gated_need(n) for n in needs]), target_dir
+    # The extra finders run on a change's first round only: none kept before this one.
+    extra = spec.extra_finders and not info.is_tree and rounds.round_number(target_dir) == 1
+    return (ReviewState(target=info, mode=spec.mode, trim=spec.trim, extra_finders=extra,
+                        needs=[gated_need(n) for n in needs]), target_dir)
 
 
 def _same_remote(url: str | None, here: tuple[str, str] | None) -> bool:
@@ -462,6 +466,8 @@ def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[st
 
 
 async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:
+    if config.extra_finders and not spec.extra_finders:
+        spec = replace(spec, extra_finders=True)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, check_interrupted=True, lock=lock)
         # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.

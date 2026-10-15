@@ -6,7 +6,7 @@ own file beats multiplai.conf, which beats the default):
 1. `review.yaml` in the output directory (`<out>/review.yaml`; for the
    default output directory, the old default's when the new one has none):
    `concurrency`, `finder_model`, `verifier_model`, `merger_model`, `effort`,
-   `max_turns`, `explain`, `find_with_facts`, `trim`.
+   `max_turns`, `explain`, `find_with_facts`, `trim`, `extra_finders`.
 2. `multiplai.conf` keys `review_finder_model`, `review_verifier_model`,
    `review_effort` (the merger uses the verifier's), `review_explain`.
 3. Default: no model and no effort passed, so every stage runs on the
@@ -21,6 +21,10 @@ by default until real runs are compared.
 review: it judges the tests and comments the change adds or edits, and its
 findings go to the advisory Trim section. A tree review runs it only with
 `--trim`, which the review's state keeps (`ReviewState.trim`).
+
+`extra_finders` (default false; also `review --extra-finders`) adds one finder per
+~600 changed lines (`chunks.finder_chunks`, at most 6) to a change review's first
+round, keyed `EXTRA_DIMENSION@<i>`.
 """
 
 from __future__ import annotations
@@ -40,6 +44,8 @@ log = logging.getLogger(__name__)
 DIMENSIONS: tuple[str, ...] = ("diff-bugs", "callers", "history", "conventions", "tests")
 # Not one of DIMENSIONS: `finder_dimensions` adds it when the review runs it.
 TRIM_DIMENSION = "trim"
+# The extra finders' dimension (`extra_finders`), one per chunk of the change.
+EXTRA_DIMENSION = "extra"
 DEFAULT_CONCURRENCY = 4
 
 
@@ -56,6 +62,7 @@ class ReviewConfig:
     explain: bool = False
     find_with_facts: bool = False
     trim: bool = True
+    extra_finders: bool = False
 
 
 _TRUE = ("1", "true", "yes", "on")
@@ -127,7 +134,7 @@ def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MA
         if value is not None:
             setattr(cfg, key, value)
 
-    for key in ("explain", "find_with_facts", "trim"):
+    for key in ("explain", "find_with_facts", "trim", "extra_finders"):
         value = _flag(data.get(key), key, yaml_path)
         if value is not None:
             setattr(cfg, key, value)
