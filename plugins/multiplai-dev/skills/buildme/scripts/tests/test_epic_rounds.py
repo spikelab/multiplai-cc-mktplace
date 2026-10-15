@@ -158,26 +158,43 @@ def test_a_breaks_users_medium_earns_another_round(tmp_path, monkeypatch):
     assert first["next"] == "round" and "m2 (breaks-users)" in first["next_reason"]
     assert last["blocking"] == [] and "next" not in last
     [fixer] = r.fixers()
-    assert "--no-review" not in fixer and _opt(fixer, "--max-rounds") == "2"
+    assert "--no-review" not in fixer and _opt(fixer, "--max-rounds") == "1"
     assert r.issues() == []
 
 
 @pytest.mark.parametrize("left, want", [(high("h3"), "park"), (medium("m3", "breaks-users"), "final_fix")])
 def test_at_round_3_an_open_high_parks_and_mediums_get_the_final_fix(tmp_path, monkeypatch, left, want):
-    """The cap is 3 by default: the fixer's two rounds are reviews 2 and 3."""
-    rounds = {"rounds": [{"findings": [high("h2")]}, {"findings": [left]}], "max_rounds": True, "push": True}
-    r = Rounds(tmp_path, monkeypatch, [{"findings": [high("h1")]}], [rounds, FINAL])
+    """The cap is 3 by default. Each fixer launch runs one round, whose
+    review is the next: reviews 2 and 3 are two launches' reviews, and each
+    gets its own recorded decision."""
+    one = lambda found: {"rounds": [{"findings": found}], "max_rounds": True, "push": True}
+    r = Rounds(tmp_path, monkeypatch, [{"findings": [high("h1")]}], [one([high("h2")]), one([left]), FINAL])
     r.run()
     nexts = [(x["pr_round"], x.get("next")) for x in r.reviewed()]
-    assert nexts == [(1, "round"), (3, want)]
-    assert _opt(r.fixers()[0], "--max-rounds") == "2"
+    assert nexts == [(1, "round"), (2, "round"), (3, want)]
+    assert [_opt(f, "--max-rounds") for f in r.fixers()[:2]] == ["1", "2"]
+    assert not any("--no-review" in f for f in r.fixers()[:2])
     if want == "park":
         assert r.status()["status"] == "parked" and r.status()["reason"].startswith("review round 3 of 3 left 1 blocker")
-        assert len(r.fixers()) == 1 and r.issues() == [] and r.fakes.merges() == []
+        assert len(r.fixers()) == 2 and r.issues() == [] and r.fakes.merges() == []
     else:
         assert r.merged() and len(r.issues()) == 1 and "MEDIUM m3" in r.issues()[0]["body"]
-        assert "--no-review" in r.fixers()[1] and _opt(r.fixers()[1], "--max-rounds") == "3"
-    assert r.reviews_of_a() == 1          # the coordinator's own; reviews 2 and 3 are the fixer's
+        assert "--no-review" in r.fixers()[2] and _opt(r.fixers()[2], "--max-rounds") == "3"
+    assert r.reviews_of_a() == 1          # the coordinator's own; reviews 2 and 3 are the fixers'
+
+
+def test_a_round_fixer_runs_one_round_so_a_low_value_review_2_gets_the_final_fix(tmp_path, monkeypatch):
+    """Spike, 2026-10-15: one round per fixer launch, so a decision follows
+    every review. Review 2 leaves only a `correctness-only` MEDIUM: the
+    decision on it is `final_fix`, not a third review."""
+    one = {"rounds": [{"findings": [medium("m2")]}], "max_rounds": True, "push": True}
+    r = Rounds(tmp_path, monkeypatch, [{"findings": [high("h1")]}], [one, FINAL])
+    assert r.run() == 0 and r.merged()
+    assert [(x["pr_round"], x.get("next")) for x in r.reviewed()] == [(1, "round"), (2, "final_fix")]
+    first, final = r.fixers()
+    assert _opt(first, "--max-rounds") == "1" and "--no-review" not in first
+    assert _opt(final, "--max-rounds") == "2" and "--no-review" in final
+    assert len(r.issues()) == 1 and "MEDIUM m2" in r.issues()[0]["body"]
 
 
 # --- stop and resume (rows R2, R3, R4) ---------------------------------------------------
@@ -243,9 +260,10 @@ def test_a_final_fix_after_a_fixer_stopped_in_its_review_at_round_3_gets_a_fresh
     that never stopped."""
     def fixes(stop: bool) -> list[dict]:
         last = {"findings": [medium("m3")], **({"stop": "review"} if stop else {})}
-        normal = {"rounds": [{"findings": [high("h2")]}, last], "max_rounds": True, "push": True}
+        first = {"rounds": [{"findings": [high("h2")]}], "max_rounds": True, "push": True}
+        second = {"rounds": [last], "max_rounds": True, "push": True}
         final = {"rounds": [{}, {}] if stop else [{}], "max_rounds": True, "push": True}
-        return [normal, final]
+        return [first, second, final]
 
     plain = Rounds(tmp_path / "plain", monkeypatch, [{"findings": [high("h1")]}], fixes(False))
     assert plain.run() == 0
@@ -253,9 +271,9 @@ def test_a_final_fix_after_a_fixer_stopped_in_its_review_at_round_3_gets_a_fresh
     assert r.run() == 3
     assert r.status()["status"] == "built" and r.fix_rounds() == 2
     assert r.run() == 0
-    assert [(x["pr_round"], x.get("next")) for x in r.reviewed()] == [(1, "round"), (3, "final_fix")]
-    assert "--no-review" in r.fixers()[1]
-    assert _outcome(r) == _outcome(plain) == {**_outcome(plain), "fixers": ["2", "3"], "fix_rounds": 3}
+    assert [(x["pr_round"], x.get("next")) for x in r.reviewed()] == [(1, "round"), (2, "round"), (3, "final_fix")]
+    assert "--no-review" in r.fixers()[2]
+    assert _outcome(r) == _outcome(plain) == {**_outcome(plain), "fixers": ["1", "2", "3"], "fix_rounds": 3}
 
 
 def test_r2_a_final_fixer_that_ended_before_its_result_was_written_is_not_paid_twice(tmp_path, monkeypatch):

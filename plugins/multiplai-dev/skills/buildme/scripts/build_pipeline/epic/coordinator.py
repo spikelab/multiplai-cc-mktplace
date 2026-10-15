@@ -982,10 +982,11 @@ class Coordinator:
         return self.settings.max_review_rounds - (c.pr_round or 0)
 
     def _rounds_for_fixer(self, c: Child, project: Path) -> int:
-        """`<M>` (32.2): the rounds in the change's findings state whose review
-        finished, plus the review rounds the PR has left. A round still open is
-        one of those left: its review is not in `pr_round` yet."""
-        return fix.rounds_done(project, f"{self.epic.name}-{c.id}") + self._rounds_left(c)
+        """`<M>` (32.2): one round per fixer launch, so a decision follows
+        every review (Spike, 2026-10-15). Every round in the change's findings
+        state, finished or not, plus one: `findings` resumes an open round
+        first, and stops at the count."""
+        return fix.rounds_started(project, f"{self.epic.name}-{c.id}") + 1
 
     async def _run_fix(self, c: Child, head: str, number: int, rounds: int, *, final: bool = False) -> bool:
         """32.2: run `findings` on *c*'s PR. True when it exited 0, so the review
@@ -1120,13 +1121,8 @@ class Coordinator:
             if self._over_budget():
                 c.status = "built"
                 return False
-        project = self._child_project(c)
-        if rec.result.get("next") == "final_fix":
-            # One fresh round past every round in the state, finished or not:
-            # `findings` resumes an open one first, and stops at the count.
-            return await self._run_fix(c, head, number,
-                                       fix.rounds_started(project, f"{self.epic.name}-{c.id}") + 1, final=True)
-        return await self._run_fix(c, head, number, self._rounds_for_fixer(c, project))
+        rounds = self._rounds_for_fixer(c, self._child_project(c))
+        return await self._run_fix(c, head, number, rounds, final=rec.result.get("next") == "final_fix")
 
     async def _fix_pending(self, c: Child, number: int, head: str) -> bool | None:
         """Item 33's resume. A `post` an earlier run left is waited for while it
@@ -1134,7 +1130,8 @@ class Coordinator:
         When the last `fix` has no result (its coordinator was stopped) or an
         `interrupted` one, wait while it runs and write its result; when its
         log ends in `FINDINGS:FAILED`, park with the reason (D2.S6), else run
-        it again with `--max-rounds` recomputed (D2.S4, S5, S7, S11): True
+        it again with the `--max-rounds` it was launched with (D2.S4, S5,
+        S7, S11), so it stops where a fixer that never stopped would: True
         when it exited 0, False when the step ends, None when no fixer is to
         be run again."""
         tries = [a for a in records.attempts(self.epic_dir) if a.child == c.id and a.kind in FIX_KINDS]
@@ -1148,7 +1145,7 @@ class Coordinator:
         fixes = [a for a in tries if a.kind == "fix"]
         if not fixes or (fixes[-1].result is not None and not fixes[-1].result.get("interrupted")):
             return None
-        last, project = fixes[-1], self._child_project(c)
+        last = fixes[-1]
         if last.result is None and not await self._fixer_gone(c, number):
             return False
         why = fix.failed_reason(review.log_text(last.log))
@@ -1160,19 +1157,16 @@ class Coordinator:
         if last.result is None:
             records.finish(last, None, interrupted=True)
         argv = last.started.get("argv") or []
-        if fix.is_final(argv):      # R2: once more, as launched; recounted, a finished round would run again
-            if self._over_budget():
-                c.status = "built"
-                return False
-            return await self._run_fix(c, head, number, fix.saved_rounds(argv), final=True)
-        c.pr_round = review.pr_round(review.ledger_lines(), c.slug, number)
-        if self._rounds_left(c) < 1:      # no review round left: the review step decides
-            return None
-        rounds = self._rounds_for_fixer(c, project)
+        final = fix.is_final(argv)
+        if not final:
+            c.pr_round = review.pr_round(review.ledger_lines(), c.slug, number)
+            if self._rounds_left(c) < 1:      # no review round left: the review step decides
+                return None
         if self._over_budget():
             c.status = "built"
             return False
-        return await self._run_fix(c, head, number, rounds)
+        # R2: once more, as launched; recounted, a finished round would run again.
+        return await self._run_fix(c, head, number, fix.saved_rounds(argv), final=final)
 
     # -- merging a reviewed PR (PR E) ---------------------------------------------
 
