@@ -29,6 +29,8 @@ time, not derived from a tag.
   assessed like the others'. A later round of the same change runs none, and
   `resume` asks only the chunks whose finder had not returned. Off by
   default; `--tree` and `--dir` refuse it.
+- `/multiplai-dev:buildme`: an epic child's PR review passes
+  `--extra-finders`, so each PR's first review gets these finders.
 
 ## [0.74.0] - 2026-10-15
 

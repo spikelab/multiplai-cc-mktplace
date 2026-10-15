@@ -59,8 +59,11 @@ def _skill(*args: str) -> list[str]:
 def review_argv(worktree: Path, number: int) -> list[str]:
     """`--fetch`: the review needs the PR's head and base commits in the clone.
     A sibling's merge moves the base, and a push from elsewhere moves the
-    head, without any launch here fetching them (C.S8)."""
-    return _skill("review", "--repo", str(worktree), "--pr", str(number), "--trust-repo", "--fetch")
+    head, without any launch here fetching them (C.S8). `--extra-finders`: the
+    review skill adds one finder per ~600 changed lines on the PR's first
+    round only; later rounds of the same PR run without them."""
+    return _skill("review", "--repo", str(worktree), "--pr", str(number), "--trust-repo", "--fetch",
+                  "--extra-finders")
 
 
 def resume_argv(target_dir: str) -> list[str]:

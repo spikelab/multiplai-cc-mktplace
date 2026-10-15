@@ -802,8 +802,10 @@ stopped run left running is not counted in another fixer's share.
 
 **Reviewing the children's PRs.** Each child's open PR is reviewed with
 `/multiplai-dev:review` (`python -m review_pipeline review --repo <child
-worktree> --pr <n> --trust-repo --fetch`, run as a subprocess; `--fetch`
-brings in a base a sibling's merge moved), at most once per head:
+worktree> --pr <n> --trust-repo --fetch --extra-finders`, run as a
+subprocess; `--fetch` brings in a base a sibling's merge moved, and
+`--extra-finders` adds one finder per ~600 changed lines, at most 6, on the
+PR's first review round only), at most once per head:
 when the review ledger (`<data_dir>/reviews/ledger.jsonl`) already holds a
 complete review of the PR at its current head, no review starts and the
 record says `reused: true`. While a review of that head is running (its
