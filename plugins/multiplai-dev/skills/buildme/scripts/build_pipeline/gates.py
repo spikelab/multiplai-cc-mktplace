@@ -10,11 +10,13 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
 from .models import GateResult, ImplementationNote, ReviewGatePolicy, ReviewResult
+from .narrow_tests import PYTEST, _pytest_config, _UnreadableConfig, _words, runner_of
 
 log = logging.getLogger(__name__)
 
@@ -89,11 +91,93 @@ def run_test_suite(test_command: str, project_dir: Path, timeout: int = 300) -> 
     return result.returncode, result.stdout + "\n" + result.stderr
 
 
-def baseline_test_gate(test_command: str, project_dir: Path) -> GateResult:
-    """Run the test suite and check it passes before TDD starts."""
+# Wrappers that run their command in the project's own environment, where
+# `<wrapper> python` is the interpreter that runs `<wrapper> pytest`.
+_ENV_RUNNERS = (("uv", "run"), ("poetry", "run"), ("pdm", "run"), ("hatch", "run"),
+                ("pipenv", "run"), ("rye", "run"))
+XDIST_PROBE = ("-c", "import xdist")
+XDIST_PROBE_TIMEOUT = 120
+
+
+def _pytest_at(tokens: list[str]) -> int:
+    return next(i for i, t in enumerate(tokens) if Path(t).name in ("pytest", "py.test"))
+
+
+def _xdist_probe(tokens: list[str], project_dir: Path) -> list[str] | None:
+    """The argv that imports xdist in the environment the pytest command
+    *tokens* runs in, or None when this cannot tell which one that is."""
+    at = _pytest_at(tokens)
+    if at >= 2 and tokens[at - 1] == "-m":                  # `<python> -m pytest`
+        return [*tokens[:at - 1], *XDIST_PROBE]
+    prefix = tokens[:at]
+    if any(tuple(prefix[:len(r)]) == r for r in _ENV_RUNNERS):
+        return [*prefix, "python", *XDIST_PROBE]
+    if prefix:                                              # `env X=1 pytest`, an unknown wrapper
+        return None
+    script = tokens[at]
+    found = str(project_dir / script) if "/" in script else shutil.which(script)
+    python = Path(found).parent / "python" if found else None
+    return [str(python), *XDIST_PROBE] if python is not None and python.is_file() else None
+
+
+def _chose_workers(args: list[str]) -> bool:
+    """True when the pytest arguments already set xdist's workers, turn the
+    plugin off, end the options (`--`), or ask for a debugger xdist refuses."""
+    for i, token in enumerate(args):
+        if token == "--" or token in ("--pdb", "--trace", "-d", "--dist", "--tx"):
+            return True
+        if token.startswith(("-n", "--numprocesses", "--dist=", "--tx=")):
+            return True
+        if token in ("-p", "-pno:xdist") and (token == "-pno:xdist" or args[i + 1:i + 2] == ["no:xdist"]):
+            return True
+    return False
+
+
+def parallel_command(test_command: str, project_dir: Path, parallel: str = "off") -> str:
+    """*test_command* with `-n auto` appended when *parallel* is "auto", the
+    command runs pytest (`narrow_tests.runner_of`), nothing in it, its
+    `addopts` or `PYTEST_ADDOPTS` chose the workers already, and
+    `python -c "import xdist"` succeeds in the environment pytest runs in.
+    Otherwise *test_command* unchanged. Runs the project's interpreter, so
+    callers check the repo is trusted first."""
+    if parallel != "auto" or not test_command:
+        return test_command
+    project_dir = Path(project_dir)
+    if runner_of(test_command, project_dir) != PYTEST:
+        return test_command
+    try:
+        tokens = shlex.split(test_command)
+        found = _pytest_config(project_dir)
+        addopts = _words(found[1].get("addopts"), shell=True) if found else []
+        args = addopts + shlex.split(os.environ.get("PYTEST_ADDOPTS", "")) + tokens[_pytest_at(tokens) + 1:]
+    except (_UnreadableConfig, ValueError):
+        return test_command
+    if _chose_workers(args):
+        return test_command
+    probe = _xdist_probe(tokens, project_dir)
+    if probe is None:
+        log.info("Parallel tests: cannot tell which Python runs %r — running it as written", test_command)
+        return test_command
+    try:
+        proc = subprocess.run(probe, cwd=project_dir, capture_output=True, timeout=XDIST_PROBE_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        return test_command
+    if proc.returncode != 0:
+        return test_command
+    log.info("Parallel tests: pytest-xdist is installed — running the full suite with -n auto")
+    return f"{test_command} -n auto"
+
+
+def _full_suite(test_command: str, project_dir: Path, parallel: str) -> str:
+    return parallel_command(test_command, project_dir, parallel) if _repo_trusted() else test_command
+
+
+def baseline_test_gate(test_command: str, project_dir: Path, *, parallel: str = "off") -> GateResult:
+    """Run the test suite and check it passes before TDD starts. *parallel*
+    is `tdd.parallel` (`parallel_command`)."""
     if not test_command:
         return GateResult(passed=True, reason="No test command configured — skipping baseline")
-    exit_code, output = run_test_suite(test_command, project_dir)
+    exit_code, output = run_test_suite(_full_suite(test_command, project_dir, parallel), project_dir)
     if exit_code is None:
         # Could not verify — untrusted repo, missing binary or timeout. The
         # message run_test_suite returns already names which.
@@ -111,11 +195,12 @@ def baseline_test_gate(test_command: str, project_dir: Path) -> GateResult:
     )
 
 
-def integration_gate(test_command: str, project_dir: Path) -> GateResult:
-    """Run the full test suite after a block completes."""
+def integration_gate(test_command: str, project_dir: Path, *, parallel: str = "off") -> GateResult:
+    """Run the full test suite after a block completes. *parallel* is
+    `tdd.parallel` (`parallel_command`)."""
     if not test_command:
         return GateResult(passed=True, reason="No test command — skipping integration gate")
-    exit_code, output = run_test_suite(test_command, project_dir)
+    exit_code, output = run_test_suite(_full_suite(test_command, project_dir, parallel), project_dir)
     if exit_code is None:
         # No action: an unverifiable suite is not something a fix agent can
         # repair (the pre-collapse gate returned no action here either).

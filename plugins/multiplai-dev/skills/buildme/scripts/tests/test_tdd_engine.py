@@ -1548,7 +1548,7 @@ class TestNarrowTestCommandInTheBlockLoop:
             suite_calls.append(command)
             return results.pop(0) if results else RED_SUITE_RESULT
 
-        def _gate(command, _cwd):
+        def _gate(command, _cwd, **_kw):
             gate_calls.append(command)
             return GateResult(passed=True, reason="green")
 
@@ -1651,7 +1651,7 @@ class TestNarrowTestCommandInTheBlockLoop:
         (config.project_dir / "tests" / "test_new.py").write_text("def test_n(): pass\n")
         gate_calls: list[str] = []
 
-        def _gate(command, _cwd):
+        def _gate(command, _cwd, **_kw):
             gate_calls.append(command)
             return GateResult(passed=False, reason="red", metadata={"stdout": "1 failed"})
 

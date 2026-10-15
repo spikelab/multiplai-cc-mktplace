@@ -1461,10 +1461,10 @@ class Coordinator:
         return True
 
     async def _merge_tests(self, c: Child, w: Path, head: str | None, *, hint: str) -> bool:
-        """40.4: the project's test command in `<P>`, with `BUILDME_TRUST_REPO=1`,
+        """40.4: the project's test command (`merge.suite_command`) in `<P>`, with `BUILDME_TRUST_REPO=1`,
         as a `merge-tests` pair. True when it passed or there is none."""
         project = self._child_project(c)
-        command = merge.test_command(project)
+        command = await asyncio.to_thread(merge.suite_command, project)
         if command is None:
             log.info("EPIC child %s: merge tests skipped: no test command", c.id)
             return True

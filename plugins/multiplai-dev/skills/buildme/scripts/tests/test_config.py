@@ -814,6 +814,27 @@ class TestNarrowTestsConfig:
         assert _config_from_yaml(tmp_path, 'tdd:\n  narrow_tests: "true"\n').narrow_tests is True
 
 
+class TestParallelTestsConfig:
+    """`tdd.parallel`: `auto` (default) lets the full-suite runs use
+    pytest-xdist; `off` never does. YAML reads a bare `off` as false."""
+
+    def test_auto_by_default(self, tmp_path):
+        assert BuildConfig().parallel_tests == "auto"
+        assert _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n").parallel_tests == "auto"
+
+    @pytest.mark.parametrize("value", ["off", '"off"', "false", "no"])
+    def test_off_turns_it_off(self, tmp_path, value):
+        assert _config_from_yaml(tmp_path, f"tdd:\n  parallel: {value}\n").parallel_tests == "off"
+
+    @pytest.mark.parametrize("value", ["auto", '"auto"', "true", "on"])
+    def test_auto_or_true_keeps_it_on(self, tmp_path, value):
+        assert _config_from_yaml(tmp_path, f"tdd:\n  parallel: {value}\n").parallel_tests == "auto"
+
+    def test_an_unknown_value_warns_and_keeps_auto(self, tmp_path, caplog):
+        assert _config_from_yaml(tmp_path, "tdd:\n  parallel: always\n").parallel_tests == "auto"
+        assert "tdd.parallel" in caplog.text
+
+
 class TestBudgetConfig:
     def test_unlimited_by_default(self):
         config = BuildConfig()

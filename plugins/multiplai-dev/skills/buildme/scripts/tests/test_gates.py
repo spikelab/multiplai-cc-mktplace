@@ -1195,3 +1195,109 @@ class TestDocsFreshnessGate:
         gate = docs_freshness_gate(_diff_for("src/a.py"), [], tmp_path / "gone")
         assert gate.passed is True
         assert gate.action is None
+
+
+class TestParallelFullSuite:
+    """Item 4 of plan-review-rounds-and-finders-2026-10-15.md: a full-suite
+    pytest run gets `-n auto` when pytest-xdist imports in the environment
+    pytest runs in, and never under `tdd.parallel: off`."""
+
+    @staticmethod
+    def _venv(tmp_path, *, xdist: bool) -> Path:
+        """A project whose `.venv/bin/pytest` echoes its arguments and whose
+        `.venv/bin/python` imports xdist or fails to."""
+        bin_dir = tmp_path / ".venv" / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "pytest").write_text('#!/bin/sh\necho "ARGS: $*"\n')
+        (bin_dir / "python").write_text(
+            '#!/bin/sh\n[ "$1" = "-m" ] && shift 2 && echo "ARGS: $*" && exit 0\n'
+            f'[ "$*" = "-c import xdist" ] && exit {0 if xdist else 1}\nexit 2\n')
+        for name in ("pytest", "python"):
+            (bin_dir / name).chmod(0o755)
+        return tmp_path
+
+    @pytest.mark.parametrize("gate", [baseline_test_gate, integration_gate])
+    def test_xdist_importable_runs_the_suite_with_n_auto(self, tmp_path, trust_repo, gate):
+        p = self._venv(tmp_path, xdist=True)
+        result = gate(".venv/bin/pytest -q", p, parallel="auto")
+        assert result.passed
+        assert "ARGS: -q -n auto\n" in result.metadata["output"]
+
+    @pytest.mark.parametrize("gate", [baseline_test_gate, integration_gate])
+    def test_xdist_missing_runs_the_command_as_written(self, tmp_path, trust_repo, gate):
+        p = self._venv(tmp_path, xdist=False)
+        result = gate(".venv/bin/pytest -q", p, parallel="auto")
+        assert "ARGS: -q\n" in result.metadata["output"]
+
+    @pytest.mark.parametrize("gate", [baseline_test_gate, integration_gate])
+    def test_parallel_off_never_adds_workers(self, tmp_path, trust_repo, gate):
+        p = self._venv(tmp_path, xdist=True)
+        assert "ARGS: -q\n" in gate(".venv/bin/pytest -q", p, parallel="off").metadata["output"]
+        assert "ARGS: -q\n" in gate(".venv/bin/pytest -q", p).metadata["output"]
+
+    def test_python_dash_m_pytest_probes_that_python(self, tmp_path, trust_repo):
+        p = self._venv(tmp_path, xdist=True)
+        result = integration_gate(".venv/bin/python -m pytest -q", p, parallel="auto")
+        assert "ARGS: -q -n auto\n" in result.metadata["output"]
+
+    @pytest.mark.parametrize("command", [
+        ".venv/bin/pytest -n 2", ".venv/bin/pytest -n4", ".venv/bin/pytest --numprocesses=2",
+        ".venv/bin/pytest -p no:xdist", ".venv/bin/pytest --pdb", ".venv/bin/pytest -q -- tests",
+    ])
+    def test_a_command_that_chose_its_workers_is_kept(self, tmp_path, command):
+        from build_pipeline.gates import parallel_command
+        p = self._venv(tmp_path, xdist=True)
+        assert parallel_command(command, p, "auto") == command
+
+    def test_addopts_that_set_workers_are_kept(self, tmp_path, monkeypatch):
+        from build_pipeline.gates import parallel_command
+        p = self._venv(tmp_path, xdist=True)
+        (p / "pytest.ini").write_text("[pytest]\naddopts = -n 4\n")
+        assert parallel_command(".venv/bin/pytest -q", p, "auto") == ".venv/bin/pytest -q"
+        (p / "pytest.ini").unlink()
+        monkeypatch.setenv("PYTEST_ADDOPTS", "-p no:xdist")
+        assert parallel_command(".venv/bin/pytest -q", p, "auto") == ".venv/bin/pytest -q"
+
+    @pytest.mark.parametrize("command", ["npm test", "make test", "tox -e py", "pytest -q && echo x",
+                                         "cargo test"])
+    def test_other_runners_are_kept(self, tmp_path, command):
+        from build_pipeline.gates import parallel_command
+        assert parallel_command(command, self._venv(tmp_path, xdist=True), "auto") == command
+
+    @pytest.mark.parametrize("command, probe", [
+        ("uv run pytest -q", ["uv", "run", "python", "-c", "import xdist"]),
+        ("poetry run pytest", ["poetry", "run", "python", "-c", "import xdist"]),
+        ("uv run python -m pytest", ["uv", "run", "python", "-c", "import xdist"]),
+        ("python3 -m pytest", ["python3", "-c", "import xdist"]),
+        ("env X=1 pytest", None),
+    ])
+    def test_the_probe_runs_in_the_environment_pytest_runs_in(self, tmp_path, command, probe):
+        import shlex
+        from build_pipeline.gates import _xdist_probe
+        assert _xdist_probe(shlex.split(command), tmp_path) == probe
+
+    def test_a_bare_pytest_probes_the_python_beside_it_on_path(self, tmp_path, monkeypatch):
+        import shlex
+        from build_pipeline.gates import _xdist_probe
+        p = self._venv(tmp_path, xdist=True)
+        monkeypatch.setenv("PATH", f"{p / '.venv' / 'bin'}:/usr/bin:/bin")
+        assert _xdist_probe(shlex.split("pytest -xvs"), p) == [
+            str(p / ".venv" / "bin" / "python"), "-c", "import xdist"]
+
+    def test_an_untrusted_repo_is_not_probed(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+        monkeypatch.delenv("BUILDME_TRUST_REPO", raising=False)
+        p = self._venv(tmp_path, xdist=True)
+        with patch("build_pipeline.gates.parallel_command") as probe:
+            assert not integration_gate(".venv/bin/pytest -q", p, parallel="auto").passed
+        probe.assert_not_called()
+
+    def test_every_full_suite_gate_in_the_engine_passes_the_setting(self):
+        """`tdd.parallel` reaches every integration and baseline gate call."""
+        import inspect
+        import re
+        from build_pipeline import tdd_engine
+        src = inspect.getsource(tdd_engine)
+        calls = re.findall(r"(?:integration_gate|baseline_test_gate)\(([^()]*)\)", src)
+        assert len(calls) == 10
+        assert all(c.endswith("parallel=config.parallel_tests") for c in calls), calls
