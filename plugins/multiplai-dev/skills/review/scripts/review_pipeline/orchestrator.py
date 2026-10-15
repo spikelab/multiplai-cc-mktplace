@@ -334,8 +334,9 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
     if kept is not None:
         log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
-    # The extra finders run on a change's first round only: none kept before this one.
-    extra = spec.extra_finders and not info.is_tree and rounds.round_number(target_dir) == 1
+    # The extra finders run on a change's first complete round only: no finished round kept
+    # before this one. A run that stopped before export is kept as a round but not counted.
+    extra = spec.extra_finders and not info.is_tree and rounds.finished_rounds(target_dir) == 0
     return (ReviewState(target=info, mode=spec.mode, trim=spec.trim, extra_finders=extra,
                         needs=[gated_need(n) for n in needs]), target_dir)
 

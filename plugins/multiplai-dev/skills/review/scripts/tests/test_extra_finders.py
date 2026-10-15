@@ -259,6 +259,30 @@ def test_a_second_round_on_the_same_change_asks_no_extra_finder(two_chunk_repo, 
     assert not any(k.startswith(f"{EXTRA_DIMENSION}@") for k in state.finder_results)
 
 
+def test_a_first_review_that_stopped_before_export_does_not_use_up_the_first_round(two_chunk_repo, tmp_path,
+                                                                                  agents):
+    """A first review stopped by the budget is kept as a round with no findings.json; the next
+    `review` (a fresh run, not a resume) is still the change's first complete round."""
+    repo, base, head = two_chunk_repo
+    out = tmp_path / "out"
+    stopped = agents(stop_on_extra_call=1)
+    assert _review(repo, base, head, out, "--extra-finders") == 4
+    target_dir, _ = _state(out)
+    second = agents()
+    assert _review(repo, base, head, out, "--extra-finders") == 0
+    kept = sorted((target_dir / "rounds").iterdir())
+    assert len(kept) == 1 and not (kept[0] / "findings.json").exists()  # the stopped attempt, kept
+    assert second.calls.count(EXTRA) == 2
+    _, state = _state(out)
+    assert state.extra_finders is True
+    assert sorted(k for k in state.finder_results if k.startswith(f"{EXTRA_DIMENSION}@")) == [
+        f"{EXTRA_DIMENSION}@0", f"{EXTRA_DIMENSION}@1"]
+    third = agents()  # the round after the first complete one asks none
+    assert _review(repo, base, head, out, "--extra-finders") == 0
+    assert EXTRA not in third.calls
+    assert EXTRA in stopped.calls  # the stopped attempt was a first round too
+
+
 def test_extra_finders_go_with_a_change_review(two_chunk_repo, tmp_path, capsys):
     repo, _, _ = two_chunk_repo
     code = main(["--session-id", "sess-test", "--out", str(tmp_path / "out"), "review", "--repo", str(repo),

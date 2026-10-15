@@ -223,9 +223,11 @@ hunk's enclosing function and the direct callers and callees, never whole
 files, and lists every HIGH or MEDIUM correctness defect there. Its findings
 go through verify, merge and assess like every other finder's.
 
-They run only when the review directory holds no earlier round of the change:
-a second `review` of the same PR, branch or range (a rerun on the same head
-included) runs none. `resume` keeps the choice and asks only the chunks whose
+They run only when the review directory holds no earlier finished round of
+the change: a second `review` of the same PR, branch or range (a rerun on the
+same head included) runs none. A first review that stopped before it wrote
+its findings (a budget stop, or every finder failing) does not count, so the
+next `review` still runs them. `resume` keeps the choice and asks only the chunks whose
 finder had not returned. The option goes with `--branch`, `--pr` and
 `--range`; `--tree` and `--dir` refuse it.
 

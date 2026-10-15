@@ -26,7 +26,8 @@ time, not derived from a tag.
   left out, at most 6. Each reads only its part of the diff, the enclosing
   functions and the direct callers and callees, and lists every HIGH or
   MEDIUM correctness defect there; its findings are verified, merged and
-  assessed like the others'. A later round of the same change runs none, and
+  assessed like the others'. A later round of the same change runs none (a first
+  review that stopped before writing its findings does not count), and
   `resume` asks only the chunks whose finder had not returned. Off by
   default; `--tree` and `--dir` refuse it.
 - `/multiplai-dev:buildme`: an epic child's PR review passes

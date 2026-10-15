@@ -359,7 +359,7 @@ class ReviewState(BaseModel):
     # instead). Set when the review starts; `resume` keeps it.
     trim: bool = False
     # Whether this run asks the extra finders (`extra@<i>`, one per chunk of the change): the
-    # option was given and the change has no earlier round. Set when the review starts;
+    # option was given and the change has no earlier finished round. Set when the review starts;
     # `resume` keeps it.
     extra_finders: bool = False
     findings: list[Finding] = Field(default_factory=list)

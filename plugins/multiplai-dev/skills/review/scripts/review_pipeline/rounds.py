@@ -119,6 +119,12 @@ def round_number(target_dir: Path) -> int:
     return n
 
 
+def finished_rounds(target_dir: Path) -> int:
+    """How many kept rounds finished: those holding a `findings.json`. A run that stopped
+    before export is kept without one (`keep_round`), so it is not counted."""
+    return sum((d / "findings.json").is_file() for d in _round_dirs(target_dir))
+
+
 def _kept_already(target_dir: Path, data: dict) -> Path | None:
     """The round directory that already holds the round in *data*, if one does."""
     key = _round_key(data)
