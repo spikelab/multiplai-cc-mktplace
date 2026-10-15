@@ -15,15 +15,16 @@ of records each:
 2. `fix`: `python -m build_pipeline findings --pr <n> --change <epic>-<id>
    --project-dir <P> --auto --trust-repo --max-rounds <M> --severities
    HIGH,MEDIUM --code-only [--max-usd <left>]`, cwd `<P>`, the child's worktree joined
-   with the project's offset. `<M>` is the rounds in
-   the change's `.findings-state.json` whose review finished plus the review
-   rounds the PR has left (`epic.max_review_rounds` less `pr_round`), so
-   `findings`, which counts its own rounds from its state, stops where the
-   epic's cap is. A round still open (its review not yet in the ledger, so not
-   in `pr_round`) is one of the rounds left: `findings` finishes it first.
-   `findings` resumes itself, so an interrupted one is run again with the same
-   command; `findings` exits 128 + the signal on SIGTERM or SIGHUP, which is a
-   stop like a kill, not a failure. `--severities` and `--code-only` make its
+   with the project's offset. `<M>` is every round in the change's
+   `.findings-state.json`, finished or not, plus one (`rounds_started`), so
+   `findings`, which counts its own rounds from its state, runs one round and
+   stops, and a decision follows every review
+   (plan-review-rounds-and-finders-2026-10-15.md, amended by Spike on
+   2026-10-15). A round an earlier fixer left open is finished first.
+   `findings` resumes itself, so an interrupted one is run again with the
+   `--max-rounds` it was launched with (`saved_rounds`); `findings` exits
+   128 + the signal on SIGTERM or SIGHUP, which is a stop like a kill, not a
+   failure. `--severities` and `--code-only` make its
    re-reviews post, so its rounds act on, only what the epic blocks on.
    `<left>` is `epic.max_usd` less the epic's spend at the launch and less
    what the fixers still running were given and have not yet spent on their
@@ -40,13 +41,11 @@ fixer's last review.
 
 The final fix (plan-review-rounds-and-finders-2026-10-15.md, item 2): when
 the review's recorded decision (`review.decide`) is `final_fix`, the same
-`findings` runs with `--max-rounds` one more than `rounds_started` (every
-round in its state, finished or not: an open round an earlier fixer left is
-resumed first) and `--no-review`, so its fresh round fetches the blockers just
-posted, fixes, pushes and replies, and nothing reviews it. A relaunch keeps
-the `--max-rounds` it was launched with (`saved_rounds`): recomputed after its
-round started or finished, it would run, and pay for, another. Its
-result keeps `final_head`, the HEAD it left, which the merge step takes as
+`findings` runs with the same `<M>` and `--no-review`, so its fresh round
+fetches the blockers just posted, fixes, pushes and replies, and nothing
+reviews it. Any relaunch keeps the `--max-rounds` it was launched with
+(`saved_rounds`): recomputed after its round started or finished, it would
+run, and pay for, another. Its result keeps `final_head`, the HEAD it left, which the merge step takes as
 the PR's approved head. The steps that run these are `Coordinator._fix` and
 `Coordinator._fix_pending` in `coordinator.py`.
 """

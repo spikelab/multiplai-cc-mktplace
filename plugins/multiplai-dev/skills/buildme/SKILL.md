@@ -835,8 +835,8 @@ say), is not signalled: it keeps running, and the next run uses what it
 finished. SIGHUP leaves a review running, and the next run uses what it
 finished.
 
-**Is another round worth it?** After each review it reads that leaves
-blockers, the coordinator records on the review's record what follows it
+**Is another round worth it?** After each review that leaves blockers, the
+coordinator records on the review's record what follows it
 (`next`) and why (`next_reason`), from the review's own fields, with no model
 call:
 
@@ -858,13 +858,11 @@ call:
   open or closed, files none.
 - `park`: a Code HIGH is open at `epic.max_review_rounds`.
 
-The reviews it reads are its own and the last review of each fixer it runs
-(below). A fixer launched for `round` runs every review round the PR has
-left, so its re-reviews before its last round get no decision: it acts on
-their blockers itself.
+The reviews are its own and each fixer's (below). Every fixer launch runs one
+round, whose review is the PR's next, so a decision follows every review.
 
 A failing test is caught where it was before: the merge step's tests and the
-PR's required checks park the child. A final fixer stopped part-way is run
+PR's required checks park the child. A fixer stopped part-way is run
 again once with the `--max-rounds` it was launched with, so a round it
 finished is never paid for twice.
 
@@ -880,10 +878,10 @@ project directory (`agents/<NNN>-post-<id>.*`). Then the fixer runs there:
 HIGH,MEDIUM --code-only [--max-usd <left>]` (`agents/<NNN>-fix-<id>.*`;
 `<left>` is its share of `epic.max_usd`, above, only when `epic.max_usd` is
 set; its re-reviews post only HIGH and MEDIUM Code findings, so it runs no
-round for a finding the epic would merge with), where `<M>` is the rounds in the change's
-`.findings-state.json` whose review finished plus the review rounds the PR
-has left, so the fixer stops at the epic's cap, also when it resumes a round
-it had started. When it ends, the coordinator reads the PR again and
+round for a finding the epic would merge with), where `<M>` is every round in
+the change's `.findings-state.json`, finished or not, plus one, so the fixer
+runs one round (finishing first a round an earlier fixer left open) and
+stops. When it ends, the coordinator reads the PR again and
 reuses the fixer's last review (no new review launch): blockers on it get
 the same decision, above. A head with a fix
 after its review is not fixed again: when that fixer exited 0 with
@@ -895,8 +893,8 @@ other failing exit of the fixer, a failed post, or a review folder with no
 `findings.json` parks the child with the reason, and it stays parked. On a
 re-run, a head whose post succeeded runs the fixer, not a second post or a
 review; a post or fixer an earlier run left running is waited for (never two
-at once), then a post runs again, and a fixer runs again with `--max-rounds`
-recomputed, and `findings` resumes itself; a fixer, post or review killed or
+at once), then a post runs again, and a fixer runs again with the `--max-rounds` it
+was launched with, and `findings` resumes itself; a fixer, post or review killed or
 stopped by SIGKILL, SIGTERM or SIGHUP (a negative exit, or 137, 143 or 129,
 as `findings` and `uv run` report it) is run again by the next run. Before
 each fixer launch, any `findings` on the PR's number is waited for, one

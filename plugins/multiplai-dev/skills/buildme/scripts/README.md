@@ -109,7 +109,8 @@ it left, unless an issue with its title exists. A review whose `next` is
 `review_pipeline post <review dir> --decisions <review dir>/buildme-decisions.json`
 (record kind `post`), then `python -m build_pipeline findings --pr <n> --change
 <epic>-<id> --project-dir <worktree + project offset> --auto --trust-repo
---max-rounds <reviewed rounds in .findings-state.json + rounds left>` (kind `fix`), both
+--max-rounds <rounds in .findings-state.json, finished or not, + 1>` (kind `fix`:
+one round per launch, so a decision follows every review), both
 with cwd the child's project directory; then the PR is read again and the
 fixer's last review reused. A head with a `fix` record after its review is
 not fixed again; when that fix exited 0 with `FINDINGS:DONE` or
