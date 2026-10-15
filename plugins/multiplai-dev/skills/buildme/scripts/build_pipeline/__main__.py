@@ -232,6 +232,9 @@ def build_parser() -> argparse.ArgumentParser:
     findings.add_argument("--code-only", action="store_true",
                           help="With --auto, post only the re-review's Code findings, not its "
                                "Tests findings on source files")
+    findings.add_argument("--no-review", action="store_true",
+                          help="End each round after its replies, with no re-review (an epic's "
+                               "final fix)")
     _add_trust_repo_flag(findings)
 
     # --- archive ---

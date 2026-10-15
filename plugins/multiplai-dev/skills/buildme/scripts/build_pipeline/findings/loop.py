@@ -35,7 +35,9 @@ something to act on once this process's spend plus the reviews of the PR it
 ran have reached it (`FINDINGS:BUDGET:<rounds>:<usd>`). Each stops between
 rounds, exit 0. With `--severities`, `--auto` posts only findings of those
 severities, and with `--code-only` only Code findings, so the next round acts
-on nothing else.
+on nothing else. With `--no-review` (an epic's final fix) a round's review step
+runs no review and posts nothing: it is recorded finished, with no
+`review_run_dir`.
 """
 
 from __future__ import annotations
@@ -123,6 +125,7 @@ class FindingsRun:
     max_usd: float | None = None             # `--max-usd`: stop between rounds once reached
     severities: tuple[str, ...] | None = None    # `--severities`: what `--auto` posts
     code_only: bool = False                  # `--code-only`: `--auto` posts Code findings only
+    review: bool = True                      # False (`--no-review`): a round ends with no review
 
     @property
     def project_dir(self) -> Path:
@@ -533,6 +536,8 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             raise StepFailed("publish", str(e)) from e
 
     async def do_review() -> None:
+        if not run.review:        # an epic's final fix: its fixes get no review
+            return
         if rnd.review_run_dir is None:
             outcome = (seams.review or run_review)(run, rnd)
             if not outcome.ok:
