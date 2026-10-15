@@ -12,7 +12,9 @@ Run a code review as a pipeline of separate agents, with gates written in
 Python between them:
 
 1. **find** — five finders, one per aspect (`diff-bugs`, `callers`, `history`,
-   `conventions`, `tests`). Every finding cites lines with an exact quote.
+   `conventions`, `tests`), plus the `trim` finder, which judges the tests and
+   comments the change adds or edits (see "Trim" below). Every finding cites
+   lines with an exact quote.
 2. **verify** — a fresh agent per finding re-reads the code and answers
    `confirmed`, `refuted` or `unverifiable`, citing what it read. Unless it
    refutes the finding, it also says in one sentence what correct behaviour
@@ -158,6 +160,45 @@ catch a change in behaviour: a test that asserts a value copied from the code,
 one that reads a source file as text instead of running it, and one that mocks
 the very dependency whose failure the code must handle.
 
+## Trim
+
+The `trim` finder judges the tests and comments the change adds or edits, and
+nothing else. For a test it works out what breaks if the test is removed,
+whether another test already covers it, and what it costs to keep; it reports
+only tests worth removing, merging or shortening ("Merge test B into test A",
+"Remove ...", "Shorten ..."). For a comment (docstrings included, module
+docstrings not), it reports one that is longer than the code it explains, that
+narrates what the code does instead of why, or that describes history
+("previously this..."). It leaves to the `tests` finder the tests that cannot
+catch a change.
+
+Its findings are advisory. They are always `LOW`, are listed in their own
+section, **Trim (advisory: never blocks a merge)**, after Docs, and
+`findings.json` carries `section: "trim"` on them, so buildme never counts one
+as a Code finding and never blocks an epic merge on one. `post` posts them only
+when they are accepted in a decisions file. A verifier confirms one only when
+the removal, merge or shortening is safe.
+
+A test is never suggested for removal when it matters. A confirmed trim
+finding about a test is left out of the list, labelled `important` and kept in
+the review's appendix with the reason, when the verifier rates what would break
+without it `breaks-users` or `breaks-business`, or when any of its citations is
+under a critical path. List critical paths in a `coding-standards.md` (any of
+those the `conventions` finder reads), one glob per bullet in backticks, under
+a `## Critical paths` heading. Globs are relative to the repository root, and
+`*` also matches across `/`:
+
+```markdown
+## Critical paths
+
+- `billing/*`
+- `src/auth/session.py`
+```
+
+A change review runs the trim finder unless `review.yaml` sets `trim: false`.
+A tree review (`--tree`, `--dir`) runs it over the existing tests and comments
+only with `--trim`; `resume` keeps that choice.
+
 ## Reviewing code that is not a change
 
 Three targets review code as it stands instead of a diff:
@@ -191,6 +232,9 @@ and pass the same gates as a change review: a finding names a file under review,
 is marked `pre-existing` when the problem is in another file, including one
 that was skipped. `post` refuses a tree review: it
 has no PR.
+
+`--trim` (with `--tree` or `--dir`) also runs the trim finder once per group,
+over the existing tests and comments, as a separate cleanup (see "Trim").
 
 `--plan-only` resolves the target, prints one line per group and a total line
 (`groups: <n>  finder calls: <n>  files skipped: <n>`), writes
@@ -255,7 +299,8 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts \
 
 Use `--branch <name>` (reviewed against its merge-base with `origin/HEAD`) or
 `--pr <number>` instead of `--range`. To review code that is not a change, use
-`--tree [COMMIT] [--path <dir>]` or `--dir /abs/path` (no `--repo`) instead.
+`--tree [COMMIT] [--path <dir>] [--trim]` or `--dir /abs/path [--trim]` (no
+`--repo`) instead.
 
 **For `--tree` and `--dir`, plan first.** Run the same command with
 `--plan-only` in the foreground and paste its total line to the user. When
@@ -359,8 +404,9 @@ asks again only for those findings.
 Each finished target prints a `summary: <path>` line. Read each
 `summary-<slug>.md` and paste it into chat as it is: it is about 20 lines, with
 the cost, the severity counts per section, and one line per HIGH and MEDIUM
-finding with its status, under Code, Tests or Docs. Refuted, gate-rejected,
-low-value and repeat findings (and, in critical mode, the ones not rated
+finding with its status, under Code, Tests or Docs, and a count of the
+advisory Trim findings when there are some. Refuted, gate-rejected,
+low-value, repeat and `important` findings (and, in critical mode, the ones not rated
 `breaks-*`) are neither listed nor counted there. Then give the output
 directory. Do not paste `review-<slug>.md`; the viewer shows the full findings.
 
@@ -536,7 +582,7 @@ jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd:
 default's `INBOX/reviews/review.yaml` until a `review.yaml` exists in the new
 place, with a warning) sets `concurrency`, `finder_model`,
 `verifier_model`, `merger_model` (default: the verifier's), `effort`,
-`max_turns`, `explain` and `find_with_facts`. `multiplai.conf` keys
+`max_turns`, `explain`, `find_with_facts` and `trim`. `multiplai.conf` keys
 `review_finder_model`, `review_verifier_model`, `review_effort` and
 `review_explain` apply when the file does not set them. By default every
 stage runs on the session's model.
@@ -557,6 +603,8 @@ stage runs on the session's model.
   those facts, with their ids, in every finder's prompt. Whether that makes
   the finders find more real problems has not been measured, so it stays
   off until real runs on real PRs are compared.
+- `trim` (default `true`): run the trim finder on a change review (see
+  "Trim"). A tree review runs it only with `--trim`.
 
 ## Other commands
 

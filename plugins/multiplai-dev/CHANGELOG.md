@@ -17,6 +17,30 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.71.0] - 2026-10-15
+
+### Added
+- `/multiplai-dev:review`: a `trim` finder judges the tests and comments a
+  change adds or edits, and lists in a new **Trim (advisory: never blocks a
+  merge)** section the tests worth removing, merging or shortening and the
+  comments that are longer than their code, narrate what the code does, or
+  describe history. Its findings are always LOW and are posted to a PR only
+  when accepted in a decisions file. A test is never suggested for removal
+  when the verifier rates what would break without it `breaks-users` or
+  `breaks-business`, or when it cites a path listed under `## Critical paths`
+  in a `coding-standards.md`; those suggestions go to the appendix, labelled
+  `important`. A change review runs the finder unless `review.yaml` sets
+  `trim: false`; `--tree --trim` and `--dir --trim` run it over the existing
+  tests and comments.
+- `findings.json` carries a `section` field (`code`, `tests`, `docs` or
+  `trim`) on every finding, and the assessment label `important`
+  (`review-viewer/schema/findings.v1.schema.json`). Older files have neither.
+
+### Changed
+- `/multiplai-dev:buildme`: an epic reads each finding's `section`, so a trim
+  finding never blocks a child PR's merge and is never posted by `--auto`.
+  A findings.json without the field is read as before.
+
 ## [0.70.2] - 2026-10-14
 
 ### Fixed
