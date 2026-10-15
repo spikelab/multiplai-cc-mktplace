@@ -340,7 +340,9 @@ else:
 if step.get("grandchild"):      # a process in the build's group, as a real build's agents are
     kid = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
     (root / "grandchildren").mkdir(exist_ok=True)
-    (root / "grandchildren" / f"{{cid}}.{{n}}").write_text(str(kid.pid))
+    (root / f"grandchild.{{cid}}.{{n}}.tmp").write_text(str(kid.pid))
+    os.replace(root / f"grandchild.{{cid}}.{{n}}.tmp",     # a poller never reads an empty pid file
+               root / "grandchildren" / f"{{cid}}.{{n}}")
 if step.get("ignore_signals"):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)

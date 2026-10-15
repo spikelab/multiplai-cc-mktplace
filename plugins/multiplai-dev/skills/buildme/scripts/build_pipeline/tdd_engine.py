@@ -1338,7 +1338,7 @@ def _verify_block_refactor(
     block: the implementation that was green before the refactor is still there
     afterwards, which is the whole point of committing impl first.
     """
-    gate = integration_gate(config.test_command, config.project_dir)
+    gate = integration_gate(config.test_command, config.project_dir, parallel=config.parallel_tests)
     detail = "" if gate.passed else f"tests failed after refactor: {gate.reason}"
 
     if gate.passed:
@@ -1466,7 +1466,7 @@ async def _run_integration_and_review(
 
     # --- Integration gate ---
     log.info("START block=%d name=%s phase=INTEGRATION_GATE", block.number, block.name)
-    gate = integration_gate(config.test_command, config.project_dir)
+    gate = integration_gate(config.test_command, config.project_dir, parallel=config.parallel_tests)
     if not gate.passed:
         log.warning("Integration gate failed after block %s: %s", block.name, gate.reason)
         # Circuit breaker: scoped fixes first, then one architecture-questioning
@@ -1498,7 +1498,7 @@ async def _run_integration_and_review(
             if fix_result.success:
                 fix_completed = True
                 last_fix_output = fix_result.output
-                gate = integration_gate(config.test_command, config.project_dir)
+                gate = integration_gate(config.test_command, config.project_dir, parallel=config.parallel_tests)
                 if gate.passed:
                     break
 
@@ -1883,7 +1883,7 @@ async def _run_fix_on_pass(
     if not fix.success:
         reason = "the fix agent " + ("timed out" if fix.timed_out else "failed")
     else:
-        gate = integration_gate(config.test_command, config.project_dir)
+        gate = integration_gate(config.test_command, config.project_dir, parallel=config.parallel_tests)
         if not gate.passed:
             reason = f"tests failed after the fix: {gate.reason}"
         elif not _enforce_test_integrity(block, config, state, progress, block_idx,
@@ -2132,7 +2132,7 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
     # --- Baseline test gate ---
     if state.tdd and not state.tdd.baseline_tests_pass:
         progress.log_phase("BASELINE", "Running existing test suite")
-        gate = baseline_test_gate(config.test_command, config.project_dir)
+        gate = baseline_test_gate(config.test_command, config.project_dir, parallel=config.parallel_tests)
         if not gate.passed:
             log.error("Baseline test gate failed: %s", gate.reason)
             progress.log_phase("BASELINE", f"FAILED: {gate.reason}")
@@ -2336,7 +2336,7 @@ async def _run_refactor_all(
     # downstream re-runs the suite. Whose
     # edits are dirty is unknowable from here, and unknown is never safe to
     # destroy — so: no reset, no checkpoint, no refactor pass.
-    pre_gate = integration_gate(config.test_command, config.project_dir)
+    pre_gate = integration_gate(config.test_command, config.project_dir, parallel=config.parallel_tests)
     if not pre_gate.passed:
         log.error(
             "SKIP phase=REFACTOR_ALL reason=suite-red-before-refactor: %s — "
@@ -2407,7 +2407,7 @@ async def _run_refactor_all(
         gate = None
         detail = f"refactor agent did not finish: {reason}"
     else:
-        gate = integration_gate(config.test_command, config.project_dir)
+        gate = integration_gate(config.test_command, config.project_dir, parallel=config.parallel_tests)
         detail = "" if gate.passed else f"tests failed after refactor: {gate.reason}"
     if gate is not None and gate.passed:
         after = _snapshot_all_test_files(config, state)
@@ -2579,7 +2579,7 @@ def _edits_the_suite_does_not_rewrite(
             log.warning("Could not restore the round's non-test files: %s",
                         proc.stderr.strip())
             return None, None
-    gate = integration_gate(config.test_command, root)
+    gate = integration_gate(config.test_command, root, parallel=config.parallel_tests)
     rerun = _snapshot_source_files(config)
     if rerun is None:
         return None, None
@@ -2619,7 +2619,7 @@ def _rewritten_by_the_suite(
             log.warning("Could not put back the agent's %s: %s", name, e)
     if not put_back:
         return set()
-    integration_gate(config.test_command, root)
+    integration_gate(config.test_command, root, parallel=config.parallel_tests)
     rerun = _snapshot_source_files(config)
     if rerun is None:
         return None
@@ -2754,7 +2754,7 @@ async def _run_mutation_round(
                         source_edited=True)
 
     if gate is None:
-        gate = integration_gate(config.test_command, config.project_dir)
+        gate = integration_gate(config.test_command, config.project_dir, parallel=config.parallel_tests)
     if not gate.passed:
         return _discard(
             f"The new tests left the suite red ({gate.reason[:300]}); the round was "

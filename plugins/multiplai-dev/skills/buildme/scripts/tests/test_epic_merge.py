@@ -1234,6 +1234,40 @@ def test_the_merge_tests_fall_back_to_discovery(tmp_path):
     assert merge.test_command(tmp_path) == discover_test_command(tmp_path)[0]
 
 
+
+def _xdist_venv(p: Path, *, xdist: bool) -> None:
+    bin_dir = p / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "pytest").write_text("#!/bin/sh\nexit 0\n")
+    (bin_dir / "python").write_text(f"#!/bin/sh\nexit {0 if xdist else 1}\n")
+    for name in ("pytest", "python"):
+        (bin_dir / name).chmod(0o755)
+
+
+@pytest.mark.parametrize("tdd, xdist, expected", [
+    ("tdd:\n  test_command: .venv/bin/pytest -q\n", True, ".venv/bin/pytest -q -n auto"),
+    ("tdd:\n  test_command: .venv/bin/pytest -q\n", False, ".venv/bin/pytest -q"),
+    ("tdd:\n  test_command: .venv/bin/pytest -q\n  parallel: off\n", True, ".venv/bin/pytest -q"),
+    ("tdd:\n  test_command: fake-tests\n", True, "fake-tests"),
+    ("tdd: {}\n", True, None),
+])
+def test_the_merge_tests_run_pytest_in_parallel_when_xdist_imports(tmp_path, tdd, xdist, expected):
+    """Item 4: 40.4 runs the full suite with `-n auto` as the gates do."""
+    _xdist_venv(tmp_path, xdist=xdist)
+    (tmp_path / "specs").mkdir()
+    (tmp_path / "specs" / "config.yaml").write_text(tdd)
+    assert merge.suite_command(tmp_path) == expected
+    assert merge.test_command(tmp_path) == (expected.removesuffix(" -n auto") if expected else None)
+
+
+def test_the_merge_step_runs_the_suite_command(tmp_path, monkeypatch):
+    r = MergeRoot(tmp_path, monkeypatch)
+    monkeypatch.setattr(merge, "suite_command", lambda p: "fake-tests -n auto")
+    assert r.run() == 0 and r.merged()
+    [tests] = r.tries("merge-tests")
+    assert tests.started["argv"] == ["fake-tests", "-n", "auto"]
+
+
 def test_a_heading_underline_left_in_a_resolved_changelog_is_no_conflict(tmp_path):
     (tmp_path / "CHANGELOG.rst").write_text("Changes\n=======\n\n0.2.0\n-----\n\n- Child.\n")
     (tmp_path / "CHANGELOG.md").write_text("<<<<<<< HEAD\n- a\n=======\n- b\n>>>>>>> x\n")

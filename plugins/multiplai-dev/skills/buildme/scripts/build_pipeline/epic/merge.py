@@ -22,7 +22,8 @@ from typing import NamedTuple
 import yaml
 
 from .. import git_ops, stop_record
-from ..config import discover_test_command
+from ..config import discover_test_command, parse_parallel
+from ..gates import parallel_command
 from ..models import AgentResult
 from ..prompts.epic_merge import MERGE_PROMPT
 from ..sdk import agent_call
@@ -753,20 +754,36 @@ def undo_hint(w: Path, files: list[str]) -> str:
     return f"{', then '.join(x for x in steps if x)}, then {abort_hint(w)}"
 
 
-def test_command(p: Path) -> str | None:
-    """Item 40.4: `tdd.test_command` from `<P>/specs/config.yaml`, else the first
-    command `config.discover_test_command(<P>)` finds; None when neither has one."""
+def _tdd(p: Path) -> dict:
+    """`tdd:` from `<P>/specs/config.yaml`, empty when there is none to read."""
     path = Path(p) / "specs" / "config.yaml"
     try:
         data = yaml.safe_load(path.read_text()) if path.is_file() else None
     except (OSError, yaml.YAMLError):
         data = None
     tdd = data.get("tdd") if isinstance(data, dict) else None
-    command = tdd.get("test_command") if isinstance(tdd, dict) else None
+    return tdd if isinstance(tdd, dict) else {}
+
+
+def test_command(p: Path) -> str | None:
+    """Item 40.4: `tdd.test_command` from `<P>/specs/config.yaml`, else the first
+    command `config.discover_test_command(<P>)` finds; None when neither has one."""
+    command = _tdd(p).get("test_command")
     if isinstance(command, str) and command.strip():
         return command.strip()
     found = discover_test_command(p)
     return found[0] if found else None
+
+
+def suite_command(p: Path) -> str | None:
+    """What 40.4 runs: `test_command(p)` with `-n auto` when `tdd.parallel`
+    allows it and pytest-xdist imports in the project's environment
+    (`gates.parallel_command`). Runs the project's interpreter: the merge step
+    vouches for the repo, as it does for the tests themselves."""
+    command = test_command(p)
+    if command is None:
+        return None
+    return parallel_command(command, Path(p), parse_parallel(_tdd(p).get("parallel", "auto")))
 
 
 async def run_merge_agent(config, w: Path, files: list[str], branch_name: str, default: str) -> AgentResult:

@@ -682,6 +682,18 @@ def discover_test_command(project_dir: Path | str) -> tuple[str, str] | None:
             return cmd, marker
     return None
 
+def parse_parallel(value: object) -> str:
+    """`tdd.parallel` from config.yaml as "auto" or "off". YAML reads a bare
+    `off` / `no` as false and `on` as true; anything else warns and is "auto"."""
+    text = str(value).strip().lower()
+    if value is False or text in ("off", "no", "false", "0"):
+        return "off"
+    if value is True or text in ("auto", "on", "yes", "true", "1"):
+        return "auto"
+    log.warning("Unrecognized tdd.parallel value %r in config.yaml — using auto", value)
+    return "auto"
+
+
 @dataclass
 class BuildConfig:
     """Complete configuration for a build pipeline run."""
@@ -723,6 +735,11 @@ class BuildConfig:
     # files and the tests named after its changed modules (narrow_tests.py);
     # the gates that decide whether work is done keep `test_command`.
     narrow_tests: bool = True
+    # tdd.parallel: "auto" lets the full-suite runs (`gates.baseline_test_gate`,
+    # `gates.integration_gate`, the epic's merge tests) add `-n auto` when the
+    # command runs pytest and pytest-xdist imports in its environment
+    # (`gates.parallel_command`); "off" never does.
+    parallel_tests: str = "auto"
 
     # Memory files
     core_memory_files: list[str] = field(default_factory=lambda: ["technical-pref.md"])
@@ -1107,6 +1124,7 @@ class BuildConfig:
             self.narrow_tests = False
         elif text not in ("yes", "on", "1", "true"):
             log.warning("Unrecognized tdd.narrow_tests value %r in config.yaml — using true", narrow)
+        self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
 
         # Reviewer context: coding standards + optional stronger review model
         self.standards_files = data.get("standards_files") or []

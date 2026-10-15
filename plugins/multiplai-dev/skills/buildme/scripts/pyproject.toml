@@ -26,8 +26,9 @@ dependencies = [
 
 [project.optional-dependencies]
 # jsonschema: a test validates the facts.json the analysis phase writes
-# against review/schema/facts.v1.schema.json.
-dev = ["pytest", "pytest-asyncio", "jsonschema>=4"]
+# against review/schema/facts.v1.schema.json. pytest-xdist: CI runs the
+# suite with `-n auto`.
+dev = ["pytest", "pytest-asyncio", "jsonschema>=4", "pytest-xdist"]
 
 [build-system]
 requires = ["hatchling"]
