@@ -291,6 +291,25 @@ def test_r2_a_final_fixer_that_ended_before_its_result_was_written_is_not_paid_t
     assert _outcome(r) == {**plain, "fixers": ["1", "1"]}
 
 
+def test_r2b_a_round_fixer_that_ended_before_its_result_was_written_is_not_paid_twice(tmp_path, monkeypatch):
+    """A `round` fixer finished its one round (pushed, reviewed clean) and the
+    coordinator died before writing its result. The relaunch keeps
+    `--max-rounds` 1, so `findings` ends at once; recounted from the state it
+    would get 2 and run, and pay for, a second round with no decision."""
+    reviews = [{"findings": [medium("m2", "breaks-users")]}]
+    one = {"rounds": [{}], "max_rounds": True, "push": True}
+    plain = Rounds(tmp_path / "plain", monkeypatch, reviews, [one])
+    assert plain.run() == 0
+    r = Rounds(tmp_path / "stopped", monkeypatch, reviews, [one, {"max_rounds": True}])
+    run_killed(r.run, _die_after_the_fixer)
+    fix = [a for a in records.attempts(r.dir) if a.kind == "fix"]
+    assert len(fix) == 1 and fix[0].result is None
+    assert r.run() == 0
+    first, again = r.fixers()
+    assert first == again and "--no-review" not in first
+    assert _outcome(r) == {**_outcome(plain), "fixers": ["1", "1"]}
+
+
 def test_r3_a_final_fix_done_and_not_merged_goes_to_the_merge_with_no_review(tmp_path, monkeypatch):
     plain = _never_stopped(tmp_path, monkeypatch)
     r = Rounds(tmp_path / "stopped", monkeypatch, [{"findings": [medium("m1")]}], [FINAL])
