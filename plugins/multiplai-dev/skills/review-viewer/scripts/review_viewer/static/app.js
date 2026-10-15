@@ -309,7 +309,7 @@
     state.pollGen += 1;
     state.slug = slug;
     state.detail = await api(targetUrl());
-    // Gate-rejected, low-value and repeat findings are never shown or counted
+    // Gate-rejected, low-value, repeat and important findings are never shown or counted
     // (L.shownFindings); everything below reads state.shown.
     state.shownFile = L.shownFile(state.detail.findings);
     state.shown = state.shownFile.findings;

@@ -78,6 +78,18 @@ test("findings group by severity and hide refuted, rejected and decided", () => 
   assert.equal(L.stepFinding(L.navOrder(fs, decisions, false, "e"), "e", 1), "a");
 });
 
+test("a trim suggestion labelled important (its test must stay) is never shown or counted", () => {
+  const fs = [
+    { id: "t", severity: "LOW", status: "confirmed", topic: "tests", section: "trim",
+      assessment: { label: "important", reason: "rated breaks-users" } },
+    { id: "u", severity: "LOW", status: "unverifiable", topic: "tests", section: "trim",
+      assessment: { label: "important", reason: "billing/* is a critical path" } },
+    { id: "b", severity: "HIGH", status: "confirmed" },
+  ];
+  assert.deepEqual(L.shownFindings(fs).map((f) => f.id), ["b"]);
+  assert.deepEqual(L.shownFindings(fs, "full").map((f) => f.id), ["b"]);
+});
+
 test("gate-rejected, low-value and repeat findings are never shown or counted", () => {
   const fs = [
     { id: "a", severity: "LOW", status: "confirmed", assessment: { label: "low-value", reason: "[speculative] r" } },

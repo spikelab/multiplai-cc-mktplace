@@ -81,8 +81,9 @@
   }
 
   /* Assess labels whose findings the page never shows or counts: low-value,
-   * and repeat (the same defect as one you rejected in an earlier round). */
-  const DROPPED_LABELS = new Set(["repeat", "low-value"]);
+   * repeat (the same defect as one you rejected in an earlier round), and
+   * important (a trim suggestion to remove a test that must stay). */
+  const DROPPED_LABELS = new Set(["repeat", "low-value", "important"]);
 
   /* The review's assess label for a finding, or "" for a file written before
    * the assess stage existed. */
@@ -91,7 +92,7 @@
   }
 
   /* The findings the page shows and counts. Gate-rejected findings (status
-   * `rejected`), and those labelled low-value or repeat, are left out of the
+   * `rejected`), and those labelled low-value, repeat or important, are left out of the
    * list, every count, the code markers, the palette and the risk score;
    * findings.json keeps them, and the Checked tab still lists what the gates
    * rejected. */

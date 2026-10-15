@@ -420,8 +420,8 @@
         <dt><code>important</code></dt><dd>Given by the verify step, not the assess step: a trim suggestion to
           remove or merge a test that must stay, because the verifier rates what would break without it
           as breaking users or the business, or because it covers a path listed under
-          <code>## Critical paths</code> in a <code>coding-standards.md</code>. The review lists it only in
-          its appendix.</dd>
+          <code>## Critical paths</code> in a <code>coding-standards.md</code>. Never shown or counted; the
+          review lists it only in its appendix.</dd>
       </dl>
       <p>The verifier also labels each finding's <strong>topic</strong>, what it is about, which sets its
         section: <code>tests</code> and <code>docs</code> have their own, every other topic is under Code. A
@@ -456,7 +456,7 @@
       <p>A review run with <code>--mode critical</code> shows <strong>Critical only</strong> in the header and
         lists only <code>breaks-users</code> and <code>breaks-business</code> findings; the rest are in the
         review's markdown appendix.</p>
-      <p>Gate-rejected, repeat and low-value findings stay in <code>findings.json</code> and in the
+      <p>Gate-rejected, repeat, low-value and important findings stay in <code>findings.json</code> and in the
         review's markdown appendix; the page leaves them out of the list, every count, the code markers,
         Go to and the risk score. Accept, Reject or Defer records your decision; a later round of the
         review reads it.</p>
