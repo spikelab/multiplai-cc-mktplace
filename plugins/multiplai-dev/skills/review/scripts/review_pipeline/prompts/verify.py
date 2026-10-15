@@ -31,6 +31,13 @@ code is, and not the severity the claim was given.
   record that audits or billing rely on is wrong, or a document or runbook would lead an operator
   to a wrong action in production. Example: a role granted to the whole organisation instead of
   one project.
+Rate `breaks-users` or `breaks-business` only when all three hold: (1) default settings, or a
+setting or workflow the plugin's or project's own docs present as normal use, reach the path; a
+rare host, file encoding or opt-out setting does not; (2) the harm follows from this defect alone,
+with no second failure needed (a model call failing, an agent breaking its prompt, a person's
+separate mistake); a crash or stop the code promises to survive counts as ordinary; (3) no other
+check in the code, CI or the documented workflow stops the harm before it lands. Otherwise rate
+`correctness-only`.
 - `correctness-only`: the code is wrong, but no path after merge reaches a user or the business: an
   edge case no caller reaches, a trap for the next change. A missing or weak test is always
   `correctness-only`; when the code it fails to cover is itself wrong now, the finding is about
