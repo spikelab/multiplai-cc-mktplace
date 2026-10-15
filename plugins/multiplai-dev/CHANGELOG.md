@@ -17,6 +17,17 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.72.0] - 2026-10-15
+
+### Added
+- `/multiplai-dev:review-viewer`: the Findings list shows a review's advisory
+  **Trim** section after Docs, holding the trim finder's suggestions, and
+  reads each finding's section from `findings.json` when the review wrote one,
+  so a trim finding is never listed under Code. Reviews made before 0.71 have
+  no section field and are split by topic as before. The help names the
+  `trim` finder, says Trim never blocks a merge, and says a review's own
+  section wins over the finding's topic.
+
 ## [0.71.0] - 2026-10-15
 
 ### Added

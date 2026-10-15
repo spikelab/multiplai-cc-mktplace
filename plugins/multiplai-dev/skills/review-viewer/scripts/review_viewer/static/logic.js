@@ -105,12 +105,15 @@
    * as breaking users or the business after merge. */
   const CRITICAL_IMPACTS = new Set(["breaks-users", "breaks-business"]);
 
-  /* The sections the list is split into; severity is read within a section. */
-  const SECTIONS = ["code", "tests", "docs"];
-  const SECTION_TITLES = { code: "Code", tests: "Tests", docs: "Docs" };
+  /* The sections the list is split into; severity is read within a section.
+   * Trim is advisory and never blocks a merge. */
+  const SECTIONS = ["code", "tests", "docs", "trim"];
+  const SECTION_TITLES = { code: "Code", tests: "Tests", docs: "Docs", trim: "Trim" };
 
-  /* `tests` or `docs` from the finding's topic (or the path guess), else `code`. */
+  /* The finding's `section` when the review wrote one (multiplai-dev 0.71+);
+   * else `tests` or `docs` from its topic (or the path guess), else `code`. */
   function findingSection(f) {
+    if (SECTIONS.includes(f.section)) return f.section;
     const t = findingTopic(f).topic;
     return t === "tests" || t === "docs" ? t : "code";
   }
@@ -133,11 +136,12 @@
     return HIDDEN_STATUSES.has(finding.status) || !!(d && d.decision);
   }
 
-  /* The shown findings by section (Code, Tests, Docs), then severity, in the
+  /* The shown findings by section (Code, Tests, Docs, Trim), then severity, in the
    * input order within each.
    * Refuted and decided findings are left out unless showHidden; `hidden`
    * counts them. Gate-rejected, low-value and repeat findings are never here
-   * (shownFindings). */
+   * (shownFindings). Trim is listed only when a finding is in it: reviews
+   * before multiplai-dev 0.71 have none. */
   function groupFindings(findings, decisions, showHidden) {
     const sections = SECTIONS.map((name) => ({ section: name, title: SECTION_TITLES[name],
       groups: { HIGH: [], MEDIUM: [], LOW: [] } }));
@@ -150,10 +154,12 @@
       const groups = sections[SECTIONS.indexOf(findingSection(f))].groups;
       (groups[f.severity] || (groups[f.severity] = [])).push(f);
     }
-    return { sections: sections, hidden: hidden };
+    const listed = sections.filter((s) => s.section !== "trim" ||
+      Object.keys(s.groups).some((sev) => s.groups[sev].length));
+    return { sections: listed, hidden: hidden };
   }
 
-  /* Ids in the order the list shows them: Code, Tests, Docs, and HIGH,
+  /* Ids in the order the list shows them: Code, Tests, Docs, Trim, and HIGH,
    * MEDIUM, LOW within each. */
   function findingOrder(grouped) {
     const ids = [];

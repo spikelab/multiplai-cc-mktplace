@@ -134,6 +134,22 @@ test("the list is split into Code, Tests and Docs, by severity within each", () 
   assert.deepEqual(L.navOrder(fs, {}, false, null), ["c1", "c2", "t", "d"]);
 });
 
+test("a finding's section field wins over its topic, and Trim comes last", () => {
+  const fs = [
+    { id: "r", severity: "LOW", status: "confirmed", topic: "code", section: "trim", file: "a.py" },
+    { id: "c", severity: "LOW", status: "confirmed", topic: "code", file: "a.py" },
+    { id: "d", severity: "LOW", status: "confirmed", topic: "docs", section: "docs", file: "a.md" },
+  ];
+  const g = L.groupFindings(fs, {}, false);
+  assert.deepEqual(g.sections.map((s) => s.title), ["Code", "Tests", "Docs", "Trim"]);
+  assert.deepEqual(L.findingOrder(g), ["c", "d", "r"]);
+  assert.equal(L.findingSection({ topic: "code", section: "trim" }), "trim", "never under Code");
+  assert.equal(L.findingSection({ topic: "code", section: null }), "code", "no section: the topic decides");
+  assert.equal(L.findingSection({ topic: "code", section: "tests" }), "tests", "any written section wins");
+  assert.equal(L.findingSection({ section: "code", file: "tests/test_a.py" }), "code", "not the path guess");
+  assert.equal(L.findingSection({ topic: "docs", section: "nits" }), "docs", "an unknown section: the topic decides");
+});
+
 test("a critical review shows and counts only findings that break users or the business", () => {
   const ff = { mode: "critical", findings: [
     { id: "u", severity: "LOW", status: "confirmed", impact: "breaks-users" },
