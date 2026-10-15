@@ -46,7 +46,7 @@ HEAD_FILES = {
     + "\n\ndef test_negative_is_zero():\n    assert charge(-5) == 0\n",
 }
 # Line numbers at head.
-ADD_AGAIN_LINE = 9     # tests/test_calc.py: def test_add_again():
+ADD_AGAIN_LINE = 8     # tests/test_calc.py: def test_add_again():
 TEST_ADD_LINE = 4      # tests/test_calc.py: def test_add():
 COMMENT_LINE = 6       # calc.py: the first comment line inside double()
 NEGATIVE_LINE = 4      # tests/test_charge.py: def test_negative_is_zero():
@@ -393,13 +393,14 @@ def test_a_stopped_tree_review_with_trim_resumes_only_the_missing_trim_keys(trim
     saved = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
     assert saved.trim is True
     assert f"{TRIM_DIMENSION}@0" in saved.finder_results and f"{TRIM_DIMENSION}@1" not in saved.finder_results
+    missing = [k for k in groups if k not in saved.finder_results]
+    assert missing == [f"{TRIM_DIMENSION}@1"]  # which later finders also finished depends on the task group
     first_run = len(fake.calls)
     assert main(["--session-id", "sess-test", "resume", str(target_dir), "--trust-repo"]) == 0
-    resumed = fake.calls[first_run:]
-    assert resumed.count(f"find:{TRIM_DIMENSION}") == len(groups) - 1
-    # Group 0 holds the files directly in the repository; its trim result came back before the stop.
     trim_prompts = [p for label, p in fake.prompts[first_run:] if label == f"find:{TRIM_DIMENSION}"]
-    assert not any("- calc.py" in p for p in trim_prompts)
+    assert len(trim_prompts) == len(missing)
+    # Group 0 holds the files directly in the repository, group 1 billing/: only group 1 is asked again.
+    assert "- billing/charge.py" in trim_prompts[0] and "- calc.py" not in trim_prompts[0]
     done = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
     assert done.trim is True
     assert sorted(done.finder_results) == sorted(whole.finder_results)

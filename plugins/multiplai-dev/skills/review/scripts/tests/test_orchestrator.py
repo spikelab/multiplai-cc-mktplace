@@ -262,16 +262,16 @@ def test_a_budget_stop_during_find_keeps_finished_finders_and_resume_runs_the_re
 
 def test_a_budget_stop_during_verify_keeps_the_verdicts_and_resume_asks_only_the_rest(
         fixture_repo, tmp_path, agents, capsys):
-    saved, before, resumed = _stop_then_resume(fixture_repo, tmp_path, agents, capsys, stop_at=7)
-    assert before[-1] == "verify" and len(before) == 6
+    saved, before, resumed = _stop_then_resume(fixture_repo, tmp_path, agents, capsys, stop_at=8)
+    assert before[-1] == "verify" and len(before) == 7
     assert saved.stage == "find" and list(saved.verdicts) == [high_finding().id]
     assert resumed == ["verify", "merge"]
 
 
 def test_a_budget_stop_during_merge_keeps_the_answers_and_resume_asks_only_the_rest(
         fixture_repo, tmp_path, agents, capsys):
-    # 5 finders, 4 verifiers, then one merge call per group: stop on the second.
-    saved, before, resumed = _stop_then_resume(fixture_repo, tmp_path, agents, capsys, stop_at=11,
+    # 6 finders (trim included), 4 verifiers, then one merge call per group: stop on the second.
+    saved, before, resumed = _stop_then_resume(fixture_repo, tmp_path, agents, capsys, stop_at=12,
                                                two_groups=True)
     assert before[-1] == "merge" and before.count("merge") == 1
     assert saved.stage == "verify" and len(saved.merge_answers) == 1

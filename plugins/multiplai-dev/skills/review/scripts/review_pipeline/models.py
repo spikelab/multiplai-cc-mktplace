@@ -13,11 +13,14 @@ time, so no stage has to remember them:
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from typing import Literal
 
 from code_facts import Dropped as FactDropped
 from code_facts import Fact, FilePurpose, Term
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .config import TRIM_DIMENSION
 
 Severity = Literal["HIGH", "MEDIUM", "LOW"]
 SEVERITIES: tuple[str, ...] = ("HIGH", "MEDIUM", "LOW")
@@ -96,6 +99,12 @@ class Finding(_Model):
         return Finding.model_validate({**self.model_dump(), **changes})
 
 
+def is_trim(finding: Finding) -> bool:
+    """Whether only the trim finder reported *finding*."""
+    names = finding.finders or [finding.finder]
+    return all(name == TRIM_DIMENSION for name in names)
+
+
 NEED_CAUSES: tuple[str, ...] = ("no-access", "lookup-failed", "unreachable")
 # What a finding is about, as the verifier labels it. The page shows it as a badge.
 TOPICS: tuple[str, ...] = ("code", "tests", "docs", "config", "infra", "data", "security", "performance",
@@ -105,11 +114,15 @@ TOPICS: tuple[str, ...] = ("code", "tests", "docs", "config", "infra", "data", "
 IMPACTS: tuple[str, ...] = ("breaks-users", "breaks-business", "correctness-only", "hygiene")
 CRITICAL_IMPACTS: tuple[str, ...] = ("breaks-users", "breaks-business")
 MODES: tuple[str, ...] = ("full", "critical")
-# The section a finding is listed in, by topic; any other topic, or none, is "code".
-SECTIONS: tuple[str, ...] = ("code", "tests", "docs")
+# The section a finding is listed in. `trim` holds what only the trim finder
+# reported; otherwise by topic, and any other topic, or none, is "code".
+SECTIONS: tuple[str, ...] = ("code", "tests", "docs", "trim")
 
 
-def section_of(topic: str | None) -> str:
+def section_of(topic: str | None, finders: Sequence[str] = ()) -> str:
+    """The finding's section. Exported as `section`, so readers of findings.json need not repeat this."""
+    if finders and all(name == TRIM_DIMENSION for name in finders):
+        return "trim"
     return topic if topic in ("tests", "docs") else "code"
 
 
@@ -306,7 +319,9 @@ class Repeat(BaseModel):
     by: Literal["id", "agent"] = "agent"  # matched on the same id in Python, or by the repeats agent
 
 
-AssessLabel = Literal["useful", "still-open", "low-value", "repeat"]
+# `important` is not the assess agent's: the verify stage gives it to a
+# confirmed trim finding about a test that must stay (`stages/verify.important_assessments`).
+AssessLabel = Literal["useful", "still-open", "low-value", "repeat", "important"]
 
 
 class Assessment(BaseModel):
@@ -340,6 +355,9 @@ class ReviewState(BaseModel):
     # `full` lists every section; `critical` only findings whose impact is in
     # CRITICAL_IMPACTS. Set when the review starts; `resume` keeps it.
     mode: Literal["full", "critical"] = "full"
+    # A tree review run with `--trim` (a change review reads `ReviewConfig.trim`
+    # instead). Set when the review starts; `resume` keeps it.
+    trim: bool = False
     findings: list[Finding] = Field(default_factory=list)
     verdicts: dict[str, Verdict] = Field(default_factory=dict)  # by finding id
     rejected: list[Rejected] = Field(default_factory=list)

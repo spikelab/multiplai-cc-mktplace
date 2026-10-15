@@ -23,8 +23,8 @@ SHOWN_STATUSES = ("confirmed", "unverifiable")
 # Assess labels whose findings are never listed or counted: low-value, and a
 # repeat of a finding the person rejected in an earlier round. They go to the
 # review's appendix with the refuted and gate-rejected ones; findings.json
-# keeps them all.
-HIDDEN_LABELS = ("repeat", "low-value")
+# keeps them all. `important`: a trim finding about a test that must stay.
+HIDDEN_LABELS = ("repeat", "low-value", "important")
 
 
 def assess_label(fd: dict) -> str:
@@ -32,12 +32,14 @@ def assess_label(fd: dict) -> str:
     return str((fd.get("assessment") or {}).get("label") or "")
 
 
-SECTION_TITLES = {"code": "Code", "tests": "Tests", "docs": "Docs"}
+SECTION_TITLES = {"code": "Code", "tests": "Tests", "docs": "Docs", "trim": "Trim"}
+# Said after a section's title in the review and the summary.
+SECTION_NOTES = {"trim": " (advisory: never blocks a merge)"}
 
 
 def listed(findings: list[dict], mode: str | None = None) -> list[dict]:
     """The findings the markdown lists and counts: confirmed or unverifiable,
-    and not labelled low-value or repeat; in `critical` mode, also rated
+    and not labelled low-value, repeat or important; in `critical` mode, also rated
     `breaks-users` or `breaks-business`."""
     keep = [f for f in findings if f["status"] in SHOWN_STATUSES and assess_label(f) not in HIDDEN_LABELS]
     if mode == "critical":
@@ -52,7 +54,10 @@ def not_listed(findings: list[dict], mode: str | None = None) -> list[dict]:
 
 
 def section(fd: dict) -> str:
-    """`code`, `tests` or `docs`, from the finding's topic; no topic is `code`."""
+    """The finding's `section`; a file written before 0.71 has none, and then it is
+    `code`, `tests` or `docs` from the topic (no topic is `code`)."""
+    if fd.get("section") in SECTIONS:
+        return fd["section"]
     return section_of(fd.get("topic"))
 
 
@@ -60,11 +65,14 @@ def count_line(findings: list[dict], mode: str | None = None) -> str:
     """`Code 1 HIGH, 0 MEDIUM, 2 LOW; Tests none; Docs none`, over the listed findings.
 
     Severity is read within a section: a HIGH test finding is not a HIGH code finding.
+    Trim, which is advisory, is named only when it lists something.
     """
     shown = listed(findings, mode)
     parts = []
     for name in SECTIONS:
         group = [f for f in shown if section(f) == name]
+        if name == "trim" and not group:
+            continue
         counts = ", ".join(f"{sum(1 for f in group if f['severity'] == s)} {s}" for s in SEVERITIES)
         parts.append(f"{SECTION_TITLES[name]} {counts if group else 'none'}")
     return "; ".join(parts)
@@ -255,7 +263,7 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
         group = sorted((f for f in shown if section(f) == name), key=lambda f: rank[f["severity"]])
         if not group:
             continue
-        out += [f"## {SECTION_TITLES[name]}", ""]
+        out += [f"## {SECTION_TITLES[name]}{SECTION_NOTES.get(name, '')}", ""]
         for fd in group:
             out.append(finding_section(fd, web_base=web, head_sha=head,
                                        original_severity=state.original_severity.get(fd["id"]),
@@ -263,8 +271,8 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
 
     out += ["## Appendix — not listed above", "",
             "The record of what the review left out: findings a gate rejected, the verifier refuted, the "
-            "assess stage labelled low-value or a repeat of one you rejected, duplicates merged into "
-            "another" + (", and in critical mode those not rated as breaking users or the business"
+            "assess stage labelled low-value or a repeat of one you rejected, trim suggestions about an "
+            "important test, duplicates merged into another" + (", and in critical mode those not rated as breaking users or the business"
                          if mode == "critical" else "") + ". None is counted above.", ""]
     if not hidden and not state.merged:
         out += ["Nothing was left out.", ""]
@@ -369,7 +377,7 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
         group = [f for f in shown if section(f) == name]
         if not group:
             continue
-        out += ["", f"## {SECTION_TITLES[name]}", ""]
+        out += ["", f"## {SECTION_TITLES[name]}{SECTION_NOTES.get(name, '')}", ""]
         for severity in ("HIGH", "MEDIUM"):
             for fd in (f for f in group if f["severity"] == severity):
                 lines_ = (f"{fd['line_start']}" if fd["line_start"] == fd["line_end"]

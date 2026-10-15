@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 
 from .. import checks, sdk
-from ..models import SEVERITIES, AgentCheck, DuplicateSet, Finding, Merged, MergeOutput, ReviewState
+from ..models import SEVERITIES, AgentCheck, DuplicateSet, Finding, Merged, MergeOutput, ReviewState, is_trim
 from ..prompts import merge as prompt
 from . import RunContext, bounded
 
@@ -45,8 +45,11 @@ def linked(a: Finding, b: Finding) -> bool:
 
     The second test catches one defect reported from two files: a finding
     anchored in a test and one anchored in the code it tests, both citing the
-    same line of a third file. Web citations never link findings.
+    same line of a third file. Web citations never link findings, and a trim
+    finding never links to another finder's (it would leave the Trim section).
     """
+    if is_trim(a) != is_trim(b):
+        return False
     if a.file == b.file and _near(a.line_start, a.line_end, b.line_start, b.line_end):
         return True
     return any(ca.path == cb.path and _near(ca.line_start, ca.line_end, cb.line_start, cb.line_end)

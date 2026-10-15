@@ -24,18 +24,29 @@ verifiers finish, keeps their verdicts, then raises `VerifyIncomplete`, and
 review unverified or with no impact or topic. A finding about `tests` never
 breaks users or the business: a `breaks-*` impact on one is lowered to
 `correctness-only`, with a line in `state.errors`.
+
+A trim finding (`models.is_trim`) is a suggestion to remove, merge or shorten
+a test or comment: its impact rates what removing the test risks, so it is
+never lowered, and its severity is set to LOW once the stage ends.
+`important_assessments` then labels `important` each confirmed trim finding
+whose test must stay (impact `breaks-*`, or a citation under a `## Critical
+paths` glob), which takes it out of the list. Both are recomputed from the
+verdicts whenever the stage ends, never stored on their own, so a resume
+cannot apply them twice.
 """
 
 from __future__ import annotations
 
 import logging
+from fnmatch import fnmatchcase
 
 from .. import checks, sdk
 from ..gates import gated_need, reason_kind, verdict_gate
-from ..models import (CRITICAL_IMPACTS, SEVERITIES, AgentCheck, Finding, GateCheck, Need, ReviewState, Verdict,
-                      VerifierAnswer, lower_severity)
+from ..models import (CRITICAL_IMPACTS, SEVERITIES, AgentCheck, Assessment, Finding, GateCheck, Need, ReviewState,
+                      Verdict, VerifierAnswer, is_trim, lower_severity)
 from ..prompts import verify as prompt
 from . import RunContext, bounded, fix_citation
+from .find import critical_paths
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +64,30 @@ class VerifyIncomplete(Exception):
             f"the verifier gave no usable answer for {n} finding{'' if n == 1 else 's'} after "
             f"{VERIFY_TRIES} tries each ({', '.join(finding_ids)}); last error: {last_error}")
         self.finding_ids = finding_ids
+
+
+def important_assessments(state: ReviewState) -> dict[str, Assessment]:
+    """`important` for each confirmed trim finding about a test (its topic is not `docs`) that is
+    rated `breaks-users`/`breaks-business`, or that cites a path under a `## Critical paths` glob."""
+    candidates = [f for f in state.findings if is_trim(f) and (v := state.verdicts.get(f.id))
+                  and v.status == "confirmed" and v.topic != "docs"]
+    if not candidates:
+        return {}
+    paths = sorted({c.path for f in candidates for c in f.citations if not c.is_web})
+    globs = critical_paths(state.target, paths)
+    out: dict[str, Assessment] = {}
+    for f in candidates:
+        impact = state.verdicts[f.id].impact
+        hit = next(((c.path, glob, where) for c in f.citations if not c.is_web
+                    for glob, where in globs if fnmatchcase(c.path, glob)), None)
+        if impact in CRITICAL_IMPACTS:
+            reason = f"the behaviour this test checks is rated {impact}; it is never suggested for removal"
+        elif hit:
+            reason = f"{hit[0]} is a critical path (`{hit[1]}` in {hit[2]}); its tests always count as important"
+        else:
+            continue
+        out[f.id] = Assessment(label="important", reason=reason)
+    return out
 
 
 def unverifiable_severity(severity: str, *, has_need: bool) -> str:
@@ -105,7 +140,7 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
             "finding_id": finding.id,
             "citations": [fix_citation(c, target, ctx.snapshot) for c in answer.citations],
         })
-        if verdict.topic == "tests" and verdict.impact in CRITICAL_IMPACTS:
+        if verdict.topic == "tests" and verdict.impact in CRITICAL_IMPACTS and not is_trim(finding):
             state.errors.append(f"verify: {finding.id} is about tests; impact {verdict.impact} lowered to "
                                 "correctness-only")
             verdict = verdict.model_copy(update={"impact": "correctness-only"})
@@ -160,6 +195,10 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
             lowered.append(finding.id)
             severity = unverifiable_severity(finding.severity, has_need=finding.id in waiting)
             state.findings[i] = finding.model_copy(update={"severity": severity})
+    for i, finding in enumerate(state.findings):
+        if is_trim(finding) and finding.severity != "LOW":
+            state.findings[i] = finding.model_copy(update={"severity": "LOW"})
+    state.assessments.update(important_assessments(state))
 
     statuses = [state.verdicts[f.id].status for f in state.findings if f.id in state.verdicts]
     ctx.counts = {s: statuses.count(s) for s in ("confirmed", "refuted", "unverifiable")}

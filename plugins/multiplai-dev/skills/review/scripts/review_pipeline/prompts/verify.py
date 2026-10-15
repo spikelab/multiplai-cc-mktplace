@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from ..models import Finding, TargetInfo
+from ..models import Finding, TargetInfo, is_trim
 from . import CITATION_RULES, JSON_ONLY, description_block, settings_block, workspace_block
 
 SCHEMA = """\
@@ -38,6 +38,21 @@ code is, and not the severity the claim was given.
 - `hygiene`: nothing behaves wrongly: naming, dead code, a convention breached with no consequence,
   a stale comment or document that misleads nobody about production.
 `impact` is required on every answer but `refuted`; an answer without it is rejected."""
+
+# Only for a finding of the trim finder (`models.is_trim`).
+TRIM_RULES = """\
+This claim suggests removing, merging or shortening a test or a comment. For it, these meanings
+replace the ones above:
+- `confirmed`: removing, merging or shortening it as the claim says is safe and the suggestion is
+  right. For a test, another test you read checks the same behaviour (cite it), or nothing the test
+  checks can break. For a comment, it is longer than the code it explains, narrates what the code
+  does instead of why, or describes history.
+- `refuted`: the test checks behaviour no other test checks, or the comment says why the code does
+  something a reader would not expect. Cite what shows it.
+- `impact`: for a test, what would go wrong in production if the behaviour the test checks broke
+  after the test was removed and no other test caught it, rated with the words above. For a
+  comment, `hygiene`.
+- `topic`: `tests` for a test, `docs` for a comment."""
 
 NEEDS_RULES = """\
 When your answer is `unverifiable` because something could not be read, fill `needs`: one item per
@@ -91,6 +106,7 @@ def build(target: TargetInfo, finding: Finding) -> str:
         "exactly (`tests`, not `test`): `topic` is required on every answer but `refuted`, and an answer "
         "without one from this list is rejected.",
         IMPACT_RULES,
+        TRIM_RULES if is_trim(finding) else "",
         NEEDS_RULES,
         CITATION_RULES,
         f"Schema:\n{SCHEMA}",
