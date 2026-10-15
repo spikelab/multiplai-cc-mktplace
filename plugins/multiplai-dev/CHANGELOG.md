@@ -17,6 +17,24 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.76.0] - 2026-10-15
+
+### Added
+- `/multiplai-dev:buildme`: the full-suite test runs (the baseline gate, the
+  integration gate after each block, and epic mode's merge tests) add
+  `-n auto` to a pytest command when pytest-xdist is installed in the
+  environment pytest runs in, so the suite runs on every CPU. `tdd.parallel:
+  off` in `specs/config.yaml` keeps the serial run (default `auto`). A command
+  that already chooses its workers (`-n`, `--dist`, `-p no:xdist`, `--pdb`,
+  also in `addopts` or `PYTEST_ADDOPTS`), or whose Python buildme cannot
+  tell, runs as written. The narrow runs inside a block's loop are
+  unchanged, and so are jest and vitest, which already run files in
+  parallel.
+
+### Changed
+- buildme's own suite: `pytest-xdist` is in the `dev` extra, and CI runs the
+  suite with `-n auto`.
+
 ## [0.75.0] - 2026-10-15
 
 ### Added

@@ -314,9 +314,22 @@ the baseline gate, the integration gate after each block (which also checks a
 block's refactor), the whole-change refactor, mutation testing and epic mode's
 merge step.
 
+The baseline gate, the integration gate and epic mode's merge tests run a
+pytest command with `-n auto` (pytest-xdist, one worker per CPU) when
+`python -c "import xdist"` succeeds in the environment pytest runs in: the
+Python beside the `pytest` script, the one before `-m pytest`, or `python`
+under the same `uv run` / `poetry run` / `pdm run` / `hatch run` /
+`pipenv run` / `rye run`. A command buildme cannot place in an environment
+(`env X=1 pytest`, a task runner) runs as written, and so does one that
+already chooses its workers (`-n`, `--numprocesses`, `--dist`, `-p no:xdist`,
+`--pdb`, in the command, `addopts` or `PYTEST_ADDOPTS`). The narrow runs in
+the loop never add it. jest and vitest already run test files in parallel,
+so Node commands are unchanged.
+
 | Key | Values | Default |
 |---|---|---|
 | `tdd.narrow_tests` | `true` / `false` | `true`; `false` runs the whole command in the loop too |
+| `tdd.parallel` | `auto` / `off` | `auto`; `off` runs the full suite serially |
 
 ## Mutation testing
 
