@@ -259,7 +259,7 @@ def test_a_fix_round_for_a_child_in_another_repo_is_read_under_its_own_slug(tmp_
     assert [x["kind"] for x in e.fakes.review_launches()] == ["review", "review"]      # a's and b's first
     [fix] = e.fakes.fix_launches()
     assert fix["cwd"] == "<root>/ws/.worktrees/buildme-e-b"
-    assert _opt(fix["argv"], "--max-rounds") == "5"
+    assert _opt(fix["argv"], "--max-rounds") == "2"      # epic.max_review_rounds 3, less the 1 round reviewed
     head = git(tmp_path / "q", "rev-parse", "refs/heads/buildme/e-b").strip()
     last = e.tries("b", "review")[-1]
     assert last.result["reused"] is True and last.result["head_sha"] == head
