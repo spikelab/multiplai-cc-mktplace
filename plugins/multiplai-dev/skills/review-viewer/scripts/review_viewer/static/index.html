@@ -382,13 +382,15 @@
 
     <section id="help-findings" class="help-sec" tabindex="-1" aria-labelledby="help-h-findings">
       <h3 id="help-h-findings">Findings, verdicts and labels</h3>
-      <p>The Findings tab lists findings in three sections, <strong>Code</strong>, <strong>Tests</strong>
-        and <strong>Docs</strong>, by the finding's topic (or, for an older review, a guess from its path), and
-        by severity within each. Severity is read within its section: a HIGH under Tests is a serious test
+      <p>The Findings tab lists findings in sections, <strong>Code</strong>, <strong>Tests</strong>
+        and <strong>Docs</strong>, plus <strong>Trim</strong> when the review has trim findings, and by
+        severity within each. A review from multiplai-dev 0.71 on names each finding's section; for an older
+        review the page takes it from the finding's topic (see below).
+        Severity is read within its section: a HIGH under Tests is a serious test
         gap, not a serious defect in the code. Picking one moves the code to its lines and shows the
         claim, the failure scenario, the expected behaviour and the verdict's reason. When the Checked tab has
         the finding's verifier, a link opens its entry there, with every line it read and cited; otherwise the
-        finding lists its cited code and the verifier's citations. Code starts open; Tests and Docs fold
+        finding lists its cited code and the verifier's citations. Code starts open; Tests, Docs and Trim fold
         until you open them or pick a finding in them. Once the list scrolls out of sight, a bar under the tabs
         leads back to it, with Prev and Next.</p>
       <p>Accept, reject or defer a finding at the bottom of its page, or press ✓ or ✕ on it in the list
@@ -428,9 +430,12 @@
           <code>## Critical paths</code> in a <code>coding-standards.md</code>. Never shown or counted; the
           review lists it only in its appendix.</dd>
       </dl>
-      <p>The verifier also labels each finding's <strong>topic</strong>, what it is about, which sets its
-        section: <code>tests</code> and <code>docs</code> have their own, every other topic is under Code. A
-        topic in italics was guessed from the file's path, for a review older than topics.</p>
+      <p>The verifier also labels each finding's <strong>topic</strong>, what it is about. The section
+        follows from it: <code>tests</code> and <code>docs</code> have their own, every other topic
+        is under Code. A topic in italics was guessed from the file's path, for a review older than topics or a
+        finding no verifier labelled. For a review older than sections, the guess sets the section too; a
+        newer review lists a finding no verifier labelled under Code, whatever the guess, unless only
+        <code>trim</code> reported it.</p>
       <p>A finding only the <code>trim</code> finder reported is under <strong>Trim</strong>, whatever its
         topic. Trim is advisory: it never blocks a merge, buildme never counts it as a Code finding, and the
         review posts it to a PR only when it is accepted, here or in a decisions file. Its findings are

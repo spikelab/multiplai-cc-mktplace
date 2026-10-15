@@ -145,6 +145,9 @@ test("a finding's section field wins over its topic, and Trim comes last", () =>
   assert.deepEqual(L.findingOrder(g), ["c", "d", "r"]);
   assert.equal(L.findingSection({ topic: "code", section: "trim" }), "trim", "never under Code");
   assert.equal(L.findingSection({ topic: "code", section: null }), "code", "no section: the topic decides");
+  assert.equal(L.findingSection({ topic: "code", section: "tests" }), "tests", "any written section wins");
+  assert.equal(L.findingSection({ section: "code", file: "tests/test_a.py" }), "code", "not the path guess");
+  assert.equal(L.findingSection({ topic: "docs", section: "nits" }), "docs", "an unknown section: the topic decides");
 });
 
 test("a critical review shows and counts only findings that break users or the business", () => {

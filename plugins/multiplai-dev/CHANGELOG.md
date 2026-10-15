@@ -25,7 +25,8 @@ time, not derived from a tag.
   reads each finding's section from `findings.json` when the review wrote one,
   so a trim finding is never listed under Code. Reviews made before 0.71 have
   no section field and are split by topic as before. The help names the
-  `trim` finder and says Trim never blocks a merge.
+  `trim` finder, says Trim never blocks a merge, and says a review's own
+  section wins over the finding's topic.
 
 ## [0.71.0] - 2026-10-15
 

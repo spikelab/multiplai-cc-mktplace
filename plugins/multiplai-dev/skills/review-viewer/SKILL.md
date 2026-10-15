@@ -289,9 +289,12 @@ they match:
   review), and **Copy as markdown** copies the finding (claim, where, with a
   GitHub link when the remote is on GitHub, failure scenario, explanation,
   expected behaviour, verdict, cited code) for whoever will fix it.
-- The Findings list is split into **Code**, **Tests** and **Docs** sections
-  by topic, by severity within each: a HIGH under Tests is a serious test
-  gap, not a serious code defect. A second badge shows the verifier's
+- The Findings list is split into **Code**, **Tests** and **Docs** sections,
+  plus **Trim** when the review has trim findings, by severity within each:
+  a HIGH under Tests is a serious test gap, not a serious code defect. Each
+  finding is in the section the review names (multiplai-dev 0.71+), or, for
+  an older review, the one its topic gives: `tests` and `docs` have their
+  own, any other topic is under Code. A second badge shows the verifier's
   `impact` (`breaks-users`, `breaks-business`, `correctness-only`,
   `hygiene`; none for an older review).
 - A review run with `--mode critical` (`mode` in `findings.json`) shows
