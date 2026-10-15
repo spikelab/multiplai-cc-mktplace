@@ -52,7 +52,7 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
   is what an epic blocks a merge on, which is how the epic runs the fixer.
 - `--no-review`: each round fixes, pushes and replies, and runs no re-review,
   so it posts no new findings. An epic's final fix runs one such round
-  (`--max-rounds` one more than the rounds already finished): its commits
+  (`--max-rounds` one more than the rounds in its state, finished or not): its commits
   get no review.
 - `--trust-repo`: required. The triage, fix, self-check and review agents
   hold tools and run without asking; pass it only after the user says they trust the

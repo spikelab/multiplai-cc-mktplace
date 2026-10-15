@@ -99,7 +99,8 @@ MEDIUM earns one (`epic.round_worth: breaks`: the verifier rated it
 the cap; `park` for an open HIGH at the cap. A park, or any other failure,
 parks the child. A review counts against `epic.max_parallel` and
 `epic.max_usd` like a build. `final_fix` runs one fixer round with
-`--no-review` and `--max-rounds <finished rounds + 1>` (kept on a relaunch);
+`--no-review` and `--max-rounds <rounds in its findings state, finished or
+not, + 1>` (kept on a relaunch);
 its result keeps `final_head`, which goes to the merge step with no review,
 and after the merge (or while it waits under `manual`) one issue lists what
 it left, unless an issue with its title exists. A review whose `next` is

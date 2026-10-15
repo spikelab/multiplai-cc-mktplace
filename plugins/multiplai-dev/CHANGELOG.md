@@ -22,15 +22,18 @@ time, not derived from a tag.
 ### Changed
 - `/multiplai-dev:buildme` epic mode: each child PR gets at most 3 reviews
   (`epic.max_review_rounds` now defaults to `3`, down from `6`), and after
-  each review that leaves Code HIGH or MEDIUM findings buildme records whether
-  another round is worth it (`next` and `next_reason` on the review's record,
+  each review the coordinator reads that leaves Code HIGH or MEDIUM findings
+  (its own, and the last review of each fixer it runs; a fixer's re-reviews
+  before its last round get none) buildme records whether another round is
+  worth it (`next` and `next_reason` on the review's record,
   decided from the review's own fields, with no model call). An open HIGH
   earns another round, and parks the child at the cap, as before. A MEDIUM
   earns one only when the review's verifier rated it `breaks-users` or
   `breaks-business`, or did not rate it (new `epic.round_worth: breaks`, the
   default; `any` keeps the old rule, every MEDIUM). Otherwise, and at the cap
   with only MEDIUMs left, where the child used to park, one final fixer round
-  runs with no review after it, the PR goes to the merge step (under `manual`
+  runs with no review after it (a fresh round, past any round an earlier
+  fixer left open), the PR goes to the merge step (under `manual`
   it waits for you, as before), and buildme files one issue on the child's
   repository listing each finding that fix acted on and saying its commits
   had no review.

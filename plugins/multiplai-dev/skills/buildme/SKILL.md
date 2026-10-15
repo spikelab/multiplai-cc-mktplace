@@ -835,9 +835,10 @@ say), is not signalled: it keeps running, and the next run uses what it
 finished. SIGHUP leaves a review running, and the next run uses what it
 finished.
 
-**Is another round worth it?** After each review that leaves blockers, the
-coordinator records on the review's record what follows it (`next`) and why
-(`next_reason`), from the review's own fields, with no model call:
+**Is another round worth it?** After each review it reads that leaves
+blockers, the coordinator records on the review's record what follows it
+(`next`) and why (`next_reason`), from the review's own fields, with no model
+call:
 
 - `round` (another fix and review): a Code HIGH is open, or, below
   `epic.max_review_rounds`, a Code MEDIUM earns a round. Under
@@ -846,14 +847,21 @@ coordinator records on the review's record what follows it (`next`) and why
   MEDIUM, as before 0.74.
 - `final_fix`: only Code MEDIUMs are left and none earns a round, or the PR
   is at `epic.max_review_rounds` with only Code MEDIUMs. One fixer runs one
-  round with `--no-review`: it fixes, pushes and replies, and nothing reviews
-  its commits. The head it leaves goes to the merge step (under
+  fresh round with `--no-review` (`--max-rounds` one more than every round in
+  the change's `.findings-state.json`, finished or not, as `findings` first
+  finishes a round an earlier fixer left open): it fixes, pushes and replies,
+  and nothing reviews its commits. The head it leaves goes to the merge step (under
   `epic.merge: manual` it waits for a human merge, exit 3), and buildme files
   one issue on the child's repository, titled `buildme epic <epic>: what the
   final fix of #<n> left`, listing each blocker with its finding id and saying
   the last fixes had no review. A run that finds an issue with that title,
   open or closed, files none.
 - `park`: a Code HIGH is open at `epic.max_review_rounds`.
+
+The reviews it reads are its own and the last review of each fixer it runs
+(below). A fixer launched for `round` runs every review round the PR has
+left, so its re-reviews before its last round get no decision: it acts on
+their blockers itself.
 
 A failing test is caught where it was before: the merge step's tests and the
 PR's required checks park the child. A final fixer stopped part-way is run
