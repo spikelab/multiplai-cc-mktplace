@@ -17,6 +17,36 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.74.0] - 2026-10-15
+
+### Changed
+- `/multiplai-dev:buildme` epic mode: each child PR gets at most 3 reviews
+  (`epic.max_review_rounds` now defaults to `3`, down from `6`). Each fixer
+  launch runs one fix round, where it used to run every round the PR had
+  left, so after every review that leaves Code HIGH or MEDIUM findings
+  buildme records whether another round is worth it (`next` and `next_reason` on the review's record,
+  decided from the review's own fields, with no model call). An open HIGH
+  earns another round, and parks the child at the cap, as before. A MEDIUM
+  earns one only when the review's verifier rated it `breaks-users` or
+  `breaks-business`, or did not rate it (new `epic.round_worth: breaks`, the
+  default; `any` keeps the old rule, every MEDIUM). Otherwise, and at the cap
+  with only MEDIUMs left, where the child used to park, one final fixer round
+  runs with no review after it (a fresh round, past any round an earlier
+  fixer left open), the PR goes to the merge step (under `manual`
+  it waits for you, as before), and buildme files one issue on the child's
+  repository listing each finding left and saying the last fixes had no
+  review. When every finding was already on the PR from an earlier round,
+  that fixer finds nothing new to act on and runs no round; the PR still
+  goes to the merge step, and the issue says no fix ran.
+- `/multiplai-dev:review`: the verifier rates a defect `breaks-users` or
+  `breaks-business` only when normal use reaches it, it does harm with no
+  second failure, and nothing else in the code, CI or the documented workflow
+  stops it first; otherwise `correctness-only`.
+
+### Added
+- `/multiplai-dev:buildme-findings`: `--no-review`, a round that fixes, pushes
+  and replies with no re-review. The epic's final fix uses it.
+
 ## [0.73.0] - 2026-10-15
 
 ### Changed

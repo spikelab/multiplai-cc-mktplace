@@ -98,7 +98,7 @@ def _rounds(arg: list[str]) -> int:
 
 def test_blockers_lead_to_a_post_then_a_fix_and_round_counts_add_up(tmp_path, monkeypatch):
     """32.1-32.3: the review's blockers are posted, then the fixer runs with
-    `--max-rounds` = its rounds so far + the rounds left; back at the review
+    `--max-rounds` = every round in its state + 1 (one round per launch); back at the review
     step, the fixer's last review is reused, and blockers on it start one
     more post and fix."""
     fixes = {str(N): [{"rounds": [{"findings": [high("f2")]}, {"findings": [high("f3", "MEDIUM")]}]},
@@ -111,8 +111,8 @@ def test_blockers_lead_to_a_post_then_a_fix_and_round_counts_add_up(tmp_path, mo
     session = e.tries()[0].started["argv"][4]           # the build's own --session-id
     assert first == ["python", "-m", "build_pipeline", "--session-id", session, "findings", "--pr", str(N),
                      "--change", "e-a", "--project-dir", str(e.worktree), "--auto", "--trust-repo",
-                     "--max-rounds", "5", "--severities", "HIGH,MEDIUM", "--code-only"]
-    assert (_rounds(first), _rounds(second)) == (0 + 6 - 1, 2 + 6 - 3)
+                     "--max-rounds", "1", "--severities", "HIGH,MEDIUM", "--code-only"]
+    assert (_rounds(first), _rounds(second)) == (0 + 1, 2 + 1)
     assert [x["cwd"] for x in e.fakes.fix_launches()] == ["<root>/ws/.worktrees/buildme-e-a"] * 2
     posts = [a for a in e.tries() if a.kind == "post"]
     decisions = e.target / "buildme-decisions.json"
@@ -142,7 +142,7 @@ def test_at_the_cap_the_child_parks(tmp_path, monkeypatch):
     fixes = {str(N): [{"rounds": [{"findings": [high("f2")]}, {"findings": [high("f3")]}]}]}
     e = Epic(tmp_path, monkeypatch, answer=CHAIN, fixes=fixes, rounds=3)
     assert e.run() == 0
-    assert [_rounds(a.started["argv"]) for a in e.fixes()] == [2]
+    assert [_rounds(a.started["argv"]) for a in e.fixes()] == [1]
     st = e.status()
     assert st["status"] == "parked" and "review round 3 of 3" in st["reason"] and "f3" in st["reason"]
     assert e.status("b")["status"] == "skipped"
@@ -316,7 +316,7 @@ def test_a_fixer_killed_part_way_through_a_round_is_relaunched_within_the_cap(tm
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     assert e.status()["status"] == "built" and e.fixes()[0].result["interrupted"] is True
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
-    assert [_rounds(a.started["argv"]) for a in e.fixes()] == [5, 5]
+    assert [_rounds(a.started["argv"]) for a in e.fixes()] == [1, 1]
     st = e.status()
     assert (st["status"], st["pr_round"]) == ("built", 3)
 

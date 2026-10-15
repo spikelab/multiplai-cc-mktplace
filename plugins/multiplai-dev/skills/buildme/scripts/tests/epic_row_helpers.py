@@ -522,6 +522,18 @@ elif a[:2] in (["pr", "checks"], ["pr", "merge"]):
 elif a[:2] == ["pr", "list"]:
     head = a[a.index("--head") + 1]
     print(json.dumps([{{"url": u}} for u, p in prs.items() if p["branch"] == head]))
+elif a[:2] in (["issue", "list"], ["issue", "create"]):     # the final fix's issue, in `<root>/issues.json`
+    store = root / "issues.json"
+    issues = json.loads(store.read_text()) if store.exists() else []
+    if a[1] == "list":      # `--search '"<title>" in:title'`: issues whose title holds the phrase
+        phrase = a[a.index("--search") + 1].rsplit(" in:title", 1)[0].strip('"')
+        print(json.dumps([{{k: i[k] for k in ("number", "title", "url")}} for i in issues if phrase in i["title"]]))
+    else:
+        url = f"https://example.invalid/o/r/issues/{{len(issues) + 1}}"
+        issues.append({{"number": len(issues) + 1, "title": a[a.index("--title") + 1],
+                       "body": a[a.index("--body") + 1], "url": url}})
+        store.write_text(json.dumps(issues))
+        print(url)
 else:
     print("fake gh: unexpected " + " ".join(a), file=sys.stderr)
     sys.exit(2)
@@ -661,7 +673,8 @@ FAKE_FINDINGS = r'''#!{python}
 `stdout` (a `FINDINGS:FAILED:` line) and exits with it; each of `rounds` is one
 fix round: an empty commit on the PR branch, one more round in the change's
 `.findings-state.json` (its steps all `finished`), and the fixer's own review
-of that head in the review ledger with the round's `findings`. A round with
+of that head in the review ledger with the round's `findings` (none under
+`--no-review`; with `push`, the commit is pushed to the branch's upstream). A round with
 `stop` is SIGKILLed part-way: `fetch` right after the round is added (no commit,
 no review), `review` after its review is in the ledger but before the round
 records it as finished. A launch that finds the last round unfinished
@@ -739,16 +752,20 @@ for i, r in enumerate(todo):
                     f"fix round {{rnd['number']}}"], cwd=project, check=True)
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True,
                           check=True).stdout.strip()
+    if step.get("push"):        # as `findings` publishes: the round's commit on the PR's branch
+        subprocess.run(["git", "push", "-q"], cwd=project, check=True, capture_output=True)
     rnd["finished"] = ALL[:-1]
     save()
-    target.mkdir(parents=True, exist_ok=True)
-    (target / "findings.json").write_text(json.dumps({{"mode": None, "findings": r.get("findings", [])}}))
-    with (reviews / "ledger.jsonl").open("a") as f:
-        for entry in ({{"event": "started", "slug": f"o-{{repo}}--pr-{{n}}", "target_dir": str(target), "head_sha": head}},
-                      {{"event": "finished", "slug": f"o-{{repo}}--pr-{{n}}", "target_dir": str(target), "head_sha": head,
-                       "base_sha": "b" * 40, "pr": n, "round": "01", "stopped": None,
-                       "run": {{"cost_usd": r.get("cost", 1.5)}}}}):
-            f.write(json.dumps(entry, sort_keys=True) + "\n")
+    if "--no-review" not in argv:       # the epic's final fix runs no review of its round
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "findings.json").write_text(json.dumps({{"mode": None, "findings": r.get("findings", [])}}))
+        with (reviews / "ledger.jsonl").open("a") as f:
+            for entry in ({{"event": "started", "slug": f"o-{{repo}}--pr-{{n}}", "target_dir": str(target),
+                           "head_sha": head}},
+                          {{"event": "finished", "slug": f"o-{{repo}}--pr-{{n}}", "target_dir": str(target),
+                           "head_sha": head, "base_sha": "b" * 40, "pr": n, "round": "01", "stopped": None,
+                           "run": {{"cost_usd": r.get("cost", 1.5)}}}}):
+                f.write(json.dumps(entry, sort_keys=True) + "\n")
     if r.get("stop") == "review":
         os.kill(os.getpid(), signal.SIGKILL)
     rnd["finished"] = ALL

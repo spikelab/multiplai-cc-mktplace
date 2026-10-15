@@ -18,7 +18,7 @@ build runs. Each round replies on the PR and re-runs the review.
 uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
   python -m build_pipeline findings --pr <number> --project-dir "<repo>" \
   [--change <name>] [--auto] [--max-rounds <n>] [--max-usd <usd>] \
-  [--severities <list>] [--code-only] [--trust-repo]
+  [--severities <list>] [--code-only] [--no-review] [--trust-repo]
 ```
 
 - `--pr`: the PR number on the repository at `--project-dir`.
@@ -50,6 +50,10 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
 - `--code-only`: with `--auto`, post only the re-review's Code findings, not
   its Tests findings on source files. With `--severities HIGH,MEDIUM` this
   is what an epic blocks a merge on, which is how the epic runs the fixer.
+- `--no-review`: each round fixes, pushes and replies, and runs no re-review,
+  so it posts no new findings. An epic's final fix runs one such round
+  (`--max-rounds` one more than the rounds in its state, finished or not): its commits
+  get no review.
 - `--trust-repo`: required. The triage, fix, self-check and review agents
   hold tools and run without asking; pass it only after the user says they trust the
   repository's specs and code.

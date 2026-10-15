@@ -746,7 +746,7 @@ def test_epic_keys_defaults_and_fallbacks(tmp_path, yaml_text, want):
     config.specs_dir = tmp_path / "specs"
     config._load_specs_config()
     assert config.epic == want
-    assert EpicSettings() == EpicSettings(max_parallel=2, max_review_rounds=6, merge="manual", max_usd=None)
+    assert EpicSettings() == EpicSettings(max_parallel=2, max_review_rounds=3, merge="manual", max_usd=None)
 
 
 # --- --base-ref in the build itself -------------------------------------------------

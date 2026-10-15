@@ -103,3 +103,21 @@ def test_tests_finder_reports_tests_that_cannot_fail(target_info):
     assert "replaces with a mock or stub the exact dependency" in prompt  # (c)
     assert "Rate such a finding LOW at most" in prompt
     assert "Do not describe what the tests cover." in prompt
+
+
+STRICT_IMPACT = (
+    "Rate `breaks-users` or `breaks-business` only when all three hold: (1) default settings, or a setting or "
+    "workflow the plugin's or project's own docs present as normal use, reach the path; a rare host, file "
+    "encoding or opt-out setting does not; (2) the harm follows from this defect alone, with no second failure "
+    "needed (a model call failing, an agent breaking its prompt, a person's separate mistake); a crash or stop "
+    "the code promises to survive counts as ordinary; (3) no other check in the code, CI or the documented "
+    "workflow stops the harm before it lands. Otherwise rate `correctness-only`.")
+
+
+def test_verifier_rates_breaking_impact_only_when_all_three_conditions_hold(target_info):
+    """plan-review-rounds-and-finders-2026-10-15.md, item 2: the strict
+    reading, verbatim, after the `breaks-business` bullet and before
+    `correctness-only`."""
+    prompt = " ".join(verify.build(target_info, high_finding()).split())
+    assert STRICT_IMPACT in prompt
+    assert prompt.index("- `breaks-business`:") < prompt.index(STRICT_IMPACT) < prompt.index("- `correctness-only`:")

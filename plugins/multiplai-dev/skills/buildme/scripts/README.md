@@ -90,15 +90,30 @@ because its `git fetch` or `gh pr view` failed, or a PR commit is not in the
 clone after its fetch, leaves the child `unknown`, and the next run asks
 again. Its `review` record holds
 the head, the base, the review directory, the cost, `pr_round`, `reused`,
-`conflicts` (never blocks) and `blocking` (open Code HIGH/MEDIUM findings); at
-`epic.max_review_rounds` with blockers, or on any other failure, the child
-parks. A review counts against `epic.max_parallel` and `epic.max_usd` like a
-build. A review with blockers below the cap runs the fix loop (`epic/fix.py`,
+`conflicts` (never blocks) and `blocking` (open Code HIGH/MEDIUM findings),
+and with blockers `next` and `next_reason` (`review.decide`, no model call):
+`round` when a Code HIGH is open or, below `epic.max_review_rounds`, a Code
+MEDIUM earns one (`epic.round_worth: breaks`: the verifier rated it
+`breaks-users`/`breaks-business` or did not rate it; `any`: every one);
+`final_fix` when only Code MEDIUMs are left and none earns a round, or at
+the cap; `park` for an open HIGH at the cap. A park, or any other failure,
+parks the child. A review counts against `epic.max_parallel` and
+`epic.max_usd` like a build. `final_fix` runs one fixer round with
+`--no-review` and `--max-rounds <rounds in its findings state, finished or
+not, + 1>` (kept on a relaunch);
+its result keeps `final_head`, which goes to the merge step with no review,
+and after the merge (or while it waits under `manual`) one issue lists what
+it left, unless an issue with its title exists. A final fix whose fetch found
+no new comment (the blockers were already on the PR) ends `FINDINGS:DONE`
+with no round; its PR goes to the merge step all the same, and the issue says
+no fix ran on what it lists. A review whose `next` is
+`round` runs the fix loop (`epic/fix.py`,
 `Coordinator._fix`): `findings.decisions.write_decisions(<review dir>)`, then
 `review_pipeline post <review dir> --decisions <review dir>/buildme-decisions.json`
 (record kind `post`), then `python -m build_pipeline findings --pr <n> --change
 <epic>-<id> --project-dir <worktree + project offset> --auto --trust-repo
---max-rounds <reviewed rounds in .findings-state.json + rounds left>` (kind `fix`), both
+--max-rounds <rounds in .findings-state.json, finished or not, + 1>` (kind `fix`:
+one round per launch, so a decision follows every review), both
 with cwd the child's project directory; then the PR is read again and the
 fixer's last review reused. A head with a `fix` record after its review is
 not fixed again; when that fix exited 0 with `FINDINGS:DONE` or

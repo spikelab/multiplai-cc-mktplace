@@ -760,8 +760,9 @@ class Coordinator:
 
     def _fields(self, c: Child, line: dict, review_dir: str, number: int, *, reused: bool) -> dict:
         """Item 22's fields of a review result, from its ledger line; with
-        `parked` when the PR is at the round cap with blockers (item 23) or its
-        findings cannot be read."""
+        blockers, `next` and `next_reason`, what follows it (`review.decide`);
+        with `parked` when that is `park` (an open HIGH at the round cap) or
+        its findings cannot be read."""
         c.pr_round = review.pr_round(review.ledger_lines(), c.slug, number)
         blocking = review.blockers(review_dir)
         fields = {"head_sha": line.get("head_sha"), "base_sha": line.get("base_sha"), "review_dir": review_dir,
@@ -772,9 +773,12 @@ class Coordinator:
         cap = self.settings.max_review_rounds
         if blocking is None:
             fields["parked"] = f"cannot read the review's findings in {review_dir}"
-        elif blocking and c.pr_round >= cap:
-            fields["parked"] = (f"review round {c.pr_round} of {cap} left {len(blocking)} blocker(s): "
-                                + "; ".join(blocking))
+        elif blocking:
+            fields["next"], fields["next_reason"] = review.decide(
+                review.blocking_findings(review_dir) or [], c.pr_round, cap, self.settings.round_worth)
+            if fields["next"] == "park":
+                fields["parked"] = (f"review round {c.pr_round} of {cap} left {len(blocking)} blocker(s): "
+                                    + "; ".join(blocking))
         return fields
 
     def _reviewed(self, c: Child, fields: dict) -> None:
@@ -827,6 +831,10 @@ class Coordinator:
                 if pending is not None:       # a fixer an earlier run left (D2.S4, S5, S7, S11)
                     if pending:
                         continue
+                    return
+                if head == self._final_head(c):       # R3: the final fix's head is never reviewed
+                    c.status, c.reason = "built", ""
+                    await self._after_review(c, head)
                     return
                 if self._merge_head(c, head):     # E.S8, E.S13: its own pushed merge, not reviewed again
                     await self._merge(c)
@@ -974,12 +982,13 @@ class Coordinator:
         return self.settings.max_review_rounds - (c.pr_round or 0)
 
     def _rounds_for_fixer(self, c: Child, project: Path) -> int:
-        """`<M>` (32.2): the rounds in the change's findings state whose review
-        finished, plus the review rounds the PR has left. A round still open is
-        one of those left: its review is not in `pr_round` yet."""
-        return fix.rounds_done(project, f"{self.epic.name}-{c.id}") + self._rounds_left(c)
+        """`<M>` (32.2): one round per fixer launch, so a decision follows
+        every review (Spike, 2026-10-15). Every round in the change's findings
+        state, finished or not, plus one: `findings` resumes an open round
+        first, and stops at the count."""
+        return fix.rounds_started(project, f"{self.epic.name}-{c.id}") + 1
 
-    async def _run_fix(self, c: Child, head: str, number: int, rounds: int) -> bool:
+    async def _run_fix(self, c: Child, head: str, number: int, rounds: int, *, final: bool = False) -> bool:
         """32.2: run `findings` on *c*'s PR. True when it exited 0, so the review
         step reads the PR again; else the child is parked (`FINDINGS:FAILED`, or
         any other exit), `built` when the fixer was stopped by a signal (killed,
@@ -992,7 +1001,8 @@ class Coordinator:
         run with a higher `epic.max_usd` runs it again (D2.S16), and nothing
         more is launched. Under it, the fixer used up only its share while
         others held the rest: True, so the review step runs it again with
-        its share recomputed (D2.S19)."""
+        its share recomputed (D2.S19). *final*: the final fix (`--no-review`),
+        whose result keeps `final_head`, the HEAD it left in `<P>`."""
         project = self._child_project(c)
         change = f"{self.epic.name}-{c.id}"
         if not await self._fixer_gone(c, number):
@@ -1006,7 +1016,8 @@ class Coordinator:
                 return False
             await CLOCK.sleep(POLL)           # D2.S18: wait for the fixers that hold it
             left = self._left(c.id)
-        argv = fix.fix_argv(getattr(self.args, "session_id", "") or "", number, change, project, rounds, left)
+        argv = fix.fix_argv(getattr(self.args, "session_id", "") or "", number, change, project, rounds, left,
+                            final=final)
         attempt = records.start(self.epic_dir, "fix", c.id, argv, head_sha=head, pr_round=c.pr_round)
         if left is not None:
             self.shares[c.id] = Share(max(left, 0.0), self._pr_reviews(c))
@@ -1024,6 +1035,18 @@ class Coordinator:
             log.warning("EPIC child %s: its fixer stopped at the $%.2f left of epic.max_usd $%.2f: "
                         "launching nothing more", c.id, left or 0.0, ceiling or 0.0)
             return False
+        if code == 0 and final:
+            left_head = git_ops.rev_parse_head(project)
+            if left_head is None:
+                why = f"cannot read HEAD in {project} after the final fix"
+                records.finish(attempt, code, interrupted=False, extra={"parked": why})
+                self._park(c, why)
+                return False
+            records.finish(attempt, code, interrupted=False, extra={"final_head": left_head})
+            if fix.acted_on_nothing(out):
+                log.warning("EPIC child %s: its final fix found no new comment to act on (%s), so no fix ran; "
+                            "its blockers go to the merge step and to its issue as they are", c.id, fix.ended(out))
+            return True
         if code == 0:
             records.finish(attempt, code, interrupted=False)
             return True
@@ -1073,7 +1096,8 @@ class Coordinator:
         it) and run the fixer. True when the fixer ran to its end. When a `fix`
         follows it that exited 0 saying it is done (`FINDINGS:DONE` or
         `FINDINGS:MAX_ROUNDS`), the head it left is this one and nothing will
-        fix its blockers: the child parks (D2.S15)."""
+        fix its blockers: the child parks (D2.S15). A review whose `next` is
+        `final_fix` runs the final fix: one fresh round, `--no-review`."""
         if c.status != "built":
             return False
         tries = [a for a in records.attempts(self.epic_dir) if a.child == c.id]
@@ -1100,7 +1124,8 @@ class Coordinator:
             if self._over_budget():
                 c.status = "built"
                 return False
-        return await self._run_fix(c, head, number, self._rounds_for_fixer(c, self._child_project(c)))
+        rounds = self._rounds_for_fixer(c, self._child_project(c))
+        return await self._run_fix(c, head, number, rounds, final=rec.result.get("next") == "final_fix")
 
     async def _fix_pending(self, c: Child, number: int, head: str) -> bool | None:
         """Item 33's resume. A `post` an earlier run left is waited for while it
@@ -1108,7 +1133,8 @@ class Coordinator:
         When the last `fix` has no result (its coordinator was stopped) or an
         `interrupted` one, wait while it runs and write its result; when its
         log ends in `FINDINGS:FAILED`, park with the reason (D2.S6), else run
-        it again with `--max-rounds` recomputed (D2.S4, S5, S7, S11): True
+        it again with the `--max-rounds` it was launched with (D2.S4, S5,
+        S7, S11), so it stops where a fixer that never stopped would: True
         when it exited 0, False when the step ends, None when no fixer is to
         be run again."""
         tries = [a for a in records.attempts(self.epic_dir) if a.child == c.id and a.kind in FIX_KINDS]
@@ -1122,7 +1148,7 @@ class Coordinator:
         fixes = [a for a in tries if a.kind == "fix"]
         if not fixes or (fixes[-1].result is not None and not fixes[-1].result.get("interrupted")):
             return None
-        last, project = fixes[-1], self._child_project(c)
+        last = fixes[-1]
         if last.result is None and not await self._fixer_gone(c, number):
             return False
         why = fix.failed_reason(review.log_text(last.log))
@@ -1133,25 +1159,88 @@ class Coordinator:
             return False
         if last.result is None:
             records.finish(last, None, interrupted=True)
-        c.pr_round = review.pr_round(review.ledger_lines(), c.slug, number)
-        if self._rounds_left(c) < 1:      # no review round left: the review step decides
-            return None
-        rounds = self._rounds_for_fixer(c, project)
+        argv = last.started.get("argv") or []
+        final = fix.is_final(argv)
+        if not final:
+            c.pr_round = review.pr_round(review.ledger_lines(), c.slug, number)
+            if self._rounds_left(c) < 1:      # no review round left: the review step decides
+                return None
         if self._over_budget():
             c.status = "built"
             return False
-        return await self._run_fix(c, head, number, rounds)
+        # R2: once more, as launched; recounted, a finished round would run again.
+        return await self._run_fix(c, head, number, fix.saved_rounds(argv), final=final)
 
     # -- merging a reviewed PR (PR E) ---------------------------------------------
 
-    def _clean_head(self, c: Child) -> str | None:
-        """The head of *c*'s last recorded review when it left no blocker and
-        did not park the child: the last clean reviewed head."""
+    def _last_review(self, c: Child) -> records.Attempt | None:
+        """*c*'s last recorded review that holds a review's fields."""
         done = [a for a in records.attempts(self.epic_dir) if a.child == c.id and a.kind in REVIEW_KINDS
                 and a.result is not None and "blocking" in a.result]
-        if not done or done[-1].result["blocking"] or done[-1].result.get("parked"):
+        return done[-1] if done else None
+
+    def _clean_head(self, c: Child) -> str | None:
+        """The head of *c*'s last recorded review when it left no blocker and
+        did not park the child: the last clean reviewed head; or, when that
+        review chose `final_fix`, the head its final fix left (`_final_head`)."""
+        last = self._last_review(c)
+        if last is None or last.result.get("parked"):
             return None
-        return done[-1].started.get("head_sha")
+        if last.result["blocking"]:
+            return self._final_head(c)
+        return last.started.get("head_sha")
+
+    def _final_fix(self, c: Child) -> records.Attempt | None:
+        """The final fix that ended after *c*'s last recorded review, when that
+        review chose `final_fix`; else None."""
+        last = self._last_review(c)
+        if last is None or last.result.get("next") != "final_fix":
+            return None
+        ended = [a for a in records.attempts(self.epic_dir) if a.child == c.id and a.kind == "fix"
+                 and a.n > last.n and (a.result or {}).get("final_head")]
+        return ended[-1] if ended else None
+
+    def _final_head(self, c: Child) -> str | None:
+        """The HEAD *c*'s final fix left (`_final_fix`); else None."""
+        done = self._final_fix(c)
+        return done.result["final_head"] if done is not None else None
+
+    def _left_issue(self, c: Child) -> None:
+        """R4: one issue for what *c*'s final fix left, on its repo: each
+        blocker of the review that chose it, and that the last fixes had no
+        review. A final fix that ended `FINDINGS:DONE` found no new comment
+        to act on (the blockers were already on the PR, so `post` skipped
+        them), and the issue says no fix ran on them. Filed unless an issue
+        with its title exists, open or closed, so a re-run files none. A
+        failed `gh` call is logged; the next run tries again."""
+        done, last = self._final_fix(c), self._last_review(c)
+        if done is None or last is None:
+            return
+        title = f"buildme epic {self.epic.name}: what the final fix of #{fix.pr_of(done.started['argv'])} left"
+        found = _gh(c.root, "issue", "list", "--state", "all", "--search", f'"{title}" in:title',
+                    "--json", "number,title,url")
+        if not isinstance(found, list):
+            log.warning("EPIC child %s: cannot search for its final-fix issue; the next run tries again", c.id)
+            return
+        if any(isinstance(i, dict) and i.get("title") == title for i in found):
+            return
+        body = "\n".join([
+            f"Epic `{self.epic.name}`, child `{c.id}`: {c.pr}",
+            "",
+            f"Review round {last.result.get('pr_round')} (head {str(last.started.get('head_sha'))[:12]}) "
+            f"left these Code findings. {last.result.get('next_reason') or ''}".rstrip(),
+            ("The final fix found no new comment on the PR to act on, so no fix ran on them; "
+             "the last fixes had no review." if fix.acted_on_nothing(review.log_text(done.log))
+             else "One final fix acted on them; the last fixes had no review."),
+            "",
+            *(f"- {b}" for b in last.result["blocking"]),
+        ])
+        res = git_ops._run_gh(["gh", "issue", "create", "--title", title, "--body", body], cwd=c.root, timeout=60)
+        if res.ok:
+            log.info("EPIC child %s: filed %s", c.id, res.stdout.strip())
+        else:
+            log.warning("EPIC child %s: gh issue create failed: %s; the next run tries again",
+                        c.id, review.tail(res.stderr))
 
     def _passed(self, c: Child) -> bool:
         """Item 41: *c*'s PR, at the head last read, passed review: that head is
@@ -1721,6 +1810,10 @@ class Coordinator:
                         signal.signal(sig, handler)
                 except (NotImplementedError, RuntimeError, ValueError):
                     pass
+        for c in self.children.values():      # R4: a final-fixed PR, merged or waiting for a human merge
+            waits = self.settings.merge == "manual" and c.status == "built" and self._passed(c)
+            if (c.status == "merged" or waits) and self._final_fix(c) is not None:
+                self._left_issue(c)
         self._summary(run_dir)
         bad = [c for c in self.children.values() if c.status in ("failed", "unknown")]
         for c in bad:       # beside EPIC:MERGE_WAITING too, not only in the summary

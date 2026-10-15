@@ -2183,3 +2183,43 @@ class TestCli:
         monkeypatch.setattr(cli, "run_findings", fake)
         assert main(["findings", "--pr", str(PR), "--project-dir", str(repo), "--auto"]) == 0
         assert seen["run"].auto is True
+
+
+class TestNoReview:
+    """`--no-review`, the epic's final fix (plan-review-rounds-and-finders-2026-10-15.md,
+    item 2): the round fixes, pushes and replies, and runs no review."""
+
+    @pytest.mark.asyncio
+    async def test_a_round_with_no_review_runs_none_and_counts_as_done(self, built, fake_pr):
+        import dataclasses
+
+        repo, change, config = built
+        thread = fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+        review = FakeReview(fake_pr)
+        run, lines = _run(config, change, triage_call=FakeTriage({"add subtracts": FIX}), review=review)
+        run.review = False
+        run.config.findings = dataclasses.replace(run.config.findings, max_rounds=1)
+        with _Stubs(engine_stubs(repo)):
+            assert await loop.run_findings(run) == 0, lines
+        assert (review.calls, review.posts) == (0, [])
+        assert [r[1] for r in fake_pr.replies()] == [thread]
+        rnd = json.loads((change / ".findings-state.json").read_text())["findings"]["rounds"][-1]
+        assert "review" in rnd["finished"] and rnd["review_run_dir"] is None
+        assert lines[-1] == "FINDINGS:MAX_ROUNDS:1"
+
+    def test_the_flag_reaches_the_run(self, built, monkeypatch):
+        from build_pipeline.__main__ import build_parser
+        from build_pipeline.findings import cli
+
+        repo, _, _ = built
+
+        def gh(argv, cwd=None, timeout=None):
+            if argv[:3] == ["gh", "repo", "view"]:
+                return git_ops.GitResult(argv, 0, REPO + "\n", "")
+            return git_ops.GitResult(argv, 0, json.dumps(
+                {"headRefName": "buildme/calc", "isCrossRepository": False}), "")
+
+        monkeypatch.setattr(git_ops, "_run_gh", gh)
+        base = ["findings", "--pr", str(PR), "--project-dir", str(repo)]
+        assert cli.resolve(build_parser().parse_args([*base, "--no-review"])).review is False
+        assert cli.resolve(build_parser().parse_args(base)).review is True
