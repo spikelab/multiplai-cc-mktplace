@@ -103,7 +103,7 @@ def test_each_built_child_is_reviewed_and_the_result_recorded(tmp_path, monkeypa
                                      "python", "-m"]
     assert a.started["argv"][6:] == ["review_pipeline", "review", "--repo",
                                      str(e.root / "ws" / ".worktrees" / "buildme-e-a"),
-                                     "--pr", str(N), "--trust-repo", "--fetch"]
+                                     "--pr", str(N), "--trust-repo", "--fetch", "--extra-finders"]
     assert a.started["head_sha"] == e.head() and a.started["pr_round"] == 0
     r = a.result
     assert (r["exit_code"], r["interrupted"], r["reused"], r["reused_pipeline_run"]) == (0, False, False, None)

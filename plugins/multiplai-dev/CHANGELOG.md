@@ -17,6 +17,22 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.75.0] - 2026-10-15
+
+### Added
+- `/multiplai-dev:review`: `--extra-finders` (or `extra_finders: true` in
+  `review.yaml`) adds finders sized by the change to its first review round:
+  one per ~600 changed lines in diff order, a larger file alone, lockfiles
+  left out, at most 6. Each reads only its part of the diff, the enclosing
+  functions and the direct callers and callees, and lists every HIGH or
+  MEDIUM correctness defect there; its findings are verified, merged and
+  assessed like the others'. A later round of the same change runs none (a first
+  review that stopped before writing its findings does not count), and
+  `resume` asks only the chunks whose finder had not returned. Off by
+  default; `--tree` and `--dir` refuse it.
+- `/multiplai-dev:buildme`: an epic child's PR review passes
+  `--extra-finders`, so each PR's first review gets these finders.
+
 ## [0.74.0] - 2026-10-15
 
 ### Changed

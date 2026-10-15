@@ -358,6 +358,10 @@ class ReviewState(BaseModel):
     # A tree review run with `--trim` (a change review reads `ReviewConfig.trim`
     # instead). Set when the review starts; `resume` keeps it.
     trim: bool = False
+    # Whether this run asks the extra finders (`extra@<i>`, one per chunk of the change): the
+    # option was given and the change has no earlier finished round. Set when the review starts;
+    # `resume` keeps it.
+    extra_finders: bool = False
     findings: list[Finding] = Field(default_factory=list)
     verdicts: dict[str, Verdict] = Field(default_factory=dict)  # by finding id
     rejected: list[Rejected] = Field(default_factory=list)
