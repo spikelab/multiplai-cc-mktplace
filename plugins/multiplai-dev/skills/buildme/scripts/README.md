@@ -90,10 +90,20 @@ because its `git fetch` or `gh pr view` failed, or a PR commit is not in the
 clone after its fetch, leaves the child `unknown`, and the next run asks
 again. Its `review` record holds
 the head, the base, the review directory, the cost, `pr_round`, `reused`,
-`conflicts` (never blocks) and `blocking` (open Code HIGH/MEDIUM findings); at
-`epic.max_review_rounds` with blockers, or on any other failure, the child
-parks. A review counts against `epic.max_parallel` and `epic.max_usd` like a
-build. A review with blockers below the cap runs the fix loop (`epic/fix.py`,
+`conflicts` (never blocks) and `blocking` (open Code HIGH/MEDIUM findings),
+and with blockers `next` and `next_reason` (`review.decide`, no model call):
+`round` when a Code HIGH is open or, below `epic.max_review_rounds`, a Code
+MEDIUM earns one (`epic.round_worth: breaks`: the verifier rated it
+`breaks-users`/`breaks-business` or did not rate it; `any`: every one);
+`final_fix` when only Code MEDIUMs are left and none earns a round, or at
+the cap; `park` for an open HIGH at the cap. A park, or any other failure,
+parks the child. A review counts against `epic.max_parallel` and
+`epic.max_usd` like a build. `final_fix` runs one fixer round with
+`--no-review` and `--max-rounds <finished rounds + 1>` (kept on a relaunch);
+its result keeps `final_head`, which goes to the merge step with no review,
+and after the merge (or while it waits under `manual`) one issue lists what
+it left, unless an issue with its title exists. A review whose `next` is
+`round` runs the fix loop (`epic/fix.py`,
 `Coordinator._fix`): `findings.decisions.write_decisions(<review dir>)`, then
 `review_pipeline post <review dir> --decisions <review dir>/buildme-decisions.json`
 (record kind `post`), then `python -m build_pipeline findings --pr <n> --change
