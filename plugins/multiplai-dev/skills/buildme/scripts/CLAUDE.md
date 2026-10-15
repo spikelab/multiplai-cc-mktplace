@@ -56,6 +56,7 @@ Templates are Python f-strings with `{placeholders}`. Each template is a constan
 | `spec_generation.py` | PROPOSAL_PROMPT, SPEC_PROMPT, DESIGN_PROMPT, TASKS_PROMPT |
 | `test_writing.py` | TEST_WRITER_PROMPT, TEST_QUALITY_PROMPT, MUTATION_TEST_WRITER_PROMPT |
 | `implementation.py` | IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM, REFACTOR_PROMPT, REFACTOR_ALL_PROMPT |
+| `writing_rules.py` | TEST_VALUE_RULE (in TEST_WRITER_PROMPT), COMMENT_RULE (in TEST_WRITER_PROMPT and both implementer prompts): the writing rules, concatenated into those prompts (`tests/test_writing_rules.py`) |
 | `review.py` | CODE_REVIEW_PROMPT, FINDING_ADJUDICATION_PROMPT |
 | `design_audit.py` | DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT |
 | `prototype.py` | PROTOTYPE_PROMPT |

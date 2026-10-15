@@ -1,5 +1,7 @@
 """Prompt templates for test-writing agents."""
 
+from .writing_rules import COMMENT_RULE, TEST_VALUE_RULE
+
 TEST_WRITER_PROMPT = """\
 You are a test-writing agent working in a TDD pipeline. Your job is to write
 failing tests that define the expected behavior for a block of work.
@@ -22,11 +24,13 @@ failing tests that define the expected behavior for a block of work.
 3. **One test file per logical unit.** Group related tests in a class or module.
 4. **Every WHEN/THEN scenario** from the specs must have at least one test.
 5. **Edge cases matter.** Include boundary conditions, error cases, empty inputs.
-6. **Tests MUST fail** when you're done — there's no implementation yet. If a test
+6. """ + TEST_VALUE_RULE + """
+7. """ + COMMENT_RULE + """
+8. **Tests MUST fail** when you're done — there's no implementation yet. If a test
    passes before implementation, it's testing nothing useful.
-7. **No `assert True`**, no `assert x is not None` as the sole assertion, no empty
+9. **No `assert True`**, no `assert x is not None` as the sole assertion, no empty
    test bodies. Every test must assert a meaningful behavioral outcome.
-8. Run the test command after writing to confirm tests are syntactically valid
+10. Run the test command after writing to confirm tests are syntactically valid
    (they should fail, not error with ImportError/SyntaxError).
 
 ## Quality Gates — check every test against these before finishing
