@@ -221,7 +221,7 @@ jobs:
         working-directory: plugins/multiplai-dev/skills/buildme/scripts
         run: |
           uv run --project ../../../../.. --package build-pipeline \
-            --extra dev python -m pytest tests/ -q
+            --extra dev python -m pytest tests/ -q -n auto
 
   research-tests:
     name: deep-research pipeline tests
