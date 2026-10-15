@@ -46,7 +46,11 @@ fetches the blockers just posted, fixes, pushes and replies, and nothing
 reviews it. Any relaunch keeps the `--max-rounds` it was launched with
 (`saved_rounds`): recomputed after its round started or finished, it would
 run, and pay for, another. Its result keeps `final_head`, the HEAD it left, which the merge step takes as
-the PR's approved head. The steps that run these are `Coordinator._fix` and
+the PR's approved head. A final fix whose fetch finds no new comment (the
+blockers were already on the PR, so `post` skipped them) ends
+`FINDINGS:DONE` with no round (`acted_on_nothing`); the PR still goes to the
+merge step, as the decision chose no further review, and its issue says no
+fix ran on what it lists. The steps that run these are `Coordinator._fix` and
 `Coordinator._fix_pending` in `coordinator.py`.
 """
 
@@ -140,6 +144,14 @@ def ended(text: str) -> str | None:
     fixer's output; None without one."""
     hits = ENDED.findall(text)
     return hits[-1] if hits else None
+
+
+def acted_on_nothing(text: str) -> bool:
+    """Whether a fixer's output ends `FINDINGS:DONE`: its fetch found no new
+    comment to act on, so it ran no round. A final fix that ran its round
+    ends `FINDINGS:MAX_ROUNDS`, as its `--max-rounds` allows only that one."""
+    end = ended(text)
+    return end is not None and end.startswith("FINDINGS:DONE:")
 
 
 def budget_stopped(text: str) -> bool:

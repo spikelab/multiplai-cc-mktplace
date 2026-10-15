@@ -1043,6 +1043,9 @@ class Coordinator:
                 self._park(c, why)
                 return False
             records.finish(attempt, code, interrupted=False, extra={"final_head": left_head})
+            if fix.acted_on_nothing(out):
+                log.warning("EPIC child %s: its final fix found no new comment to act on (%s), so no fix ran; "
+                            "its blockers go to the merge step and to its issue as they are", c.id, fix.ended(out))
             return True
         if code == 0:
             records.finish(attempt, code, interrupted=False)
@@ -1205,9 +1208,11 @@ class Coordinator:
     def _left_issue(self, c: Child) -> None:
         """R4: one issue for what *c*'s final fix left, on its repo: each
         blocker of the review that chose it, and that the last fixes had no
-        review. Filed unless an issue with its title exists, open or closed,
-        so a re-run files none. A failed `gh` call is logged; the next run
-        tries again."""
+        review. A final fix that ended `FINDINGS:DONE` found no new comment
+        to act on (the blockers were already on the PR, so `post` skipped
+        them), and the issue says no fix ran on them. Filed unless an issue
+        with its title exists, open or closed, so a re-run files none. A
+        failed `gh` call is logged; the next run tries again."""
         done, last = self._final_fix(c), self._last_review(c)
         if done is None or last is None:
             return
@@ -1224,7 +1229,9 @@ class Coordinator:
             "",
             f"Review round {last.result.get('pr_round')} (head {str(last.started.get('head_sha'))[:12]}) "
             f"left these Code findings. {last.result.get('next_reason') or ''}".rstrip(),
-            "One final fix acted on them; the last fixes had no review.",
+            ("The final fix found no new comment on the PR to act on, so no fix ran on them; "
+             "the last fixes had no review." if fix.acted_on_nothing(review.log_text(done.log))
+             else "One final fix acted on them; the last fixes had no review."),
             "",
             *(f"- {b}" for b in last.result["blocking"]),
         ])

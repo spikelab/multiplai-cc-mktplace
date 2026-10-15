@@ -34,8 +34,10 @@ time, not derived from a tag.
   runs with no review after it (a fresh round, past any round an earlier
   fixer left open), the PR goes to the merge step (under `manual`
   it waits for you, as before), and buildme files one issue on the child's
-  repository listing each finding that fix acted on and saying its commits
-  had no review.
+  repository listing each finding left and saying the last fixes had no
+  review. When every finding was already on the PR from an earlier round,
+  that fixer finds nothing new to act on and runs no round; the PR still
+  goes to the merge step, and the issue says no fix ran.
 - `/multiplai-dev:review`: the verifier rates a defect `breaks-users` or
   `breaks-business` only when normal use reaches it, it does harm with no
   second failure, and nothing else in the code, CI or the documented workflow

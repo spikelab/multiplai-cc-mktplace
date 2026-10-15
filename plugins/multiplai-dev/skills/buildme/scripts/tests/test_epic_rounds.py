@@ -140,6 +140,7 @@ def test_only_correctness_only_mediums_get_one_final_fix_then_merge_and_one_issu
     [issue] = r.issues()
     assert f"#{N}" in issue["title"] and pr_url("e-a") in issue["body"]
     assert LEFT in issue["body"] and "MEDIUM m2" in issue["body"] and "last fixes had no review" in issue["body"]
+    assert "One final fix acted on them" in issue["body"] and "no fix ran" not in issue["body"]
 
 
 def test_under_manual_the_final_fixed_pr_waits_for_a_human_merge_with_its_issue(tmp_path, monkeypatch):
@@ -197,6 +198,24 @@ def test_a_round_fixer_runs_one_round_so_a_low_value_review_2_gets_the_final_fix
     assert len(r.issues()) == 1 and "MEDIUM m2" in r.issues()[0]["body"]
 
 
+def test_a_final_fix_that_found_nothing_to_act_on_merges_and_its_issue_says_no_fix_ran(tmp_path, monkeypatch):
+    """A final fixer whose fetch finds no new comment (the blockers were
+    already on the PR, so `post` skipped them) ends `FINDINGS:DONE` with no
+    round and HEAD still the reviewed head. The decision already chose not
+    to review again, so the PR still goes to the merge step, and the issue
+    says no fix ran on what it lists instead of that a fix acted on it."""
+    r = Rounds(tmp_path, monkeypatch, [{"findings": [medium("m1")]}], [{}])
+    assert r.run() == 0 and r.merged()
+    [fixer] = r.fixers()
+    assert "--no-review" in fixer and r.reviews_of_a() == 1
+    [fix] = [a for a in records.attempts(r.dir) if a.kind == "fix"]
+    assert fix.result["final_head"] == fix.started["head_sha"]
+    [issue] = r.issues()
+    assert LEFT in issue["body"] and "no fix ran" in issue["body"]
+    assert "acted on them" not in issue["body"]
+    assert r.run() == 0 and len(r.issues()) == 1 and len(r.fixers()) == 1
+
+
 # --- stop and resume (rows R2, R3, R4) ---------------------------------------------------
 
 def _outcome(r: Rounds) -> dict:
@@ -232,6 +251,25 @@ def test_r2_a_final_fixer_killed_before_its_round_runs_again_once_with_the_same_
     first, again = r.fixers()
     assert first == again and "--no-review" in first
     assert _outcome(r) == {**plain, "fixers": ["1", "1"]}
+
+
+def test_r2_a_final_fixer_killed_at_round_3_runs_again_once_though_no_review_round_is_left(tmp_path, monkeypatch):
+    """At the cap no review round is left, and a killed final fixer still
+    runs again: left to the review step, its head would have no final fix
+    and the child would wait with its blockers. Compared with the run that
+    never stopped."""
+    one = lambda found: {"rounds": [{"findings": found}], "max_rounds": True, "push": True}
+    fixes = [one([high("h2")]), one([medium("m3")])]
+    plain = Rounds(tmp_path / "plain", monkeypatch, [{"findings": [high("h1")]}], [*fixes, FINAL])
+    assert plain.run() == 0
+    r = Rounds(tmp_path / "stopped", monkeypatch, [{"findings": [high("h1")]}], [*fixes, {"die": True}, FINAL])
+    assert r.run() == 3
+    assert r.status()["status"] == "built" and r.issues() == [] and not r.merged()
+    assert r.run() == 0
+    assert [(x["pr_round"], x.get("next")) for x in r.reviewed()] == [(1, "round"), (2, "round"), (3, "final_fix")]
+    final, again = r.fixers()[2:]
+    assert final == again and "--no-review" in final
+    assert _outcome(r) == {**_outcome(plain), "fixers": [*_outcome(plain)["fixers"], _opt(final, "--max-rounds")]}
 
 
 def test_r2_a_final_fixer_killed_mid_round_with_its_commit_pushed_finishes_that_round_only(tmp_path, monkeypatch):

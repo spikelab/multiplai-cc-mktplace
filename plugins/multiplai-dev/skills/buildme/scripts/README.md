@@ -103,7 +103,10 @@ parks the child. A review counts against `epic.max_parallel` and
 not, + 1>` (kept on a relaunch);
 its result keeps `final_head`, which goes to the merge step with no review,
 and after the merge (or while it waits under `manual`) one issue lists what
-it left, unless an issue with its title exists. A review whose `next` is
+it left, unless an issue with its title exists. A final fix whose fetch found
+no new comment (the blockers were already on the PR) ends `FINDINGS:DONE`
+with no round; its PR goes to the merge step all the same, and the issue says
+no fix ran on what it lists. A review whose `next` is
 `round` runs the fix loop (`epic/fix.py`,
 `Coordinator._fix`): `findings.decisions.write_decisions(<review dir>)`, then
 `review_pipeline post <review dir> --decisions <review dir>/buildme-decisions.json`

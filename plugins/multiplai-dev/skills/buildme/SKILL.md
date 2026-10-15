@@ -854,15 +854,19 @@ call:
   `epic.merge: manual` it waits for a human merge, exit 3), and buildme files
   one issue on the child's repository, titled `buildme epic <epic>: what the
   final fix of #<n> left`, listing each blocker with its finding id and saying
-  the last fixes had no review. A run that finds an issue with that title,
-  open or closed, files none.
+  the last fixes had no review. When the fixer finds no new comment to act on
+  (every blocker was already on the PR, from an earlier round), it runs no
+  round and ends `FINDINGS:DONE`; the PR still goes to the merge step, and the
+  issue says no fix ran on what it lists. A run that finds an issue with that
+  title, open or closed, files none.
 - `park`: a Code HIGH is open at `epic.max_review_rounds`.
 
 The reviews are its own and each fixer's (below). Every fixer launch runs one
 round, whose review is the PR's next, so a decision follows every review.
 
-A failing test is caught where it was before: the merge step's tests and the
-PR's required checks park the child. A fixer stopped part-way is run
+A failing test is caught where it was before. Under `epic.merge: auto`, the
+merge step's tests and the PR's checks park the child. Under `manual`, buildme
+runs neither, and the person who merges the PR reads its checks. A fixer stopped part-way is run
 again once with the `--max-rounds` it was launched with, so a round it
 finished is never paid for twice.
 
