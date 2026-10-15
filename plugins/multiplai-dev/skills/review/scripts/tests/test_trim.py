@@ -9,20 +9,20 @@ from pathlib import Path
 
 import pytest
 
-from conftest import SCHEMA, high_finding
+from conftest import SCHEMA, high_finding, medium_finding
 from review_pipeline import budget, post, sdk
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS, TRIM_DIMENSION, ReviewConfig, load_config
 from review_pipeline.export import to_findings_file
-from review_pipeline.models import (AssessOutput, Citation, Finding, FinderOutput, MergeOutput, RepeatsOutput,
-                                    ReviewState, Verdict, section_of)
+from review_pipeline.models import (AssessOutput, Citation, DuplicateSet, Finding, FinderOutput, MergeOutput,
+                                    RepeatsOutput, ReviewState, Verdict, section_of)
 from review_pipeline.prompts import find as find_prompt
 from review_pipeline.prompts import verify as verify_prompt
-from review_pipeline.render import render_review, section
+from review_pipeline.render import render_review, render_rollup, section
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.assess import run_assess
-from review_pipeline.stages.find import critical_paths, finder_dimensions
-from review_pipeline.stages.merge import linked
+from review_pipeline.stages.find import critical_paths, finder_dimensions, run_find
+from review_pipeline.stages.merge import linked, run_merge
 from review_pipeline.stages.verify import important_assessments, run_verify
 from review_pipeline import target as target_mod
 
@@ -124,13 +124,14 @@ class TrimAgents:
     """Canned answers by stage label. The trim finder returns *trim*; every other finder nothing."""
 
     def __init__(self, trim: list[Finding] | None = None, verdicts: dict[str, Verdict] | None = None,
-                 stop_on_trim_call: int | None = None):
+                 stop_on_trim_call: int | None = None, by_group: bool = False):
         self.calls: list[str] = []
         self.prompts: list[tuple[str, str]] = []
         self.trim = trim if trim is not None else [merge_test_finding(), comment_finding()]
         self.verdicts = verdicts or {}
         self.stop_on_trim_call = stop_on_trim_call
         self.trim_calls = 0
+        self.by_group = by_group  # a tree review: each group's trim call returns the findings on its files
 
     async def __call__(self, prompt, schema, *, budget_label="", **kwargs):
         sdk.require_trusted_repo()
@@ -142,6 +143,8 @@ class TrimAgents:
             if self.trim_calls == self.stop_on_trim_call:
                 self.stop_on_trim_call = None
                 raise budget.BudgetExceededError("circuit breaker stopped the run during find:trim")
+            if self.by_group:
+                return FinderOutput(findings=[f for f in self.trim if f"- {f.file}\n" in prompt])
             return FinderOutput(findings=self.trim)
         if stage == "find":
             return FinderOutput()
@@ -189,13 +192,17 @@ def test_a_change_review_lists_trim_findings_in_their_own_advisory_section(trim_
 
     repo, base, head = trim_repo
     out = tmp_path / "out"
-    fake = agents()
+    # The verifier labels the comment finding `code`: its section still comes from the finder, so it is
+    # neither listed under Code nor posted at LOW, as a Code finding would be.
+    fake = agents(verdicts={comment_finding().claim: confirmed("code", "hygiene", cite(
+        "calc.py", COMMENT_LINE, COMMENT[0].strip()))})
     assert _review(repo, base, head, out) == 0
     assert fake.calls.count(f"find:{TRIM_DIMENSION}") == 1
     target_dir = _target_dir(out)
     data = json.loads((target_dir / "findings.json").read_text())
     jsonschema.validate(data, json.loads(SCHEMA.read_text()))
     rows = {f["claim"]: f for f in data["findings"]}
+    assert rows[comment_finding().claim]["topic"] == "code"
     for claim in (merge_test_finding().claim, comment_finding().claim):
         assert rows[claim]["section"] == "trim"
         assert rows[claim]["severity"] == "LOW"  # the comment finding came back MEDIUM
@@ -389,14 +396,18 @@ def _tree(repo: Path, out: Path, *extra: str) -> int:
 
 def test_a_stopped_tree_review_with_trim_resumes_only_the_missing_trim_keys(trim_repo, tmp_path, agents):
     repo, _, _ = trim_repo
-    never_stopped = agents(trim=[])
+    # Each group's trim call returns the findings on its own files: trim@0 the comment in calc.py, the
+    # tests/ group the merge suggestion. A resume that lost a result stored before the stop loses its finding.
+    trim = [comment_finding(), merge_test_finding()]
+    never_stopped = agents(trim=trim, by_group=True)
     assert _tree(repo, tmp_path / "whole", "--trim") == 0
     whole_dir = _target_dir(tmp_path / "whole")
     whole = ReviewState.model_validate_json((whole_dir / "review-state.json").read_text())
     groups = sorted(k for k in whole.finder_results if k.startswith(f"{TRIM_DIMENSION}@"))
     assert len(groups) >= 2 and never_stopped.calls.count(f"find:{TRIM_DIMENSION}") == len(groups)
+    assert sorted(f.claim for f in whole.findings) == sorted(f.claim for f in trim)
 
-    fake = agents(trim=[], stop_on_trim_call=2)  # trim@0 returns, the run stops on trim@1
+    fake = agents(trim=trim, by_group=True, stop_on_trim_call=2)  # trim@0 returns, the run stops on trim@1
     assert _tree(repo, tmp_path / "out", "--trim") == 4
     target_dir = _target_dir_of_state(tmp_path / "out")
     saved = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
@@ -414,6 +425,7 @@ def test_a_stopped_tree_review_with_trim_resumes_only_the_missing_trim_keys(trim
     assert done.trim is True
     assert sorted(done.finder_results) == sorted(whole.finder_results)
     assert [f.id for f in done.findings] == [f.id for f in whole.findings]
+    assert comment_finding().claim in {f.claim for f in done.findings}  # trim@0's, stored before the stop
 
 
 def _target_dir_of_state(out: Path) -> Path:
