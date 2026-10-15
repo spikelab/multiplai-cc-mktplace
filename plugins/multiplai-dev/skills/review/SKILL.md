@@ -13,7 +13,9 @@ Python between them:
 
 1. **find** — five finders, one per aspect (`diff-bugs`, `callers`, `history`,
    `conventions`, `tests`), plus the `trim` finder, which judges the tests and
-   comments the change adds or edits (see "Trim" below). Every finding cites
+   comments the change adds or edits (see "Trim" below). With
+   `--extra-finders`, a change's first round also runs one extra finder per
+   ~600 changed lines (see "Extra finders" below). Every finding cites
    lines with an exact quote.
 2. **verify** — a fresh agent per finding re-reads the code and answers
    `confirmed`, `refuted` or `unverifiable`, citing what it read. Unless it
@@ -209,6 +211,24 @@ A change review runs the trim finder unless `review.yaml` sets `trim: false`.
 A tree review (`--tree`, `--dir`) runs it over the existing tests and comments
 only with `--trim`; `resume` keeps that choice.
 
+## Extra finders
+
+`--extra-finders` (or `extra_finders: true` in `review.yaml`) adds finders
+sized by the change to its first review round. The changed files are grouped
+in diff order into chunks of about 600 changed lines: a larger file is a
+chunk of its own, lockfiles are left out, and there are at most 6 chunks
+(past that, the chunk size grows and the smallest neighbouring chunks merge).
+Each chunk gets one extra finder, which reads only its chunk's hunks, each
+hunk's enclosing function and the direct callers and callees, never whole
+files, and lists every HIGH or MEDIUM correctness defect there. Its findings
+go through verify, merge and assess like every other finder's.
+
+They run only when the review directory holds no earlier round of the change:
+a second `review` of the same PR, branch or range (a rerun on the same head
+included) runs none. `resume` keeps the choice and asks only the chunks whose
+finder had not returned. The option goes with `--branch`, `--pr` and
+`--range`; `--tree` and `--dir` refuse it.
+
 ## Reviewing code that is not a change
 
 Three targets review code as it stands instead of a diff:
@@ -304,7 +324,7 @@ One target:
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts \
   python -m review_pipeline --session-id "{session_id}" [--out /abs/out] \
   review --repo /abs/path/to/repo --range <base>..<head> --trust-repo \
-  [--mode critical] [--ticket DB-2038] [--deployed-in staging]
+  [--mode critical] [--extra-finders] [--ticket DB-2038] [--deployed-in staging]
 ```
 
 Use `--branch <name>` (reviewed against its merge-base with `origin/HEAD`) or
@@ -593,7 +613,7 @@ jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd:
 default's `INBOX/reviews/review.yaml` until a `review.yaml` exists in the new
 place, with a warning) sets `concurrency`, `finder_model`,
 `verifier_model`, `merger_model` (default: the verifier's), `effort`,
-`max_turns`, `explain`, `find_with_facts` and `trim`. `multiplai.conf` keys
+`max_turns`, `explain`, `find_with_facts`, `trim` and `extra_finders`. `multiplai.conf` keys
 `review_finder_model`, `review_verifier_model`, `review_effort` and
 `review_explain` apply when the file does not set them. By default every
 stage runs on the session's model.
@@ -616,6 +636,8 @@ stage runs on the session's model.
   off until real runs on real PRs are compared.
 - `trim` (default `true`): run the trim finder on a change review (see
   "Trim"). A tree review runs it only with `--trim`.
+- `extra_finders` (default `false`): what `--extra-finders` does, for every
+  change review written to this output directory (see "Extra finders").
 
 ## Other commands
 
