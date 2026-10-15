@@ -21,7 +21,10 @@ Python between them:
    would be (the finding's **expected behaviour**), without proposing a code
    change, and rates its **impact**: what goes wrong in production if the
    change is merged as it is — `breaks-users`, `breaks-business`,
-   `correctness-only` or `hygiene`. A missing or weak test is always
+   `correctness-only` or `hygiene`. It rates `breaks-*` only when default
+   settings or documented normal use reach the path, the harm needs no
+   second failure, and no other check in the code, CI or the documented
+   workflow stops it first. A missing or weak test is always
    `correctness-only`. An answer without an impact, or without a topic from
    the list below, is re-asked; a verify call is tried up to three times, and
    a finding still without a verdict stops the run (exit `5`) instead of
