@@ -152,24 +152,64 @@ def conflicts(view: dict) -> bool | None:
     return None
 
 
-def blockers(review_dir: Path | str) -> list[str] | None:
-    """The open Code findings at HIGH or MEDIUM in `<review_dir>/findings.json`,
-    one line each; None when the file cannot be read. "Open" is what the
-    review lists (`findings.decisions._listed`, a copy of the review skill's
-    rule)."""
+def blocking_findings(review_dir: Path | str) -> list[dict] | None:
+    """The open Code findings at HIGH or MEDIUM in `<review_dir>/findings.json`;
+    None when the file cannot be read. "Open" is what the review lists
+    (`findings.decisions._listed`, a copy of the review skill's rule)."""
     from ..findings.decisions import _listed, _section
 
     path = Path(review_dir) / "findings.json"
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
         findings, mode = doc["findings"], doc.get("mode")
-        return [f"{f['severity']} {f['id']} {f.get('file') or '?'}:{f.get('line_start') or '?'} "
-                f"{' '.join(str(f.get('claim') or '').split())[:160]}"
-                for f in findings
+        return [f for f in findings
                 if _listed(f, mode) and _section(f) == "code" and f.get("severity") in BLOCKING_SEVERITIES]
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
         log.warning("cannot read %s: %s", path, e)
         return None
+
+
+def blocker_line(f: dict) -> str:
+    return (f"{f['severity']} {f['id']} {f.get('file') or '?'}:{f.get('line_start') or '?'} "
+            f"{' '.join(str(f.get('claim') or '').split())[:160]}")
+
+
+def blockers(review_dir: Path | str) -> list[str] | None:
+    """`blocking_findings`, one line each; None when the file cannot be read."""
+    found = blocking_findings(review_dir)
+    try:
+        return None if found is None else [blocker_line(f) for f in found]
+    except (KeyError, TypeError, AttributeError) as e:
+        log.warning("cannot read %s: %s", Path(review_dir) / "findings.json", e)
+        return None
+
+
+# The impacts the verifier gives a defect that does not reach a user or the
+# business (`review_pipeline/prompts/verify.py`, `IMPACT_RULES`).
+HARMLESS_IMPACTS = ("correctness-only", "hygiene")
+
+
+def decide(found: list[dict], pr_round: int, cap: int, worth: str) -> tuple[str, str]:
+    """What follows a review that left the blockers *found* (not empty): `round`
+    (another fix and review), `final_fix` (one fix with no review after it,
+    then the merge step) or `park`, and why (plan-review-rounds-and-finders,
+    item 2). An open HIGH earns a round, and parks at the cap. A MEDIUM earns
+    a round under *worth* `any`, and under `breaks` unless the verifier rated
+    it `correctness-only` or `hygiene`: one it did not rate is not known to be
+    harmless. At the cap, MEDIUMs alone get the final fix. Reads only the
+    review's own fields; calls no model."""
+    highs = [f["id"] for f in found if f.get("severity") == "HIGH"]
+    if pr_round >= cap:
+        if highs:
+            return "park", f"review round {pr_round} of {cap} left Code HIGH {', '.join(highs)}"
+        return "final_fix", f"review round {pr_round} of {cap} left only Code MEDIUMs"
+    if highs:
+        return "round", f"Code HIGH {', '.join(highs)} is open"
+    worthy = [f"{f['id']} ({f.get('impact') or 'not rated'})" for f in found
+              if worth == "any" or f.get("impact") not in HARMLESS_IMPACTS]
+    if worthy:
+        return "round", f"Code MEDIUM {', '.join(worthy)} earns another round (epic.round_worth: {worth})"
+    return "final_fix", "every Code MEDIUM left is rated correctness-only or hygiene"
 
 
 def log_text(path: Path) -> str:

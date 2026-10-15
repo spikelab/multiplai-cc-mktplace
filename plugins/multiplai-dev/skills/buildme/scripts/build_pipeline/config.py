@@ -559,12 +559,15 @@ class EpicSettings:
     (plan-buildme-epic-mode-2026-10-12.md, item 16a). `max_parallel`: children
     building at once. `max_review_rounds`: review rounds per child PR.
     `merge`: `auto` or `manual` (a human merges). `max_usd`: one ceiling for
-    the whole epic, None for none."""
+    the whole epic, None for none. `round_worth`: which Code MEDIUM earns
+    another review round (`epic.review.decide`): `breaks`, one the verifier
+    did not rate `correctness-only` or `hygiene`; `any`, every one."""
 
     max_parallel: int = 2
-    max_review_rounds: int = 6
+    max_review_rounds: int = 3
     merge: Literal["auto", "manual"] = "manual"
     max_usd: float | None = None
+    round_worth: Literal["breaks", "any"] = "breaks"
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -1360,11 +1363,16 @@ class BuildConfig:
             max_usd = float(raw_usd) if raw_usd is not None else None
         except (TypeError, ValueError):
             log.warning("Invalid epic.max_usd=%r — ignoring", raw_usd)
+        worth = epic_cfg.get("round_worth", "breaks")
+        if worth not in ("breaks", "any"):
+            log.warning("Invalid epic.round_worth value %r in config.yaml — using 'breaks'", worth)
+            worth = "breaks"
         self.epic = EpicSettings(
             max_parallel=_cfg_int(epic_cfg.get("max_parallel", 2), "epic.max_parallel", 2),
-            max_review_rounds=_cfg_int(epic_cfg.get("max_review_rounds", 6), "epic.max_review_rounds", 6),
+            max_review_rounds=_cfg_int(epic_cfg.get("max_review_rounds", 3), "epic.max_review_rounds", 3),
             merge=merge,
             max_usd=max_usd,
+            round_worth=worth,
         )
 
     def _discover_test_command(self) -> None:
