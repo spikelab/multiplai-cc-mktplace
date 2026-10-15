@@ -204,13 +204,15 @@ async def test_find_records_one_check_per_finder_with_fates_and_gate_results(tar
     reads = [ToolCall("Read", {"file_path": str(ctx.snapshot / "rateplan_service.py")}),
              ToolCall("Grep", {"pattern": "KEYWORD", "path": str(ctx.snapshot)})]
     recorded = Recorded({"find:diff-bugs": [FinderOutput(findings=[high, bad])],
-                         "find:callers": [FinderOutput(findings=[high, medium])]},  # high again: deduped
+                         "find:callers": [FinderOutput(findings=[high, medium])],  # high again: deduped
+                         "find:trim": [FinderOutput()]},
                         {"find:diff-bugs": reads})
     monkeypatch.setattr(sdk, "agent_call_structured", recorded)
     state = await run_find(ReviewState(target=target_info), ctx)
 
-    assert [(c.stage, c.subject) for c in state.checks] == [("find", "diff-bugs"), ("find", "callers")]
-    first, second = state.checks
+    assert [(c.stage, c.subject) for c in state.checks] == [("find", "diff-bugs"), ("find", "callers"),
+                                                             ("find", "trim")]
+    first, second, _ = state.checks
     assert first.calls[0] == {"tool": "Read", "target": "rateplan_service.py", "detail": "whole file"}
     assert first.calls[1]["detail"] == "in ."
     assert (first.turns, first.cost_usd, first.outcome) == (2, 0.25, "2 findings")
@@ -232,7 +234,7 @@ async def test_find_records_one_check_per_finder_with_fates_and_gate_results(tar
 async def test_a_failed_finder_is_recorded_with_its_error(target_info, ctx, monkeypatch):
     monkeypatch.setattr(sdk, "agent_call_structured", Recorded({
         "find:diff-bugs": [sdk.AgentCallError("agent call failed (timeout)")],
-        "find:callers": [FinderOutput()]}))
+        "find:callers": [FinderOutput()], "find:trim": [FinderOutput()]}))
     state = await run_find(ReviewState(target=target_info), ctx)
     failed = state.checks[0]
     assert failed.subject == "diff-bugs" and failed.error.startswith("finder diff-bugs: agent call failed")
@@ -246,14 +248,14 @@ async def test_a_resumed_find_does_not_record_a_finder_twice(target_info, ctx, m
     state = ReviewState(target=target_info)
     monkeypatch.setattr(sdk, "agent_call_structured", Recorded({
         "find:diff-bugs": [FinderOutput(findings=[high_finding()])],
-        "find:callers": [budget.BudgetExceededError("stop")]}))
+        "find:callers": [budget.BudgetExceededError("stop")], "find:trim": [FinderOutput()]}))
     with pytest.raises(budget.BudgetExceededError):
         await run_find(state, ctx)
-    assert [c.subject for c in state.checks] == ["diff-bugs"]
+    assert [c.subject for c in state.checks] == ["diff-bugs", "trim"]
     reloaded = load_state(save_state(state, ctx.snapshot.parent))
     monkeypatch.setattr(sdk, "agent_call_structured", Recorded({"find:callers": [FinderOutput()]}))
     reloaded = await run_find(reloaded, ctx)
-    assert [c.subject for c in reloaded.checks] == ["diff-bugs", "callers"]
+    assert [c.subject for c in reloaded.checks] == ["diff-bugs", "trim", "callers"]
 
 
 async def test_verify_records_the_verdict_its_citations_and_the_gate(target_info, ctx, monkeypatch):
@@ -290,7 +292,8 @@ async def test_merge_records_the_group_and_marks_merged_findings_in_their_finder
         target_info, ctx, monkeypatch):
     a, b = high_finding(), medium_finding().with_location(line_start=1, line_end=1)
     monkeypatch.setattr(sdk, "agent_call_structured", Recorded({
-        "find:diff-bugs": [FinderOutput(findings=[a])], "find:callers": [FinderOutput(findings=[b])]}))
+        "find:diff-bugs": [FinderOutput(findings=[a])], "find:callers": [FinderOutput(findings=[b])],
+        "find:trim": [FinderOutput()]}))
     state = await run_find(ReviewState(target=target_info), ctx)
     state.verdicts = {f.id: Verdict(finding_id=f.id, status="confirmed", reason="r") for f in state.findings}
     state.stage = "verify"

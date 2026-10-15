@@ -509,7 +509,7 @@ async def test_find_gives_the_facts_to_finders_only_with_find_with_facts(target_
                          snapshot=snapshot, diff=Path(target_info.diff_path).read_text())
         state = ReviewState(target=target_info, facts=ExplainedFacts(facts=_facts()))
         state = await run_find(state, ctx)
-        assert len(prompts) == 1
+        assert len(prompts) == 2  # diff-bugs, then trim
         assert (find_prompt.FACTS_INTRO in prompts[0]) is on
         assert ("checked facts (2)" in state.checks[0].given) is on
 
