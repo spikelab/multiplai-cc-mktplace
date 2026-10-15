@@ -17,6 +17,17 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.73.0] - 2026-10-15
+
+### Changed
+- `/multiplai-dev:buildme`: the test writer is told to write fewer, more
+  valuable tests (every WHEN/THEN scenario still gets one; beyond that, only a
+  test that would catch a real defect on a path that matters, and none another
+  test already covers), and the test writer and both implementer tiers are told
+  to keep comments short: say why, never narrate the next line or describe
+  history, and stay shorter than the code. The mutation test writer and the
+  refactorers keep their prompts.
+
 ## [0.72.0] - 2026-10-15
 
 ### Added
