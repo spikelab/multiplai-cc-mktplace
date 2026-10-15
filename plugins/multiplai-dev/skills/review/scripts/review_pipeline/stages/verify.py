@@ -28,8 +28,8 @@ breaks users or the business: a `breaks-*` impact on one is lowered to
 A trim finding (`models.is_trim`) is a suggestion to remove, merge or shorten
 a test or comment: its impact rates what removing the test risks, so it is
 never lowered, and its severity is set to LOW once the stage ends.
-`important_assessments` then labels `important` each confirmed trim finding
-whose test must stay (impact `breaks-*`, or a citation under a `## Critical
+`important_assessments` then labels `important` each shown (confirmed or
+unverifiable) trim finding whose test must stay (impact `breaks-*`, or a citation under a `## Critical
 paths` glob), which takes it out of the list. Both are recomputed from the
 verdicts whenever the stage ends, never stored on their own, so a resume
 cannot apply them twice.
@@ -67,10 +67,11 @@ class VerifyIncomplete(Exception):
 
 
 def important_assessments(state: ReviewState) -> dict[str, Assessment]:
-    """`important` for each confirmed trim finding about a test (its topic is not `docs`) that is
-    rated `breaks-users`/`breaks-business`, or that cites a path under a `## Critical paths` glob."""
+    """`important` for each shown trim finding about a test (its topic is not `docs`) that is rated
+    `breaks-users`/`breaks-business`, or that cites a path under a `## Critical paths` glob. An
+    unverifiable one counts too: it would otherwise be listed, suggesting the removal."""
     candidates = [f for f in state.findings if is_trim(f) and (v := state.verdicts.get(f.id))
-                  and v.status == "confirmed" and v.topic != "docs"]
+                  and v.status in ("confirmed", "unverifiable") and v.topic != "docs"]
     if not candidates:
         return {}
     paths = sorted({c.path for f in candidates for c in f.citations if not c.is_web})

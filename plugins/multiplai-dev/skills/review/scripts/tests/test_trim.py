@@ -23,7 +23,7 @@ from review_pipeline.stages import RunContext
 from review_pipeline.stages.assess import run_assess
 from review_pipeline.stages.find import critical_paths, finder_dimensions
 from review_pipeline.stages.merge import linked
-from review_pipeline.stages.verify import run_verify
+from review_pipeline.stages.verify import important_assessments, run_verify
 from review_pipeline import target as target_mod
 
 ENV = dict(os.environ, GIT_AUTHOR_NAME="Fixture", GIT_AUTHOR_EMAIL="fixture@example.com",
@@ -272,6 +272,15 @@ async def test_a_trim_finding_on_an_important_test_is_labelled_important_and_not
     assert state.assessments[merge.id].label == "important"
     assert state.assessments[critical.id].label == "important"
     assert comment.id not in state.assessments
+
+
+def test_an_unverifiable_trim_finding_on_an_important_test_is_not_listed_either(target_info):
+    trim = trimmed(high_finding())
+    state = ReviewState(target=target_info, findings=[trim], verdicts={trim.id: Verdict(
+        status="unverifiable", topic="tests", impact="breaks-business", reason="could not read the caller")})
+    assert important_assessments(state)[trim.id].label == "important"
+    state.verdicts[trim.id] = state.verdicts[trim.id].model_copy(update={"status": "refuted"})
+    assert important_assessments(state) == {}  # refuted is never listed anyway
 
 
 def test_critical_paths_reads_one_backticked_glob_per_bullet_under_the_heading(trim_repo):

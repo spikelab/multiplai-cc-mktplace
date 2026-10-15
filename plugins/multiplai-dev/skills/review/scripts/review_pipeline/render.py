@@ -272,8 +272,9 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
     out += ["## Appendix — not listed above", "",
             "The record of what the review left out: findings a gate rejected, the verifier refuted, the "
             "assess stage labelled low-value or a repeat of one you rejected, trim suggestions about an "
-            "important test, duplicates merged into another" + (", and in critical mode those not rated as breaking users or the business"
-                         if mode == "critical" else "") + ". None is counted above.", ""]
+            "important test, duplicates merged into another"
+            + (", and in critical mode those not rated as breaking users or the business"
+               if mode == "critical" else "") + ". None is counted above.", ""]
     if not hidden and not state.merged:
         out += ["Nothing was left out.", ""]
     for fd in hidden:

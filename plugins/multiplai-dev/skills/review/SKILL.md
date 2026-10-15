@@ -179,9 +179,10 @@ as a Code finding and never blocks an epic merge on one. `post` posts them only
 when they are accepted in a decisions file. A verifier confirms one only when
 the removal, merge or shortening is safe.
 
-A test is never suggested for removal when it matters. A confirmed trim
-finding about a test is left out of the list, labelled `important` and kept in
-the review's appendix with the reason, when the verifier rates what would break
+A test is never suggested for removal when it matters. A confirmed or
+unverifiable trim finding about a test is left out of the list, labelled
+`important` and kept in the review's appendix with the reason, when the
+verifier rates what would break
 without it `breaks-users` or `breaks-business`, or when any of its citations is
 under a critical path. List critical paths in a `coding-standards.md` (any of
 those the `conventions` finder reads), one glob per bullet in backticks, under
