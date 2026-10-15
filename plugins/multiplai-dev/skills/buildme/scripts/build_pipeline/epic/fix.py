@@ -36,7 +36,16 @@ of records each:
    and it runs again once the others end.
 
 Then the coordinator's review step reads the PR's head again and reuses the
-fixer's last review. The steps that run these are `Coordinator._fix` and
+fixer's last review.
+
+The final fix (plan-review-rounds-and-finders-2026-10-15.md, item 2): when
+the review's recorded decision (`review.decide`) is `final_fix`, the same
+`findings` runs with `--max-rounds` one more than `rounds_done` and
+`--no-review`, so its one round fixes, pushes and replies and nothing reviews
+it. A relaunch keeps the `--max-rounds` it was launched with (`saved_rounds`):
+recomputed after its round finished, it would run, and pay for, another. Its
+result keeps `final_head`, the HEAD it left, which the merge step takes as
+the PR's approved head. The steps that run these are `Coordinator._fix` and
 `Coordinator._fix_pending` in `coordinator.py`.
 """
 
@@ -130,14 +139,35 @@ def budget_stopped(text: str) -> bool:
 
 
 def fix_argv(session_id: str, number: int, change: str, project: Path, max_rounds: int,
-             max_usd: float | None = None) -> list[str]:
+             max_usd: float | None = None, *, final: bool = False) -> list[str]:
+    """*final*: the final fix (`--no-review`), whose round gets no review."""
     argv = ["python", "-m", "build_pipeline", "--session-id", session_id, "findings", "--pr", str(number),
             "--change", change, "--project-dir", str(project), "--auto", "--trust-repo",
             "--max-rounds", str(max_rounds), "--severities", ",".join(review.BLOCKING_SEVERITIES),
             "--code-only"]
+    if final:
+        argv.append(FINAL_FLAG)
     if max_usd is not None:
         argv += ["--max-usd", f"{max(max_usd, 0.0):.6f}"]
     return argv
+
+
+FINAL_FLAG = "--no-review"
+
+
+def is_final(attempt_argv: list[str]) -> bool:
+    """Whether a `fix` record's argv is a final fix's."""
+    return FINAL_FLAG in attempt_argv
+
+
+def pr_of(attempt_argv: list[str]) -> str:
+    """The PR number a `fix` record was launched for."""
+    return attempt_argv[attempt_argv.index("--pr") + 1]
+
+
+def saved_rounds(attempt_argv: list[str]) -> int:
+    """The `--max-rounds` a `fix` record was launched with."""
+    return int(attempt_argv[attempt_argv.index("--max-rounds") + 1])
 
 
 def failed_reason(text: str) -> str | None:
