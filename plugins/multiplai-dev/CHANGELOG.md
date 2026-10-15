@@ -34,7 +34,8 @@ time, not derived from a tag.
   tests and comments.
 - `findings.json` carries a `section` field (`code`, `tests`, `docs` or
   `trim`) on every finding, and the assessment label `important`
-  (`review-viewer/schema/findings.v1.schema.json`). Older files have neither.
+  (`review-viewer/schema/findings.v1.schema.json`), which review-viewer's
+  help explains. Older files have neither.
 
 ### Changed
 - `/multiplai-dev:buildme`: an epic reads each finding's `section`, so a trim
