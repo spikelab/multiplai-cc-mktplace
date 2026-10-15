@@ -26,8 +26,10 @@ time, not derived from a tag.
   environment pytest runs in, so the suite runs on every CPU. `tdd.parallel:
   off` in `specs/config.yaml` keeps the serial run (default `auto`). A command
   that already chooses its workers (`-n`, `--dist`, `-p no:xdist`, `--pdb`,
-  also in `addopts` or `PYTEST_ADDOPTS`), or whose Python buildme cannot
-  tell, runs as written. The narrow runs inside a block's loop are
+  also in `addopts` or `PYTEST_ADDOPTS`), one where pytest will not load
+  xdist (`PYTEST_DISABLE_PLUGIN_AUTOLOAD` or `--disable-plugin-autoload`
+  without `-p xdist`), or one whose Python buildme cannot tell, runs as
+  written. The narrow runs inside a block's loop are
   unchanged, and so are jest and vitest, which already run files in
   parallel.
 

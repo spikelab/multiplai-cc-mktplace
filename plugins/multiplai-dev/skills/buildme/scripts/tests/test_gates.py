@@ -1258,6 +1258,54 @@ class TestParallelFullSuite:
         monkeypatch.setenv("PYTEST_ADDOPTS", "-p no:xdist")
         assert parallel_command(".venv/bin/pytest -q", p, "auto") == ".venv/bin/pytest -q"
 
+    @pytest.mark.parametrize("env, command", [
+        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}, ".venv/bin/pytest -q"),
+        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "0"}, ".venv/bin/pytest -q"),        # any value turns it off
+        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_PLUGINS": "xdist"}, ".venv/bin/pytest -q"),
+        ({}, ".venv/bin/pytest -q --disable-plugin-autoload"),
+    ])
+    def test_xdist_not_loaded_without_autoload_is_kept(self, tmp_path, monkeypatch, env, command):
+        """With plugin autoloading off, pytest loads xdist only when `-p` or
+        `PYTEST_PLUGINS` names it, and rejects `-n` otherwise (exit 4)."""
+        from build_pipeline.gates import parallel_command
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        assert parallel_command(command, self._venv(tmp_path, xdist=True), "auto") == command
+
+    @pytest.mark.parametrize("env, command", [
+        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}, ".venv/bin/pytest -q -p xdist"),
+        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}, ".venv/bin/pytest -q -pxdist.plugin"),
+        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_PLUGINS": "cov,xdist.plugin"}, ".venv/bin/pytest -q"),
+        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_ADDOPTS": "-p xdist"}, ".venv/bin/pytest -q"),
+        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": ""}, ".venv/bin/pytest -q"),
+    ])
+    def test_xdist_named_without_autoload_gets_workers(self, tmp_path, monkeypatch, env, command):
+        from build_pipeline.gates import parallel_command
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        assert parallel_command(command, self._venv(tmp_path, xdist=True), "auto") == f"{command} -n auto"
+
+    @pytest.mark.parametrize("gate", [baseline_test_gate, integration_gate])
+    def test_a_probe_that_times_out_runs_the_command_as_written(self, tmp_path, trust_repo, monkeypatch, gate):
+        """A probe that hangs (a first `uv run` sync) or cannot start leaves
+        the command as written instead of raising out of the gate."""
+        from build_pipeline import gates
+        p = self._venv(tmp_path, xdist=True)
+        python = p / ".venv" / "bin" / "python"
+        python.write_text('#!/bin/sh\n[ "$1" = "-m" ] && shift 2 && echo "ARGS: $*" && exit 0\nexec sleep 5\n')
+        monkeypatch.setattr(gates, "XDIST_PROBE_TIMEOUT", 0.2)
+        assert "ARGS: -q\n" in gate(".venv/bin/pytest -q", p, parallel="auto").metadata["output"]
+
+    def test_a_probe_that_cannot_start_runs_the_command_as_written(self, tmp_path, trust_repo):
+        p = self._venv(tmp_path, xdist=True)
+        (p / ".venv" / "bin" / "python").chmod(0o644)       # PermissionError, an OSError
+        assert "ARGS: -q\n" in integration_gate(".venv/bin/pytest -q", p, parallel="auto").metadata["output"]
+
+    def test_autoload_off_runs_the_gate_as_written(self, tmp_path, trust_repo, monkeypatch):
+        monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+        p = self._venv(tmp_path, xdist=True)
+        assert "ARGS: -q\n" in integration_gate(".venv/bin/pytest -q", p, parallel="auto").metadata["output"]
+
     @pytest.mark.parametrize("command", ["npm test", "make test", "tox -e py", "pytest -q && echo x",
                                          "cargo test"])
     def test_other_runners_are_kept(self, tmp_path, command):

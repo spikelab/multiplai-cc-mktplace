@@ -133,13 +133,27 @@ def _chose_workers(args: list[str]) -> bool:
     return False
 
 
+def _xdist_loads(args: list[str]) -> bool:
+    """False when pytest will not load xdist, and so rejects `-n`: plugin
+    autoloading is off (`PYTEST_DISABLE_PLUGIN_AUTOLOAD` set to any value, or
+    `--disable-plugin-autoload`) and neither `-p xdist` / `-p xdist.plugin`
+    nor `PYTEST_PLUGINS=xdist.plugin` names it."""
+    if not os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") and "--disable-plugin-autoload" not in args:
+        return True
+    if "xdist.plugin" in (p.strip() for p in os.environ.get("PYTEST_PLUGINS", "").split(",")):
+        return True
+    named = [args[i + 1] if t == "-p" and i + 1 < len(args) else t[2:]
+             for i, t in enumerate(args) if t.startswith("-p")]
+    return any(n in ("xdist", "xdist.plugin") for n in named)
+
+
 def parallel_command(test_command: str, project_dir: Path, parallel: str = "off") -> str:
     """*test_command* with `-n auto` appended when *parallel* is "auto", the
     command runs pytest (`narrow_tests.runner_of`), nothing in it, its
-    `addopts` or `PYTEST_ADDOPTS` chose the workers already, and
-    `python -c "import xdist"` succeeds in the environment pytest runs in.
-    Otherwise *test_command* unchanged. Runs the project's interpreter, so
-    callers check the repo is trusted first."""
+    `addopts` or `PYTEST_ADDOPTS` chose the workers already, pytest loads
+    xdist (`_xdist_loads`), and `python -c "import xdist"` succeeds in the
+    environment pytest runs in. Otherwise *test_command* unchanged. Runs the
+    project's interpreter, so callers check the repo is trusted first."""
     if parallel != "auto" or not test_command:
         return test_command
     project_dir = Path(project_dir)
@@ -152,7 +166,7 @@ def parallel_command(test_command: str, project_dir: Path, parallel: str = "off"
         args = addopts + shlex.split(os.environ.get("PYTEST_ADDOPTS", "")) + tokens[_pytest_at(tokens) + 1:]
     except (_UnreadableConfig, ValueError):
         return test_command
-    if _chose_workers(args):
+    if _chose_workers(args) or not _xdist_loads(args):
         return test_command
     probe = _xdist_probe(tokens, project_dir)
     if probe is None:

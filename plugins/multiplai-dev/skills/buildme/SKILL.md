@@ -322,7 +322,9 @@ under the same `uv run` / `poetry run` / `pdm run` / `hatch run` /
 `pipenv run` / `rye run`. A command buildme cannot place in an environment
 (`env X=1 pytest`, a task runner) runs as written, and so does one that
 already chooses its workers (`-n`, `--numprocesses`, `--dist`, `-p no:xdist`,
-`--pdb`, in the command, `addopts` or `PYTEST_ADDOPTS`). The narrow runs in
+`--pdb`, in the command, `addopts` or `PYTEST_ADDOPTS`), or where pytest will
+not load xdist (`PYTEST_DISABLE_PLUGIN_AUTOLOAD` or `--disable-plugin-autoload`
+with no `-p xdist` or `PYTEST_PLUGINS=xdist.plugin`). The narrow runs in
 the loop never add it. jest and vitest already run test files in parallel,
 so Node commands are unchanged.
 
