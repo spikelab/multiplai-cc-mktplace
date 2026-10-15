@@ -1,6 +1,7 @@
 """Prompt templates for implementation and refactoring agents."""
 
 from ..gates import TEST_CHANGE_MARKER
+from .writing_rules import COMMENT_RULE
 
 # How an agent that may change a test after the RED gate declares the change.
 # Built from the gate's own marker, so this text and
@@ -54,6 +55,7 @@ it tidies, it does not rescue. Your code should be production-quality as written
 5. **Run the test command below** after implementation to verify nothing is broken.
 6. **Implement exactly what the tests require.** Build for today's tests, not
    imagined future needs.
+7. """ + COMMENT_RULE + """
 
 ## Test Command
 {test_command}
@@ -122,6 +124,7 @@ refactoring agent will clean up the code afterward.
    then declare it in your report as the Output section below says.
 4. **Run the test command below** after implementation.
 5. **Leave refactoring to the next phase.**
+6. """ + COMMENT_RULE + """
 
 ## Test Command
 {test_command}
