@@ -267,7 +267,8 @@ has no PR.
 over the existing tests and comments, as a separate cleanup (see "Trim").
 
 `--plan-only` resolves the target, prints one line per group and a total line
-(`groups: <n>  finder calls: <n>  files skipped: <n>`), writes
+(`groups: <n>  finder calls: <n>  files skipped: <n>`; the calls include the
+extra finders a first round with `--extra-finders` would ask), writes
 `<out>/<repo>/<object>/plan.txt`, and stops before any model call.
 
 ## What this skill does on the machine

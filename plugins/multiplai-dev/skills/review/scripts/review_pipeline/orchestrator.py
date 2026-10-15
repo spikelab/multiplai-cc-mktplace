@@ -20,6 +20,7 @@ import yaml
 from multiplai_core.log_utils import log_event
 
 from . import budget, ledger as review_ledger, rounds, runlock, target as target_mod, timings
+from .chunks import diff_files, finder_chunks
 from .config import ReviewConfig, run_config
 from .export import producer, run_record, to_findings_file, write_checks_file, write_findings_file
 from .facts import FACTS_FILE
@@ -451,12 +452,17 @@ def plan_text(state: ReviewState, config: ReviewConfig) -> str:
         chars = sum(file_chars(t, f) for f in group)
         where = f" ({group[0]} .. {group[-1]})" if len(group) > 1 else (f" ({group[0]})" if group else "")
         lines.append(f"group {i}: {len(group)} files, {chars} characters{where}")
-    lines.append(f"groups: {len(groups)}  finder calls: {len(groups) * len(dims)}  files skipped: {len(t.skipped)}")
+    calls = len(groups) * len(dims)
+    if state.extra_finders:  # the same chunks `run_find` asks, one call each
+        diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
+        calls += len(finder_chunks(diff_files(diff)))
+    lines.append(f"groups: {len(groups)}  finder calls: {calls}  files skipped: {len(t.skipped)}")
     return "\n".join(lines) + "\n"
 
 
 def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[str, Path]:
     """Resolve the target and write `plan.txt` beside `skipped.txt`; no model call, no ledger."""
+    spec = _extra_finders_from(config, spec)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, lock=lock)
         text = plan_text(state, config)
@@ -465,9 +471,13 @@ def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[st
     return text, path
 
 
+def _extra_finders_from(config: ReviewConfig, spec: TargetSpec) -> TargetSpec:
+    """`review.yaml`'s `extra_finders: true` turns them on as `--extra-finders` does."""
+    return replace(spec, extra_finders=True) if config.extra_finders and not spec.extra_finders else spec
+
+
 async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:
-    if config.extra_finders and not spec.extra_finders:
-        spec = replace(spec, extra_finders=True)
+    spec = _extra_finders_from(config, spec)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, check_interrupted=True, lock=lock)
         # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.

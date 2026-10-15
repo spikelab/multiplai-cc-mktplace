@@ -265,3 +265,20 @@ def test_extra_finders_go_with_a_change_review(two_chunk_repo, tmp_path, capsys)
                  "--tree", "--trust-repo", "--extra-finders"])
     assert code == 2
     assert "--extra-finders goes with a change review" in capsys.readouterr().err
+
+
+def test_plan_only_counts_the_extra_finders(two_chunk_repo, tmp_path, capsys):
+    """`--plan-only`'s total line counts the calls the review would make, the extra finders' too."""
+    repo, base, head = two_chunk_repo
+
+    def calls(out: Path, *extra: str) -> int:
+        assert main(["--out", str(out), "review", "--repo", str(repo), "--range", f"{base}..{head}",
+                     "--plan-only", *extra]) == 0
+        total = [line for line in capsys.readouterr().out.splitlines() if "finder calls:" in line][-1]
+        return int(total.split("finder calls:")[1].split()[0])
+
+    without = calls(tmp_path / "a")
+    assert calls(tmp_path / "b", "--extra-finders") == without + 2
+    (tmp_path / "c").mkdir()
+    (tmp_path / "c" / "review.yaml").write_text("extra_finders: true\n")
+    assert calls(tmp_path / "c") == without + 2
