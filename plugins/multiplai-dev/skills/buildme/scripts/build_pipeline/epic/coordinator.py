@@ -1812,7 +1812,7 @@ class Coordinator:
             if (c.status == "merged" or waits) and self._final_fix(c) is not None:
                 self._left_issue(c)
         self._summary(run_dir)
-        bad =[c for c in self.children.values() if c.status in ("failed", "unknown")]
+        bad = [c for c in self.children.values() if c.status in ("failed", "unknown")]
         for c in bad:       # beside EPIC:MERGE_WAITING too, not only in the summary
             print(f"EPIC: child {c.id} {c.status}: {c.reason}", file=sys.stderr, flush=True)
         if self.budget_stop is not None:      # the spend at exit, the running children's included
