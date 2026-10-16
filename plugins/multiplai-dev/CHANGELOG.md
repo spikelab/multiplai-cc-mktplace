@@ -17,6 +17,20 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.79.2] - 2026-10-16
+
+### Fixed
+- `/multiplai-dev:review` now gives its finders a diff of up to 300,000
+  characters whole, where it used to cut it at 120,000. On a large change,
+  the cut used to hide the files that come last in the diff from every
+  finder. On PR #295 of this repository, that was most of the new code.
+- When a diff is still too large, the finders can now read the rest of it.
+  Their prompt has always said where the whole diff is. Since 0.79.1 limits
+  their reads to the snapshot, that file was out of their reach. The review
+  now puts a copy in the snapshot and points to it.
+- The review now says when a finder saw only part of the diff, as a line
+  under **Agent failures** in the review's header.
+
 ## [0.79.1] - 2026-10-16
 
 ### Security

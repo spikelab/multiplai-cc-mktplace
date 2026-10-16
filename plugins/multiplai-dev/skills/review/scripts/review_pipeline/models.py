@@ -154,6 +154,10 @@ class NeedAsk(_Model):
 # (`deps.py`): `<snapshot>/.review-deps/<name>@<commit[:12]>/`.
 DEPS_DIR = ".review-deps"
 
+# The change's whole diff, copied into the snapshot so an agent whose prompt
+# holds only part of it can read the rest: its reads are limited to the snapshot.
+DIFF_FILE = ".review-diff.patch"
+
 
 class DepEntry(BaseModel):
     """One git dependency a uv.lock at head pins, and what `deps.materialize` did with it.

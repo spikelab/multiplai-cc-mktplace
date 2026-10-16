@@ -306,3 +306,17 @@ def test_plan_only_counts_the_extra_finders(two_chunk_repo, tmp_path, capsys):
     (tmp_path / "c").mkdir()
     (tmp_path / "c" / "review.yaml").write_text("extra_finders: true\n")
     assert calls(tmp_path / "c") == without + 2
+
+
+def test_a_chunk_larger_than_the_prompt_cap_is_reported(monkeypatch):
+    from types import SimpleNamespace
+
+    from review_pipeline.chunks import Chunk
+    from review_pipeline.stages import find as find_stage
+
+    monkeypatch.setattr(find_stage, "DIFF_PROMPT_CHARS", 10)
+    change = SimpleNamespace(is_tree=False)
+    notes = find_stage.cut_notes(change, "x" * 10, [Chunk(text="y" * 5), Chunk(text="z" * 11)])
+    assert notes == ["find: extra finder 2's part of the diff is 11 characters; its prompt held the first 10 "
+                     "and pointed to the rest in .review-diff.patch"]
+    assert find_stage.cut_notes(SimpleNamespace(is_tree=True), "x" * 11, []) == []

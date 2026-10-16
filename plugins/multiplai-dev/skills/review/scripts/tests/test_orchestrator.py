@@ -9,11 +9,12 @@ from types import SimpleNamespace
 import pytest
 
 from conftest import DEF_CITATION, KEYWORD_CITATION, SCHEMA, high_finding
-from review_pipeline import budget, orchestrator, sdk
+from review_pipeline import budget, orchestrator, prompts, sdk
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS
-from review_pipeline.models import (AssessOutput, DuplicateSet, FinderOutput, MergeOutput, RepeatsOutput,
-                                    ReviewState, Verdict)
+from review_pipeline.models import (DIFF_FILE, AssessOutput, DuplicateSet, FinderOutput, MergeOutput,
+                                    RepeatsOutput, ReviewState, Verdict)
+from review_pipeline.stages import find as find_stage
 
 
 def reworded_finding():
@@ -149,6 +150,51 @@ def test_every_stage_runs_in_its_snapshot(fixture_repo, tmp_path, agents):
     assert {"find", "verify", "merge"} <= {label.split(":")[0] for label, _ in fake.cwds}
     for label, cwd in fake.cwds:
         assert cwd == str(target_dir / ("assess-tree" if label == "assess" else "tree")), label
+
+
+def _seen_by_finders(fake: FakeAgents, monkeypatch) -> list[tuple[str, str]]:
+    """Wrap *fake*: each finder call records its prompt and the diff file in its snapshot."""
+    seen: list[tuple[str, str]] = []
+
+    async def spy(prompt, schema, *, budget_label="", **kwargs):
+        if budget_label.startswith("find:"):
+            seen.append((prompt, (Path(kwargs["cwd"]) / DIFF_FILE).read_text()))
+        return await fake(prompt, schema, budget_label=budget_label, **kwargs)
+    monkeypatch.setattr(sdk, "agent_call_structured", spy)
+    return seen
+
+
+def test_finders_find_the_whole_diff_in_their_snapshot(fixture_repo, tmp_path, agents, monkeypatch):
+    """The snapshot holds the diff: an agent's reads are limited to it, and a cut prompt points there."""
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    seen = _seen_by_finders(agents(), monkeypatch)
+    assert main(_review_args(repo, base, head, out)) == 0
+    diff = (out / "booking-engine" / f"range-{base}..{head}" / "diff.patch").read_text()
+    assert seen and all(copy == diff for _, copy in seen)
+    assert all("diff cut" not in prompt for prompt, _ in seen)
+    state = ReviewState.model_validate_json(
+        (out / "booking-engine" / f"range-{base}..{head}" / "review-state.json").read_text())
+    assert not [e for e in state.errors if "characters" in e]
+
+
+def test_a_cut_diff_points_to_the_snapshot_copy_and_is_reported(fixture_repo, tmp_path, agents, monkeypatch):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    monkeypatch.setattr(prompts, "DIFF_PROMPT_CHARS", 50)
+    monkeypatch.setattr(find_stage, "DIFF_PROMPT_CHARS", 50)
+    seen = _seen_by_finders(agents(), monkeypatch)
+    assert main(_review_args(repo, base, head, out)) == 0
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
+    diff = (target_dir / "diff.patch").read_text()
+    for prompt, copy in seen:
+        assert f"diff cut at 50 of {len(diff)} characters; the whole diff is `{DIFF_FILE}`" in prompt
+        assert copy == diff
+    state = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
+    note = (f"find: the diff is {len(diff)} characters; each finder's prompt held the first 50 and pointed "
+            f"to the rest in {DIFF_FILE}")
+    assert state.errors.count(note) == 1
+    assert note in (target_dir / f"review-example-booking-engine--{base}..{head}.md").read_text()
 
 
 def test_resume_after_a_kill_following_verify(fixture_repo, tmp_path, agents, capsys):

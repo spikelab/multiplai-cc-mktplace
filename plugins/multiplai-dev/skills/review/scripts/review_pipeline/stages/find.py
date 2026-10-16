@@ -19,11 +19,11 @@ from pathlib import PurePosixPath
 from code_facts import Fact
 
 from .. import checks, sdk, timings
-from ..chunks import diff_files, finder_chunks
+from ..chunks import Chunk, diff_files, finder_chunks
 from ..config import EXTRA_DIMENSION, TRIM_DIMENSION, ReviewConfig
 from ..gates import file_at_head, finding_gate, gated_need, reason_kind
-from ..models import (AgentCheck, Finding, FinderOutput, FinderResult, GateCheck, Need, Rejected, ReviewState,
-                      TargetInfo)
+from ..models import (DIFF_FILE, AgentCheck, Finding, FinderOutput, FinderResult, GateCheck, Need, Rejected,
+                      ReviewState, TargetInfo)
 from ..prompts import DIFF_PROMPT_CHARS
 from ..prompts import find as prompt
 from . import RunContext, bounded, fix_citation, relative_path
@@ -190,6 +190,19 @@ def group_facts(facts: list[Fact], group: list[str] | None) -> list[Fact]:
     return [f for f in facts if any(c.path in files for c in f.citations)]
 
 
+def cut_notes(target: TargetInfo, diff: str, chunks: list[Chunk]) -> list[str]:
+    """A line for each finder prompt that holds only part of its diff (`prompts.diff_block` cuts it)."""
+    notes = []
+    if not target.is_tree and len(diff) > DIFF_PROMPT_CHARS:
+        notes.append(f"find: the diff is {len(diff)} characters; each finder's prompt held the first "
+                     f"{DIFF_PROMPT_CHARS} and pointed to the rest in {DIFF_FILE}")
+    for i, chunk in enumerate(chunks):
+        if len(chunk.text) > DIFF_PROMPT_CHARS:
+            notes.append(f"find: extra finder {i + 1}'s part of the diff is {len(chunk.text)} characters; its "
+                         f"prompt held the first {DIFF_PROMPT_CHARS} and pointed to the rest in {DIFF_FILE}")
+    return notes
+
+
 async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
     if state.past("find"):
         return state
@@ -210,6 +223,10 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
         for i, group in enumerate(groups):
             if any(key not in state.finder_results for key, d, g in pairs if g == i and d == "conventions"):
                 rules[i] = conventions_blocks(target, group)
+    for note in cut_notes(target, ctx.diff, chunks):
+        if note not in state.errors:  # a resume mid-stage computes the same notes
+            log.warning("%s: %s", target.slug, note)
+            state.errors.append(note)
     hunks = checks.diff_hunks(ctx.diff[:DIFF_PROMPT_CHARS])
     todo = [p for p in pairs if p[0] not in state.finder_results]
     facts = state.facts.facts if cfg.find_with_facts and state.facts else []

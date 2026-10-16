@@ -98,6 +98,13 @@ nothing to the repo) and every agent runs with `cwd` there. Paths the agents
 return are made repo-relative in `stages/__init__.py`. The snapshot is deleted
 when the run finishes.
 
+The orchestrator also copies a change's `diff.patch` into the snapshot as
+`.review-diff.patch` (`models.DIFF_FILE`). A finder's prompt holds the diff up
+to `prompts.DIFF_PROMPT_CHARS` (300 000) and, past that, says to read the rest
+from that copy: the agents' reads are limited to the snapshot, so the
+`diff.patch` beside it is out of their reach. `stages/find.cut_notes` adds a
+line to `state.errors` for each prompt that held only part of its diff.
+
 ## The gates
 
 | Gate | Passes when | On failure |

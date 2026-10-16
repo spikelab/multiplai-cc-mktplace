@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from ..models import DEPS_DIR, TargetInfo
+from ..models import DEPS_DIR, DIFF_FILE, TargetInfo
 
 # Diffs larger than this are cut in the prompt; the agent is told where the
-# whole diff is.
-DIFF_PROMPT_CHARS = 120_000
+# whole diff is (`DIFF_FILE` in its snapshot). About 75-100k tokens, which
+# leaves the rest of a 200k-token context for the files the agent reads.
+DIFF_PROMPT_CHARS = 300_000
 
 
 # Externally authored text (a PR body, API output, a fetched page) goes into a
@@ -75,7 +76,8 @@ def diff_block(target: TargetInfo, diff: str) -> str:
         body = diff
     else:
         body = diff[:DIFF_PROMPT_CHARS] + (
-            f"\n[... diff cut at {DIFF_PROMPT_CHARS} characters; the whole diff is at {target.diff_path} ...]"
+            f"\n[... diff cut at {DIFF_PROMPT_CHARS} of {len(diff)} characters; the whole diff is `{DIFF_FILE}` "
+            f"in your working directory: Read the rest of it from there with an offset ...]"
         )
     return f"The change under review is {target.base_sha[:12]}..{target.head_sha[:12]}:\n\n```diff\n{body}\n```"
 

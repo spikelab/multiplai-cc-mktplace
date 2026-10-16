@@ -27,7 +27,7 @@ from .config import ReviewConfig, run_config
 from .export import producer, run_record, to_findings_file, write_checks_file, write_findings_file
 from .facts import FACTS_FILE
 from .gates import gated_need, reason_kind
-from .models import MODES, SEVERITIES, ReviewState
+from .models import DIFF_FILE, MODES, SEVERITIES, ReviewState
 from .progress import ProgressWriter
 from .render import count_line, listed, summary_path, write_review, write_rollups, write_runs
 from .stages import RunContext
@@ -199,6 +199,8 @@ async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig
     snapshot = target_mod.snapshot_head(t, target_dir / "tree")
     _with_deps(state, snapshot, config)
     diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
+    if diff and not t.is_tree:
+        (snapshot / DIFF_FILE).write_text(diff, encoding="utf-8")
     ctx = RunContext(config=config, snapshot=snapshot, diff=diff, progress=progress, session_id=session_id,
                      target_dir=target_dir)
     state.run_config = run_config(config)
