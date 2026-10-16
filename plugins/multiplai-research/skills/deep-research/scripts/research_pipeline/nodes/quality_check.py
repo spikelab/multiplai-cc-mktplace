@@ -1,7 +1,7 @@
 """Quality check node — pre-synthesis go/no-go assessment.
 
-Runs after REASSESS, before SYNTHESIZE. Uses the parse-tier model (sonnet)
-at the "quality_check" effort from config.efforts (default "medium").
+Runs after REASSESS, before SYNTHESIZE. Uses the parse-tier model
+at the "quality_check" effort from config.efforts.
 Prevents synthesis on research that's completely
 empty, but has a strong GO bias — aborting after expensive fetch+extract
 is almost always the worse outcome. GO/NO-GO thresholds scale with the

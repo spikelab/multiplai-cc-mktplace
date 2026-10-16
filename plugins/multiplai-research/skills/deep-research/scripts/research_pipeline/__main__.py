@@ -128,7 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         type=str,
         default=None,
-        help="Override model for ALL pipeline nodes (bypasses ceiling)",
+        help="Override model for ALL pipeline nodes",
     )
     parser.add_argument(
         "--thinking",

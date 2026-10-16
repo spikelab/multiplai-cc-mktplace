@@ -1,7 +1,6 @@
 ---
 name: deep-research
 description: Conduct web research using a code-driven pipeline (plan, diverge, challenge, search, triage, read, reassess, synthesize). Asks clarifying questions first, searches via Brave/Tavily/Exa/Serper/You.com, follows links by default, and outputs at three detail levels (gist, structured, detailed).
-effort: medium
 ---
 
 # Deep Research — Thin Dispatcher
@@ -242,8 +241,10 @@ retune both parse nodes, write `[deep-research.extract]` and
 
 On the CLI, `--model` overrides the model on every node, `--effort` the effort
 on every node, and `--thinking on|off` the thinking on every node — each covers
-its own axis and nothing else. The `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT`
-ceilings cap the model and effort axes.
+its own axis and nothing else. A node that none of these name runs on
+`MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT` (environment, then `multiplai.conf`),
+else on the model and effort of the Claude Code session that started the run.
+Nothing caps a configured model or effort.
 
 `THINKING` controls extended thinking, which is on by default in the Agent SDK
 and adds ~15s of latency per call. The mechanical nodes — `search`,

@@ -279,10 +279,13 @@ class TestEffortAndModelConfig:
             model=None,
         )
         config = ResearchConfig.from_cli_args(args)
-        # All nodes should have the DEFAULT_MODEL, not None or empty
+        # Every node keeps its default: DEFAULT_MODEL / PARSE_MODEL, which are
+        # None when multiplai.conf names no model (run_agent then falls back
+        # to default_model()).
+        from research_pipeline.config import DEFAULT_MODEL, PARSE_MODEL
+
         for node_name, model_value in config.models.items():
-            assert model_value != "test-model-override"
-            assert model_value  # not empty/None
+            assert model_value in (DEFAULT_MODEL, PARSE_MODEL), node_name
 
 
 class TestCLIArgs:

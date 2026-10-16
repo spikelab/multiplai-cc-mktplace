@@ -17,18 +17,9 @@ SummaryLevel = Literal["gist", "structured", "detailed"]
 Preset = Literal["micro", "quick", "standard", "thorough"]
 ResearchType = Literal["general", "company", "job-market", "fact-check", "theme"]
 
-from .env import load_multiplai_conf, pick_model, resolve_effort
+from .env import load_multiplai_conf, pick_model
 
 log = logging.getLogger(__name__)
-
-# Reasoning nodes run opus (hard work); the high-volume per-source parse nodes
-# (triage, extract) run sonnet (cheap bulk work). Both are resolved from a
-# semantic tier via pick_model and capped by the MULTIPLAI_MODEL ceiling, so a
-# sonnet ceiling still forces every node to sonnet. No dated model literal here —
-# the family→ID map is the single source of truth in multiplai_core.env. Retune
-# per task in multiplai.conf: [deep-research] / [deep-research.parse] MODEL=...
-DEFAULT_MODEL = pick_model("opus", task="deep-research")
-PARSE_MODEL = pick_model("sonnet", task="deep-research.parse")
 
 
 def _conf_sections() -> Mapping[str, Mapping[str, str]]:
@@ -55,13 +46,29 @@ def _conf_section_value(
     return (section.get(key) or "").strip().lower()
 
 
+# No built-in model. A node runs on the model multiplai.conf names for it —
+# [deep-research.parse] MODEL= for the parse nodes, [deep-research] MODEL= for
+# every node — and otherwise on None, which run_agent resolves through
+# multiplai_core.session.default_model(): MULTIPLAI_MODEL, then the Claude Code
+# session's model. pick_model expands a family alias to its current ID.
+def _conf_model(task: str, default: str | None) -> str | None:
+    """``[task] MODEL=`` from multiplai.conf as a model ID, else *default*."""
+    if not _conf_section_value(task, "MODEL"):
+        return default
+    return pick_model(task=task)
+
+
+DEFAULT_MODEL = _conf_model("deep-research", None)
+PARSE_MODEL = _conf_model("deep-research.parse", DEFAULT_MODEL)
+
+
 def conf_effort(
     task: str,
     default: str | None = None,
     *,
     sections: Mapping[str, Mapping[str, str]] | None = None,
 ) -> str | None:
-    """``EFFORT=`` for *task* from multiplai.conf, capped by MULTIPLAI_EFFORT.
+    """``EFFORT=`` for *task* from multiplai.conf, used as written.
 
     Model and effort are two axes of the same tuning decision, and only the
     model half was configurable without a code edit — a node could be retuned
@@ -72,11 +79,7 @@ def conf_effort(
     default below is unchanged unless someone opts in.
     """
     requested = _conf_section_value(task, "EFFORT", sections)
-    if not requested:
-        return default
-    # The ceiling exists so a budget run can force every node down; it must
-    # apply to a conf override exactly as it applies to a code default.
-    return resolve_effort(requested)
+    return requested or default
 
 
 def _node_effort(
@@ -174,20 +177,21 @@ def _node_thinking(
     )
 
 
-# Per-node reasoning effort: mechanical parse/search work runs "low", the
-# quality gate "medium", reasoning nodes None (SDK default).
+# Per-node reasoning effort: no built-in value. None means run_agent resolves
+# it through multiplai_core.session.default_effort(): MULTIPLAI_EFFORT, then
+# the Claude Code session's effort.
 _EFFORT_DEFAULTS: tuple[tuple[str, str | None], ...] = (
     ("plan", None),
     ("diverge", None),
     ("challenge", None),
-    ("search", "low"),
-    ("triage_relevance", "low"),
-    ("extract", "low"),
-    ("verify", "low"),
+    ("search", None),
+    ("triage_relevance", None),
+    ("extract", None),
+    ("verify", None),
     ("reassess", None),
     ("synthesize", None),
     ("adversarial", None),
-    ("quality_check", "medium"),
+    ("quality_check", None),
 )
 
 # Per-node extended thinking: mechanical parse/search work runs with thinking
@@ -335,7 +339,7 @@ class ResearchConfig:
     # Session tracking
     session_id: str = ""  # Claude Code session ID for log correlation
 
-    # Effort level for all SDK calls (low/medium/high). None = SDK default.
+    # Effort level for all SDK calls (low/medium/high). None = per-node defaults.
     # Kept for record/CLI parity — call sites read the per-node `efforts` map.
     effort: str | None = None
 
@@ -343,9 +347,9 @@ class ResearchConfig:
     # defaults. Kept for record/CLI parity — call sites read `thinkings`.
     thinking: str | None = None
 
-    # Per-node model tiers: opus for reasoning, sonnet for the high-volume
-    # per-source parse nodes (triage, extract). `--model` overrides all nodes.
-    models: dict[str, str] = field(
+    # Per-node models: the parse nodes read PARSE_MODEL, the rest
+    # DEFAULT_MODEL; None runs on default_model(). `--model` overrides all nodes.
+    models: dict[str, str | None] = field(
         default_factory=lambda: {
             "plan": DEFAULT_MODEL,
             "diverge": DEFAULT_MODEL,
@@ -398,7 +402,7 @@ class ResearchConfig:
             effort=getattr(args, "effort", None),
             thinking=getattr(args, "thinking", None),
         )
-        # Global model override — bypasses ceiling, sets all nodes to same model
+        # Global model override — sets all nodes to same model
         model_override = getattr(args, "model", None)
         if model_override:
             config.models = {k: model_override for k in config.models}

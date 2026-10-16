@@ -55,7 +55,7 @@ All tests use stubs/mocks — no real API calls. Run in milliseconds.
 **Model/effort/thinking tiers — three axes, and a new call site must set all
 three.** Every LLM call site reads `config.models[node]`,
 `config.efforts[node]` **and** `config.thinkings[node]`. Search, triage,
-extract, and verify run the parse-tier model (sonnet) at `effort="low"` with
+extract, and verify run the parse-tier model with
 `thinking={"type": "disabled"}` — they're mechanical formatting/parsing work,
 and extended thinking costs ~15s per call there for nothing. The Claude Agent
 search provider gets its pin via
