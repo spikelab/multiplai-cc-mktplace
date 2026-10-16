@@ -3,8 +3,8 @@
 - No shell: each call is a fixed argv list, `shell=False`.
 - `gh` goes through `_run_gh` (copied from buildme's `git_ops._run_gh`) so
   tests stub it without stubbing git.
-- Writes: `git push -u origin <branch>` (never `--force`), `gh pr create`,
-  `gh pr edit --body-file`, `gh pr comment --body-file`. Nothing here merges,
+- Writes: `git push -u origin refs/heads/<b>:refs/heads/<b>` (never `--force`), `gh pr create`,
+  `gh pr edit <url> --body-file`, `gh pr comment <url> --body-file`. Nothing here merges,
   closes a PR, deletes a branch or edits a title or labels.
 - A failure returns a `Result`; callers turn it into `PR_DIAGNOSIS:` and exit 2.
 """
@@ -86,6 +86,36 @@ def current_branch(repo: Path) -> str:
 
 def _ref_exists(repo: Path, ref: str) -> bool:
     return _run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=repo).ok
+
+
+def local_branch_exists(repo: Path, name: str) -> bool:
+    return _ref_exists(repo, f"refs/heads/{name}")
+
+
+def valid_branch(repo: Path, name: str) -> bool:
+    """A valid Git branch name that cannot be read as an option. `--branch` also expands
+    `@{-N}`, so the name must come back unchanged."""
+    if not name or name.startswith("-"):
+        return False
+    res = _run(["git", "check-ref-format", "--branch", name], cwd=repo)
+    return res.ok and res.stdout.strip() == name
+
+
+_REMOTE_RE = re.compile(r"(?:https://[^/\s]+/|git@[^:\s]+:)([^/\s]+)/([^/\s]+?)(?:\.git)?/?")
+_URL_REPO_RE = re.compile(r"https://[^/\s]+/([^/\s]+)/([^/\s]+)/pull/\d+/?")
+
+
+def origin_repo(repo: Path) -> str | None:
+    """`owner/name` of the checkout's `origin` (an `https://` or `git@host:` URL); None otherwise."""
+    res = _run(["git", "remote", "get-url", "origin"], cwd=repo)
+    m = _REMOTE_RE.fullmatch(res.stdout.strip()) if res.ok else None
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
+def url_repo(url: str) -> str | None:
+    """`owner/name` of a PR URL `https://<host>/<owner>/<name>/pull/<n>`; None otherwise."""
+    m = _URL_REPO_RE.fullmatch((url or "").strip())
+    return f"{m.group(1)}/{m.group(2)}" if m else None
 
 
 def git_default_branch(repo: Path) -> str | None:
@@ -185,7 +215,7 @@ def gh_default_branch(repo: Path) -> str | None:
 
 def view_pr(repo: Path, pr: str) -> tuple[dict | None, Result]:
     res = _run_gh(["gh", "pr", "view", pr, "--json",
-                   "body,author,number,url,baseRefName,headRefName,headRefOid"], cwd=repo)
+                   "body,author,number,url,baseRefName,headRefName,headRefOid,isCrossRepository"], cwd=repo)
     if not res.ok:
         return None, res
     try:
@@ -209,11 +239,12 @@ def viewer_login(repo: Path) -> str:
 
 
 def push_argv(branch: str) -> list[str]:
-    return ["git", "push", "-u", "origin", branch]
+    # A full refspec: the local branch and nothing else, to the branch of the same name.
+    return ["git", "push", "-u", "origin", f"refs/heads/{branch}:refs/heads/{branch}"]
 
 
 def push(repo: Path, branch: str) -> Result:
-    """`git push -u origin <branch>`. Never forces."""
+    """`git push -u origin refs/heads/<branch>:refs/heads/<branch>`. Never forces."""
     return _run(push_argv(branch), cwd=repo, timeout=_PUSH_TIMEOUT)
 
 

@@ -20,8 +20,8 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/pr/scripts" python -m pr_pipeli
 
 | Command | Does |
 |---|---|
-| `open --repo <dir> --change-dir <dir> [--base <branch>] [--head <branch>] [--title <t>] [--ready \| --draft] [--no-push] [--section <file>]… [--ticket-url <url>] [--dry-run]` | Pushes the branch (`git push -u origin <head>`, never `--force`) unless `--no-push`, then opens the PR with `gh pr create --body-file`. Draft unless `--ready`, or `pr.draft: false` in `specs/config.yaml`; `--draft` opens a draft whatever `pr.draft` says. Title defaults to `buildme: <change-name>`. |
-| `edit <pr-number\|url> --repo <dir> --change-dir <dir> [--section <file>]… [--push] [--dry-run]` | Reads the current description (`gh pr view --json body`), refreshes the sections this skill owns, and writes the whole description back with `gh pr edit --body-file`. Pushes first only with `--push`. Measures the diff on the PR's head commit (`headRefOid`), fetched from `origin` when the checkout lacks it, so a fork's PR or a branch never fetched is measured right; with `--push`, on the local branch being pushed. When that commit cannot be had, the Size section says "not measured" with a `PR_DIAGNOSIS:` line, rather than measuring whatever is checked out. Never changes the title or labels. |
+| `open --repo <dir> --change-dir <dir> [--base <branch>] [--head <branch>] [--title <t>] [--ready \| --draft] [--no-push] [--section <file>]… [--ticket-url <url>] [--dry-run]` | Pushes the branch (`git push -u origin refs/heads/<head>:refs/heads/<head>`, never `--force`) unless `--no-push`, then opens the PR with `gh pr create --body-file`. Draft unless `--ready`, or `pr.draft: false` in `specs/config.yaml`; `--draft` opens a draft whatever `pr.draft` says. Title defaults to `buildme: <change-name>`. Refuses a `--head` that is not a valid Git branch name or that starts with `-`. |
+| `edit <pr-number\|url> --repo <dir> --change-dir <dir> [--section <file>]… [--push] [--dry-run]` | Reads the current description (`gh pr view --json body`), refreshes the sections this skill owns, and writes the whole description back with `gh pr edit <url> --body-file`, naming the PR by the URL `gh pr view` gives, never by its bare number. Refuses before reading the diff when that URL's repository is not the checkout's `origin` (run it from a checkout of the PR's repository), or when `gh` gives no URL. Pushes first only with `--push`, and then only to the PR's own branch: it refuses a PR whose head is on a fork (`isCrossRepository`; push to the fork yourself, then run `edit` without `--push`), and a head branch that is not in the checkout. Refuses a PR head that is not a valid Git branch name. Measures the diff on the PR's head commit (`headRefOid`), fetched from `origin` when the checkout lacks it, so a fork's PR or a branch never fetched is measured right; with `--push`, on the local branch being pushed. When that commit cannot be had, the Size section says "not measured" with a `PR_DIAGNOSIS:` line, rather than measuring whatever is checked out. Never changes the title or labels. |
 | `render --repo <dir> --change-dir <dir> [--section <file>]…` | Prints the description `open` would write. No `gh` call, no push. |
 
 `--change-dir` is the change's documents: `specs/changes/<name>/` or its
@@ -36,9 +36,9 @@ under the user's `gh` login.
 
 ## What it writes outside its output
 
-- `git push -u origin <branch>` (`open` without `--no-push`, `edit --push`).
-- `gh pr create` (`open`), `gh pr edit` (`edit`).
-- `gh pr comment`: once, on `edit` of a PR that was opened by hand (below).
+- `git push -u origin refs/heads/<branch>:refs/heads/<branch>` (`open` without `--no-push`, `edit --push`).
+- `gh pr create` (`open`), `gh pr edit <url>` (`edit`).
+- `gh pr comment <url>`: once, on `edit` of a PR that was opened by hand (below).
 - `git fetch --no-tags origin refs/pull/<n>/head` (`edit` without `--push`, only when
   the checkout lacks the PR's head commit): adds that commit's objects and
   `FETCH_HEAD`, and creates no branch.
@@ -57,7 +57,10 @@ The template is, in order: `pr.template` in that `specs/config.yaml` (a path
 relative to the repository root; `auto`, buildme's default, counts as unset); else the first found of `.github/`, the repo root and
 `docs/`, each checked for `pull_request_template.md` and then a
 `PULL_REQUEST_TEMPLATE/` directory (names matched in any case). A directory
-with one `.md` file uses it. A malformed `pr:` block (not a mapping, a
+with one `.md` file uses it. A location, template file or template directory
+whose resolved path is outside the repository, such as a symlink to another
+folder, is skipped, and the skill prints
+`` PR_DIAGNOSIS:`<path>` resolves outside the repository; ignored ``. A malformed `pr:` block (not a mapping, a
 `pr.template` that is not a string, a `pr.draft` that is not true or false,
 or a `config.yaml` that is not valid YAML) logs a warning and uses the
 defaults, as buildme does with the same file. A `pr.template` that names no
@@ -87,7 +90,7 @@ Size.
   no Blocks, Documentation or Companion artifacts heading and that section's
   source is not empty, code adds it after the template's sections, so a
   buildme PR always names the documents the build rewrote.
-- Any other section is written by one model call with no tools. The model
+- Any other section is written by one model call with no tools, at any prompt size. The model
   sees the template's headings and hints, the change's documents, and the
   ticket's text inside an `<untrusted-content>` fence: ticket text is data,
   never instructions. It never sees the ticket link, the size or the extra
