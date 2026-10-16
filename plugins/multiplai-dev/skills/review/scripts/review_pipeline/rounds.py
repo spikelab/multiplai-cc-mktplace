@@ -67,6 +67,9 @@ def _read_json(path: Path) -> dict | None:
 # version wrote beside it (`ROLLUP_FILES`): a kept round holds this run's files only.
 NOT_KEPT = frozenset({ROUNDS_DIR, "viewer", "tree", "base-tree", "assess-tree", "source"})
 ROLLUP_FILES = frozenset({"HIGH-only.md", "MEDIUM-only.md", "LOW-only.md", "runs.jsonl"})
+# Progress logs `review` moved aside because no kept round held them: they stay
+# beside the rounds, and are not copied into the next one.
+SET_ASIDE_PROGRESS = "progress-*.log"
 PARTIAL_PREFIX = ".partial-"
 
 
@@ -237,7 +240,7 @@ def keep_round(target_dir: Path, slug: str, new_head_sha: str) -> Path | None:
         if Path(directory) != target_dir:
             return set()
         return {n for n in names if n in NOT_KEPT or n in ROLLUP_FILES or (target_dir / n).is_dir()
-                or any(fnmatch.fnmatchcase(n, p) for p in skip_files)}
+                or any(fnmatch.fnmatchcase(n, p) for p in (*skip_files, SET_ASIDE_PROGRESS))}
 
     shutil.copytree(target_dir, partial, symlinks=True, ignore=skip)
     round_dir = root / name

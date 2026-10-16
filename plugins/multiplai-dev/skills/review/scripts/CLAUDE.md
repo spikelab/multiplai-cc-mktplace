@@ -61,7 +61,8 @@ knows a tree review by that base.
   commits on top, so the head an earlier `findings.json` names stays readable.
   `check_out_dir()` refuses an `--out` inside the source before `__main__`
   creates it. `review` (not `prepare`, which `--plan-only` also calls) deletes
-  the last `progress.log`.
+  the last `progress.log` when a kept round in `rounds/` holds a copy, and
+  otherwise moves it to `progress-<UTC time>.log`, which `keep_round` never copies.
 - `stages/find.file_groups()` splits the files at `GROUP_MAX_CHARS` (100 000)
   and at each top-level directory below the reviewed path; a change review is
   one group, so its path is unchanged. Each dimension runs once per group and

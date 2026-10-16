@@ -17,6 +17,18 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.78.1] - 2026-10-16
+
+### Fixed
+- `/multiplai-dev:codebase-walkthrough` no longer deletes `progress.log` when you
+  run it again on the same module and commit. The earlier run's log moves to
+  `progress-<UTC time>.log` in the same run directory, and the new run writes a
+  fresh `progress.log`.
+- `/multiplai-dev:review` no longer deletes a `progress.log` that no earlier
+  round in `rounds/` holds, such as one from a run that stopped before it saved
+  any state. That log moves to `progress-<UTC time>.log` beside the rounds. A
+  log that a kept round already holds is still deleted, as before.
+
 ## [0.78.0] - 2026-10-16
 
 ### Added
