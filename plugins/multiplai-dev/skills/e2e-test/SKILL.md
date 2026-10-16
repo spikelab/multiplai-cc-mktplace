@@ -533,16 +533,18 @@ correct against the next. A model bump can silently change output format,
 verbosity, or how literally an instruction is followed — none of which raises
 an error, and all of which change what an E2E run actually verifies.
 
-Run this pass whenever the `MULTIPLAI_MODEL` ceiling changes, a skill's
-`model:`/`effort:` frontmatter changes, or Claude Code's default model moves:
+Run this pass whenever `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT` change, a
+skill's configured model or effort changes, or the model you run Claude Code
+sessions on moves (skills follow the session's model and effort when nothing
+else is set):
 
 1. **Smoke-invoke every skill** — each bundled script with `--help` and with its
    documented minimal invocation. A traceback means it's broken now.
 2. **Run the contract assertions** — skills with a `CONTRACT.md` have concrete
    expected-output checks. These catch a changed output *shape*, which a crash
    test never will.
-3. **Re-check the frontmatter tier** — a newer model at `effort: medium` often
-   matches the old one at `high`. Compare the cost report before and after.
+3. **Re-check the effort** — a newer model at `medium` effort often matches
+   the old one at `high`. Compare the cost report before and after.
 4. **Delete scaffolding the model no longer needs** — newer models absorb
    capabilities that older ones needed spelled out. Redundant scaffolding costs
    context on every invocation and constrains a model that would do better
