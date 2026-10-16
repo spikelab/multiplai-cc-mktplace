@@ -183,6 +183,8 @@ def cmd_open(args) -> int:
     head = args.head or github.current_branch(repo)
     if not head or head == "HEAD":
         raise Refused("no branch to open the PR from: pass --head, or check out a branch")
+    if not github.valid_branch(repo, head):
+        raise Refused(f"`{head}` is not a valid branch name")
     draft = args.draft or (not args.ready and config.draft)
     base = args.base or github.gh_default_branch(repo) or github.git_default_branch(repo)
     r = render_body(repo, change_dir, base=base, head=head, ticket_url=args.ticket_url,
@@ -279,7 +281,17 @@ def cmd_edit(args) -> int:
         raise Refused(f"PR {url} is in {pr_repo}, but this checkout's origin is {origin}: "
                       f"run edit from a checkout of {pr_repo}")
     current = (pr.get("body") or "").replace("\r\n", "\n")
-    head = pr.get("headRefName") or github.current_branch(repo)
+    head_ref = pr.get("headRefName") or ""
+    if head_ref and not github.valid_branch(repo, head_ref):
+        raise Refused(f"PR {url}'s head `{head_ref}` is not a valid branch name")
+    head = head_ref or github.current_branch(repo)
+    if args.push:
+        # Push only to the PR's own branch: a fork's head is not on origin, and pushing the
+        # same-named local branch there would publish an unrelated branch.
+        if pr.get("isCrossRepository") is True:
+            raise Refused(f"PR {url}'s head is on a fork; push it there yourself, then run edit without --push")
+        if not github.local_branch_exists(repo, head):
+            raise Refused(f"no local branch `{head}` to push for PR {url}")
     base = pr.get("baseRefName") or github.git_default_branch(repo)
     args._log_fields = {"pr": url or number}
 

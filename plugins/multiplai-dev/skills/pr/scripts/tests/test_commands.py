@@ -8,7 +8,7 @@ import subprocess
 import pytest
 from conftest import git, make_bare_origin, make_change, make_repo
 
-from pr_pipeline import commands, markers
+from pr_pipeline import commands, github, markers
 from pr_pipeline.__main__ import build_parser
 from pr_pipeline.template import STANDARD_TEMPLATE
 
@@ -86,7 +86,7 @@ def test_open_dry_run_prints_the_commands_and_body_and_writes_nothing(tmp_path, 
     assert run(["open", "--repo", str(repo), "--change-dir", str(change), "--dry-run",
                 "--title", "My title"]) == 0
     out = capsys.readouterr().out
-    assert "DRY_RUN:git push -u origin feat/x" in out
+    assert "DRY_RUN:git push -u origin refs/heads/feat/x:refs/heads/feat/x" in out
     assert "DRY_RUN:gh pr create --title 'My title' --body-file '<body-file>' --head feat/x --draft" in out
     assert out.split("DRY_RUN_BODY:\n", 1)[1].startswith("<!-- pr:managed v1 -->")
     assert gh_stub.writes() == []
@@ -491,6 +491,79 @@ def test_edit_push_pushes_before_editing(tmp_path, gh_stub, capsys):
     assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change), "--push"]) == 0
     assert "PUSHED:feat/x" in capsys.readouterr().out
     assert git(tmp_path / "origin.git", "branch", "--list", "feat/x").strip()
+
+
+# --- pushes go only to the PR's own branch; a branch name is never an option ------
+
+
+@pytest.fixture
+def pushes(monkeypatch):
+    calls: list[str] = []
+    real = github.push
+
+    def push(repo, branch):
+        calls.append(branch)
+        return real(repo, branch)
+
+    monkeypatch.setattr(github, "push", push)
+    return calls
+
+
+def test_push_argv_pushes_exactly_the_named_branch():
+    assert github.push_argv("feat") == ["git", "push", "-u", "origin", "refs/heads/feat:refs/heads/feat"]
+
+
+@pytest.mark.parametrize("head", ["--all", "-f", "bad..name", "@{-1}"])
+def test_open_refuses_a_head_that_is_not_a_branch_name(tmp_path, gh_stub, capsys, pushes, head):
+    repo, change = _setup(tmp_path, origin=True)
+    git(repo, "checkout", "-q", "-b", "other")
+    git(repo, "checkout", "-q", "feat/x")
+    gh_stub.on(["gh", "repo", "view"], stdout="main\n").on(["gh", "pr", "create"], stdout=URL)
+    assert run(["open", "--repo", str(repo), "--change-dir", str(change), f"--head={head}"]) == 2
+    assert "is not a valid branch name" in capsys.readouterr().out
+    assert pushes == [] and gh_stub.writes() == []
+    assert git(tmp_path / "origin.git", "branch", "--list").strip() == "main"
+
+
+def test_edit_refuses_a_pr_head_that_is_not_a_branch_name(tmp_path, gh_stub, capsys, pushes):
+    repo, change = _setup(tmp_path, origin=True)
+    pr = json.loads(_pr_json("mine")) | {"headRefName": "--all"}
+    gh_stub.on(["gh", "pr", "view"], stdout=json.dumps(pr)).on(["gh", "pr", "edit"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change), "--push"]) == 2
+    assert "is not a valid branch name" in capsys.readouterr().out
+    assert pushes == [] and gh_stub.writes() == []
+
+
+def test_edit_push_of_a_fork_pr_pushes_and_edits_nothing(tmp_path, gh_stub, capsys, pushes):
+    repo, change = _setup(tmp_path, origin=True)
+    body = _managed_body(repo, change, capsys)
+    pr = json.loads(_pr_json(body)) | {"isCrossRepository": True}
+    gh_stub.on(["gh", "pr", "view"], stdout=json.dumps(pr)).on(["gh", "pr", "edit"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change), "--push"]) == 2
+    assert "head is on a fork; push it there yourself, then run edit without --push" in capsys.readouterr().out
+    assert pushes == [] and gh_stub.writes() == []
+    assert not git(tmp_path / "origin.git", "branch", "--list", "feat/x").strip()
+
+
+def test_edit_push_refuses_when_the_head_branch_is_not_local(tmp_path, gh_stub, capsys, pushes):
+    repo, change = _setup(tmp_path, origin=True)
+    body = _managed_body(repo, change, capsys)
+    pr = json.loads(_pr_json(body)) | {"headRefName": "elsewhere"}
+    gh_stub.on(["gh", "pr", "view"], stdout=json.dumps(pr)).on(["gh", "pr", "edit"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change), "--push"]) == 2
+    assert "no local branch `elsewhere`" in capsys.readouterr().out
+    assert pushes == [] and gh_stub.writes() == []
+
+
+def test_edit_push_dry_run_prints_the_refspec(tmp_path, gh_stub, capsys, pushes):
+    repo, change = _setup(tmp_path, origin=True)
+    body = _managed_body(repo, change, capsys)
+    gh_stub.on(["gh", "pr", "view"], stdout=_pr_json(body))
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change), "--push", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "DRY_RUN:git push -u origin refs/heads/feat/x:refs/heads/feat/x" in out
+    assert f"DRY_RUN:gh pr edit {URL} --body-file '<body-file>'" in out
+    assert pushes == [] and gh_stub.writes() == []
 
 
 def test_an_unexpected_error_exits_2_not_1(tmp_path, monkeypatch, capsys, logged):
