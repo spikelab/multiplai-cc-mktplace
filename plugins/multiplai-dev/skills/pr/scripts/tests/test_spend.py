@@ -5,6 +5,8 @@ model calls cost. buildme adds the line to its own spend, so an epic's
 from __future__ import annotations
 
 import asyncio
+import sys
+from types import ModuleType, SimpleNamespace
 
 import multiplai_core
 import pytest
@@ -46,6 +48,51 @@ def test_a_failed_call_counts_what_it_spent(monkeypatch):
     with pytest.raises(AgentRunError):
         asyncio.run(_RUN_MODEL("p"))
     assert fill.spend_marker() == "SPEND:0.750000:30"
+
+
+def _fake_sdk(monkeypatch) -> list[dict]:
+    """Replace `claude_agent_sdk` under multiplai-core's real `run_agent`; return the
+    `ClaudeAgentOptions` keyword arguments of every call, i.e. what the CLI would be given."""
+    options: list[dict] = []
+
+    class TextBlock:
+        text = "answer"
+
+    class AssistantMessage:
+        content = [TextBlock()]
+
+    async def query(prompt, options):
+        yield AssistantMessage()
+
+    fake = ModuleType("claude_agent_sdk")
+    fake.ClaudeAgentOptions = lambda **kwargs: options.append(kwargs) or SimpleNamespace(**kwargs)
+    fake.query = query
+    fake.AssistantMessage = AssistantMessage
+    fake.TextBlock = TextBlock
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake)
+    return options
+
+
+# The pr skill has no model or effort setting of its own, so there is no third case in which
+# one wins over both.
+@pytest.mark.parametrize("env, sent", [
+    ({}, ("claude-test-session", "low")),
+    ({"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"},
+     ("claude-test-default", "high")),
+], ids=["session", "multiplai-defaults"])
+def test_the_model_call_gets_multiplai_then_the_session_model(monkeypatch, env, sent):
+    """`_run_model` passes no model or effort, and run_agent's own fallback
+    (multiplai-core 0.21) picks MULTIPLAI_MODEL / MULTIPLAI_EFFORT, else the session's."""
+    # conftest's _no_session_defaults has cleared MULTIPLAI_* and CLAUDE_CODE_SESSION_ID, so
+    # no session transcript is read.
+    monkeypatch.setenv("MULTIPLAI_SESSION_MODEL", "claude-test-session")
+    monkeypatch.setenv("MULTIPLAI_SESSION_EFFORT", "low")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    options = _fake_sdk(monkeypatch)
+
+    assert asyncio.run(_RUN_MODEL("p")) == "answer"
+    assert [(o["model"], o.get("effort")) for o in options] == [sent]
 
 
 @pytest.mark.parametrize("argv", [["open"], ["edit", "7"]])
