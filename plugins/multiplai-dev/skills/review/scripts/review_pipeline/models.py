@@ -57,7 +57,9 @@ class _Model(BaseModel):
 
 
 class Citation(_Model):
-    path: str  # a repo-relative path, or an http(s) URL for a web source
+    # A repo-relative path, an http(s) URL for a web source, or a path under
+    # `.review-deps/<name>@<commit12>/` for a line of a git dependency.
+    path: str
     line_start: int = Field(ge=1)
     line_end: int = Field(ge=1)
     quote: str  # exact text expected at those lines
@@ -66,6 +68,11 @@ class Citation(_Model):
     def is_web(self) -> bool:
         """A web source. The gates do not check it, and it never anchors a finding."""
         return self.path.lower().startswith(("http://", "https://"))
+
+    @property
+    def is_dependency(self) -> bool:
+        """A line of a git dependency (`deps.py`). The gates check it, but it never anchors a finding."""
+        return self.path.startswith(DEPS_DIR + "/")
 
     @model_validator(mode="after")
     def _ordered(self) -> "Citation":

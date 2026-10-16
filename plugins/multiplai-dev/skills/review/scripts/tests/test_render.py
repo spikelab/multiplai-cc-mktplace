@@ -267,3 +267,10 @@ def test_post_without_decisions_takes_what_the_review_lists(canned_state):
     assert post_mod.select(data["findings"], None, data["mode"]) == []
     # The LOW finding has no topic, so it is in Code, which posts every severity.
     assert [f["claim"] for f in post_mod.select(data["findings"], None, "full")] == [CLAIM_HIGH, CLAIM_MEDIUM]
+
+
+def test_a_dependency_citation_is_not_linked_into_the_reviewed_repository():
+    from review_pipeline.render import code_link
+
+    path = f".review-deps/lib@{'a' * 12}/lib/runner.py"
+    assert code_link("https://github.com/o/r", "f" * 40, path, 3, 4) == f"`{path}:3-4`"
