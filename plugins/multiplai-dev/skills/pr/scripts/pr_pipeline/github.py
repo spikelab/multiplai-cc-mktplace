@@ -4,7 +4,7 @@
 - `gh` goes through `_run_gh` (copied from buildme's `git_ops._run_gh`) so
   tests stub it without stubbing git.
 - Writes: `git push -u origin <branch>` (never `--force`), `gh pr create`,
-  `gh pr edit --body-file`, `gh pr comment --body-file`. Nothing here merges,
+  `gh pr edit <url> --body-file`, `gh pr comment <url> --body-file`. Nothing here merges,
   closes a PR, deletes a branch or edits a title or labels.
 - A failure returns a `Result`; callers turn it into `PR_DIAGNOSIS:` and exit 2.
 """
@@ -86,6 +86,23 @@ def current_branch(repo: Path) -> str:
 
 def _ref_exists(repo: Path, ref: str) -> bool:
     return _run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=repo).ok
+
+
+_REMOTE_RE = re.compile(r"(?:https://[^/\s]+/|git@[^:\s]+:)([^/\s]+)/([^/\s]+?)(?:\.git)?/?")
+_URL_REPO_RE = re.compile(r"https://[^/\s]+/([^/\s]+)/([^/\s]+)/pull/\d+/?")
+
+
+def origin_repo(repo: Path) -> str | None:
+    """`owner/name` of the checkout's `origin` (an `https://` or `git@host:` URL); None otherwise."""
+    res = _run(["git", "remote", "get-url", "origin"], cwd=repo)
+    m = _REMOTE_RE.fullmatch(res.stdout.strip()) if res.ok else None
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
+def url_repo(url: str) -> str | None:
+    """`owner/name` of a PR URL `https://<host>/<owner>/<name>/pull/<n>`; None otherwise."""
+    m = _URL_REPO_RE.fullmatch((url or "").strip())
+    return f"{m.group(1)}/{m.group(2)}" if m else None
 
 
 def git_default_branch(repo: Path) -> str | None:

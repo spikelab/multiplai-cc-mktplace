@@ -269,6 +269,15 @@ def cmd_edit(args) -> int:
         raise Refused(f"`{res.command}` failed: {res.why()}")
     number = str(pr.get("number") or args.pr)
     url = pr.get("url") or ""
+    # `gh` resolves a bare number against the checkout's repository, so write to the URL, and
+    # only from a checkout of the URL's repository: the diff and the templates are read here.
+    if not url:
+        raise Refused(f"`gh pr view` gave no URL for PR {number}: cannot tell which repository "
+                      "edit would write to")
+    pr_repo, origin = github.url_repo(url), github.origin_repo(repo)
+    if pr_repo and origin and pr_repo.lower() != origin.lower():
+        raise Refused(f"PR {url} is in {pr_repo}, but this checkout's origin is {origin}: "
+                      f"run edit from a checkout of {pr_repo}")
     current = (pr.get("body") or "").replace("\r\n", "\n")
     head = pr.get("headRefName") or github.current_branch(repo)
     base = pr.get("baseRefName") or github.git_default_branch(repo)
@@ -341,13 +350,13 @@ def cmd_edit(args) -> int:
 
     body_file = Path("<body-file>") if args.dry_run else _body_file(body)
     comment_file = Path("<comment-file>") if args.dry_run else (_body_file(comment) if comment else None)
-    edit = github.edit_argv(number, body_file)
+    edit = github.edit_argv(url, body_file)
     if args.dry_run:
         if args.push:
             print("DRY_RUN:" + github.Result(github.push_argv(head), 0, "", "").command, flush=True)
         print("DRY_RUN:" + github.Result(edit, 0, "", "").command, flush=True)
         if comment:
-            print("DRY_RUN:" + github.Result(github.comment_argv(number, comment_file), 0, "", "").command,
+            print("DRY_RUN:" + github.Result(github.comment_argv(url, comment_file), 0, "", "").command,
                   flush=True)
         print("DRY_RUN_BODY:", flush=True)
         sys.stdout.write(body)
@@ -363,7 +372,7 @@ def cmd_edit(args) -> int:
         if not res.ok:
             raise Refused(f"`gh pr edit` failed (exit {res.returncode}): {res.why()}")
         if comment_file is not None:
-            res = github.run_write(repo, github.comment_argv(number, comment_file))
+            res = github.run_write(repo, github.comment_argv(url, comment_file))
             if not res.ok:
                 raise Refused(f"the description was edited, but `gh pr comment` failed "
                               f"(exit {res.returncode}): {res.why()}")
@@ -371,7 +380,7 @@ def cmd_edit(args) -> int:
         body_file.unlink(missing_ok=True)
         if comment_file is not None:
             comment_file.unlink(missing_ok=True)
-    print(f"PR_EDITED:{url or number}", flush=True)
+    print(f"PR_EDITED:{url}", flush=True)
     args._log_fields["changed"] = ",".join(changed)
     return 0
 

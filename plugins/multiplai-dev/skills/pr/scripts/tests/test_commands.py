@@ -390,6 +390,42 @@ def test_edit_appends_a_new_extra_section(tmp_path, gh_stub, capsys):
     assert new.rstrip().endswith(f"## Findings fixed\n{markers.wrap('extra:findings-fixed', '- round 1')}")
 
 
+# --- edit writes only to the PR it was given -----------------------------------
+
+
+@pytest.mark.parametrize("origin", ["https://github.com/me/repo.git", "git@github.com:me/repo.git"])
+def test_edit_of_a_pr_in_another_repository_writes_nothing_and_exits_2(tmp_path, gh_stub, capsys, origin):
+    repo, change = _setup(tmp_path)
+    git(repo, "remote", "add", "origin", origin)
+    pr = json.loads(_pr_json("mine")) | {"url": "https://github.com/other/repo/pull/7"}
+    gh_stub.on(["gh", "pr", "view"], stdout=json.dumps(pr)).on(["gh", "pr", "edit"]).on(["gh", "pr", "comment"])
+    assert run(["edit", "https://github.com/other/repo/pull/7", "--repo", str(repo),
+                "--change-dir", str(change)]) == 2
+    out = capsys.readouterr().out
+    assert "is in other/repo, but this checkout's origin is me/repo" in out
+    assert gh_stub.writes() == []
+    assert [c[:3] for c in gh_stub.calls] == [["gh", "pr", "view"]], "refused before anything else"
+
+
+def test_edit_writes_to_the_pr_url_not_its_number(tmp_path, gh_stub, capsys):
+    repo, change = _setup(tmp_path)
+    git(repo, "remote", "add", "origin", "git@github.com:O/R.git")  # same repository, other case
+    gh_stub.on(["gh", "pr", "view"], stdout=_pr_json("hand-written")).on(["gh", "repo", "view"], stdout="WRITE\n")
+    gh_stub.on(["gh", "pr", "edit"]).on(["gh", "pr", "comment"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 0
+    assert [c[:4] for c in gh_stub.writes()] == [["gh", "pr", "edit", URL], ["gh", "pr", "comment", URL]]
+
+
+def test_edit_refuses_when_gh_gives_no_pr_url(tmp_path, gh_stub, capsys):
+    repo, change = _setup(tmp_path)
+    pr = json.loads(_pr_json("mine"))
+    del pr["url"]
+    gh_stub.on(["gh", "pr", "view"], stdout=json.dumps(pr)).on(["gh", "pr", "edit"]).on(["gh", "pr", "comment"])
+    assert run(["edit", "7", "--repo", str(repo), "--change-dir", str(change)]) == 2
+    assert "no URL" in capsys.readouterr().out
+    assert gh_stub.writes() == []
+
+
 def _pr_head_on_origin(repo, tmp_path) -> str:
     """A PR head commit (1 file, +1 -0 against main) that exists only as origin's
     `refs/pull/7/head`, as a fork's PR does. Returns its sha."""
