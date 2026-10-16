@@ -437,6 +437,7 @@ specs/
 │   └── my-feature/                # Active change
 │       ├── .change.yaml           # Metadata
 │       ├── .build-state.json      # Resumable state checkpoint
+│       ├── .build-state.complete.json  # The same checkpoint, kept once the build finished
 │       ├── .board.json            # Kanban card (column, branch, pr_url, history)
 │       ├── proposal.md            # Why this change exists
 │       ├── use-cases.md           # Who it is for, and what they can observe
@@ -712,7 +713,8 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
 | `--pr-ready` | Open the PR ready-for-review instead of draft |
 | `--lenient-review` | Accept-and-continue instead of failing on low review scores — `build`, `tdd` |
 | `--trust-repo` | Opt-in for auto-approving agents — `build`, `spec-generate`, `tdd`, `apply`. Now also required by the reviews and the spec audits, which hold `Read`/`Grep`/`Glob`; `BUILDME_TRUST_REPO=1` is the environment equivalent |
-| `--block N` | Resume TDD from specific block (tdd/apply only) |
+| `--block N` | Resume TDD from specific block (tdd/apply only). A standalone `tdd` that finished keeps its checkpoint as `.build-state.complete.json`, so `tdd --block N` after it starts from a new checkpoint |
+| `--force` | `build` only: start a new build of a change that already published, on the next free branch (`buildme/<change>-2`, …). Without it the re-run exits 3 with `BUILD:COMPLETE:<path>` and writes nothing |
 
 ### specs/config.yaml toggles
 
@@ -731,9 +733,9 @@ CLI flags win over `config.yaml` in every case.
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Build failure |
+| 1 | Build failure (a failed TDD build prints `ERROR:TDD build failed (exit <n>)`) |
 | 2 | Usage error (e.g. an input file that does not exist), or a refusal that wrote nothing: another process holds the epic's lock, or an approved epic file changed (the `ERROR:` line names which) |
-| 3 | Waiting on a human or the wrapper — see SKILL.md Step 4 |
+| 3 | Waiting on a human or the wrapper — see SKILL.md Step 4. This includes `BUILD:COMPLETE:<path>`: the change already published, and the re-run wrote nothing |
 | 4 | Agent timeout |
 | 130, 143 | An epic run stopped by Ctrl-C or SIGTERM; re-run the same command to continue |
 | 129, 143 | A `build` or `findings` stopped by SIGHUP or SIGTERM (it still prints `SPEND:`). An epic run stopped by SIGHUP leaves its children running; re-run the same command to continue |
@@ -746,27 +748,73 @@ The pipeline writes a tail-able progress file:
 tail -f /path/to/project/build-progress.md
 ```
 
-Output:
+The file is append-only: a resumed run adds a `RESUMED` section under the
+same header, a stop by a signal adds `INTERRUPTED by <signal>`, and every run
+ends with a `BUDGET` section (tokens and USD per step). The header names the
+model and effort the run started with and where each came from (`session`,
+`MULTIPLAI_MODEL`, `multiplai.conf`, or `CLI default` when nothing set one).
+
+A build stopped by SIGTERM in block 2, then resumed:
 ```
 # Build Progress: password-reset
-Mode: scratch | Tier: advanced | Blocks: 2
+Mode: scratch | Tier: standard
+Model: claude-opus-5-5 (session) | Effort: high (session)
 
-## [12:00:00] BOOTSTRAP
-Created specs/changes/password-reset/
+## [2026-10-16T06:41:19Z] LAUNCHED
 
-## [12:10:00] SPEC_GENERATION
-Artifacts: proposal ✓ specs ✓ design ✓ tasks ✓ rubric ✓
+## [2026-10-16T06:41:19Z] BOARD → Shaping (owner: product)
 
-- [12:20:00] Block 1/2: Reset Request — TESTING
-  - test_writer: 14 tests written
-  - implementer: tests passing
-  - Review iter=1 score=4.1 PASS
+## [2026-10-16T06:41:19Z] INTERVIEW
+Interview (user) saved to …/specs/changes/password-reset/interview.md
 
-- [12:35:00] Block 2/2: Token Redemption — TESTING
-  - test_writer: 10 tests written
-  - implementer: tests passing
-  - Review iter=1 score=3.8 PASS
+## [2026-10-16T06:41:19Z] BOARD → Planning (owner: eng)
+
+## [2026-10-16T06:41:19Z] BOARD → In Development (owner: author)
+
+## [2026-10-16T06:41:19Z] TDD_BUILD
+Blocks: 2
+- [2026-10-16T06:41:19Z] Block 1/2: Reset Request — started
+- [2026-10-16T06:41:19Z] Block 1/2: Reset Request — done
+- [2026-10-16T06:41:19Z] Block 2/2: Token Redemption — started
+
+## [2026-10-16T06:41:19Z] INTERRUPTED by SIGTERM
+
+## [2026-10-16T06:41:19Z] BUDGET
+Budget: 5,500 tokens / $5.50 over 4 SDK calls.
+  breakdown: in=5,500 out=0 cache_read=0 cache_write=0
+  by phase: implementer=4,000 tokens/$4.00, spec_generation=1,000 tokens/$1.00, design_audit=500 tokens/$0.50
+
+## [2026-10-16T06:41:19Z] RESUMED
+Mode: scratch | Tier: standard
+Model: claude-opus-5-5 (session) | Effort: high (session)
+
+## [2026-10-16T06:41:19Z] BOARD → Planning (owner: eng)
+
+## [2026-10-16T06:41:19Z] BOARD → In Development (owner: author)
+
+## [2026-10-16T06:41:19Z] TDD_BUILD
+Blocks: 2
+- [2026-10-16T06:41:19Z] Block 2/2: Token Redemption — started
+- [2026-10-16T06:41:19Z] Block 2/2: Token Redemption — done
+
+## [2026-10-16T06:41:20Z] BOARD → In Review (owner: reviewer)
+branch buildme/password-reset pushed; PR https://github.com/acme/proj/pull/7
+
+## [2026-10-16T06:41:20Z] COMPLETE
+Published: https://github.com/acme/proj/pull/7. Checkpoint kept at …/specs/archive/2026-10-16-password-reset/.build-state.complete.json
+
+## [2026-10-16T06:41:20Z] BUDGET
+Budget: 7,500 tokens / $7.50 over 5 SDK calls.
+  breakdown: in=7,500 out=0 cache_read=0 cache_write=0
+  by phase: implementer=6,000 tokens/$6.00, spec_generation=1,000 tokens/$1.00, design_audit=500 tokens/$0.50
 ```
+
+This sample comes from `tests/stop_resume_driver.py` (S3), whose phases record
+a fixed spend instead of calling a model, so the per-block agent lines a real
+build writes are missing. The block names and the `Model:` line are what a
+build run from a Claude Code session writes; the driver runs with no session
+and writes `Model: CLI default | Effort: CLI default`. The spend of block 2 counts twice: the stop came
+after its implementer spent, and the resume ran the block again.
 
 ### Stdout Protocol
 
@@ -941,8 +989,10 @@ bound spend: three review iterations over a huge diff with a three-member
 panel costs an order of magnitude more than three over a small one. The
 `budget:` ceilings add the missing axis. Spend is checked at block boundaries
 (nothing is half-done there), warns once at 80%, and stops with a
-per-phase breakdown of where the tokens went. The spend is checkpointed into
-`.build-state.json`, so a resumed build does not get a fresh budget.
+per-phase breakdown of where the tokens went. The 80% warning also prints
+`BUDGET:WARN:<percent>:<usd>` and writes a `BUDGET_WARNING` section to
+`build-progress.md`. The spend is checkpointed into `.build-state.json`, and a
+resume in any phase loads it, so a resumed build does not get a fresh budget.
 
 ### Configuring reviews and budget
 
@@ -1016,7 +1066,17 @@ State is checkpointed to `.build-state.json` after every phase transition:
 }
 ```
 
-If the build crashes, restarting with the same `--change` name loads state and skips completed phases. Completed blocks are not re-run. A block that stopped during its fix on pass (`fix_pass` on the block in the checkpoint) is not rebuilt either: the tree goes back to the pass's checkpoint and only the pass runs again.
+If the build crashes, restarting with the same `--change` name loads state and skips completed phases. A stop by SIGTERM, SIGHUP or Ctrl-C saves the checkpoint (with the spend so far) before the process exits and writes `INTERRUPTED by <signal>` to `build-progress.md`; the resumed run adds a `RESUMED` section. Completed blocks are not re-run. A block that stopped during its fix on pass (`fix_pass` on the block in the checkpoint) is not rebuilt either: the tree goes back to the pass's checkpoint and only the pass runs again.
+
+A finished build keeps its checkpoint: `.build-state.json` is renamed to
+`.build-state.complete.json`, with the phase it reached (`complete` after a
+publish, the last spec phase after `--spec-only`, `tdd_build` after a
+standalone `tdd`). Resume never loads that file. Running `build` again for a
+change whose completed checkpoint says `complete` exits 3 with
+`BUILD:COMPLETE:<path>` and a stderr line naming the branch and PR, and writes
+nothing; `--force` starts a new build on the next free branch. The board reads
+the file as "completed", so a later failure never moves the card to
+Cancelled.
 
 ## Module Map
 

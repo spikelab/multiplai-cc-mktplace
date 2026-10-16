@@ -144,8 +144,11 @@ class BuildBudget:
             fractions.append(self.cost_usd / self.max_usd)
         return max(fractions) if fractions else 0.0
 
-    def diagnosis(self) -> str:
-        """Where the build's spend went — the useful half of a stop."""
+    def diagnosis(self, *, advice: bool = True) -> str:
+        """Where the build's spend went — the useful half of a stop.
+
+        ``advice=False`` leaves out the advice on cutting spend, for the
+        summary every run ends with, where nothing was stopped."""
         lines = [
             f"Budget: {self.total_tokens:,} tokens / ${self.cost_usd:.2f} over {self.calls} SDK calls.",
         ]
@@ -161,11 +164,12 @@ class BuildBudget:
             top = sorted(self.by_label.items(), key=lambda kv: -kv[1])
             lines.append("  by phase: " + ", ".join(
                 f"{k}={v:,} tokens/${self.usd_by_label.get(k, 0.0):.2f}" for k, v in top))
-        lines.append(
-            "  The review/fix loop is the usual culprit: it re-runs the reviewer "
-            "AND an implementer per iteration (MAX_REVIEW_ITERATIONS=3, times the "
-            "panel size). Lower the panel, tighten the diff cap, or raise the budget."
-        )
+        if advice:
+            lines.append(
+                "  The review/fix loop is the usual culprit: it re-runs the reviewer "
+                "AND an implementer per iteration (MAX_REVIEW_ITERATIONS=3, times the "
+                "panel size). Lower the panel, tighten the diff cap, or raise the budget."
+            )
         return "\n".join(lines)
 
     def check(self, *, phase: str = "") -> None:

@@ -505,7 +505,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # its progress section (success, failure, a stop, an exit 3).
         if progress_started:
             try:
-                progress.log_phase("BUDGET", budget_mod.get_budget().diagnosis())
+                progress.log_phase("BUDGET", budget_mod.get_budget().diagnosis(advice=False))
             except OSError as e:
                 log.warning("Could not write the spend summary to the progress file: %s", e)
 

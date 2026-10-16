@@ -86,6 +86,13 @@ class TestCheck:
         assert "review=90" in exc.value.diagnosis
         assert exc.value.diagnosis.index("review=90") < exc.value.diagnosis.index("rubric=20")
 
+    def test_the_end_of_run_summary_leaves_out_the_advice_on_cutting_spend(self):
+        b = BuildBudget()
+        b.record(FakeUsage(input_tokens=90), label="review")
+        assert "usual culprit" in b.diagnosis()
+        summary = b.diagnosis(advice=False)
+        assert "review=90" in summary and "usual culprit" not in summary
+
     def test_warns_once_at_80_percent(self, caplog):
         b = BuildBudget(max_tokens=100)
         b.record(FakeUsage(input_tokens=85))

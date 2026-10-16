@@ -59,6 +59,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--plan-file <file>` | A plan written with the plan skill (`# Plan:` + `## Done means`). Saved as `plan.md`; its text goes into the spec input and `interview.md` in every interview mode, and plan authoring still runs. |
 | `--interview-replies <file>` | `interview: ticket` only — the ticket replies posted after the questions. |
 | `--accept-size` | Build a plan the size gate says should be split, as one PR. The build remembers it, so a later retry or resume does not stop on size again. |
+| `--force` | Start a new build even if this change already published. The new build gets the next free branch (`buildme/<change>-2`, …) and leaves the published one alone. Pass it only after the user said yes to the `BUILD:COMPLETE` question (below). A stopped build with a `.build-state.json` resumes with or without it. |
 | `--approve-split` | Approve the epic split the build printed as `EPIC:SPLIT:<split.md>`, as `split.md` and `plans/` are on disk now. See [Epic mode](#epic-mode-one-input-several-changes). |
 | `--no-epic-split` | Build the input as one change: no `EPIC_SPLIT` decision, no model call. An epic's child builds pass it. |
 | `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch, or the parent's commit that holds its `specs/registry` baseline (below); a build that re-binds to its worktree ignores it. When the commit is not on the default branch, the PR targets the branch that holds it (`--base`). Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
@@ -187,6 +188,20 @@ calling checkout:
   commit of its own, re-runs in a new `-2` worktree as it did then. A re-run
   stopped before its interview finished resumes in the same worktree, and a
   build that moved to a `-2` worktree re-runs in that one.
+- **A build that published is not re-run without asking.** Its checkpoint is
+  kept as `.build-state.complete.json` (in the change dir, or under
+  `specs/archive/` after the archive move). Running the same command again
+  writes nothing and exits `3` with `BUILD:COMPLETE:<path>` (see the marker
+  table). `--force` starts a new build on the next free branch. A
+  `--spec-only` build or a standalone `tdd` run keeps its checkpoint the same
+  way, but that file does not stop the next run: the `--mode only` handoff
+  runs as before.
+- **`build-progress.md` is append-only.** A resumed run adds a `RESUMED`
+  section under the existing header; a stop by SIGTERM, SIGHUP or Ctrl-C adds
+  `INTERRUPTED by <signal>` and saves the checkpoint with the spend so far;
+  every `build` and `findings` run ends with a `BUDGET` section (tokens and
+  USD per step). The header names the model and effort the run started with
+  and where each came from.
 - **The worktree survives the run.** The pipeline never removes a worktree —
   including its own — never merges (except an epic child's PR under
   `epic.merge: auto`; see "Merging the children's PRs"), and never force-pushes. Deleting it is the
@@ -1066,6 +1081,9 @@ Parse pipeline stdout for progress lines:
 - `WORKTREE:<path>` / `BRANCH:<name>` / `PUSHED:<branch>` / `PR:<url>` — git lifecycle.
   PUBLISH opens the PR with the pr skill, from the repo's PR template; these
   lines and `PUBLISH_DIAGNOSIS:` are the same as before it did
+- `BUDGET:WARN:<percent>:<usd>` — the build has spent 80% of its budget; the
+  same warning is in `build-progress.md` as a `BUDGET_WARNING` section. Tell
+  the user; the build goes on
 - `DOCS_WARNING:<reason>` — source changed, the project keeps a changelog, and
   the documentation phase updated nothing (a warning, never a failure)
 - `PUBLISH_DIAGNOSIS:<reason>` — push/PR could not finish; manual commands are in
@@ -1109,7 +1127,7 @@ Parse pipeline stdout for progress lines:
 - `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent, the pr skill, a walkthrough run and spec-extract included (`:incomplete` follows when one of them printed no spend)
 - `ERROR:<message>` — failure
 
-**Exit codes.** `0` done, `1` failure, `2` usage error or a refusal that wrote
+**Exit codes.** `0` done, `1` failure (a failed TDD build prints `ERROR:TDD build failed (exit <n>)`), `2` usage error or a refusal that wrote
 nothing (another process holds the epic's lock, or an approved epic file
 changed: the `ERROR:` line names the process or the file; report it, and never
 change the flags to get past it), `4` an agent timed out
@@ -1121,6 +1139,7 @@ change the flags to get past it), `4` an agent timed out
 | `INTERVIEW:WAITING:<path>` | `interview: ticket` wrote its questions to `<path>` | Post them as **one** ticket comment (plane: `comment <ref> "<text>"`; github: `gh issue comment <n> --body-file <path>`), tell the user the build is waiting for replies, and stop. On the next run, fetch the comments posted after yours into a file and pass `--interview-replies <file>`. No replies yet: it prints the marker again. |
 | `RESEARCH:NEEDED:<path>` | the research decision asked for research; topics in `<path>` | Run `/deep-research` on them and re-run with `--research-path <output>` — or, without `multiplai-research`, say so and re-run with `--skip-research`. |
 | `SPLIT:REQUIRED:<path>` | the size gate wants the plan split; proposal in `<path>` | Post `<path>` on the ticket (plane `comment` / `gh issue comment --body-file`), or show it to the user for a prompt, and stop. Re-run with `--accept-size` only when the user chooses to build it as one PR. |
+| `BUILD:COMPLETE:<path>` | this change already published; `<path>` is its kept checkpoint, and stderr names its branch and PR. Nothing was written | Ask the user with AskUserQuestion whether to start a new build of it on a new branch. On yes, re-run the same command with `--force`; on no, stop. Never add `--force` without the user's yes. |
 | `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge, or a PR passed review and waits for a person to merge it (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and any child the `EPIC: child` lines on stderr name, and stop. Re-run the same command once they are merged; a PR closed without a merge parks the children that wait on it. |
 | `EPIC:BUDGET:<spent>` | the epic's spend (USD) reached `epic.max_usd`; nothing more was launched | Tell the user what was spent and which children did not start (the `EPIC:SUMMARY` file), and stop. A re-run stops again until the user raises `epic.max_usd` in `specs/config.yaml`; never raise it yourself. |
 | `EPIC:SPLIT:<path>` | the input is several changes; the split is in `<path>` (`split.md`), one plan per child in `plans/` beside it | For a GitHub ticket, post **one** comment whose body is the line `<!-- buildme-epic-split:<sha256 of split.md> -->` (`shasum -a 256 <path>`) followed by the content of `<path>`, and only when no comment on the issue already starts with that line (`gh issue view <n> --json comments --jq '.comments[].body'`): a re-run prints the same line for the same `split.md`, so it never posts twice. For any other input, show `<path>` to the user. Then stop. Re-run with `--approve-split` only when the user approves the split. Never create, close or edit a ticket for a child. |
