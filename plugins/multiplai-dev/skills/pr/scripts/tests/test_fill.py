@@ -4,12 +4,19 @@ archive-dir case after `--auto`."""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
+import multiplai_core
 from conftest import git, make_bare_origin, make_change, make_repo
+from test_spend import _fake_sdk
 
 from pr_pipeline import commands, fill, github
 from pr_pipeline.template import STANDARD_TEMPLATE, load, parse
+
+
+# The real call, kept before conftest's guard replaces it.
+_RUN_MODEL = fill._run_model
 
 
 def _render(repo: Path, change: Path, **kw) -> commands.Rendered:
@@ -293,3 +300,33 @@ def test_checklist_only_and_container_sections_get_no_model_text():
     sections = parse("## Changes\n### Added\n\n## Checklist\n- [ ] a\n## Notes\n")
     kinds = {sections[p.index].title: p.kind for p in fill.plan_sections(sections)}
     assert kinds == {"": "none", "Changes": "none", "Added": "model", "Checklist": "none", "Notes": "model"}
+
+
+# --- the model call has no tools at any prompt size -----------------------------
+
+BIG_PROMPT = "x" * 100_001  # over multiplai-core's MAX_PROMPT_BYTES (80,000)
+
+
+def test_the_model_call_turns_off_the_prompt_file_fallback(monkeypatch):
+    # multiplai-core's run_agent writes a prompt over MAX_PROMPT_BYTES to a file and opens
+    # Read to reach it, unless prompt_file_fallback is off.
+    seen: list[dict] = []
+
+    async def run_agent(prompt, **kw):
+        seen.append(kw)
+        raise multiplai_core.AgentRunError("stop here")
+
+    monkeypatch.setattr(multiplai_core, "run_agent", run_agent)
+    try:
+        asyncio.run(_RUN_MODEL(BIG_PROMPT))
+    except multiplai_core.AgentRunError:
+        pass
+    assert seen and seen[0]["prompt_file_fallback"] is False and seen[0]["allowed_tools"] is None
+
+
+def test_a_big_prompt_reaches_the_cli_with_no_read_tool_and_one_turn(monkeypatch):
+    options = _fake_sdk(monkeypatch)
+    assert asyncio.run(_RUN_MODEL(BIG_PROMPT)) == "answer"
+    assert len(options) == 1
+    assert "Read" not in (options[0]["allowed_tools"] or [])
+    assert options[0]["max_turns"] == 1

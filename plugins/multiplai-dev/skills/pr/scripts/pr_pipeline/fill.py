@@ -350,11 +350,14 @@ async def _run_model(prompt: str) -> str:
     """One no-tools, one-turn call. The seam tests stub."""
     from multiplai_core import AgentRunError, run_agent
 
-    # The model has no tools, so it cannot read the environment; blanking the
-    # GitHub tokens for the child process is a second guard on top of that.
+    # The model has no tools, so it cannot read the environment. allowed_tools=None alone does
+    # not promise that: for a prompt over MAX_PROMPT_BYTES, run_agent's prompt-file fallback
+    # writes the prompt to a file and adds Read (under bypassPermissions, Read of any file).
+    # prompt_file_fallback=False keeps the prompt inline, so the call has no tools at any size.
+    # Blanking the GitHub tokens for the child process is a second guard on top of that.
     try:
-        result = await run_agent(prompt, allowed_tools=None, max_turns=1, label="pr-fill", component="pr",
-                                 env={"GH_TOKEN": "", "GITHUB_TOKEN": ""})
+        result = await run_agent(prompt, allowed_tools=None, max_turns=1, prompt_file_fallback=False,
+                                 label="pr-fill", component="pr", env={"GH_TOKEN": "", "GITHUB_TOKEN": ""})
     except AgentRunError as e:   # a failed call was still paid for, up to where it failed
         if getattr(e, "partial", None) is not None:
             _spent.add_usage(e.partial.usage)
