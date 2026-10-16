@@ -122,10 +122,11 @@ class TestPrecedence:
             assert config.model_for(step) == "claude-haiku-4-5", step
         assert config.model_for("adjudication") == "model-x"
 
-    def test_a_claude_spec_is_capped_by_the_ceiling(self, tmp_path, no_conf):
+    def test_a_claude_spec_is_not_capped(self, tmp_path, no_conf):
+        """MULTIPLAI_MODEL is a default, not a cap (multiplai-core 0.21)."""
         with patch.dict(os.environ, {"MULTIPLAI_MODEL": CURRENT_MODEL["opus"]}):
             config = _config(tmp_path, "models:\n  review: claude:fable\n")
-            assert config.model_for("review") == CURRENT_MODEL["opus"]
+            assert config.model_for("review") == CURRENT_MODEL["fable"]
 
     def test_an_unknown_step_is_a_programming_error(self, tmp_path, no_conf):
         with pytest.raises(KeyError):

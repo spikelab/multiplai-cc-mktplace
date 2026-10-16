@@ -9,6 +9,33 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+# A session-derived source is shown as "session": which of the session's own
+# records supplied it (a parent's pin, the transcript, CLAUDE_EFFORT) does not
+# change what the user does next.
+_SESSION_SOURCES = {
+    "MULTIPLAI_SESSION_MODEL", "session transcript",
+    "MULTIPLAI_SESSION_EFFORT", "CLAUDE_EFFORT",
+}
+
+
+def default_settings_line() -> str:
+    """``Model: <m> (<source>) | Effort: <e> (<source>)`` for steps with none configured.
+
+    What multiplai-core's ``default_model()`` / ``default_effort()`` give: the
+    ``MULTIPLAI_MODEL``/``MULTIPLAI_EFFORT`` setting, else the Claude Code
+    session's own. A value found nowhere reads ``CLI default``.
+    """
+    from multiplai_core import default_effort_source, default_model_source
+
+    def part(label: str, value: str | None, source: str) -> str:
+        if not value:
+            return f"{label}: CLI default"
+        shown = "session" if source in _SESSION_SOURCES else source
+        return f"{label}: {value} ({shown})"
+
+    return " | ".join((part("Model", *default_model_source()),
+                       part("Effort", *default_effort_source())))
+
 
 class ProgressWriter:
     """Append timestamped entries to a build progress file."""
@@ -16,15 +43,33 @@ class ProgressWriter:
     def __init__(self, path: Path):
         self.path = path
 
-    def initialize(self, change_name: str, mode: str, tier: str, block_count: int) -> None:
+    def initialize(
+        self, change_name: str, mode: str, tier: str, block_count: int | None = None,
+    ) -> None:
+        """Start this run's section of the progress file. Never truncates.
+
+        A missing file gets the header and ``LAUNCHED``. An existing one is a
+        resumed (or re-run) build: it gets a ``RESUMED`` section and keeps every
+        earlier line. Both record the model and effort a step with none
+        configured runs on, and where each came from.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        header = (
+        blocks = f"Blocks: {block_count}\n" if block_count is not None else ""
+        settings = default_settings_line()
+        if self.path.exists():
+            with self.path.open("a") as f:
+                f.write(
+                    f"\n## [{self._now()}] RESUMED\n"
+                    f"Mode: {mode} | Tier: {tier}\n"
+                    f"{blocks}{settings}\n"
+                )
+            return
+        self.path.write_text(
             f"# Build Progress: {change_name}\n"
             f"Mode: {mode} | Tier: {tier}\n"
-            f"Blocks: {block_count}\n\n"
+            f"{blocks}{settings}\n\n"
             f"## [{self._now()}] LAUNCHED\n"
         )
-        self.path.write_text(header)
 
     def log_phase(self, phase: str, details: str = "") -> None:
         with self.path.open("a") as f:
@@ -90,10 +135,6 @@ class ProgressWriter:
             f.write(f"\n## [{self._now()}] BOARD → {column}{owner}\n")
             if note:
                 f.write(f"{note}\n")
-
-    def cleanup(self) -> None:
-        if self.path.exists():
-            self.path.unlink()
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

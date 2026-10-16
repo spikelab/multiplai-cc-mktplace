@@ -183,6 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     load_env()
     setup_logging("review-pipeline", session_id=args.session_id,
                   packages=("review_pipeline", "code_facts"))
+    log.info("Session settings: model=%s effort=%s",
+             os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
+             os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found")
 
     if getattr(args, "trust_repo", False):
         os.environ["REVIEW_TRUST_REPO"] = "1"
@@ -360,4 +363,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    from multiplai_core import pin_session_settings
+
+    # First, before any step or child process starts: every model call of
+    # this run sees the session's model and effort as they were at launch.
+    pin_session_settings()
     sys.exit(main())

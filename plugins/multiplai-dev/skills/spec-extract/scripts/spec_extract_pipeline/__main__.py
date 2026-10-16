@@ -219,6 +219,9 @@ def main(argv: Sequence[str] | None = None, *, now: Callable[[], datetime] | Non
     # INFO and above go to spec-extract-pipeline-<day>.log; WARNING+ to stderr.
     setup_logging("spec-extract-pipeline", session_id=os.environ.get("CLAUDE_CODE_SESSION_ID", ""),
                   packages=("spec_extract_pipeline", "code_facts"))
+    log.info("Session settings: model=%s effort=%s",
+             os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
+             os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found")
     try:
         return _run(args, clock)
     except target.TargetError as e:
@@ -264,4 +267,9 @@ def cli(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    from multiplai_core import pin_session_settings
+
+    # First, before any step or child process starts: every model call of
+    # this run sees the session's model and effort as they were at launch.
+    pin_session_settings()
     sys.exit(cli())

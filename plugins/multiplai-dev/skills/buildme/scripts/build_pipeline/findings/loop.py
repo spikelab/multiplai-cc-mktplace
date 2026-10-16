@@ -42,6 +42,7 @@ runs no review and posts nothing: it is recorded finished, with no
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 import re
@@ -54,6 +55,7 @@ from .. import budget, git_ops, stop_record
 from ..change_manager import normalize_change_name
 from ..config import BuildConfig
 from ..models import BlockStatus, BuildPhase
+from ..progress import ProgressWriter
 from ..state import BuildState, FindingsRound, FindingsState
 from . import code, fetch, publish, spec, triage
 from .decisions import write_decisions
@@ -624,7 +626,35 @@ def spend_meter(run: FindingsRun) -> Callable[[], float]:
 
 
 async def run_findings(run: FindingsRun) -> int:
-    """The loop. Returns the process exit code."""
+    """The loop. Returns the process exit code.
+
+    Writes to the PR worktree's build-progress.md: `## INTERRUPTED by <SIG>`
+    when a stop ends the run (the running step has saved its stop record and
+    the checkpoint, `_step`), and what this process spent, at the end of every
+    run."""
+    progress = ProgressWriter(run.config.progress_file_path())
+    try:
+        return await _run_findings(run)
+    except (SystemExit, KeyboardInterrupt, asyncio.CancelledError) as e:
+        sig = git_ops.stop_signal_name(e)
+        log.warning("INTERRUPTED by %s", sig)
+        _progress_note(progress, f"INTERRUPTED by {sig}")
+        raise
+    finally:
+        spend = budget.process_spend()
+        _progress_note(progress, "BUDGET", (
+            f"Findings run (this process): ${spend.cost_usd:.2f}, {spend.tokens:,} tokens"
+            + ("" if spend.complete else " (incomplete: a skill printed no SPEND line)")))
+
+
+def _progress_note(progress: ProgressWriter, phase: str, details: str = "") -> None:
+    try:
+        progress.log_phase(phase, details)
+    except OSError as e:
+        log.warning("Could not write %s to the progress file: %s", phase, e)
+
+
+async def _run_findings(run: FindingsRun) -> int:
     st = load_state(run)
     fs = st.findings
     assert fs is not None

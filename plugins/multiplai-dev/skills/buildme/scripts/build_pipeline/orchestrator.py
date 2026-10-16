@@ -19,11 +19,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import board, git_ops, review_rounds, walkthroughs
+from . import budget as budget_mod
 from .change_manager import ChangeManager
 from .config import BuildConfig
 from .models import BoardColumn, BuildPhase
 from .progress import ProgressWriter
-from .state import BuildState, SpecGenState
+from .state import BuildState, SpecGenState, completed_state_path
 
 log = logging.getLogger(__name__)
 
@@ -41,11 +42,28 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     # with the change dir into specs/archive/ — _existing_state_path finds it
     # in either place.
     state_path = _existing_state_path(config) or config.state_file_path()
+
+    # Nothing to resume, but this change already published: ask before
+    # building it again (exit 3, writing nothing). With --force, build it anew
+    # on the next free branch, skipping the published builds' branches.
+    if not state_path.exists():
+        completed = _completed_builds(config)
+        if completed and not getattr(args, "force", False):
+            return _refuse_published_rerun(config, completed)
+        if completed:
+            config.published_branches = tuple(
+                st.branch for _, _, st in completed if st.branch)
+            log.info("FORCE new build of published change=%s skipping branches=%s",
+                     config.change_name, ",".join(config.published_branches) or "-")
+
     progress = ProgressWriter(config.progress_file_path())
 
     # Resume or create state
     if state_path.exists():
         state = BuildState.load(state_path)
+        # The spend saved so far carries into this run, whatever phase it
+        # resumes in; every checkpoint below saves the running total.
+        budget_mod.get_budget().load_state(state.budget)
         log.info("Resumed build: %s (phase=%s)", config.change_name, state.phase)
     else:
         state = BuildState(
@@ -70,10 +88,23 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             return 2
 
     # Set the moment the build's outcome is decided as success (spec-only done,
-    # or publish resolved). From then on the checkpoint is deliberately gone,
-    # so a late exception (progress cleanup, stdout) must NOT be recorded as
-    # Cancelled — the card's real column (e.g. In Review) already stands.
+    # or publish resolved). From then on `.build-state.json` may be renamed to
+    # `.build-state.complete.json`, so a late exception (stdout) must NOT be
+    # recorded as Cancelled — the card's real column (e.g. In Review) already
+    # stands.
     build_succeeded = False
+    # Whether this run has started its section of build-progress.md. The
+    # progress file lives in the build's worktree, which bootstrap may create,
+    # so the section starts right after bootstrap (or at once when bootstrap is
+    # behind the build).
+    progress_started = False
+
+    def start_progress() -> None:
+        nonlocal progress_started
+        if not progress_started:
+            progress.initialize(config.change_name, config.mode, config.tier)
+            budget_mod.warn_into(progress)
+            progress_started = True
 
     try:
         # Phase: Bootstrap
@@ -91,12 +122,14 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             state_path = config.state_file_path()
             progress = ProgressWriter(config.progress_file_path())
             cm = ChangeManager(config.specs_dir)
+            start_progress()
             log.info("DONE phase=BOOTSTRAP")
             print("PHASE:BOOTSTRAP:COMPLETE", flush=True)
             # First board record of the run: the card is being shaped. Not
             # recorded any earlier — at INIT the change directory does not
             # exist yet, and creating it would suppress .change.yaml.
             board.record(config, state, BuildPhase.BOOTSTRAP, progress=progress)
+        start_progress()
 
         # Phase: Interview. `user`: the SKILL.md wrapper ran the interviewer and
         # we receive its summary. `self`: questioner + answerer, no human.
@@ -283,11 +316,13 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             print("PHASE:PROTOTYPE:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.PROTOTYPE, progress=progress)
 
-        # Stop if --spec-only
+        # Stop if --spec-only. The checkpoint is kept, renamed, at the last spec
+        # phase: not a published build, so the `--mode only` handoff runs as usual.
         if config.spec_only:
             log.info("DONE pipeline=spec-only")
             build_succeeded = True
-            state.cleanup(state_path)
+            done = state.complete(state_path)
+            progress.log_phase("COMPLETE", f"Specs only. Checkpoint kept at {done}")
             print("RESULT:SUCCESS:spec-only", flush=True)
             return 0
 
@@ -311,8 +346,8 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             board.record(config, state, BuildPhase.TDD_BUILD, progress=progress)
             from .tdd_engine import run_tdd_engine
             # standalone=False: this is a sub-phase, so the engine must not
-            # advance to COMPLETE or delete the checkpoint — the reload below
-            # depends on the file still being there.
+            # complete the checkpoint — the reload below depends on the file
+            # still being there.
             result = await run_tdd_engine(config, args, standalone=False)
             # Reload state from disk — tdd_engine wrote its own updates (block status, TDD sub-state)
             # and our in-memory copy is stale. Without this, advance_to() overwrites tdd state with null.
@@ -320,6 +355,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 state = BuildState.load(state_path)
             if result != 0:
                 log.error("FAIL phase=TDD_BUILD exit_code=%d", result)
+                print(f"ERROR:TDD build failed (exit {result})", file=sys.stderr, flush=True)
                 state.fail(config.project_dir, state_path)
                 board.record_failure(config, state, "TDD build failed", progress=progress)
                 return result
@@ -415,19 +451,21 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # Phase: Publish (push branch + open draft PR). Non-fatal by
         # construction — a failure leaves the branch and worktree intact with
         # the exact manual commands in build-progress.md, and the build still
-        # reports success for the code it produced. Runs BEFORE state.cleanup:
-        # a failed publish keeps the checkpoint, so a re-run adopts this
-        # worktree/branch and retries instead of colliding on the branch.
+        # reports success for the code it produced. A failed publish keeps
+        # `.build-state.json`, so a re-run adopts this worktree/branch and
+        # retries instead of colliding on the branch.
         published = _run_publish(
             config, state, progress, state_path=state_path, docs_dir=publish_docs_dir,
         )
         state.phase = BuildPhase.COMPLETE
         build_succeeded = True
         if published:
-            state.cleanup(state_path)
-            # Only clear the progress file when there is nothing left for a
-            # human to do — an unpushed branch's diagnosis must survive.
-            progress.cleanup()
+            # Kept at COMPLETE as `.build-state.complete.json`: never resumed,
+            # and a re-run of the change asks first (`_completed_builds`).
+            done = state.complete(state_path)
+            progress.log_phase(
+                "COMPLETE", f"Published: {state.pr_url or state.branch}. Checkpoint kept at {done}",
+            )
         else:
             # Leave a resumable PUBLISH checkpoint (pr_url and branch already
             # persisted by _run_publish / advance_to above).
@@ -444,16 +482,55 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         log.info("DONE pipeline=complete change=%s", config.change_name)
         return 0
 
+    except (SystemExit, KeyboardInterrupt, asyncio.CancelledError) as e:
+        # A stop (SIGTERM/SIGHUP via git_ops._exit_on_termination, Ctrl-C) is
+        # not a failure: write it down, save the spend so far, and let it end
+        # the process. The state is not marked FAILED, so resume behaves as
+        # after any stop.
+        _record_interrupt(progress if progress_started else None, state_path, e,
+                          completed=build_succeeded)
+        raise
     except Exception as e:
         log.error("FAIL pipeline change=%s error=%s", config.change_name, e, exc_info=True)
         print(f"ERROR:{e}", file=sys.stderr, flush=True)
         # Cancelled only if nothing survives to resume from; otherwise the card
         # stays in its last column and a re-run picks it up there. Once the
-        # build succeeded the missing checkpoint is the normal post-success
-        # cleanup, not an unrecoverable failure — never Cancelled then.
+        # build succeeded `.build-state.json` may have become
+        # `.build-state.complete.json` — never Cancelled then.
         if not build_succeeded:
             board.record_failure(config, state, f"pipeline error: {e}", progress=progress)
         return 1
+    finally:
+        # What this run spent, by step, at the end of every run that started
+        # its progress section (success, failure, a stop, an exit 3).
+        if progress_started:
+            try:
+                progress.log_phase("BUDGET", budget_mod.get_budget().diagnosis())
+            except OSError as e:
+                log.warning("Could not write the spend summary to the progress file: %s", e)
+
+
+def _record_interrupt(progress, state_path: Path, exc: BaseException, *, completed: bool) -> None:
+    """Write a stop down: `## INTERRUPTED by <SIG>` in the progress file, a
+    WARNING log line, and the checkpoint re-saved with the spend so far.
+
+    The checkpoint is re-read from disk first: the TDD engine and the spec
+    generator checkpoint their own copies, and writing this function's caller's
+    copy would put stale block state back. Never raises — the stop must go on.
+    """
+    sig = git_ops.stop_signal_name(exc)
+    log.warning("INTERRUPTED by %s", sig)
+    if progress is not None:
+        try:
+            progress.log_phase(f"INTERRUPTED by {sig}")
+        except OSError as e:
+            log.warning("Could not write the stop to the progress file: %s", e)
+    if completed or not state_path.exists():
+        return
+    try:
+        BuildState.load(state_path).checkpoint(state_path)
+    except Exception as e:  # noqa: BLE001 — a stop must not turn into a crash
+        log.warning("Could not save the checkpoint on %s: %s", sig, e)
 
 
 def prototype_decision(config) -> tuple[bool, str]:
@@ -1205,7 +1282,8 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
     # killed before its first commit sits at that ref, which the local default
     # branch may not have reached: count its commits against the ref.
     base = config.base_ref or git_ops.default_branch(repo)
-    branch, dest = git_ops.resolve_new_branch(repo, config.change_name, base)
+    branch, dest = git_ops.resolve_new_branch(
+        repo, config.change_name, base, taken=config.published_branches)
     git_ops.create_worktree(repo, branch, dest, start_point=config.base_ref or None)
 
     state.source_repo = str(repo)
@@ -1334,6 +1412,73 @@ def _existing_state_path(config: BuildConfig) -> Path | None:
         if (d / active.name).exists()
     ]
     return archived[-1] if archived else None
+
+
+def _completed_state_paths(config: BuildConfig) -> list[Path]:
+    """The change's `.build-state.complete.json` files under *config*'s
+    project: in specs/changes/<name>/ and each specs/archive/<date>-<name>/."""
+    if not config.change_name:
+        return []
+    from .change_manager import archived_change_dirs
+    active = completed_state_path(config.state_file_path())
+    paths = [active] if active.exists() else []
+    paths += [d / active.name
+              for d in archived_change_dirs(config.specs_dir, config.change_name)
+              if (d / active.name).exists()]
+    return paths
+
+
+def _completed_builds(config: BuildConfig) -> list[tuple[str, Path, BuildState]]:
+    """This change's published builds, oldest first: ``(updated_at, path, state)``.
+
+    Looks where resume looks (`_rebind_to_existing_worktree`,
+    `_existing_state_path`): the project itself, and each
+    ``buildme-<change>[-N]`` worktree under the worktrees root. Only a
+    completed checkpoint at phase COMPLETE counts; a ``--spec-only`` or
+    standalone ``tdd`` completion is not a published build.
+    """
+    if not config.change_name:
+        return []
+    projects = [config]
+    repo = git_ops.repo_root(config.project_dir) if config.git.worktree else None
+    if repo is not None:
+        root = git_ops.worktrees_root(repo)
+        if root.is_dir():
+            offset = _project_offset(config.project_dir, repo)
+            prefix = git_ops.worktree_dir_name(config.change_name)
+            for dest in sorted(p for p in root.iterdir() if p.is_dir() and (
+                    p.name == prefix or p.name.startswith(f"{prefix}-"))):
+                probe = BuildConfig(mode=config.mode, project_dir=dest / offset,
+                                    change_name=config.change_name)
+                probe.specs_dir = dest / offset / "specs"
+                projects.append(probe)
+    found: dict[Path, tuple[str, Path, BuildState]] = {}
+    for project in projects:
+        for path in _completed_state_paths(project):
+            key = path.resolve()
+            if key in found:
+                continue
+            try:
+                done = BuildState.load(path)
+            except Exception as e:  # unreadable — not evidence of a published build
+                log.warning("Ignoring unreadable completed state at %s: %s", path, e)
+                continue
+            if done.phase == BuildPhase.COMPLETE:
+                found[key] = (done.updated_at, path, done)
+    return sorted(found.values(), key=lambda f: f[0])
+
+
+def _refuse_published_rerun(config: BuildConfig, completed: list[tuple[str, Path, BuildState]]) -> int:
+    """Exit 3 with `BUILD:COMPLETE:<path>`: the change already published, and
+    building it again is the user's call (`--force`). Writes nothing."""
+    _, path, done = completed[-1]
+    log.info("REFUSE re-run of published change=%s completed=%s branch=%s pr=%s",
+             config.change_name, path, done.branch, done.pr_url)
+    print(f"BUILD:COMPLETE:{path}", flush=True)
+    print(f"{config.change_name} already published on branch {done.branch or '(none recorded)'}"
+          f", PR {done.pr_url or '(none recorded)'}. Re-run with --force to start a new build "
+          f"of it on a new branch.", file=sys.stderr, flush=True)
+    return 3
 
 
 def _spec_paths(config: BuildConfig) -> list[str]:

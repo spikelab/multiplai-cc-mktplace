@@ -108,6 +108,18 @@ def _run_gh(argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_T
     return _run(argv, cwd=cwd, timeout=timeout)
 
 
+def stop_signal_name(exc: BaseException) -> str:
+    """The signal behind a stop: ``SystemExit(128 + n)`` from
+    `_exit_on_termination` names signal n; anything else (KeyboardInterrupt,
+    the task cancel `asyncio.run` makes of Ctrl-C) is SIGINT."""
+    if isinstance(exc, SystemExit) and isinstance(exc.code, int) and exc.code > 128:
+        try:
+            return signal.Signals(exc.code - 128).name
+        except ValueError:
+            pass
+    return "SIGINT"
+
+
 @contextlib.contextmanager
 def _exit_on_termination(*, interrupt: bool = True):
     """Make SIGINT, SIGTERM and SIGHUP raise for the length of the block.
@@ -409,17 +421,23 @@ def worktree_dest(repo: Path, change_name: str, suffix: int = 1) -> Path:
     return worktrees_root(repo) / name
 
 
-def resolve_new_branch(repo: Path, change_name: str, base: str) -> tuple[str, Path]:
+def resolve_new_branch(
+    repo: Path, change_name: str, base: str, *, taken: tuple[str, ...] = (),
+) -> tuple[str, Path]:
     """Pick a free ``buildme/<change>`` branch and its matching worktree path.
 
     A colliding branch that carries commits not on ``base`` is somebody's
     work — refuse rather than guess. A colliding branch with nothing on it
     gets a ``-2``/``-3``/... suffix (branch and worktree stay in lockstep).
+    A branch in *taken* (a published build's, when the user asked for a new
+    build of that change) is skipped the same way, whatever it carries.
     """
     base_branch = branch_name_for(change_name)
     for suffix in range(1, 51):
         branch = base_branch if suffix == 1 else f"{base_branch}-{suffix}"
         dest = worktree_dest(repo, change_name, suffix)
+        if branch in taken:
+            continue
         if branch_exists(repo, branch):
             ahead = unmerged_commit_count(repo, branch, base)
             if ahead is None:
@@ -623,6 +641,8 @@ def commit_paths(worktree: Path, message: str, paths: list[str]) -> str | None:
 # not) — with a `git clean` on the other side of the disagreement.
 BOOKKEEPING_EXCLUDES = [
     ":(exclude,glob)**/.build-state.json",
+    # A succeeded run's kept checkpoint (state.BuildState.complete).
+    ":(exclude,glob)**/.build-state.complete.json",
     # The findings stage's checkpoints: its round loop, and each round's TDD engine.
     ":(exclude,glob)**/.findings-state.json",
     ":(exclude,glob)**/.findings-r*-state.json",

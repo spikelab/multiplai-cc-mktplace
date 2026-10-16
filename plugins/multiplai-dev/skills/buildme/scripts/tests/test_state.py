@@ -43,16 +43,21 @@ class TestBuildState:
         assert s.phase == BuildPhase.SPEC_GENERATION
         assert state_file.exists()
 
-    def test_cleanup(self, tmp_path):
-        state_file = tmp_path / "state.json"
+    def test_complete_keeps_the_checkpoint_under_its_completed_name(self, tmp_path):
+        state_file = tmp_path / ".build-state.json"
         s = BuildState(
             change_name="test", mode="scratch", tier="standard",
             state_file=str(state_file),
         )
         s.checkpoint(state_file)
-        assert state_file.exists()
-        s.cleanup(state_file)
+        s.phase = BuildPhase.COMPLETE
+        done = s.complete(state_file)
         assert not state_file.exists()
+        assert done == tmp_path / ".build-state.complete.json"
+        kept = BuildState.load(done)
+        assert kept.phase == BuildPhase.COMPLETE
+        assert kept.change_name == "test"
+        assert "cost_usd" in kept.budget
 
     def test_is_phase_complete(self):
         s = BuildState(change_name="t", mode="scratch", tier="advanced")

@@ -130,6 +130,10 @@ def _setup_logging(session_id: str = "") -> None:
         session_id=session_id,
         packages=("research_pipeline",),
     )
+    logging.getLogger("research_pipeline").info(
+        "Session settings: model=%s effort=%s",
+        os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
+        os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found")
 
 
 async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> int:

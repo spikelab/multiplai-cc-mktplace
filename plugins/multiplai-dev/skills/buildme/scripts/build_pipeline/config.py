@@ -806,6 +806,10 @@ class BuildConfig:
     # resume). None means "we do not own a branch" — every commit/push/PR
     # helper no-ops, which is what keeps --no-worktree behavior unchanged.
     pipeline_branch: str | None = None
+    # Runtime marker, not user-configurable: with `build --force`, the branches
+    # of this change's published builds. A new worktree skips them instead of
+    # refusing (`git_ops.resolve_new_branch`).
+    published_branches: tuple[str, ...] = ()
 
     # Runtime marker, not user-configurable: stack_reference_docs() announces
     # the resolved set once per process (it is called per artifact and per TDD

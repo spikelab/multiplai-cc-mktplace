@@ -34,9 +34,9 @@ Set, but only at the edges:
     the first recorded column is Shaping.
   * **Cancelled** — recorded by `record_failure` **only** when the run ended
     unrecoverably, defined as "no resumable checkpoint survives"
-    (`.build-state.json` is gone). An ordinary failed phase leaves the
-    checkpoint on disk, so the card stays in its last column and a resume
-    continues from it.
+    (`.build-state.json` is gone and no `.build-state.complete.json` took
+    its place). An ordinary failed phase leaves the checkpoint on disk, so
+    the card stays in its last column and a resume continues from it.
 
 **Never set by this pipeline: Backlog, Testing, Ready for Prod, Deploying,
 Deployed.** They exist in `BoardColumn` (and therefore in `.board.json`'s
@@ -284,10 +284,12 @@ def record_failure(config, state, reason: str = "", progress=None) -> BoardColum
     checkpoint exists the card deliberately stays in its last column, which is
     where a resume continues from.
 
-    A *completed* build also has no checkpoint (post-success cleanup deletes
-    it) — the orchestrator never calls this once its build-succeeded signal is
-    set, so a late crash after cleanup cannot be misrecorded as Cancelled.
+    A *completed* build has `.build-state.complete.json` instead
+    (`BuildState.complete`): it is never Cancelled. The orchestrator also never
+    calls this once its build-succeeded signal is set.
     """
+    from .state import completed_state_path
+
     raw = state.state_file or ""
     state_file = Path(raw) if raw else config.state_file_path()
     if state_file.exists():
@@ -295,5 +297,8 @@ def record_failure(config, state, reason: str = "", progress=None) -> BoardColum
             "Build failed but %s survives — card stays in its current column for resume",
             state_file,
         )
+        return None
+    if completed_state_path(state_file).exists():
+        log.info("Build completed (%s) — never Cancelled", completed_state_path(state_file))
         return None
     return record(config, state, column=BoardColumn.CANCELLED, note=reason, progress=progress)
