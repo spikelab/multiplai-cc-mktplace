@@ -24,6 +24,13 @@ are the release dates recorded at the time, not derived from a tag.
   Background jobs (the router, catalogs, checkpoint, dream, learnings
   extraction, the memory maintainer) keep their own models.
 
+### Added
+- One effort option per background job: `router_effort`, `catalog_effort`,
+  `checkpoint_effort`, `dream_effort`, `extraction_effort`, `now_effort`,
+  `utilisation_judge_effort` and `memory_doctor_effort`. Empty, the default,
+  leaves the job at `MULTIPLAI_EFFORT`, then the session's effort. See
+  "Background-job effort" in the README.
+
 ## [0.56.0] - 2026-10-16
 
 ### Changed

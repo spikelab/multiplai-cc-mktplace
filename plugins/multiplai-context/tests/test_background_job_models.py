@@ -17,9 +17,11 @@ fallback, so the model recorded is the one the CLI would have been started
 with. Every job is run three times: with nothing set, with only the session's
 values pinned, and with ``MULTIPLAI_MODEL`` / ``MULTIPLAI_EFFORT`` set as well.
 
-No job passes an effort today, so the effort each call receives is whatever
-``default_effort()`` finds; ``test_effort_follows_the_session_when_a_job_sets_none``
-records that behaviour rather than endorsing it.
+Each job's effort is its own plugin option, ``<job>_effort`` (``lib/job_effort.py``).
+Unset, the job sends no effort and each call receives whatever
+``default_effort()`` finds (``test_effort_follows_the_session_when_a_job_sets_none``);
+set, every call the job makes receives it, whatever the session or
+``MULTIPLAI_EFFORT`` says (``test_job_effort_option_wins``).
 """
 
 import asyncio
@@ -40,7 +42,10 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from multiplai_core.env import CURRENT_MODEL
+from multiplai_core.plugin_options import option_var
 from multiplai_core.model_client import DEFAULT_MODEL as CLIENT_DEFAULT_MODEL
+
+from lib.job_effort import EFFORT_OPTIONS
 
 SESSION_MODEL = "claude-test-session"
 SESSION_EFFORT = "low"
@@ -335,23 +340,31 @@ class Job:
     drive: Callable
     #: Every model the job's calls reach the SDK with, nothing set.
     models: frozenset[str]
-    #: True when the job passes an effort of its own. None does today.
-    sets_effort: bool = False
+    #: The ``<job>_effort`` options (lib/job_effort.py) that govern its calls.
+    effort_options: tuple[str, ...]
 
 
 HAIKU = CURRENT_MODEL["haiku"]
 
 JOBS = [
-    Job("memory_maintainer status", _maintainer_status, frozenset({HAIKU})),
-    Job("memory_maintainer utilisation judge", _maintainer_judge, frozenset({HAIKU})),
-    Job("memory_maintainer doctor", _maintainer_doctor, frozenset({HAIKU})),
-    Job("memory router", _router, frozenset({"claude-haiku-4-5"})),
-    Job("catalogs", _catalogs, frozenset({"claude-sonnet-5"})),
-    Job("checkpoint", _checkpoint, frozenset({CLIENT_DEFAULT_MODEL})),
-    Job("dream", _dream, frozenset({CLIENT_DEFAULT_MODEL})),
-    Job("extract_learnings", _extract_learnings, frozenset({CLIENT_DEFAULT_MODEL})),
-    Job("backfill", _backfill, frozenset({CLIENT_DEFAULT_MODEL, "claude-sonnet-5"})),
+    Job("memory_maintainer status", _maintainer_status, frozenset({HAIKU}), ("now_effort",)),
+    Job("memory_maintainer utilisation judge", _maintainer_judge, frozenset({HAIKU}),
+        ("utilisation_judge_effort",)),
+    Job("memory_maintainer doctor", _maintainer_doctor, frozenset({HAIKU}),
+        ("memory_doctor_effort",)),
+    Job("memory router", _router, frozenset({"claude-haiku-4-5"}), ("router_effort",)),
+    Job("catalogs", _catalogs, frozenset({"claude-sonnet-5"}), ("catalog_effort",)),
+    Job("checkpoint", _checkpoint, frozenset({CLIENT_DEFAULT_MODEL}), ("checkpoint_effort",)),
+    Job("dream", _dream, frozenset({CLIENT_DEFAULT_MODEL}), ("dream_effort",)),
+    Job("extract_learnings", _extract_learnings, frozenset({CLIENT_DEFAULT_MODEL}),
+        ("extraction_effort", "now_effort")),
+    Job("backfill", _backfill, frozenset({CLIENT_DEFAULT_MODEL, "claude-sonnet-5"}),
+        ("extraction_effort", "now_effort", "catalog_effort")),
 ]
+
+#: The effort an option sets in the tests: neither SESSION_EFFORT nor
+#: CONFIGURED_EFFORT, so a call that receives it got it from the option.
+OPTION_EFFORT = "medium"
 
 
 def _run_in(state: str, job: Job, tmp_path: Path, monkeypatch, sdk) -> list[SdkCall]:
@@ -381,15 +394,42 @@ def test_job_model_ignores_the_session_and_multiplai_model(job, tmp_path, monkey
         calls = _run_in(state, job, tmp_path, monkeypatch, sdk)
         assert {c.model for c in calls} == job.models, (
             f"{job.name}: with {state} env the SDK got {sorted({c.model for c in calls})}")
-        if job.sets_effort:
-            assert {c.effort for c in calls} == {c.effort for c in baseline}
 
 
 def test_effort_follows_the_session_when_a_job_sets_none(job, tmp_path, monkeypatch, sdk):
-    """Records today's behaviour: with no effort of its own, each call gets
-    ``default_effort()`` — none, then the session's, then ``MULTIPLAI_EFFORT``."""
-    if job.sets_effort:
-        pytest.skip(f"{job.name} passes its own effort")
+    """With no ``<job>_effort`` option, each call gets ``default_effort()`` —
+    none, then the session's, then ``MULTIPLAI_EFFORT``."""
+    for name in EFFORT_OPTIONS:
+        monkeypatch.delenv(option_var(name), raising=False)
     for state, expected in DEFAULT_EFFORT_BY_STATE.items():
         calls = _run_in(state, job, tmp_path, monkeypatch, sdk)
         assert {c.effort for c in calls} == {expected}, (job.name, state)
+
+
+def test_job_effort_option_wins(job, tmp_path, monkeypatch, sdk):
+    """``<job>_effort`` reaches every call the job makes, in every env state."""
+    for name in job.effort_options:
+        monkeypatch.setenv(option_var(name), OPTION_EFFORT)
+    for state in ENV_STATES:
+        calls = _run_in(state, job, tmp_path, monkeypatch, sdk)
+        assert {c.effort for c in calls} == {OPTION_EFFORT}, (job.name, state)
+        assert {c.model for c in calls} == job.models
+
+
+def test_an_invalid_job_effort_is_ignored(tmp_path, monkeypatch, sdk):
+    """A value that is no effort name falls back like an unset option."""
+    router = next(j for j in JOBS if j.name == "memory router")
+    monkeypatch.setenv(option_var("router_effort"), "turbo")
+    for state, expected in DEFAULT_EFFORT_BY_STATE.items():
+        calls = _run_in(state, router, tmp_path, monkeypatch, sdk)
+        assert {c.effort for c in calls} == {expected}, state
+
+
+def test_every_job_effort_option_is_declared():
+    """Each option lib/job_effort.py reads is in plugin.json's userConfig."""
+    manifest = json.loads((SCRIPTS_DIR.parent / ".claude-plugin" / "plugin.json").read_text())
+    declared = manifest["userConfig"]
+    for name in EFFORT_OPTIONS:
+        entry = declared[name]
+        assert entry["type"] == "string" and entry["default"] == ""
+    assert {n for j in JOBS for n in j.effort_options} <= set(EFFORT_OPTIONS)

@@ -341,6 +341,54 @@
       "title": "Checkpoint Writer Model",
       "description": "Model used by the checkpoint writer. Empty uses the plugin's default model.",
       "default": ""
+    },
+    "router_effort": {
+      "type": "string",
+      "title": "Memory Router Effort",
+      "description": "Reasoning effort for the 'llm' memory router's per-prompt call: low, medium, high, xhigh or max. Empty sends none, so the call uses MULTIPLAI_EFFORT (environment, then multiplai.conf), then the Claude Code session's effort. Any other value is ignored with a warning.",
+      "default": ""
+    },
+    "catalog_effort": {
+      "type": "string",
+      "title": "Catalog Generation Effort",
+      "description": "Reasoning effort for catalog generation, the diary catalog included: low, medium, high, xhigh or max. Empty sends none, so the call uses MULTIPLAI_EFFORT (environment, then multiplai.conf), then the Claude Code session's effort. Any other value is ignored with a warning.",
+      "default": ""
+    },
+    "checkpoint_effort": {
+      "type": "string",
+      "title": "Checkpoint Writer Effort",
+      "description": "Reasoning effort for the checkpoint writer: low, medium, high, xhigh or max. Empty sends none, so the call uses MULTIPLAI_EFFORT (environment, then multiplai.conf), then the Claude Code session's effort. Any other value is ignored with a warning.",
+      "default": ""
+    },
+    "dream_effort": {
+      "type": "string",
+      "title": "Dream Effort",
+      "description": "Reasoning effort for every dream call: the proposal, its critique, triage and apply: low, medium, high, xhigh or max. Empty sends none, so the call uses MULTIPLAI_EFFORT (environment, then multiplai.conf), then the Claude Code session's effort. Any other value is ignored with a warning.",
+      "default": ""
+    },
+    "extraction_effort": {
+      "type": "string",
+      "title": "Learning Extraction Effort",
+      "description": "Reasoning effort for learning extraction at session end and in backfill: low, medium, high, xhigh or max. Empty sends none, so the call uses MULTIPLAI_EFFORT (environment, then multiplai.conf), then the Claude Code session's effort. Any other value is ignored with a warning.",
+      "default": ""
+    },
+    "now_effort": {
+      "type": "string",
+      "title": "now/ Refresh Effort",
+      "description": "Reasoning effort for the now/ status summaries, written after extraction, by backfill and by the memory maintainer: low, medium, high, xhigh or max. Empty sends none, so the call uses MULTIPLAI_EFFORT (environment, then multiplai.conf), then the Claude Code session's effort. Any other value is ignored with a warning.",
+      "default": ""
+    },
+    "utilisation_judge_effort": {
+      "type": "string",
+      "title": "Utilisation Judge Effort",
+      "description": "Reasoning effort for the memory maintainer's utilisation judge: low, medium, high, xhigh or max. Empty sends none, so the call uses MULTIPLAI_EFFORT (environment, then multiplai.conf), then the Claude Code session's effort. Any other value is ignored with a warning.",
+      "default": ""
+    },
+    "memory_doctor_effort": {
+      "type": "string",
+      "title": "Memory Doctor Effort",
+      "description": "Reasoning effort for both memory doctor passes, duplication and contradiction: low, medium, high, xhigh or max. Empty sends none, so the call uses MULTIPLAI_EFFORT (environment, then multiplai.conf), then the Claude Code session's effort. Any other value is ignored with a warning.",
+      "default": ""
     }
   }
 }

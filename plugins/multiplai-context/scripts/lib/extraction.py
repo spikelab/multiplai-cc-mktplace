@@ -16,6 +16,7 @@ from typing import Optional, Sequence, Union
 
 from lib import taxonomy
 from lib.runtime import lock_path
+from lib.job_effort import EXTRACTION_EFFORT_OPTION, effort_kwargs
 from lib.thinking import EXTRACTION_THINKING_OPTION, thinking_kwargs
 
 logger = logging.getLogger(__name__)
@@ -777,6 +778,7 @@ async def extract_session_signals(
     # cannot change between attempts. The messages list is still rebuilt per
     # attempt: a client that appended to it would otherwise corrupt the retry.
     thinking = thinking_kwargs(EXTRACTION_THINKING_OPTION)
+    effort = effort_kwargs(EXTRACTION_EFFORT_OPTION)
     last_error: Optional[ExtractionParseError] = None
     for attempt in range(2):
         response = await client.query(
@@ -786,6 +788,7 @@ async def extract_session_signals(
                 "content": prompt,
             }],
             **thinking,
+            **effort,
         )
         try:
             units = _parse_units(response.content)

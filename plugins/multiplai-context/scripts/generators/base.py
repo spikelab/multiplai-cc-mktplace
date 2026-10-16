@@ -21,6 +21,7 @@ from typing import Any
 from multiplai_core.paths import Paths
 
 from lib.fsio import atomic_write_json
+from lib.job_effort import CATALOG_EFFORT_OPTION, effort_kwargs
 from lib.thinking import CATALOG_THINKING_OPTION, thinking_kwargs
 
 logger = logging.getLogger(__name__)
@@ -611,6 +612,7 @@ class GeneratorBase:
         # built per attempt: a client that appended to the messages list would
         # otherwise corrupt the retry.
         thinking = thinking_kwargs(CATALOG_THINKING_OPTION)
+        effort = effort_kwargs(CATALOG_EFFORT_OPTION)
         for attempt in range(MAX_RETRIES + 1):
             try:
                 response = await self._model_client.query(
@@ -621,6 +623,7 @@ class GeneratorBase:
                     messages=[{"role": "user", "content": prompt}],
                     model=self._call_model,
                     **thinking,
+                    **effort,
                 )
                 return response.content
             except Exception as e:

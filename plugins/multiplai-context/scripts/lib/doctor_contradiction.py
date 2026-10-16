@@ -65,6 +65,8 @@ from typing import Mapping, Optional, Sequence
 
 from multiplai_core.untrusted import defang, fence, markdown_notice
 
+from lib.job_effort import MEMORY_DOCTOR_EFFORT_OPTION, effort_kwargs
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -408,6 +410,7 @@ async def check_file(
             messages=[{"role": "user", "content": build_prompt(filename, text)}],
             model=model,
             timeout_s=timeout_s,
+            **effort_kwargs(MEMORY_DOCTOR_EFFORT_OPTION),
         )
         return parse_findings(response.content, filename, text)
     except Exception:

@@ -55,6 +55,7 @@ from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
 from lib import citation_repair, learnings_ledger, taxonomy
+from lib.job_effort import DREAM_EFFORT_OPTION, effort_kwargs
 from lib.dream_processed import (
     PROCESSED_HEADING,
     Decision,
@@ -1039,7 +1040,8 @@ async def _query(client, system: str, messages: list[dict], timeout_s: float | N
     global _TIMEOUT_KWARG_UNSUPPORTED
     if timeout_s and not _TIMEOUT_KWARG_UNSUPPORTED:
         try:
-            return await client.query(system=system, messages=messages, timeout_s=timeout_s)
+            return await client.query(system=system, messages=messages, timeout_s=timeout_s,
+                                      **effort_kwargs(DREAM_EFFORT_OPTION))
         except TypeError as exc:
             if "timeout_s" not in str(exc):
                 raise
@@ -1048,7 +1050,8 @@ async def _query(client, system: str, messages: list[dict], timeout_s: float | N
                 "Installed multiplai-core has no query(timeout_s=…) (pre-v0.12.0) — "
                 "per-chunk timeouts fall back to MULTIPLAI_SDK_CALL_TIMEOUT_S"
             )
-    return await client.query(system=system, messages=messages)
+    return await client.query(system=system, messages=messages,
+                              **effort_kwargs(DREAM_EFFORT_OPTION))
 
 
 async def _generate_proposal(
@@ -1071,7 +1074,8 @@ async def _generate_proposal(
         }
     ]
 
-    response = await client.query(system=_PROPOSAL_SYSTEM, messages=messages)
+    response = await client.query(system=_PROPOSAL_SYSTEM, messages=messages,
+                                  **effort_kwargs(DREAM_EFFORT_OPTION))
     cleaned = await _critique_proposal(client, response.content, memory_context)
     sourced = _with_repaired_citations(cleaned, get_paths().learnings_dir)
     validated = _with_relearns(_with_routing_warnings(sourced, memory_contents))

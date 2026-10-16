@@ -257,6 +257,27 @@ Where `token_overlap` genuinely wins is knowing when to inject *nothing* —
 76.9% vs 51.3% on the first prompt of a session. `llm_hybrid` exists to take
 both, and has not been scored yet.
 
+### Background-job effort
+
+Each background job has one effort option. Empty, the default, sends no
+effort, so the job runs at `MULTIPLAI_EFFORT` (environment, then
+`multiplai.conf`), and failing that at the effort of the Claude Code session
+it runs under. Set one to `low`, `medium`, `high`, `xhigh` or `max` to fix
+that job's effort; any other value is ignored with a warning. A job's model is
+unaffected: it keeps its own (`router_model`, `catalog_model`,
+`checkpoint_model`, and so on).
+
+| Option | Job |
+|--------|-----|
+| `router_effort` | The `llm` memory router's per-prompt call |
+| `catalog_effort` | Catalog generation, the diary catalog included |
+| `checkpoint_effort` | The checkpoint writer |
+| `dream_effort` | Every dream call: the proposal, its critique, triage and apply |
+| `extraction_effort` | Learning extraction, at session end and in backfill |
+| `now_effort` | The now/ status summaries, after extraction, in backfill and in the memory maintainer |
+| `utilisation_judge_effort` | The memory maintainer's utilisation judge |
+| `memory_doctor_effort` | Both memory doctor passes, duplication and contradiction |
+
 ### Resources retrieval via qmd
 
 **qmd is the only way a resources corpus is retrieved.** Set

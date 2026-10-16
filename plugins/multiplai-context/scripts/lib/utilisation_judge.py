@@ -37,6 +37,7 @@ from typing import Optional, Sequence
 from multiplai_core.untrusted import fence
 
 from lib import utilisation as util
+from lib.job_effort import UTILISATION_JUDGE_EFFORT_OPTION, effort_kwargs
 from lib.thinking import UTILISATION_THINKING_OPTION, thinking_kwargs
 
 logger = logging.getLogger(__name__)
@@ -433,6 +434,7 @@ async def judge_one_detailed(
             model=model,
             timeout_s=timeout_s,
             **judge_thinking_kwargs(),
+            **effort_kwargs(UTILISATION_JUDGE_EFFORT_OPTION),
         )
         return parse_verdicts(
             response.content, keys, session=str(record.get("session") or "")
