@@ -15,7 +15,7 @@ from fixture_repo import (  # noqa: E402
     KEYWORD_LINE, KEYWORD_USE_LINE, SETTINGS_DEF_LINE,
 )
 
-from review_pipeline import budget, ledger, target  # noqa: E402
+from review_pipeline import budget, deps, ledger, target  # noqa: E402
 from review_pipeline.models import Citation, Finding, Rejected, ReviewState, Verdict  # noqa: E402
 
 SCHEMA = TESTS.parents[2] / "review-viewer" / "schema" / "findings.v1.schema.json"
@@ -50,7 +50,14 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(ledger, "legacy_reviews_root", lambda: tmp_path / "no-legacy-reviews")
     monkeypatch.delenv("REVIEW_TRUST_REPO", raising=False)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setattr(deps, "cache_root", lambda: tmp_path / "dep-cache")
     budget.start(None)
+
+
+@pytest.fixture
+def allow_file_urls(monkeypatch):
+    """Let the dependency code clone the tests' local bare repositories (file:// URLs)."""
+    monkeypatch.setattr(deps, "ALLOWED_SCHEMES", {*deps.ALLOWED_SCHEMES, "file"})
 
 
 @pytest.fixture(scope="session")

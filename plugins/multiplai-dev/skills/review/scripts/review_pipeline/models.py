@@ -143,6 +143,29 @@ class NeedAsk(_Model):
         return value if value in NEED_CAUSES else "no-access"
 
 
+# Where the snapshot holds the reviewed repository's git dependencies
+# (`deps.py`): `<snapshot>/.review-deps/<name>@<commit[:12]>/`.
+DEPS_DIR = ".review-deps"
+
+
+class DepEntry(BaseModel):
+    """One git dependency a uv.lock at head pins, and what `deps.materialize` did with it.
+
+    `cache` is the bare clone the gates re-read a citation of it from; `status`
+    `ok` means its source is in the snapshot under `folder`.
+    """
+    name: str
+    url: str
+    commit: str
+    cache: str = ""
+    status: Literal["ok", "skipped", "failed"]
+    reason: str = ""
+
+    @property
+    def folder(self) -> str:
+        return f"{self.name}@{self.commit[:12]}"
+
+
 class Need(BaseModel):
     """Information the review needed and could not get, and how a person would get it.
 
