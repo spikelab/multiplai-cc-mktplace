@@ -2,8 +2,6 @@
 name: buildme
 description: Full bootstrap conductor - from idea to working code. Orchestrates interview, research, spec generation, and autonomous TDD implementation via a deterministic Python pipeline.
 when_to_use: 'Triggers: build me, buildme, bootstrap, full build, /buildme'
-model: opus
-effort: medium
 ---
 
 # BuildMe

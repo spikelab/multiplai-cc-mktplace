@@ -6,8 +6,6 @@ description: >
   that open in VS Code Excalidraw extension for drawing on top of.
   Triggers on "draw a diagram", "create an excalidraw", "diagram this",
   "visualize this architecture", or explicit /excalidraw invocation.
-model: opus
-effort: medium
 ---
 
 # Excalidraw Diagram Generator

@@ -1,8 +1,6 @@
 ---
 name: host-browser
 description: Drive the user's REAL logged-in Chrome on the macOS host (via the `ab`/agent-browser bridge) instead of an ephemeral test browser. Use whenever a task needs a real, persistent, fingerprint-genuine browser session — logging into a site, filling a form, scraping a JS/bot-walled page, automating a signup, or grabbing a verification email from a temp-mail service. Provides a reliable connect procedure plus human-pacing/anti-detection helpers. Triggers on "use the browser", "drive Chrome", "log into", "sign up for", "the page is bot-blocked / 403 / JS-rendered", "grab the verification email".
-model: opus
-effort: medium
 ---
 
 # host-browser

@@ -2,8 +2,6 @@
 name: spec-extract
 description: Writes BDD capability specs, in the format of buildme's specs/registry/, from the Python code of a commit, a directory or a PR, with every scenario citing lines a gate re-read at that commit. This version resolves the target, chooses and locks its run folder, lists the Python files and their public symbols, and asks one read-only agent per slice of code what it does, keeping only facts whose cited lines are at the commit; then groups the symbols into capabilities, asks one agent per capability for its requirements and scenarios, drops every scenario whose citations fail, and writes one registry file per capability. With --apply it then copies each new file into the repository's specs/registry/, after checking that nobody else's uncommitted work is there, and commits nothing.
 when_to_use: 'Triggers: spec-extract, reverse-engineer specs, write specs from code, /multiplai-dev:spec-extract'
-model: sonnet
-effort: medium
 ---
 
 # spec-extract
