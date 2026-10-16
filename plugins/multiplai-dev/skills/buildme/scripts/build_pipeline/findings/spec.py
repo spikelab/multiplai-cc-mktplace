@@ -107,6 +107,7 @@ async def write_delta(config: BuildConfig, change_dir: Path, round_n: int,
     body = await call(
         prompt,
         model=config.model_for('findings_spec'),
+        effort=config.effort_for('findings_spec'),
         system_prompt=("You are a specification editor writing a delta. Output the delta "
                        "directly as markdown. Do not use tools; everything you need is in "
                        "the prompt."),

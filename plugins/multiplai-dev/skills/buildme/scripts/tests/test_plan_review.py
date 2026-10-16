@@ -111,6 +111,9 @@ def _stub_config(tmp_path, **overrides):
     # BuildConfig.model_for("plan_review")'s chain, for the fields this stub has.
     config.model_for = lambda step: (getattr(config, "plan_review_model", None)
                                      or config.review_model)
+    # And effort_for("plan_review")'s.
+    config.effort_for = lambda step: (getattr(config, "plan_review_effort", None)
+                                      or config.review_effort)
     return config
 
 

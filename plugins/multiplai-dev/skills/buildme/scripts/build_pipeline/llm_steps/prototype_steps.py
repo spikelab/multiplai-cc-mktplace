@@ -52,6 +52,7 @@ async def run_prototype(config) -> GateResult:
             prompt,
             allowed_tools=PROTOTYPE_TOOLS,
             model=config.model_for("prototype"),
+            effort=config.effort_for("prototype"),
             cwd=str(prototype_dir),
         )
 

@@ -699,7 +699,7 @@ async def _audit_test_quality(test_files_content: str, contracts: str, config: B
         contracts=contracts or "(none provided)",
     )
     return await llm_call_structured(prompt, TestQualityAudit, model=config.model_for("test_quality_audit"),
-                                     effort=config.review_effort, max_retries=1,
+                                     effort=config.effort_for("test_quality_audit"), max_retries=1,
                                      budget_label="test_quality_audit")
 
 
@@ -759,7 +759,7 @@ async def _adjudicate_review_findings(
     try:
         adjudication = await llm_call_structured(
             prompt, FindingAdjudication, model=config.model_for("adjudication"),
-            effort=config.review_effort, max_retries=1,
+            effort=config.effort_for("adjudication"), max_retries=1,
             budget_label="adjudication",
         )
     except Exception as e:
@@ -844,7 +844,7 @@ async def _enforce_test_quality(
         context_bundle=context,
         test_command=_block_agent_test_command(config, block),
         model=config.model_for("test_writer"),
-        effort=config.agent_effort,
+        effort=config.effort_for("test_writer"),
         cwd=str(config.project_dir),
     )
     if not retry.success:
@@ -954,7 +954,7 @@ async def _enforce_red_gate(
                 context_bundle=context,
                 test_command=_block_agent_test_command(config, block),
                 model=config.model_for("test_writer"),
-                effort=config.agent_effort,
+                effort=config.effort_for("test_writer"),
                 cwd=str(config.project_dir),
             )
             if not retry.success:
@@ -1134,7 +1134,7 @@ async def run_block_tdd(
         context_bundle=context,
         test_command=_block_agent_test_command(config, block),
         model=config.model_for("test_writer"),
-        effort=config.agent_effort,
+        effort=config.effort_for("test_writer"),
         cwd=cwd,
     )
 
@@ -1207,7 +1207,7 @@ async def run_block_tdd(
         test_command=_block_agent_test_command(config, block),
         prompt_style=config.implementer_prompt_style,
         model=config.model_for("implementer"),
-        effort=config.agent_effort,
+        effort=config.effort_for("implementer"),
         cwd=cwd,
     )
 
@@ -1279,7 +1279,7 @@ async def run_block_tdd(
             context_bundle=refactor_context,
             test_command=_block_agent_test_command(config, block),
             model=config.model_for("refactor"),
-            effort=config.agent_effort,
+            effort=config.effort_for("refactor"),
             cwd=cwd,
         )
         # Refactor is non-fatal: a failed or timed-out refactor leaves the
@@ -1475,8 +1475,8 @@ async def _run_integration_and_review(
         fix_completed = False
         for attempt in range(MAX_INTEGRATION_FIX_ATTEMPTS):
             escalated = attempt == MAX_INTEGRATION_FIX_ATTEMPTS - 1
-            fix_model = config.model_for(
-                "integration_fix_escalated" if escalated else "integration_fix")
+            fix_step = "integration_fix_escalated" if escalated else "integration_fix"
+            fix_model = config.model_for(fix_step)
             log.info("Integration fix attempt %d/%d%s", attempt + 1,
                      MAX_INTEGRATION_FIX_ATTEMPTS, " (escalated)" if escalated else "")
             if escalated:
@@ -1489,7 +1489,7 @@ async def _run_integration_and_review(
                 context_bundle=context,
                 escalate=escalated,
                 model=fix_model,
-                effort=config.agent_effort,
+                effort=config.effort_for(fix_step),
                 cwd=str(config.project_dir),
             )
             if fix_result.output:
@@ -1607,7 +1607,7 @@ async def _run_integration_and_review(
             test_command=config.test_command,
             prompt_style=config.implementer_prompt_style,
             model=config.model_for("review_fix"),
-            effort=config.agent_effort,
+            effort=config.effort_for("review_fix"),
             cwd=str(config.project_dir),
         )
         _record_fix(round_path, block, fix)
@@ -1867,7 +1867,7 @@ async def _run_fix_on_pass(
         test_command=config.test_command,
         prompt_style=config.implementer_prompt_style,
         model=config.model_for("review_fix"),
-        effort=config.agent_effort,
+        effort=config.effort_for("review_fix"),
         cwd=str(config.project_dir),
     )
     _record_fix(fp.round_path, block, fix, pass_kind="fix_on_pass")
@@ -2392,7 +2392,7 @@ async def _run_refactor_all(
         rubric=config.rubric_path.read_text() if config.rubric_path.exists() else "(no rubric.md)",
         test_command=config.test_command,
         model=config.model_for("refactor_all"),
-        effort=config.agent_effort,
+        effort=config.effort_for("refactor_all"),
         cwd=str(config.project_dir),
     )
 
@@ -2707,7 +2707,7 @@ async def _run_mutation_round(
         survivors=_format_survivors(config, first),
         test_command=config.test_command,
         model=config.model_for("mutation_test_writer"),
-        effort=config.agent_effort,
+        effort=config.effort_for("mutation_test_writer"),
         cwd=str(config.project_dir),
     )
 

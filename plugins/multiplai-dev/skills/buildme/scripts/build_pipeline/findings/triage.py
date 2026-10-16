@@ -82,6 +82,7 @@ async def triage_comment(config: BuildConfig, change_dir: Path, comment: PRComme
         Triage,
         allowed_tools=TRIAGE_TOOLS,
         model=config.model_for('findings_triage'),
+        effort=config.effort_for('findings_triage'),
         max_turns=TRIAGE_MAX_TURNS,
         cwd=str(config.project_dir),
         budget_label="findings_triage",

@@ -51,7 +51,7 @@ async def run_docs_update(config, state=None) -> tuple[list[str], GateResult]:
             prompt,
             allowed_tools=DOCS_TOOLS,
             model=config.model_for("docs_update"),
-            effort=config.spec_effort,
+            effort=config.effort_for("docs_update"),
             cwd=str(config.project_dir),
             budget_label="docs_update",
         )

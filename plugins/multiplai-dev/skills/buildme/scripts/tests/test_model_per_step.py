@@ -1,8 +1,11 @@
-"""A model per step: `models:` in specs/config.yaml and BuildConfig.model_for.
+"""A model and an effort per step: `models:` / `efforts:` in specs/config.yaml,
+BuildConfig.model_for and BuildConfig.effort_for.
 
-Five groups: with no `models:` key every step runs on today's model; the
-chain's precedence; a `pi:` spec reaching `run_agent` unchanged; the tier;
-and every model-bearing call site mapped to a step.
+Groups: with no `models:` key every step runs on today's model; with no
+config at all every step follows MULTIPLAI_MODEL / MULTIPLAI_EFFORT, then the
+session; each chain's precedence; a `pi:` spec reaching `run_agent`
+unchanged; the tier; and every model-bearing call site mapped to a step,
+passing that step's effort.
 """
 
 from __future__ import annotations
@@ -30,13 +33,15 @@ PI_SPEC = "pi:deepseek/deepseek-v4-flash@fireworks"
 
 @pytest.fixture
 def no_conf(tmp_path):
-    """An empty multiplai.conf, no buildme env vars, and a ceiling nothing hits."""
+    """An empty multiplai.conf, and no buildme, MULTIPLAI_* or session env vars."""
     home = tmp_path / "multiplai-home"
     home.mkdir()
     (home / "multiplai.conf").write_text("")
-    env = {"CLAUDE_MULTIPLAI_HOME": str(home), "MULTIPLAI_MODEL": CURRENT_MODEL["fable"]}
-    with patch.dict(os.environ, env, clear=True):
+    with patch.dict(os.environ, {"CLAUDE_MULTIPLAI_HOME": str(home)}, clear=True):
         yield
+
+
+SESSION = {"MULTIPLAI_SESSION_MODEL": "claude-test-session", "MULTIPLAI_SESSION_EFFORT": "low"}
 
 
 def _config(tmp_path, yaml_text: str = "", **fields) -> BuildConfig:
@@ -79,6 +84,113 @@ class TestNoConfigEquivalence:
         config = _config(tmp_path, model="claude-opus-4-6", review_model="claude-sonnet-4-6")
         assert config.model_for("implementer") == "claude-opus-4-6"
         assert config.model_for("review") == "claude-sonnet-4-6"
+
+
+class TestSessionDefaults:
+    """Done means 7: with nothing configured every step follows the session;
+    MULTIPLAI_MODEL moves every step's model; `models:` / `efforts:` move only
+    the steps they name."""
+
+    def test_there_are_28_steps(self):
+        assert len(STEP_STAGES) == 28
+
+    def test_every_step_follows_the_session(self, tmp_path, no_conf):
+        with patch.dict(os.environ, SESSION):
+            config = _config(tmp_path)
+            for step in STEP_STAGES:
+                assert (config.model_for(step), config.effort_for(step)) == \
+                    ("claude-test-session", "low"), step
+
+    def test_multiplai_model_moves_every_step_but_not_the_effort(self, tmp_path, no_conf):
+        with patch.dict(os.environ, {**SESSION, "MULTIPLAI_MODEL": "claude-test-default"}):
+            config = _config(tmp_path)
+            for step in STEP_STAGES:
+                assert (config.model_for(step), config.effort_for(step)) == \
+                    ("claude-test-default", "low"), step
+
+    def test_multiplai_effort_moves_every_step(self, tmp_path, no_conf):
+        with patch.dict(os.environ, {**SESSION, "MULTIPLAI_EFFORT": "high"}):
+            config = _config(tmp_path)
+            assert {config.effort_for(step) for step in STEP_STAGES} == {"high"}
+
+    @pytest.mark.parametrize("env", [{}, {"MULTIPLAI_MODEL": "claude-test-default"}])
+    def test_models_implementer_moves_only_the_implementer(self, tmp_path, no_conf, env):
+        with patch.dict(os.environ, {**SESSION, **env}):
+            config = _config(tmp_path, "models:\n  implementer: sonnet\n")
+            rest = env.get("MULTIPLAI_MODEL", "claude-test-session")
+            for step in STEP_STAGES:
+                want = CURRENT_MODEL["sonnet"] if step == "implementer" else rest
+                assert config.model_for(step) == want, step
+
+    def test_efforts_review_moves_only_the_review_stage(self, tmp_path, no_conf):
+        with patch.dict(os.environ, SESSION):
+            config = _config(tmp_path, "efforts:\n  review: high\n")
+            for step, stage in STEP_STAGES.items():
+                assert config.effort_for(step) == ("high" if stage == "review" else "low"), step
+
+    def test_nothing_anywhere_leaves_the_cli_to_choose(self, tmp_path, no_conf):
+        config = _config(tmp_path)
+        for step in STEP_STAGES:
+            assert (config.model_for(step), config.effort_for(step)) == (None, None), step
+
+
+class TestEffortPrecedence:
+    """efforts.<step> → efforts.<stage> → [buildme.<stage>] EFFORT= →
+    efforts.default → [buildme] EFFORT= → MULTIPLAI_EFFORT → the session."""
+
+    def test_step_beats_stage(self, tmp_path, no_conf):
+        config = _config(tmp_path, "efforts:\n  implementer: max\n  agent: low\n")
+        assert config.effort_for("implementer") == "max"
+        assert config.effort_for("refactor") == "low"
+
+    def test_stage_beats_the_per_stage_field(self, tmp_path, no_conf):
+        config = _config(tmp_path, "efforts:\n  review: low\n", review_effort="high")
+        assert config.effort_for("review") == "low"
+
+    def test_the_per_stage_field_beats_default(self, tmp_path, no_conf):
+        config = _config(tmp_path, "efforts:\n  default: low\n", agent_effort="high")
+        assert config.effort_for("implementer") == "high"
+        assert config.effort_for("review") == "low"
+
+    def test_default_beats_the_pipeline_effort(self, tmp_path, no_conf):
+        config = _config(tmp_path, "efforts:\n  default: low\n", effort="high")
+        assert config.effort_for("rubric") == "low"
+
+    def test_the_pipeline_effort_beats_multiplai_effort(self, tmp_path, no_conf):
+        with patch.dict(os.environ, {"MULTIPLAI_EFFORT": "low"}):
+            config = _config(tmp_path, effort="high")
+            assert {config.effort_for(step) for step in STEP_STAGES} == {"high"}
+
+    def test_a_copied_field_is_not_a_choice(self, tmp_path, no_conf):
+        """`effort` is copied into spec/agent/review_effort; the copy must not
+        beat `efforts.default`."""
+        config = _config(tmp_path, "efforts:\n  default: low\n", effort="high")
+        assert config.agent_effort == "high"
+        assert config.effort_for("implementer") == "low"
+
+    def test_plan_review_falls_back_to_review_effort(self, tmp_path, no_conf):
+        config = _config(tmp_path, review_effort="high")
+        assert config.effort_for("plan_review") == "high"
+        config = _config(tmp_path, review_effort="high", plan_review_effort="low")
+        assert config.effort_for("plan_review") == "low"
+
+    def test_the_conf_stage_section_sets_the_stage(self, tmp_path, no_conf):
+        conf = Path(os.environ["CLAUDE_MULTIPLAI_HOME"]) / "multiplai.conf"
+        conf.write_text("[buildme.agent]\nEFFORT=max\n")
+        config = _config(tmp_path)
+        assert config.effort_for("prototype") == "max"
+        assert config.effort_for("rubric") is None
+
+    def test_an_unknown_key_or_effort_is_dropped_with_a_warning(self, tmp_path, no_conf, caplog):
+        with caplog.at_level(logging.WARNING):
+            config = _config(tmp_path, "efforts:\n  implementor: high\n  review: turbo\n")
+        assert config.effort_specs == {}
+        text = " ".join(r.getMessage() for r in caplog.records)
+        assert "efforts.implementor" in text and "efforts.review" in text
+
+    def test_an_unknown_step_is_a_programming_error(self, tmp_path, no_conf):
+        with pytest.raises(KeyError):
+            _config(tmp_path).effort_for("nope")
 
 
 class TestPrecedence:
@@ -199,8 +311,8 @@ class TestPassThrough:
 
 class TestTier:
     @pytest.mark.parametrize("model", ["claude-fable-5-1", "fable"])
-    def test_fable_is_advanced(self, model):
-        with patch.dict(os.environ, {"CLAUDE_MODEL": model}):
+    def test_fable_is_advanced(self, model, no_conf):
+        with patch.dict(os.environ, {"MULTIPLAI_MODEL": model}):
             assert detect_tier()[0] == "advanced"
 
     def test_a_non_anthropic_default_is_standard_and_says_why(self, caplog):
@@ -222,7 +334,7 @@ class TestTier:
         assert (config.tier, config.model_name) == ("advanced", PI_SPEC)
 
     def test_tier_does_not_override_a_claude_default(self, tmp_path, no_conf):
-        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-sonnet-5"}):
+        with patch.dict(os.environ, {"MULTIPLAI_MODEL": "claude-sonnet-5"}):
             assert detect_tier(None, configured_tier="advanced")[0] == "standard"
 
 
@@ -315,8 +427,9 @@ CALL_SITES = {
 SDK_CALLS = {"llm_call", "agent_call", "llm_call_structured", "agent_call_structured"}
 
 
-def _model_call_sites() -> dict[tuple[str, str, str], str | None]:
-    """Every call to an SDK function, or passing `model=` or `budget_label=`."""
+def _model_call_sites(kwarg: str = "model") -> dict[tuple[str, str, str], str | None]:
+    """Every call to an SDK function, or passing `model=` or `budget_label=`,
+    and the source of its *kwarg* argument."""
     found: dict[tuple[str, str, str], str | None] = {}
 
     def walk(node, path: str, func: str | None) -> None:
@@ -330,7 +443,7 @@ def _model_call_sites() -> dict[tuple[str, str, str], str | None]:
                 if callee in SDK_CALLS or "model" in kwargs or "budget_label" in kwargs:
                     key = (path, name, callee)
                     assert key not in found, f"two sites share {key}; extend the key"
-                    found[key] = ast.unparse(kwargs["model"]) if "model" in kwargs else None
+                    found[key] = ast.unparse(kwargs[kwarg]) if kwarg in kwargs else None
             walk(child, path, name)
 
     for file in sorted(PIPELINE.rglob("*.py")):
@@ -358,3 +471,18 @@ class TestCallSiteCoverage:
 
     def test_every_stage_is_known(self):
         assert set(STEP_STAGES.values()) == set(MODEL_STAGES)
+
+    def test_every_call_site_passes_its_steps_effort(self):
+        """A site asking `model_for(x)` asks `effort_for(x)`; a step function
+        that takes `model` takes `effort` too."""
+        other = {
+            "model": "effort",
+            "fix_model": "config.effort_for(fix_step)",
+            "m": "config.effort_for('review')",
+            None: None,
+        }
+        for key, effort in _model_call_sites("effort").items():
+            model = CALL_SITES[key][0]
+            want = (model.replace("model_for", "effort_for")
+                    if model and model.startswith("config.model_for(") else other[model])
+            assert effort == want, key
