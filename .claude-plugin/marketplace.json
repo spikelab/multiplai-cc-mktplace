@@ -10,7 +10,7 @@
       "name": "multiplai-context",
       "source": "./plugins/multiplai-context",
       "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
-      "version": "0.55.2",
+      "version": "0.56.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -75,7 +75,7 @@
       "name": "multiplai-research",
       "source": "./plugins/multiplai-research",
       "description": "Research skill pack: code-driven deep research pipeline, insight extraction, structured interviewing.",
-      "version": "0.7.4",
+      "version": "0.8.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -96,7 +96,7 @@
       "name": "multiplai-dev",
       "source": "./plugins/multiplai-dev",
       "description": "Developer skill pack: spec-driven builds, executable plan authoring, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring.",
-      "version": "0.76.0",
+      "version": "0.77.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
