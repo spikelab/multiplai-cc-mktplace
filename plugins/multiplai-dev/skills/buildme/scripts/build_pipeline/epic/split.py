@@ -74,7 +74,7 @@ async def epic_split(config, inputs: str, errors: list[str] | tuple[str, ...] = 
         prompt,
         EpicSplitAnswer,
         model=config.model_for('epic_split'),
-        effort=config.spec_effort,
+        effort=config.effort_for('epic_split'),
         budget_label="epic_split",
     )
 

@@ -7,8 +7,6 @@ description: |
   GCP. For project-specific conventions, also load the matching reference
   file under `references/conventions/`.
 when_to_use: 'Triggers: gcloud, gcp, google cloud, cloud run, cloud sql, terraform (GCP context), IAM policy / service account (GCP context), cloud logging / monitoring, artifact registry, workload identity federation / WIF'
-model: opus
-effort: medium
 ---
 
 # DevOps GCP Skill

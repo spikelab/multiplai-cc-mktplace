@@ -360,7 +360,7 @@ async def run_plan_review(
     """Review tasks.md against the rubric, the constraints and the use cases.
 
     Runs as a read-only subagent on `config.model_for("plan_review")` and
-    `plan_review_effort` (read with a fallback to `review_effort`). Returns the findings; raises whatever `agent_call_structured`
+    `config.effort_for("plan_review")`. Returns the findings; raises whatever `agent_call_structured`
     raises (the stage above treats that as non-fatal).
     """
     use_cases = _read(change_dir / "use-cases.md", NO_USE_CASES)
@@ -377,7 +377,7 @@ async def run_plan_review(
     )
 
     model = config.model_for("plan_review")
-    effort = getattr(config, "plan_review_effort", None) or config.review_effort
+    effort = config.effort_for("plan_review")
 
     log.info("Running plan review on %s", change_dir.name)
     return await agent_call_structured(

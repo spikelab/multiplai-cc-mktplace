@@ -12,6 +12,12 @@ Recorded history starts at **0.1.2**; anything earlier is in `git log` only.
 
 `multiplai-messaging@0.1.1` predates this file and has no section here.
 
+## [0.4.0] - 2026-10-16
+
+### Changed
+- Skills no longer set `model:` or `effort:` in their frontmatter: each runs
+  on the model and effort of the Claude Code session you start it from.
+
 ## [0.3.2] - 2026-08-16
 
 ### Changed

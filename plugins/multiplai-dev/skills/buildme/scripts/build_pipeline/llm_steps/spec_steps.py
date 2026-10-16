@@ -73,7 +73,7 @@ async def _audit_agent_text(prompt: str, config, *, budget_label: str) -> str:
         prompt,
         allowed_tools=AUDITOR_TOOLS,
         model=config.model_for(budget_label),
-        effort=config.spec_effort,
+        effort=config.effort_for(budget_label),
         max_turns=AUDITOR_MAX_TURNS,
         cwd=str(config.project_dir),
         budget_label=budget_label,
@@ -130,7 +130,7 @@ async def generate_artifact(
     result = await llm_call(
         prompt,
         model=config.model_for("spec_artifact"),
-        effort=config.spec_effort,
+        effort=config.effort_for("spec_artifact"),
         system_prompt=(
             "You are a technical specification generator. Your ONLY job is to "
             "generate the requested document content based on the context provided "
@@ -332,6 +332,7 @@ async def run_explainer(dep, config, usage_context: str = "") -> str:
     return await llm_call(
         prompt,
         model=config.model_for("explainer"),
+        effort=config.effort_for("explainer"),
         allowed_tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep"],
         max_turns=12,
     )
@@ -442,7 +443,7 @@ async def _codebase_analysis_call(prompt: str, schema, *, config, budget_label: 
     structured answer, re-run whole on a failure (`agent_call_structured`), all
     spend under `codebase_analysis` whatever `code_facts` names the task."""
     return await agent_call_structured(
-        prompt, schema, model=config.model_for("codebase_analysis"), effort=config.spec_effort,
+        prompt, schema, model=config.model_for("codebase_analysis"), effort=config.effort_for("codebase_analysis"),
         budget_label="codebase_analysis", **kwargs,
     )
 

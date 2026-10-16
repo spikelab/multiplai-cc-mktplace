@@ -213,7 +213,7 @@ async def run_code_review(
     settled = await asyncio.gather(*[
         agent_call_structured(
             prompt, ReviewResult, allowed_tools=REVIEWER_TOOLS,
-            model=m, effort=config.review_effort,
+            model=m, effort=config.effort_for("review"),
             max_retries=1, max_turns=REVIEWER_MAX_TURNS,
             cwd=str(config.project_dir), budget_label="review",
         )
@@ -292,7 +292,7 @@ async def run_review_fix(
         prompt,
         allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
         model=config.model_for("review_fix"),
-        effort=config.agent_effort,
+        effort=config.effort_for("review_fix"),
         max_turns=20,
         cwd=str(config.project_dir),
         budget_label="review_fix",

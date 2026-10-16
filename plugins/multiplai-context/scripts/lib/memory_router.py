@@ -42,6 +42,7 @@ from typing import Protocol, runtime_checkable
 from multiplai_core.plugin_options import option, option_var
 
 from lib.router_prompt import SYSTEM_PROMPT, FEW_SHOT_EXAMPLES, build_user_message
+from lib.job_effort import ROUTER_EFFORT_OPTION, effort_kwargs
 from lib.thinking import (
     core_supports_thinking,
     resolve_thinking_option,
@@ -980,6 +981,7 @@ class LLMRouter:
         # self._thinking to None when the resolved core cannot take it.
         if self._thinking is not None:
             query_kwargs["thinking"] = self._thinking
+        query_kwargs.update(effort_kwargs(ROUTER_EFFORT_OPTION))
         # No inner wait_for: _bounded_select_multi owns the one deadline, so
         # client creation and the query share a single budget.
         response = await client.query(**query_kwargs)

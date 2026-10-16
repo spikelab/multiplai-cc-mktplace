@@ -8,8 +8,6 @@ description: >-
   email, or draft a reply/new email for them to review and send manually. Triggers
   on "check my inbox", "search my email", "email from X about Y", "read that
   email", "draft a reply", "write an email to", "gmail".
-model: opus
-effort: medium
 ---
 
 # Gmail

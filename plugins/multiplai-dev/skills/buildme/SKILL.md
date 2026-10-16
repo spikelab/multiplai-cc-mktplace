@@ -2,8 +2,6 @@
 name: buildme
 description: Full bootstrap conductor - from idea to working code. Orchestrates interview, research, spec generation, and autonomous TDD implementation via a deterministic Python pipeline.
 when_to_use: 'Triggers: build me, buildme, bootstrap, full build, /buildme'
-model: opus
-effort: medium
 ---
 
 # BuildMe
@@ -428,9 +426,13 @@ stops.
 
 ## Tuning model and effort (multiplai.conf)
 
-Model and effort are two axes of one decision. Each step's model can be set in
-`specs/config.yaml` under `models:`; `multiplai.conf` sets per-stage models and
-efforts without a code edit.
+Model and effort are two axes of one decision. With nothing configured, every
+step runs on `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT` (environment, then
+`multiplai.conf`), and otherwise on the model and effort of the Claude Code
+session that started the build. With none of those, the CLI picks. Each
+step's model and effort can be set in `specs/config.yaml` under `models:` and
+`efforts:`; `multiplai.conf` sets per-stage models and efforts without a code
+edit. Nothing caps a configured model or effort.
 
 ### `models:` in specs/config.yaml
 
@@ -447,8 +449,8 @@ models:
 A value is a model spec:
 
 - a Claude model: `haiku`, `sonnet`, `opus`, `fable`, a `claude-…` ID, or
-  either one prefixed `claude:` (or `anthropic:`). Fable ranks above Opus, so
-  an `opus` ceiling (`MULTIPLAI_MODEL`) turns a `fable` request into Opus.
+  either one prefixed `claude:` (or `anthropic:`). A family name runs on its
+  current model.
 - a Pi model: `pi:<model-id>@<provider>`. It runs through
   `multiplai-core`'s Pi backend, so it **needs Pi installed and configured;
   not covered here**. A missing `pi` binary fails that step; it does not fall
@@ -466,12 +468,34 @@ Each step resolves its model through this chain, and the first one set wins:
    `plan_review`, and none for `adjudication`
 4. `models.default`
 5. `[buildme] MODEL=` (the whole pipeline's model)
+6. `MULTIPLAI_MODEL` (environment, then `multiplai.conf`)
+7. the session's model
 
-With no `models:` key and no stage model (link 3), every step runs on the
-model it ran on before `models:` existed. A stage model now reaches every step
-of its stage: `[buildme.spec] MODEL=` used to reach only the interview,
-`[buildme.agent] MODEL=` reached nothing, and `review_model` did not reach
-the test-quality audit.
+A stage model reaches every step of its stage.
+
+### `efforts:` in specs/config.yaml
+
+```yaml
+efforts:
+  default: medium          # low | medium | high | xhigh | max
+  review: high             # stage
+  implementer: max         # step
+```
+
+The keys are the same as `models:`. Each step resolves its effort through this
+chain, and the first one set wins:
+
+1. `efforts.<step>`
+2. `efforts.<stage>`
+3. the stage's `multiplai.conf` effort: `[buildme.spec]`, `[buildme.agent]` or
+   `[buildme.review] EFFORT=`; `[buildme.plan_review]`, then
+   `[buildme.review]`, for `plan_review`
+4. `efforts.default`
+5. `[buildme] EFFORT=`
+6. `MULTIPLAI_EFFORT` (environment, then `multiplai.conf`)
+7. the session's effort
+
+An unknown key or effort name is dropped with a warning.
 
 | Stage | Steps |
 |---|---|
@@ -479,8 +503,10 @@ the test-quality audit.
 | `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `prototype`, `merge` |
 | `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt), `findings_triage` (the findings stage's one read-only agent per PR comment), `findings_self_check` (the findings stage's one read-only check of a round's fix commits) |
 
-The tier (advanced or standard) comes from the default model: Fable, or Opus
-4.5 and later, is advanced. A Pi model's version says nothing about the tier,
+The tier (advanced or standard) comes from the default model: `models.default`,
+then `[buildme] MODEL=`, then `MULTIPLAI_MODEL`, then the session's model.
+Fable, or Opus 4.5 and later, is advanced; a bare `opus` or `fable` counts as
+its current model. With no model anywhere the tier is standard. A Pi model's version says nothing about the tier,
 so when `models.default` is a `pi:` spec the tier comes from `BUILDME_TIER`
 (env) or `tier:` in specs/config.yaml, and is `standard` when neither is set.
 
@@ -491,7 +517,7 @@ so when `models.default` is a `pi:` spec the tier comes from `BUILDME_TIER`
 | `[buildme]` | `MODEL=` and `EFFORT=` for the whole pipeline |
 | `[buildme.spec]` | `MODEL=` and `EFFORT=` for spec generation, audits, rubric |
 | `[buildme.review]` | `MODEL=` and `EFFORT=` for code review, test-quality audit |
-| `[buildme.agent]` | `MODEL=` and `EFFORT=` for the TDD agents (test writer, implementer, per-block refactorer, the whole-change refactor pass, fix) |
+| `[buildme.agent]` | `MODEL=` and `EFFORT=` for the agent stage (test writer, implementer, refactorers, fixers, docs update, prototype, merge) |
 
 ```ini
 [buildme]
@@ -502,12 +528,9 @@ EFFORT=medium
 EFFORT=high
 ```
 
-A stage section's `MODEL=` takes a Claude model or a `pi:` spec. A step
-section falls back to `[buildme]`, which falls back to the SDK default
-(unset). The `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT` ceilings still cap the
-result for Claude models, so a budget run forces everything down and a conf
-override cannot escape it. A `pi:` spec is not capped: the Claude ranking
-means nothing for another vendor's model.
+A stage section's `MODEL=` takes a Claude model or a `pi:` spec. A stage
+section falls back to `models.default` / `efforts.default`, then `[buildme]`,
+then `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT`, then the session.
 
 ## Scale Assessment (MANDATORY)
 

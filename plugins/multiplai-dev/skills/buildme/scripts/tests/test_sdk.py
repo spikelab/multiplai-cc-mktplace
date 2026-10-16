@@ -209,6 +209,7 @@ class TestExplainerPath:
             model = None
             project_description = "test project"
             model_for = staticmethod(lambda step: None)
+            effort_for = staticmethod(lambda step: None)
 
         return Dep(), Config()
 

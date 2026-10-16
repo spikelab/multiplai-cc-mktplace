@@ -15,9 +15,10 @@ from typing import Iterable, Literal
 import yaml
 
 from multiplai_core import resolve_model_spec
+from multiplai_core.session import default_effort, default_model
 from multiplai_core.env import CURRENT_MODEL, parse_model_spec, pick_model_spec
 
-from .env import KNOWN_EFFORTS, load_multiplai_conf, pick_effort, pick_model, resolve_model
+from .env import KNOWN_EFFORTS, load_multiplai_conf, pick_effort, resolve_model
 from .models import ReviewGatePolicy
 
 log = logging.getLogger(__name__)
@@ -186,26 +187,24 @@ def detect_tier(default_spec: str | None = None,
                 configured_tier: str | None = None) -> tuple[Tier, str]:
     """Detect model tier from the model buildme will actually run.
 
-    Returns (tier, model_name). Derives advanced/standard from ``DEFAULT_MODEL``
-    — the model resolved by ``pick_model`` from the family + ``multiplai.conf``
-    ceiling — rather than the ``CLAUDE_MODEL`` env var.
+    Returns (tier, model_name). The model is, first set wins: *default_spec*
+    (`models.default` from specs/config.yaml, already resolved), `[buildme]
+    MODEL=` in multiplai.conf, then multiplai-core's ``default_model()``
+    (``MULTIPLAI_MODEL``, then the Claude Code session's model). With none of
+    them the CLI picks the model, which says nothing about the tier, so it is
+    ``standard`` and *model_name* is ``CLI default``.
 
-    DEV-3 fix: Claude Code (v2.1.x) does NOT export ``CLAUDE_MODEL`` to Bash
-    subprocesses, and buildme's SKILL.md invokes this pipeline via a plain
-    `uv run ...` with no `CLAUDE_MODEL=` prefix, so the old env-based check
-    ALWAYS returned 'standard' in production regardless of the pinned model.
-    Deriving from ``DEFAULT_MODEL`` makes the tier reflect the real model (opus
-    → advanced under an opus ceiling). An explicit ``CLAUDE_MODEL``, if set,
-    still wins as an override.
-
-    *default_spec* is `models.default` from specs/config.yaml, already
-    resolved, when one is set; it stands in for ``DEFAULT_MODEL``. A Claude
-    model's version says which tier it is. Another vendor's model says nothing
+    A Claude model's version says which tier it is; a bare family alias
+    (``opus``, ``fable``) counts as its newest version. Another vendor's model says nothing
     about that, so for a non-Anthropic default the tier is pinned by
     ``BUILDME_TIER`` (env, wins) or *configured_tier* (`tier:` in
     specs/config.yaml), and is ``standard`` when neither is set.
     """
-    model = os.environ.get("CLAUDE_MODEL") or default_spec or DEFAULT_MODEL
+    model = default_spec or conf_model("buildme") or default_model()
+    if not model:
+        log.info("tier: standard — no model is configured and no session model "
+                 "was found, so the CLI's default model runs")
+        return "standard", "CLI default"
     spec = parse_model_spec(model)
     if not spec.is_anthropic:
         pinned = os.environ.get("BUILDME_TIER") or configured_tier
@@ -215,9 +214,10 @@ def detect_tier(default_spec: str | None = None,
                  "its version says nothing about the tier; set BUILDME_TIER or "
                  "`tier:` in specs/config.yaml to pin it", spec.qualified)
         return "standard", spec.qualified
-    if _is_advanced_model(spec.model):
-        return "advanced", spec.model
-    return "standard", spec.model
+    model = CURRENT_MODEL.get(spec.model.lower(), spec.model)
+    if _is_advanced_model(model):
+        return "advanced", model
+    return "standard", model
 
 
 def _is_advanced_model(model: str) -> bool:
@@ -238,11 +238,10 @@ def _is_advanced_model(model: str) -> bool:
     return (major, minor) >= (4, 5)
 
 
-# Resolve buildme's model from its semantic tier (opus — hard work) capped by
-# the MULTIPLAI_MODEL ceiling. pick_model applies a [buildme] override from
-# multiplai.conf if present; the family→ID map is the single source of truth in
-# multiplai_core.env, so there is no dated model literal to go stale here.
-DEFAULT_MODEL = pick_model("opus", task="buildme")
+# No model of buildme's own: a step nothing configures runs on multiplai-core's
+# `default_model()` (MULTIPLAI_MODEL, then the session's model), or the CLI's
+# default when neither is set. See `BuildConfig.model_for`.
+DEFAULT_MODEL = None
 
 
 # The effort names the SDK accepts — core's own table, imported rather than
@@ -256,7 +255,7 @@ DEFAULT_MODEL = pick_model("opus", task="buildme")
 
 
 def conf_effort(task: str, default: str | None = None) -> str | None:
-    """``EFFORT=`` for *task* from multiplai.conf, capped by MULTIPLAI_EFFORT.
+    """``EFFORT=`` for *task* from multiplai.conf.
 
     The effort twin of ``pick_model``'s ``[task] MODEL=`` override: model and
     effort are two axes of the same tuning decision, and only the model half
@@ -266,12 +265,8 @@ def conf_effort(task: str, default: str | None = None) -> str | None:
     Returns *default* when the conf says nothing, so behaviour is unchanged
     unless someone opts in — ``None`` means "omit effort, let the SDK decide",
     a state ``multiplai_core.env.pick_effort`` cannot express, which is why
-    this wrapper exists at all. Normalization and the MULTIPLAI_EFFORT ceiling
-    are ``pick_effort``'s job: a budget run forces every step down and a conf
-    override can't escape it. Delegating to core changed one thing — a
-    ``MULTIPLAI_EFFORT`` *global in the conf file* now caps conf-set efforts
-    too (previously only the env var did); the two ceilings were never meant
-    to disagree.
+    this wrapper exists at all. Normalization is ``pick_effort``'s job; nothing
+    caps the value.
 
     An unrecognized value falls back to *default* rather than passing through,
     with a warning — ``pick_effort`` drops unknown names silently, which would
@@ -299,7 +294,7 @@ def conf_model(task: str, default_tier: str = "opus") -> str | None:
     fallback chain in ``__post_init__`` — and `review_model`'s "None → use
     `model`" contract — intact.
 
-    A Claude model comes back as a bare, ceiling-capped ID. A Pi model
+    A Claude model comes back as a bare ID. A Pi model
     (``pi:<model>@<provider>``) comes back qualified: ``run_agent`` runs it on
     its Pi backend. Any other provider (``openai:gpt-5``) has no runner, so it
     is dropped with a warning rather than failing the build at its first call.
@@ -447,8 +442,8 @@ MODEL_STAGES: tuple[str, ...] = ("spec", "agent", "review")
 # calls are named for what they do; `review_fix` is the fix agent the review
 # loop runs (it charges the budget as `implementer`); and
 # `integration_fix_escalated` is the last integration-fix attempt, which has
-# always run on the review model. Each stage holds the steps whose
-# `[buildme.<stage>]` effort they already use.
+# always run on the review model. A stage's `[buildme.<stage>] EFFORT=` and
+# `efforts.<stage>` apply to every step in it.
 STEP_STAGES: dict[str, str] = {
     "spec_artifact": "spec",
     "rubric": "spec",
@@ -480,7 +475,7 @@ STEP_STAGES: dict[str, str] = {
     "findings_self_check": "review",
 }
 
-# The keys `models:` accepts: a step, a stage, or `default`.
+# The keys `models:` and `efforts:` accept: a step, a stage, or `default`.
 MODEL_KEYS: frozenset[str] = frozenset(STEP_STAGES) | frozenset(MODEL_STAGES) | {"default"}
 
 # The existing per-stage field each step reads at the third link of
@@ -495,6 +490,14 @@ _STAGE_MODEL_FIELDS: dict[str, str] = {
 _STEP_MODEL_FIELDS: dict[str, str] = {
     "plan_review": "plan_review_model",
     "adjudication": "model",
+}
+# The same for `effort_for`. Adjudication runs at the review stage's effort,
+# as it always has.
+_STAGE_EFFORT_FIELDS: dict[str, str] = {
+    "spec": "spec_effort", "agent": "agent_effort", "review": "review_effort",
+}
+_STEP_EFFORT_FIELDS: dict[str, str] = {
+    "plan_review": "plan_review_effort",
 }
 
 
@@ -778,6 +781,9 @@ class BuildConfig:
     # `models:` from specs/config.yaml: step, stage or `default` → a model spec
     # as written. `model_for` resolves it.
     model_specs: dict[str, str] = field(default_factory=dict)
+    # `efforts:` from specs/config.yaml, the same keys → an effort name.
+    # `effort_for` resolves it.
+    effort_specs: dict[str, str] = field(default_factory=dict)
     # `tier:` from specs/config.yaml. Read only when the default model is not
     # a Claude model (see detect_tier).
     configured_tier: str | None = None
@@ -830,15 +836,15 @@ class BuildConfig:
     state_file: str = ".build-state.json"
     _change_dir_override: str = field(default="", repr=False)
 
-    # Model for LLM calls
-    model: str = DEFAULT_MODEL
+    # `[buildme] MODEL=` from multiplai.conf, or None: the last configured link
+    # of `model_for`'s chain, before multiplai-core's `default_model()`.
+    model: str | None = field(default_factory=lambda: conf_model("buildme"))
 
     # Optional stronger model for quality reviews (None → falls back to
     # `model`). Populated from BUILDME_REVIEW_MODEL (env, wins),
     # `code_review.model` in specs/config.yaml, then `[buildme.review] MODEL=`
-    # in multiplai.conf — in that order; the first two are ceiling-capped by
-    # resolve_model, the conf one by pick_model, matching the existing
-    # model-resolution pattern.
+    # in multiplai.conf — in that order; the first two are resolved by
+    # resolve_model, the conf one by pick_model.
     #
     # The conf read happens in __post_init__ (not a default_factory) so
     # `_review_model_from_conf` can record where the value came from: without
@@ -854,9 +860,9 @@ class BuildConfig:
     # the effort fields below. `[buildme.spec]` / `[buildme.agent]` /
     # `[buildme.plan_review]` MODEL= tune one step without a code edit.
     #
-    # Unlike `review_model` these resolve to a concrete ID in __post_init__
-    # (spec/agent from `model`, plan_review from `review_model`-or-`model`), so
-    # a call site can pass them straight to the SDK. review_model keeps its
+    # Unlike `review_model` these are copied from their root in __post_init__
+    # (spec/agent from `model`, plan_review from `review_model`-or-`model`);
+    # call sites ask `model_for`, which reads only the ones someone set. review_model keeps its
     # None-means-`model` contract because `_panel_models` and its tests already
     # depend on it.
     spec_model: str | None = field(default_factory=lambda: conf_model("buildme.spec"))
@@ -865,7 +871,7 @@ class BuildConfig:
         default_factory=lambda: conf_model("buildme.plan_review"))
 
     # Reasoning effort, the second axis of the same tuning decision as `model`.
-    # None → SDK default. `[buildme] EFFORT=` sets the pipeline-wide value;
+    # None → `effort_for` goes on down its chain. `[buildme] EFFORT=` sets the pipeline-wide value;
     # `[buildme.spec]` / `[buildme.review]` / `[buildme.agent]` tune one step.
     # All four read the conf at construction (not import) time, so the
     # pipeline-wide value and the per-step ones can never disagree about which
@@ -975,8 +981,8 @@ class BuildConfig:
             if attr in self._derived_step_fields and getattr(self, attr) is None:
                 setattr(self, attr, getattr(self, root))
 
-    def model_for(self, step: str) -> str:
-        """The model one step runs on: a bare Claude ID, or a ``pi:…`` spec.
+    def model_for(self, step: str) -> str | None:
+        """The model one step runs on: a bare Claude ID, a ``pi:…`` spec, or None.
 
         The chain, first set link wins:
 
@@ -986,16 +992,18 @@ class BuildConfig:
            ``review_model``; ``plan_review_model`` for ``plan_review``;
            none for ``adjudication``, see ``_STEP_MODEL_FIELDS``)
         4. ``models.default``
-        5. ``model``
+        5. ``model`` (``[buildme] MODEL=``)
+        6. multiplai-core's ``default_model()``: ``MULTIPLAI_MODEL``, then the
+           Claude Code session's model. None when neither is set: the call
+           passes no model and the CLI uses its own default.
 
         Links 1, 2 and 4 go through ``multiplai_core.resolve_model_spec``,
-        which caps a Claude model at ``MULTIPLAI_MODEL`` and passes a Pi spec
+        which turns a family name into its current ID and passes a Pi spec
         through. Links 3 and 5 were resolved when the config loaded, so they
         are returned as they are: resolving them again would pin a dated ID
-        (``claude-opus-4-6``) to the current one and change what today's
-        steps run on. A per-stage field that was only copied from its root
-        is not set; the chain looks at the root instead (``review_model`` for
-        ``plan_review``), and ``model`` comes last.
+        (``claude-opus-4-6``) to the current one. A per-stage field that was
+        only copied from its root is not set; the chain looks at the root
+        instead (``review_model`` for ``plan_review``).
 
         A Claude model comes back as a bare ID, the string every call site
         passed before this method existed; ``run_agent`` reads a bare ID as
@@ -1013,16 +1021,50 @@ class BuildConfig:
                 return field_model
             spec = resolve_model_spec([self.model_specs.get("default")])
         if spec is None:
-            return self.model
+            return self.model or default_model()
         return spec.model if spec.is_anthropic else spec.qualified
 
+    def effort_for(self, step: str) -> str | None:
+        """The effort one step runs at, or None (the CLI's default).
+
+        The chain, first set link wins:
+
+        1. ``efforts.<step>`` in specs/config.yaml
+        2. ``efforts.<stage>``
+        3. ``[buildme.<stage>] EFFORT=`` in multiplai.conf (``spec_effort`` /
+           ``agent_effort`` / ``review_effort``; for ``plan_review``,
+           ``[buildme.plan_review]`` and then ``[buildme.review]``), or the
+           same field set on the config
+        4. ``efforts.default``
+        5. ``effort`` (``[buildme] EFFORT=``)
+        6. multiplai-core's ``default_effort()``: ``MULTIPLAI_EFFORT``, then
+           the Claude Code session's effort
+
+        Raises:
+            KeyError: *step* is not in ``STEP_STAGES``.
+        """
+        stage = STEP_STAGES[step]
+        for key in (step, stage):
+            if self.effort_specs.get(key):
+                return self.effort_specs[key]
+        field_effort = self._explicit_field(
+            _STEP_EFFORT_FIELDS.get(step) or _STAGE_EFFORT_FIELDS[stage], "effort")
+        if field_effort:
+            return field_effort
+        return self.effort_specs.get("default") or self.effort or default_effort()
+
     def _explicit_field_model(self, attr: str) -> str | None:
-        """*attr*'s value if someone set it, else its roots' (``model`` excluded).
+        """*attr*'s value if someone set it, else its roots' (``model`` excluded)."""
+        return self._explicit_field(attr, "model")
+
+    def _explicit_field(self, attr: str, last: str) -> str | None:
+        """*attr*'s value if someone set it, else its roots' (*last* excluded).
 
         A field in ``_derived_step_fields`` holds a copy of its root, not a
-        choice, so the roots in ``_STEP_FALLBACKS`` are asked instead.
+        choice, so the roots in ``_STEP_FALLBACKS`` are asked instead. *last*
+        is the chain's own later link (``model`` or ``effort``).
         """
-        if attr == "model":
+        if attr == last:
             return None
         if attr not in self._derived_step_fields:
             value = getattr(self, attr, None)
@@ -1030,7 +1072,7 @@ class BuildConfig:
                 return value
         for derived, root in _STEP_FALLBACKS:
             if derived == attr:
-                value = self._explicit_field_model(root)
+                value = self._explicit_field(root, last)
                 if value:
                     return value
         return None
@@ -1077,8 +1119,7 @@ class BuildConfig:
         # every other override here). Absent flags leave the config.yaml /
         # dataclass defaults alone.
         config._apply_git_cli_overrides(args)
-        # Env override wins over config.yaml (same precedence as CLAUDE_MODEL
-        # in detect_tier); ceiling-capped like every other model resolution.
+        # Env override wins over config.yaml.
         env_review_model = os.environ.get("BUILDME_REVIEW_MODEL")
         if env_review_model:
             config.review_model = resolve_model(env_review_model)
@@ -1279,6 +1320,20 @@ class BuildConfig:
                             "pi:<model>@<provider>", key, spec)
         self.model_specs = specs
 
+        efforts: dict[str, str] = {}
+        for key, value in _cfg_mapping(data.get("efforts"), "efforts").items():
+            key = str(key)
+            name = str(value).strip().lower() if value is not None else ""
+            if key not in MODEL_KEYS:
+                log.warning("Dropping efforts.%s in config.yaml — not a buildme step, "
+                            "a stage (%s) or 'default'", key, ", ".join(MODEL_STAGES))
+            elif name in KNOWN_EFFORTS:
+                efforts[key] = name
+            else:
+                log.warning("Dropping efforts.%s value %r in config.yaml — want one of %s",
+                            key, value, ", ".join(sorted(KNOWN_EFFORTS)))
+        self.effort_specs = efforts
+
         tier = data.get("tier")
         if tier is not None and tier not in ("advanced", "standard"):
             log.warning("Invalid tier value %r in config.yaml — want advanced | "
@@ -1320,11 +1375,9 @@ class BuildConfig:
         """Resolve `code_review.panel` into concrete reviewer model IDs.
 
         Accepts either a list of dicts (`- model: opus`) or bare strings. Each
-        entry is ceiling-capped by `resolve_model` like every other model
-        resolution here, EXCEPT provider-qualified entries (`openai:gpt-5`),
-        which pass through untouched — the ceiling ranks the Claude family
-        only, and the point of a cross-family panel member is that it is not
-        in that family.
+        entry is resolved by `resolve_model` (a family name becomes its current
+        ID), EXCEPT provider-qualified entries (`openai:gpt-5`), which pass
+        through untouched.
         """
         entries = code_review_cfg.get("panel") or []
         if not isinstance(entries, list):

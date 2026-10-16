@@ -396,7 +396,7 @@ async def _generate_use_cases(
     content = await llm_call(
         prompt,
         model=config.model_for("spec_artifact"),
-        effort=getattr(config, "spec_effort", None),
+        effort=config.effort_for("spec_artifact"),
         system_prompt=(
             "You are a technical specification generator. Your ONLY job is to "
             "generate the requested document content based on the context provided "

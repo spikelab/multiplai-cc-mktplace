@@ -45,6 +45,7 @@ from multiplai_core.model_client import DEFAULT_MODEL
 from multiplai_core.paths import get_paths
 from lib import checkpoint as cp
 from lib.hook_input import read_hook_input
+from lib.job_effort import CHECKPOINT_EFFORT_OPTION, effort_kwargs
 from lib.thinking import CHECKPOINT_THINKING_OPTION, RUN_AGENT, thinking_kwargs
 from lib.transcript_distiller import distill
 
@@ -353,6 +354,7 @@ async def write_checkpoint(payload: dict) -> bool:
             # is why the cadence could never be costed before now.
             component="checkpoint",
             **thinking_kwargs(CHECKPOINT_THINKING_OPTION, target=RUN_AGENT),
+            **effort_kwargs(CHECKPOINT_EFFORT_OPTION),
         )
     except Exception as e:
         logger.error("Checkpoint model call failed for %s: %s", session_id, e)

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
@@ -9,6 +10,7 @@ from pydantic import BaseModel
 from multiplai_core import deny_list
 from multiplai_core.agent_runner import AgentRunError
 from walkthrough_pipeline import budget, sdk
+from walkthrough_pipeline.config import STAGE_MODELS, load_config
 
 
 class Answer(BaseModel):
@@ -148,3 +150,56 @@ async def test_write_agents_get_no_tools(trusted, fake_run):
     assert calls[0]["allowed_tools"] == []
     assert "disallowed_tools" not in calls[0]
     assert {"Read", "Grep", "Glob", "Bash", "WebFetch", "WebSearch"} <= set(deny_list(calls[0]["allowed_tools"]))
+
+
+def _fake_sdk(monkeypatch) -> list[dict]:
+    """Replace `claude_agent_sdk` under multiplai-core's real `run_agent`; return the
+    `ClaudeAgentOptions` keyword arguments of every call, i.e. what the CLI would be given."""
+    options: list[dict] = []
+
+    class TextBlock:
+        text = '{"value": 1}'
+
+    class AssistantMessage:
+        content = [TextBlock()]
+
+    async def query(prompt, options):
+        yield AssistantMessage()
+
+    fake = ModuleType("claude_agent_sdk")
+    fake.ClaudeAgentOptions = lambda **kwargs: options.append(kwargs) or SimpleNamespace(**kwargs)
+    fake.query = query
+    fake.AssistantMessage = AssistantMessage
+    fake.TextBlock = TextBlock
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake)
+    return options
+
+
+@pytest.mark.parametrize("env, walkthrough_yaml, sent", [
+    ({}, "", ("claude-test-session", "low")),
+    ({"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"}, "",
+     ("claude-test-default", "high")),
+    ({"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"},
+     "".join(f"{key}: claude-test-explicit\n" for key in STAGE_MODELS) + "effort: medium\n",
+     ("claude-test-explicit", "medium")),
+], ids=["session", "multiplai-defaults", "walkthrough-yaml-wins"])
+async def test_every_stage_call_gets_the_configured_then_multiplai_then_the_session_model(
+        trusted, monkeypatch, tmp_path, env, walkthrough_yaml, sent):
+    """No model or effort configured passes None, and run_agent's own fallback
+    (multiplai-core 0.21) picks MULTIPLAI_MODEL / MULTIPLAI_EFFORT, else the session's."""
+    # conftest's _no_session_defaults has cleared MULTIPLAI_* and CLAUDE_CODE_SESSION_ID, so
+    # no session transcript is read.
+    monkeypatch.setenv("MULTIPLAI_SESSION_MODEL", "claude-test-session")
+    monkeypatch.setenv("MULTIPLAI_SESSION_EFFORT", "low")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    (tmp_path / "walkthrough.yaml").write_text(walkthrough_yaml, encoding="utf-8")
+    cfg = load_config(tmp_path)
+    options = _fake_sdk(monkeypatch)
+
+    for attr in STAGE_MODELS:
+        out = await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.READ_ONLY_TOOLS,
+                                              model=getattr(cfg, attr), effort=cfg.effort,
+                                              budget_label=attr.removesuffix("_model"))
+        assert out.value == 1
+    assert [(o["model"], o.get("effort")) for o in options] == [sent] * len(STAGE_MODELS)

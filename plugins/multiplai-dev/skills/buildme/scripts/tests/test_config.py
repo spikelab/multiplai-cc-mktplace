@@ -18,76 +18,79 @@ from build_pipeline.config import (
 )
 
 
+def _tier_with(model: str | None, **env):
+    """detect_tier with MULTIPLAI_MODEL=*model*, or no model set at all."""
+    if model:
+        env["MULTIPLAI_MODEL"] = model
+    with patch.dict(os.environ, env, clear=True), \
+            patch("build_pipeline.config.conf_model", return_value=None):
+        return detect_tier()
+
+
 class TestTierDetection:
+    """The tier follows the model buildme runs: models.default, `[buildme]
+    MODEL=`, then multiplai-core's default_model() (MULTIPLAI_MODEL, then the
+    session). CLAUDE_MODEL is not read."""
+
     def test_opus_46_is_advanced(self):
-        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-6"}):
-            tier, name = detect_tier()
-            assert tier == "advanced"
-            assert "opus-4-6" in name
+        tier, name = _tier_with("claude-opus-4-6")
+        assert tier == "advanced"
+        assert "opus-4-6" in name
 
     def test_opus_45_is_advanced(self):
-        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-5"}):
-            tier, _ = detect_tier()
-            assert tier == "advanced"
+        assert _tier_with("claude-opus-4-5")[0] == "advanced"
 
     def test_sonnet_is_standard(self):
-        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-sonnet-4-6"}):
-            tier, _ = detect_tier()
-            assert tier == "standard"
+        assert _tier_with("claude-sonnet-4-6")[0] == "standard"
 
     def test_haiku_is_standard(self):
-        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-haiku-4-5"}):
-            tier, _ = detect_tier()
-            assert tier == "standard"
+        assert _tier_with("claude-haiku-4-5")[0] == "standard"
 
-    def test_no_env_model_derives_from_default_model(self):
-        """DEV-3 fix: with CLAUDE_MODEL unset, tier derives from the resolved
-        DEFAULT_MODEL (the model buildme actually runs), not a hardcoded
-        'standard'/'unknown'. An opus DEFAULT_MODEL → advanced."""
-        import build_pipeline.config as cfg
-        with patch.dict(os.environ, {}, clear=True), \
-                patch.object(cfg, "DEFAULT_MODEL", "claude-opus-4-8"):
-            tier, name = detect_tier()
-            assert tier == "advanced"
-            assert name == "claude-opus-4-8"
+    def test_the_session_model_sets_the_tier(self):
+        tier, name = _tier_with(None, MULTIPLAI_SESSION_MODEL="claude-opus-4-8")
+        assert (tier, name) == ("advanced", "claude-opus-4-8")
+        tier, name = _tier_with(None, MULTIPLAI_SESSION_MODEL="claude-sonnet-5")
+        assert (tier, name) == ("standard", "claude-sonnet-5")
 
-    def test_no_env_model_sonnet_default_is_standard(self):
-        """A sonnet DEFAULT_MODEL (e.g. under a sonnet ceiling) → standard."""
-        import build_pipeline.config as cfg
-        with patch.dict(os.environ, {}, clear=True), \
-                patch.object(cfg, "DEFAULT_MODEL", "claude-sonnet-5"):
-            tier, name = detect_tier()
-            assert tier == "standard"
-            assert name == "claude-sonnet-5"
+    def test_multiplai_model_wins_over_the_session(self):
+        tier, name = _tier_with("claude-sonnet-5", MULTIPLAI_SESSION_MODEL="claude-opus-4-8")
+        assert (tier, name) == ("standard", "claude-sonnet-5")
+
+    def test_no_model_anywhere_is_standard_on_the_cli_default(self):
+        assert _tier_with(None) == ("standard", "CLI default")
+
+    def test_claude_model_is_not_read(self):
+        assert _tier_with(None, CLAUDE_MODEL="claude-opus-4-8") == ("standard", "CLI default")
+
+    def test_a_buildme_conf_model_wins_over_multiplai_model(self):
+        with patch.dict(os.environ, {"MULTIPLAI_MODEL": "claude-sonnet-5"}, clear=True), \
+                patch("build_pipeline.config.conf_model", return_value="claude-opus-4-8"):
+            assert detect_tier() == ("advanced", "claude-opus-4-8")
+
+    @pytest.mark.parametrize("alias", ["opus", "fable"])
+    def test_a_bare_family_alias_is_its_newest_version(self, alias):
+        tier, name = _tier_with(None, MULTIPLAI_SESSION_MODEL=alias)
+        assert (tier, name) == ("advanced", CURRENT_MODEL[alias])
 
     def test_unknown_model_defaults_standard(self):
-        with patch.dict(os.environ, {"CLAUDE_MODEL": "gpt-4-turbo"}):
-            tier, _ = detect_tier()
-            assert tier == "standard"
+        assert _tier_with("gpt-4-turbo")[0] == "standard"
 
     def test_future_opus_5_is_advanced(self):
-        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-5-0"}):
-            tier, _ = detect_tier()
-            assert tier == "advanced"
+        assert _tier_with("claude-opus-5-0")[0] == "advanced"
 
     def test_opus_47_is_advanced(self):
-        """The skill pins claude-opus-4-7 — the version-range check must accept it
-        (the old literal allowlist would have silently downgraded it to standard)."""
-        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-7"}):
-            tier, name = detect_tier()
-            assert tier == "advanced"
-            assert "opus-4-7" in name
+        """The version-range check accepts claude-opus-4-7 (a literal allowlist
+        would have silently downgraded it to standard)."""
+        tier, name = _tier_with("claude-opus-4-7")
+        assert tier == "advanced"
+        assert "opus-4-7" in name
 
     def test_opus_48_is_advanced(self):
-        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-8"}):
-            tier, _ = detect_tier()
-            assert tier == "advanced"
+        assert _tier_with("claude-opus-4-8")[0] == "advanced"
 
     def test_opus_44_is_standard(self):
         """Below the 4.5 floor stays standard."""
-        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-4"}):
-            tier, _ = detect_tier()
-            assert tier == "standard"
+        assert _tier_with("claude-opus-4-4")[0] == "standard"
 
 
 class TestTestCommandDiscovery:

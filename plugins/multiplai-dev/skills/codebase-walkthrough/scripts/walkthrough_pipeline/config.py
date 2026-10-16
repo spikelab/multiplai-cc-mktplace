@@ -6,8 +6,8 @@ Precedence, highest first (the same order as review's config.py):
    `docs_model`, `trace_model`, `write_model`, `effort`, `max_turns`.
 2. `multiplai.conf` keys `walkthrough_explore_model`, `walkthrough_docs_model`,
    `walkthrough_trace_model`, `walkthrough_write_model`, `walkthrough_effort`.
-3. Default: no model and no effort passed, so every stage runs on the
-   session's model.
+3. Default: no model and no effort passed, so `run_agent` uses
+   `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT`, else the session's model and effort.
 """
 
 from __future__ import annotations

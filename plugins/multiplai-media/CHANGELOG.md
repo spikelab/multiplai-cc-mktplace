@@ -19,7 +19,12 @@ a tag.
 
 ## [Unreleased]
 
-Nothing yet.
+## [0.15.0] - 2026-10-16
+
+### Changed
+- Skills no longer set `model:` or `effort:` in their frontmatter: each runs
+  on the model and effort of the Claude Code session you start it from.
+
 
 ## [0.14.0] - 2026-10-13
 

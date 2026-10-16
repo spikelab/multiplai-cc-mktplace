@@ -1,8 +1,6 @@
 ---
 name: plane
 description: Work with Plane tickets and projects — list, read, search, create, update, comment, and move issues through workflow states, restricted to an explicit project allowlist so shared team projects cannot be touched. Triggers on "my tickets", "what's on my board", "create a ticket", "move X to in progress", "comment on SPK-12", "what's in progress", "add this to Plane", or /multiplai-pm:plane.
-model: opus
-effort: medium
 disable-model-invocation: false
 ---
 

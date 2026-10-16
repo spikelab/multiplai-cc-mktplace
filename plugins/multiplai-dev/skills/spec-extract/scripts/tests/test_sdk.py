@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from multiplai_core import budget as core_budget
@@ -171,6 +172,56 @@ def test_model_key_from_multiplai_conf(monkeypatch):
     assert _REAL_MODEL_FOR("explore") == "claude-sonnet-5"  # an Anthropic model goes bare
     monkeypatch.setattr(sdk, "load_multiplai_conf", lambda: {})
     assert _REAL_MODEL_FOR("explore") is None
+
+
+def _fake_sdk(monkeypatch) -> list[dict]:
+    """Replace `claude_agent_sdk` under multiplai-core's real `run_agent`; return the
+    `ClaudeAgentOptions` keyword arguments of every call, i.e. what the CLI would be given."""
+    options: list[dict] = []
+
+    class TextBlock:
+        text = '{"value": 1}'
+
+    class AssistantMessage:
+        content = [TextBlock()]
+
+    async def query(prompt, options):
+        yield AssistantMessage()
+
+    fake = ModuleType("claude_agent_sdk")
+    fake.ClaudeAgentOptions = lambda **kwargs: options.append(kwargs) or SimpleNamespace(**kwargs)
+    fake.query = query
+    fake.AssistantMessage = AssistantMessage
+    fake.TextBlock = TextBlock
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake)
+    return options
+
+
+@pytest.mark.parametrize("env, conf, sent", [
+    ({}, {}, ("claude-test-session", "low")),
+    ({"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"}, {},
+     ("claude-test-default", "high")),
+    # spec-extract has a model key and no effort key, so MULTIPLAI_EFFORT still sets the effort.
+    ({"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"},
+     {"spec_extract_explore_model": "claude-test-explicit"}, ("claude-test-explicit", "high")),
+], ids=["session", "multiplai-defaults", "model-key-wins"])
+def test_the_sdk_call_gets_the_configured_then_multiplai_then_the_session_model(monkeypatch, env, conf, sent):
+    """With no model key, run_agent's own fallback (multiplai-core 0.21) picks the model and
+    effort: MULTIPLAI_MODEL / MULTIPLAI_EFFORT, else the session's."""
+    # conftest's _no_session_defaults has cleared MULTIPLAI_* and CLAUDE_CODE_SESSION_ID, so
+    # no session transcript is read.
+    monkeypatch.setenv("MULTIPLAI_SESSION_MODEL", "claude-test-session")
+    monkeypatch.setenv("MULTIPLAI_SESSION_EFFORT", "low")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(sdk, "load_multiplai_conf", lambda: conf)
+    options = _fake_sdk(monkeypatch)
+    core_budget.start(80.0, None, ledger_cls=sdk.SpecExtractBudget)
+
+    answer = asyncio.run(_REAL_CALL("prompt", Answer, allowed_tools=["Read"],
+                                    model=_REAL_MODEL_FOR("explore"), budget_label="explore:unit"))
+    assert answer.value == 1
+    assert [(o["model"], o.get("effort")) for o in options] == [sent]
 
 
 # --- the command line ---------------------------------------------------------------------

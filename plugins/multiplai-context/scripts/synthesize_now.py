@@ -25,6 +25,7 @@ from multiplai_core.paths import get_paths
 from multiplai_core.model_client import create_client
 from multiplai_core.log_utils import setup_logging
 from lib.project_identity import load_project_map, resolve_project
+from lib.job_effort import NOW_EFFORT_OPTION, effort_kwargs
 from lib.thinking import NOW_THINKING_OPTION, thinking_kwargs
 
 logger = setup_logging("synthesize_now", packages=("lib", "generators"))
@@ -183,6 +184,7 @@ async def _summarize_project(client, project: str, entries: list[dict],
         # Mechanical status summary: extended thinking off by default
         # (lib/thinking.py), which owns whether the keyword is sent at all.
         kwargs.update(thinking_kwargs(NOW_THINKING_OPTION))
+        kwargs.update(effort_kwargs(NOW_EFFORT_OPTION))
         response = await client.query(
             system=system,
             messages=[{"role": "user", "content": prompt}],

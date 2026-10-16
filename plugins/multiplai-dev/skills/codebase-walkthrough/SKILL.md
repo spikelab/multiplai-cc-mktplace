@@ -2,8 +2,6 @@
 name: codebase-walkthrough
 description: Explains a module end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and opens it in the review-viewer, or compact Markdown for coding agents.
 when_to_use: 'Triggers: walk me through this module, explain this codebase, onboard me, codebase tour, walkthrough, /multiplai-dev:codebase-walkthrough'
-model: opus
-effort: medium
 disable-model-invocation: true
 ---
 

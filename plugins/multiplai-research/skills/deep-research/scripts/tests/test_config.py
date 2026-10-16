@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from research_pipeline import config as config_module
 from research_pipeline.__main__ import build_parser
 from research_pipeline.config import (
     DEFAULT_MODEL,
+    _conf_model,
     _node_effort,
     _node_thinking,
     conf_effort,
@@ -49,17 +52,150 @@ class TestModelTiers:
             assert config.models[node] == DEFAULT_MODEL, node
 
 
+class TestConfModel:
+    """multiplai.conf MODEL= is the only built-in model source; with none set
+    a node's model is None and run_agent uses default_model()."""
+
+    def test_no_conf_gives_no_model(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "")
+        assert _conf_model("deep-research", None) is None
+        assert _conf_model("deep-research.parse", None) is None
+
+    def test_family_alias_expands_to_its_current_id(self, tmp_path, monkeypatch):
+        from multiplai_core.env import CURRENT_MODEL
+
+        _write_conf(tmp_path, monkeypatch, "[deep-research]\nMODEL=sonnet\n")
+        assert _conf_model("deep-research", None) == CURRENT_MODEL["sonnet"]
+
+    def test_parse_nodes_fall_back_to_the_skill_wide_model(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "[deep-research]\nMODEL=claude-test-skill\n")
+        skill = _conf_model("deep-research", None)
+        assert _conf_model("deep-research.parse", skill) == "claude-test-skill"
+
+    def test_parse_section_beats_the_skill_wide_model(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch,
+                    "[deep-research]\nMODEL=claude-test-skill\n"
+                    "[deep-research.parse]\nMODEL=claude-test-parse\n")
+        skill = _conf_model("deep-research", None)
+        assert _conf_model("deep-research.parse", skill) == "claude-test-parse"
+
+
+# --- What each node's SDK call receives ------------------------------------
+
+
+@pytest.fixture
+def sdk_options(monkeypatch) -> list[dict]:
+    """Replace claude_agent_sdk with a fake; return the ClaudeAgentOptions
+    kwargs of every call, so a test sees what run_agent really sends after its
+    own fallback to default_model() / default_effort()."""
+    calls: list[dict] = []
+    fake_sdk = types.ModuleType("claude_agent_sdk")
+
+    class FakeOptions:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append(kwargs)
+
+    class FakeAssistantMessage:
+        content: list = []
+
+    class FakeTextBlock:
+        text = "ok"
+
+    async def fake_query(prompt, options):  # type: ignore[no-untyped-def]
+        msg = FakeAssistantMessage()
+        msg.content = [FakeTextBlock()]
+        yield msg
+
+    fake_sdk.ClaudeAgentOptions = FakeOptions  # type: ignore[attr-defined]
+    fake_sdk.query = fake_query  # type: ignore[attr-defined]
+    fake_sdk.AssistantMessage = FakeAssistantMessage  # type: ignore[attr-defined]
+    fake_sdk.TextBlock = FakeTextBlock  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_sdk)
+    return calls
+
+
+async def _sent_per_node(config: ResearchConfig, calls: list[dict]) -> dict:
+    """Make one llm_call per node, as the nodes do, and return what each
+    node's SDK call received as ``{node: (model, effort)}``."""
+    from research_pipeline.sdk import llm_call
+
+    sent = {}
+    for node in config.models:
+        await llm_call("p", model=config.models[node],
+                       effort=config.efforts[node], label=node)
+        sent[node] = (calls[-1]["model"], calls[-1].get("effort"))
+    return sent
+
+
+class TestSessionDefaults:
+    """multiplai-core 0.21: a node nothing configures runs on MULTIPLAI_MODEL /
+    MULTIPLAI_EFFORT, else the session's model and effort."""
+
+    @pytest.fixture(autouse=True)
+    def _no_config(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "")
+        # The model constants as imported with no multiplai.conf.
+        monkeypatch.setattr(config_module, "DEFAULT_MODEL", None)
+        monkeypatch.setattr(config_module, "PARSE_MODEL", None)
+        # conftest's _no_session_defaults has cleared MULTIPLAI_MODEL,
+        # MULTIPLAI_EFFORT and CLAUDE_CODE_SESSION_ID (no transcript is read).
+        monkeypatch.setenv("MULTIPLAI_SESSION_MODEL", "claude-test-session")
+        monkeypatch.setenv("MULTIPLAI_SESSION_EFFORT", "low")
+
+    @pytest.mark.asyncio
+    async def test_every_node_gets_the_session_values(self, tmp_path, sdk_options):
+        sent = await _sent_per_node(_mk_config(tmp_path), sdk_options)
+        assert set(sent) == {node for node, _ in config_module._EFFORT_DEFAULTS}
+        assert set(sent.values()) == {("claude-test-session", "low")}, sent
+
+    @pytest.mark.asyncio
+    async def test_multiplai_model_wins_over_the_session(
+        self, tmp_path, monkeypatch, sdk_options
+    ):
+        monkeypatch.setenv("MULTIPLAI_MODEL", "claude-test-default")
+        sent = await _sent_per_node(_mk_config(tmp_path), sdk_options)
+        assert set(sent.values()) == {("claude-test-default", "low")}, sent
+
+    @pytest.mark.asyncio
+    async def test_multiplai_effort_wins_over_the_session(
+        self, tmp_path, monkeypatch, sdk_options
+    ):
+        monkeypatch.setenv("MULTIPLAI_MODEL", "claude-test-default")
+        monkeypatch.setenv("MULTIPLAI_EFFORT", "high")
+        sent = await _sent_per_node(_mk_config(tmp_path), sdk_options)
+        assert set(sent.values()) == {("claude-test-default", "high")}, sent
+
+    @pytest.mark.asyncio
+    async def test_cli_model_and_effort_win_over_both(
+        self, tmp_path, monkeypatch, sdk_options
+    ):
+        monkeypatch.setenv("MULTIPLAI_MODEL", "claude-test-default")
+        monkeypatch.setenv("MULTIPLAI_EFFORT", "high")
+        args = build_parser().parse_args(
+            ["--query", "q", "--output", str(tmp_path),
+             "--model", "claude-test-explicit", "--effort", "medium"]
+        )
+        sent = await _sent_per_node(ResearchConfig.from_cli_args(args), sdk_options)
+        assert set(sent.values()) == {("claude-test-explicit", "medium")}, sent
+
+    @pytest.mark.asyncio
+    async def test_conf_node_effort_wins_over_both(
+        self, tmp_path, monkeypatch, sdk_options
+    ):
+        _write_conf(tmp_path, monkeypatch, "[deep-research.extract]\nEFFORT=medium\n")
+        monkeypatch.setenv("MULTIPLAI_EFFORT", "high")
+        sent = await _sent_per_node(_mk_config(tmp_path), sdk_options)
+        assert sent["extract"] == ("claude-test-session", "medium")
+        assert sent["plan"] == ("claude-test-session", "high")
+
+
 class TestEffortTiers:
-    def test_default_efforts(self, tmp_path: Path) -> None:
+    def test_default_efforts(self, tmp_path: Path, monkeypatch) -> None:
+        """No node has a built-in effort: None makes run_agent use
+        default_effort() (MULTIPLAI_EFFORT, then the session's)."""
+        _write_conf(tmp_path, monkeypatch, "")
         config = _mk_config(tmp_path)
-        assert config.efforts["extract"] == "low"
-        assert config.efforts["search"] == "low"
-        assert config.efforts["triage_relevance"] == "low"
-        assert config.efforts["verify"] == "low"
-        assert config.efforts["quality_check"] == "medium"
-        assert config.efforts["synthesize"] is None
-        assert config.efforts["plan"] is None
-        assert config.efforts["adversarial"] is None
+        assert all(e is None for e in config.efforts.values()), config.efforts
 
     def test_efforts_and_models_cover_same_nodes(self, tmp_path: Path) -> None:
         config = _mk_config(tmp_path)
@@ -72,7 +208,8 @@ class TestEffortTiers:
         config = ResearchConfig.from_cli_args(args)
         assert all(e == "high" for e in config.efforts.values())
 
-    def test_no_cli_effort_keeps_per_node_defaults(self, tmp_path: Path) -> None:
+    def test_no_cli_effort_keeps_per_node_defaults(self, tmp_path: Path, monkeypatch) -> None:
+        _write_conf(tmp_path, monkeypatch, "[deep-research.extract]\nEFFORT=low\n")
         args = build_parser().parse_args(["--query", "q", "--output", str(tmp_path)])
         config = ResearchConfig.from_cli_args(args)
         assert config.efforts["extract"] == "low"
@@ -135,7 +272,7 @@ def test_config_efforts_pick_up_the_conf(tmp_path, monkeypatch):
     config = ResearchConfig(query="q", output_dir=tmp_path,
                             preset=PRESETS["quick"], date="2026-07-20")
     assert config.efforts["extract"] == "medium"
-    assert config.efforts["triage_relevance"] == "low"  # untouched default
+    assert config.efforts["triage_relevance"] is None  # untouched default
 
 
 def test_cli_effort_still_overrides_every_node(tmp_path, monkeypatch):
@@ -330,10 +467,13 @@ class TestCliThinkingOverride:
 
     def test_thinking_flag_leaves_the_effort_axis_alone(self, tmp_path, monkeypatch):
         """Each flag covers one axis — the doc claim SKILL.md now makes."""
-        config = self._config(tmp_path, monkeypatch, "--thinking", "off")
+        _write_conf(tmp_path, monkeypatch, "[deep-research.search]\nEFFORT=low\n")
+        args = build_parser().parse_args(
+            ["--query", "q", "--output", str(tmp_path), "--thinking", "off"]
+        )
+        config = ResearchConfig.from_cli_args(args)
         assert config.efforts["plan"] is None
         assert config.efforts["search"] == "low"
-        assert config.efforts["quality_check"] == "medium"
 
     def test_rejects_anything_but_on_or_off(self, tmp_path, monkeypatch):
         with pytest.raises(SystemExit):

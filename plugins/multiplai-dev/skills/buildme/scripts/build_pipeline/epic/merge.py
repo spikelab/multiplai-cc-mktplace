@@ -800,6 +800,7 @@ async def run_merge_agent(config, w: Path, files: list[str], branch_name: str, d
             prompt,
             allowed_tools=MERGE_TOOLS,
             model=config.model_for('merge'),
+            effort=config.effort_for('merge'),
             max_turns=MERGE_MAX_TURNS,
             cwd=str(w),
             budget_label="merge",

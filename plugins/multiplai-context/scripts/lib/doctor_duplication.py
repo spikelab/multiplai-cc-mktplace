@@ -60,6 +60,7 @@ from typing import Iterable, Mapping, Sequence
 
 from multiplai_core.untrusted import defang, fence, markdown_notice
 
+from lib.job_effort import MEMORY_DOCTOR_EFFORT_OPTION, effort_kwargs
 from lib.thinking import DUPLICATION_THINKING_OPTION, thinking_kwargs
 
 logger = logging.getLogger(__name__)
@@ -574,6 +575,7 @@ async def confirm_pairs(
     # SDK default; these are not the same kind of question. Resolved once per
     # run, not per batch.
     thinking = thinking_kwargs(DUPLICATION_THINKING_OPTION)
+    effort = effort_kwargs(MEMORY_DOCTOR_EFFORT_OPTION)
     for batch in _batches(list(pairs), max(1, batch_size)):
         try:
             response = await client.query(
@@ -582,6 +584,7 @@ async def confirm_pairs(
                 model=model,
                 timeout_s=timeout_s,
                 **thinking,
+                **effort,
             )
             result = parse_confirmations(response.content, batch)
             confirmations.extend(result.confirmations)

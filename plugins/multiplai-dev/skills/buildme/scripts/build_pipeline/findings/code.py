@@ -309,6 +309,7 @@ async def run_self_check(config: BuildConfig, diff: str) -> str:
         prompt,
         allowed_tools=AUDITOR_TOOLS,
         model=config.model_for('findings_self_check'),
+        effort=config.effort_for('findings_self_check'),
         max_turns=AUDITOR_MAX_TURNS,
         cwd=str(config.project_dir),
         budget_label="findings_self_check",
