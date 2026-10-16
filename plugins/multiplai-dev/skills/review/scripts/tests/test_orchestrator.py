@@ -37,6 +37,7 @@ class FakeAgents:
     def __init__(self, kill_at: str | None = None, cost: float = 0.0, budget_stop_at: int | None = None,
                  two_groups: bool = False):
         self.calls: list[str] = []
+        self.cwds: list[tuple[str, str | None]] = []
         self.kill_at = kill_at
         self.cost = cost
         self.budget_stop_at = budget_stop_at
@@ -48,6 +49,7 @@ class FakeAgents:
         sdk.require_trusted_repo()
         budget.check(stage=budget_label)
         self.calls.append(budget_label)
+        self.cwds.append((budget_label, kwargs.get("cwd")))
         if len(self.calls) == self.budget_stop_at:
             self.budget_stop_at = None
             raise budget.BudgetExceededError(f"circuit breaker stopped the run during {budget_label}")
@@ -134,6 +136,19 @@ def test_review_end_to_end(fixture_repo, tmp_path, agents, capsys):
     assert "merge rateplan_service.py:1-1: 2 findings, 1 duplicates" in progress
     assert data["findings"][0]["expected_behaviour"] == "Rate plans match whatever the channel is titled."
     assert "**Expected behaviour:** Rate plans match whatever the channel is titled." in review
+
+
+def test_every_stage_runs_in_its_snapshot(fixture_repo, tmp_path, agents):
+    """Every stage's agent call has its snapshot as cwd. sdk passes that cwd to run_agent as
+    read_roots (test_sdk.py), so no stage can read outside the snapshot."""
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    fake = agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
+    assert {"find", "verify", "merge"} <= {label.split(":")[0] for label, _ in fake.cwds}
+    for label, cwd in fake.cwds:
+        assert cwd == str(target_dir / ("assess-tree" if label == "assess" else "tree")), label
 
 
 def test_resume_after_a_kill_following_verify(fixture_repo, tmp_path, agents, capsys):

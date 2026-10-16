@@ -16,7 +16,8 @@ text, so its re-ask re-runs the prompt.
 Every stage gets `Read`, `Grep` and `Glob`; finders and verifiers also get
 `WebFetch` and `WebSearch`, to look up how a dependency behaves at the version
 the repository pins. No stage can run a command or write, so the pipeline is
-read-only over the reviewed code by construction.
+read-only over the reviewed code by construction. `read_roots=[cwd]` makes
+multiplai-core deny any `Read`, `Grep` or `Glob` outside the stage's snapshot.
 """
 
 from __future__ import annotations
@@ -134,6 +135,8 @@ async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effo
             timeout_s=call_timeout,
             label=run_label or budget_label or "review",
             component="review",
+            # Reads stop at the snapshot; with no cwd there is nothing to read.
+            read_roots=[cwd] if cwd is not None else [],
         )
     except AgentRunError as e:
         partial = getattr(e, "partial", None)
