@@ -6,7 +6,8 @@ own file beats multiplai.conf, which beats the default):
 1. `review.yaml` in the output directory (`<out>/review.yaml`; for the
    default output directory, the old default's when the new one has none):
    `concurrency`, `finder_model`, `verifier_model`, `merger_model`, `effort`,
-   `max_turns`, `explain`, `find_with_facts`, `trim`, `extra_finders`.
+   `max_turns`, `explain`, `find_with_facts`, `trim`, `extra_finders`, `deps`,
+   `deps_max_mb`.
 2. `multiplai.conf` keys `review_finder_model`, `review_verifier_model`,
    `review_effort` (the merger uses the verifier's), `review_explain`.
 3. Default: no model and no effort passed, so every stage runs on the
@@ -25,6 +26,10 @@ findings go to the advisory Trim section. A tree review runs it only with
 `extra_finders` (default false; also `review --extra-finders`) adds one finder per
 ~600 changed lines (`chunks.finder_chunks`, at most 6) to a change review's first
 round, keyed `EXTRA_DIMENSION@<i>`.
+
+`deps` (default true; `review --no-deps` turns it off for one run) extracts the
+source of the git dependencies a uv.lock at head pins into the snapshot
+(`deps.py`); `deps_max_mb` (default 50) skips one whose source is larger.
 """
 
 from __future__ import annotations
@@ -63,6 +68,8 @@ class ReviewConfig:
     find_with_facts: bool = False
     trim: bool = True
     extra_finders: bool = False
+    deps: bool = True
+    deps_max_mb: int = 50
 
 
 _TRUE = ("1", "true", "yes", "on")
@@ -129,12 +136,12 @@ def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MA
             setattr(cfg, key, str(data[key]))
     if data.get("verifier_model") and not data.get("merger_model"):
         cfg.merger_model = str(data["verifier_model"])
-    for key in ("concurrency", "max_turns"):
+    for key in ("concurrency", "max_turns", "deps_max_mb"):
         value = coerce_int(data, key, yaml_path)
         if value is not None:
             setattr(cfg, key, value)
 
-    for key in ("explain", "find_with_facts", "trim", "extra_finders"):
+    for key in ("explain", "find_with_facts", "trim", "extra_finders", "deps"):
         value = _flag(data.get(key), key, yaml_path)
         if value is not None:
             setattr(cfg, key, value)

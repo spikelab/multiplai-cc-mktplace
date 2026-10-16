@@ -121,3 +121,26 @@ def test_verifier_rates_breaking_impact_only_when_all_three_conditions_hold(targ
     prompt = " ".join(verify.build(target_info, high_finding()).split())
     assert STRICT_IMPACT in prompt
     assert prompt.index("- `breaks-business`:") < prompt.index(STRICT_IMPACT) < prompt.index("- `correctness-only`:")
+
+
+def _with_deps(target_info):
+    from review_pipeline.models import DepEntry
+    entries = [DepEntry(name=n, url=f"https://example.com/{n}", commit=c * 40, cache="/c", status="ok")
+               for n, c in (("multiplai-core", "a"), ("other-lib", "b"))]
+    return target_info.model_copy(update={"deps": entries})
+
+
+def test_finders_and_verifier_are_told_where_the_dependency_source_is(target_info):
+    target = _with_deps(target_info)
+    prompts = [find.build(target, "diff-bugs", "diff"), find.build_extra(target, ["a.py"], 10, 0, 2, "diff"),
+               verify.build(target, high_finding())]
+    for prompt in prompts:
+        assert f".review-deps/multiplai-core@{'a' * 12}/" in prompt
+        assert f".review-deps/other-lib@{'b' * 12}/" in prompt
+        assert "never report a defect that lies only in a dependency" in prompt.lower()
+        assert "only after a line of the repository" in prompt
+
+
+def test_without_dependencies_the_prompts_name_none(target_info):
+    for prompt in (find.build(target_info, "diff-bugs", "diff"), verify.build(target_info, high_finding())):
+        assert ".review-deps" not in prompt

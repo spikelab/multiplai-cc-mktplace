@@ -209,6 +209,24 @@ A change review runs the trim finder unless `review.yaml` sets `trim: false`.
 A tree review (`--tree`, `--dir`) runs it over the existing tests and comments
 only with `--trim`; `resume` keeps that choice.
 
+## Dependency source
+
+Before the stages run, the review reads every `uv.lock` in the reviewed
+commit and finds the packages with a `git` source. It clones each one once
+into a bare partial clone in the skill's state folder (only `https://`,
+`ssh://` and `git@host:` URLs) and extracts it at the pinned commit into the
+snapshot, as `.review-deps/<name>@<commit12>/`. Finders and verifiers are told
+those folders are there to follow a call from the change into a dependency. A
+finding may cite a dependency line after at least one line of the repository;
+the gate re-reads it from the dependency's git history at the pinned commit. A
+finding is never about a dependency's code alone.
+
+A dependency it cannot clone, or whose source is over `deps_max_mb` (50 MB),
+becomes a need with a read-only command, and the review goes on without it.
+`--no-deps` (on `review` and `resume`), or `deps: false` in `review.yaml`,
+turns it off. Registry (PyPI) packages, `path` and editable sources, and other
+ecosystems' lock files are not read; for those the agents have `WebFetch`.
+
 ## Extra finders
 
 `--extra-finders` (or `extra_finders: true` in `review.yaml`) adds finders
@@ -281,18 +299,27 @@ extra finders a first round with `--extra-finders` would ask), writes
   becomes part of what the model acts on. The PR description and fetched pages
   are shown to the agents as untrusted data; a web page can be cited only after
   a line of the repository, and never confirms a finding by itself.
+- **Clones the repository's git dependencies.** For each package a `uv.lock`
+  at the reviewed commit pins to a git commit, it runs `git clone --bare
+  --filter=blob:none` (or `git fetch origin <commit>` into an existing clone)
+  over `https` or `ssh` only, with prompts off and a 300 s timeout, into the
+  skill's state folder (`<data_dir>/skills/review/deps/`), then `git archive`s
+  that commit into the snapshot's `.review-deps/`. Their text reaches the model
+  the same way the repository's does, so `--trust-repo` covers them too.
+  `--no-deps` turns this off.
 - **Reads git history** of the reviewed repository (`git rev-parse`,
   `git diff`, `git log`, `git show`, `git archive`). It never
   checks out, merges, commits or writes to it, and fetches only with
   `--fetch`.
 - **Uses the network** through the model calls, the agents' `WebFetch` and
-  `WebSearch`, and the GitHub CLI: for `--pr`, `gh pr view` (shas, title,
+  `WebSearch`, the dependency clones above, and the GitHub CLI: for `--pr`, `gh pr view` (shas, title,
   body) and `gh api repos/{owner}/{repo}/rules/branches/<base>` (the rules on
   the base branch, so the agents know whether CI blocks a merge); and
   for `post`, `gh api` to read the PR's review comments and reviews and to
   create one review on it. That `POST` is the only command that writes
   anywhere outside the output directory.
-- **Writes files** under the output directory and to the log files. For
+- **Writes files** under the output directory, the dependency clone cache
+  and the log files. For
   `--dir`, that includes a copy of the directory, in which it runs `git init`,
   `git add -A` and one `git commit` with a fixed author and no user git config.
 
@@ -325,7 +352,7 @@ One target:
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts \
   python -m review_pipeline --session-id "{session_id}" [--out /abs/out] \
   review --repo /abs/path/to/repo --range <base>..<head> --trust-repo \
-  [--mode critical] [--extra-finders] [--ticket DB-2038] [--deployed-in staging]
+  [--mode critical] [--extra-finders] [--no-deps] [--ticket DB-2038] [--deployed-in staging]
 ```
 
 Use `--branch <name>` (reviewed against its merge-base with `origin/HEAD`) or
@@ -639,6 +666,9 @@ stage runs on the session's model.
   "Trim"). A tree review runs it only with `--trim`.
 - `extra_finders` (default `false`): what `--extra-finders` does, for every
   change review written to this output directory (see "Extra finders").
+- `deps` (default `true`): clone the git dependencies `uv.lock` pins into the
+  snapshot (see "Dependency source"); `false` is what `--no-deps` does.
+- `deps_max_mb` (default `50`): skip a dependency whose source is larger.
 
 ## Other commands
 

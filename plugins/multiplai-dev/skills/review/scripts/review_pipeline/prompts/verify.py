@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from ..models import Finding, TargetInfo, is_trim
-from . import CITATION_RULES, JSON_ONLY, description_block, settings_block, workspace_block
+from . import CITATION_RULES, JSON_ONLY, deps_block, description_block, settings_block, workspace_block
 
 SCHEMA = """\
 {"status": "confirmed" | "refuted" | "unverifiable",
@@ -85,6 +85,7 @@ def build(target: TargetInfo, finding: Finding) -> str:
         "You are checking one claim from a code review. You did not write it; assume nothing it says "
         "until you have read the code yourself.",
         workspace_block(target, web=True),
+        deps_block(target),
         description_block(target),
         settings_block(target),
         f"Claim ({finding.severity}) about `{finding.file}` lines {finding.line_start}-{finding.line_end}:\n"

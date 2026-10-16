@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 
 from .export import to_checks_file, to_findings_file
-from .models import CRITICAL_IMPACTS, SECTIONS, SEVERITIES, ReviewState, section_of
+from .models import CRITICAL_IMPACTS, DEPS_DIR, SECTIONS, SEVERITIES, ReviewState, section_of
 from .target import github_web_base, object_folders, review_children
 
 log = logging.getLogger(__name__)
@@ -105,9 +105,12 @@ def assessment_line(fd: dict) -> str:
 
 
 def code_link(web_base: str | None, head_sha: str, path: str, start: int, end: int) -> str:
-    """A full-sha GitHub link for a GitHub remote, else `path:lines`."""
+    """A full-sha GitHub link for a GitHub remote, else `path:lines`.
+
+    A dependency's line (`.review-deps/...`) is not in the reviewed repository, so it is never linked.
+    """
     lines = f"{start}" if start == end else f"{start}-{end}"
-    if web_base:
+    if web_base and not path.startswith(DEPS_DIR + "/"):
         return f"[{path}:{lines}]({web_base}/blob/{head_sha}/{path}#L{start}-L{end})"
     return f"`{path}:{lines}`"
 

@@ -14,7 +14,7 @@ import re
 
 from multiplai_core.citations import check_quote, file_at, lines_at
 
-from .models import SEVERITIES, Citation, Finding, GateResult, Need, TargetInfo, Verdict
+from .models import DEPS_DIR, SEVERITIES, Citation, Finding, GateResult, Need, TargetInfo, Verdict
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +24,8 @@ log = logging.getLogger(__name__)
 _REASON_KINDS = (
     "quote not at cited lines", "path not at head", "empty quote", "is not a changed file",
     "unknown severity", "no citations", "first citation is a web source", "confirmed without citing",
-    "none of its citations reproduce",
+    "none of its citations reproduce", "dependency not in manifest", "first citation is a dependency",
+    "path not at commit",
 )
 
 
@@ -48,8 +49,23 @@ def lines_at_head(target: TargetInfo, path: str, start: int, end: int) -> list[s
 # --- citations ----------------------------------------------------------------
 
 
+def _dependency_citation_gate(target: TargetInfo, citation: Citation) -> GateResult:
+    """A citation under `.review-deps/<name>@<commit12>/`, re-read from that dependency's clone at its commit."""
+    folder, _, inner = citation.path[len(DEPS_DIR) + 1:].partition("/")
+    entry = next((e for e in target.deps if e.folder == folder), None)
+    if entry is None or not inner:
+        return GateResult(passed=False, reason="dependency not in manifest", action="reject")
+    reason = check_quote(entry.cache, entry.commit, inner, citation.line_start, citation.line_end, citation.quote)
+    return GateResult(passed=True) if reason is None else GateResult(passed=False, reason=reason, action="reject")
+
+
 def citation_gate(target: TargetInfo, citation: Citation) -> GateResult:
-    """The quote, whitespace-normalised, is inside lines line_start..line_end at head."""
+    """The quote, whitespace-normalised, is inside lines line_start..line_end at head.
+
+    A dependency citation is checked against that dependency's pinned commit instead.
+    """
+    if citation.is_dependency:
+        return _dependency_citation_gate(target, citation)
     reason = check_quote(
         target.repo_path, target.head_sha, citation.path, citation.line_start, citation.line_end, citation.quote,
     )
@@ -66,7 +82,8 @@ def finding_gate(target: TargetInfo, finding: Finding) -> GateResult:
 
     A web citation (an http(s) URL as `path`) is not checked: the gates only
     read git. It may follow a repo citation, never stand first or alone, so a
-    finding is always anchored to the reviewed commit.
+    finding is always anchored to the reviewed commit. A dependency citation
+    is checked, and follows the same rule.
     """
     if finding.severity not in SEVERITIES:
         return GateResult(passed=False, reason=f"unknown severity {finding.severity!r}", action="reject")
@@ -76,6 +93,8 @@ def finding_gate(target: TargetInfo, finding: Finding) -> GateResult:
         return GateResult(passed=False, reason="no citations", action="reject")
     if finding.citations[0].is_web:
         return GateResult(passed=False, reason="first citation is a web source, not a file at head", action="reject")
+    if finding.citations[0].is_dependency:
+        return GateResult(passed=False, reason="first citation is a dependency", action="reject")
     for i, citation in enumerate(finding.citations):
         if citation.is_web:
             continue

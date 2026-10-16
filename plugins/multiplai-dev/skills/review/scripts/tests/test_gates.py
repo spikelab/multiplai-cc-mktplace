@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from conftest import DEF_CITATION, KEYWORD_CITATION, cite, high_finding
 from review_pipeline import gates
 from review_pipeline.models import Citation, Verdict
@@ -100,3 +101,56 @@ def test_verdict_gate_does_not_confirm_on_a_web_citation_alone(target_info):
     result = gates.verdict_gate(target_info, web_only)
     assert result.action == "downgrade" and "web source" in result.reason
     assert gates.verdict_gate(target_info, Verdict(status="confirmed", reason="r", citations=[WEB, KEYWORD_CITATION])).passed
+
+
+# --- dependency citations ----------------------------------------------------------
+
+
+@pytest.fixture
+def dep_target(target_info, tmp_path):
+    """target_info with one extracted dependency, `lib`, whose runner.py line 2 is `ADD_READ = True`."""
+    from deps_fixtures import dependency
+    from review_pipeline.models import DepEntry
+
+    url, sha, _ = dependency(tmp_path, "lib", {"lib/runner.py": "def run():\n    ADD_READ = True\n"})
+    entry = DepEntry(name="lib", url=url, commit=sha, cache=url.removeprefix("file://"), status="ok")
+    return target_info.model_copy(update={"deps": [entry]}), f".review-deps/lib@{sha[:12]}"
+
+
+def test_a_dependency_quote_is_checked_against_the_pinned_commit(dep_target):
+    target, folder = dep_target
+    assert gates.citation_gate(target, cite(f"{folder}/lib/runner.py", 2, "ADD_READ = True")).passed
+    result = gates.citation_gate(target, cite(f"{folder}/lib/runner.py", 2, "ADD_READ = False"))
+    assert not result.passed and result.reason == "quote not at cited lines"
+
+
+def test_a_dependency_not_in_the_manifest_fails(dep_target):
+    target, _ = dep_target
+    result = gates.citation_gate(target, cite(f".review-deps/other@{'f' * 12}/x.py", 1, "x"))
+    assert not result.passed and result.reason == "dependency not in manifest"
+    assert gates.reason_kind(result.reason) == "dependency not in manifest"
+
+
+def test_a_dependency_citation_may_follow_a_repository_one(dep_target):
+    target, folder = dep_target
+    dep = cite(f"{folder}/lib/runner.py", 2, "ADD_READ = True")
+    finding = high_finding().model_copy(update={"citations": [KEYWORD_CITATION, dep]})
+    assert gates.finding_gate(target, finding).passed
+
+
+def test_a_dependency_citation_first_or_alone_is_rejected(dep_target):
+    target, folder = dep_target
+    dep = cite(f"{folder}/lib/runner.py", 2, "ADD_READ = True")
+    for citations in ([dep, KEYWORD_CITATION], [dep]):
+        result = gates.finding_gate(target, high_finding().model_copy(update={"citations": citations}))
+        assert not result.passed and result.reason == "first citation is a dependency"
+        assert gates.reason_kind(result.reason) == "first citation is a dependency"
+
+
+def test_an_absolute_path_into_the_dependency_folder_becomes_relative(target_info, tmp_path):
+    from review_pipeline.stages import relative_path
+
+    snapshot = tmp_path / "tree"
+    snapshot.mkdir()
+    path = f"{snapshot.resolve()}/.review-deps/lib@{'a' * 12}/lib/runner.py"
+    assert relative_path(path, target_info, snapshot) == f".review-deps/lib@{'a' * 12}/lib/runner.py"

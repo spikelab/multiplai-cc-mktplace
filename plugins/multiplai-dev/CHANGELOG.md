@@ -17,6 +17,23 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.79.0] - 2026-10-16
+
+### Added
+- `/multiplai-dev:review` now gives its finders and verifiers the source of the
+  reviewed repository's git dependencies, at the commits its `uv.lock` pins. It
+  clones each one (over `https` or `ssh`) into the skill's state folder and puts
+  its files in the snapshot under `.review-deps/<name>@<commit>/`, so a finder
+  can follow a call from the change into, say, `multiplai-core`. A finding may
+  cite a dependency's line after a line of the repository, and that line is
+  checked against the dependency's git history at the pinned commit. A finding
+  is never about a dependency's code alone.
+- A dependency the review cannot clone, or whose source is over 50 MB
+  (`deps_max_mb` in `review.yaml`), is listed under **Needs you** and the review
+  goes on without it.
+- `review --no-deps` and `resume --no-deps`, or `deps: false` in `review.yaml`,
+  turn the dependency source off.
+
 ## [0.78.2] - 2026-10-16
 
 ### Security

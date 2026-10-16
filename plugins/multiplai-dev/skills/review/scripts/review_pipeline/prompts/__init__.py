@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..models import TargetInfo
+from ..models import DEPS_DIR, TargetInfo
 
 # Diffs larger than this are cut in the prompt; the agent is told where the
 # whole diff is.
@@ -34,6 +34,22 @@ def workspace_block(target: TargetInfo, *, web: bool = False) -> str:
         f"tool shows them. {tools}"
     )
     return f"{text} {WEB_RULES}" if web else text
+
+
+def deps_block(target: TargetInfo) -> str:
+    """Where the snapshot holds the repository's git dependencies (`deps.py`); "" when it holds none."""
+    if not target.deps:
+        return ""
+    folders = "\n".join(f"- {DEPS_DIR}/{e.folder}/ ({e.url} at {e.commit})" for e in target.deps)
+    return (
+        f"`{DEPS_DIR}/<name>@<commit>/` holds the source of the repository's git dependencies at the "
+        f"commits uv.lock pins:\n{folders}\n"
+        f"Open them only to follow a call from the changed code into a dependency. Never report a defect "
+        f"that lies only in a dependency: a finding is about this repository's code. Cite a dependency "
+        f"line, with its path under `{DEPS_DIR}/`, only after a line of the repository: the first citation "
+        f"is always a file of this repository. A program re-reads a dependency citation from that "
+        f"dependency's git history at the pinned commit."
+    )
 
 
 def fence(text: str, source: str) -> str:

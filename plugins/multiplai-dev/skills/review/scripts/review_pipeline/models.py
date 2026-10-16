@@ -57,7 +57,9 @@ class _Model(BaseModel):
 
 
 class Citation(_Model):
-    path: str  # a repo-relative path, or an http(s) URL for a web source
+    # A repo-relative path, an http(s) URL for a web source, or a path under
+    # `.review-deps/<name>@<commit12>/` for a line of a git dependency.
+    path: str
     line_start: int = Field(ge=1)
     line_end: int = Field(ge=1)
     quote: str  # exact text expected at those lines
@@ -66,6 +68,11 @@ class Citation(_Model):
     def is_web(self) -> bool:
         """A web source. The gates do not check it, and it never anchors a finding."""
         return self.path.lower().startswith(("http://", "https://"))
+
+    @property
+    def is_dependency(self) -> bool:
+        """A line of a git dependency (`deps.py`). The gates check it, but it never anchors a finding."""
+        return self.path.startswith(DEPS_DIR + "/")
 
     @model_validator(mode="after")
     def _ordered(self) -> "Citation":
@@ -141,6 +148,29 @@ class NeedAsk(_Model):
     @classmethod
     def _known_cause(cls, value) -> str:
         return value if value in NEED_CAUSES else "no-access"
+
+
+# Where the snapshot holds the reviewed repository's git dependencies
+# (`deps.py`): `<snapshot>/.review-deps/<name>@<commit[:12]>/`.
+DEPS_DIR = ".review-deps"
+
+
+class DepEntry(BaseModel):
+    """One git dependency a uv.lock at head pins, and what `deps.materialize` did with it.
+
+    `cache` is the bare clone the gates re-read a citation of it from; `status`
+    `ok` means its source is in the snapshot under `folder`.
+    """
+    name: str
+    url: str
+    commit: str
+    cache: str = ""
+    status: Literal["ok", "skipped", "failed"]
+    reason: str = ""
+
+    @property
+    def folder(self) -> str:
+        return f"{self.name}@{self.commit[:12]}"
 
 
 class Need(BaseModel):
@@ -248,6 +278,10 @@ class TargetInfo(BaseModel):
     # Tree targets only: (file, reason) for each file at head left out of the
     # review (binary, too large, a lockfile, generated or vendored).
     skipped: list[tuple[str, str]] = Field(default_factory=list)
+    # The git dependencies whose source this run extracted into the snapshot
+    # (`deps.ensure`, set again on every run and resume); the gates re-read a
+    # citation of one from its `cache` at its `commit`.
+    deps: list[DepEntry] = Field(default_factory=list)
 
     @property
     def is_tree(self) -> bool:
