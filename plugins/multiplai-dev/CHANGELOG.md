@@ -17,6 +17,30 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.78.2] - 2026-10-16
+
+### Security
+- `/multiplai-dev:pr`'s model call now has no tools at any prompt size. Before,
+  a description prompt over 80,000 bytes made multiplai-core write the prompt
+  to a file and give the model `Read`, which could open any file you can read.
+- `/multiplai-dev:pr edit <url>` now writes only to the PR at that URL. It
+  names the PR to `gh pr edit` and `gh pr comment` by its URL, and refuses,
+  before reading the diff or writing anything, when the URL's repository is not
+  the checkout's `origin` or when `gh` gives no URL. Before, the description of
+  PR 7 in one repository could be written onto PR 7 in another.
+- `/multiplai-dev:pr edit --push` now pushes only to the PR's own branch. It
+  refuses a PR whose head is on a fork (push to the fork yourself, then run
+  `edit` without `--push`) and a head branch that is not in the checkout, and
+  pushes `refs/heads/<head>` to the branch of the same name. Before, a fork's
+  PR pushed your unrelated same-named branch to `origin`.
+- `/multiplai-dev:pr open` and `edit` refuse a branch name that is not a valid
+  Git branch name or that starts with `-`. Before, a `--head` or a PR head such
+  as `--all` reached `git push` as an option.
+- `/multiplai-dev:pr` template discovery skips a template file, template
+  directory or location whose resolved path is outside the repository, such as
+  a symlink to another folder, and says so in a `PR_DIAGNOSIS:` line. Before,
+  that file's text was copied into the PR description.
+
 ## [0.78.1] - 2026-10-16
 
 ### Fixed
