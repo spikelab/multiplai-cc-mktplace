@@ -70,12 +70,14 @@ from lib.transcript_helper import read_last_assistant_response
 from generators.base import CATALOG_SCHEMA_VERSION
 from generators.config import load_catalog_config
 
-# Forward the router's and multiplai_core's loggers into context_manager.log.
-# Without this, every line they wrote (the router's timeout/degrade warning,
-# run_agent's START/DONE/FAIL and CLI debug-log path) reached only the hook's
-# stderr, and context_manager.log never showed why a router call was slow.
+# Forward the router's (lib.*) and generators.* loggers into the
+# context_manager log; multiplai_core is always included. Without this, every
+# line they wrote (the router's timeout/degrade warning, run_agent's
+# START/DONE/FAIL and CLI debug-log path) reached only the hook's stderr, and
+# the log never showed why a router call was slow. A script run by path has no
+# package of its own, so it names them.
 logger = setup_logging(
-    "context_manager", propagate_loggers=("multiplai_core", "lib"),
+    "context_manager", packages=("lib", "generators"),
 )
 
 # Seconds into the run at which the watchdog logs the stage still running and

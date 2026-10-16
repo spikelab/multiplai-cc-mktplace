@@ -82,7 +82,7 @@ def _main(args: argparse.Namespace) -> int:
         from multiplai_core.log_utils import setup_logging
 
         load_env()
-        setup_logging("pr-pipeline", propagate_loggers=("pr_pipeline", "multiplai_core"))
+        setup_logging("pr-pipeline", packages=("pr_pipeline",))
 
         from . import commands
     except Exception as e:  # before commands.run's handler exists: exit 2, never Python's 1, which means a gate

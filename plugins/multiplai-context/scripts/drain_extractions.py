@@ -78,7 +78,7 @@ from lib.extraction_drain import (
 )
 from lib.fleet import write_fleet_view
 
-logger = setup_logging("drain_extractions")
+logger = setup_logging("drain_extractions", packages=("lib", "generators"))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -184,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         log_event(
             "checkpoint", "drain-failed",
             f"{cp_result.failed} of {cp_result.launched} end-of-session "
-            "checkpoint write(s) failed or degraded — see checkpoint_writer.log",
+            "checkpoint write(s) failed or degraded — see checkpoint_writer-YYYY-MM-DD.log",
             count=cp_result.failed,
         )
         print(

@@ -29,7 +29,7 @@ from multiplai_core.paths import get_paths
 from multiplai_core.config import save_yaml
 from multiplai_core.log_utils import setup_logging
 
-logger = setup_logging("config_audit")
+logger = setup_logging("config_audit", packages=("lib", "generators"))
 
 STATE_FILENAME = "config_audit_state.yaml"
 

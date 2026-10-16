@@ -322,10 +322,12 @@ def _main(args: argparse.Namespace) -> int:
     load_env()
     session_id = getattr(args, "session_id", "") or ""
     # setup_logging always attaches a stderr handler and derives the log file
-    # from the component name.
+    # from the component name. Every build_pipeline.*, code_facts.* and
+    # multiplai_core.* record at INFO and above lands in that file.
     logger = setup_logging(
         "build-pipeline",
         session_id=session_id,
+        packages=("build_pipeline", "code_facts"),
     )
 
     if args.command == "setup":

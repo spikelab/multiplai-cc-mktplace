@@ -213,6 +213,12 @@ def main(argv: Sequence[str] | None = None, *, now: Callable[[], datetime] | Non
         args = build_parser().parse_args(argv)
     except SystemExit as e:  # --help, or a usage error argparse already printed
         return e.code if isinstance(e.code, int) else EXIT_REFUSED
+    from multiplai_core.log_utils import setup_logging
+
+    # spec_extract_pipeline.*, code_facts.* and multiplai_core.* records at
+    # INFO and above go to spec-extract-pipeline-<day>.log; WARNING+ to stderr.
+    setup_logging("spec-extract-pipeline", session_id=os.environ.get("CLAUDE_CODE_SESSION_ID", ""),
+                  packages=("spec_extract_pipeline", "code_facts"))
     try:
         return _run(args, clock)
     except target.TargetError as e:

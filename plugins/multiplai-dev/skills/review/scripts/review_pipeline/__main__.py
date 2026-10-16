@@ -182,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
 
     load_env()
     setup_logging("review-pipeline", session_id=args.session_id,
-                  propagate_loggers=("review_pipeline", "multiplai_core"))
+                  packages=("review_pipeline", "code_facts"))
 
     if getattr(args, "trust_repo", False):
         os.environ["REVIEW_TRUST_REPO"] = "1"

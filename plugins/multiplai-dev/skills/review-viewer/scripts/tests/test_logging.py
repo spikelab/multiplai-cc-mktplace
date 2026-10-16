@@ -21,6 +21,15 @@ from multiplai_core.log_utils import _get_logs_dir
 
 from conftest import free_port
 
+
+def _read_logs(logs, stem, ext):
+    """Every ``<stem>-YYYY-MM-DD.<ext>`` file in *logs*, oldest day first, joined.
+
+    multiplai-core 0.21 writes one file per UTC day under its dated name."""
+    files = sorted(logs.glob(f"{stem}-*.{ext}"))
+    assert files, f"no {stem} log in {logs}"
+    return "".join(f.read_text() for f in files)
+
 HIGH = "b561bd34ce"
 QUESTION = "Is the qty field ever missing in production carts?"
 ANSWER = "Only from the legacy checkout, which still exists."
@@ -81,8 +90,8 @@ def test_cycle_logs_events_without_text_or_token(findings_path, logs_env, tmp_pa
 
     logs = _get_logs_dir()
     assert logs == tmp_path / "ws" / ".multiplai" / "data" / "logs"
-    assert (logs / "review-viewer.log").exists()
-    records = [json.loads(line) for line in (logs / "activity.jsonl").read_text().splitlines()
+    assert _read_logs(logs, "review-viewer", "log")
+    records = [json.loads(line) for line in _read_logs(logs, "activity", "jsonl").splitlines()
                if line.strip()]
     ours = [r for r in records if r.get("component") == "review-viewer"]
     events = [r["event"] for r in ours]
@@ -108,6 +117,6 @@ def test_rejected_requests_are_rate_limited(start_live, logs_env):
     for _ in range(5):
         assert live.request("GET", "/api/whoami", token="nope")[0] == 401
     records = [json.loads(line) for line in
-               (_get_logs_dir() / "activity.jsonl").read_text().splitlines() if line.strip()]
+               _read_logs(_get_logs_dir(), "activity", "jsonl").splitlines() if line.strip()]
     rejected = [r for r in records if r.get("event") == "rejected_request" and r["status"] == 401]
     assert len(rejected) == 1

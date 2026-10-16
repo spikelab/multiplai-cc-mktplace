@@ -57,7 +57,7 @@ from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
 from lib.runtime import run_supervised, uv_run_argv
 
-logger = setup_logging("pre_compact")
+logger = setup_logging("pre_compact", packages=("lib", "generators"))
 
 # Poll step while waiting for an already-in-flight band writer to finish.
 _INFLIGHT_POLL_S = 2.0

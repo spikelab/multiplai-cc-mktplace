@@ -186,21 +186,32 @@ def _routing_status(paths) -> dict:
     status["effective_strategy"] = "token_overlap" if degraded else configured
     status["degraded_to_fallback"] = degraded
 
-    # Live aggregates from the machine routing log.
-    log_file = paths.logs_dir() / "context_manager.log"
+    # Live aggregates from the machine routing log: one file per UTC day
+    # (context_manager-YYYY-MM-DD.log), read newest first until there are
+    # enough samples. An undated context_manager.log from before multiplai-core
+    # 0.21 holds lines older than any dated file, so it is read last.
+    logs_dir = paths.logs_dir()
+    log_files = sorted(logs_dir.glob("context_manager-*.log"), reverse=True)
+    log_files.append(logs_dir / "context_manager.log")
     samples: list[dict] = []
-    if log_file.exists():
+    for log_file in log_files:
+        if len(samples) >= _MAX_ROUTING_SAMPLES:
+            break
+        if not log_file.exists():
+            continue
+        found: list[dict] = []
         try:
             for ln in log_file.read_text(errors="replace").splitlines():
                 m = _ROUTING_RE.search(ln)
                 if not m:
                     continue
                 try:
-                    samples.append(json.loads(m.group(1)))
+                    found.append(json.loads(m.group(1)))
                 except (json.JSONDecodeError, ValueError):
                     continue
         except OSError:
-            samples = []
+            continue
+        samples = found + samples
     samples = samples[-_MAX_ROUTING_SAMPLES:]
     if samples:
         n = len(samples)

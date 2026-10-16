@@ -802,7 +802,7 @@ def main(argv: list[str] | None = None) -> int:
         args.session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     args.agent = getattr(args, "agent", "Claude")
     setup_logging(COMPONENT, session_id=args.session_id,
-                  propagate_loggers=("review_viewer", "multiplai_core"))
+                  packages=("review_viewer",))
     return args.func(args)
 
 

@@ -147,7 +147,7 @@ def _main(args: argparse.Namespace) -> int:
 
     load_env()
     setup_logging("walkthrough-pipeline", session_id=args.session_id,
-                  propagate_loggers=("walkthrough_pipeline", "multiplai_core"))
+                  packages=("walkthrough_pipeline", "code_facts"))
 
     if args.command == "check":
         from .check import check_file

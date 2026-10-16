@@ -214,8 +214,9 @@ name) for PR, branch, unpushed and tree targets, so both give a target one slug.
 
 ## Logging
 
-`setup_logging("review-viewer", propagate_loggers=("review_viewer", "multiplai_core"))`
-writes `review-viewer.log`; every module logs to `logging.getLogger(__name__)`.
+`setup_logging("review-viewer", packages=("review_viewer",))`
+writes `review-viewer-YYYY-MM-DD.log` (one file per UTC day, with
+`multiplai_core`'s records too); every module logs to `logging.getLogger(__name__)`.
 Request lines go to DEBUG. Unexpected handler errors log at ERROR with
 `exc_info` (so they reach `hook-errors.log`); the client gets `500
 {"error": "internal"}`.

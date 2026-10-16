@@ -396,13 +396,30 @@ def injected_from_inject_events(events: Iterable[dict]) -> list[dict]:
     return out
 
 
+def _activity_files_oldest_first(logs_dir: Path) -> list[Path]:
+    """The activity JSONL files in *logs_dir*, oldest content first."""
+    keyed: list[tuple[str, int, Path]] = []
+    for path in logs_dir.glob("activity-*.jsonl"):
+        keyed.append((path.stem[len("activity-"):], 1, path))
+    legacy = logs_dir / "activity.jsonl"
+    if legacy.exists():
+        try:
+            day = datetime.fromtimestamp(legacy.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d")
+        except OSError:
+            day = ""
+        keyed.append((day, 0, legacy))
+    return [path for _, _, path in sorted(keyed)]
+
+
 def inject_events_for_session(logs_dir: Path, session: str) -> list[dict]:
     """Every ``inject`` event for *session* across the rotated activity logs.
 
     ``log_event`` records only the first 8 characters of a session id, so
-    *session* is matched against that prefix. Files are read oldest-first
-    (``activity-YYYY-MM-DD.jsonl`` sorts before the current ``activity.jsonl``)
-    so a session spanning midnight keeps its turn order.
+    *session* is matched against that prefix. Files are read oldest-first so
+    a session spanning midnight keeps its turn order: one
+    ``activity-YYYY-MM-DD.jsonl`` per UTC day, plus the undated
+    ``activity.jsonl`` that multiplai-core before 0.21 wrote, placed at the day
+    its last write happened and before that day's dated file.
     """
     logs_dir = Path(logs_dir)
     if not logs_dir.is_dir():
@@ -410,7 +427,7 @@ def inject_events_for_session(logs_dir: Path, session: str) -> list[dict]:
     key = (session or "")[:8]
     if not key:
         return []
-    files = sorted(logs_dir.glob("activity-*.jsonl")) + [logs_dir / "activity.jsonl"]
+    files = _activity_files_oldest_first(logs_dir)
     events: list[dict] = []
     for path in files:
         if not path.exists():

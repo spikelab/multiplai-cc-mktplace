@@ -66,7 +66,7 @@ from lib.dream_processed import (
     mark_processed,
 )
 
-logger = setup_logging("dream", propagate_loggers=("multiplai_core",))
+logger = setup_logging("dream", packages=("lib", "generators"))
 
 # Each chunk spawns a Claude Code CLI subprocess. Unbounded fan-out over a dozen
 # chunks is a subprocess storm, so the gather runs behind a semaphore.
@@ -1903,7 +1903,7 @@ async def dream_report() -> None:
         print(
             f"  ⚠ {failed_chunks} of {len(chunks)} chunk(s) did not complete — "
             f"{len(deferred)} block(s) stay pending and are picked up by the next run "
-            f"(see dream.log)"
+            f"(see dream-YYYY-MM-DD.log)"
         )
     else:
         print(f"Sources: {len(source_files)} files, {len(pending)} new learning block(s)")

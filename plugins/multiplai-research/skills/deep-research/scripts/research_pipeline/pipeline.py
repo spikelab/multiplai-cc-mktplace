@@ -128,6 +128,7 @@ def _setup_logging(session_id: str = "") -> None:
     setup_logging(
         "deep-research",
         session_id=session_id,
+        packages=("research_pipeline",),
     )
 
 

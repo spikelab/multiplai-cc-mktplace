@@ -175,7 +175,7 @@ hook leaves behind, and a hook that stopped firing writes neither).
 When the user questions a context injection (wrong files, irrelevant memory,
 "why did X get injected"), use `--injections`. It reconstructs each routing
 decision by joining `context_manager` logs (candidate scores, cap/floor,
-cooldown suppressions) with `activity.jsonl` inject events (session id, final
+cooldown suppressions) with `activity-YYYY-MM-DD.jsonl` inject events (session id, final
 files, bytes) on timestamp.
 
 ```bash

@@ -35,7 +35,7 @@ from lib.extraction import (
 from lib.session_registry import record_disposition
 from lib.transcript_distiller import distill_slice
 
-logger = setup_logging("extract_learnings")
+logger = setup_logging("extract_learnings", packages=("lib", "generators"))
 
 
 def _distill_transcript(

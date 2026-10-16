@@ -105,7 +105,7 @@ from multiplai_core.paths import get_paths
 from lib.dream_chunking import CHUNK_TIMEOUT_S
 from lib.runtime import run_supervised, uv_run_argv
 
-logger = setup_logging("memory_maintainer")
+logger = setup_logging("memory_maintainer", packages=("lib", "generators"))
 
 STATE_FILENAME = "maintainer_state.yaml"
 

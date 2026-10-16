@@ -37,7 +37,7 @@ from lib.costing_collector import (
 )
 from lib.runtime import lock_path
 
-logger = setup_logging("costs")
+logger = setup_logging("costs", packages=("lib", "generators"))
 
 # Single global collector — the ledger and offset state are shared, so two
 # concurrent writing passes (e.g. racing SessionStart hooks) could double-append

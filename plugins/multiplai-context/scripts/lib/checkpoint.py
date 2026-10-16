@@ -56,7 +56,7 @@ from multiplai_core.plugin_options import option, option_float, option_int
 
 from lib.fsio import atomic_write, claude_config_dir
 
-logger = logging.getLogger("multiplai.checkpoint")
+logger = logging.getLogger(__name__)
 
 # How many bytes of transcript tail to scan for the latest usage record.
 # Transcripts grow to tens of MB; the last main-chain assistant record is

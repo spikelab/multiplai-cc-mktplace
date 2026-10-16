@@ -48,7 +48,7 @@ from lib.hook_input import read_hook_input
 from lib.thinking import CHECKPOINT_THINKING_OPTION, RUN_AGENT, thinking_kwargs
 from lib.transcript_distiller import distill
 
-logger = setup_logging("checkpoint_writer")
+logger = setup_logging("checkpoint_writer", packages=("lib", "generators"))
 
 # Cap on distilled transcript characters fed to the writer model. When the
 # segment exceeds it, keep the head (task framing) and a larger tail (recent

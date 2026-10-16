@@ -57,7 +57,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.log_utils import setup_logging
 
-logger = setup_logging("qmd_retrieval")
+logger = setup_logging("qmd_retrieval", packages=("lib", "generators"))
 
 MAX_RESULTS = 5
 MIN_SCORE = 0.30          # drop weak matches rather than inject noise

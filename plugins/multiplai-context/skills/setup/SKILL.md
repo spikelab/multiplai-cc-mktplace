@@ -152,7 +152,7 @@ default and belongs in the full interview.
    > 3. You should get your own words back — your name, your workspace —
    >    because the relevant memory files now arrive with every prompt
    >    (the `MEMORY` block).
-   > 4. To see the machinery decide: `tail -5 <workspace>/.multiplai/data/logs/activity.log`
+   > 4. To see the machinery decide: `tail -5 <workspace>/.multiplai/data/logs/activity-$(date -u +%F).log`
    >    — the `[context]` line names exactly which memory files were injected,
    >    with relevance scores.
    >

@@ -48,7 +48,7 @@ from lib.hook_input import read_hook_input
 from lib.runtime import uv_run_argv
 from lib.fleet import roster_dead_sids, write_fleet_view
 
-logger = setup_logging("session_start")
+logger = setup_logging("session_start", packages=("lib", "generators"))
 
 _DREAM_GATE_HOURS = 24
 

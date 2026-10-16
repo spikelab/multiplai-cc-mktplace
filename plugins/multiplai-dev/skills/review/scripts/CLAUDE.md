@@ -220,8 +220,10 @@ must never be read as `code`: buildme's epic merge blocks on Code HIGH/MEDIUM.
 
 ## Logging
 
-`setup_logging("review-pipeline", propagate_loggers=("review_pipeline", "multiplai_core"))`
-writes `review-pipeline.log`. `log_event("review", …)` fires `start`, `stage`,
+`setup_logging("review-pipeline", packages=("review_pipeline", "code_facts"))`
+writes `review-pipeline-YYYY-MM-DD.log` (one file per UTC day, never deleted
+or truncated), holding every INFO+ record from those packages and
+`multiplai_core`. `log_event("review", …)` fires `start`, `stage`,
 `gate_reject`, `budget_stop`, `verify_incomplete`, `done`, `post`. No field
 holds finding or prompt text: `gate_reject` records which rule fired
 (`gates.reason_kind`), not the reason string. The record of what was checked goes to `checks.json` and

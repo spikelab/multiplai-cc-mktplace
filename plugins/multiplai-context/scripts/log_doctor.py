@@ -33,7 +33,7 @@ from multiplai_core.paths import get_paths
 from multiplai_core.untrusted import contains_injection, fence, markdown_notice
 from multiplai_core.untrusted import defang as _core_defang
 
-logger = setup_logging("log_doctor")
+logger = setup_logging("log_doctor", packages=("lib", "generators"))
 
 # filename → subsystem: "<name>-YYYY-MM-DD.log" or "<name>.log" / ".jsonl"
 FILENAME_RE = re.compile(
@@ -96,9 +96,6 @@ def defang(text: str | None, limit: int | None = None) -> str:
     """
     return _core_defang(text, limit, mark_injections=True)
 
-
-# Append-only logs the logging standard says get truncated around 100KB.
-APPEND_ONLY_TRUNCATE_BYTES = 100 * 1024
 
 SEVERITY_ORDER = {"CRITICAL": 0, "ERROR": 1, "WARNING": 2, "INFO": 3, "DEBUG": 4}
 
@@ -290,11 +287,6 @@ def health_checks(stats: list, entries: list) -> list:
     """Cross-cutting anomalies the clusters themselves won't show."""
     notes: list[str] = []
     for s in stats:
-        if s.path.name == "hook-errors.log" and s.size > APPEND_ONLY_TRUNCATE_BYTES:
-            notes.append(
-                f"{s.path.name} is {s.size // 1024}KB — logging standard says append-only "
-                f"logs are truncated to ~100KB when oversized; truncation is not happening."
-            )
         if s.size > 0 and s.entries == 0 and s.unparsed > 0:
             notes.append(
                 f"{s.path.name}: {s.unparsed} lines, none parseable — format drift from "
