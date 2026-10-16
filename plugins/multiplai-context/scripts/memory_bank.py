@@ -39,7 +39,7 @@ from lib.bank_git import head_sha, is_git_repo, pull_ff_only
 from lib.bank_policy import load_policy
 from lib.banks import configured_banks, shared_banks, sync_ttl_hours
 
-logger = setup_logging("memory_bank")
+logger = setup_logging("memory_bank", packages=("lib", "generators"))
 
 _STATE_FILE = "bank_sync_state.yaml"
 

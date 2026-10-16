@@ -16,6 +16,17 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-10-16
+
+### Changed
+- Every multiplai-context script writes its log to a dated file,
+  `<data_dir>/logs/<script>-<UTC date>.log`, kept 365 days (`MULTIPLAI_LOG_RETENTION_DAYS`, multiplai-core 0.22.0), and the lines its
+  `lib` and `generators` modules log reach that file (before, their INFO
+  lines were dropped). The activity log is `activity-<UTC date>.jsonl`.
+  `health_check`, `log-doctor` and the utilisation report read the dated
+  files and the old undated ones.
+- `log-doctor` no longer truncates `hook-errors.log`.
+
 ## [0.55.2] - 2026-09-28
 
 ### Changed

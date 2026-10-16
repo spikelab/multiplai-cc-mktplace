@@ -101,7 +101,7 @@ Run `/multiplai-context:dream-remember` to load the proposal and apply approved 
    ```
    Sources: 5 files, 122 of 231 new learning block(s) consolidated
      ⚠ 10 of 19 chunk(s) did not complete — 109 block(s) stay pending and are
-       picked up by the next run (see dream.log)
+       picked up by the next run (see dream-YYYY-MM-DD.log)
      ⚠ second-pass review incomplete: 8 of 8 batch(es) failed — duplicates and
        mis-routed items may remain
    ```

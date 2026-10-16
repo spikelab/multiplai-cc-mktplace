@@ -56,7 +56,7 @@ from lib.fleet_sources.jobs import collect_jobs
 from lib.fleet_sources.prs import collect_prs, scan_from_dict, scan_to_dict
 from lib.fsio import atomic_write
 
-logger = setup_logging("fleet_status")
+logger = setup_logging("fleet_status", packages=("lib", "generators"))
 
 _PR_CACHE_KEY = "prs"
 

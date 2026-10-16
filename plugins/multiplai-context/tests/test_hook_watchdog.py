@@ -173,9 +173,9 @@ class TestContextManagerArmsIt:
     def test_router_and_core_loggers_reach_context_manager_log(self):
         src = (SCRIPTS_DIR / "context_manager.py").read_text()
         assert re.search(
-            r'setup_logging\(\s*"context_manager",\s*propagate_loggers=\("multiplai_core", "lib"\)',
+            r'setup_logging\(\s*"context_manager",\s*packages=\("lib", "generators"\)',
             src,
-        ), "context_manager must forward multiplai_core and lib loggers to its file"
+        ), "context_manager must forward lib (and, by default, multiplai_core) to its file"
         assert "**_watchdog_kwargs()" in src
 
     def test_watchdog_is_armed_on_a_core_that_supports_it(self, monkeypatch):

@@ -100,12 +100,12 @@ class TestConfEffort:
         _write_conf(tmp_path, monkeypatch, "[deep-research.extract]\nEFFORT=medium\n")
         assert conf_effort("deep-research.extract", "low") == "medium"
 
-    def test_effort_is_capped_by_the_ceiling(self, tmp_path, monkeypatch):
-        """A budget run forces every node down — a conf override must not be
-        the one thing that escapes the ceiling."""
+    def test_multiplai_effort_does_not_cap_a_conf_override(self, tmp_path, monkeypatch):
+        """MULTIPLAI_EFFORT is the default for a step nothing configures, not
+        a cap (multiplai-core 0.21): an explicit override is used as written."""
         _write_conf(tmp_path, monkeypatch, "[deep-research.plan]\nEFFORT=high\n")
         monkeypatch.setenv("MULTIPLAI_EFFORT", "low")
-        assert conf_effort("deep-research.plan", None) == "low"
+        assert conf_effort("deep-research.plan", None) == "high"
 
     def test_blank_value_is_treated_as_unset(self, tmp_path, monkeypatch):
         _write_conf(tmp_path, monkeypatch, "[deep-research.extract]\nEFFORT=\n")

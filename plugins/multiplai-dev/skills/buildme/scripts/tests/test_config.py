@@ -205,8 +205,9 @@ class TestReviewModel:
             config = BuildConfig.from_cli_args(args)
         assert config.review_model == "claude-sonnet-4-6"
 
-    def test_review_model_is_ceiling_capped(self, tmp_path):
-        """The MULTIPLAI_MODEL ceiling applies to the reviewer model too."""
+    def test_review_model_is_not_capped(self, tmp_path):
+        """MULTIPLAI_MODEL is a default, not a cap (multiplai-core 0.21): a
+        configured reviewer model is used as written."""
         specs = tmp_path / "specs"
         specs.mkdir()
         (specs / "config.yaml").write_text("code_review:\n  model: claude-opus-4-6\n")
@@ -214,7 +215,7 @@ class TestReviewModel:
         config.specs_dir = specs
         with patch.dict(os.environ, {"MULTIPLAI_MODEL": "claude-sonnet-4-6"}):
             config._load_specs_config()
-        assert config.review_model == "claude-sonnet-4-6"
+        assert config.review_model == "claude-opus-4-6"
 
 
 class TestStandardsFiles:
@@ -1122,22 +1123,18 @@ class TestConfEffort:
         with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=medium\n"), clear=True):
             assert conf_effort("buildme") == "medium"
 
-    def test_effort_is_capped_by_the_ceiling(self, tmp_path):
-        """A budget run forces every step down — a conf override must not be
-        the one thing that escapes the ceiling."""
+    def test_multiplai_effort_does_not_cap_a_conf_effort(self, tmp_path):
+        """MULTIPLAI_EFFORT is the default for a step nothing configures, not a
+        cap (multiplai-core 0.21): a conf override is used as written."""
         env = self._conf(tmp_path, "[buildme]\nEFFORT=high\n")
         env["MULTIPLAI_EFFORT"] = "low"
         with patch.dict(os.environ, env, clear=True):
-            assert conf_effort("buildme") == "low"
+            assert conf_effort("buildme") == "high"
 
-    def test_conf_file_global_ceiling_caps_a_conf_set_effort(self, tmp_path):
-        """A MULTIPLAI_EFFORT *global in the conf file* caps conf-set efforts,
-        same as the env var — delegation to core's pick_effort made the two
-        ceilings agree (the local copy only consulted the env var). The env
-        var here says 'high', so a pass proves the conf global did the capping."""
+    def test_conf_file_multiplai_effort_does_not_cap_a_conf_effort(self, tmp_path):
         body = "MULTIPLAI_EFFORT=low\n[buildme]\nEFFORT=high\n"
         with patch.dict(os.environ, self._conf(tmp_path, body), clear=True):
-            assert conf_effort("buildme") == "low"
+            assert conf_effort("buildme") == "high"
 
     def test_blank_value_is_treated_as_unset(self, tmp_path):
         with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=\n"), clear=True):
@@ -1184,12 +1181,11 @@ class TestConfEffort:
         with patch.dict(os.environ, env, clear=True):
             assert conf_effort("buildme") == "xhigh"
 
-    def test_conf_ceiling_caps_a_higher_env_effort(self, tmp_path):
-        """The other direction from the ceiling test above: conf global wins."""
+    def test_section_effort_wins_over_both_multiplai_efforts(self, tmp_path):
         env = self._conf(tmp_path, 'MULTIPLAI_EFFORT="low"\n[buildme]\nEFFORT=high\n')
-        env["MULTIPLAI_EFFORT"] = "high"
+        env["MULTIPLAI_EFFORT"] = "medium"
         with patch.dict(os.environ, env, clear=True):
-            assert conf_effort("buildme") == "low"
+            assert conf_effort("buildme") == "high"
 
 
 class TestBuildConfigEffortFields:
@@ -1264,12 +1260,12 @@ class TestConfModel:
         with patch.dict(os.environ, self._conf(tmp_path, body), clear=True):
             assert conf_model("buildme.review") == CURRENT_MODEL["sonnet"]
 
-    def test_model_is_ceiling_capped(self, tmp_path):
-        """A budget run forces every step down; a conf override must not escape."""
+    def test_model_is_not_capped(self, tmp_path):
+        """MULTIPLAI_MODEL is a default, not a cap: a conf override is used."""
         env = self._conf(tmp_path, "[buildme.review]\nMODEL=opus\n")
         env["MULTIPLAI_MODEL"] = "claude-sonnet-4-6"
         with patch.dict(os.environ, env, clear=True):
-            assert conf_model("buildme.review") == "claude-sonnet-4-6"
+            assert conf_model("buildme.review") == CURRENT_MODEL["opus"]
 
     def test_non_anthropic_provider_is_dropped_with_a_warning(self, tmp_path, caplog):
         """`pick_model` raises for a provider this call site cannot honor; the

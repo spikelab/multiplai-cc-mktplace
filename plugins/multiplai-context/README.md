@@ -120,7 +120,7 @@ more. On vanilla Claude Code:
    see the routing decision itself:
 
    ```bash
-   tail -5 <workspace>/.multiplai/data/logs/activity.log
+   tail -5 <workspace>/.multiplai/data/logs/activity-$(date -u +%F).log
    ```
 
    The `[context]` line names exactly which memory files were injected,
@@ -1898,11 +1898,11 @@ option overrides everything; with no workspace configured it uses
 
 ### The activity log — what to watch
 
-`activity.log` is the human-in-the-loop view: one plain-language line
-per meaningful action — context injected (and the exact files), nudges
-fired, diary written, learnings captured, catalogs rebuilt, session
-start/end. It's the *current* file (no date); the previous day's stream
-rotates to `activity-YYYY-MM-DD.log` on the first write of a new day.
+`activity-YYYY-MM-DD.log` is the human-in-the-loop view: one
+plain-language line per meaningful action — context injected (and the
+exact files), nudges fired, diary written, learnings captured, catalogs
+rebuilt, session start/end. Each UTC day gets its own file, written under
+that name from its first line; nothing is renamed or deleted.
 
 ```
 14:51:03Z [a1b2c3d4] [context]   injected 4 memory · 0 skills · 0 resources · scores 31.5→9.8 (4/12 kept) → memory: finances.md, life.md, preferences.md, taxes-italy.md
@@ -1917,7 +1917,7 @@ Each line is `HH:MM:SS**Z** [**session**] [component] message`:
 - The **`Z`** marks the time as **UTC** — it is *not* your local
   clock. If you're at UTC+2, `14:51Z` happened at 16:51 your time.
 - The **8-char session id** in brackets makes a line self-traceable:
-  `grep a1b2c3d4 activity.log` replays everything one session did,
+  `grep a1b2c3d4 activity-*.log` replays everything one session did,
   and the same id maps to the transcript at
   `$CLAUDE_CONFIG_DIR/projects/**/a1b2c3d4-*.jsonl` (which has the
   actual prompts).
@@ -2061,11 +2061,11 @@ Watch it live from a **second terminal** (it stays out of Claude's
 context entirely):
 
 ```bash
-tail -f <workspace>/.multiplai/data/logs/activity.log
+tail -f <workspace>/.multiplai/data/logs/activity-$(date -u +%F).log
 ```
 
-`activity.jsonl` mirrors the same events as one JSON object per line,
-for tooling and the health audit (rotated the same way).
+`activity-YYYY-MM-DD.jsonl` mirrors the same events as one JSON object
+per line, for tooling and the health audit (one file per day the same way).
 
 An `inject` record carries the attribution the human line has no room for:
 
@@ -2096,15 +2096,20 @@ per-component log **and** stderr — visible under `claude --debug`.
 
 ### Log layout & retention
 
-- `<component>.log` — current per-component file; rotates to
-  `<component>-YYYY-MM-DD.log` on UTC day change.
-- `activity.{log,jsonl}` — current curated activity stream; rotates to
-  `activity-YYYY-MM-DD.{log,jsonl}` the same way.
-- `hook-errors.log` — every ERROR+ across all components, append-only.
-- Retention: `MULTIPLAI_LOG_RETENTION_DAYS` (default **7**, `0` = keep
-  forever) — applies uniformly to every rotated `*-DATE.{log,jsonl}`.
-  The rejected `<name>.log.DATE` form is auto-migrated to the standard
-  `<name>-DATE.log`.
+- `<component>-YYYY-MM-DD.log` — one file per component per UTC day,
+  written under its dated name from the first line. A process that runs
+  past midnight switches to the next day's file. It holds every INFO+
+  record from the script's own modules (`lib.*`, `generators.*`) and from
+  `multiplai_core`; WARNING+ also goes to stderr.
+- `activity-YYYY-MM-DD.{log,jsonl}` — the curated activity stream, one
+  file per UTC day the same way.
+- `hook-errors.log` — every ERROR+ across all components, append-only,
+  never truncated.
+- `sdk/` — the Claude CLI debug log of every SDK call, kept.
+- Retention: nothing is deleted by default (multiplai-core 0.21).
+  `MULTIPLAI_LOG_RETENTION_DAYS=N` deletes dated files older than N days
+  if you want that. An undated `<component>.log` or `activity.log` left
+  by an older version stays as it was.
 - **One log sits outside all of the above:** `scripts/.warmup-deferred.log`,
   where `hooks/run.sh` records a lifecycle hook it had to drop because the
   dependency install was still running. It cannot live in `data/logs/` —
@@ -2131,7 +2136,7 @@ checks the plumbing mechanically and names what's missing.
 | **Hooks appear to do nothing.** No visible effect, unsure if anything is installed correctly. | Run `/multiplai-context:health` — it verifies the model client, directories, memory freshness, and diary/learnings counts, and names the broken piece. |
 | **Memory not injected.** You told setup things, but a new session doesn't know them. | Two checks: (1) your `settings.json` key must be the compound `pluginConfigs["multiplai-context@multiplai"]` form — a bare `multiplai` key fails **silently** (see [Configuration](#configuration)); (2) read the `[context]` routing line in the activity log — [Observability](#observability) explains how to tell a healthy route from an abstention or a fallback. |
 | **Settings changed but nothing happened.** | Options are read at session start — restart Claude Code after any `settings.json` change. |
-| **Where are the logs?** | `<workspace>/.multiplai/data/logs/` — `activity.log` is the human-readable stream (`tail -f` it from a second terminal); `hook-errors.log` collects every error. Layout and retention in [Observability](#observability). |
+| **Where are the logs?** | `<workspace>/.multiplai/data/logs/` — `activity-YYYY-MM-DD.log` is the human-readable stream (`tail -f` today's from a second terminal); `hook-errors.log` collects every error. Layout and retention in [Observability](#observability). |
 
 ## Uninstall
 

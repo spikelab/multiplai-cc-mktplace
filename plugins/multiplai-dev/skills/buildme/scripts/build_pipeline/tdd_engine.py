@@ -2069,16 +2069,17 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
 
     *standalone* says who owns the build's lifecycle. True (the
     `python -m build_pipeline tdd` entry point) means the engine IS the build:
-    on success it advances the checkpoint to COMPLETE and deletes it. False
-    (the orchestrator's TDD_BUILD sub-phase) means the orchestrator owns phase
-    advancement and cleanup, and the engine must leave the checkpoint alone —
-    deleting it here made the orchestrator's post-engine reload
+    it starts its own section of the progress file, and on success renames the
+    checkpoint to `.build-state.complete.json` with the phase still at
+    TDD_BUILD (`BuildState.complete`). That is not a published build, so a
+    later `build` of the change runs as usual. False (the orchestrator's
+    TDD_BUILD sub-phase, and each findings round) means the caller owns phase
+    advancement and the checkpoint, and the engine must leave it in place:
+    removing it here made the orchestrator's post-engine reload
     (`if state_path.exists(): state = BuildState.load(state_path)`) fall
     through to a stale in-memory copy with `tdd is None`, so a crash in
     DOCS_UPDATE/RESPEC/PUBLISH resumed at TDD_BUILD with no block state and
-    re-ran the whole build; and a crash in the few lines between the advance
-    and the cleanup left a checkpoint at COMPLETE, silently skipping every
-    remaining phase.
+    re-ran the whole build.
     """
     state_path = config.state_file_path()
     progress = ProgressWriter(config.progress_file_path())
@@ -2088,6 +2089,7 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
         max_tokens=config.budget_max_tokens,
         max_usd=config.budget_max_usd,
     )
+    budget_mod.warn_into(progress)
 
     # Load or create state
     if state_path.exists():
@@ -2123,7 +2125,11 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
         state.tdd.current_block = start_block - 1  # 0-indexed
 
     total_blocks = len(state.tdd.blocks) if state.tdd else 0
-    progress.initialize(config.change_name, config.mode, config.tier, total_blocks)
+    if standalone:
+        progress.initialize(config.change_name, config.mode, config.tier, total_blocks)
+    else:
+        # The caller started this run's section of the progress file.
+        progress.log_phase("TDD_BUILD", f"Blocks: {total_blocks}")
     # The card is In Development for the whole engine run (a no-op emission
     # when the orchestrator already put it there).
     board.record(config, state, BuildPhase.TDD_BUILD, progress=progress,
@@ -2224,14 +2230,10 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
             log.info("DONE phase=E2E_CHECK result=passed")
             progress.log_phase("E2E_CHECK", "PASSED")
 
-    # Success
-    if standalone:
-        state.advance_to(BuildPhase.COMPLETE, state_path)
-    else:
-        # Persist the finished TDD sub-state so the orchestrator's reload sees
-        # it; the phase pointer stays at TDD_BUILD for the orchestrator to
-        # advance.
-        state.checkpoint(state_path)
+    # Success. Persist the finished TDD sub-state; the phase pointer stays at
+    # TDD_BUILD (for the orchestrator to advance, or as a standalone run's
+    # completed phase).
+    state.checkpoint(state_path)
     # Report the spend even when nothing stopped: a build that finished at 95%
     # of its ceiling is the one worth knowing about before the next run.
     spend = budget_mod.get_budget()
@@ -2240,7 +2242,7 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
     progress.log_phase("BUDGET", spend.diagnosis())
     progress.log_phase("COMPLETE", f"All {total_blocks} blocks implemented successfully")
     if standalone:
-        state.cleanup(state_path)
+        state.complete(state_path)
     return EXIT_SUCCESS
 
 

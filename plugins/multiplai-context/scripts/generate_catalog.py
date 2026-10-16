@@ -23,7 +23,7 @@ from multiplai_core.log_utils import setup_logging, log_event
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
 
-logger = setup_logging("generate_catalog")
+logger = setup_logging("generate_catalog", packages=("lib", "generators"))
 
 
 def main(argv: list[str] | None = None) -> None:

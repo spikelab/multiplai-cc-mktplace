@@ -280,7 +280,7 @@ def test_token_stays_out_of_stdout_logs_and_server_json(findings_path, tmp_path)
     assert token not in server_json
     logs = ws / ".multiplai" / "data" / "logs"
     files = [p for p in logs.rglob("*") if p.is_file()]
-    assert any(p.name == "review-viewer.log" for p in files)
+    assert any(p.name.startswith("review-viewer-") and p.suffix == ".log" for p in files)
     for p in files:
         assert token not in p.read_text(errors="replace"), p
     assert not (box / "server.token").exists() and not (box / "open.html").exists()

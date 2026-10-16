@@ -27,7 +27,7 @@ from multiplai_core.log_utils import setup_logging
 from lib.project_identity import load_project_map, resolve_project
 from lib.thinking import NOW_THINKING_OPTION, thinking_kwargs
 
-logger = setup_logging("synthesize_now")
+logger = setup_logging("synthesize_now", packages=("lib", "generators"))
 
 DEFAULT_LOOKBACK_HOURS = 48
 MAX_SUMMARY_LINES = 5

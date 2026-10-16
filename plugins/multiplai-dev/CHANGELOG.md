@@ -17,6 +17,40 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.77.0] - 2026-10-16
+
+### Added
+- `/multiplai-dev:buildme`: `--force` starts a new build of a change that
+  already published, on the next free branch (`buildme/<change>-2`, …).
+  Without it, running `build` again for a published change exits `3` with
+  `BUILD:COMPLETE:<path>` and a line naming its branch and PR, and writes
+  nothing; the skill asks you before it re-runs with `--force`.
+- buildme prints `BUDGET:WARN:<percent>:<usd>` when a build has spent 80% of
+  its budget, and writes the warning to `build-progress.md`.
+
+### Changed
+- buildme keeps a finished build's checkpoint as
+  `.build-state.complete.json` instead of deleting it, and never deletes
+  `build-progress.md`. A resumed run appends a `RESUMED` section under the
+  same header; a stop by SIGTERM, SIGHUP or Ctrl-C writes `INTERRUPTED by
+  <signal>` and saves the checkpoint with the spend so far; every `build` and
+  `findings` run ends with a `BUDGET` section listing tokens and USD per step.
+  A resume in any phase keeps the saved spend.
+- The progress file's header names the model and effort the build started
+  with and where each came from (the session, `MULTIPLAI_MODEL`,
+  `multiplai.conf`, or the CLI default).
+- A failed TDD build prints `ERROR:TDD build failed (exit <n>)`. A
+  standalone `tdd` run gets the same stop handling and `SPEND:` line as
+  `build`.
+- buildme, spec-extract, review, review-viewer, codebase-walkthrough and pr
+  write every line their own modules log, and multiplai-core's, to one log
+  file per day (`<data_dir>/logs/<name>-<UTC date>.log`), kept 365 days (`MULTIPLAI_LOG_RETENTION_DAYS`, multiplai-core 0.22.0).
+  Each run logs the model and effort it pinned from the session at start.
+- A model or effort set for a step is used as given; multiplai-core 0.21.0
+  no longer lowers it to a ceiling.
+- An epic child whose earlier attempt already published is counted as built
+  when its PR is found, instead of failing on `BUILD:COMPLETE`.
+
 ## [0.76.0] - 2026-10-15
 
 ### Added

@@ -14,6 +14,15 @@ from review_pipeline.__main__ import main
 from test_orchestrator import FakeAgents
 
 
+def _read_logs(logs, stem, ext):
+    """Every ``<stem>-YYYY-MM-DD.<ext>`` file in *logs*, oldest day first, joined.
+
+    multiplai-core 0.21 writes one file per UTC day under its dated name."""
+    files = sorted(logs.glob(f"{stem}-*.{ext}"))
+    assert files, f"no {stem} log in {logs}"
+    return "".join(f.read_text() for f in files)
+
+
 def test_review_logs_events_without_finding_text(fixture_repo, tmp_path, monkeypatch, capsys):
     from review_pipeline import sdk
 
@@ -24,10 +33,10 @@ def test_review_logs_events_without_finding_text(fixture_repo, tmp_path, monkeyp
                  "--range", f"{base}..{head}", "--trust-repo"]) == 0
 
     logs = _get_logs_dir()
-    assert (logs / "review-pipeline.log").is_file()
+    assert _read_logs(logs, "review-pipeline", "log")
 
     slug = f"example-booking-engine--{base}..{head}"
-    records = [json.loads(line) for line in (logs / "activity.jsonl").read_text().splitlines() if line.strip()]
+    records = [json.loads(line) for line in _read_logs(logs, "activity", "jsonl").splitlines() if line.strip()]
     ours = [r for r in records if r.get("component") == "review" and r.get("target") == slug]
     events = {r["event"] for r in ours}
     assert {"start", "stage", "done"} <= events
@@ -37,4 +46,4 @@ def test_review_logs_events_without_finding_text(fixture_repo, tmp_path, monkeyp
 
     for r in records:
         assert CLAIM_HIGH not in json.dumps(r)
-    assert CLAIM_HIGH not in (logs / "activity.log").read_text()
+    assert CLAIM_HIGH not in _read_logs(logs, "activity", "log")

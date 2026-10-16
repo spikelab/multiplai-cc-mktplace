@@ -194,6 +194,28 @@ def test_a_failure_is_relaunched_once_per_invocation(tmp_path, monkeypatch):
     assert e.launches().count("a") == 3
 
 
+def test_a_relaunch_of_a_child_that_published_counts_it_built(tmp_path, monkeypatch):
+    """The first attempt published, then exited 1 (an error after the publish);
+    the relaunch refuses with BUILD:COMPLETE and exit 3. The child is built,
+    with the first attempt's PR, and is not parked or relaunched again."""
+    done = {"marker": "BUILD:COMPLETE:/x/.build-state.complete.json"}
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit_after_pr": 1}, done]})
+    e.run()
+    assert e.launches().count("a") == 2
+    assert e.status()["a"] == "built" and e.reasons()["a"] == ""
+    assert pr_url("e-a") in merge_waiting()
+    e.run()
+    assert e.launches().count("a") == 2
+
+
+def test_a_completed_relaunch_with_no_pr_found_parks_with_the_reason(tmp_path, monkeypatch):
+    done = {"marker": "BUILD:COMPLETE:/x/.build-state.complete.json"}
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit": 1}, done]})
+    e.run()
+    assert e.status()["a"] == "parked"
+    assert e.reasons()["a"].startswith("already published (BUILD:COMPLETE), but no PR found")
+
+
 def test_a_child_alive_after_the_stop_wait_keeps_no_result(tmp_path, monkeypatch):
     """Ctrl-C, and a child ignores it past STOP_WAIT: no result, so the next
     run adopts it instead of relaunching it. Then Ctrl-C while `ps` fails for

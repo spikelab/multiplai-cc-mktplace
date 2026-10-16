@@ -5,6 +5,8 @@ delegations so a broken import is caught."""
 
 from pathlib import Path
 
+import pytest
+
 from research_pipeline import env as rp_env
 from research_pipeline.env import (
     find_project_root,
@@ -24,13 +26,15 @@ def test_reexports_delegate_to_core():
     assert rp_env.resolve_effort is core_env.resolve_effort
 
 
-def test_resolve_model_ceiling():
-    assert resolve_model("claude-opus-4", "claude-sonnet-4-6") == "claude-sonnet-4-6"
-    assert resolve_model("claude-haiku-4", "claude-sonnet-4-6") == "claude-haiku-4"
+def test_resolve_model_no_longer_caps():
+    # multiplai-core 0.21 removed the model ceiling; the name stays, deprecated.
+    with pytest.warns(DeprecationWarning):
+        assert resolve_model("claude-opus-4", "claude-sonnet-4-6") == "claude-opus-4"
 
 
-def test_resolve_effort_ceiling():
-    assert resolve_effort("max", "medium") == "medium"
+def test_resolve_effort_no_longer_caps():
+    with pytest.warns(DeprecationWarning):
+        assert resolve_effort("max", "medium") == "max"
 
 
 def test_find_project_root_kit_marker(tmp_path: Path):

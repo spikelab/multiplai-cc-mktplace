@@ -39,7 +39,7 @@ from lib import checkpoint as cp
 from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
 
-logger = setup_logging("session_stop")
+logger = setup_logging("session_stop", packages=("lib", "generators"))
 
 
 def _degraded_file(data_dir: Path, session_id: str) -> Path:
@@ -108,7 +108,7 @@ def _degraded_message(data_dir: Path, session_id: str, state: dict) -> str | Non
             if kept
             else "There is no checkpoint on disk for this session yet."
         )
-        + " See checkpoint_writer.log under the plugin's log directory."
+        + " See checkpoint_writer-YYYY-MM-DD.log under the plugin's log directory."
     )
 
 

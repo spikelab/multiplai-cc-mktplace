@@ -41,7 +41,7 @@ from lib import checkpoint as cp
 from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
 
-logger = setup_logging("checkpoint_nudge")
+logger = setup_logging("checkpoint_nudge", packages=("lib", "generators"))
 
 
 def _cooldown_ok(data_dir: Path, session_id: str, tokens: int, step: int) -> bool:

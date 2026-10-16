@@ -191,3 +191,26 @@ def fake_gh(monkeypatch):
     monkeypatch.setattr(post_mod.shutil, "which", lambda name: "/usr/bin/gh")
     monkeypatch.setattr(post_mod.subprocess, "run", fake)
     return fake
+
+
+# multiplai-core 0.21: a step with no configured model or effort runs on
+# MULTIPLAI_MODEL / MULTIPLAI_EFFORT, else the Claude Code session's own
+# (multiplai_core.session). Run inside a session, the developer's values would
+# set a test's model, so clear them and hide the developer's multiplai.conf
+# from that lookup. A test that wants one sets it with monkeypatch.
+_SESSION_DEFAULT_VARS = (
+    "MULTIPLAI_MODEL",
+    "MULTIPLAI_EFFORT",
+    "MULTIPLAI_SESSION_MODEL",
+    "MULTIPLAI_SESSION_EFFORT",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_EFFORT",
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_session_defaults(monkeypatch):
+    for key in _SESSION_DEFAULT_VARS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr("multiplai_core.session.load_multiplai_conf",
+                        lambda: {"_sections": {}})

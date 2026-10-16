@@ -28,9 +28,12 @@ Design notes:
   process spent: an epic adds it up across attempts and rounds without
   counting a resumed build's earlier spend twice.
 - This is not `multiplai_core.budget.SpendLedger`, which review and the
-  walkthrough use: buildme's `by_label` counts tokens, not USD, its diagnosis
-  ranks phases by tokens, and its saved state carries `total_tokens`. Moving
-  onto the shared ledger would change those, and four tests assert them.
+  walkthrough use: buildme's `by_label` counts tokens (USD per label is
+  `usd_by_label`), its diagnosis ranks phases by tokens, and its saved state
+  carries `total_tokens`. Moving onto the shared ledger would change those,
+  and four tests assert them.
+- The 80% warning goes to the log, to stdout as `BUDGET:WARN:<percent>:<usd>`,
+  and to the progress file `warn_into` names, as a `BUDGET_WARNING` section.
 """
 
 from __future__ import annotations
@@ -75,6 +78,8 @@ class BuildBudget:
     # {label: tokens} — which phase spent it. The whole point of stopping is to
     # say what to fix, and "the review loop" vs "spec generation" is the answer.
     by_label: dict[str, int] = field(default_factory=dict)
+    # {label: USD} — the same split in money, which is what a user decides on.
+    usd_by_label: dict[str, float] = field(default_factory=dict)
     _warned: bool = False
 
     @property
@@ -122,6 +127,10 @@ class BuildBudget:
                     + int(getattr(usage, "cache_creation_tokens", 0) or 0)
                 )
                 self.by_label[label] = self.by_label.get(label, 0) + spent
+                self.usd_by_label[label] = (
+                    self.usd_by_label.get(label, 0.0)
+                    + float(getattr(usage, "cost_usd", 0.0) or 0.0)
+                )
         except Exception as e:  # pragma: no cover — accounting must never break a build
             log.warning("Budget accounting failed for a call (ignored): %s", e)
 
@@ -135,8 +144,11 @@ class BuildBudget:
             fractions.append(self.cost_usd / self.max_usd)
         return max(fractions) if fractions else 0.0
 
-    def diagnosis(self) -> str:
-        """Where the build's spend went — the useful half of a stop."""
+    def diagnosis(self, *, advice: bool = True) -> str:
+        """Where the build's spend went — the useful half of a stop.
+
+        ``advice=False`` leaves out the advice on cutting spend, for the
+        summary every run ends with, where nothing was stopped."""
         lines = [
             f"Budget: {self.total_tokens:,} tokens / ${self.cost_usd:.2f} over {self.calls} SDK calls.",
         ]
@@ -150,12 +162,14 @@ class BuildBudget:
         )
         if self.by_label:
             top = sorted(self.by_label.items(), key=lambda kv: -kv[1])
-            lines.append("  by phase: " + ", ".join(f"{k}={v:,}" for k, v in top))
-        lines.append(
-            "  The review/fix loop is the usual culprit: it re-runs the reviewer "
-            "AND an implementer per iteration (MAX_REVIEW_ITERATIONS=3, times the "
-            "panel size). Lower the panel, tighten the diff cap, or raise the budget."
-        )
+            lines.append("  by phase: " + ", ".join(
+                f"{k}={v:,} tokens/${self.usd_by_label.get(k, 0.0):.2f}" for k, v in top))
+        if advice:
+            lines.append(
+                "  The review/fix loop is the usual culprit: it re-runs the reviewer "
+                "AND an implementer per iteration (MAX_REVIEW_ITERATIONS=3, times the "
+                "panel size). Lower the panel, tighten the diff cap, or raise the budget."
+            )
         return "\n".join(lines)
 
     def check(self, *, phase: str = "") -> None:
@@ -179,10 +193,18 @@ class BuildBudget:
             )
         if used >= WARN_FRACTION and not self._warned:
             self._warned = True
-            log.warning(
-                "Build has used %.0f%% of its budget%s — %s",
-                used * 100, f" ({phase})" if phase else "", self.diagnosis(),
-            )
+            where = f" ({phase})" if phase else ""
+            diagnosis = self.diagnosis()
+            log.warning("Build has used %.0f%% of its budget%s — %s", used * 100, where, diagnosis)
+            print(f"BUDGET:WARN:{used * 100:.0f}:{self.cost_usd:.2f}", flush=True)
+            if _warn_progress is not None:
+                try:
+                    _warn_progress.log_phase(
+                        "BUDGET_WARNING",
+                        f"{used * 100:.0f}% of the budget used{where}.\n{diagnosis}",
+                    )
+                except OSError as e:
+                    log.warning("Could not write the budget warning to the progress file: %s", e)
 
     def to_state(self) -> dict:
         """Serializable snapshot for the build state file."""
@@ -195,6 +217,7 @@ class BuildBudget:
             "total_tokens": self.total_tokens,
             "cost_usd": round(self.cost_usd, 6),
             "by_label": dict(self.by_label),
+            "usd_by_label": {k: round(v, 6) for k, v in self.usd_by_label.items()},
             "max_tokens": self.max_tokens,
             "max_usd": self.max_usd,
         }
@@ -211,6 +234,9 @@ class BuildBudget:
         self.cache_creation_tokens = int(data.get("cache_creation_tokens", 0) or 0)
         self.cost_usd = float(data.get("cost_usd", 0.0) or 0.0)
         self.by_label = dict(data.get("by_label", {}) or {})
+        self.usd_by_label = {
+            k: float(v or 0.0) for k, v in (data.get("usd_by_label", {}) or {}).items()
+        }
 
 
 @dataclass
@@ -226,6 +252,16 @@ class ProcessSpend:
 
 _budget = BuildBudget()
 _process = ProcessSpend()
+# The ProgressWriter the 80% warning is also written to (`warn_into`).
+_warn_progress = None
+
+
+def warn_into(progress) -> None:
+    """Write the 80% budget warning into *progress* (a `ProgressWriter`) too.
+
+    The TDD engine names its progress file at start; checks run from there."""
+    global _warn_progress
+    _warn_progress = progress
 
 
 def process_spend() -> ProcessSpend:

@@ -402,8 +402,8 @@ class TestRoutingScoresEmission:
             prompt="help with my italian tax filing and FBAR",
             extra_env={"MULTIPLAI_LOG_LEVEL": "INFO"},
         )
-        logs = list(env_setup["data_dir"].rglob("context_manager.log"))
-        assert logs, "context_manager.log not written"
+        logs = list(env_setup["data_dir"].rglob("context_manager-*.log"))
+        assert logs, "context_manager log not written"
         line = next(
             (ln for ln in logs[0].read_text().splitlines()
              if "ROUTING_SCORES memory=" in ln),
@@ -439,8 +439,8 @@ class TestRoutingScoresEmission:
             env_setup, prompt=long_prompt,
             extra_env={"MULTIPLAI_LOG_LEVEL": "INFO"},
         )
-        logs = list(env_setup["data_dir"].rglob("context_manager.log"))
-        assert logs, "context_manager.log not written"
+        logs = list(env_setup["data_dir"].rglob("context_manager-*.log"))
+        assert logs, "context_manager log not written"
         line = next(
             (ln for ln in logs[0].read_text().splitlines()
              if "ROUTING_SCORES memory=" in ln),
@@ -479,8 +479,8 @@ class TestRoutingScoresEmission:
             },
         )
         assert len(corpus_files(out, "SKILLS")) >= 1
-        logs = list(env_setup["data_dir"].rglob("context_manager.log"))
-        assert logs, "context_manager.log not written"
+        logs = list(env_setup["data_dir"].rglob("context_manager-*.log"))
+        assert logs, "context_manager log not written"
         line = next(
             (ln for ln in logs[0].read_text().splitlines()
              if "ROUTING_SCORES skills=" in ln),
@@ -747,7 +747,7 @@ class TestRecommendationCooldown:
         assert len(corpus_files(second, "MEMORY")) == 0
         assert "weak.md" not in hook_context(second)
         assert hook_context(second) == ""
-        logs = list(env_setup["data_dir"].rglob("context_manager.log"))
+        logs = list(env_setup["data_dir"].rglob("context_manager-*.log"))
         assert logs and any(
             "COOLDOWN_REFLOOR" in ln and "weak.md" in ln
             for ln in logs[0].read_text().splitlines()

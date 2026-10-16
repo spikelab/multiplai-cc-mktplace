@@ -187,6 +187,8 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--base-ref", default="",
                        help="The commit a new worktree branches from (default: the source "
                             "checkout's HEAD); a build that re-binds to its worktree ignores it")
+    build.add_argument("--force", action="store_true",
+                       help="Start a new build even if this change already published")
     _add_trust_repo_flag(build)
     _add_lenient_review_flag(build)
     _add_skip_explainers_flag(build)
@@ -271,7 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
 # wait on a skill (`git_ops._exit_on_termination`); an epic's coordinator sends
 # SIGTERM to its children when it is stopped. Only a kill (SIGKILL) prints
 # nothing; the epic then counts the attempt as unknown.
-SPEND_COMMANDS = ("build", "findings")
+SPEND_COMMANDS = ("build", "findings", "tdd")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -322,11 +324,16 @@ def _main(args: argparse.Namespace) -> int:
     load_env()
     session_id = getattr(args, "session_id", "") or ""
     # setup_logging always attaches a stderr handler and derives the log file
-    # from the component name.
+    # from the component name. Every build_pipeline.*, code_facts.* and
+    # multiplai_core.* record at INFO and above lands in that file.
     logger = setup_logging(
         "build-pipeline",
         session_id=session_id,
+        packages=("build_pipeline", "code_facts"),
     )
+    logger.info("Session settings: model=%s effort=%s",
+                os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
+                os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found")
 
     if args.command == "setup":
         from .setup import run_setup
@@ -371,4 +378,9 @@ def _main(args: argparse.Namespace) -> int:
 
 
 if __name__ == "__main__":
+    from multiplai_core import pin_session_settings
+
+    # First, before any step or child process starts: every model call of
+    # this run sees the session's model and effort as they were at launch.
+    pin_session_settings()
     sys.exit(main())

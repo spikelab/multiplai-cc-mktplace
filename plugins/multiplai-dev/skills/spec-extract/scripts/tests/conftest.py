@@ -256,3 +256,26 @@ def stops_after_explore(monkeypatch):
     """End the run where PR 1b ended it, after `SPEC_EXTRACT:EXPLORED`, with the snapshot
     in place: for the tests of resolve, scope and explore, which look at that state."""
     monkeypatch.setattr(cli, "_group_write_render", lambda *a, **k: cli.EXIT_DONE)
+
+
+# multiplai-core 0.21: a step with no configured model or effort runs on
+# MULTIPLAI_MODEL / MULTIPLAI_EFFORT, else the Claude Code session's own
+# (multiplai_core.session). Run inside a session, the developer's values would
+# set a test's model, so clear them and hide the developer's multiplai.conf
+# from that lookup. A test that wants one sets it with monkeypatch.
+_SESSION_DEFAULT_VARS = (
+    "MULTIPLAI_MODEL",
+    "MULTIPLAI_EFFORT",
+    "MULTIPLAI_SESSION_MODEL",
+    "MULTIPLAI_SESSION_EFFORT",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_EFFORT",
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_session_defaults(monkeypatch):
+    for key in _SESSION_DEFAULT_VARS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr("multiplai_core.session.load_multiplai_conf",
+                        lambda: {"_sections": {}})

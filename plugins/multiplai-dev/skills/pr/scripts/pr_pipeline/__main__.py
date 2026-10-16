@@ -13,6 +13,8 @@ only the body on stdout; its `DIFF:` and `PR_DIAGNOSIS:` lines go to stderr.
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 import sys
 import traceback
 
@@ -82,7 +84,11 @@ def _main(args: argparse.Namespace) -> int:
         from multiplai_core.log_utils import setup_logging
 
         load_env()
-        setup_logging("pr-pipeline", propagate_loggers=("pr_pipeline", "multiplai_core"))
+        setup_logging("pr-pipeline", packages=("pr_pipeline",))
+        logging.getLogger("pr_pipeline").info(
+            "Session settings: model=%s effort=%s",
+            os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
+            os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found")
 
         from . import commands
     except Exception as e:  # before commands.run's handler exists: exit 2, never Python's 1, which means a gate
@@ -96,4 +102,9 @@ def _main(args: argparse.Namespace) -> int:
 
 
 if __name__ == "__main__":
+    from multiplai_core import pin_session_settings
+
+    # First, before any step or child process starts: every model call of
+    # this run sees the session's model and effort as they were at launch.
+    pin_session_settings()
     sys.exit(main())

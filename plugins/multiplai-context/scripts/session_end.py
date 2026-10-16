@@ -40,7 +40,7 @@ from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
 
-logger = setup_logging("session_end")
+logger = setup_logging("session_end", packages=("lib", "generators"))
 
 # Reasons for which the session container keeps running, so a detached child
 # survives this hook. Everything else must go through the queue.

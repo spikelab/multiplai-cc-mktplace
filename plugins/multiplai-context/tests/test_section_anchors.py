@@ -79,9 +79,11 @@ def _entry(catalogs_dir, source):
 
 def _inject_events(env_setup):
     """Every ``inject`` record the hook wrote to the activity JSONL mirror."""
-    jsonl = env_setup["data_dir"] / "logs" / "activity.jsonl"
-    assert jsonl.exists(), "context_manager wrote no activity log"
-    records = [json.loads(line) for line in jsonl.read_text().splitlines() if line.strip()]
+    # One activity-YYYY-MM-DD.jsonl per UTC day (multiplai-core 0.21).
+    files = sorted((env_setup["data_dir"] / "logs").glob("activity-*.jsonl"))
+    assert files, "context_manager wrote no activity log"
+    records = [json.loads(line) for f in files
+               for line in f.read_text().splitlines() if line.strip()]
     return [r for r in records if r.get("event") == "inject"]
 
 

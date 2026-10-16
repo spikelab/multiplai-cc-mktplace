@@ -147,7 +147,10 @@ def _main(args: argparse.Namespace) -> int:
 
     load_env()
     setup_logging("walkthrough-pipeline", session_id=args.session_id,
-                  propagate_loggers=("walkthrough_pipeline", "multiplai_core"))
+                  packages=("walkthrough_pipeline", "code_facts"))
+    log.info("Session settings: model=%s effort=%s",
+             os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
+             os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found")
 
     if args.command == "check":
         from .check import check_file
@@ -210,4 +213,9 @@ def _main(args: argparse.Namespace) -> int:
 
 
 if __name__ == "__main__":
+    from multiplai_core import pin_session_settings
+
+    # First, before any step or child process starts: every model call of
+    # this run sees the session's model and effort as they were at launch.
+    pin_session_settings()
     sys.exit(main())

@@ -31,7 +31,7 @@ NAMED_MARKERS = ("WORKTREE", "BRANCH", "PR", "SPEND")
 _NAME_RE = re.compile(r"^(\d{3,})-(.+)\.started\.json$")
 # A marker line: `WORD:WORD...`, as buildme prints them (`SPLIT:REQUIRED:<path>`).
 _MARKER_RE = re.compile(r"^[A-Z][A-Z_]*:[A-Z][A-Z_]*(?::|$)")
-_NOT_MARKERS = ("PHASE:", "RESULT:", "BOARD:")
+_NOT_MARKERS = ("PHASE:", "RESULT:", "BOARD:", "BUDGET:")
 
 
 @dataclass
@@ -98,8 +98,8 @@ def start(epic_dir: Path, kind: str, child: str, argv: list[str], *,
 
 def markers(log: Path) -> list[str]:
     """The marker lines a process printed, in order: `WORKTREE:`, `BRANCH:`,
-    `PR:` and `SPEND:`, and any `WORD:WORD` line but the `PHASE:`, `RESULT:`
-    and `BOARD:` progress lines."""
+    `PR:` and `SPEND:`, and any `WORD:WORD` line but the `PHASE:`, `RESULT:`,
+    `BOARD:` and `BUDGET:` progress lines."""
     try:
         lines = log.read_text(errors="replace").splitlines()
     except OSError:

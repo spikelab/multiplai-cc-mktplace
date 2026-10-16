@@ -38,7 +38,7 @@ from generators.config import load_catalog_config
 from qmd_retrieval import QmdTarget, target_from_config
 from lib.runtime import lock_path
 
-logger = setup_logging("qmd_refresh")
+logger = setup_logging("qmd_refresh", packages=("lib", "generators"))
 
 TIMEOUT_STATUS = 30
 TIMEOUT_UPDATE = 600

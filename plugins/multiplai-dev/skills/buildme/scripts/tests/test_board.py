@@ -362,6 +362,22 @@ class TestRecordFailure:
         assert card.history[-1].note == "no checkpoint left"
         assert "BOARD:card-change:Cancelled" in capsys.readouterr().out
 
+    def test_a_completed_build_is_never_cancelled(self, tmp_path, capsys):
+        """`.build-state.complete.json` in place of the checkpoint: completed."""
+        config = _config(tmp_path)
+        state = _state(config)
+        record(config, state, BuildPhase.PUBLISH)
+        (config.change_dir / ".build-state.complete.json").write_text("{}")
+        assert not config.state_file_path().exists()
+        capsys.readouterr()
+
+        assert record_failure(config, state, "late crash") is None
+        card = BoardCard.model_validate(
+            json.loads((config.change_dir / ".board.json").read_text())
+        )
+        assert card.column is not BoardColumn.CANCELLED
+        assert "Cancelled" not in capsys.readouterr().out
+
     def test_failure_before_the_change_dir_exists_writes_nothing(self, tmp_path, capsys):
         """A failure before bootstrap (config still bound to the caller's
         source repo, change dir never created) must not manufacture
@@ -523,10 +539,18 @@ class TestFullRunBoardTrail:
     async def test_crash_after_success_is_not_recorded_as_cancelled(
         self, tmp_path, monkeypatch, capsys,
     ):
-        """After publish, the checkpoint is deliberately gone. An exception in
-        the post-success tail (here: progress cleanup) must not flip the card
-        from In Review to Cancelled."""
+        """After publish, `.build-state.json` is renamed to
+        `.build-state.complete.json`. An exception in the post-success tail
+        (here: the progress file's COMPLETE line) must not flip the card from
+        In Review to Cancelled."""
         from build_pipeline.orchestrator import run_orchestrator
+
+        real_log_phase = ProgressWriter.log_phase
+
+        def crash_on_complete(self, phase, details=""):
+            if phase == "COMPLETE":
+                raise RuntimeError("late crash")
+            return real_log_phase(self, phase, details)
 
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         repo = make_repo(tmp_path / "proj")
@@ -549,8 +573,7 @@ class TestFullRunBoardTrail:
                    new_callable=AsyncMock, return_value=0), \
              patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
                    new_callable=AsyncMock, return_value=None), \
-             patch.object(ProgressWriter, "cleanup",
-                          side_effect=RuntimeError("late crash")):
+             patch.object(ProgressWriter, "log_phase", crash_on_complete):
             rc = await run_orchestrator(config, _args(repo, "latecrash"))
 
         assert rc == 1  # the crash is still an error...
@@ -558,6 +581,7 @@ class TestFullRunBoardTrail:
         assert "Cancelled" not in out  # ...but never a cancellation
         archived = list((config.specs_dir / "archive").glob("*-latecrash"))
         assert len(archived) == 1
+        assert (archived[0] / ".build-state.complete.json").exists()
         card = BoardCard.model_validate(
             json.loads((archived[0] / ".board.json").read_text())
         )

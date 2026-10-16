@@ -173,6 +173,16 @@ class FindingsState(BaseModel):
         return out
 
 
+COMPLETED_SUFFIX = ".complete.json"
+
+
+def completed_state_path(state_path: Path) -> Path:
+    """Where a succeeded run keeps *state_path*: ``.build-state.json`` →
+    ``.build-state.complete.json``."""
+    stem = state_path.name[:-len(".json")] if state_path.name.endswith(".json") else state_path.name
+    return state_path.with_name(stem + COMPLETED_SUFFIX)
+
+
 class BuildState(BaseModel):
     """Root state for the entire build pipeline."""
 
@@ -328,12 +338,22 @@ class BuildState(BaseModel):
         self.failed_stop = record_stop(project_dir)
         self.advance_to(BuildPhase.FAILED, path)
 
-    def cleanup(self, path: Path | None = None) -> None:
-        """Delete state file on successful completion."""
+    def complete(self, path: Path | None = None) -> Path:
+        """Keep the checkpoint of a run that succeeded, under its completed name.
+
+        Writes the state as it is now (phase and spend), then renames
+        ``.build-state.json`` to ``.build-state.complete.json`` in the same
+        directory, atomically. Resume looks only for ``.build-state.json``, so
+        the completed file is never resumed; it stays as the record of what the
+        build did and spent, and lets a re-run of a published build ask first
+        (``orchestrator._completed_builds``). Returns the completed file's path.
+        """
         target = path or Path(self.state_file)
-        if target.exists():
-            target.unlink()
-            log.info("State file cleaned up: %s", target)
+        self.checkpoint(target)
+        done = completed_state_path(target)
+        os.replace(target, done)
+        log.info("Checkpoint kept as %s (phase=%s)", done, self.phase)
+        return done
 
     def is_phase_complete(self, phase: BuildPhase) -> bool:
         """Check if a phase has already been completed (for resume).

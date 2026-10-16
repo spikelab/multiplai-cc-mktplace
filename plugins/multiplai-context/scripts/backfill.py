@@ -43,7 +43,7 @@ from lib.extraction import (
 from lib.fsio import claude_config_dir
 from lib.transcript_distiller import distill, estimate_tokens
 
-logger = setup_logging("backfill")
+logger = setup_logging("backfill", packages=("lib", "generators"))
 
 DEFAULT_DAYS = 7
 DEFAULT_CONCURRENCY = 3

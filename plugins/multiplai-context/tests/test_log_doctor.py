@@ -132,9 +132,11 @@ class TestCluster:
 
 
 class TestScan:
-    def test_health_check_flags_oversized_hook_errors(self, logs_dir):
+    def test_a_large_hook_errors_log_is_not_flagged(self, logs_dir):
+        # hook-errors.log is append-only and never truncated (multiplai-core
+        # 0.21), so its size is not an anomaly.
         _, _, notes, _ = scan(logs_dir)
-        assert any("hook-errors.log" in n and "truncation" in n for n in notes)
+        assert not any("hook-errors.log" in n and "KB" in n for n in notes)
 
     def test_subsystem_focus(self, logs_dir):
         clusters, _, _, found = scan(logs_dir, subsystems=["backfill"])
