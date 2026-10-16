@@ -535,6 +535,23 @@ class Coordinator:
             c.status, c.reason = "built", ""
         elif code == 0:
             c.status, c.reason = "parked", NO_PR
+        elif code == 3 and (records.wait_marker(last.get("markers", [])) or "").startswith(
+                "BUILD:COMPLETE:"):
+            # The build already published on an earlier attempt, which then
+            # exited non-zero (an error or a stop after the publish) and was
+            # relaunched; the relaunch refuses to build it again. It is built
+            # when its PR can be found.
+            try:
+                c.pr = c.pr or self._find_pr(tries)
+            except ReadFailed as e:
+                c.status, c.reason = "unknown", f"cannot tell whether it opened a PR: {e}"
+                return
+            if c.pr:
+                c.status, c.reason = "built", ""
+            else:
+                c.status, c.reason = "parked", (
+                    "already published (BUILD:COMPLETE), but no PR found: "
+                    + records.wait_marker(last.get("markers", []))[len("BUILD:COMPLETE:"):])
         elif code == 3:
             c.status, c.reason = "parked", records.wait_marker(last.get("markers", [])) or "exit 3"
         else:

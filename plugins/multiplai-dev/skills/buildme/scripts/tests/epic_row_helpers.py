@@ -372,6 +372,8 @@ with (root / "prs.lock").open("a") as held:     # two builds ending at once both
 if step.get("die_before_pr_line"):
     os.kill(os.getpid(), signal.SIGKILL)
 print(f"PR:{{url}}", flush=True)
+if step.get("exit_after_pr"):     # published, then an error or a stop
+    sys.exit(step["exit_after_pr"])
 '''
 
 FAKE_GH = r'''#!{python}

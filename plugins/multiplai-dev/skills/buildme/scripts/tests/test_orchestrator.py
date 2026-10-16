@@ -1619,8 +1619,10 @@ class TestAutoPublishPRBody:
         assert "Because the queue drops jobs." in (change_dir / "proposal.md").read_text()
         assert (change_dir / "respec.md").exists()
         assert not config2.change_dir.exists()  # archived
-        # Successful publish drops the checkpoint, even from its archived home.
+        # Successful publish keeps the checkpoint, renamed, in its archived home.
         assert list((config2.specs_dir / "archive").glob("*/.build-state.json")) == []
+        kept = list((config2.specs_dir / "archive").glob("*/.build-state.complete.json"))
+        assert len(kept) == 1 and BuildState.load(kept[0]).phase == BuildPhase.COMPLETE
 
 
 class TestPublishFailureRecovery:
@@ -1674,9 +1676,11 @@ class TestPublishFailureRecovery:
         out = capsys.readouterr().out
         assert "PR:https://github.com/o/r/pull/8" in out
         assert _worktree_count(repo) == before, "the re-run must not mint a second worktree"
-        assert not archived_states[0].exists(), "checkpoint cleaned after success"
+        assert not archived_states[0].exists(), "checkpoint renamed after success"
+        kept = archived_states[0].with_name(".build-state.complete.json")
+        assert BuildState.load(kept).phase == BuildPhase.COMPLETE
         # Bookkeeping was never tracked, so the worktree ends clean — no
-        # uncommitted deletion left behind by the cleanup.
+        # uncommitted deletion left behind by the rename.
         status = subprocess.run(
             ["git", "status", "--porcelain", "--untracked-files=no"],
             cwd=str(worktree), capture_output=True, text=True,

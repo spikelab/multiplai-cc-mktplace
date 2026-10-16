@@ -3359,14 +3359,16 @@ class TestCheckpointLifecycleOwnership:
             assert not state.is_phase_complete(later)
 
     @pytest.mark.asyncio
-    async def test_standalone_run_still_completes_and_cleans_up(self, tdd_setup):
-        """The `python -m build_pipeline tdd` entry point keeps its old
-        behavior: the engine IS the build, so it completes and removes the
-        checkpoint."""
+    async def test_standalone_run_keeps_its_checkpoint_as_completed(self, tdd_setup):
+        """The `python -m build_pipeline tdd` entry point is the build: on
+        success the checkpoint becomes `.build-state.complete.json`, at
+        TDD_BUILD (not a published build)."""
         config, args = tdd_setup
 
         assert await self._run(config, args) == EXIT_SUCCESS
         assert not config.state_file_path().exists()
+        kept = config.state_file_path().with_name(".build-state.complete.json")
+        assert BuildState.load(kept).phase == BuildPhase.TDD_BUILD
 
     @pytest.mark.asyncio
     async def test_a_post_tdd_resume_does_not_re_run_the_build(self, tdd_setup):
