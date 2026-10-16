@@ -7,10 +7,12 @@ from pathlib import Path
 import pytest
 from deps_fixtures import commit_files, dependency, git_lock_entry, init, lock_entry, push, reviewed_repo
 
-from review_pipeline import deps
+from review_pipeline import deps, sdk
+from review_pipeline.__main__ import main
+from review_pipeline.config import ReviewConfig, load_config
 from review_pipeline.deps import Dep
 from review_pipeline.gates import gated_need
-from review_pipeline.models import DEPS_DIR
+from review_pipeline.models import DEPS_DIR, ReviewState
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -200,3 +202,85 @@ def test_cache_paths_stay_under_the_cache_root(tmp_path):
         assert path.name.endswith(".git") and "tok" not in str(path)
     assert deps.cache_path("https://github.com/spikelab/multiplai-core") == \
         root / "github.com" / "spikelab" / "multiplai-core.git"
+
+
+# --- ensure and the run -------------------------------------------------------------
+
+
+def test_ensure_does_nothing_when_deps_is_off(tmp_path, allow_file_urls, monkeypatch):
+    url, sha, _ = dependency(tmp_path, "lib", {"a.py": "a\n"})
+    target = reviewed_repo(tmp_path, {"uv.lock": git_lock_entry("lib", url, sha)})
+    calls = _git_calls(monkeypatch)
+    manifest = deps.ensure(target, tmp_path / "snap", ReviewConfig(deps=False))
+    assert manifest.deps == [] and calls == [] and not (tmp_path / "snap" / DEPS_DIR).exists()
+
+
+def test_ensure_writes_nothing_without_git_dependencies(tmp_path):
+    target = reviewed_repo(tmp_path, {"uv.lock": lock_entry("requests", '{ registry = "https://pypi.org/simple" }')})
+    assert deps.ensure(target, tmp_path / "snap", ReviewConfig()).deps == []
+    assert not (tmp_path / "snap" / DEPS_DIR).exists()
+
+
+def test_config_reads_deps_and_deps_max_mb(tmp_path):
+    (tmp_path / "review.yaml").write_text("deps: false\ndeps_max_mb: 7\n")
+    cfg = load_config(tmp_path)
+    assert (cfg.deps, cfg.deps_max_mb) == (False, 7)
+    assert (ReviewConfig().deps, ReviewConfig().deps_max_mb) == (True, 50)
+
+
+class _SeesDeps:
+    """A fake agent call that records, per stage, whether the snapshot held each dependency."""
+
+    def __init__(self, folder: str):
+        self.folder = folder
+        self.seen: dict[str, bool] = {}
+
+    async def __call__(self, prompt, schema, *, budget_label="", cwd=None, **kwargs):
+        self.seen[budget_label] = (Path(cwd) / DEPS_DIR / self.folder / "a.py").is_file()
+        return schema()
+
+
+def _deps_repo(tmp_path):
+    url, sha, _ = dependency(tmp_path, "lib", {"a.py": "a\n"})
+    lock = git_lock_entry("lib", url, sha) + git_lock_entry("gone", f"file://{tmp_path}/nowhere.git", "e" * 40)
+    target = reviewed_repo(tmp_path, {"uv.lock": lock})
+    return target, f"lib@{sha[:12]}"
+
+
+def _review(target, out, *extra):
+    return main(["--out", str(out), "review", "--repo", target.repo_path,
+                 "--range", f"{target.base_sha}..{target.head_sha}", "--trust-repo", *extra])
+
+
+def test_a_review_gives_the_finders_the_dependency_source_and_needs_the_missing_one(
+        tmp_path, allow_file_urls, monkeypatch, capsys):
+    target, folder = _deps_repo(tmp_path)
+    fake = _SeesDeps(folder)
+    monkeypatch.setattr(sdk, "agent_call_structured", fake)
+    assert _review(target, tmp_path / "out") == 0
+    assert fake.seen and all(fake.seen.values()), fake.seen
+    target_dir = next((tmp_path / "out").glob("*/range-*"))
+    state = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
+    assert [e.folder for e in state.target.deps] == [folder]
+    (need,) = [n for n in state.needs if "gone@" in n.what]
+    assert need.source == "pipeline" and need.blocks == "review"
+    assert "2 git dependencies" in (target_dir / "progress.log").read_text()
+
+
+def test_no_deps_turns_it_off(tmp_path, allow_file_urls, monkeypatch, capsys):
+    target, folder = _deps_repo(tmp_path)
+    fake = _SeesDeps(folder)
+    monkeypatch.setattr(sdk, "agent_call_structured", fake)
+    assert _review(target, tmp_path / "out", "--no-deps") == 0
+    assert fake.seen and not any(fake.seen.values())
+    target_dir = next((tmp_path / "out").glob("*/range-*"))
+    state = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
+    assert state.target.deps == [] and not [n for n in state.needs if "gone@" in n.what]
+
+
+def test_plan_only_counts_the_git_dependencies_without_fetching(tmp_path, allow_file_urls, monkeypatch, capsys):
+    target, _ = _deps_repo(tmp_path)
+    calls = _git_calls(monkeypatch)
+    assert _review(target, tmp_path / "out", "--plan-only") == 0
+    assert "git dependencies: 2" in capsys.readouterr().out
+    assert not {"clone", "fetch", "archive"} & set(_verbs(calls))

@@ -271,6 +271,10 @@ class TargetInfo(BaseModel):
     # Tree targets only: (file, reason) for each file at head left out of the
     # review (binary, too large, a lockfile, generated or vendored).
     skipped: list[tuple[str, str]] = Field(default_factory=list)
+    # The git dependencies whose source this run extracted into the snapshot
+    # (`deps.ensure`, set again on every run and resume); the gates re-read a
+    # citation of one from its `cache` at its `commit`.
+    deps: list[DepEntry] = Field(default_factory=list)
 
     @property
     def is_tree(self) -> bool:

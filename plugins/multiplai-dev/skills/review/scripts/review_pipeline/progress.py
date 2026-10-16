@@ -12,5 +12,6 @@ from multiplai_core.progress import ProgressWriter as _CoreProgressWriter
 
 
 class ProgressWriter(_CoreProgressWriter):
-    def started(self, label: str, base: str, head: str, files: int) -> None:
-        self.line(f"STARTED {label} {base[:12]}..{head[:12]} ({files} files)")
+    def started(self, label: str, base: str, head: str, files: int, deps: int = 0) -> None:
+        extra = f", {deps} git dependencies" if deps else ""
+        self.line(f"STARTED {label} {base[:12]}..{head[:12]} ({files} files{extra})")

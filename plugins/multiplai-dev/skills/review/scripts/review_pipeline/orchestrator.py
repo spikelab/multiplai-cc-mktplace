@@ -21,7 +21,7 @@ import yaml
 
 from multiplai_core.log_utils import log_event
 
-from . import budget, ledger as review_ledger, rounds, runlock, target as target_mod, timings
+from . import budget, deps, ledger as review_ledger, rounds, runlock, target as target_mod, timings
 from .chunks import diff_files, finder_chunks
 from .config import ReviewConfig, run_config
 from .export import producer, run_record, to_findings_file, write_checks_file, write_findings_file
@@ -171,19 +171,33 @@ def _finish(state: ReviewState, target_dir: Path, *, session_id: str, number: st
                            stopped=stopped, run=run)
 
 
+def _with_deps(state: ReviewState, snapshot: Path, config: ReviewConfig) -> None:
+    """Extract the git dependencies' source into *snapshot* (`deps.ensure`) and record the result.
+
+    `state.target.deps` names the extracted ones for the gates; each one that
+    could not be extracted becomes a need, once.
+    """
+    manifest = deps.ensure(state.target, snapshot, config)
+    state.target.deps = manifest.ok()
+    known = {n.what for n in state.needs}
+    state.needs.extend(n for n in map(gated_need, deps.needs(manifest)) if n.what not in known)
+
+
 async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig, *,
                       session_id: str = "") -> Path:
     t = state.target
     ledger = budget.start(config.max_cost_usd, state.budget)
     progress = ProgressWriter(target_dir / "progress.log")
     if state.stage == "target":
-        progress.started(t.label or t.slug, t.base_sha, t.head_sha, len(t.files))
+        progress.started(t.label or t.slug, t.base_sha, t.head_sha, len(t.files),
+                         deps=len(deps.locked_git_deps(t)) if config.deps else 0)
         log_event("review", "start", f"review started for {t.slug}", session_id=session_id,
                   target=t.slug, base=t.base_sha, head=t.head_sha, files=len(t.files))
     else:
         progress.line(f"RESUMED after {state.stage}")
 
     snapshot = target_mod.snapshot_head(t, target_dir / "tree")
+    _with_deps(state, snapshot, config)
     diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
     ctx = RunContext(config=config, snapshot=snapshot, diff=diff, progress=progress, session_id=session_id,
                      target_dir=target_dir)
@@ -459,7 +473,11 @@ def plan_text(state: ReviewState, config: ReviewConfig) -> str:
     if state.extra_finders:  # the same chunks `run_find` asks, one call each
         diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
         calls += len(finder_chunks(diff_files(diff)))
-    lines.append(f"groups: {len(groups)}  finder calls: {calls}  files skipped: {len(t.skipped)}")
+    total = f"groups: {len(groups)}  finder calls: {calls}  files skipped: {len(t.skipped)}"
+    found = deps.locked_git_deps(t) if config.deps else []  # read from git only; nothing is fetched
+    if found:
+        total += f"  git dependencies: {len(found)}"
+    lines.append(total)
     return "\n".join(lines) + "\n"
 
 
@@ -559,6 +577,7 @@ async def assess_only(target_dir: Path, config: ReviewConfig) -> AssessOnly:
     state.repeats, state.repeats_checked, state.assessments, state.assess_answer = {}, [], {}, None
     ledger = budget.start(config.max_cost_usd)
     snapshot = target_mod.snapshot_head(state.target, target_dir / "assess-tree")
+    _with_deps(state, snapshot, config)
     ctx = RunContext(config=config, snapshot=snapshot, diff="", target_dir=target_dir)
     try:
         state = await run_repeats(state, ctx)

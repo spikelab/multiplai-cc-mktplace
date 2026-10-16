@@ -76,6 +76,11 @@ def _budget_flag(p: argparse.ArgumentParser) -> None:
                    help=f"Circuit breaker per target, in USD (default {DEFAULT_MAX_USD:g}; 0 = no ceiling).")
 
 
+def _deps_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--no-deps", action="store_true",
+                   help="Do not clone the git dependencies uv.lock pins into the snapshot (review.yaml: deps)")
+
+
 def _mode_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument("--mode", choices=MODES, default="full",
                    help="full (default): list every finding to act on, in Code, Tests and Docs sections. "
@@ -132,6 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     _trust_flag(rv)
     _budget_flag(rv)
     _mode_flag(rv)
+    _deps_flag(rv)
 
     bt = sub.add_parser("batch", parents=[common], help="Review a YAML list of targets, then write rollups")
     bt.add_argument("file", help="YAML list of {repo, branch|pr|range, tickets, deployed_in}")
@@ -147,6 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("target_dir", help="The review's directory, <out>/<repo>/<object>")
     _trust_flag(rs)
     _budget_flag(rs)
+    _deps_flag(rs)
 
     po = sub.add_parser("post", parents=[common],
                         help="Post the accepted findings as one PR review, one inline comment each")
@@ -191,7 +198,13 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["REVIEW_TRUST_REPO"] = "1"
 
     from . import orchestrator, render, rounds, sdk, target
-    from .config import load_config
+    from .config import load_config as read_config
+
+    def load_config(root: Path, **kwargs):
+        config = read_config(root, **kwargs)
+        if getattr(args, "no_deps", False):
+            config.deps = False
+        return config
     from .post import PostError, post
     from .stages.verify import VerifyIncomplete
 

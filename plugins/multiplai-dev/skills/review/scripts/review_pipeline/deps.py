@@ -32,6 +32,7 @@ from multiplai_core.citations import GIT_ARGV, git_env
 from multiplai_core.paths import get_paths
 from pydantic import BaseModel, Field
 
+from .config import ReviewConfig
 from .models import DEPS_DIR, DepEntry, Need, TargetInfo
 from .target import git
 
@@ -337,3 +338,34 @@ def needs(manifest: Manifest) -> list[Need]:
             where=f"a clone of {e.url} checked out at {e.commit}" if allowed else "",
             source="pipeline"))
     return out
+
+
+def read_manifest(root: Path) -> Manifest | None:
+    try:
+        return Manifest.model_validate_json((root / MANIFEST_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def ensure(target: TargetInfo, snapshot: Path, config: ReviewConfig) -> Manifest:
+    """The snapshot's dependency source for *target*, extracted unless it is already there.
+
+    The saved manifest is reused when it names the same head and the same
+    dependencies and every `ok` folder still exists. Otherwise `.review-deps/`
+    is removed, partial folders included, and every dependency is extracted
+    again from the clone cache. With `deps` off it does nothing.
+    """
+    if not config.deps:
+        return Manifest(head_sha=target.head_sha)
+    wanted = locked_git_deps(target)
+    root = snapshot / DEPS_DIR
+    saved = read_manifest(root)
+    if (saved is not None and saved.head_sha == target.head_sha
+            and [(e.name, e.url, e.commit) for e in saved.deps] == [(d.name, d.url, d.commit) for d in wanted]
+            and all((root / e.folder).is_dir() for e in saved.ok())):
+        return saved
+    if root.exists():
+        shutil.rmtree(root)
+    if not wanted:
+        return Manifest(head_sha=target.head_sha)
+    return materialize(wanted, snapshot, head_sha=target.head_sha, max_mb=config.deps_max_mb)
