@@ -10,9 +10,11 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import os
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -477,12 +479,39 @@ def _extra_finders_from(config: ReviewConfig, spec: TargetSpec) -> TargetSpec:
     return replace(spec, extra_finders=True) if config.extra_finders and not spec.extra_finders else spec
 
 
+def _set_aside_progress(target_dir: Path) -> None:
+    """Clear the way for a fresh ``progress.log`` without losing the last one.
+
+    ``keep_round`` has already copied the last run's log into ``rounds/`` when
+    it kept that run, and then the log is deleted here. A log no kept round
+    holds (a run that stopped before it saved any state, or a second start of a
+    round already kept) moves to ``progress-<UTC time>.log``, named from its
+    last write. ``os.link`` refuses an existing name, so nothing is
+    overwritten; if the dated name is taken, the log stays and the new run
+    appends to it.
+    """
+    log = target_dir / "progress.log"
+    try:
+        text = log.read_bytes()
+    except OSError:
+        return
+    if any(kept.read_bytes() == text for kept in (target_dir / rounds.ROUNDS_DIR).glob("*/progress.log")):
+        log.unlink(missing_ok=True)
+        return
+    try:
+        stamp = datetime.fromtimestamp(log.stat().st_mtime, timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        os.link(log, target_dir / f"progress-{stamp}.log")
+        log.unlink()
+    except OSError:
+        pass
+
+
 async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:
     spec = _extra_finders_from(config, spec)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, check_interrupted=True, lock=lock)
         # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.
-        (target_dir / "progress.log").unlink(missing_ok=True)
+        _set_aside_progress(target_dir)
         # The last round's facts.json is kept in rounds/ by prepare; the explain stage writes
         # this run's one, and a run with explain off must not leave the old one beside its findings.
         (target_dir / FACTS_FILE).unlink(missing_ok=True)
