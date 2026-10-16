@@ -67,7 +67,7 @@ time, not derived from a tag.
   `build`.
 - buildme, spec-extract, review, review-viewer, codebase-walkthrough and pr
   write every line their own modules log, and multiplai-core's, to one log
-  file per day (`<data_dir>/logs/<name>-<UTC date>.log`), kept forever.
+  file per day (`<data_dir>/logs/<name>-<UTC date>.log`), kept 365 days (`MULTIPLAI_LOG_RETENTION_DAYS`, multiplai-core 0.22.0).
   Each run logs the model and effort it pinned from the session at start.
 - A model or effort set for a step is used as given; multiplai-core 0.21.0
   no longer lowers it to a ceiling.

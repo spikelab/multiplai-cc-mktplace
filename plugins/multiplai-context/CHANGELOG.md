@@ -35,7 +35,7 @@ are the release dates recorded at the time, not derived from a tag.
 
 ### Changed
 - Every multiplai-context script writes its log to a dated file,
-  `<data_dir>/logs/<script>-<UTC date>.log`, kept forever, and the lines its
+  `<data_dir>/logs/<script>-<UTC date>.log`, kept 365 days (`MULTIPLAI_LOG_RETENTION_DAYS`, multiplai-core 0.22.0), and the lines its
   `lib` and `generators` modules log reach that file (before, their INFO
   lines were dropped). The activity log is `activity-<UTC date>.jsonl`.
   `health_check`, `log-doctor` and the utilisation report read the dated

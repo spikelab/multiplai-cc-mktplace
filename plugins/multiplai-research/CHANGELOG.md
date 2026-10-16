@@ -36,7 +36,7 @@ dates recorded at the time, not derived from a tag.
 ### Changed
 - `/multiplai-research:deep-research` writes every line its pipeline logs,
   and multiplai-core's, to `<data_dir>/logs/deep-research-<UTC date>.log`,
-  kept forever, and logs the model and effort it pinned from the session at
+  kept 365 days (`MULTIPLAI_LOG_RETENTION_DAYS`, multiplai-core 0.22.0), and logs the model and effort it pinned from the session at
   start.
 - A model or effort set for a node is used as given; multiplai-core 0.21.0
   no longer lowers it to a ceiling.
