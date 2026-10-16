@@ -125,6 +125,29 @@ class TestPersistence:
         with pytest.raises(BudgetExceededError):
             resumed.check()
 
+    def test_round_trip_keeps_usd_per_label(self):
+        """S14: the USD per step label is saved with the checkpoint."""
+        b = BuildBudget()
+        b.record(FakeUsage(input_tokens=10, cost_usd=0.25), label="review")
+        b.record(FakeUsage(input_tokens=10, cost_usd=1.5), label="implementer")
+        restored = BuildBudget()
+        restored.load_state(b.to_state())
+        assert restored.usd_by_label == {"review": 0.25, "implementer": 1.5}
+
+    def test_a_checkpoint_saved_before_usd_per_label_loads(self):
+        """S14: an older checkpoint has no `usd_by_label`; its tokens load,
+        and USD per label counts from the resume on."""
+        old = BuildBudget()
+        old.record(FakeUsage(input_tokens=10, cost_usd=0.25), label="review")
+        state = old.to_state()
+        del state["usd_by_label"]
+        resumed = BuildBudget()
+        resumed.load_state(state)
+        assert resumed.by_label == {"review": 10} and resumed.usd_by_label == {}
+        resumed.record(FakeUsage(input_tokens=10, cost_usd=0.5), label="review")
+        assert resumed.usd_by_label == {"review": 0.5}
+        assert resumed.cost_usd == pytest.approx(0.75)
+
     def test_load_state_ignores_empty(self):
         b = BuildBudget()
         b.record(FakeUsage(input_tokens=7))
