@@ -18,8 +18,8 @@ from __future__ import annotations
 from code_facts import Fact
 
 from ..models import TargetInfo
-from . import (CITATION_RULES, JSON_ONLY, commits_block, description_block, diff_block, fence, files_block,
-               settings_block, workspace_block)
+from . import (CITATION_RULES, JSON_ONLY, commits_block, deps_block, description_block, diff_block, fence,
+               files_block, settings_block, workspace_block)
 
 # The same share of the prompt the repository's rules get (stages/find.py CONVENTIONS_MAX_CHARS).
 FACTS_MAX_CHARS = 40_000
@@ -236,6 +236,7 @@ def build(target: TargetInfo, dimension: str, diff: str, conventions: str = "",
         f"message is one JSON object listing defects (schema at the end), read by a program; it is "
         f"not a report.",
         workspace_block(target, web=True),
+        deps_block(target),
         DIMENSION_TASKS[dimension],
         commits_block(target),
         description_block(target),
@@ -265,6 +266,7 @@ def _build_tree(target: TargetInfo, dimension: str, conventions: str, files: lis
         f"message is one JSON object listing defects (schema at the end), read by a program; it is "
         f"not a report.",
         workspace_block(target, web=True),
+        deps_block(target),
         DIMENSION_TASKS_TREE[dimension],
         tree_files_block(files),
     ]
@@ -280,7 +282,7 @@ def _build_tree(target: TargetInfo, dimension: str, conventions: str, files: lis
         "Schema:\n" + SCHEMA.replace("path of the changed file the bug is in", "path of the file under review the bug is in"),
         JSON_ONLY,
     ]
-    return "\n\n".join(parts)
+    return "\n\n".join(p for p in parts if p)
 
 
 EXTRA_TASK = (
@@ -302,6 +304,7 @@ def build_extra(target: TargetInfo, files: list[str], lines: int, index: int, co
         f"message is one JSON object listing defects (schema at the end), read by a program; it is not a "
         f"report.",
         workspace_block(target, web=True),
+        deps_block(target),
         f"Your files (about {lines} changed lines): {', '.join(files)}. Other finders cover the rest of "
         f"the change.",
         EXTRA_TASK,
