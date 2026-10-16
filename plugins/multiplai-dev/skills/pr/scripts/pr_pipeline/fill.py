@@ -353,7 +353,7 @@ async def _run_model(prompt: str) -> str:
     # The model has no tools, so it cannot read the environment. allowed_tools=None alone does
     # not promise that: for a prompt over MAX_PROMPT_BYTES, run_agent's prompt-file fallback
     # writes the prompt to a file and adds Read (under bypassPermissions, Read of any file).
-    # prompt_file_fallback=False keeps the prompt inline, so the call has no tools at any size.
+    # Turning prompt_file_fallback off keeps the prompt inline, so the call has no tools at any size.
     # Blanking the GitHub tokens for the child process is a second guard on top of that.
     try:
         result = await run_agent(prompt, allowed_tools=None, max_turns=1, prompt_file_fallback=False,
