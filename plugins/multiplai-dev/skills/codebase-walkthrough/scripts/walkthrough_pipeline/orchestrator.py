@@ -11,8 +11,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from multiplai_core.log_utils import log_event
@@ -67,6 +69,25 @@ class RunOptions:
     lsp_timeout: float = 300.0
 
 
+def _keep_previous_progress(run_dir: Path) -> None:
+    """Move an earlier run's ``progress.log`` to ``progress-<UTC time>.log``.
+
+    A new run starts a fresh ``progress.log``, so the skill's wait for its
+    ``DONE`` or ``FAILED`` line never matches the earlier run's. The earlier
+    log keeps its whole content under the dated name, taken from its last
+    write. ``os.link`` refuses an existing name, so nothing is overwritten;
+    if the dated name is taken, the log stays where it is and the new run
+    appends to it.
+    """
+    log = run_dir / "progress.log"
+    try:
+        stamp = datetime.fromtimestamp(log.stat().st_mtime, timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        os.link(log, run_dir / f"progress-{stamp}.log")
+        log.unlink()
+    except OSError:
+        pass
+
+
 def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
     """Resolve, snapshot and gate the target; create the run directory. Raises WalkError."""
     try:
@@ -76,8 +97,9 @@ def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
     slug = target_mod.sanitize_slug(f"{root.name}--{sub or 'root'}--{sha[:12]}--{opts.mode}")
     run_dir = runs_dir / slug
     run_dir.mkdir(parents=True, exist_ok=True)
-    for stale in (STATE_FILE, "progress.log", "boundary.json"):
+    for stale in (STATE_FILE, "boundary.json"):
         (run_dir / stale).unlink(missing_ok=True)
+    _keep_previous_progress(run_dir)
     try:
         info, repo = target_mod.build_target(opts.target, run_dir, name=opts.name, depth=opts.depth,
                                               key=opts.repo_key)
