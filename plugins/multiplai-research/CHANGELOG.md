@@ -18,6 +18,19 @@ dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-16
+
+### Changed
+- `/multiplai-research:deep-research` runs every node that no setting names
+  on `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT`, else on the model and effort of
+  the Claude Code session, else on the CLI's default. Before, reasoning nodes
+  ran Opus and the parse nodes Sonnet at low effort. `--model`, `--effort`,
+  `[deep-research.<node>]` and `[deep-research]` in `multiplai.conf` still win.
+- The parse nodes (triage, extract) use `[deep-research] MODEL=` when
+  `[deep-research.parse] MODEL=` is not set.
+- Skills no longer set `model:` or `effort:` in their frontmatter: each runs
+  on the model and effort of the Claude Code session you start it from.
+
 ## [0.8.0] - 2026-10-16
 
 ### Changed

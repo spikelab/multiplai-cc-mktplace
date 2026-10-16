@@ -21,6 +21,8 @@ to prevent.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-16
+
 ### Added
 - **A plugin README** (`plugins/multiplai-writing/README.md`) — what the pack
   contains, what each mode does, and what it needs.
@@ -32,6 +34,8 @@ to prevent.
   are deliberately not shipped. Each is now loaded only if present, and when
   none are found the skill asks you for your voice preferences instead of
   blocking on step 1.
+- Skills no longer set `model:` or `effort:` in their frontmatter: each runs
+  on the model and effort of the Claude Code session you start it from.
 
 ### Fixed
 - Dropped `user_invocable: true` from the SKILL.md. The underscore spelling is

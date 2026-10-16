@@ -10,6 +10,12 @@ Version numbers are this plugin's version in the marketplace manifest
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-16
+
+### Changed
+- Skills no longer set `model:` or `effort:` in their frontmatter: each runs
+  on the model and effort of the Claude Code session you start it from.
+
 ## [0.1.0] - 2026-08-14
 
 ### Added

@@ -16,6 +16,14 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-10-16
+
+### Changed
+- Skills no longer set `model:` or `effort:` in their frontmatter: each runs
+  on the model and effort of the Claude Code session you start it from.
+  Background jobs (the router, catalogs, checkpoint, dream, learnings
+  extraction, the memory maintainer) keep their own models.
+
 ## [0.56.0] - 2026-10-16
 
 ### Changed

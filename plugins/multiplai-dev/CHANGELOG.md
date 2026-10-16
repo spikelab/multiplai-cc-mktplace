@@ -17,6 +17,29 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.78.0] - 2026-10-16
+
+### Added
+- `/multiplai-dev:buildme`: `efforts:` in `specs/config.yaml` sets a step's,
+  a stage's or every step's effort, with the same keys as `models:`.
+
+### Changed
+- buildme runs every step that no setting names on `MULTIPLAI_MODEL` /
+  `MULTIPLAI_EFFORT`, else on the model and effort of the Claude Code session
+  that started the build, else on the CLI's default. Before, it ran Opus.
+  `models:`, `efforts:`, `[buildme.<stage>]` and `[buildme]` in
+  `multiplai.conf` still win, in that order.
+- The steps that passed no effort (merge, findings triage, spec delta and
+  self-check, prototype, respec, explainers) now take their stage's effort.
+  `docs_update` takes the agent stage's effort instead of the spec stage's.
+- buildme's tier follows that model; `CLAUDE_MODEL` is no longer read. With
+  no model anywhere the tier is `standard`.
+- spec-extract, review, codebase-walkthrough and pr follow the same order
+  (their own setting, then `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT`, then the
+  session).
+- Skills no longer set `model:` or `effort:` in their frontmatter: each runs
+  on the model and effort of the Claude Code session you start it from.
+
 ## [0.77.0] - 2026-10-16
 
 ### Added

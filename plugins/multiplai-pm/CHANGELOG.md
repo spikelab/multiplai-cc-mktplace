@@ -21,7 +21,12 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
-Nothing yet.
+## [0.6.0] - 2026-10-16
+
+### Changed
+- Skills no longer set `model:` or `effort:` in their frontmatter: each runs
+  on the model and effort of the Claude Code session you start it from.
+
 
 ## [0.5.0] - 2026-08-20
 
