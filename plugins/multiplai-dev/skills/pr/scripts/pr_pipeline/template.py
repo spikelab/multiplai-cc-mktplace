@@ -137,27 +137,43 @@ def discover(repo: Path, config: PrConfig | None = None) -> Discovery:
 
 
 def _discover_unset(repo: Path) -> Discovery:
-    """The template GitHub's locations give *repo*, with no `pr.template`."""
+    """The template GitHub's locations give *repo*, with no `pr.template`.
+
+    *repo* is resolved. A candidate (a location, the single file, the template directory or
+    a file in it) whose resolved path is outside *repo*, such as a symlink to another
+    folder, is skipped and named in the diagnosis: its text would go into the PR body."""
+    skipped: list[str] = []
+
+    def inside(path: Path) -> bool:
+        if path.resolve().is_relative_to(repo):
+            return True
+        skipped.append(f"`{_rel(repo, path)}` resolves outside the repository; ignored")
+        return False
+
+    def found(path: Path, standard: bool = False, diagnosis: str | None = None) -> Discovery:
+        return Discovery(path, standard, "; ".join([*skipped, *([diagnosis] if diagnosis else [])]) or None)
+
     for loc in LOCATIONS:
         base = repo / loc if loc else repo
-        if not base.is_dir():
+        if not base.is_dir() or not inside(base):
             continue
         single = _entry(base, TEMPLATE_NAME, want_dir=False)
-        if single:
-            return Discovery(single, standard=False)
+        if single and inside(single):
+            return found(single)
         directory = _entry(base, TEMPLATE_DIR, want_dir=True)
-        if directory is None:
+        if directory is None or not inside(directory):
             continue
         mds = sorted((p for p in directory.iterdir() if p.is_file() and p.suffix.lower() == ".md"),
                      key=lambda p: p.name)
+        mds = [p for p in mds if inside(p)]
         if len(mds) == 1:
-            return Discovery(mds[0], standard=False)
+            return found(mds[0])
         if len(mds) > 1:
             names = ", ".join(_rel(repo, p) for p in mds)
-            return Discovery(STANDARD_TEMPLATE, standard=True, diagnosis=(
+            return found(STANDARD_TEMPLATE, standard=True, diagnosis=(
                 "several templates, used the standard one; set pr.template in specs/config.yaml "
                 f"to pick one of: {names}"))
-    return Discovery(STANDARD_TEMPLATE, standard=True)
+    return found(STANDARD_TEMPLATE, standard=True)
 
 
 # --- parsing ----------------------------------------------------------------

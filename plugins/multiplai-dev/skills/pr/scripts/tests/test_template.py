@@ -90,6 +90,61 @@ def test_several_templates_use_the_standard_template_and_name_them(tmp_path):
     )
 
 
+# --- discovery stays inside the repository -------------------------------------
+
+
+def _repo_and_outside(tmp_path: Path) -> tuple[Path, Path]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = _write(tmp_path / "outside" / "pull_request_template.md", "## Secret\nOUTSIDE-TEXT\n")
+    return repo, outside
+
+
+def test_a_template_symlinked_outside_the_repo_is_ignored_and_named(tmp_path):
+    repo, outside = _repo_and_outside(tmp_path)
+    (repo / ".github").mkdir()
+    (repo / ".github" / "pull_request_template.md").symlink_to(outside)
+    found = discover(repo)
+    assert found.path == STANDARD_TEMPLATE and found.standard
+    assert found.diagnosis == "`.github/pull_request_template.md` resolves outside the repository; ignored"
+
+
+def test_a_symlinked_github_directory_outside_the_repo_is_ignored_and_named(tmp_path):
+    repo, outside = _repo_and_outside(tmp_path)
+    (repo / ".github").symlink_to(outside.parent, target_is_directory=True)
+    found = discover(repo)
+    assert found.path == STANDARD_TEMPLATE and found.standard
+    assert found.diagnosis == "`.github` resolves outside the repository; ignored"
+
+
+def test_a_template_directory_entry_symlinked_outside_is_ignored(tmp_path):
+    repo, outside = _repo_and_outside(tmp_path)
+    inside = _write(repo / ".github" / "PULL_REQUEST_TEMPLATE" / "feature.md")
+    (repo / ".github" / "PULL_REQUEST_TEMPLATE" / "leak.md").symlink_to(outside)
+    found = discover(repo)
+    assert found.path == inside.resolve() and not found.standard
+    assert found.diagnosis == "`.github/PULL_REQUEST_TEMPLATE/leak.md` resolves outside the repository; ignored"
+
+
+def test_discovery_goes_on_to_the_next_location_after_an_outside_symlink(tmp_path):
+    repo, outside = _repo_and_outside(tmp_path)
+    (repo / ".github").mkdir()
+    (repo / ".github" / "pull_request_template.md").symlink_to(outside)
+    docs = _write(repo / "docs" / "pull_request_template.md")
+    found = discover(repo)
+    assert found.path == docs.resolve() and "resolves outside the repository" in found.diagnosis
+
+
+def test_a_template_symlinked_inside_the_repo_is_still_used(tmp_path):
+    repo = tmp_path / "repo"
+    real = _write(repo / "templates" / "pr.md")
+    (repo / ".github").mkdir()
+    link = repo / ".github" / "pull_request_template.md"
+    link.symlink_to(real)
+    found = discover(repo)
+    assert found.path == link and not found.standard and found.diagnosis is None
+
+
 def test_config_template_takes_precedence_over_discovery(tmp_path):
     _write(tmp_path / ".github" / "pull_request_template.md")
     chosen = _write(tmp_path / ".github" / "PULL_REQUEST_TEMPLATE" / "feature.md")
