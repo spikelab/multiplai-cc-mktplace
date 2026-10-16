@@ -63,6 +63,21 @@ async def test_the_allow_list_reaches_run_agent_and_core_builds_the_deny_list(tr
         ("/repo", "review", "find:diff-bugs", "m", "high")
 
 
+async def test_every_call_limits_reads_to_its_cwd_including_the_reformat(trusted, fake_run, tmp_path):
+    """read_roots=[cwd] reaches run_agent on the first call and on the no-tools reformat."""
+    calls, replies = fake_run
+    replies.extend([_result("not json"), _result('{"value": 1}')])
+    await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.FINDER_TOOLS, cwd=str(tmp_path))
+    assert [c["read_roots"] for c in calls] == [[str(tmp_path)], [str(tmp_path)]]
+
+
+async def test_a_call_with_no_cwd_may_read_nothing(trusted, fake_run):
+    calls, replies = fake_run
+    replies.append(_result('{"value": 1}'))
+    await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.FINDER_TOOLS)
+    assert calls[0]["read_roots"] == []
+
+
 def test_finders_and_verifiers_read_and_browse_the_merger_only_reads():
     assert sdk.FINDER_TOOLS == sdk.VERIFIER_TOOLS == ["Read", "Grep", "Glob", "WebFetch", "WebSearch"]
     assert sdk.MERGER_TOOLS == ["Read", "Grep", "Glob"]
@@ -220,6 +235,7 @@ def _fake_sdk(monkeypatch) -> list[dict]:
     fake.query = query
     fake.AssistantMessage = AssistantMessage
     fake.TextBlock = TextBlock
+    fake.HookMatcher = lambda **kwargs: SimpleNamespace(**kwargs)  # run_agent needs it for read_roots
     monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake)
     return options
 

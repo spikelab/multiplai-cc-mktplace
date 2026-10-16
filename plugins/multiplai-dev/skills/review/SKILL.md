@@ -292,7 +292,9 @@ extra finders a first round with `--extra-finders` would ask), writes
 ## What this skill does on the machine
 
 - **Sends the repository's contents to a model.** Each agent reads a snapshot
-  of the tree at the reviewed commit with `Read`, `Grep` and `Glob`. Finders
+  of the tree at the reviewed commit with `Read`, `Grep` and `Glob`, and
+  cannot read anything outside it: multiplai-core denies any of those calls
+  whose path resolves outside the snapshot folder. Finders
   and verifiers also have `WebFetch` and `WebSearch`, to look up how a
   dependency behaves at the version the repository pins. No agent gets a shell
   or file edits. This is why it needs `--trust-repo`: the repo's own text

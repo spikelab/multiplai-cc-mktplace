@@ -17,6 +17,20 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.79.1] - 2026-10-16
+
+### Security
+- `/multiplai-dev:review`'s agents can no longer read files outside the
+  review's snapshot. Before, an agent could open any file you can read by
+  giving `Read`, `Grep` or `Glob` an absolute path, although the skill said
+  each agent reads a snapshot. Now multiplai-core 0.23.0 denies any of those
+  calls whose path resolves outside the stage's snapshot folder, including
+  through `..` or a symlink. The dependency source in `.review-deps/` is inside
+  the snapshot, so finders can still follow calls into it. `WebFetch` and
+  `WebSearch` are unchanged.
+- multiplai-core 0.23.0 also sends a large prompt inline. A review prompt over
+  80,000 bytes no longer gives its agent an extra `Read` of a temporary file.
+
 ## [0.79.0] - 2026-10-16
 
 ### Added
