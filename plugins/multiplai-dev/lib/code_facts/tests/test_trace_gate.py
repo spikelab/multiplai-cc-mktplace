@@ -55,7 +55,7 @@ def entry(kind="argparse_subcommand", name="opal", path=CLI, line=None, handler=
     Entry, Location, Handler = lib("Entry"), lib("Location"), lib("Handler")
     return Entry(kind=kind, name=name, location=Location(path=path, line=line),
                  handler=Handler(**handler) if handler else None, invocation=None,
-                 known_edges=list(edges), also_invoked_by=[])
+                 invoked_by=f"a person or a script running {name}", known_edges=list(edges), also_invoked_by=[])
 
 
 def opal_entry(snap):

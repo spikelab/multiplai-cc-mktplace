@@ -78,7 +78,8 @@ def _loc(path: str, line: int) -> dict:
 
 def _entry(kind: str, name: str, path: str, line: int, *, handler=None, invocation=None, invokers=()) -> dict:
     return {"kind": kind, "name": name, "location": _loc(path, line), "handler": handler,
-            "invocation": invocation, "also_invoked_by": list(invokers)}
+            "invocation": invocation, "invoked_by": f"a person or a script running {invocation or name}",
+            "also_invoked_by": list(invokers)}
 
 
 def _hop(symbol: str, path: str, start: int, end: int, quote: str) -> dict:

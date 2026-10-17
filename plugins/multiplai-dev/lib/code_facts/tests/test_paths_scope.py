@@ -234,7 +234,7 @@ def entry(path, line, *, handler=None, invokers=(), kind="argparse_subcommand"):
     inv = [lib("EntryInvoker")(kind="skill_command", name="inv", location=Location(path=p, line=n))
            for p, n in invokers]
     return lib("Entry")(kind=kind, name="e", location=Location(path=path, line=line), handler=h,
-                        invocation=None, known_edges=[], also_invoked_by=inv)
+                        invocation=None, invoked_by="the caller (seed)", known_edges=[], also_invoked_by=inv)
 
 
 class TestEntryDistance:
@@ -287,7 +287,7 @@ class TestCoveredLines:
 def traced_path(name, *, hops=1, covered=(), kind="argparse", path="a/cli.py", line=1):
     L, E = lib("Location"), lib("PathEntry")
     ent = E(kind=kind, name=name, location=L(path=path, line=line), handler=None, invocation=None,
-            also_invoked_by=[])
+            invoked_by="the caller (seed)", also_invoked_by=[])
     return lib("TracedPath")(
         id="p1", entry=ent, hops=[hop(path, n, n) for n in range(1, hops + 1)], stops_at=None, break_reason=None,
         changed_lines_covered=[L(path="core.py", line=n) for n in covered],
@@ -315,7 +315,7 @@ class TestOrderPaths:
 def drop(stage, reason, path, line, kind="argparse"):
     L, E = lib("Location"), lib("PathEntry")
     ent = E(kind=kind, name=f"{stage}:{path}:{line}:{kind}", location=L(path=path, line=line), handler=None,
-            invocation=None, also_invoked_by=[])
+            invocation=None, invoked_by="the caller (seed)", also_invoked_by=[])
     return lib("PathDrop")(stage=stage, reason=reason, detail="d", entry=ent)
 
 

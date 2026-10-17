@@ -48,6 +48,8 @@ log = logging.getLogger(__name__)
 FALLBACK_KINDS = frozenset(get_args(EntryKind))
 OTHER_KIND = "other"
 FALLBACK_LABEL = "paths:fallback"
+# Who runs an entry the fallback adds: the model names no invoker.
+MODEL_INVOKED_BY = "another program, skill or agent (found by model)"
 
 # The location a dropped entry is recorded at when it cites no line under the snapshot root.
 UNPLACED = Location(path="(unplaced)", line=1)
@@ -191,7 +193,8 @@ def _enclosing_handler(index: PyIndex, location: Location) -> Handler | None:
 
 def _model_entry(item: FallbackEntry, location: Location, handler: Handler | None) -> Entry:
     return Entry(kind="model", name=item.name.strip() or f"{location.path}:{location.line}", location=location,
-                 handler=handler, invocation=None, known_edges=[], also_invoked_by=[])
+                 handler=handler, invocation=None, invoked_by=MODEL_INVOKED_BY, known_edges=[],
+                 also_invoked_by=[])
 
 
 def _drop(stage: DropStage, reason: DropReason, detail: str, entry: Entry) -> PathDrop:

@@ -47,7 +47,7 @@ def test_argparse_cli_maps_to_a_written_document_whose_hops_reread(tmp_path):
     assert opal["entry"] == {
         "kind": "argparse", "name": "opal", "location": {"path": CLI, "line": snap.line(CLI, "add_parser('opal')")},
         "handler": {"path": CLI, "line": snap.line(CLI, "def cmd_opal("), "symbol": "cmd_opal"},
-        "invocation": None, "also_invoked_by": [],
+        "invocation": None, "invoked_by": "a person or a script running opal", "also_invoked_by": [],
     }
     assert ruby["entry"]["name"] == "ruby"
     for p in doc["paths"]:
@@ -398,7 +398,7 @@ def test_to_path_entry_maps_the_kind_and_drops_known_edges(tmp_path):
     assert ent.known_edges  # set_defaults dispatch gives an edge, which paths.v1 does not publish
     assert lib("to_path_entry")(ent) == lib("PathEntry")(
         kind="argparse", name="opal", location=ent.location, handler=ent.handler, invocation=None,
-        also_invoked_by=[])
+        invoked_by="a person or a script running opal", also_invoked_by=[])
 
 
 def test_assign_ids_numbers_in_order(tmp_path):
@@ -407,7 +407,8 @@ def test_assign_ids_numbers_in_order(tmp_path):
 
     def path(pid, line):
         return TracedPath(id=pid, entry=PathEntry(kind="seed", name=f"s{line}", location={**loc, "line": line},
-                                                  handler=None, invocation=None, also_invoked_by=[]),
+                                                  handler=None, invocation=None, invoked_by="the caller (seed)",
+                                                  also_invoked_by=[]),
                           hops=[PathHop(symbol_called="f", path="a.py", line_start=line, line_end=line, quote="x")],
                           stops_at=None, break_reason=None, changed_lines_covered=[],
                           tests={"e2e": [], "mocks_hop_2": []})

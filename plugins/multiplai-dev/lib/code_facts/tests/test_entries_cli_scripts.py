@@ -374,6 +374,25 @@ def test_repeat_and_reordered_seed_runs_are_byte_identical(tmp_path):
     assert discover(root, list(reversed(seeds))).model_dump_json(by_alias=True) == first
 
 
+def test_a_person_or_a_script_invokes_every_cli_entry_by_its_command_name(tmp_path):
+    argparse_cli = ('import argparse\n\n\ndef cmd_open(args):\n    return 0\n\n\ndef build():\n'
+                    '    sub = argparse.ArgumentParser().add_subparsers()\n'
+                    '    sub.add_parser("open").set_defaults(func=cmd_open)\n')
+    root = make_tree(tmp_path / "snap", {
+        "pyproject.toml": PYPROJECT_HEAD + 'tool = "app.tools:other"\n', "app/__init__.py": "",
+        "app/cli.py": CLICK, "app/typer_cli.py": TYPER, "app/args.py": argparse_cli,
+        "app/tools.py": "def other():\n    return 1\n",
+        "tools/report.py": "def run():\n    pass\n\n\nif __name__ == \"__main__\":\n    run()\n"})
+    entries = discover(root).entries
+    assert {e.kind for e in entries} == {"argparse_subcommand", "click_command", "typer_command", "project_script",
+                                         "main_module"}
+    for e in entries:
+        assert e.invoked_by == f"a person or a script running {e.name}", e.name
+    published = {e.name: entries_mod().to_path_entry(e).invoked_by for e in entries}
+    assert published["open"] == "a person or a script running open"
+    assert published["tool"] == "a person or a script running tool"
+
+
 # --- merging ---------------------------------------------------------------------------------------
 
 
@@ -381,7 +400,7 @@ def make_entry(kind, name, path, line, h=None, edges_=()):
     m = entries_mod()
     return m.Entry(kind=kind, name=name, location=lib("Location")(path=path, line=line),
                    handler=None if h is None else lib("Handler")(path=h[0], line=h[1], symbol=h[2]),
-                   invocation=None,
+                   invocation=None, invoked_by=f"a person or a script running {name}",
                    known_edges=[m.KnownEdge(from_=lib("Location")(path=a, line=b), to=lib("Location")(path=c, line=d))
                                 for a, b, c, d in edges_],
                    also_invoked_by=[])

@@ -576,6 +576,11 @@
           ],
           "title": "Invocation"
         },
+        "invoked_by": {
+          "minLength": 1,
+          "title": "Invoked By",
+          "type": "string"
+        },
         "also_invoked_by": {
           "items": {
             "$ref": "#/$defs/Invoker"
@@ -590,6 +595,7 @@
         "location",
         "handler",
         "invocation",
+        "invoked_by",
         "also_invoked_by"
       ],
       "title": "PathEntry",

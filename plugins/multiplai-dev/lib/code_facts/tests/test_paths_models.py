@@ -24,7 +24,7 @@ FIELD_ORDER = {
     "PathsResult": ["schema_version", "commit", "scoped", "cap", "fallback", "paths", "dropped",
                     "diagnostics", "test_listing_skips"],
     "TracedPath": ["id", "entry", "hops", "stops_at", "break_reason", "changed_lines_covered", "tests"],
-    "PathEntry": ["kind", "name", "location", "handler", "invocation", "also_invoked_by"],
+    "PathEntry": ["kind", "name", "location", "handler", "invocation", "invoked_by", "also_invoked_by"],
     "Invoker": ["kind", "name", "location"],
     "Location": ["path", "line"],
     "Handler": ["path", "line", "symbol"],

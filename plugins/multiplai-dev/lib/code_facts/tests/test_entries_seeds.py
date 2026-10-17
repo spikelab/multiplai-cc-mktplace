@@ -73,6 +73,14 @@ class TestSeedEntries:
         assert e.handler.line == line_of(API, "def other")
 
 
+    def test_the_seed_name_says_who_invokes_it_else_the_caller(self, root):
+        # Entries come in location order: handle_request is above other.
+        unnamed, named = seeds_of(discover(root, [Seed(path="lib/api.py", symbol="other", name="the nightly job"),
+                                                   Seed(path="lib/api.py", symbol="handle_request")]))
+        assert (named.name, named.invoked_by) == ("the nightly job", "the nightly job")
+        assert (unnamed.name, unnamed.invoked_by) == ("lib/api.py:handle_request", "the caller (seed)")
+
+
 class TestSeedNotFound:
     @pytest.mark.parametrize("seed", [
         Seed(path="lib/missing.py", symbol="x"),

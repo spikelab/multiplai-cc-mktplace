@@ -245,6 +245,13 @@ def test_kept_entry_is_traced_as_a_model_path(snap, tmp_path):
     lib("write_paths_file")(result, tmp_path / "paths.json")
 
 
+def test_a_model_found_entry_is_invoked_by_another_program_skill_or_agent(snap):
+    result = run_map(snap, fake(snap, {"entries": [ruby_entry(snap)]}), fallback=True)
+    by_kind = {p.entry.kind: p.entry.invoked_by for p in result.paths}
+    assert by_kind == {"argparse": "a person or a script running opal",
+                       "model": "another program, skill or agent (found by model)"}
+
+
 def test_handler_is_the_enclosing_def_only_for_python_lines_inside_one(snap):
     answer = {"entries": [
         fb("in body", cite(snap, HIDDEN, "return helper()")),

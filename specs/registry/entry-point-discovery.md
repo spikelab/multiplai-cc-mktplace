@@ -30,6 +30,7 @@ Each discovered entry SHALL have these fields:
 - `location`: `{path, line}`, where the entry is declared.
 - `handler`: `{path, line, symbol}`, or `null` if no handler resolves.
 - `invocation`: the literal command text for `skill_command` and `hook_command`, otherwise `null`.
+- `invoked_by`: who runs the entry, in words, derived from its kind without a model call: `an agent following <SKILL.md path>` for `skill_command`; `Claude Code, on the <event[:matcher]> hook (<hooks file>)` for `hook_command`; the seed's name, else `the caller (seed)`, for `seed`; `a person or a script running <invocation or name>` for every other kind.
 - `known_edges`: a list of `{from: {path, line}, to: {path, line}}`.
 - `also_invoked_by`: a list of `{kind, name, location}`.
 

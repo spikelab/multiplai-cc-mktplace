@@ -743,7 +743,7 @@ class TestModelsAndExports:
     def test_entry_fields_in_order_and_known_edge_alias(self, tmp_path):
         mod = entries_mod()
         assert list(mod.Entry.model_fields) == [
-            "kind", "name", "location", "handler", "invocation", "known_edges", "also_invoked_by"]
+            "kind", "name", "location", "handler", "invocation", "invoked_by", "known_edges", "also_invoked_by"]
         assert list(mod.Diagnostic.model_fields) == ["path", "line", "reason", "detail"]
         root = make_tree(tmp_path / "snap", {"cli.py": SET_DEFAULTS})
         [e] = argparse_entries(discover(root))

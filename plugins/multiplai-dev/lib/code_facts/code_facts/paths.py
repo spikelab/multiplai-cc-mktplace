@@ -138,6 +138,8 @@ class PathEntry(_Strict):
     location: Location
     handler: Handler | None
     invocation: str | None
+    # Who runs the entry, in words: derived from its kind in code, never asked of a model.
+    invoked_by: str = Field(min_length=1)
     also_invoked_by: list[Invoker]
 
 

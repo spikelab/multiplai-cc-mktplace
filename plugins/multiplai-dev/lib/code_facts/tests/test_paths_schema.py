@@ -111,7 +111,7 @@ def test_property_order_matches_the_normative_field_order():
     assert _props(schema, "paths") == ["id", "entry", "hops", "stops_at", "break_reason",
                                        "changed_lines_covered", "tests"]
     assert _props(schema, "paths", "entry") == ["kind", "name", "location", "handler", "invocation",
-                                                "also_invoked_by"]
+                                                "invoked_by", "also_invoked_by"]
     assert _props(schema, "paths", "entry", "location") == ["path", "line"]
     assert _props(schema, "paths", "entry", "handler") == ["path", "line", "symbol"]
     assert _props(schema, "paths", "entry", "also_invoked_by") == ["kind", "name", "location"]

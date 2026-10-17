@@ -140,6 +140,12 @@ class TestSkillCommands:
         assert edges(e) == {(PR_SKILL, e.location.line, PR, line_of(PR_MAIN, 'add_parser("open")'))}
         assert disc.diagnostics == []
 
+    def test_an_agent_following_the_skill_md_invokes_a_skill_command(self, tmp_path):
+        disc = discover(pr_tree(tmp_path, skill_md(fenced("bash", "python3 -m pr_pipeline open --draft"))))
+        (e,) = of_kind(disc, "skill_command")
+        assert e.invoked_by == f"an agent following {PR_SKILL}"
+        assert lib("to_path_entry")(e).invoked_by == "an agent following skills/pr/SKILL.md"
+
     def test_subcommand_with_resolved_handler_edges_to_it_and_merges(self, tmp_path):
         text = skill_md(fenced("bash", "python3 -m pr_pipeline open"))
         disc = discover(pr_tree(tmp_path, text, PR_MAIN_RESOLVED))
@@ -350,6 +356,13 @@ class TestHookCommands:
             assert {t for *_, t, _ in edges(e)} == {script}
             assert all(f == "plugin/hooks/hooks.json" for f, *_ in edges(e))
         assert disc.diagnostics == []
+
+    def test_claude_code_invokes_a_hook_on_its_event_and_matcher(self, tmp_path):
+        root, _, _ = eight_hook_plugin(tmp_path, GUARDLESS_SCRIPT)
+        got = {e.name: e.invoked_by for e in of_kind(discover(root), "hook_command")}
+        assert got == {hook_name(ev, m): f"Claude Code, on the {hook_name(ev, m)} hook (plugin/hooks/hooks.json)"
+                       for ev, m in EIGHT_EVENTS}
+        assert got["PreToolUse:Bash"] == "Claude Code, on the PreToolUse:Bash hook (plugin/hooks/hooks.json)"
 
     def test_eight_hooks_on_guarded_scripts_stay_eight_separate_paths(self, tmp_path):
         root, _, _ = eight_hook_plugin(tmp_path, GUARDED_MAIN)

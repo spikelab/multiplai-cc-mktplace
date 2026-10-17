@@ -38,7 +38,7 @@ def test_keys_are_written_in_declaration_order(tmp_path, full_paths_doc):
     assert list(doc["paths"][0]) == ["id", "entry", "hops", "stops_at", "break_reason",
                                      "changed_lines_covered", "tests"]
     assert list(doc["paths"][0]["entry"]) == ["kind", "name", "location", "handler", "invocation",
-                                              "also_invoked_by"]
+                                              "invoked_by", "also_invoked_by"]
     assert list(doc["paths"][0]["hops"][0]) == ["symbol_called", "path", "line_start", "line_end", "quote",
                                                 "note", "side"]
     assert list(doc["dropped"][0]) == ["stage", "reason", "detail", "entry"]

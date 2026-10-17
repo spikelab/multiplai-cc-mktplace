@@ -105,6 +105,7 @@ An entry object SHALL have these fields:
 - `kind`: one of `argparse`, `click`, `typer`, `script`, `main`, `skill_command`, `hook`, `seed`, `model`.
 - `name`: a string.
 - `location`: a location object giving the definition or dispatch line.
+- `invoked_by`: a non-empty string saying who runs the entry. An entry the model fallback added has `another program, skill or agent (found by model)`.
 - `also_invoked_by`: an array of invoker records. Each record has its own `kind`, `name` and `location`. The array is sorted by `path`, then `line`, then `kind`. It is empty when no other invoker resolved to the same handler.
 
 #### Scenario: Unknown kind rejected

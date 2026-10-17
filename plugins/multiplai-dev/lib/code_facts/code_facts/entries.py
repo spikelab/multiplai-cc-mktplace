@@ -134,6 +134,7 @@ class Entry(_Strict):
     location: Location
     handler: Handler | None
     invocation: str | None
+    invoked_by: str = Field(min_length=1)
     known_edges: list[KnownEdge]
     also_invoked_by: list[EntryInvoker]
 
@@ -147,7 +148,25 @@ def to_path_entry(entry: Entry) -> PathEntry:
     """The entry as paths.v1 publishes it: output kinds, its invokers' included, and no known edges."""
     invokers = [Invoker(kind=OUTPUT_KIND[i.kind], name=i.name, location=i.location) for i in entry.also_invoked_by]
     return PathEntry(kind=output_kind(entry), name=entry.name, location=entry.location, handler=entry.handler,
-                     invocation=entry.invocation, also_invoked_by=invokers)
+                     invocation=entry.invocation, invoked_by=entry.invoked_by, also_invoked_by=invokers)
+
+
+def invoked_by(kind: EntryKind, name: str, path: str, invocation: str | None) -> str:
+    """Who runs an entry of discovery kind `kind` declared in `path`, in words. A seed's is its caller's
+    (`seed_invoked_by`).
+    """
+    if kind == "skill_command":
+        return f"an agent following {path}"
+    if kind == "hook_command":
+        return f"Claude Code, on the {name} hook ({path})"
+    if kind == "seed":
+        return seed_invoked_by(None)
+    return f"a person or a script running {invocation or name}"
+
+
+def seed_invoked_by(seed_name: str | None) -> str:
+    """Who runs a seed's entry: the name the caller gave the seed, else the caller."""
+    return seed_name or "the caller (seed)"
 
 
 class Discovery(_Strict):
@@ -213,10 +232,13 @@ def _edge(from_path: str, from_line: int, to: Handler) -> KnownEdge:
 
 
 def _static_entry(kind: EntryKind, name: str, path: str, line: int, handler: Handler | None,
-                  known_edges: Iterable[KnownEdge] = ()) -> Entry:
-    """An entry declared at `path:line` of the source: no invocation text, and no invokers until merged."""
+                  known_edges: Iterable[KnownEdge] = (), by: str | None = None) -> Entry:
+    """An entry declared at `path:line` of the source: no invocation text, and no invokers until merged. `by`
+    overrides who runs it.
+    """
     return Entry(kind=kind, name=name, location=Location(path=path, line=line), handler=handler, invocation=None,
-                 known_edges=list(known_edges), also_invoked_by=[])
+                 invoked_by=by or invoked_by(kind, name, path, None), known_edges=list(known_edges),
+                 also_invoked_by=[])
 
 
 # --- argparse ---------------------------------------------------------------------------------
@@ -1121,7 +1143,7 @@ def _seed_entry(index: PyIndex, seed: Seed, path: str) -> Entry | Diagnostic:
         found = index.enclosing_def(path, line)
     handler = Handler(path=path, line=found.start, symbol=found.name) if found else None
     default_name = f"{path}:{found.name}" if found else f"{path}:{line}"
-    return _static_entry("seed", seed.name or default_name, path, line, handler)
+    return _static_entry("seed", seed.name or default_name, path, line, handler, by=seed_invoked_by(seed.name))
 
 
 # --- SKILL.md and hook commands -----------------------------------------------------------------
@@ -1268,6 +1290,7 @@ def _command_entry(kind: EntryKind, name: str, path: str, line: int, invocation:
     """An entry for the command `invocation` at `path:line`, with one known edge to where it lands."""
     location = Location(path=path, line=line)
     return Entry(kind=kind, name=name, location=location, handler=target.handler, invocation=invocation,
+                 invoked_by=invoked_by(kind, name, path, invocation),
                  known_edges=[KnownEdge(from_=location, to=target.to)], also_invoked_by=[])
 
 
