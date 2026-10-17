@@ -6,6 +6,7 @@ import json
 import random
 
 import pytest
+from pydantic import BaseModel, field_serializer
 
 from trace_fixtures import (CLI, NAMES, FakeCall, as_json, chain_hops, chain_source, cli_snapshot, cli_source,
                             commit_snapshot, lib, run_map)
@@ -138,7 +139,7 @@ def test_trace_prompt_names_the_change_scope(tmp_path):
     prompt = lib("paths_trace")(ent, commit="c0ffee", changed_lines={"pkg/core.py": frozenset({10, 11, 12, 37})},
                                 known_edges=ent.known_edges, places=[], hop_limit=20)
     assert "pkg/core.py" in prompt and "c0ffee" in prompt and "cmd_opal" in prompt
-    assert all(str(n) in prompt for n in (10, 12, 37))
+    assert "pkg/core.py: lines 10-12, 37" in prompt
     assert "no change scope" not in prompt
 
 
@@ -210,8 +211,18 @@ def test_break_at_hop_1_after_reask_drops_the_entry(tmp_path):
     assert len(call.of("opal")) == 2
 
 
+class Unserialisable(BaseModel):
+    """An answer model whose dump fails, as a foreign CallFn's might."""
+    hops: list = []
+
+    @field_serializer("hops")
+    def _refuse(self, hops):
+        raise ValueError("cannot serialise hops")
+
+
 @pytest.mark.parametrize("bad,reason", [
     ("this is not json", "malformed_answer"),
+    (Unserialisable(), "malformed_answer"),
     ({"hops": [], "alternatives": [[]]}, "malformed_answer"),
     ({"hops": []}, "empty_trace"),
 ])

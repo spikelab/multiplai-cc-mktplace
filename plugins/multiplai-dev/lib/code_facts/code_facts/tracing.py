@@ -94,6 +94,8 @@ def encode_trace_answer(out: Any) -> dict:
     """A call's answer as stored: the validated TraceAnswer's dump, or the reason it does not parse.
 
     The call may return a TraceAnswer, another model, a dict or a JSON string.
+    Any answer that cannot be read as a TraceAnswer is malformed, so one odd
+    answer costs only its own entry.
     """
     try:
         if isinstance(out, BaseModel):
@@ -104,6 +106,8 @@ def encode_trace_answer(out: Any) -> dict:
         first = e.errors()[0]
         where = ".".join(map(str, first["loc"]))
         return {MALFORMED: f"{where}: {first['msg']}" if where else first["msg"]}
+    except Exception as e:  # a foreign model's own dump failing, e.g. PydanticSerializationError
+        return {MALFORMED: (str(e).splitlines() or [type(e).__name__])[0][:200]}
     return answer.model_dump(mode="json")
 
 

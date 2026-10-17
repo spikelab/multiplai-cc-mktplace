@@ -1,0 +1,140 @@
+{
+  "generated_at": "2026-10-17T06:52:58.478478+00:00",
+  "kind": "fix_on_pass_review",
+  "block": {
+    "number": 3,
+    "name": "Trace each discovered entry into a gated, linear path with one re-ask"
+  },
+  "round": 3,
+  "head_sha": "d5e988507daf70ee422c87a2e276d533feaff2e5",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The boundaries are clean. trace_gate.py is pure (no CallFn). tracing.py owns the ask/re-ask orchestration. `canonical_digest` lives once in explore.py. `normalise_rel_path` is shared between changed lines and gate rule 1. Break codes and reasons are Literals (`BreakCode`, `CutReason`, `DropReason`). No walkthrough_pipeline import. `ask` changes are backward compatible. Possible smells: prompts.py, the shared explore-prompt module used by review and spec-extract, now imports `.trace_gate` at load time just for `TraceAnswer` (possible Divergent Change / coupling). map_paths needs function-local imports to break a paths\u2192entries/tracing\u2192paths cycle. `ask` still hard-codes 'explore' in its `errors` string and its progress line ('\u2026 facts'), even though it is now a generic asker.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "Tests assert observable outcomes: written paths.json bytes, entry dicts, stops_at/break_reason, drop (stage, reason), ids, and hops that re-read through `check_citation`. FakeCall honours the async `(prompt, schema, **kwargs)` contract and returns dicts, JSON strings, models, and an unserialisable model. Fixtures are committed to git with a fixed author env (conftest._git). Gate rule order, the A\u2192B\u2192A repeat, hop limits 20/21/25, the worse re-answer replacing the first, and an exception during encode are all pinned. Gaps: `line_out_of_range` is tested only past EOF, never for start<1 or end<start, the very cases that are why TraceHop lines are unconstrained ints. `test_unscoped_trace_prompt_\u2026` still asserts `str(line) in prompt` for small line numbers, which can match the hex commit SHA in the same prompt. Trace-order and places/changed-lines reordering independence of the keys are not tested directly.",
+      "confidence": 0.7
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "Every block-3 behaviour is implemented and tested: OUTPUT_KIND/KIND_RANK values, the overrides of read-only tools, cwd and labels, prompt contents (kind, location, handler, commit, scope text, edges, places, 'at most 20 hops'), the three answer forms, extra='forbid' branching rejected as malformed_answer, gate rules 1\u20138 in order, hop_limit kept with no re-ask, one re-ask carrying index/code/detail/prefix, cut semantics, hop-1 drops, call_failed vs propagation, sort key and p1\u2026pN ids, the empty `tests` listing, and the four spec amendments. Small divergences: the re-ask prompt drops the change scope, known edges and places that the first prompt carried, and that the gate still uses to judge the re-answer. `trace_key` omits `entry.name`/`invocation`, which the prompt includes.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Signatures match the stated interfaces: `gate_hops`, `to_path_entry`, `trace_entry(entry, *, ctx)`, `assign_ids`, `paths_trace`, `paths_reask`, `TraceHop`/`TraceAnswer`/`GateResult`, `BREAK_CODES`. `Entry.known_edges` and `places` reach both the first prompt and gate rule 7. The never-published codes (malformed_answer, empty_trace, entry_mismatch) can only become drops: they occur only at hop 1, and `CutReason` in TracedPath enforces this. Ids are assigned after ordering. Every call goes through the caller's CallFn via the extended `ask`. Loose seam: on the re-ask, the prompt and the gate disagree about edges, places and scope (the gate uses them; `paths_reask` does not tell the agent about them).",
+      "confidence": 0.7
+    }
+  ],
+  "weighted_average": 3.865625,
+  "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 3.9"
+  },
+  "missing": [],
+  "extra": [
+    "`ask` now replaces a `budget_label` passed in `call_kwargs` instead of raising TypeError on a duplicate keyword (explore.py:141). This changes behaviour for every explore caller, not only paths. The implementation notes declare it and no existing caller depends on the TypeError, but the block did not ask for it."
+  ],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "`trace_key` does not cover every prompt input. `entry.name` and `entry.invocation` appear in the prompt but not in the key, so two entries with the same kind, location and handler but different names share one cached answer, and the second entry's prompt is never sent.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "tracing.py `trace_key`: \"entry\": [entry.kind, entry.location.path, entry.location.line, entry.handler\u2026]. prompts.py `_entry_lines` renders f\"name: {entry.name}\" and f\"invocation: {entry.invocation}\". `trace_entries` builds `first = {trace_key(e, ctx): \u2026 for e in entries}`, so a key collision silently drops one prompt. Fix: add `entry.name` and `entry.invocation` to the digested `entry` list, so the key covers exactly what the prompt renders.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/tracing.py",
+      "line": 73,
+      "reviewers": []
+    },
+    {
+      "claim": "No test covers `line_out_of_range` for line_start < 1 or line_end < line_start. Those are the two cases for which the implementer made TraceHop lines unconstrained ints (implementation note 4).",
+      "severity": "Minor",
+      "confidence": 0.75,
+      "evidence": "test_trace_gate.py `test_line_past_the_end_of_file_is_line_out_of_range` uses line=500 only. `test_first_failing_rule_wins_on_one_hop` uses 9000. trace_gate.py `_cite` checks `1 <= hop.line_start <= hop.line_end <= lines`. A regression that re-adds `ge=1` to TraceHop would turn these answers into `malformed_answer`, and nothing would catch it. Fix: parametrize the out-of-range test with (0, 0) and (end < start) cases.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_trace_gate.py",
+      "line": 160,
+      "reviewers": []
+    },
+    {
+      "claim": "`test_unscoped_trace_prompt_carries_entry_commit_edge_places_and_limit` still checks that line numbers appear in the prompt with bare `str(line) in prompt`. The same prompt contains the 40-hex commit SHA, so short line numbers can match by accident. This is the weakness the implementer removed elsewhere.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "test_trace_paths.py: `for line in (snap.line(CLI, \"add_parser('opal')\"), snap.line(CLI, \"return args.func(args)\"), snap.line(CLI, \"def cmd_opal(\")): assert str(line) in prompt` alongside `assert snap.head in prompt`. Fix: assert the rendered forms, e.g. f\"declared at: {CLI}:{line}\", f\"handler: cmd_opal at {CLI}:{line}\", and the edge bullet f\"{CLI}:{from} -> {CLI}:{to}\".",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_trace_paths.py",
+      "line": 132,
+      "reviewers": []
+    },
+    {
+      "claim": "`ask` is now a generic asker, but its error string and progress line still hard-code the explore domain ('explore {key}: \u2026', '\u2026 facts').",
+      "severity": "Note",
+      "confidence": 0.5,
+      "evidence": "explore.py:148 `errors.append(f\"explore {key}: {first}\")` and :152 `progress(f\"  explore {key}: {len(answers[key].get('facts', []))} facts\")`. Tracing avoids the wrong output only because `ask_kwargs` passes no `progress` and a throwaway `errors=[]`. Any future caller that passes either would get 'explore <sha>: 0 facts'. Fix: build these strings from `label`, or let callers supply a progress formatter.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/explore.py",
+      "line": 152,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "The re-ask prompt omits the known edges, the known places and the change scope that the first trace prompt carried. The gate still judges the re-asked answer against those edges and places, and a later scoping step will judge it against the changed lines.",
+      "severity": "Minor",
+      "confidence": 0.7,
+      "evidence": "prompts.py `paths_trace` includes `{scope}`, 'Known edges: \u2026{_bullets(edges)}' and 'Known places: \u2026{_bullets(shown_places)}'. `paths_reask(entry, *, commit, broken_at, break_reason, detail, accepted)` builds only `_snapshot_and_entry`, the kept-hop bullets and `_trace_task(HOP_LIMIT)`, with no edges, places or scope. tracing.py `_gate` for the second answer still passes `known_edges=entry.known_edges, places=ctx.places`. Why it matters: a re-asked agent is not told that it may follow a static edge or land on a framework boundary, which is exactly what fixes many `unconnected_hop` breaks. In scoped runs it also loses the 'through the changed lines' instruction, so coverage can drop. The spec signature for `paths_reask` has no edges/places/changed_lines parameters, so the fix needs a decision. Either extend `paths_reask` (or share a helper with `paths_trace`) to render the same scope, edges and places sections, or record the omission as a deliberate spec clarification.\nREJECTED: The block spec gives `paths_reask(entry, *, commit, broken_at, break_reason, detail, accepted)` with no edges, places or changed-lines parameters. It also says the re-ask carries 'the broken index, the code, the detail and the accepted prefix'. The diff implements exactly that interface. Adding scope, edges and places would contradict the agreed signature. The reviewer itself says this needs a spec decision. That makes it a spec-level suggestion, not a defect in this block.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/prompts.py",
+      "line": 152,
+      "reviewers": [],
+      "judge_reason": "The block spec gives `paths_reask(entry, *, commit, broken_at, break_reason, detail, accepted)` with no edges, places or changed-lines parameters. It also says the re-ask carries 'the broken index, the code, the detail and the accepted prefix'. The diff implements exactly that interface. Adding scope, edges and places would contradict the agreed signature. The reviewer itself says this needs a spec decision. That makes it a spec-level suggestion, not a defect in this block."
+    },
+    {
+      "claim": "prompts.py, the shared explore-prompt module imported by review, spec-extract and buildme through `code_facts`, now imports `.trace_gate` (and so entries, pyindex and explore) at module load, only to render `schema_json(TraceAnswer)`.",
+      "severity": "Note",
+      "confidence": 0.45,
+      "evidence": "prompts.py:10-11 `from .paths import HOP_LIMIT` / `from .trace_gate import TraceAnswer`. Before this diff prompts.py imported only `.models`. Possible Divergent Change: paths-trace prompt changes and explore-prompt changes now share one module and one import graph. Fix: move the paths prompts into their own module (e.g. `paths_prompts.py`) that imports `citation_rules`, `_DATA_NOT_INSTRUCTIONS` and `schema_json` from prompts.py.\nREJECTED: This is a module-organisation preference. The import graph is acyclic: `explore.py` imports only `.models`, and `map_paths` defers its imports. The build spec puts `paths_trace`/`paths_reask` and the version constants among the block's products without requiring a separate module, and the current layout works. No standard in the context asks for the split.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/prompts.py",
+      "line": 11,
+      "reviewers": [],
+      "judge_reason": "This is a module-organisation preference. The import graph is acyclic: `explore.py` imports only `.models`, and `map_paths` defers its imports. The build spec puts `paths_trace`/`paths_reask` and the version constants among the block's products without requiring a separate module, and the current layout works. No standard in the context asks for the split."
+    },
+    {
+      "claim": "`encode_trace_answer` catches every `Exception` raised while dumping or validating an answer and turns it into `malformed_answer`. A programming error (or a MemoryError) inside a foreign model's serializer is reported only as an entry drop at INFO level.",
+      "severity": "Note",
+      "confidence": 0.45,
+      "evidence": "tracing.py `except Exception as e:  # a foreign model's own dump failing, e.g. PydanticSerializationError` \u2192 `return {MALFORMED: \u2026}`. The drop is logged via `_report` with `log.info`, with no traceback. Hidden errors: bugs in the CallFn's result model look like model chatter. Fix: catch `pydantic_core.PydanticSerializationError` (plus `ValueError`/`TypeError` if needed) explicitly, and `log.warning(..., exc_info=True)` in the broad branch.\nREJECTED: The broad catch is a deliberate decision. `encode_trace_answer`'s docstring says 'Any answer that cannot be read as a TraceAnswer is malformed, so one odd answer costs only its own entry', and implementation note (5) records it too. The test `Unserialisable` case exercises it. The failure message is still kept in the drop's `detail` in the output. Changing exception scope or log level is a preference, not a defect against the spec.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/tracing.py",
+      "line": 107,
+      "reviewers": [],
+      "judge_reason": "The broad catch is a deliberate decision. `encode_trace_answer`'s docstring says 'Any answer that cannot be read as a TraceAnswer is malformed, so one odd answer costs only its own entry', and implementation note (5) records it too. The test `Unserialisable` case exercises it. The failure message is still kept in the drop's `detail` in the output. Changing exception scope or log level is a preference, not a defect against the spec."
+    },
+    {
+      "claim": "This diff changes code under plugins/multiplai-dev with no version bump or CHANGELOG entry. CLAUDE.md says the changelog gate fails such a PR, but this is one block of a larger change, so the bump may land later.",
+      "severity": "Note",
+      "confidence": 0.3,
+      "evidence": "CLAUDE.md: \"release notes: a changed plugin must carry a version bump and an entry\" and \"the `changelog-gate` CI job fails a pull request that changes a plugin without both.\" The diff touches no `plugins/multiplai-dev/CHANGELOG.md`, `plugin.json` or `marketplace.json`.\nREJECTED: This is block 3 of a multi-block change. The version bump and CHANGELOG entry belong to the change's pull request as a whole, not to each block's diff. The reviewer acknowledges this, and nothing in the build context requires a per-block bump.",
+      "dimension": "conventions",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/tracing.py",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "This is block 3 of a multi-block change. The version bump and CHANGELOG entry belong to the change's pull request as a whole, not to each block's diff. The reviewer acknowledges this, and nothing in the build context requires a per-block bump."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}

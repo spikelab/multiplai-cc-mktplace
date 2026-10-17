@@ -132,13 +132,13 @@ async def ask(key: str, prompt: str, call: CallFn, answers: dict[str, dict], *,
 
     The call gets *schema* and `budget_label(key)`, which replaces any
     `budget_label` in *call_kwargs*; *encode* turns what it returns into the
-    stored answer. An exception in *fatal* propagates. One in *recoverable* is
-    logged, stored as `{"error": ...}` and appended to *errors*. Anything else
-    propagates.
+    stored answer. An exception from the call or from *encode* is handled
+    alike: one in *fatal* propagates, one in *recoverable* is logged, stored as
+    `{"error": ...}` and appended to *errors*, and anything else propagates.
     """
     label = budget_label(key)
     try:
-        out = await call(prompt, schema, **{**call_kwargs, "budget_label": label})
+        answer = encode(await call(prompt, schema, **{**call_kwargs, "budget_label": label}))
     except fatal:
         raise
     except recoverable as e:
@@ -147,7 +147,7 @@ async def ask(key: str, prompt: str, call: CallFn, answers: dict[str, dict], *,
         answers[key] = {"error": first}
         errors.append(f"explore {key}: {first}")
     else:
-        answers[key] = encode(out)
+        answers[key] = answer
     if progress:
         progress(f"  explore {key}: {len(answers[key].get('facts', []))} facts")
 
