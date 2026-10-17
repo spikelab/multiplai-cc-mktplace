@@ -50,6 +50,12 @@ time, not derived from a tag.
   tests as a `paths.v1` document, written by code_facts' `write_paths_file`.
   The run prints its path as another `walkthrough:` line. If it cannot be
   written, the walkthrough is kept and the error is recorded.
+- codebase-walkthrough: `check` (and `check --at-head`, which buildme uses to
+  find stale walkthroughs) names a failing path hop by its id, as in
+  `FAIL p2h3 <repo>/<path>:<lines>: …`, fails a hop cited in prose whose
+  anchor is missing, and prints `check: N hops checked` on stderr. Its stdout
+  summary line is unchanged, and walkthroughs with the older "End-to-end
+  scenarios" section are checked as before.
 
 ## [0.80.0] - 2026-10-17
 

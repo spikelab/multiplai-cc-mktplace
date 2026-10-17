@@ -193,7 +193,11 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
 It re-checks every `path:line` link and snippet against the commits in the
 file's header and prints `N checked, M failed`; it exits 1 on any failure.
 With `--at-head` it checks against each repository's current HEAD, which says
-whether the code has moved since.
+whether the code has moved since. A failing path hop is named by its id (`FAIL p2h3 …`),
+a hop cited in prose whose anchor is missing fails as `unresolved hop
+citation p4h1`, and when the file has path hops `check: N hops checked` is
+printed on stderr. It reads only the Markdown; walkthroughs with the older
+"End-to-end scenarios" section are checked as before.
 
 ## Configuration
 

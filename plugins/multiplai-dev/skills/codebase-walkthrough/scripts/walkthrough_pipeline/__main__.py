@@ -5,7 +5,8 @@
   check   — re-check every `path:line` and snippet in a finished walkthrough
 
 stdout contract: one summary line per stage, then `walkthrough: <path>` for
-each file written, or `check: N checked, M failed`. `run` and `resume` print
+each file written, or `check: N checked, M failed` (and, when the file has path
+hops, `check: N hops checked` on stderr). `run` and `resume` print
 `SPEND:<usd>:<tokens>` last, on every exit but a kill: what this process's
 model calls cost.
 
@@ -165,12 +166,16 @@ def _main(args: argparse.Namespace) -> int:
              os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found")
 
     if args.command == "check":
-        from .check import check_file
+        from .check import check_file, hop_count
         overrides = dict(x.split("=", 1) for x in args.repo if "=" in x)
         checked, failures = check_file(Path(args.walkthrough), at_head=args.at_head, repo_paths=overrides)
         for f in failures:
             print(f"FAIL {f}")
         print(f"check: {checked} checked, {len(failures)} failed")
+        hops = hop_count(Path(args.walkthrough).expanduser().read_text(encoding="utf-8"))
+        if hops:
+            # On stderr, so the stdout line above stays byte for byte what parsers expect.
+            print(f"check: {hops} hops checked", file=sys.stderr)
         return 1 if failures or checked == 0 else 0
 
     if getattr(args, "trust_repo", False):
