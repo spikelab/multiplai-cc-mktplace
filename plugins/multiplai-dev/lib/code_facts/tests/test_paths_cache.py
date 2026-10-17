@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -166,6 +167,19 @@ def test_cache_key_is_a_sha256_hex_that_ignores_key_order_and_depends_on_kind_an
     assert key("reask", payload) != k
     assert key("fallback", payload) != k
     assert key("trace", {**payload, "commit": "abd"}) != k
+
+
+def test_trace_key_covers_the_entry_name_and_invocation_the_prompt_shows():
+    tracing = importlib.import_module("code_facts.tracing")
+    ctx = SimpleNamespace(commit="c" * 40, changed_lines=None, places=[])
+    base = lib("Entry")(kind="skill_command", name="pr: pr_pipeline open", location={"path": CLI, "line": 3},
+                        handler=None, invocation="python3 -m pr_pipeline open", invoked_by="an agent following x",
+                        known_edges=[], also_invoked_by=[])
+    renamed = base.model_copy(update={"name": "pr: pr_pipeline open --draft"})
+    reinvoked = base.model_copy(update={"invocation": "python3 -m pr_pipeline open --draft"})
+    for other in (renamed, reinvoked):
+        assert tracing._trace_prompt(other, ctx) != tracing._trace_prompt(base, ctx)
+        assert tracing.trace_key(other, ctx) != tracing.trace_key(base, ctx)
 
 
 # --- map_paths with a cache_dir ------------------------------------------------------------

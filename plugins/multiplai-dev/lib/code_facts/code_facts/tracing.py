@@ -85,8 +85,8 @@ def trace_key(entry: Entry, ctx: TraceContext) -> str:
     return cache_key("trace", {
         "version": PATHS_TRACE_PROMPT_VERSION,
         "commit": ctx.commit,
-        "entry": [entry.kind, entry.location.path, entry.location.line,
-                  entry.handler.model_dump(mode="json") if entry.handler else None],
+        "entry": [entry.kind, entry.name, entry.location.path, entry.location.line,
+                  entry.handler.model_dump(mode="json") if entry.handler else None, entry.invocation],
         "changed_lines": None if changed is None else {path: sorted(lines) for path, lines in changed.items()},
         "known_edges": sorted([e.from_.path, e.from_.line, e.to.path, e.to.line] for e in entry.known_edges),
         "places": sorted([p.path, p.line] for p in ctx.places),
