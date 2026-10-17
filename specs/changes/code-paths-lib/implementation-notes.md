@@ -20,3 +20,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   The block's test command `uv run --directory plugins/multiplai-dev/lib/code_facts python -m pytest tests/` creates an untracked `code_facts/uv.lock` because the library isn't a workspace member, which goes against D18's "only the root uv.lock changes"; I deleted it. Model docstrings are written into the committed schema as `description`s, so any docstring edit means regenerating the schema. `normalise_changed_lines` raises `TypeError` (not `ValueError`) for a line that isn't an int; I left that as it is.
+
+## Block 2 — Discover argparse subcommands and caller seeds from a static `PyIndex` (test_writer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  (1) The specs don't say whether an argparse subcommand with no handler mechanism at all (no set_defaults, no dict, no comparison) gets an `unresolved_handler` diagnostic: D6 implies yes, while the block text lists only the comparison and out-of-repository cases. Left unpinned. (2) Block 1's `Invoker.kind` is the output-kind Literal, so it cannot hold discovery kinds in `Entry.also_invoked_by`; the merge block will need to resolve this. (3) Not specified for seeds: `location.line` of a line seed, and the `seed_not_found` line when the file is missing, even though "line is null only for parse errors" implies one is required. (4) The `repo_root` fallback could be spelt `""` or `"."`; the test accepts both. (5) The live pr_pipeline gets `commands` through a function-local `from . import commands` inside `_main`, not `main`; the tests mirror that.

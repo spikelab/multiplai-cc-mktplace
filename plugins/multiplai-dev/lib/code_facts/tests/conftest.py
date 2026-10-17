@@ -225,3 +225,32 @@ def empty_snapshot(tmp_path) -> Path:
     (root / "pkg" / "__init__.py").write_text("")
     (root / "pkg" / "core.py").write_text("def run(x):\n    return x + 1\n")
     return root
+
+
+# --- discovery fixtures -------------------------------------------------------------------
+
+
+def make_tree(root: Path, files: dict[str, str | bytes]) -> Path:
+    """Write `files` (relative path -> text or bytes) under `root` and return `root`."""
+    root.mkdir(parents=True, exist_ok=True)
+    for rel, content in files.items():
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_text(content, encoding="utf-8")
+    return root
+
+
+def line_of(text: str, needle: str, nth: int = 1) -> int:
+    """The 1-based line of the `nth` line of `text` containing `needle`."""
+    hits = [i for i, line in enumerate(text.splitlines(), start=1) if needle in line]
+    assert len(hits) >= nth, f"{needle!r} occurs {len(hits)} times, wanted occurrence {nth}"
+    return hits[nth - 1]
+
+
+def sentinel_prelude(sentinel: Path) -> str:
+    """Module code that, if ever imported or run, writes `sentinel` and raises."""
+    return (f"import pathlib as _pl\n_pl.Path({str(sentinel)!r}).write_text('ran')\n"
+            "raise RuntimeError('fixture code was executed')\n")
