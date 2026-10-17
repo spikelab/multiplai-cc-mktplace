@@ -107,7 +107,7 @@ async def run_paths(state: ReviewState, ctx: RunContext) -> ReviewState:
             root=ctx.snapshot, commit=t.head_sha, resolve=resolver(t), call=_call, changed_lines=changed,
             cap=PATH_CAP, trace_limit=TRACE_LIMIT, concurrency=cfg.concurrency, cache_dir=cache,
             recoverable=(_CallFailed,),
-            call_kwargs=dict(model=cfg.finder_model, effort=cfg.effort, max_turns=cfg.max_turns),
+            call_kwargs={"model": cfg.finder_model, "effort": cfg.effort, "max_turns": cfg.max_turns},
             progress=ctx.progress.line if ctx.progress else None,
         )
         if ctx.target_dir is not None:
@@ -115,7 +115,7 @@ async def run_paths(state: ReviewState, ctx: RunContext) -> ReviewState:
     except (sdk.RepoTrustError, budget.BudgetExceededError):
         raise
     except Exception as e:  # noqa: BLE001 — a failed mapping must not stop the review; find runs without paths
-        log.error("paths: mapping failed", exc_info=True)
+        log.exception("paths: mapping failed")
         message = (str(e).splitlines() or [type(e).__name__])[0][:300]
         state.paths_status, state.paths_failure, state.path_ids = "failed", message, []
         add_coverage(state, CoverageRecord(stage="paths", subject="mapping", level="error",

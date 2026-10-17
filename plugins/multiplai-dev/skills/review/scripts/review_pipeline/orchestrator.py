@@ -22,7 +22,7 @@ import yaml
 from multiplai_core.log_utils import log_event
 
 from . import budget, deps, ledger as review_ledger, rounds, runlock, target as target_mod, timings
-from .chunks import diff_files, finder_chunks
+from .chunks import diff_files, finder_chunks, split_pieces
 from .config import ReviewConfig, run_config
 from .export import producer, run_record, to_findings_file, write_checks_file, write_findings_file
 from .facts import FACTS_FILE
@@ -33,7 +33,7 @@ from .render import count_line, listed, summary_path, write_review, write_rollup
 from .stages import RunContext
 from .stages.assess import run_assess
 from .stages.explain import run_explain
-from .stages.paths import run_paths
+from .stages.paths import PATH_CAP, run_paths
 from .stages.find import file_chars, file_groups, finder_dimensions, run_find
 from .stages.merge import run_merge
 from .stages.repeats import run_repeats
@@ -353,11 +353,19 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
     if kept is not None:
         log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
+    # A change review's pieces, once: `resume` reuses the stored ones, so piece ids stay stable.
+    pieces = None
+    if not info.is_tree:
+        try:
+            pieces = split_pieces(diff or "", head_tree=target_mod.tree_paths(info.repo_path, info.head_sha),
+                                  base_tree=target_mod.tree_paths(info.repo_path, info.base_sha))
+        except target_mod.TargetError as e:
+            raise ReviewError(str(e)) from e
     # The extra finders run on a change's first complete round only: no finished round kept
     # before this one. A run that stopped before export is kept as a round but not counted.
     extra = spec.extra_finders and not info.is_tree and rounds.finished_rounds(target_dir) == 0
     return (ReviewState(target=info, mode=spec.mode, trim=spec.trim, extra_finders=extra,
-                        paths_enabled=spec.paths and info.is_tree,
+                        paths_enabled=spec.paths and info.is_tree, pieces=pieces,
                         needs=[gated_need(n) for n in needs]), target_dir)
 
 
@@ -482,7 +490,28 @@ def plan_text(state: ReviewState, config: ReviewConfig) -> str:
     if found:
         total += f"  git dependencies: {len(found)}"
     lines.append(total)
+    lines.extend(piece_plan_lines(state))
     return "\n".join(lines) + "\n"
+
+
+def piece_plan_lines(state: ReviewState) -> list[str]:
+    """One line per piece, then the piece and path finder calls (a tree review: path finders with --paths)."""
+    lines = []
+    for p in state.pieces or []:
+        label = "meta" if p.meta else (p.group or ".")
+        noun = "file" if len(p.files) == 1 else "files"
+        parts = [f"piece {p.id}: {len(p.files)} {noun}, {p.chars} characters [{label}]"]
+        if p.files:
+            parts.append(", ".join(p.files))
+        if p.omitted:
+            parts.append("omitted: " + ", ".join(p.omitted))
+        lines.append(" ".join(parts))
+    each = "(each one report call and one convert call)"
+    if not state.target.is_tree:
+        lines.append(f"piece and path finder calls: {len(state.pieces or [])} pieces + up to {PATH_CAP} paths {each}")
+    elif state.paths_enabled:
+        lines.append(f"path finder calls: up to {PATH_CAP} paths {each}")
+    return lines
 
 
 def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[str, Path]:

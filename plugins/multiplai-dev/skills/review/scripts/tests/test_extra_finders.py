@@ -298,7 +298,7 @@ def test_plan_only_counts_the_extra_finders(two_chunk_repo, tmp_path, capsys):
     def calls(out: Path, *extra: str) -> int:
         assert main(["--out", str(out), "review", "--repo", str(repo), "--range", f"{base}..{head}",
                      "--plan-only", *extra]) == 0
-        total = [line for line in capsys.readouterr().out.splitlines() if "finder calls:" in line][-1]
+        total = [line for line in capsys.readouterr().out.splitlines() if line.startswith("groups: ")][-1]
         return int(total.split("finder calls:")[1].split()[0])
 
     without = calls(tmp_path / "a")

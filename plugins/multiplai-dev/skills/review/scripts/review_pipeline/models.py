@@ -383,6 +383,22 @@ class ExplainedFacts(BaseModel):
     dropped: list[FactDropped] = Field(default_factory=list)
 
 
+class Piece(BaseModel):
+    """One piece of a change review's diff, for one piece finder (`chunks.split_pieces`).
+
+    Files only, in piece order (head paths; a deleted file's base path); the
+    finder's diff is rebuilt from the stored `diff.patch` when its prompt is
+    built (`chunks.piece_diff_text`), which keeps the state small.
+    """
+    id: int  # 1-based, contiguous
+    group: str  # the package or skill directory, "" for the root, "meta" for a meta piece
+    meta: bool = False
+    files: list[str] = Field(default_factory=list)
+    omitted: list[str] = Field(default_factory=list)  # lockfiles, whose text no piece holds (meta only)
+    binary: list[str] = Field(default_factory=list)  # files in `files` whose change is binary
+    chars: int = 0  # characters of diff, headers included; binary files count 0
+
+
 class CoverageRecord(BaseModel):
     """What a stage could not cover, or covered only in part, and why (`checks.add_coverage`).
 
@@ -417,6 +433,9 @@ class ReviewState(BaseModel):
     paths_status: Literal["not-run", "skipped", "ok", "empty", "failed"] = "not-run"
     paths_failure: str | None = None  # why a failed or empty mapping has no paths
     path_ids: list[str] = Field(default_factory=list)
+    # A change review's pieces (`chunks.split_pieces`), computed once by `prepare` and reused by
+    # `resume`; None for a tree review and in checkpoints written before pieces existed.
+    pieces: list[Piece] | None = None
     # What a stage could not cover (`checks.add_coverage`), exported as `checks.json`'s `coverage`.
     coverage: list[CoverageRecord] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)

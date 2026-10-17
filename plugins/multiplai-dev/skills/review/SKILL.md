@@ -320,7 +320,12 @@ over the existing tests and comments, as a separate cleanup (see "Trim").
 
 `--plan-only` resolves the target, prints one line per group and a total line
 (`groups: <n>  finder calls: <n>  files skipped: <n>`; the calls include the
-extra finders a first round with `--extra-finders` would ask), writes
+extra finders a first round with `--extra-finders` would ask). A change
+review also prints one line per piece of its diff
+(`piece <n>: <k> files, <C> characters [<group>] <file>, ...`, `[.]` for files
+outside any package or skill directory, `[meta]` for release metadata, with the
+lockfiles whose text is left out after `omitted:`) and
+`piece and path finder calls: <P> pieces + up to 21 paths (each one report call and one convert call)`. It writes
 `<out>/<repo>/<object>/plan.txt`, and stops before any model call.
 
 ## What this skill does on the machine

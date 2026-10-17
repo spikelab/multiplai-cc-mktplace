@@ -40,7 +40,7 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 # in skipped.txt: they are large, machine-written, or not text.
 TREE_MAX_CHARS = 200_000
 LOCKFILES = frozenset({
-    "uv.lock", "poetry.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock",
+    "uv.lock", "poetry.lock", "Pipfile.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock",
     "Gemfile.lock", "go.sum",
 })
 GENERATED_ATTRS = ("linguist-generated", "linguist-vendored")
@@ -330,6 +330,11 @@ def resolve(repo: str | Path, *, branch: str | None = None, pr: int | None = Non
     base, head = rev_parse(repo, a), rev_parse(repo, b)
     problem = "" if base and head else f"{a if not base else b} does not resolve to a commit"
     return Resolved(repo, "range", range_, base, head, problem=problem)
+
+
+def tree_paths(repo: str | Path, sha: str) -> frozenset[str]:
+    """Every path in the tree of commit *sha* (`git ls-tree -r --name-only`), blobs and links alike."""
+    return frozenset(p for p in git(repo, "ls-tree", "-r", "-z", "--name-only", sha).stdout.split("\0") if p)
 
 
 def diff_text(repo: Path, base: str, head: str) -> str:
