@@ -1,0 +1,150 @@
+{
+  "generated_at": "2026-10-17T06:47:03.429665+00:00",
+  "kind": "review",
+  "block": {
+    "number": 3,
+    "name": "Trace each discovered entry into a gated, linear path with one re-ask"
+  },
+  "round": 2,
+  "head_sha": "52aebbb4797bfe9373db48f4d24cf2472737e173",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Module boundaries are clean. trace_gate.py is pure and sync, takes no CallFn and builds PyIndex lazily. tracing.py orchestrates through the extended `ask`/`run_tasks`/`bounded`. `canonical_digest` lives once in explore.py. Path normalisation reuses `normalise_rel_path`. Kinds and reasons are Literals (`BreakCode`, `CutReason`, `DropReason`), and `KIND_RANK`/`OUTPUT_KIND` centralise kind mapping. Possible smells: (1) prompts.py now imports `.trace_gate` at module level only to call `schema_json(TraceAnswer)`, so the shared prompts module, which walkthrough_pipeline/prompts.py imports, depends on the gate/entries/pyindex/paths stack; (2) `BREAK_CODES` is a hand-written duplicate of `get_args(BreakCode)` in a different order; (3) the `UNNUMBERED = \"p1\"` placeholder looks like a real id; (4) `map_paths` needs function-local imports to get around a cycle. None of these impairs behaviour.",
+      "confidence": 0.8
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "Tests assert observable outcomes: written paths.json bytes, `(broken_at, break_reason, len(accepted))`, drop (stage, reason) and exact entry dicts. Call accounting (`call.of(...)`, `max_in_flight`) is always paired with a result assertion. FakeCall honours the async `(prompt, schema, **kwargs)` contract and records kwargs. The rule-order controls, cycle, hop-limit and worse-re-answer cases are all present. Gaps: test_trace_prompt_names_the_change_scope still checks bare digits (`str(n) in prompt` for 10/12/37), which is the weakness the implementer fixed elsewhere. No test pins that `trace_key` is independent of the order of places, changed lines or edges, though it is a pure function testable now. No test covers an `encode`-time exception.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "Every Block 3 bullet has matching code: read-only tools/cwd/label override, prompt contents including `NO_CHANGE_SCOPE` and the hop limit, the three answer forms via `encode_trace_answer`, extra=forbid branching rejection, gate rules 1\u20138 in order, exactly one re-ask carrying index/code/detail/prefix, `stops_at=k\u22121`, `hop_limit` \u2192 20, a drop for zero hops, `call_failed` for recoverable errors, unwrapped propagation via `bounded`'s `raise group.exceptions[0]`, sorting plus `p1..pN`, and empty `tests`. The four D1 scenario amendments are in the diff. One leftover: three trace-gate.md scenarios (lines 47, 51, 204) still use `stops_at` for the gate-level break index, which contradicts the amended definition at line 233. Cache/resume scenarios depend on `cache_dir`, which a later block delivers.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Produced signatures match the stated interfaces: `gate_hops`, `trace_entry(entry, *, ctx)`, `paths_trace`, `paths_reask`, `assign_ids`, `to_path_entry`, `TraceHop`/`TraceAnswer` with extra=forbid over `_Model`, `GateResult(_Strict)`. The prompt and the gate use the same `entry.known_edges` and `ctx.places` (`_trace_prompt` and `_gate`), so the two cannot disagree on edges. `trace_key` uses exactly the spec's identity (kind, file, line, handler) plus the commit, the sorted scope/edges/places and the prompt version. Loose seams: `trace_entry` returns paths all numbered `p1` and relies on later blocks calling `assign_ids`. The `ask` change also moved `encode` outside the try, which changes what counts as recoverable for existing explore callers.",
+      "confidence": 0.75
+    }
+  ],
+  "weighted_average": 3.88125,
+  "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 3.9"
+  },
+  "missing": [],
+  "extra": [],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "The `ask` refactor moved answer encoding out of the `try`. An exception raised while encoding the call's return value used to be caught by `recoverable` and stored as `{\"error\": \u2026}`; now it propagates. For map_paths it aborts the whole run, because `bounded`'s TaskGroup cancels the other tasks.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "Removed: `out = await call(...)` and `answers[key] = out.model_dump()` both inside `try:` with `except recoverable`. New explore.py:140-150: `try: out = await call(...)` \u2026 `else: answers[key] = encode(out)`. tracing.py `encode_trace_answer` catches only `ValidationError`, so e.g. a `PydanticSerializationError` from `out.model_dump(mode=\"json\")` on a foreign model escapes. For explore callers with the default `recoverable=(Exception,)`, a CallFn returning a non-BaseModel used to be stored as an error and now raises AttributeError. Hidden errors: serialisation failures and wrong return shapes from a CallFn. Impact: one odd answer kills the run instead of dropping one entry. Fix: either keep encoding inside the `try` (`out = encode(await call(...))`), or document the change and widen `encode_trace_answer` to turn any exception into `{MALFORMED: \u2026}`.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/explore.py",
+      "line": 149,
+      "reviewers": []
+    },
+    {
+      "claim": "test_trace_prompt_names_the_change_scope checks the changed lines with bare-digit membership. A '10' or '12' anywhere in the prompt passes it, including the entry or handler line numbers. This is the false-match weakness the implementer fixed in the other prompt tests.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "test_trace_paths.py: `assert all(str(n) in prompt for n in (10, 12, 37))`. `paths_trace` renders `pkg/core.py: lines 10-12, 37` via `_ranges`. Fix: assert `\"pkg/core.py: lines 10-12, 37\" in prompt`. That would also pin `_ranges` compaction, which no test covers now.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_trace_paths.py",
+      "line": 132,
+      "reviewers": []
+    },
+    {
+      "claim": "`BREAK_CODES` repeats the members of the `BreakCode` Literal by hand, in a different order. Nothing ties the two together, so adding a code to one would not update the other.",
+      "severity": "Note",
+      "confidence": 0.5,
+      "evidence": "trace_gate.py: `BREAK_CODES: tuple[BreakCode, ...] = (\"malformed_answer\", \"empty_trace\", \"path_outside_root\", \u2026)`. paths.py:66 `BreakCode = Literal[\"malformed_answer\", \"empty_trace\", \"entry_mismatch\", CutReason]`, and `DROP_REASONS[\"trace\"]` uses `get_args(BreakCode)`. test_break_codes_are_the_fixed_set pins only `BREAK_CODES`. Possible Duplicated Code. Fix: add an assertion that `set(BREAK_CODES) == set(get_args(BreakCode))`, or derive one from the other.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/trace_gate.py",
+      "line": 41,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "Three trace-gate.md scenarios still use `stops_at` for the gate-level 1-based break index. That contradicts the amended requirement, where `stops_at` is the last kept hop, and the code, which uses `GateResult.broken_at`.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "trace-gate.md:47 `the gate reports stops_at = 1 and break_reason = malformed_answer`; :51 the same for `empty_trace`; :204 `stops_at = 3 and break_reason reflects hop 3 only`. Amended :233 says `stops_at: the 1-based index of the last hop kept (the first broken hop minus one)`. Under that definition :204 would be 2, and :47 and :51 describe drops, not paths. The test writer flagged this in implementation-notes (item 4) and it was left as is. Fix: reword these three scenarios in terms of the gate's `broken_at`, or in terms of the resulting drop or cut.\nREJECTED: The block limits spec amendments to D1 rows 2\u20135. The test writer saw these other scenarios and deliberately left them alone as out of scope (implementation-notes item 4). Scenarios :47 and :51 describe gate-level output, which reads naturally as `broken_at`. Changing scenarios outside the listed D1 rows would overstep this block's mandate; any reconciliation belongs to a spec-level change, not this diff.",
+      "dimension": "Spec Compliance",
+      "file_path": "specs/changes/code-paths-lib/requirements/trace-gate.md",
+      "line": 47,
+      "reviewers": [],
+      "judge_reason": "The block limits spec amendments to D1 rows 2\u20135. The test writer saw these other scenarios and deliberately left them alone as out of scope (implementation-notes item 4). Scenarios :47 and :51 describe gate-level output, which reads naturally as `broken_at`. Changing scenarios outside the listed D1 rows would overstep this block's mandate; any reconciliation belongs to a spec-level change, not this diff."
+    },
+    {
+      "claim": "Nothing tests that `trace_key`/`reask_key` are independent of input order or that they change when the scope or prompt version changes. Both are pure functions and testable in this block, and path-tracing 'Answer cache keyed independently of order' depends on them.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "tracing.py `trace_key` sorts known_edges and places and turns changed_lines into sorted lists. Neither test file calls `trace_key`, permutes places/edges/changed_lines, or compares keys. The byte-identical test covers only concurrency and completion order. Fix: add unit tests asserting the same key for permuted places/edges/changed_lines and a different key when a changed line is added or `PATHS_TRACE_PROMPT_VERSION` differs.\nREJECTED: This block ignores `cache_dir`, and the 'Answer cache keyed independently of order' scenario belongs to the cache wiring in a later block. The block's test list is enumerated (fixture CLI, concurrency cap, byte-identical output across concurrency levels) and does not include key-permutation tests. Their absence here is not a defect in this block.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/tracing.py",
+      "line": 69,
+      "reviewers": [],
+      "judge_reason": "This block ignores `cache_dir`, and the 'Answer cache keyed independently of order' scenario belongs to the cache wiring in a later block. The block's test list is enumerated (fixture CLI, concurrency cap, byte-identical output across concurrency levels) and does not include key-permutation tests. Their absence here is not a defect in this block."
+    },
+    {
+      "claim": "Possible layering smell: prompts.py, the shared prompt module that walkthrough_pipeline/prompts.py and spec-extract import from, now imports `.trace_gate` at module level, only to render `schema_json(TraceAnswer)`. Importing the prompt helpers therefore loads entries, pyindex, paths and jsonschema.",
+      "severity": "Minor",
+      "confidence": 0.45,
+      "evidence": "prompts.py: `from .paths import HOP_LIMIT` / `from .trace_gate import TraceAnswer` at top level. walkthrough_pipeline/prompts.py:5 `from code_facts.prompts import UNTRUSTED_RULES, citation_rules, explore_unit`. trace_gate.py imports `.entries`, `.explore`, `.paths`, `.pyindex`. Possible Divergent Change: the trace answer model lives in the gate module but is part of the prompt contract. Fix: move `TraceHop`/`TraceAnswer` next to the other answer models (models.py, or a small paths-answer module) so prompts.py does not depend on the gate.\nREJECTED: This is an architectural preference. The interface does not say which module defines `TraceAnswer`, and the import works: tests pass, and `paths.map_paths` defers its imports to avoid cycles. The extra import weight for walkthrough_pipeline is real but small. The project's stated standards do not require answer models to live in models.py.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/prompts.py",
+      "line": 11,
+      "reviewers": [],
+      "judge_reason": "This is an architectural preference. The interface does not say which module defines `TraceAnswer`, and the import works: tests pass, and `paths.map_paths` defers its imports to avoid cycles. The extra import weight for walkthrough_pipeline is real but small. The project's stated standards do not require answer models to live in models.py."
+    },
+    {
+      "claim": "`trace_entry`, a produced interface, returns every kept path with the valid-looking id `\"p1\"`. A consumer that skips `assign_ids` gets duplicate ids that look real.",
+      "severity": "Note",
+      "confidence": 0.35,
+      "evidence": "tracing.py: `UNNUMBERED = \"p1\"` and `TracedPath(id=UNNUMBERED, \u2026)` in `_cut`. The `PathsResult._consistent` validator (paths.py:284-286) would catch the duplicate at construction, so the risk is limited to intermediate code, e.g. e2e listing keyed by id in a later block. The implementer documented this (note 3).\nREJECTED: `TracedPath` requires an id that matches `^p[1-9][0-9]*$`, so a valid placeholder is needed. The implementer documented this (note 3), and `PathsResult._consistent` rejects duplicate ids. The interface also states that `trace_entry` returns an unnumbered path and that `assign_ids` assigns ids. This is the intended design.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/tracing.py",
+      "line": 42,
+      "reviewers": [],
+      "judge_reason": "`TracedPath` requires an id that matches `^p[1-9][0-9]*$`, so a valid placeholder is needed. The implementer documented this (note 3), and `PathsResult._consistent` rejects duplicate ids. The interface also states that `trace_entry` returns an unnumbered path and that `assign_ids` assigns ids. This is the intended design."
+    },
+    {
+      "claim": "`trace_key` leaves out `entry.name` and `entry.invocation`, although the prompt renders both. Two entries with the same kind, location and handler but different names (for example two seeds with different caller-supplied `name`s that discovery does not merge) collapse into one key in `trace_entries`' dict and share one answer. The spec's identity definition (kind, file, line, handler) permits this.",
+      "severity": "Note",
+      "confidence": 0.3,
+      "evidence": "tracing.py `trace_key`: `\"entry\": [entry.kind, entry.location.path, entry.location.line, handler\u2026]`. prompts.py `_entry_lines` includes `name:` and `invocation:`. `first = {trace_key(e, ctx): _trace_prompt(e, ctx) for e in entries}` would drop the second prompt. path-tracing.md:133 defines identity as `(kind, file, line, handler)`, so this matches the spec. It only matters if discovery can emit such pairs.\nREJECTED: The reviewer acknowledges that path-tracing.md defines entry identity as (kind, file, line, handler), and `trace_key` follows that definition exactly. Nothing shows that discovery emits distinct entries sharing those four values.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/tracing.py",
+      "line": 75,
+      "reviewers": [],
+      "judge_reason": "The reviewer acknowledges that path-tracing.md defines entry identity as (kind, file, line, handler), and `trace_key` follows that definition exactly. Nothing shows that discovery emits distinct entries sharing those four values."
+    },
+    {
+      "claim": "Gating runs synchronous `git show` subprocesses (through `check_citation`/`check_quote`) on the event loop inside `bounded`. While one entry is being gated, re-ask calls already in flight for other entries cannot make progress.",
+      "severity": "Note",
+      "confidence": 0.35,
+      "evidence": "tracing.py `_trace` calls `_gate(first, entry, ctx)`, which calls `gate_hops` \u2192 `check_citation(...)` for each hop, synchronously, inside the coroutine run by `bounded(entries, lambda e: trace_entry(e, ctx=ctx), concurrency)`. This affects performance only; results stay deterministic. A possible later fix is `await asyncio.to_thread(_gate, \u2026)`.\nREJECTED: This affects performance only, and the reviewer agrees results stay deterministic. The block specifies no latency requirement, and gating synchronously is consistent with `gate_hops` being specified as a pure synchronous function. Any optimisation can come later.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/tracing.py",
+      "line": 133,
+      "reviewers": [],
+      "judge_reason": "This affects performance only, and the reviewer agrees results stay deterministic. The block specifies no latency requirement, and gating synchronously is consistent with `gate_hops` being specified as a pure synchronous function. Any optimisation can come later."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}
