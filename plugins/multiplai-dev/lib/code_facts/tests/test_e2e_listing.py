@@ -477,7 +477,7 @@ class _ReversedScandir:
 
     def __init__(self, real, path):
         with real(path) as it:
-            self._entries = list(reversed(list(it)))
+            self._entries = iter(list(reversed(list(it))))
 
     def __enter__(self):
         return self
@@ -486,7 +486,10 @@ class _ReversedScandir:
         return False
 
     def __iter__(self):
-        return iter(self._entries)
+        return self
+
+    def __next__(self):
+        return next(self._entries)
 
     def close(self):
         pass

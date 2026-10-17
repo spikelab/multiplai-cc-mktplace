@@ -30,7 +30,7 @@ import importlib.util
 import logging
 import os
 import posixpath
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -127,30 +127,34 @@ class PyIndex:
     @classmethod
     def build(cls, root: Path) -> PyIndex:
         root = Path(root)
-        real_root = root.resolve()
         files: dict[str, _File] = {}
         repo_roots: set[str] = set()
         parse_errors: dict[str, str] = {}
         all_files: set[str] = set()
-        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-            rel_dir = Path(dirpath).relative_to(root).as_posix()
-            rel_dir = "" if rel_dir == "." else rel_dir
-            if any(marker in dirnames or marker in filenames for marker in REPO_MARKERS):
+        for rel_dir, names, rels in _walk(root, SKIP_DIRS):
+            if not names.isdisjoint(REPO_MARKERS):
                 repo_roots.add(rel_dir)
-            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
-            for name in sorted(filenames):
-                full = Path(dirpath, name)
-                if not _inside(full, real_root) or not full.is_file():
-                    continue
-                rel = posixpath.join(rel_dir, name)
+            for rel in rels:
                 all_files.add(rel)
-                if not name.endswith(".py"):
-                    continue
-                files[rel], error = _index_file(full, rel)
-                if error is not None:
-                    parse_errors[rel] = error
+                if rel.endswith(".py"):
+                    files[rel], error = _index_file(root / rel, rel)
+                    if error is not None:
+                        parse_errors[rel] = error
         log.debug("indexed %d Python files under %s (%d unparseable)", len(files), root, len(parse_errors))
         return cls(files, frozenset(repo_roots), parse_errors, frozenset(all_files))
+
+    def including(self, root: Path, paths: Iterable[str]) -> PyIndex:
+        """A copy that also indexes the `.py` files at `paths` under `root`, such as ones the walk prunes
+        (`build/`, `dist/`). Repository roots are unchanged.
+        """
+        files = dict(self._files)
+        parse_errors = dict(self._parse_errors)
+        added = frozenset(paths)
+        for rel in sorted(added):
+            files[rel], error = _index_file(Path(root, rel), rel)
+            if error is not None:
+                parse_errors[rel] = error
+        return PyIndex(files, self._repo_roots, parse_errors, self._all_files | added)
 
     # --- files ----------------------------------------------------------------------------
 
@@ -259,6 +263,20 @@ class PyIndex:
         """
         info = self._files.get(path)
         return self._resolve_bindings(path, info.module_bindings.get(name, []), set()) if info else None
+
+    def qualified_name(self, path: str, line: int, name: str) -> str | None:
+        """The absolute dotted name `name` means at `line` of `path` through its imports, scopes as for
+        `resolve_name`: `subprocess.run` for `sp.run` after `import subprocess as sp`, `pkg.cli.main` for `main`
+        after `from pkg.cli import main`. None when its first part is not bound by an absolute import.
+        """
+        head, dot, rest = name.partition(".")
+        for binding in self._visible(path, line, head):
+            match binding:
+                case _ModuleBinding(module=module):
+                    return f"{module}{dot}{rest}"
+                case _FromBinding(module=module, level=0, attr=attr) if module:
+                    return f"{module}.{attr}{dot}{rest}"
+        return None
 
     def is_external(self, path: str, line: int, name: str) -> bool:
         """Whether `name` (or the first part of a dotted name) at `line` of `path` is imported from outside the
@@ -428,6 +446,41 @@ class PyIndex:
                         if self._external(target, self._files[target].module_bindings.get(attr, []), seen):
                             return True
         return False
+
+
+def dotted_reference(expr: ast.expr) -> str | None:
+    """`a` or `a.b.c` for a name or an attribute chain on a name; None for anything else, such as a lambda."""
+    parts: list[str] = []
+    while isinstance(expr, ast.Attribute):
+        parts.append(expr.attr)
+        expr = expr.value
+    if not isinstance(expr, ast.Name):
+        return None
+    return ".".join([expr.id, *reversed(parts)])
+
+
+def snapshot_files(root: Path, skip_dirs: frozenset[str]) -> Iterator[str]:
+    """The snapshot-relative POSIX path of every regular file under `root`, in path order, skipping directories
+    named in `skip_dirs` and symlinks that leave the snapshot.
+    """
+    for _, _, rels in _walk(Path(root), skip_dirs):
+        yield from rels
+
+
+def _walk(root: Path, skip_dirs: frozenset[str]) -> Iterator[tuple[str, set[str], list[str]]]:
+    """Per directory, subdirectories visited in sorted order whatever order the filesystem lists them in: its
+    snapshot-relative path, every name it holds (skipped directories included), and the sorted relative paths of
+    its regular files inside the snapshot.
+    """
+    real_root = root.resolve()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        rel_dir = Path(dirpath).relative_to(root).as_posix()
+        rel_dir = "" if rel_dir == "." else rel_dir
+        names = {*dirnames, *filenames}
+        dirnames[:] = sorted(d for d in dirnames if d not in skip_dirs)
+        rels = [posixpath.join(rel_dir, name) for name in sorted(filenames)
+                if _inside(full := Path(dirpath, name), real_root) and full.is_file()]
+        yield rel_dir, names, rels
 
 
 def _inside(full: Path, real_root: Path) -> bool:

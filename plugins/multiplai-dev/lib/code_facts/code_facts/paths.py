@@ -396,7 +396,8 @@ async def map_paths(
     """
     # Deferred: these modules build on the models above.
     from .cache import ANSWERS_DIR, _DiskAnswers, purge_failed
-    from .entries import discover_entries
+    from .e2e_tests import list_e2e_tests
+    from .entries import discover_entries, output_kind
     from .fallback import run_fallback
     from .pyindex import PyIndex
     from .scope import keep_covering, select_for_trace
@@ -437,10 +438,15 @@ async def map_paths(
         kept, coverage_drops = order_paths(traced), []
     else:
         kept, coverage_drops = keep_covering(traced, changed=changed, cap=cap)
+    paths = assign_ids(kept)
+    traced_from = {(output_kind(e), e.location, e.name): e for e in to_trace}
+    listings, skips = list_e2e_tests(
+        root, paths, {p.id: traced_from[(p.entry.kind, p.entry.location, p.entry.name)] for p in paths}, index=index)
     return PathsResult(
         schema_version=SCHEMA_VERSION, commit=commit, scoped=scoped, cap=cap if scoped else None, fallback=status,
-        paths=assign_ids(kept), dropped=sort_drops([*fallback_drops, *scope_drops, *trace_drops, *coverage_drops]),
-        diagnostics=discovery.diagnostics, test_listing_skips=[],
+        paths=[p.model_copy(update={"tests": listings[p.id]}) for p in paths],
+        dropped=sort_drops([*fallback_drops, *scope_drops, *trace_drops, *coverage_drops]),
+        diagnostics=discovery.diagnostics, test_listing_skips=skips,
     )
 
 

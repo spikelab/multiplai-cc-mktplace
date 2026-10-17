@@ -235,14 +235,30 @@ def python_module(tokens: Sequence[str]) -> tuple[str, list[str]] | None:
     """`(module, arguments)` of `python[3] [options] -m <module> ...`, or of `-m <module> ...` left by a
     launcher; None for any other command.
     """
+    rest = _past_interpreter(tokens)
+    if len(rest) >= 2 and rest[0] == "-m":
+        return rest[1], rest[2:]
+    return None
+
+
+def python_script(tokens: Sequence[str]) -> tuple[str, list[str]] | None:
+    """`(script, arguments)` of `python[3] [options] <script>.py ...`, or of a `.py` file run directly; None for
+    any other command.
+    """
+    rest = _past_interpreter(tokens)
+    if rest and rest[0].endswith(".py"):
+        return rest[0], rest[1:]
+    return None
+
+
+def _past_interpreter(tokens: Sequence[str]) -> list[str]:
+    """The words after a leading `python[3]` and its options; all of `tokens` when they start otherwise."""
     rest = list(tokens)
     if rest and _INTERPRETER.fullmatch(rest[0]):
         rest = rest[1:]
         while rest and rest[0].startswith("-") and rest[0] not in ("-m", "-c", "-"):
             rest = rest[2:] if rest[0] in _PYTHON_VALUE_OPTIONS else rest[1:]
-    if len(rest) >= 2 and rest[0] == "-m":
-        return rest[1], rest[2:]
-    return None
+    return rest
 
 
 def first_positional(arguments: Sequence[str]) -> str | None:

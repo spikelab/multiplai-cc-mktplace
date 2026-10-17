@@ -89,7 +89,7 @@ from .commands import (CommandLine, first_positional, hook_commands, is_hooks_fi
 from .paths import (KIND_RANK, DiscoveredKind, Handler, Invoker, Location, PathDiagnostic, PathEntry, Seed,
                     _Strict, normalise_rel_path)
 from .paths import EntryKind as OutputKind
-from .pyindex import PyIndex
+from .pyindex import PyIndex, dotted_reference
 
 log = logging.getLogger(__name__)
 
@@ -452,7 +452,7 @@ def _set_defaults_handler(index: PyIndex, dispatch: _DispatchIndex, path: str,
     `set_defaults` line when there is none.
     """
     expr, line = func
-    reference = _reference(expr)
+    reference = dotted_reference(expr)
     if reference is None:
         return None, None, None
     handler = _function(index, index.resolve_name(path, line, reference))
@@ -496,17 +496,6 @@ def _function(index: PyIndex, handler: Handler | None) -> Handler | None:
         return None
     found = next((d for d in index.defs(handler.path) if d.start == handler.line and d.name == handler.symbol), None)
     return handler if found is not None and not found.is_class else None
-
-
-def _reference(expr: ast.expr) -> str | None:
-    """`a` or `a.b.c` for a name or an attribute chain on a name; None for anything else, such as a lambda."""
-    parts: list[str] = []
-    while isinstance(expr, ast.Attribute):
-        parts.append(expr.attr)
-        expr = expr.value
-    if not isinstance(expr, ast.Name):
-        return None
-    return ".".join([expr.id, *reversed(parts)])
 
 
 def _external_problem(index: PyIndex, site: str, path: str, line: int, reference: str) -> str | None:
@@ -652,7 +641,7 @@ def _dispatch_facts(tree: ast.Module) -> _DispatchFacts:
         elif isinstance(node, ast.Dict):
             items = {}
             for key, value in zip(node.keys, node.values):
-                reference = _reference(value)
+                reference = dotted_reference(value)
                 if isinstance(key, ast.Constant) and isinstance(key.value, str) and reference is not None:
                     items[key.value] = _DictItem(reference, key.lineno, value.lineno)
             if items:
@@ -720,6 +709,20 @@ def _decorated_command_entries(path: str, tree: ast.Module) -> _Found:
             handler = Handler(path=path, line=func.lineno, symbol=func.name)
             entries.append(_static_entry(group.kind, " ".join(names), path, decorator.lineno, handler))
     return entries, diagnostics
+
+
+def cli_apps(path: str, tree: ast.Module) -> dict[str, tuple[str, ...]]:
+    """`name -> words` of each click group or command and typer app the module defines: the command name words
+    that invoking it (`CliRunner().invoke(<name>, ...)`) supplies before its own arguments. A click function's
+    words are its full command name; a typer app's are the names it is mounted under.
+    """
+    if not _imports_any(tree, {"click", "typer"}):
+        return {}
+    apps = {name: group.prefix for name, group in _typer_apps(tree).items() if group.prefix is not None}
+    for entry in _decorated_command_entries(path, tree)[0]:
+        if entry.kind == "click_command" and entry.handler is not None and entry.handler.symbol is not None:
+            apps[entry.handler.symbol] = tuple(entry.name.split(" "))
+    return apps
 
 
 def _command_names(group: _CommandGroup, receiver: str, method: str, call: ast.Call | None,
@@ -933,7 +936,7 @@ def _main_callees(index: PyIndex, path: str, tree: ast.Module) -> tuple[Location
     guard = _main_guard(tree)
     callees: dict[tuple[str, int], Handler] = {}
     for call in _entry_calls(guard.body if guard else tree.body):
-        reference = _reference(call.func)
+        reference = dotted_reference(call.func)
         found = _function(index, index.resolve_name(path, call.lineno, reference)) if reference else None
         if found is not None:
             callees.setdefault((found.path, found.line), found)
@@ -948,7 +951,7 @@ def _entry_calls(body: list[ast.stmt]) -> Iterator[ast.Call]:
     while stack:
         node = stack.pop()
         if isinstance(node, ast.Call):
-            if _reference(node.func) not in _TRANSPARENT_WRAPPERS:
+            if dotted_reference(node.func) not in _TRANSPARENT_WRAPPERS:
                 yield node
                 continue
             children: list[ast.AST] = [*node.args, *(k.value for k in node.keywords)]

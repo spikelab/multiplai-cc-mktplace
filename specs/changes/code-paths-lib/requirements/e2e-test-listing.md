@@ -51,11 +51,15 @@ A test SHALL be listed for a path when its body contains a call whose callee res
 
 ### Requirement: CLI subcommand invocation is recognised
 For entries of kind argparse, click or typer subcommand, a test SHALL be listed when the subcommand's program is invoked with that subcommand's name as a token. The invocation must match one of these forms:
-- a call to the program's resolved `main` (or the parser's owning entry function) whose argv argument is a literal list or tuple of string constants containing the subcommand name;
+- a call to a function of the subparser's module whose body calls `.parse_args(` or `.parse_known_args(`, or `<f>().parse_args(argv)` where `f` is a function of that module (a parser builder), whose argv argument is a literal list or tuple containing the subcommand name;
 - `CliRunner().invoke(<resolved click/typer app>, <literal args>)` with the subcommand name in the args;
 - a subprocess invocation as defined in the subprocess requirement.
 
-Argv that is not a literal sequence of string constants SHALL NOT match under this rule.
+A literal list or tuple may hold elements that are not string constants (such as `str(tmp_path)`); those are unknown tokens and never match a subcommand name. Argv that is not a literal list or tuple SHALL NOT match under this rule.
+
+Tests that cannot reach the handler SHALL NOT be listed (D1#13): argv containing `-h`, `--help` or `--version` never matches, because argparse exits before any handler runs.
+
+A test that calls a helper with literal arguments SHALL be matched through the helper (D15) when the helper forwards a parameter into one of these forms as `p`, `[*prefix, *p]`, `["x", *p]` or `list(p)`. A helper is a function of the test module, of a `conftest.py` in the test's directory or above, or of a non-test module under the test's `tests/` tree. Inlining goes at most two helpers deep; the record takes the test's call line and the inner form's match kind.
 
 #### Scenario: argparse main with subcommand argv
 - **WHEN** a test calls `main(["render", "--out", "x"])`, where `main` resolves to the module that defines the `render` subparser
@@ -72,6 +76,18 @@ Argv that is not a literal sequence of string constants SHALL NOT match under th
 #### Scenario: Non-literal argv does not match
 - **WHEN** a test calls `main(argv)`, where `argv` is a local variable or a parametrized argument
 - **THEN** the test is not listed under `cli_argv` for any subcommand path
+
+#### Scenario: Help and version runs are excluded
+- **WHEN** a test calls `main(["open", "--help"])`, `main(["open", "-h"])` or `main(["open", "--version"])`
+- **THEN** the test is not listed for the `open` path
+
+#### Scenario: Helper forwarding literal argv
+- **WHEN** a test module defines `def run(argv): return commands.run(build_parser().parse_args(argv))`, `build_parser` is defined in the module that declares the `open` subparser, and a test calls `run(["open", "--repo", str(repo)])`
+- **THEN** the test is listed for the `open` path with match kind `cli_argv` and the `run(...)` call's line as `invocation_line`
+
+#### Scenario: Inlining stops after two helpers
+- **WHEN** `three(argv)` calls `two(argv)`, which calls `one(argv)`, which calls `main(argv)`, and one test calls `two(["open"])` and another `three(["open"])`
+- **THEN** only the test calling `two(["open"])` is listed for the `open` path
 
 ### Requirement: Subprocess, runpy and script invocation is recognised
 A test SHALL be listed when it statically runs the entry's command line through any of these:
@@ -96,7 +112,7 @@ The command can be a literal list of string constants or a single string constan
 - **THEN** the test is listed with match kind `runpy`
 
 #### Scenario: Console script name
-- **WHEN** `[project.scripts]` maps `mytool` to `pkg.cli:main`, and a test calls `subprocess.run(["mytool", "--help"])`
+- **WHEN** `[project.scripts]` maps `mytool` to `pkg.cli:main`, and a test calls `subprocess.run(["mytool", "build"])`
 - **THEN** the test is listed for the `mytool` path with match kind `subprocess`
 
 #### Scenario: Hook command string
