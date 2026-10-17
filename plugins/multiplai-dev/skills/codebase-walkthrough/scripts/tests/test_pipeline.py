@@ -70,6 +70,9 @@ def test_finished_walkthrough_passes_check(done_run, capsys):
 def test_walkthrough_content(done_run):
     md_path, _, _ = done_run
     md = md_path.read_text()
+    # The webhook route and the beat task, traced from their handlers as caller seeds.
+    assert "`HTTP /hooks/acme/` (caller seed)" in md and "`bookings.poll (beat)` (caller seed)" in md
+    assert "[`engine/bookings/views.py:5`](" in md and "[`engine/bookings/tasks.py:5`](" in md
     assert re.search(r"\| `ACME_ENV` \| \[`engine/project/settings.py:5`\]", md)
     assert "`/bookings/{}/ack`" in md and "`/webhooks`" in md
     assert "acme-api-collection/bookings/ack.yml" in md
