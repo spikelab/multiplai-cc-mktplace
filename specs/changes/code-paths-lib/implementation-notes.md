@@ -60,3 +60,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: none
 - SURPRISES:
   `cache_key` hashes through `canonical_digest`, which uses `ensure_ascii=False`; the interface text names only `sort_keys` and `separators`. This gives the same keys for ASCII inputs and differs only for non-ASCII paths, so I left it as is.
+
+## Block 5 — Discover click, typer, `[project.scripts]` and `__main__` entries, and merge duplicate invokers (test_writer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  No naming rule for a typer `@callback` entry, so I left the name unasserted. D6 says every null-handler entry other than comparison-dispatch argparse gets an `unresolved_handler` diagnostic, which would apply to a `main_module` with two calls; the spec's mixed-failure count only works if it doesn't, so I didn't assert either way. The "root group function name as prefix" rule (`cli build-all`) gives names nobody types on the command line. `to_path_entry` currently copies discovery-kind invoker kinds unchanged, so the "output kinds" requirement means it has to change.
