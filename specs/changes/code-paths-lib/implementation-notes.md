@@ -15,3 +15,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   (1) The schema is generated from the models by `paths_schema_text()`, as review's facts.v1 is, so `$defs` use class names rather than D16's lowercase names, and fields with defaults (`note`, `side`) are not in the hop's `required` list. (2) The models also check id contiguity, that `cap` is set exactly when scoped, no scope-stage drops or coverage when unscoped, and that a fallback reason is given exactly when the status is `failed` (all from D4/D14). (3) Drop `reason`, `break_reason` and `Invoker.kind` stay `str` as the interface says (only non-empty is enforced), so their closed code sets are not enums in the schema. (4) The design doesn't cover changed-line paths with `\` or non-integer lines; I raise ValueError and TypeError. (5) The block's test command (`uv run --directory …`) creates an untracked `code_facts/uv.lock` on every run; I deleted it. (6) The spec's "Top-level document shape" table still lists 6 of the 9 required fields; it's outside D1 rows 6/7/9/10, so I left it.
+
+## Block 1 — Write an empty but valid `paths.v1` document through `map_paths` and `write_paths_file` (refactorer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  The block's test command `uv run --directory plugins/multiplai-dev/lib/code_facts python -m pytest tests/` creates an untracked `code_facts/uv.lock` because the library isn't a workspace member, which goes against D18's "only the root uv.lock changes"; I deleted it. Model docstrings are written into the committed schema as `description`s, so any docstring edit means regenerating the schema. `normalise_changed_lines` raises `TypeError` (not `ValueError`) for a line that isn't an int; I left that as it is.

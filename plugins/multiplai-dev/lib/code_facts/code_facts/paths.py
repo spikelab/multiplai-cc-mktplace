@@ -238,6 +238,7 @@ def paths_schema_text() -> str:
 
 @functools.cache
 def _validator() -> jsonschema.protocols.Validator:
+    """A validator for the committed schema, loaded once from the package resources."""
     text = importlib.resources.files("code_facts").joinpath(*SCHEMA_RESOURCE).read_text(encoding="utf-8")
     schema = json.loads(text)
     return jsonschema.validators.validator_for(schema)(schema)
@@ -257,7 +258,7 @@ def normalise_rel_path(root: Path, path: str) -> str:
     if posixpath.isabs(path):
         raise ValueError(f"absolute path: {path!r}")
     norm = posixpath.normpath(path)
-    if norm == "." or norm == ".." or norm.startswith("../"):
+    if norm in (".", "..") or norm.startswith("../"):
         raise ValueError(f"path escapes the snapshot root: {path!r}")
     if not (root / norm).resolve().is_relative_to(root.resolve()):
         raise ValueError(f"path resolves outside the snapshot root: {path!r}")
@@ -283,6 +284,7 @@ def normalise_changed_lines(root: Path, changed_lines: Mapping[str, Iterable[int
 
 
 def _require_positive(name: str, value: int) -> None:
+    """Raise ValueError when a scoped-run limit (`cap`, `trace_limit`) is below 1."""
     if value < 1:
         raise ValueError(f"{name} must be at least 1 when changed lines are given, got {value}")
 
@@ -336,13 +338,18 @@ async def map_paths(
 # --- writing ---------------------------------------------------------------------------------
 
 
+def serialise_paths(result: PathsResult) -> str:
+    """`result` as paths.v1 JSON text: declaration-order keys, 2-space indent, non-ASCII kept, one trailing newline."""
+    return json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
+
+
 def write_paths_file(result: PathsResult, path: Path) -> Path:
     """Write `result` to `path` as paths.v1 JSON, atomically, after validating it against the schema.
 
     Raises ValueError naming the JSON pointer of the first schema error; then
     nothing is written and an existing file at `path` is left as it was.
     """
-    text = json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
+    text = serialise_paths(result)
     error = jsonschema.exceptions.best_match(_validator().iter_errors(json.loads(text)))
     if error is not None:
         pointer = "/" + "/".join(map(str, error.absolute_path))
