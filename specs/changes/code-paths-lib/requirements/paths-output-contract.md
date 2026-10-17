@@ -302,7 +302,7 @@ Loading a written `paths.json` into the top-level result model, and serialising 
 - **THEN** every check is `True`
 
 ### Requirement: Schema and models agree
-Every document produced by `write_paths_file` from a model instance SHALL validate against the schema. Every document that validates against the schema SHALL parse into the model.
+Every document produced by `write_paths_file` from a model instance SHALL validate against the schema. Every document that validates against the schema and also meets the cross-field rules a JSON Schema cannot state SHALL parse into the model. Those rules are: path ids are exactly `p1`…`pN` in array order; `stops_at` is at most `len(hops)`; and no `node_id` is in both `tests.e2e` and `tests.mocks_hop_2`. The model enforces them, and `write_paths_file` checks them after schema validation.
 
 #### Scenario: Full-coverage fixture
 - **WHEN** a hand-built result that uses every optional and nullable field and every enum value is written and then validated

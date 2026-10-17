@@ -86,12 +86,33 @@ def _hop(symbol: str, path: str, start: int, end: int, quote: str) -> dict:
             "note": "", "side": "head"}
 
 
+DISCOVERED_KINDS = ["argparse", "click", "typer", "main", "script", "skill_command", "hook", "seed"]
+# Every break code. The first three only ever break hop 1, which leaves no hop, so they never cut a kept path.
+BREAK_CODES = ["malformed_answer", "empty_trace", "entry_mismatch", "path_outside_root", "missing_file",
+               "line_out_of_range", "text_mismatch", "base_side_citation", "unconnected_hop", "repeated_hop",
+               "hop_limit"]
+CUT_REASONS = BREAK_CODES[3:]
+
+
+def _cut_path(n: int, reason: str, kind: str) -> dict:
+    """Path `p<n>` from a `kind` entry, cut by `reason`: at hop 20 for `hop_limit`, after hop 1 otherwise."""
+    path = f"cut/{reason}.py"
+    kept = 20 if reason == "hop_limit" else 1
+    return {
+        "id": f"p{n}", "entry": _entry(kind, f"{kind} {reason}", path, 1),
+        "hops": [_hop(f"step{i}", path, i, i, f"step{i}()") for i in range(1, kept + 1)],
+        "stops_at": kept, "break_reason": reason,
+        "changed_lines_covered": [_loc(path, 1)], "tests": {"e2e": [], "mocks_hop_2": []},
+    }
+
+
 def _full_paths_doc() -> dict:
     """A scoped paths.v1 document using every enum value and both arms of every nullable field."""
     open_entry = _entry(
         "argparse", "open", "pkg/__main__.py", 41,
         handler={"path": "pkg/commands.py", "line": 180, "symbol": "cmd_open"},
-        invokers=[{"kind": "hook", "name": "PreToolUse:Bash", "location": _loc("hooks/hooks.json", 7)}])
+        invokers=[{"kind": kind, "name": f"{kind} invoker", "location": _loc(f"inv/{kind}.py", 3)}
+                  for kind in sorted(DISCOVERED_KINDS)])
     skill_entry = _entry("skill_command", "café: pkg run", "skills/café/SKILL.md", 12,
                          invocation="python -m pkg run")
     p1 = {
@@ -108,8 +129,21 @@ def _full_paths_doc() -> dict:
                  "match": "cli_argv", "invocation_line": 9},
                 {"node_id": "tests/test_cli.py::TestX::test_c", "file": "tests/test_cli.py", "line": 14,
                  "match": "cli_runner", "invocation_line": 15},
+                {"node_id": "tests/test_cli.py::test_f", "file": "tests/test_cli.py", "line": 20,
+                 "match": "subprocess", "invocation_line": 21},
+                {"node_id": "tests/test_cli.py::test_g", "file": "tests/test_cli.py", "line": 25,
+                 "match": "runpy", "invocation_line": 26},
             ],
             "mocks_hop_2": [
+                {"node_id": "tests/test_run.py::test_h", "file": "tests/test_run.py", "line": 3,
+                 "match": "direct_call", "invocation_line": 4, "patch_file": "tests/conftest.py",
+                 "patch_line": 2},
+                {"node_id": "tests/test_run.py::test_i", "file": "tests/test_run.py", "line": 6,
+                 "match": "cli_argv", "invocation_line": 7, "patch_file": "tests/test_run.py",
+                 "patch_line": 5},
+                {"node_id": "tests/test_run.py::test_j", "file": "tests/test_run.py", "line": 8,
+                 "match": "cli_runner", "invocation_line": 9, "patch_file": "tests/test_run.py",
+                 "patch_line": 7},
                 {"node_id": "tests/test_run.py::test_d", "file": "tests/test_run.py", "line": 10,
                  "match": "subprocess", "invocation_line": 12, "patch_file": "tests/conftest.py",
                  "patch_line": 5},
@@ -125,13 +159,20 @@ def _full_paths_doc() -> dict:
         "stops_at": None, "break_reason": None,
         "changed_lines_covered": [], "tests": {"e2e": [], "mocks_hop_2": []},
     }
+    # p1 is cut by `text_mismatch`; one more cut path per remaining cut reason, from every other entry kind.
+    cuts = [_cut_path(n, reason, kind) for n, (reason, kind) in enumerate(
+        zip([r for r in CUT_REASONS if r != "text_mismatch"],
+            ["hook", "click", "typer", "main", "script", "seed", "model"], strict=True), start=3)]
     drops = [
+        ("model_fallback_citation", "missing_citation", _entry("model", "GET /items", "app/routes.py", 3)),
         ("model_fallback_citation", "citation_unverified", _entry("model", "GET /items", "app/routes.py", 12)),
         ("model_fallback_duplicate", "duplicate", _entry("model", "dup", "pkg/commands.py", 180)),
         ("import_reachability", "unreachable", _entry("click", "cli sync", "cli/app.py", 5,
                                                       handler={"path": "cli/app.py", "line": 6,
                                                                "symbol": None})),
         ("trace_limit", "over_trace_limit", _entry("typer", "users add-user", "cli/users.py", 9)),
+        *(("trace", code, _entry("hook", f"Stop:{code}", "hooks/hooks.json", line))
+          for line, code in enumerate(BREAK_CODES, start=1)),
         ("trace", "call_failed", _entry("main", "tools.report", "tools/report.py", 30)),
         ("no_changed_line", "no_changed_line_covered", _entry("script", "mytool", "pyproject.toml", 8)),
         ("cap", "over_cap", _entry("seed", "lib/api.py:handle_request", "lib/api.py", 30)),
@@ -142,7 +183,7 @@ def _full_paths_doc() -> dict:
         "scoped": True,
         "cap": 10,
         "fallback": {"status": "failed", "reason": "1 validation error for FallbackAnswer"},
-        "paths": [p1, p2],
+        "paths": [p1, p2, *cuts],
         "dropped": [{"stage": s, "reason": r, "detail": "detail text", "entry": e} for s, r, e in drops],
         "diagnostics": [
             {"path": "broken.py", "line": None, "reason": "parse_error", "detail": "invalid syntax"},

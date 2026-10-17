@@ -5,10 +5,13 @@ from __future__ import annotations
 import copy
 import importlib.resources
 import json
+import types
+import typing
 from pathlib import Path
 
 import jsonschema
 import pytest
+from pydantic import BaseModel, ValidationError
 
 from conftest import paths_name, unscoped_variant
 
@@ -131,6 +134,56 @@ def test_full_and_unscoped_documents_validate_and_parse(full_paths_doc):
         paths_name("PathsResult").model_validate(doc)
 
 
+def _literal_values(annotation) -> set:
+    """The values of every Literal in `annotation`, looking through unions and list items."""
+    if typing.get_origin(annotation) is typing.Literal:
+        return set(typing.get_args(annotation))
+    if typing.get_origin(annotation) in (typing.Union, types.UnionType, list):
+        return set().union(*map(_literal_values, typing.get_args(annotation)))
+    return set()
+
+
+def _used_values(node, used: dict) -> None:
+    """Record, per (model, field), every scalar value the parsed document holds there."""
+    if isinstance(node, list):
+        for item in node:
+            _used_values(item, used)
+    elif isinstance(node, BaseModel):
+        for name in type(node).model_fields:
+            value = getattr(node, name)
+            if isinstance(value, (BaseModel, list)):
+                _used_values(value, used)
+            else:
+                used.setdefault((type(node).__name__, name), set()).add(value)
+
+
+def _enum_fields(model: type[BaseModel], seen: dict) -> None:
+    """Map (model, field) to its Literal values, for `model` and every model it contains."""
+    if model.__name__ in {m for m, _ in seen}:
+        return
+    for name, field in model.model_fields.items():
+        seen[(model.__name__, name)] = _literal_values(field.annotation)
+        for arg in typing.get_args(field.annotation) or (field.annotation,):
+            for inner in typing.get_args(arg) or (arg,):
+                if isinstance(inner, type) and issubclass(inner, BaseModel):
+                    _enum_fields(inner, seen)
+
+
+def test_full_coverage_fixtures_validate_and_use_every_enum_value(full_paths_doc):
+    # A document holds one fallback status, so the other two come from variants.
+    docs = [full_paths_doc, *(_set(full_paths_doc, ("fallback",), {"status": status, "reason": None})
+                              for status in ("ok", "skipped"))]
+    result_cls = paths_name("PathsResult")
+    used: dict = {}
+    for doc in docs:
+        assert _errors(doc) == []
+        _used_values(result_cls.model_validate(doc), used)
+    enums: dict = {}
+    _enum_fields(result_cls, enums)
+    missing = {where: sorted(values - used.get(where, set())) for where, values in enums.items()}
+    assert {where: values for where, values in missing.items() if values} == {}
+
+
 @pytest.mark.parametrize("status,reason", [("ok", None), ("skipped", None), ("failed", "bad answer")])
 def test_every_fallback_status_validates(full_paths_doc, status, reason):
     doc = _set(full_paths_doc, ("fallback",), {"status": status, "reason": reason})
@@ -151,12 +204,6 @@ def test_every_fallback_status_validates(full_paths_doc, status, reason):
     (("paths", 0, "id"), "path1"),
     (("paths", 0, "id"), "p01"),
     (("paths", 0, "entry", "kind"), "route"),
-    (("paths", 0, "entry", "location", "path"), "/abs/x.py"),
-    (("paths", 0, "entry", "location", "path"), "../x.py"),
-    (("paths", 0, "entry", "location", "path"), "a/../b.py"),
-    (("paths", 0, "entry", "location", "path"), "./x.py"),
-    (("paths", 0, "entry", "location", "path"), "a\\b.py"),
-    (("paths", 0, "entry", "location", "path"), ""),
     (("paths", 0, "entry", "location", "line"), 0),
     (("paths", 0, "changed_lines_covered", 0, "line"), 0),
     (("dropped", 0, "reason"), ""),
@@ -170,6 +217,30 @@ def test_every_fallback_status_validates(full_paths_doc, status, reason):
 ])
 def test_schema_rejects(full_paths_doc, path, value):
     assert _errors(_set(full_paths_doc, path, value)), f"{path}={value!r} was accepted"
+
+
+BAD_PATHS = ["/abs/x.py", "../x.py", "a/../b.py", "./x.py", "a\\b.py", ""]
+# Every field holding a snapshot-relative path.
+PATH_FIELDS = [
+    ("paths", 0, "entry", "location", "path"),
+    ("paths", 0, "entry", "handler", "path"),
+    ("paths", 0, "hops", 0, "path"),
+    ("paths", 0, "changed_lines_covered", 0, "path"),
+    ("paths", 0, "tests", "e2e", 0, "file"),
+    ("paths", 0, "tests", "mocks_hop_2", 0, "file"),
+    ("paths", 0, "tests", "mocks_hop_2", 0, "patch_file"),
+    ("diagnostics", 0, "path"),
+    ("test_listing_skips", 0, "file"),
+]
+
+
+@pytest.mark.parametrize("field", PATH_FIELDS)
+@pytest.mark.parametrize("value", BAD_PATHS)
+def test_schema_and_model_reject_bad_paths(full_paths_doc, field, value):
+    doc = _set(full_paths_doc, field, value)
+    assert _errors(doc), f"schema accepted {field}={value!r}"
+    with pytest.raises(ValidationError):
+        paths_name("PathsResult").model_validate(doc)
 
 
 def test_more_than_twenty_hops_is_rejected(full_paths_doc):
