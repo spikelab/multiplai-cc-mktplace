@@ -3,8 +3,9 @@
 Nothing in the snapshot is imported or run. The index records, per `.py` file:
 its repository root, its dotted module name, its `def`/`class` spans, the
 names its imports and definitions bind in each scope, and the imports
-themselves. Paths are POSIX and relative to the snapshot root; the snapshot
-root itself is `""`.
+themselves. It also lists every walked file of any type, so scanners of
+`pyproject.toml` and the like share the walk's exclusions. Paths are POSIX and
+relative to the snapshot root; the snapshot root itself is `""`.
 
 Repository root. The nearest ancestor directory, at or below the snapshot
 root, that holds `.git` or `pyproject.toml`; the snapshot root otherwise.
@@ -108,10 +109,12 @@ class _File:
 class PyIndex:
     """The parsed Python files of one snapshot, and the name and import resolution over them."""
 
-    def __init__(self, files: dict[str, _File], repo_roots: frozenset[str], parse_errors: dict[str, str]):
+    def __init__(self, files: dict[str, _File], repo_roots: frozenset[str], parse_errors: dict[str, str],
+                 all_files: frozenset[str]):
         self._files = files
         self._repo_roots = repo_roots
         self._parse_errors = parse_errors
+        self._all_files = all_files
         self._imported: dict[str, list[str]] = {}
 
     @classmethod
@@ -121,6 +124,7 @@ class PyIndex:
         files: dict[str, _File] = {}
         repo_roots: set[str] = set()
         parse_errors: dict[str, str] = {}
+        all_files: set[str] = set()
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
             rel_dir = Path(dirpath).relative_to(root).as_posix()
             rel_dir = "" if rel_dir == "." else rel_dir
@@ -129,14 +133,17 @@ class PyIndex:
             dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
             for name in sorted(filenames):
                 full = Path(dirpath, name)
-                if not name.endswith(".py") or not _inside(full, real_root) or not full.is_file():
+                if not _inside(full, real_root) or not full.is_file():
                     continue
                 rel = posixpath.join(rel_dir, name)
+                all_files.add(rel)
+                if not name.endswith(".py"):
+                    continue
                 files[rel], error = _index_file(full, rel)
                 if error is not None:
                     parse_errors[rel] = error
         log.debug("indexed %d Python files under %s (%d unparseable)", len(files), root, len(parse_errors))
-        return cls(files, frozenset(repo_roots), parse_errors)
+        return cls(files, frozenset(repo_roots), parse_errors, frozenset(all_files))
 
     # --- files ----------------------------------------------------------------------------
 
@@ -161,6 +168,10 @@ class PyIndex:
         """Every `def` and `class` of `path` in source order, nested ones included."""
         info = self._files.get(path)
         return list(info.defs) if info else []
+
+    def files_named(self, name: str) -> list[str]:
+        """Every walked file of the snapshot, of any type, whose base name is `name`, in path order."""
+        return sorted(f for f in self._all_files if posixpath.basename(f) == name)
 
     def parse_errors(self) -> list[tuple[str, str]]:
         """`(path, detail)` of every `.py` file that could not be decoded or parsed, in path order."""
@@ -226,6 +237,13 @@ class PyIndex:
                 if found is not None:
                     return found
         return None
+
+    def resolve_global(self, path: str, name: str) -> Handler | None:
+        """The `def` or `class` that the module-level name `name` of `path` means, imports followed as for
+        `resolve_name`; None when `path` is not indexed or the name does not resolve.
+        """
+        info = self._files.get(path)
+        return self._resolve_bindings(path, info.module_bindings.get(name, []), set()) if info else None
 
     def is_external(self, path: str, line: int, name: str) -> bool:
         """Whether `name` (or the first part of a dotted name) at `line` of `path` is imported from outside the

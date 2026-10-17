@@ -346,7 +346,10 @@ def build():
 """
         root = make_tree(tmp_path / "snap", {"cli.py": src})
         found = argparse_entries(discover(root))
-        assert sorted((e.name, e.location.line) for e in found) == sorted([
+        # Both `list`s share one add_parser line and no handler, so they merge: one is the other's invoker.
+        declared = [(e.name, e.location.line) for e in found] + [
+            (i.name, i.location.line) for e in found for i in e.also_invoked_by]
+        assert sorted(declared) == sorted([
             ("users", line_of(src, '"users"')), ("groups", line_of(src, '"groups"')),
             ("groups", line_of(src, '"groups"', 2)),
             ("users list", line_of(src, '"list"')), ("groups list", line_of(src, '"list"'))])

@@ -65,3 +65,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   No naming rule for a typer `@callback` entry, so I left the name unasserted. D6 says every null-handler entry other than comparison-dispatch argparse gets an `unresolved_handler` diagnostic, which would apply to a `main_module` with two calls; the spec's mixed-failure count only works if it doesn't, so I didn't assert either way. The "root group function name as prefix" rule (`cli build-all`) gives names nobody types on the command line. `to_path_entry` currently copies discovery-kind invoker kinds unchanged, so the "output kinds" requirement means it has to change.
+
+## Block 5 — Discover click, typer, `[project.scripts]` and `__main__` entries, and merge duplicate invokers (implementer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  (1) D7's null-handler merge on identical (kind, location) contradicts the Block 2 test where one helper declares `list` under two parents on the same line; the Block 2 test was changed to accept the merged form. (2) The Block 2 interface types `Entry.also_invoked_by` as the paths.v1 `Invoker`, whose kinds are output kinds, while D5 and the tests need discovery kinds; I added an `EntryInvoker` model and `to_path_entry` converts it. (3) D6 asks for `unresolved_handler` on every null-handler entry; a `main_module` only gets one when it calls several functions, in line with Block 2's partial approach. (4) The spec has no naming rule for typer callbacks; the command rule is used. (5) click and typer groups and apps are resolved within one module only; click 8.2 suffix stripping and lowercasing are not done. (6) `tomllib` keeps no line numbers, so `[project.scripts]` key lines are found by scanning the text.
