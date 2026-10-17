@@ -92,6 +92,19 @@ class TestSeedNotFound:
         assert [d.reason for d in disc.diagnostics] == ["seed_not_found"]
 
 
+class TestSeedPathValidation:
+    @pytest.mark.parametrize("path", ["/abs.py", "../x.py", "lib/../../x.py"])
+    def test_absolute_or_escaping_seed_path_raises_before_discovery(self, root, monkeypatch, path):
+        entries = importlib.import_module("code_facts.entries")
+
+        def refuse(cls, root):
+            raise AssertionError("discovery ran before the seed paths were checked")
+
+        monkeypatch.setattr(entries.PyIndex, "build", classmethod(refuse))
+        with pytest.raises(ValueError, match="absolute|escapes"):
+            discover(root, [Seed(path="lib/api.py", symbol="other"), Seed(path=path, symbol="x")])
+
+
 class TestMixedFailures:
     def test_one_diagnostic_per_skipped_candidate_and_valid_entries_kept(self, tmp_path):
         root = make_tree(tmp_path / "snap", {

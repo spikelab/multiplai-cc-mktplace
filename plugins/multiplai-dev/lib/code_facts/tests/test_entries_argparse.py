@@ -267,6 +267,227 @@ class TestDispatchDictHandler:
         assert [(d.line, d.reason) for d in disc.diagnostics] == [(line_of(src, '"render")'), "unresolved_handler")]
 
 
+HELPERS = """\
+import argparse
+
+
+def cmd_open(args):
+    return 0
+
+
+def cmd_migrate(args):
+    return 1
+
+
+def add_open(sub):
+    p = sub.add_parser("open")
+    p.set_defaults(func=cmd_open)
+
+
+def add_migrate(subparsers):
+    subparsers.add_parser("migrate").set_defaults(func=cmd_migrate)
+
+
+def add_db(sub):
+    db = sub.add_parser("db")
+    add_migrate(subparsers=db.add_subparsers())
+
+
+def build():
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers()
+    add_open(sub)
+    add_db(sub)
+    return parser
+"""
+UNTRACED = """\
+import argparse
+
+
+class Cli:
+    def __init__(self):
+        self.sub = argparse.ArgumentParser().add_subparsers()
+
+    def register(self):
+        self.sub.add_parser("open")
+
+
+def add_close(sub):
+    sub.add_parser("close")
+"""
+
+
+class TestSubparsersPassedToHelpers:
+    def test_helpers_given_subparsers_at_call_sites_declare_subcommands(self, tmp_path):
+        root = make_tree(tmp_path / "snap", {"cli.py": HELPERS})
+        disc = discover(root)
+        found = by_name(argparse_entries(disc))
+        assert {name: (e.location.line, e.handler and e.handler.symbol) for name, e in found.items()} == {
+            "open": (line_of(HELPERS, '"open"'), "cmd_open"),
+            "db": (line_of(HELPERS, '"db"'), None),
+            "db migrate": (line_of(HELPERS, '"migrate"'), "cmd_migrate"),
+        }
+        assert disc.diagnostics == []
+
+    def test_one_helper_under_two_parents_declares_one_subcommand_under_each(self, tmp_path):
+        src = """\
+import argparse
+
+
+def add_list(sub):
+    sub.add_parser("list")
+
+
+def build():
+    sub = argparse.ArgumentParser().add_subparsers()
+    add_list(sub.add_parser("users").add_subparsers())
+    add_list(sub.add_parser("groups").add_subparsers())
+    add_list(sub.add_parser("groups").add_subparsers())
+"""
+        root = make_tree(tmp_path / "snap", {"cli.py": src})
+        found = argparse_entries(discover(root))
+        assert sorted((e.name, e.location.line) for e in found) == sorted([
+            ("users", line_of(src, '"users"')), ("groups", line_of(src, '"groups"')),
+            ("groups", line_of(src, '"groups"', 2)),
+            ("users list", line_of(src, '"list"')), ("groups list", line_of(src, '"list"'))])
+
+    def test_add_parser_on_an_untraced_receiver_is_an_unresolved_target(self, tmp_path):
+        root = make_tree(tmp_path / "snap", {"cli.py": UNTRACED})
+        disc = discover(root)
+        assert argparse_entries(disc) == []
+        assert [(d.path, d.line, d.reason) for d in disc.diagnostics] == [
+            ("cli.py", line_of(UNTRACED, '"open"'), "unresolved_target"),
+            ("cli.py", line_of(UNTRACED, '"close"'), "unresolved_target")]
+        assert "self.sub" in disc.diagnostics[0].detail and "add_subparsers" in disc.diagnostics[0].detail
+
+    def test_untraced_receiver_in_a_module_without_add_subparsers(self, tmp_path):
+        src = "def register(sub):\n    sub.add_parser(\"open\")\n"
+        root = make_tree(tmp_path / "snap", {"commands/open.py": src})
+        assert [(d.line, d.reason) for d in discover(root).diagnostics] == [(2, "unresolved_target")]
+
+
+class TestNamespacePackageHandlers:
+    @pytest.mark.parametrize("binding, func, symbol", [
+        ("import tools.cli", "tools.cli.cmd_open", "cmd_open"),
+        ("import tools.cli", "tools.cli.not_a_def", None),
+        ("from tools import cli", "cli.not_a_def", None),
+    ])
+    def test_namespace_package_targets_are_in_the_repository(self, tmp_path, binding, func, symbol):
+        src = SET_DEFAULTS.replace("import argparse\n", f"import argparse\n{binding}\n")
+        src = src.replace("func=cmd_open", f"func={func}")
+        root = make_tree(tmp_path / "snap", {"app.py": src, "tools/cli.py": "def cmd_open(args):\n    return 0\n"})
+        disc = discover(root)
+        e = by_name(argparse_entries(disc))["open"]
+        assert (e.handler and (e.handler.path, e.handler.symbol)) == (symbol and ("tools/cli.py", symbol))
+        assert disc.diagnostics == []
+
+
+SAME_LEAF = """\
+import argparse
+
+
+def top_migrate(args):
+    return 0
+
+
+def db_migrate(args):
+    return 1
+
+
+def cmd_db(args):
+    return 2
+
+
+DB_COMMANDS = {"migrate": db_migrate}
+COMMANDS = {"migrate": top_migrate, "db": cmd_db}
+
+
+def build():
+    sub = argparse.ArgumentParser().add_subparsers(dest="command")
+    sub.add_parser("migrate")
+    db = sub.add_parser("db")
+    db.add_subparsers(dest="db_command").add_parser("migrate")
+    return sub
+
+
+def main(args):
+    if args.command == "db" and args.db_command:
+        return DB_COMMANDS[args.db_command](args)
+    return COMMANDS[args.command](args)
+"""
+
+
+class TestDispatchDictSelection:
+    @pytest.mark.parametrize("module", [DICT_MAIN, DICT_DISPATCH], ids=["no-dispatch-call", "dispatch-call"])
+    def test_an_unrelated_dict_sharing_a_key_is_not_the_dispatch_dict(self, tmp_path, module):
+        src = module.replace("\nHANDLERS = {", '\nPALETTE = {"render": show_cmd, "red": show_cmd}\nHANDLERS = {')
+        root = make_tree(tmp_path / "snap", {
+            "pkg/__init__.py": "", "pkg/cli.py": src, "pkg/commands.py": DICT_COMMANDS})
+        e = by_name(argparse_entries(discover(root)))["render"]
+        assert e.handler.symbol == "render_cmd"
+
+    def test_only_dicts_called_as_dispatch_count_when_one_is(self, tmp_path):
+        unused = '\nUNUSED = {"render": show_cmd, "show": render_cmd}'
+        src = DICT_DISPATCH.replace("\nHANDLERS = {", unused + "\nHANDLERS = {")
+        root = make_tree(tmp_path / "snap", {
+            "pkg/__init__.py": "", "pkg/cli.py": src, "pkg/commands.py": DICT_COMMANDS})
+        found = by_name(argparse_entries(discover(root)))
+        assert (found["render"].handler.symbol, found["show"].handler.symbol) == ("render_cmd", "show_cmd")
+
+    def test_same_leaf_name_at_two_depths_finds_its_own_dict(self, tmp_path):
+        root = make_tree(tmp_path / "snap", {"cli.py": SAME_LEAF})
+        found = by_name(argparse_entries(discover(root)))
+        top, nested = found["migrate"], found["db migrate"]
+        assert (top.location.line, top.handler.symbol) == (line_of(SAME_LEAF, '"migrate")'), "top_migrate")
+        assert (nested.location.line, nested.handler.symbol) == (line_of(SAME_LEAF, '"migrate")', 2), "db_migrate")
+        assert edges(top) == {("cli.py", line_of(SAME_LEAF, "COMMANDS[args.command](args)"),
+                               "cli.py", line_of(SAME_LEAF, "def top_migrate"))}
+        assert edges(nested) == {("cli.py", line_of(SAME_LEAF, "DB_COMMANDS[args.db_command](args)"),
+                                  "cli.py", line_of(SAME_LEAF, "def db_migrate"))}
+        assert found["db"].handler.symbol == "cmd_db"
+
+    def test_dispatch_call_through_a_module_attribute_in_the_parser_module(self, tmp_path):
+        main = LIVE_MAIN.replace("    return commands.run(args)", "    return commands.COMMANDS[args.command](args)")
+        root = make_tree(tmp_path / "snap", {
+            "pr_pipeline/__init__.py": "", "pr_pipeline/__main__.py": main,
+            "pr_pipeline/commands.py": LIVE_COMMANDS.replace("    code = COMMANDS[args.command](args)\n", "")})
+        e = by_name(argparse_entries(discover(root)))["open"]
+        assert edges(e) == {("pr_pipeline/__main__.py", line_of(main, "commands.COMMANDS[args.command](args)"),
+                             "pr_pipeline/commands.py", line_of(LIVE_COMMANDS, "def cmd_open"))}
+
+    @pytest.mark.parametrize("mechanism", ["set_defaults", "dict"])
+    def test_a_class_is_not_a_handler(self, tmp_path, mechanism):
+        src = SET_DEFAULTS.replace("def cmd_open(args):\n    return 0\n", "class OpenCommand:\n    pass\n")
+        if mechanism == "set_defaults":
+            src = src.replace("func=cmd_open", "func=OpenCommand")
+        else:
+            src = src.replace("    p_open.set_defaults(func=cmd_open)\n", "") + '\nHANDLERS = {"open": OpenCommand}\n'
+        root = make_tree(tmp_path / "snap", {"cli.py": src})
+        disc = discover(root)
+        e = by_name(argparse_entries(disc))["open"]
+        assert e.handler is None and e.known_edges == []
+        assert disc.diagnostics == []
+
+
+class TestArgsFuncDispatchCall:
+    def test_func_calls_on_names_not_bound_from_parse_args_are_not_dispatch(self, tmp_path):
+        src = SET_DEFAULTS.replace("import argparse\n", (
+            "import argparse\n\n\nclass Job:\n    def run(self, obj):\n"
+            "        self.func()\n        return obj.func(1)\n"))
+        root = make_tree(tmp_path / "snap", {"cli.py": src})
+        e = by_name(argparse_entries(discover(root)))["open"]
+        assert edges(e) == {("cli.py", line_of(src, "set_defaults"), "cli.py", line_of(src, "def cmd_open"))}
+
+    @pytest.mark.parametrize("parse", ["args = build().parse_args()", "args, _rest = build().parse_known_args()"])
+    def test_dispatch_call_in_a_module_importing_the_parser(self, tmp_path, parse):
+        main = f"from .cli import build\n\n\ndef main():\n    {parse}\n    return args.func(args)\n"
+        root = make_tree(tmp_path / "snap", {
+            "pkg/__init__.py": "", "pkg/cli.py": SET_DEFAULTS, "pkg/__main__.py": main})
+        e = by_name(argparse_entries(discover(root)))["open"]
+        assert edges(e) == {("pkg/__main__.py", line_of(main, "args.func(args)"),
+                             "pkg/cli.py", line_of(SET_DEFAULTS, "def cmd_open"))}
+
+
 def comparison_main(prelude: str = "") -> str:
     return prelude + """\
 import argparse

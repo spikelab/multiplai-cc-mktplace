@@ -6,9 +6,12 @@ diagnostics in a fixed order, whatever the filesystem order or the seed order.
 
 argparse. One `argparse_subcommand` entry per `add_parser(<str literal>)` on a
 value bound from `add_subparsers(...)`, named by its parents' names and its own,
-space-joined. Its handler resolves only through `set_defaults(func=<name>)`, or
-through a dict literal that maps the subcommand's literal name to a function, in
-the parser's module or in a same-repository module it imports. Dispatch on
+space-joined. Parser values are followed through each scope's local names and
+into the parameters of same-module functions they are passed to by name; an
+`add_parser` on a receiver that cannot be followed is diagnosed as
+`unresolved_target`. A handler resolves only through `set_defaults(func=<name>)`,
+or through a dict literal that maps the subcommand's literal name to a function,
+in the parser's module or in a same-repository module it imports. Dispatch on
 `args.command == "x"` is never resolved: the entry stays at its `add_parser` line.
 
 Seeds. A caller seed becomes a `seed` entry whose handler is the named symbol,
@@ -24,6 +27,7 @@ variable) leaves the handler null with no diagnostic.
 from __future__ import annotations
 
 import ast
+import heapq
 import logging
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -125,51 +129,94 @@ class _Subparsers:
     parent: _Subcommand | None
 
 
-_DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+_Value = _Parser | _Subparsers
+_Env = dict[str, _Value]
+_FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
+_DEF_NODES = (*_FUNCTION_NODES, ast.ClassDef)
 _SCOPE_NODES = (*_DEF_NODES, ast.Lambda)
 
 
 class _ParserScan:
-    """The subcommands one module declares, following parser values through local names of each scope."""
+    """The subcommands one module declares, following parser values through the local names of each scope
+    and into the parameters of the same-module functions they are passed to by name.
+    """
 
     def __init__(self, path: str):
         self.path = path
-        self.commands: list[_Subcommand] = []
+        self._commands: dict[tuple[tuple[str, ...], int], _Subcommand] = {}
         self.diagnostics: list[Diagnostic] = []
-        self._values: dict[int, _Parser | _Subparsers | None] = {}
+        self._values: dict[int, _Value | None] = {}
+        self._helpers: dict[str, int] = {}
+        self._scopes: list[ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef] = []
+        self._seeds: dict[int, list[_Env]] = {}
+
+    @property
+    def commands(self) -> list[_Subcommand]:
+        return list(self._commands.values())
 
     def scan(self, tree: ast.Module) -> None:
-        bodies = [tree.body] + [n.body for n in ast.walk(tree) if isinstance(n, _DEF_NODES)]
-        for body in bodies:
-            env: dict[str, _Parser | _Subparsers] = {}
-            for node in _walk_scope(body):
-                if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-                    value = self._eval(node.value, env)
-                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                    for target in (t for t in targets if isinstance(t, ast.Name)):
-                        if value is None:
-                            env.pop(target.id, None)
-                        else:
-                            env[target.id] = value
-                elif isinstance(node, ast.Call):
-                    self._eval(node, env)
+        defs = sorted((n for n in ast.walk(tree) if isinstance(n, _DEF_NODES)), key=lambda n: (n.lineno, n.col_offset))
+        self._scopes = [tree, *defs]
+        self._helpers = _unique_functions(self._scopes)
+        for position in _callers_first(self._scopes, self._helpers):
+            # A function given parser values at its call sites is scanned once per distinct set of them.
+            for env in self._seeds.pop(position, None) or [{}]:
+                self._scan_body(self._scopes[position].body, dict(env))
 
-    def _eval(self, expr: ast.expr, env: dict[str, _Parser | _Subparsers]) -> _Parser | _Subparsers | None:
+    def _scan_body(self, body: list[ast.stmt], env: _Env) -> None:
+        self._values = {}
+        for node in _walk_scope(body):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+                value = self._eval(node.value, env)
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in (t for t in targets if isinstance(t, ast.Name)):
+                    if value is None:
+                        env.pop(target.id, None)
+                    else:
+                        env[target.id] = value
+            elif isinstance(node, ast.Call):
+                self._eval(node, env)
+                self._pass_to_helper(node, env)
+
+    def _pass_to_helper(self, call: ast.Call, env: _Env) -> None:
+        """Seed the parameters of a same-module function called by name with the parser values it is given."""
+        position = self._helpers.get(call.func.id) if isinstance(call.func, ast.Name) else None
+        if position is None:
+            return
+        arguments = self._scopes[position].args
+        params = [a.arg for a in (*arguments.posonlyargs, *arguments.args)]
+        seed: _Env = {}
+        for param, arg in zip(params, call.args):
+            if isinstance(arg, ast.Starred):
+                break
+            if (value := self._eval(arg, env)) is not None:
+                seed[param] = value
+        keyword_params = {*params, *(a.arg for a in arguments.kwonlyargs)}
+        for keyword in call.keywords:
+            if keyword.arg in keyword_params and (value := self._eval(keyword.value, env)) is not None:
+                seed[keyword.arg] = value
+        seeds = self._seeds.setdefault(position, [])
+        if seed and seed not in seeds:
+            seeds.append(seed)
+
+    def _eval(self, expr: ast.expr, env: _Env) -> _Value | None:
         if isinstance(expr, ast.Name):
             return env.get(expr.id)
         if not (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute)):
             return None
         # A call is reached again as a child of the statement it is in; it is evaluated, and recorded, once.
         if id(expr) not in self._values:
-            self._values[id(expr)] = self._call(expr, expr.func.attr, self._eval(expr.func.value, env))
+            self._values[id(expr)] = self._call(expr, expr.func, self._eval(expr.func.value, env))
         return self._values[id(expr)]
 
-    def _call(self, call: ast.Call, method: str,
-              receiver: _Parser | _Subparsers | None) -> _Parser | _Subparsers | None:
+    def _call(self, call: ast.Call, callee: ast.Attribute, receiver: _Value | None) -> _Value | None:
+        method = callee.attr
         if method == "add_subparsers":
             return _Subparsers(receiver.command if isinstance(receiver, _Parser) else None)
         if method == "add_parser" and isinstance(receiver, _Subparsers):
             return self._add_parser(call, receiver)
+        if method == "add_parser" and receiver is None:
+            self._untraced_add_parser(call, callee.value)
         if method == "set_defaults" and isinstance(receiver, _Parser) and receiver.command is not None:
             for keyword in call.keywords:
                 if keyword.arg == "func":
@@ -177,17 +224,31 @@ class _ParserScan:
         return None
 
     def _add_parser(self, call: ast.Call, subparsers: _Subparsers) -> _Parser | None:
-        name = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "name"), None)
+        name = _add_parser_name(call)
         if not (isinstance(name, ast.Constant) and isinstance(name.value, str) and name.value):
-            shown = ast.unparse(name) if name is not None else "nothing"
             self.diagnostics.append(Diagnostic(
                 path=self.path, line=call.lineno, reason="dynamic_name",
-                detail=f"add_parser is given {shown}, not a string literal; the subcommand name is unknown"))
+                detail=f"add_parser is given {_shown(name)}, not a string literal; the subcommand name is unknown"))
             return None
         prefix = subparsers.parent.names if subparsers.parent else ()
-        command = _Subcommand((*prefix, name.value), call.lineno)
-        self.commands.append(command)
+        key = ((*prefix, name.value), call.lineno)
+        # A helper scanned once per parent it is given may reach one parent's subcommand twice.
+        command = self._commands.setdefault(key, _Subcommand(*key))
         return _Parser(command)
+
+    def _untraced_add_parser(self, call: ast.Call, receiver: ast.expr) -> None:
+        self.diagnostics.append(Diagnostic(
+            path=self.path, line=call.lineno, reason="unresolved_target",
+            detail=f"add_parser({_shown(_add_parser_name(call))}) is called on {ast.unparse(receiver)}, "
+                   "which is not traced to an add_subparsers() value in this module; no subcommand is emitted"))
+
+
+def _add_parser_name(call: ast.Call) -> ast.expr | None:
+    return call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "name"), None)
+
+
+def _shown(expr: ast.expr | None) -> str:
+    return ast.unparse(expr) if expr is not None else "nothing"
 
 
 def _walk_scope(body: list[ast.stmt]) -> Iterator[ast.AST]:
@@ -199,15 +260,57 @@ def _walk_scope(body: list[ast.stmt]) -> Iterator[ast.AST]:
         stack.extend(c for c in reversed(list(ast.iter_child_nodes(node))) if not isinstance(c, _SCOPE_NODES))
 
 
+def _unique_functions(scopes: Sequence[ast.AST]) -> dict[str, int]:
+    """`name -> position in scopes` of each function whose name no other function or class of the module has."""
+    positions: dict[str, list[int]] = {}
+    for position, scope in enumerate(scopes):
+        if isinstance(scope, _DEF_NODES):
+            positions.setdefault(scope.name, []).append(position)
+    return {name: found[0] for name, found in positions.items()
+            if len(found) == 1 and isinstance(scopes[found[0]], _FUNCTION_NODES)}
+
+
+def _callers_first(scopes: Sequence[ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef],
+                   helpers: dict[str, int]) -> list[int]:
+    """Scope positions ordered so that each function follows every scope calling it by name, so that its
+    call sites are scanned first; source order breaks ties and call cycles.
+    """
+    callees = [{helpers[n.func.id] for n in _walk_scope(scope.body)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in helpers} - {position}
+               for position, scope in enumerate(scopes)]
+    waiting = [0] * len(scopes)
+    for called in callees:
+        for position in called:
+            waiting[position] += 1
+    ready = [position for position, count in enumerate(waiting) if count == 0]
+    heapq.heapify(ready)
+    order: list[int] = []
+    done: set[int] = set()
+    while len(order) < len(scopes):
+        if not ready:
+            ready = [min(set(range(len(scopes))) - done)]
+        position = heapq.heappop(ready)
+        if position in done:
+            continue
+        done.add(position)
+        order.append(position)
+        for callee in callees[position]:
+            waiting[callee] -= 1
+            if waiting[callee] == 0:
+                heapq.heappush(ready, callee)
+    return order
+
+
 def _argparse_entries(index: PyIndex, dispatch: _DispatchIndex, path: str,
                       tree: ast.Module) -> tuple[list[Entry], list[Diagnostic]]:
-    if not any(isinstance(n, ast.Attribute) and n.attr == "add_subparsers" for n in ast.walk(tree)):
+    if not any(isinstance(n, ast.Attribute) and n.attr == "add_parser" for n in ast.walk(tree)):
         return [], []
     scan = _ParserScan(path)
     scan.scan(tree)
     entries, diagnostics = [], list(scan.diagnostics)
     for command in scan.commands:
-        handler, edge, problem = _resolve_handler(index, dispatch, path, command)
+        siblings = frozenset(c.names[-1] for c in scan.commands if c.names[:-1] == command.names[:-1])
+        handler, edge, problem = _resolve_handler(index, dispatch, path, command, siblings)
         entries.append(Entry(kind="argparse_subcommand", name=command.name,
                              location=Location(path=path, line=command.line), handler=handler, invocation=None,
                              known_edges=[edge] if edge else [], also_invoked_by=[]))
@@ -221,44 +324,64 @@ def _argparse_entries(index: PyIndex, dispatch: _DispatchIndex, path: str,
 _Resolution = tuple[Handler | None, KnownEdge | None, str | None]
 
 
-def _resolve_handler(index: PyIndex, dispatch: _DispatchIndex, path: str, command: _Subcommand) -> _Resolution:
+def _resolve_handler(index: PyIndex, dispatch: _DispatchIndex, path: str, command: _Subcommand,
+                     siblings: frozenset[str]) -> _Resolution:
     """Resolve through `set_defaults(func=...)` when the subparser calls it, else through a dispatch dict."""
     if command.func is not None:
         return _set_defaults_handler(index, dispatch, path, command.func)
-    return _dispatch_dict_handler(index, dispatch, path, command)
+    return _dispatch_dict_handler(index, dispatch, path, command, siblings)
 
 
 def _set_defaults_handler(index: PyIndex, dispatch: _DispatchIndex, path: str,
                           func: tuple[ast.expr, int]) -> _Resolution:
-    """The edge starts at the module's `args.func(...)` call, or at the `set_defaults` line when there is none."""
+    """The edge starts at the first `args.func(...)` call of the modules `dispatch.call_modules` names, or at the
+    `set_defaults` line when there is none.
+    """
     expr, line = func
     reference = _reference(expr)
     if reference is None:
         return None, None, None
-    handler = index.resolve_name(path, line, reference)
+    handler = _function(index, index.resolve_name(path, line, reference))
     if handler is None:
         return None, None, _external_problem(index, f"set_defaults at {path}:{line}", path, line, reference)
-    return handler, _edge(path, dispatch.facts(path).func_call or line, handler), None
+    start = dispatch.func_call(path) or (path, line)
+    return handler, _edge(*start, handler), None
 
 
-def _dispatch_dict_handler(index: PyIndex, dispatch: _DispatchIndex, path: str,
-                           command: _Subcommand) -> _Resolution:
-    """The first dict item, in this module then in each same-repository module it imports, keyed by the
-    subcommand's own name and naming a function. The edge starts at the `<DICT>[...](...)` call in the dict's
-    module, or at the item's line when there is none. Comparisons such as `args.command == "x"` never resolve.
+def _dispatch_dict_handler(index: PyIndex, dispatch: _DispatchIndex, path: str, command: _Subcommand,
+                           siblings: frozenset[str]) -> _Resolution:
+    """The subcommand's item in a dict literal of this module or of a same-repository module it imports.
+
+    When some candidate dict is called as `<DICT>[...](...)`, only such dicts count. Of those left, the dict
+    whose keys best match the names of the subcommand's siblings wins, so a nested `db migrate` and a
+    top-level `migrate` find their own dicts; then search order. The edge starts at the dict's dispatch call,
+    or at the item's line when there is none. Comparisons such as `args.command == "x"` never resolve.
     """
+    leaf = command.names[-1]
+    candidates = [(module, literal, dispatch.dict_call(path, module, literal.name))
+                  for module in [path, *index.imported_files(path)]
+                  for literal in dispatch.facts(module).dicts if leaf in literal.items]
+    if any(start for _, _, start in candidates):
+        candidates = [candidate for candidate in candidates if candidate[2]]
+    candidates.sort(key=lambda candidate: candidate[1].mismatch(siblings))
     unresolved = None
-    for module in [path, *index.imported_files(path)]:
-        facts = dispatch.facts(module)
-        for item in facts.dict_items.get(command.names[-1], []):
-            handler = index.resolve_name(module, item.value_line, item.value)
-            if handler is not None:
-                start = facts.dict_calls.get(item.dict_name) if item.dict_name else None
-                return handler, _edge(module, start or item.key_line, handler), None
-            if unresolved is None:
-                unresolved = _external_problem(index, f"dispatch dict entry at {module}:{item.key_line}",
-                                               module, item.value_line, item.value)
+    for module, literal, start in candidates:
+        item = literal.items[leaf]
+        handler = _function(index, index.resolve_name(module, item.value_line, item.value))
+        if handler is not None:
+            return handler, _edge(*(start or (module, item.key_line)), handler), None
+        if unresolved is None:
+            unresolved = _external_problem(index, f"dispatch dict entry at {module}:{item.key_line}",
+                                           module, item.value_line, item.value)
     return None, None, unresolved
+
+
+def _function(index: PyIndex, handler: Handler | None) -> Handler | None:
+    """`handler` when it is a function `def`; None for a class or nothing."""
+    if handler is None:
+        return None
+    found = next((d for d in index.defs(handler.path) if d.start == handler.line and d.name == handler.symbol), None)
+    return handler if found is not None and not found.is_class else None
 
 
 def _reference(expr: ast.expr) -> str | None:
@@ -281,34 +404,81 @@ def _external_problem(index: PyIndex, site: str, path: str, line: int, reference
 
 @dataclass(frozen=True)
 class _DictItem:
-    """`"<key>": <value reference>` in a dict literal; `dict_name` is the name the dict is assigned to, if any."""
-    key: str
+    """`"<key>": <value reference>` in a dict literal."""
     value: str
     key_line: int
     value_line: int
-    dict_name: str | None
+
+
+@dataclass(frozen=True)
+class _DictLiteral:
+    """A dict literal's string-keyed reference items; `name` is the name it is assigned to, if any."""
+    name: str | None
+    line: int
+    items: dict[str, _DictItem]
+
+    def mismatch(self, siblings: frozenset[str]) -> tuple[int, int]:
+        """Sorts first for the dict with fewest keys that are not sibling names, then most that are."""
+        keys = self.items.keys()
+        return len(keys - siblings), -len(keys & siblings)
 
 
 @dataclass(frozen=True)
 class _DispatchFacts:
-    """A module's dispatch sites: the first `<x>.func(...)` line, its dict items, and each `<DICT>[...](...)` line."""
+    """A module's dispatch sites: the first `args.func(...)` line (`args` bound from `.parse_args(...)`), its
+    dict literals in source order, and the first `<DICT>[...](...)` line per dict name.
+    """
     func_call: int | None
-    dict_items: dict[str, list[_DictItem]]
+    dicts: list[_DictLiteral]
     dict_calls: dict[str, int]
 
 
 class _DispatchIndex:
-    """`_DispatchFacts` per module, computed once each."""
+    """`_DispatchFacts` per module, and where a parser module's dispatch calls may be, each computed once."""
 
     def __init__(self, index: PyIndex):
         self._index = index
         self._facts: dict[str, _DispatchFacts] = {}
+        self._call_modules: dict[str, list[str]] = {}
 
     def facts(self, path: str) -> _DispatchFacts:
         if path not in self._facts:
             tree = self._index.tree(path)
-            self._facts[path] = _dispatch_facts(tree) if tree else _DispatchFacts(None, {}, {})
+            self._facts[path] = _dispatch_facts(tree) if tree else _DispatchFacts(None, [], {})
         return self._facts[path]
+
+    def call_modules(self, path: str) -> list[str]:
+        """The parser module, the same-repository modules importing it (a `__main__.py` calling
+        `build_parser()`, say), then the ones it imports: where its dispatch call may be.
+        """
+        if path not in self._call_modules:
+            found = [path, *self._index.importing_files(path), *self._index.imported_files(path)]
+            self._call_modules[path] = list(dict.fromkeys(found))
+        return self._call_modules[path]
+
+    def func_call(self, path: str) -> tuple[str, int] | None:
+        """`(module, line)` of the first `args.func(...)` dispatch call for the parser module `path`."""
+        for module in self.call_modules(path):
+            line = self.facts(module).func_call
+            if line is not None:
+                return module, line
+        return None
+
+    def dict_call(self, path: str, module: str, name: str | None) -> tuple[str, int] | None:
+        """`(module, line)` of the first `<name>[...](...)` call: in the dict's `module`, else wherever the
+        parser module `path`'s dispatch calls may be.
+        """
+        if name is None:
+            return None
+        for candidate in dict.fromkeys([module, *self.call_modules(path)]):
+            line = self.facts(candidate).dict_calls.get(name)
+            if line is not None:
+                return candidate, line
+        return None
+
+
+_PARSE_METHODS = frozenset({"parse_args", "parse_known_args", "parse_intermixed_args",
+                            "parse_known_intermixed_args"})
 
 
 def _assigned_dict_names(nodes: list[ast.AST]) -> dict[int, str]:
@@ -326,29 +496,55 @@ def _assigned_dict_names(nodes: list[ast.AST]) -> dict[int, str]:
     return names
 
 
+def _parsed_names(node: ast.AST) -> list[str]:
+    """The names an assignment binds to a `.parse_args(...)`-style result (the first of a tuple target)."""
+    if not (isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute) and node.value.func.attr in _PARSE_METHODS):
+        return []
+    names = []
+    for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+        if isinstance(target, ast.Tuple) and target.elts:
+            target = target.elts[0]
+        if isinstance(target, ast.Name):
+            names.append(target.id)
+    return names
+
+
+def _func_dispatch_line(tree: ast.Module) -> int | None:
+    """The first `<name>.func(...)` line whose `<name>` is bound from a `.parse_args(...)` call in the same scope."""
+    lines = []
+    for body in [tree.body] + [n.body for n in ast.walk(tree) if isinstance(n, _DEF_NODES)]:
+        nodes = list(_walk_scope(body))
+        parsed = {name for node in nodes for name in _parsed_names(node)}
+        lines += [n.lineno for n in nodes
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "func"
+                  and isinstance(n.func.value, ast.Name) and n.func.value.id in parsed]
+    return min(lines, default=None)
+
+
 def _dispatch_facts(tree: ast.Module) -> _DispatchFacts:
     nodes = list(ast.walk(tree))
     dict_names = _assigned_dict_names(nodes)
-    func_calls: list[int] = []
+    dicts: list[_DictLiteral] = []
     dict_calls: dict[str, int] = {}
-    items: dict[str, list[_DictItem]] = {}
     for node in nodes:
-        if isinstance(node, ast.Call):
-            callee = node.func
-            if isinstance(callee, ast.Attribute) and callee.attr == "func" and isinstance(callee.value, ast.Name):
-                func_calls.append(node.lineno)
-            elif isinstance(callee, ast.Subscript) and isinstance(callee.value, ast.Name):
-                name = callee.value.id
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Subscript):
+            # `COMMANDS[...](...)`, or `commands.COMMANDS[...](...)` for a dict of another module.
+            target = node.func.value
+            name = target.id if isinstance(target, ast.Name) else target.attr if isinstance(
+                target, ast.Attribute) else None
+            if name is not None:
                 dict_calls[name] = min(dict_calls.get(name, node.lineno), node.lineno)
         elif isinstance(node, ast.Dict):
+            items = {}
             for key, value in zip(node.keys, node.values):
                 reference = _reference(value)
                 if isinstance(key, ast.Constant) and isinstance(key.value, str) and reference is not None:
-                    items.setdefault(key.value, []).append(
-                        _DictItem(key.value, reference, key.lineno, value.lineno, dict_names.get(id(node))))
-    for found in items.values():
-        found.sort(key=lambda item: item.key_line)
-    return _DispatchFacts(min(func_calls, default=None), items, dict_calls)
+                    items[key.value] = _DictItem(reference, key.lineno, value.lineno)
+            if items:
+                dicts.append(_DictLiteral(dict_names.get(id(node)), node.lineno, items))
+    dicts.sort(key=lambda literal: literal.line)
+    return _DispatchFacts(_func_dispatch_line(tree), dicts, dict_calls)
 
 
 # --- seeds ------------------------------------------------------------------------------------

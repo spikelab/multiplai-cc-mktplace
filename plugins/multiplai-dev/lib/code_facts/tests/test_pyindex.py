@@ -200,6 +200,18 @@ class TestResolveName:
         assert idx.is_external("pkg/user.py", 1, "get")
         assert not idx.is_external("pkg/user.py", 2, "nothing")
 
+    @pytest.mark.parametrize("binding, name", [
+        ("import tools.cli", "tools.cli.not_a_def"),
+        ("import tools", "tools.cli"),
+        ("from tools import cli", "cli.not_a_def"),
+        ("from tools import nothing", "nothing"),
+    ])
+    def test_namespace_package_in_the_repository_is_not_external(self, tmp_path, binding, name):
+        root = make_tree(tmp_path / "snap", {"app.py": f"{binding}\n", "tools/cli.py": "def run():\n    return 0\n"})
+        assert not build(root).is_external("app.py", 1, name)
+        other = make_tree(tmp_path / "other", {"app.py": "import tool.cli\n", "tools/cli.py": ""})
+        assert build(other).is_external("app.py", 1, "tool.cli.run")
+
     def test_unknown_and_third_party_names(self, snap):
         idx = build(snap)
         line = line_of(CLI, "# module-scope handler")

@@ -42,6 +42,7 @@ class Def:
     qualname: str
     start: int
     end: int
+    is_class: bool
 
 
 # What a name is bound to in a scope.
@@ -195,7 +196,7 @@ class PyIndex:
                 base = posixpath.dirname(base)
             bases = [base]
         elif parts:
-            bases = [repo, posixpath.join(repo, "src"), posixpath.dirname(importer)]
+            bases = self._absolute_bases(importer)
         else:
             return None
         for base in bases:
@@ -243,6 +244,10 @@ class PyIndex:
         inner = self.enclosing_def(path, line)
         return (inner.start, inner.end) if inner else (1, info.lines)
 
+    def importing_files(self, path: str) -> list[str]:
+        """The indexed files that import `path`, as `imported_files` counts imports, in path order."""
+        return [p for p in sorted(self._files) if path in self.imported_files(p)]
+
     def imported_files(self, path: str) -> list[str]:
         """The same-repository files `path` imports at any nesting level, in path order.
 
@@ -260,6 +265,20 @@ class PyIndex:
         return list(self._imported[path])
 
     # --- internals ------------------------------------------------------------------------
+
+    def _absolute_bases(self, importer: str) -> list[str]:
+        repo = self.repo_root(importer)
+        return [repo, posixpath.join(repo, "src"), posixpath.dirname(importer)]
+
+    def _in_repository(self, importer: str, dotted: str) -> bool:
+        """Whether absolute `import <dotted>` from `importer` names a same-repository module or package,
+        a namespace package (a directory with no `__init__.py`) included.
+        """
+        if self.resolve_module(importer, dotted) is not None:
+            return True
+        repo = self.repo_root(importer)
+        prefixes = tuple(posixpath.join(base, *dotted.split(".")) + "/" for base in self._absolute_bases(importer))
+        return any(f.startswith(prefixes) and self.repo_root(f) == repo for f in self._files)
 
     def _module_file(self, stem: str) -> str | None:
         candidates = [f"{stem}.py", posixpath.join(stem, "__init__.py")] if stem else ["__init__.py"]
@@ -308,13 +327,13 @@ class PyIndex:
         for binding in bindings:
             match binding:
                 case _ModuleBinding(module=module):
-                    if self.resolve_module(path, module) is None:
+                    if not self._in_repository(path, module):
                         return True
                 case _FromBinding(module=module, level=level, attr=attr):
                     target = self.resolve_module(path, module, level)
                     if target is None:
-                        # A relative import never leaves the repository; `from ns import mod` may name a submodule.
-                        if level == 0 and self._bound_module(path, binding, "") is None:
+                        # A relative import never leaves the repository.
+                        if level == 0 and not self._in_repository(path, module):
                             return True
                     elif (target, attr) not in seen:
                         seen.add((target, attr))
@@ -377,7 +396,7 @@ class _Collector:
                 bindings.setdefault(node.name, []).append(_DefBinding(node.name, node.lineno))
                 qualname = prefix + node.name
                 end = node.end_lineno or node.lineno
-                self._info.defs.append(Def(node.name, qualname, node.lineno, end))
+                self._info.defs.append(Def(node.name, qualname, node.lineno, end, isinstance(node, ast.ClassDef)))
                 scope = _Scope(node.lineno, end, isinstance(node, ast.ClassDef))
                 self._info.scopes.append(scope)
                 self.body(node.body, scope.bindings, qualname + ".")
