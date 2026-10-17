@@ -3,8 +3,10 @@
 Code, not a model, turns `[[cN]]` into `path:line` links and `[[snippet:cN]]`
 into the cited lines read with `git show` at the commit. Each link carries its
 quote as the link title, so `check.py` can re-run `citation_gate` on a finished
-file. Every Mermaid diagram is drawn by code from gated hops and boundary
-entries.
+file. Every Mermaid diagram is drawn by code from boundary entries. The Paths
+section is rendered by code from the trace stage's `map_paths` result, which
+is also written, in human mode, as `<name>-paths.json` (paths.v1) by
+code_facts' `write_paths_file`.
 """
 
 from __future__ import annotations
@@ -16,6 +18,9 @@ from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote as url_quote
 
+import code_facts
+from code_facts.paths import PathHop, PathsResult, TracedPath
+
 from .check import LINK
 from .gates import CITE_ID, file_at_commit, lines_at_commit, sections_gate
 from .models import Citation, RepoInfo, WalkState
@@ -26,6 +31,7 @@ LANG = {".py": "python", ".ts": "typescript", ".tsx": "tsx", ".js": "javascript"
         ".sqlx": "sql", ".yml": "yaml", ".yaml": "yaml", ".json": "json", ".md": "markdown", ".html": "markup",
         ".sh": "bash", ".toml": "toml"}
 SNIPPET_MAX_LINES = 40
+HOP_ID = re.compile(r"p\d+h\d+")
 
 
 class Linker:
@@ -74,28 +80,17 @@ class Linker:
             c = self.citations.get(m.group(1))
             return "\n\n" + self.snippet(c) + "\n\n" if c else ""
         text = re.sub(r"\[\[snippet:([a-z0-9]+)\]\]", snip, text)
-        return CITE_ID.sub(lambda m: self.link(self.citations[m.group(1)]) if m.group(1) in self.citations else "",
-                           text)
+        def cite(m: re.Match) -> str:
+            c = self.citations.get(m.group(1))
+            if c is None:
+                return ""
+            # A hop citation also points at the hop's anchor in the Paths section.
+            return self.link(c) + (f" ([{c.id}](#{c.id}))" if c.id and HOP_ID.fullmatch(c.id) else "")
+        return CITE_ID.sub(cite, text)
 
 
 def _mermaid_id(i: int) -> str:
     return f"n{i}"
-
-
-def _scenario_mermaid(hops) -> str:
-    parts: list[str] = []
-    for h in hops:
-        label = PurePosixPath(h.path).name
-        if label not in parts:
-            parts.append(label)
-    lines = ["sequenceDiagram"]
-    for i, p in enumerate(parts):
-        lines.append(f'    participant {_mermaid_id(i)} as {p}')
-    for a, b in zip(hops, hops[1:]):
-        ia, ib = parts.index(PurePosixPath(a.path).name), parts.index(PurePosixPath(b.path).name)
-        msg = re.sub(r"[;#:\n]", " ", b.symbol_called)[:60]
-        lines.append(f"    {_mermaid_id(ia)}->>{_mermaid_id(ib)}: {msg}")
-    return "```mermaid\n" + "\n".join(lines) + "\n```"
 
 
 def _boundary_mermaid(state: WalkState) -> str:
@@ -123,6 +118,113 @@ def _entry_link(lk: Linker, path: str, line: int, quote: str) -> str:
     return lk.link(Citation(path=path, line_start=line, line_end=line, quote=quote))
 
 
+# --- the Paths section, rendered by code from the trace stage's map_paths result ---------------
+
+# A label per paths.v1 entry kind; a kind not listed here renders verbatim.
+KIND_LABELS: dict[str, str] = {
+    "argparse": "argparse command",
+    "click": "click command",
+    "typer": "typer command",
+    "main": "`main` module",
+    "script": "script",
+    "skill_command": "skill command",
+    "hook": "hook",
+    "seed": "caller seed",
+    "model": "found by the model fallback",
+}
+
+
+def _hop_citation(repo_key: str, hop: PathHop) -> Citation:
+    return Citation(path=f"{repo_key}/{hop.path}", line_start=hop.line_start, line_end=hop.line_end, quote=hop.quote)
+
+
+def _line_text(repos: dict[str, RepoInfo], ws: str, line: int) -> str:
+    return " ".join(lines_at_commit(repos, ws, line, line) or [])
+
+
+def _path_block(state: WalkState, lk: Linker, path: TracedPath) -> list[str]:
+    key = state.target.repo_key
+    pid, entry, hops = path.id, path.entry, path.hops
+    out = [f"**{pid}** — `{entry.name}` ({KIND_LABELS.get(entry.kind, entry.kind)})", ""]
+    written = state.sections.get(f"path:{pid}")
+    if written:
+        out += [p for para in written.paragraphs for p in (lk.expand(para), "")]
+    loc = entry.location
+    first = hops[0]
+    if first.path == loc.path and first.line_start <= loc.line <= first.line_end:
+        where = f"`{pid}h1`"
+    else:
+        ws = f"{key}/{loc.path}"
+        where = _entry_link(lk, ws, loc.line, _line_text(lk.repos, ws, loc.line))
+    out.append(f"- Entry: invoked by `{entry.invoked_by}`, at {where}")
+    out.append("- Hops:")
+    for k, hop in enumerate(hops, start=1):
+        hid = f"{pid}h{k}"
+        out.append(f'  - <a id="{hid}"></a>`{hid}` {lk.link(_hop_citation(key, hop))}')
+    if path.stops_at is not None:
+        out.append(f"- Stops after `{pid}h{path.stops_at}`: `{path.break_reason}`")
+    else:
+        out.append(f"- Ends at `{pid}h{len(hops)}` (trace complete).")
+    counted = ", ".join(f"`{t.node_id}`" for t in path.tests.e2e) or "no e2e test"
+    mocked = ", ".join(f"`{t.node_id}` (mocks `{pid}h2`, not counted)" for t in path.tests.mocks_hop_2)
+    out.append(f"- E2E tests: {counted}" + (f"; not counted: {mocked}" if mocked else ""))
+    return out
+
+
+# Diagnostics listed in Left out; only seed_not_found counts as an entry left out.
+LEFT_OUT_DIAGNOSTICS = ("seed_not_found", "dynamic_name")
+
+
+def left_out_count(result: PathsResult) -> int:
+    """Entries left out: every drop, plus every seed that was not found."""
+    return len(result.dropped) + sum(1 for d in result.diagnostics if d.reason == "seed_not_found")
+
+
+def render_left_out(result: PathsResult, repo_key: str) -> str:
+    """The `### Left out` table: drops, then diagnostics, then e2e listing skips. "" when there is no row.
+
+    Entries are plain text, never links: they are not claims, so `check` does not re-read them.
+    """
+    rows: list[tuple[str, str, str, str]] = []
+    for d in result.dropped:
+        loc = d.entry.location
+        rows.append((f"`{repo_key}/{loc.path}:{loc.line}` (`{d.entry.name}`)", d.stage, d.reason, d.detail))
+    for g in result.diagnostics:
+        if g.reason in LEFT_OUT_DIAGNOSTICS:
+            where = f"{repo_key}/{g.path}" + (f":{g.line}" if g.line is not None else "")
+            rows.append((f"`{where}`", "discover", g.reason, g.detail))
+    for skip in result.test_listing_skips:
+        rows.append((f"`{repo_key}/{skip.file}`", "e2e", "e2e_listing", skip.reason))
+    if not rows:
+        return ""
+    out = ["### Left out", "", "| Entry | Stage | Reason | Detail |", "|---|---|---|---|"]
+    out += [f"| {_cell(entry)} | {_cell(stage)} | `{_cell(reason)}` | {_cell(detail)} |"
+            for entry, stage, reason, detail in rows]
+    return "\n".join(out)
+
+
+def _entries_left_out(m: int) -> str:
+    return ("1 entry was left out" if m == 1 else f"{m} entries were left out") + \
+        "; see **Left out** under Coverage."
+
+
+def render_paths_section(state: WalkState, linker: Linker) -> str:
+    """The Paths body: a lead sentence, then one block per path in map_paths order."""
+    if state.paths_error:
+        return f"Path finding failed: {state.paths_error}"
+    paths = state.paths.paths if state.paths else []
+    m = left_out_count(state.paths) if state.paths else 0
+    if not paths:
+        return f"No paths were traced. {_entries_left_out(m)}" if m else \
+            "No entry points reaching this module were found."
+    n = len(paths)
+    lead = "1 path reaches this module." if n == 1 else f"{n} paths reach this module."
+    out = [lead + (f" {_entries_left_out(m)}" if m else ""), ""]
+    for path in paths:
+        out += _path_block(state, linker, path) + [""]
+    return "\n".join(out).rstrip()
+
+
 def coverage_lines(state: WalkState) -> list[str]:
     t = state.target
     cited = {c.path for f in state.facts for c in f.citations}
@@ -148,15 +250,20 @@ def coverage_lines(state: WalkState) -> list[str]:
         out.append(f"| Claims dropped by the {stage} checks | {n} |")
     cut = sum(len(s.cut) for s in state.sections.values())
     out.append(f"| Paragraphs cut by the write checks | {cut} |")
-    stops = [i + 1 for i, s in enumerate(state.scenarios) if s.stops_at is not None]
-    if state.scenarios:
-        out.append(f"| Scenarios cut short by the trace check | {len(stops)} of {len(state.scenarios)} |")
+    if state.options.get("mode") != "agent":
+        paths = state.paths.paths if state.paths else []
+        out.append(f"| Paths traced | {len(paths)} |")
+        out.append(f"| Paths cut short | {sum(1 for p in paths if p.stops_at is not None)} |")
+        out.append(f"| Entries left out | {left_out_count(state.paths) if state.paths else 0} |")
     if state.lsp:
         lsp = state.lsp
         detail = (f"{lsp.get('status')} in {lsp.get('seconds')}s, {lsp.get('answered')} of {lsp.get('symbols')} "
                   "symbols answered" if not str(lsp.get("status", "")).startswith("skipped") else lsp.get("status"))
         out.append(f"| pyright references | {detail} |")
     out.append("")
+    left_out = render_left_out(state.paths, t.repo_key) if state.paths else ""
+    if left_out:
+        out += [left_out, ""]
     missing = [f for f in files if f not in cited]
     if missing:
         out.append(f"Files with no surviving fact ({len(missing)}):")
@@ -233,20 +340,7 @@ def render_markdown(state: WalkState, out_dir: Path) -> str:
         md.append("No domain terms passed the checks.")
     md.append("")
 
-    md += ["## End-to-end scenarios", ""]
-    if not state.scenarios:
-        md += ["No scenario was traced.", ""]
-    for i, sc in enumerate(state.scenarios):
-        md += [f"### {i + 1}. {sc.title or 'Scenario ' + str(i + 1)}", ""]
-        md += section(f"scenario:s{i + 1}")
-        if len(sc.hops) > 1:
-            md += [_scenario_mermaid(sc.hops), ""]
-        for k, h in enumerate(sc.hops):
-            c = Citation(path=h.path, line_start=h.line_start, line_end=h.line_end, quote=h.quote)
-            md.append(f"{k + 1}. `{_cell(h.symbol_called)}` — {_cell(h.note)} {lk.link(c)}")
-        md.append("")
-        if sc.stops_at is not None:
-            md += [f"> trace stops at hop {sc.stops_at}: {sc.break_reason}", ""]
+    md += ["## Paths", "", render_paths_section(state, lk), ""]
 
     md += ["## Module tour", ""]
     for u in state.units:
@@ -494,6 +588,28 @@ def markdown_headings(md: str) -> list[str]:
     return [m.group(1).strip() for m in re.finditer(r"^## (.+)$", md, re.M)]
 
 
+def paths_file_for(md: Path) -> Path:
+    """`<name>-paths.json` beside `<name>-walkthrough.md`."""
+    return md.with_name(md.name.removesuffix("-walkthrough.md") + "-paths.json")
+
+
+def write_paths_output(state: WalkState, md: Path) -> Path | None:
+    """Write the trace stage's result beside the walkthrough with code_facts' writer; None when there is none.
+
+    A failed write is recorded in `state.errors` and leaves no file: the walkthrough is already written.
+    """
+    target = paths_file_for(md)
+    if state.paths is None:
+        target.unlink(missing_ok=True)       # a stale file from an earlier run would be taken for this one's
+        return None
+    try:
+        return code_facts.write_paths_file(state.paths, target)
+    except (OSError, ValueError) as e:
+        state.errors.append(f"paths file {target}: {type(e).__name__}: {e}")
+        target.unlink(missing_ok=True)
+        return None
+
+
 def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     name = state.target.name
@@ -509,4 +625,7 @@ def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
         json_path.write_text(json.dumps(render_walkthrough_json(state, md), indent=2, ensure_ascii=False) + "\n",
                              encoding="utf-8")
         paths.append(json_path)
+        written = write_paths_output(state, md_path)
+        if written is not None:
+            paths.append(written)
     return paths

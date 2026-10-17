@@ -3,6 +3,11 @@
 No model is called anywhere in the tests. Each answer is built by reading the
 files the prompt names, so the citations it returns are real and the gates
 pass them; the options plant the failures the gates must catch.
+
+Path tracing goes through `code_facts.map_paths`, which asks with its own
+schemas (`TraceAnswer`, `FallbackAnswer`) and the snapshot root as `cwd`. The
+fake answers a trace with hop 1 at the entry's handler (or its declaration)
+and then the hops `trace_plan` lists for that entry name.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from walkthrough_pipeline import budget
-from walkthrough_pipeline.models import DocsOutput, ExploreOutput, SectionOutput, TraceOutput
+from walkthrough_pipeline.models import DocsOutput, ExploreOutput, SectionOutput
 
 
 def _line(cwd: str, path: str, n: int) -> str:
@@ -30,14 +35,26 @@ def _find(cwd: str, path: str, needle: str) -> int:
     return next(i for i, l in enumerate(lines, start=1) if needle in l)
 
 
+def _def_line(cwd: str, path: str, symbol: str) -> int:
+    return _find(cwd, path, f"def {symbol}(")
+
+
 class FakeAgents:
-    def __init__(self, *, cost: float = 0.0, broken_trace: bool = False, invent_path: bool = False,
-                 fail_on: str | None = None):
+    def __init__(self, *, cost: float = 0.0, invent_path: bool = False, fail_on: str | None = None,
+                 trace_plan: dict[str, list] | None = None, span_declaration: bool = False,
+                 stop_trace_after: int | None = None):
         self.calls: list[dict] = []
         self.cost = cost
-        self.broken_trace = broken_trace
         self.invent_path = invent_path
         self.fail_on = fail_on
+        # entry name -> hops after hop 1: (path, symbol) cites `def symbol(`;
+        # (path, start, end, called, quote) cites exactly that range.
+        self.trace_plan = trace_plan or {}
+        # Hop 1 runs from the entry's declaration line down to its handler's `def`.
+        self.span_declaration = span_declaration
+        # Raise BudgetExceededError on trace call number stop_trace_after + 1.
+        self.stop_trace_after = stop_trace_after
+        self.trace_calls = 0
 
     async def __call__(self, prompt: str, schema, **kw):
         from walkthrough_pipeline import sdk
@@ -53,10 +70,19 @@ class FakeAgents:
             return self.explore(prompt, cwd)
         if schema is DocsOutput:
             return self.docs(prompt, cwd)
-        if schema is TraceOutput:
-            return self.trace(prompt, cwd)
+        if schema.__name__ == "TraceAnswer":
+            self.trace_calls += 1
+            if self.stop_trace_after is not None and self.trace_calls > self.stop_trace_after:
+                raise budget.BudgetExceededError("circuit breaker: planted stop during trace")
+            return schema.model_validate(self.trace(prompt, cwd))
+        if schema.__name__ == "FallbackAnswer":
+            return schema.model_validate(self.fallback(prompt, cwd))
         if schema is SectionOutput:
             return self.write(prompt)
+        if schema.__name__ == "TraceOutput":
+            # The trace stage from before map_paths: an empty answer, so suites that do not test
+            # tracing still run against it. Unreachable once that stage and its model are gone.
+            return schema.model_validate({"hops": []})
         raise AssertionError(schema)
 
     def explore(self, prompt: str, cwd: str) -> ExploreOutput:
@@ -99,22 +125,34 @@ class FakeAgents:
                        "this sentence is not on the page"})
         return DocsOutput.model_validate({"claims": claims, "mappings": mappings})
 
-    def trace(self, prompt: str, cwd: str) -> TraceOutput:
-        m = re.search(r"entry point \(found by code\):\n(\S+?):(\d+) — ", prompt)
-        path, line = m.group(1), int(m.group(2))
-        hops = [{"symbol_called": "entry", "path": path, "line_start": line, "line_end": line,
-                 "quote": _line(cwd, path, line), "note": "entry"}]
-        if path.endswith("bookings/urls.py") and "hooks/acme/" in _line(cwd, path, line):
-            views = "engine/bookings/views.py"
-            a, b = _find(cwd, views, "def webhook"), _find(cwd, views, "return ack_booking")
-            hops.append({"symbol_called": "views.webhook", "path": views, "line_start": a, "line_end": b,
-                         "quote": "return ack_booking(booking_id)", "note": "the view"})
-            client = "engine/bookings/client.py"
-            a, b = _find(cwd, client, "def ack_booking"), _find(cwd, client, "httpx.post")
-            name = "missing_function" if self.broken_trace else "ack_booking"
-            hops.append({"symbol_called": name, "path": client, "line_start": a, "line_end": b,
-                         "quote": "return httpx.post(", "note": "acknowledges the booking"})
-        return TraceOutput.model_validate({"title": "A webhook arrives", "hops": hops})
+    def trace(self, prompt: str, cwd: str) -> dict:
+        """A `TraceAnswer`: hop 1 at the entry, then the hops `trace_plan` gives for its name."""
+        name = re.search(r"^- name: (.+)$", prompt, re.M).group(1).strip()
+        decl_path, decl_line = re.search(r"^- declared at: (\S+):(\d+)$", prompt, re.M).groups()
+        handler = re.search(r"^- handler: (\S+) at (\S+):(\d+)$", prompt, re.M)
+        if handler:
+            path, line = handler.group(2), int(handler.group(3))
+            start = int(decl_line) if self.span_declaration and decl_path == path else line
+        else:
+            path, line = decl_path, int(decl_line)
+            start = line
+        hops = [{"symbol_called": name, "path": path, "line_start": min(start, line), "line_end": line,
+                 "quote": _line(cwd, path, line), "note": "the entry"}]
+        for step in self.trace_plan.get(name, []):
+            if len(step) == 2:
+                p, symbol = step
+                n = _def_line(cwd, p, symbol)
+                hops.append({"symbol_called": symbol, "path": p, "line_start": n, "line_end": n,
+                             "quote": _line(cwd, p, n), "note": f"calls {symbol}"})
+            else:
+                p, a, b, called, quote = step
+                hops.append({"symbol_called": called, "path": p, "line_start": a, "line_end": b,
+                             "quote": quote, "note": f"runs {called}"})
+        return {"hops": hops}
+
+    def fallback(self, prompt: str, cwd: str) -> dict:
+        """A `FallbackAnswer`: the static scan missed nothing."""
+        return {"entries": []}
 
     def write(self, prompt: str) -> SectionOutput:
         ids = re.findall(r"^- \[([a-z0-9]+)\]", prompt, re.M)

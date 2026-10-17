@@ -1,68 +1,224 @@
-"""trace: code picks scenario seeds from boundary.json; one agent per scenario returns hops.
+"""trace: the paths that reach the module, found by `code_facts.map_paths`.
 
-Seeds, in order, capped at `--scenarios`: webhook routes; routes called from
-other repositories (seeded at the caller, so the trace crosses repos); Celery
-beat entries naming the target's tasks; the remaining routes.
+`map_paths` discovers the entry points of the module's repository (CLI
+commands, scripts, skill commands, hooks), traces each one with a read-only
+agent, gates every hop and ranks the paths. The walkthrough passes the whole
+module as the changed lines, so every entry that reaches it is kept, up to
+`--scenarios` paths. Answers are kept under `<run dir>/paths-cache/`, so a
+resumed run asks only for the ones it does not have.
 
-`trace_gate` checks every hop. A break gets one re-ask naming the hop; if it
-still breaks, the scenario keeps its hops up to the last good one and is
-marked `trace stops at hop k`.
+Web entries are not found by `map_paths`; the boundary stage found them, and
+they are passed as caller seeds in the old seed order: webhook routes, routes
+called from other repositories, Celery beat entries, then the other routes.
+Each is seeded at its handler's `def`, or at its registration line when the
+handler cannot be named. The boundary edges (routes, tasks, the target side
+of cross-repository references) are the gate's known places.
+
+Failures. An agent failure on one entry is a drop that `map_paths` reports.
+Any other failure of `map_paths` is recorded in `state.paths_error` and
+`state.errors`, and the walkthrough is still written. A trust or budget stop
+halts the run: every model call goes through `_trace_call`, whose latch keeps
+the first such stop and raises it again on every later call, and `run_trace`
+raises it whatever `map_paths` made of it.
 """
 
 from __future__ import annotations
 
 import logging
+import posixpath
+import re
+from dataclasses import dataclass
+from pathlib import Path
 
-from .. import sdk
-from ..gates import trace_gate
-from ..models import Reference, Scenario, SymbolEntry, TraceOutput, WalkState
-from ..prompts import trace_scenario
-from . import RunContext, bounded, context_lines, ws_path
+import code_facts
+from code_facts import Location, Seed
+
+from .. import budget, sdk
+from ..models import STAGES, Reference, SymbolEntry, WalkState
+from ..references import full_routes
+from ..render import left_out_count
+from . import RunContext
 
 log = logging.getLogger(__name__)
 
+# The most entries traced; past it, code_facts drops them as `over_trace_limit`.
+TRACE_LIMIT = 30
+# `map_paths`' answer cache, under the run directory. Only `resume` reuses it; `run` starts it empty.
+PATHS_CACHE = "paths-cache"
 
-def pick_seeds(state: WalkState, cap: int) -> list[SymbolEntry | Reference]:
+
+def module_lines(state: WalkState, root: Path) -> dict[str, set[int]]:
+    """Every line of every explained file, keyed by its repo-relative path, counted in the snapshot.
+
+    Empty files are left out. Never None: an all-empty module is still a scoped run.
+    """
+    out: dict[str, set[int]] = {}
+    for rel in state.target.files:
+        try:
+            data = (root / rel).read_bytes()
+        except OSError:
+            continue
+        n = data.count(b"\n") + (0 if not data or data.endswith(b"\n") else 1)
+        if n:
+            out[rel] = set(range(1, n + 1))
+    return out
+
+
+def _rel(state: WalkState, ws: str) -> str | None:
+    """The repo-relative form of a workspace path in the target repo, else None."""
+    key, _, rel = ws.partition("/")
+    return rel if key == state.target.repo_key and rel else None
+
+
+def _route_name(route: str) -> str:
+    return "HTTP /" + route.lstrip("/")
+
+
+def _view_handler(state: WalkState, url: SymbolEntry) -> tuple[str, str] | None:
+    """(repo-relative file, name) of the function or class a route's view names, when exactly one matches."""
+    dotted = re.match(r"\s*([A-Za-z_][\w.]*)", url.detail.get("view", ""))
+    if not dotted or dotted.group(1) in ("include", "path", "re_path"):
+        return None
+    parts = [p for p in dotted.group(1).split(".") if p not in ("as_view", "view")]
+    if not parts:
+        return None
+    name, qualifier = parts[-1], parts[-2] if len(parts) > 1 else ""
+    found = [e for e in state.symbols if e.kind in ("function", "class") and e.name == name and _rel(state, e.path)]
+    if qualifier:
+        found = [e for e in found if posixpath.splitext(posixpath.basename(e.path))[0] == qualifier] or found
+    return (_rel(state, found[0].path), name) if len(found) == 1 else None
+
+
+def _route_seed(state: WalkState, url: SymbolEntry, name: str) -> Seed | None:
+    """A route's seed at its handler, else at its registration line."""
+    handler = _view_handler(state, url)
+    if handler:
+        return Seed(path=handler[0], symbol=handler[1], name=name)
+    rel = _rel(state, url.path)
+    return Seed(path=rel, line=url.line, name=name) if rel else None
+
+
+def _matching_route(state: WalkState, route: str) -> SymbolEntry | None:
+    """The target's url entry a full route (with its mount prefix) names.
+
+    The boundary stage names a called route by its key in `full_routes`, so that table is asked first. Else
+    the longest url whose segments end the route: a bare suffix match would take `status/` for `items/status/`.
+    """
+    found = full_routes(state.symbols, state.references).get(route.lstrip("/"))
+    if found is not None:
+        return found
+    want = route.strip("/")
+    urls = [e for e in state.symbols if e.kind == "url" and e.name.strip("/")]
+    ends = [e for e in urls if want == e.name.strip("/") or want.endswith("/" + e.name.strip("/"))]
+    return max(ends, key=lambda e: len(e.name.strip("/")), default=None)
+
+
+def _task(state: WalkState, task: str) -> SymbolEntry | None:
+    return next((e for e in state.symbols if e.kind == "celery-task" and e.name == task), None)
+
+
+def web_seeds(state: WalkState) -> list[Seed]:
+    """Caller seeds for the web entries the boundary stage found, defined in the target repo only."""
     urls = [e for e in state.symbols if e.kind == "url"]
-    seeds: list[SymbolEntry | Reference] = []
+    seeds: list[Seed] = []
     taken: set[str] = set()
 
-    def add(entry, key: str) -> None:
-        if key not in taken and len(seeds) < cap:
+    def add(key: str, seed: Seed | None) -> None:
+        if seed is not None and key not in taken:
             taken.add(key)
-            seeds.append(entry)
+            seeds.append(seed)
 
     for e in urls:
         hay = (e.name + " " + e.detail.get("view", "") + " " + e.detail.get("url_name", "")).lower()
         if "webhook" in hay or "wbhk" in hay:
-            add(e, "route:" + e.name)
+            add("route:" + e.name, _route_seed(state, e, _route_name(e.name)))
     for r in state.references:
         if r.kind == "http-route" and r.repo != state.target.repo_key:
-            add(r, "route:" + r.symbol)
+            url = _matching_route(state, r.symbol)
+            if url is not None:
+                add("route:" + url.name, _route_seed(state, url, f"{r.repo}: {_route_name(r.symbol)}"))
     for r in state.references:
         if r.kind == "celery-name":
-            add(r, "task:" + r.symbol)
+            task, name = _task(state, r.symbol), f"{r.symbol} (beat)"
+            if task is not None and task.detail.get("function") and _rel(state, task.path):
+                add("task:" + r.symbol, Seed(path=_rel(state, task.path), symbol=task.detail["function"], name=name))
+            elif _rel(state, r.path):
+                add("task:" + r.symbol, Seed(path=_rel(state, r.path), line=r.line, name=name))
     for e in urls:
-        add(e, "route:" + e.name)
+        add("route:" + e.name, _route_seed(state, e, _route_name(e.name)))
     return seeds
 
 
-def boundary_places(state: WalkState) -> list[tuple[str, int]]:
-    return ([(r.path, r.line) for r in state.references]
-            + [(e.path, e.line) for e in state.symbols if e.kind in ("url", "celery-task", "http")])
+def known_places(state: WalkState) -> list[Location]:
+    """The boundary edges under the target repo's root: the target side of each cross-repository
+    reference, then every route, then every task and beat entry. First-seen order, no duplicates."""
+    found: list[SymbolEntry | Reference] = []
+    for r in state.references:
+        if r.repo == state.target.repo_key:
+            continue
+        if r.kind == "http-route":
+            found.append(_matching_route(state, r.symbol))
+        elif r.kind == "celery-name":
+            found.append(_task(state, r.symbol))
+    found += [e for e in state.symbols if e.kind == "url"]
+    found += [e for e in state.symbols if e.kind == "celery-task"]
+    found += [r for r in state.references if r.kind == "celery-name" and r.repo == state.target.repo_key]
+    out: list[Location] = []
+    for e in found:
+        rel = _rel(state, e.path) if e is not None else None
+        place = Location(path=rel, line=e.line) if rel else None
+        if place is not None and place not in out:
+            out.append(place)
+    return out
 
 
-def _seed_head(seed: SymbolEntry | Reference, ctx: RunContext) -> str:
-    name = getattr(seed, "symbol", None) or getattr(seed, "name", "")
-    detail = ""
-    if isinstance(seed, SymbolEntry) and seed.detail:
-        detail = " " + ", ".join(f"{k}={v}" for k, v in seed.detail.items())
-    return f"{seed.path}:{seed.line} — {seed.kind} `{name}`{detail}\n{context_lines(ctx.snap_root, seed.path, seed.line, 4)}"
+def _resolver(state: WalkState) -> code_facts.Resolve:
+    """`resolve(path, side)` for the repo-relative paths `map_paths` cites: the target repo at its commit."""
+    repo = state.repos[state.target.repo_key]
+
+    def resolve(path: str, side: str = "head") -> tuple[str, str, str] | None:
+        rel = posixpath.normpath(path.strip()) if path.strip() else ""
+        if not rel or rel.startswith(("/", "../")) or rel in (".", ".."):
+            return None
+        return repo.path, repo.head_sha, rel
+    return resolve
 
 
-def _fix(out: TraceOutput, ctx: RunContext) -> TraceOutput:
-    return out.model_copy(update={"hops": [h.model_copy(update={"path": ws_path(h.path, ctx.snap_root)})
-                                          for h in out.hops]})
+# The stops that halt the run; any other exception of a call is for map_paths to handle.
+FATAL = (sdk.RepoTrustError, budget.BudgetExceededError)
+
+
+@dataclass
+class _FatalLatch:
+    """The first trust or budget stop raised by a trace call, kept so no later call is made."""
+    exc: BaseException | None = None
+
+
+def _trace_call(ctx: RunContext, root: Path, latch: _FatalLatch) -> code_facts.CallFn:
+    """The model call for `map_paths`: the walkthrough's sdk, read-only, on the trace model, reading only the
+    target repo's snapshot."""
+    cfg = ctx.config
+
+    async def call(prompt: str, schema, **_kw):
+        if latch.exc is not None:
+            raise latch.exc
+        try:
+            return await sdk.agent_call_structured(
+                prompt, schema, allowed_tools=sdk.TRACE_TOOLS, model=cfg.trace_model, effort=cfg.effort,
+                max_turns=cfg.max_turns, cwd=str(root), budget_label="trace", read_roots=[str(root)])
+        except FATAL as e:
+            latch.exc = e
+            raise
+    return call
+
+
+def rewind_legacy_trace(state: WalkState) -> WalkState:
+    """A human-mode state past `trace` with neither paths nor a paths error was written before path
+    finding: send it back to the stage before `trace`, so a resume traces instead of rendering no paths."""
+    if (state.options.get("mode") != "agent" and state.past("trace") and state.paths is None
+            and state.paths_error is None):
+        state.stage = STAGES[STAGES.index("trace") - 1]
+    return state
 
 
 async def run_trace(state: WalkState, ctx: RunContext) -> WalkState:
@@ -71,52 +227,44 @@ async def run_trace(state: WalkState, ctx: RunContext) -> WalkState:
     if state.options.get("mode") == "agent":
         state.stage = "trace"
         return state
-    seeds = pick_seeds(state, int(state.options.get("scenarios") or 6))
-    places = boundary_places(state)
-    cfg = ctx.config
-
-    async def ask(key: str, prompt: str) -> TraceOutput | None:
-        if key in state.trace_answers:
-            raw = state.trace_answers[key]
-            return None if "error" in raw else TraceOutput.model_validate(raw)
-        try:
-            out = await sdk.agent_call_structured(
-                prompt, TraceOutput, allowed_tools=sdk.TRACE_TOOLS, model=cfg.trace_model, effort=cfg.effort,
-                max_turns=cfg.max_turns, cwd=str(ctx.snap_root), budget_label="trace")
-            out = _fix(out, ctx)
-            state.trace_answers[key] = out.model_dump()
-            return out
-        except sdk.RepoTrustError:
+    root = ctx.snap_root / state.target.repo_key
+    latch = _FatalLatch()
+    budget.check(stage="trace")
+    try:
+        result = await code_facts.map_paths(
+            root=root,
+            commit=state.target.head_sha,
+            resolve=_resolver(state),
+            call=_trace_call(ctx, root, latch),
+            changed_lines=module_lines(state, root),
+            seeds=web_seeds(state),
+            places=known_places(state),
+            cap=int(state.options.get("scenarios") or 21),
+            trace_limit=TRACE_LIMIT,
+            concurrency=ctx.config.concurrency,
+            cache_dir=ctx.run_dir / PATHS_CACHE,
+            recoverable=(sdk.AgentCallError,),
+            progress=ctx.progress.line if ctx.progress else None,
+        )
+    except Exception as e:
+        if latch.exc is not None:
+            raise latch.exc
+        if isinstance(e, FATAL):
             raise
-        except sdk.AgentCallError as e:
-            log.error("trace %s failed", key, exc_info=True)
-            state.trace_answers[key] = {"error": str(e).splitlines()[0][:200]}
-            state.errors.append(f"trace {key}: {str(e).splitlines()[0][:200]}")
-            return None
-
-    async def one(i: int) -> Scenario:
-        seed = seeds[i]
-        head = _seed_head(seed, ctx)
-        out = await ask(f"s{i + 1}", trace_scenario(state.target.package, head, seed.path, seed.line, TraceOutput))
-        if out is None:
-            return Scenario(seed=seed.model_dump(), stops_at=0, break_reason="the trace agent failed")
-        good, reason = trace_gate(ctx.repos, seed, out.hops, places)
-        if good < len(out.hops) or not out.hops:
-            retry = await ask(f"s{i + 1}:reask", trace_scenario(state.target.package, head, seed.path, seed.line,
-                                                                TraceOutput, broke=reason))
-            if retry is not None:
-                g2, r2 = trace_gate(ctx.repos, seed, retry.hops, places)
-                if g2 > good or (g2 == len(retry.hops) and retry.hops):
-                    out, good, reason = retry, g2, r2
-        hops = out.hops[:good]
-        broke = good < len(out.hops) or not out.hops
-        return Scenario(seed=seed.model_dump(), title=out.title, hops=hops,
-                        stops_at=good if broke else None, break_reason=reason if broke else "")
-
-    scenarios = await bounded(range(len(seeds)), one, cfg.concurrency)
-    state.scenarios = [s for s in scenarios]
-    ctx.counts = {"scenarios": len(scenarios), "complete": sum(1 for s in scenarios if s.stops_at is None),
-                  "hops": sum(len(s.hops) for s in scenarios),
-                  "cut": sum(1 for s in scenarios if s.stops_at is not None)}
+        # Only the type is logged: a message can quote code.
+        log.error("trace: map_paths failed (%s)", type(e).__name__)
+        if ctx.progress:
+            ctx.progress.line(f"  trace: failed ({type(e).__name__})")
+        state.errors.append(f"trace: {type(e).__name__}: {e}")
+        state.paths, state.paths_error = None, f"{type(e).__name__}: {e}"
+        ctx.counts = {"failed": 1}
+        state.stage = "trace"
+        return state
+    if latch.exc is not None:
+        raise latch.exc
+    state.paths, state.paths_error = result, None
+    ctx.counts = {"paths": len(result.paths),
+                  "cut_short": sum(1 for p in result.paths if p.stops_at is not None),
+                  "left_out": left_out_count(result)}
     state.stage = "trace"
     return state

@@ -80,39 +80,6 @@ Schema:
 Answer with ONE JSON object and nothing after it."""
 
 
-def trace_scenario(name: str, seed_head: str, seed_path: str, seed_line: int, schema,
-                   broke: str | None = None) -> str:
-    fix = ""
-    if broke:
-        fix = (f"\nAn earlier trace of this scenario was rejected by a program: {broke}. "
-               "Fix that hop and keep the rest.\n")
-    return f"""You are tracing one end-to-end scenario through `{name}` for a new engineer.
-Your working directory holds snapshots of several repositories; every path starts with the
-repository name. Read the code with Read, Grep and Glob.
-
-The scenario starts at this entry point (found by code):
-{seed_head}
-{fix}
-Follow the code from there to the last effect: a database write, an outbound API call, or a
-message sent. Return `title` (a short plain sentence: what happens) and `hops`, in order:
-- hop 1 is the entry point itself: `path` = `{seed_path}`, a line range that includes line
-  {seed_line}, its exact `quote`, `symbol_called` = the route, task or name it is entered by.
-- each next hop k is the DEFINITION of something hop k-1 calls: `symbol_called` is the name as
-  written in hop k-1's quote (so hop k-1's `quote` must contain it), and hop k's line range
-  must start at the `def`/`class` line (or the assignment) that defines it and end at the line
-  you quote: the line inside it that calls the next hop, or the final effect.
-- `note`: one sentence on what happens at this hop.
-Six to twelve hops is typical. Stop at the first effect that leaves the process.
-
-{CITATION_RULES}
-{UNTRUSTED_RULES}
-
-Schema:
-{_schema(schema)}
-
-Answer with ONE JSON object and nothing after it."""
-
-
 WRITE_RULES = """\
 Writing rules (a program checks every paragraph; one that fails is cut from the walkthrough):
 - Refer to code ONLY by citation id in double brackets, e.g. "the webhook handler [[c12]]". The
