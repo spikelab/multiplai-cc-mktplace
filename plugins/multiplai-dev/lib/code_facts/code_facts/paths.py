@@ -426,16 +426,20 @@ async def map_paths(
     else:
         status, added, fallback_drops = FallbackStatus(status="skipped", reason=None), [], []
     entries = [*discovery.entries, *added]
-    to_trace, scope_drops = (entries, []) if changed is None else select_for_trace(
-        entries, index=index, changed=changed, trace_limit=trace_limit)
+    if changed is None:
+        to_trace, scope_drops = entries, []
+    else:
+        to_trace, scope_drops = select_for_trace(entries, index=index, changed=changed, trace_limit=trace_limit)
     outcomes = await trace_entries(to_trace, ctx=ctx, concurrency=concurrency)
     traced = [o for o in outcomes if isinstance(o, TracedPath)]
     trace_drops = [o for o in outcomes if isinstance(o, PathDrop)]
-    kept, kept_drops = (order_paths(traced), []) if changed is None else keep_covering(
-        traced, changed=changed, cap=cap)
+    if changed is None:
+        kept, coverage_drops = order_paths(traced), []
+    else:
+        kept, coverage_drops = keep_covering(traced, changed=changed, cap=cap)
     return PathsResult(
         schema_version=SCHEMA_VERSION, commit=commit, scoped=scoped, cap=cap if scoped else None, fallback=status,
-        paths=assign_ids(kept), dropped=sort_drops([*fallback_drops, *scope_drops, *trace_drops, *kept_drops]),
+        paths=assign_ids(kept), dropped=sort_drops([*fallback_drops, *scope_drops, *trace_drops, *coverage_drops]),
         diagnostics=discovery.diagnostics, test_listing_skips=[],
     )
 

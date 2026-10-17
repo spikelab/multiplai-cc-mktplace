@@ -328,8 +328,10 @@ class PyIndex:
         return found
 
     def _resolve_import(self, importer: str, dotted: str, level: int = 0) -> str | None:
-        """`resolve_module`, then, for an absolute import, each other repository root and its `src/` in sorted
-        order.
+        """`resolve_module`, falling back, for an absolute import, to each other repository root and its `src/`.
+
+        Other repositories are tried in sorted order; a hit counts only when the
+        file belongs to the repository searched.
         """
         found = self.resolve_module(importer, dotted, level)
         if found is not None or level or not dotted:

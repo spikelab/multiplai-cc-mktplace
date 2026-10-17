@@ -29,13 +29,17 @@ def entry_distance(entry: Entry, index: PyIndex, changed: Mapping[str, frozenset
     location's module when there is no handler.
     """
     changed_files = frozenset(changed)
-    own = [entry.location.path, *(i.location.path for i in entry.also_invoked_by)]
-    if entry.handler is not None:
-        own.append(entry.handler.path)
+    source = entry.handler.path if entry.handler is not None else entry.location.path
+    own = {source, entry.location.path, *(i.location.path for i in entry.also_invoked_by)}
     if not changed_files.isdisjoint(own):
         return 0
-    source = entry.handler.path if entry.handler is not None else entry.location.path
     return index.import_distance(source, changed_files)
+
+
+def _pre_trace_key(ranked: tuple[int, Entry]) -> tuple[int, int, str, int]:
+    """The pre-trace order of a reachable entry: import distance, then kind rank, then location."""
+    distance, entry = ranked
+    return distance, KIND_RANK[output_kind(entry)], entry.location.path, entry.location.line
 
 
 def covered_lines(hops: Sequence[PathHop], changed: Mapping[str, frozenset[int]]) -> list[Location]:
@@ -57,7 +61,7 @@ def select_for_trace(entries: Sequence[Entry], *, index: PyIndex, changed: Mappi
                                   detail="no import path to a changed file", entry=to_path_entry(entry)))
         else:
             reachable.append((distance, entry))
-    reachable.sort(key=lambda r: (r[0], KIND_RANK[output_kind(r[1])], r[1].location.path, r[1].location.line))
+    reachable.sort(key=_pre_trace_key)
     for rank, (distance, entry) in enumerate(reachable[trace_limit:], start=trace_limit + 1):
         detail = f"rank {rank} of {len(reachable)} (import distance {distance}), trace_limit {trace_limit}"
         drops.append(PathDrop(stage="trace_limit", reason="over_trace_limit", detail=detail,
