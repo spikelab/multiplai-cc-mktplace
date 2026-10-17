@@ -356,10 +356,13 @@ class _ReversedScandir:
 
     def __init__(self, it):
         with it:
-            self._entries = sorted(it, key=lambda e: e.name, reverse=True)
+            self._entries = iter(sorted(it, key=lambda e: e.name, reverse=True))
 
     def __iter__(self):
-        return iter(self._entries)
+        return self
+
+    def __next__(self):
+        return next(self._entries)
 
     def __enter__(self):
         return self

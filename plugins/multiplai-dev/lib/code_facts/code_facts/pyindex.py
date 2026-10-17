@@ -1,0 +1,356 @@
+"""PyIndex: one static `ast` pass over the Python files of a snapshot.
+
+Nothing in the snapshot is imported or run. The index records, per `.py` file:
+its repository root, its dotted module name, its `def`/`class` spans, the
+names its imports and definitions bind in each scope, and the imports
+themselves. Paths are POSIX and relative to the snapshot root; the snapshot
+root itself is `""`.
+
+Repository root. The nearest ancestor directory, at or below the snapshot
+root, that holds `.git` or `pyproject.toml`; the snapshot root otherwise.
+
+Imports. Collected at every nesting level (function bodies, `try` blocks,
+methods) except inside `if TYPE_CHECKING:`, whose imports never run. A
+function-local import binds only inside that function. Resolution never
+leaves the importing file's repository: absolute imports are searched under
+`<repo>/`, then `<repo>/src/`, then the importing file's own directory.
+"""
+
+from __future__ import annotations
+
+import ast
+import importlib.util
+import logging
+import os
+import posixpath
+from collections.abc import Iterator
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from .paths import Handler
+
+log = logging.getLogger(__name__)
+
+SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", "site-packages", "build", "dist"})
+REPO_MARKERS = (".git", "pyproject.toml")
+
+
+@dataclass(frozen=True)
+class Def:
+    """A `def` or `class` statement: `qualname` dots the enclosing definitions' names."""
+    name: str
+    qualname: str
+    start: int
+    end: int
+
+
+# What a name is bound to in a scope.
+@dataclass(frozen=True)
+class _DefBinding:
+    name: str
+    line: int
+
+
+@dataclass(frozen=True)
+class _ModuleBinding:
+    """`import a.b` (binds `a` to module `a`) or `import a.b as c` (binds `c` to `a.b`)."""
+    module: str
+
+
+@dataclass(frozen=True)
+class _FromBinding:
+    """`from <level dots><module> import <attr> [as <name>]`."""
+    module: str
+    level: int
+    attr: str
+
+
+_Binding = _DefBinding | _ModuleBinding | _FromBinding
+_ImportBindings = (_ModuleBinding, _FromBinding)
+
+
+@dataclass(frozen=True)
+class _Import:
+    """One import statement's target: `names` is empty for `import <module>`."""
+    module: str
+    level: int
+    names: tuple[str, ...]
+
+
+@dataclass
+class _Scope:
+    start: int
+    end: int
+    is_class: bool
+    bindings: dict[str, list[_Binding]] = field(default_factory=dict)
+
+
+@dataclass
+class _File:
+    lines: int
+    tree: ast.Module | None = None
+    defs: list[Def] = field(default_factory=list)
+    scopes: list[_Scope] = field(default_factory=list)  # pre-order: an enclosing scope precedes its inner ones
+    module_bindings: dict[str, list[_Binding]] = field(default_factory=dict)
+    imports: list[_Import] = field(default_factory=list)
+
+
+class PyIndex:
+    """The parsed Python files of one snapshot, and the name and import resolution over them."""
+
+    def __init__(self, files: dict[str, _File], repo_roots: frozenset[str], parse_errors: dict[str, str]):
+        self._files = files
+        self._repo_roots = repo_roots
+        self._parse_errors = parse_errors
+        self._imported: dict[str, list[str]] = {}
+
+    @classmethod
+    def build(cls, root: Path) -> PyIndex:
+        root = Path(root)
+        real_root = root.resolve()
+        files: dict[str, _File] = {}
+        repo_roots: set[str] = set()
+        parse_errors: dict[str, str] = {}
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            rel_dir = Path(dirpath).relative_to(root).as_posix()
+            rel_dir = "" if rel_dir == "." else rel_dir
+            if any(marker in dirnames or marker in filenames for marker in REPO_MARKERS):
+                repo_roots.add(rel_dir)
+            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+            for name in sorted(filenames):
+                full = Path(dirpath, name)
+                if not name.endswith(".py") or not _inside(full, real_root) or not full.is_file():
+                    continue
+                rel = posixpath.join(rel_dir, name)
+                files[rel], error = _index_file(full, rel)
+                if error is not None:
+                    parse_errors[rel] = error
+        log.debug("indexed %d Python files under %s (%d unparseable)", len(files), root, len(parse_errors))
+        return cls(files, frozenset(repo_roots), parse_errors)
+
+    # --- files ----------------------------------------------------------------------------
+
+    def trees(self) -> Iterator[tuple[str, ast.Module]]:
+        """`(path, tree)` of every parsed file, in path order."""
+        for path in sorted(self._files):
+            tree = self._files[path].tree
+            if tree is not None:
+                yield path, tree
+
+    def tree(self, path: str) -> ast.Module | None:
+        """The parsed module, or None when `path` is not an indexed file or did not parse."""
+        info = self._files.get(path)
+        return info.tree if info else None
+
+    def line_count(self, path: str) -> int | None:
+        """The number of lines of an indexed `.py` file, or None when `path` is not one."""
+        info = self._files.get(path)
+        return info.lines if info else None
+
+    def defs(self, path: str) -> list[Def]:
+        """Every `def` and `class` of `path` in source order, nested ones included."""
+        info = self._files.get(path)
+        return list(info.defs) if info else []
+
+    def parse_errors(self) -> list[tuple[str, str]]:
+        """`(path, detail)` of every `.py` file that could not be decoded or parsed, in path order."""
+        return sorted(self._parse_errors.items())
+
+    # --- names ----------------------------------------------------------------------------
+
+    def repo_root(self, path: str) -> str:
+        directory = posixpath.dirname(path)
+        while directory and directory not in self._repo_roots:
+            directory = posixpath.dirname(directory)
+        return directory
+
+    def module_name(self, path: str) -> str | None:
+        if path not in self._files:
+            return None
+        repo = self.repo_root(path)
+        rel = path[len(repo) + 1:] if repo else path
+        parts = rel.removeprefix("src/").removesuffix(".py").split("/")
+        if parts[-1] == "__init__":
+            parts.pop()
+        return ".".join(parts) or None
+
+    def resolve_module(self, importer: str, dotted: str, level: int = 0) -> str | None:
+        """The file `importer` gets for `import <dotted>` (or `from <level dots><dotted>`), same repository only."""
+        parts = dotted.split(".") if dotted else []
+        repo = self.repo_root(importer)
+        if level:
+            base = posixpath.dirname(importer)
+            for _ in range(level - 1):
+                if not base:
+                    return None
+                base = posixpath.dirname(base)
+            bases = [base]
+        elif parts:
+            bases = [repo, posixpath.join(repo, "src"), posixpath.dirname(importer)]
+        else:
+            return None
+        for base in bases:
+            found = self._module_file(posixpath.join(base, *parts))
+            if found is not None and self.repo_root(found) == repo:
+                return found
+        return None
+
+    def resolve_name(self, path: str, line: int, name: str) -> Handler | None:
+        """The `def` or `class` that `name` means at `line` of `path`: function scope first, then module scope.
+
+        Imports are followed, re-exports included, within the repository. None
+        when the name is unbound, bound to a module, or imported from outside
+        the repository.
+        """
+        return self._resolve_bindings(path, self._visible(path, line, name), set())
+
+    def is_imported(self, path: str, line: int, name: str) -> bool:
+        """Whether `name` at `line` of `path` is bound by an import statement."""
+        return any(isinstance(b, _ImportBindings) for b in self._visible(path, line, name))
+
+    def enclosing_def(self, path: str, line: int) -> Def | None:
+        """The innermost `def` or `class` whose span holds `line`."""
+        containing = [d for d in self.defs(path) if d.start <= line <= d.end]
+        return containing[-1] if containing else None
+
+    def enclosing_scope(self, path: str, line: int) -> tuple[int, int]:
+        """The innermost `def`/`class` span holding `line`, or the whole module. KeyError for an unindexed path."""
+        info = self._files[path]
+        inner = self.enclosing_def(path, line)
+        return (inner.start, inner.end) if inner else (1, info.lines)
+
+    def imported_files(self, path: str) -> list[str]:
+        """The same-repository files `path` imports at any nesting level, in path order.
+
+        `import a.b` also imports `a`; `from x import y` also imports `x/y.py` when that is a module.
+        """
+        if path not in self._imported:
+            found: set[str] = set()
+            info = self._files.get(path)
+            imports = info.imports if info else []
+            for imp in imports:
+                if imp.names:
+                    targets = [imp.module] + [f"{imp.module}.{n}" if imp.module else n for n in imp.names]
+                else:
+                    parts = imp.module.split(".")
+                    targets = [".".join(parts[:i]) for i in range(1, len(parts) + 1)]
+                found.update(t for t in (self.resolve_module(path, d, imp.level) for d in targets) if t)
+            found.discard(path)
+            self._imported[path] = sorted(found)
+        return list(self._imported[path])
+
+    # --- internals ------------------------------------------------------------------------
+
+    def _module_file(self, stem: str) -> str | None:
+        candidates = [f"{stem}.py", posixpath.join(stem, "__init__.py")] if stem else ["__init__.py"]
+        return next((c for c in candidates if c in self._files), None)
+
+    def _visible(self, path: str, line: int, name: str) -> list[_Binding]:
+        info = self._files.get(path)
+        if info is None:
+            return []
+        containing = [s for s in info.scopes if s.start <= line <= s.end]
+        for depth, scope in enumerate(reversed(containing)):
+            # A class body's names are not visible from the methods inside it.
+            if scope.is_class and depth > 0:
+                continue
+            if name in scope.bindings:
+                return scope.bindings[name]
+        return info.module_bindings.get(name, [])
+
+    def _resolve_bindings(self, path: str, bindings: list[_Binding], seen: set[tuple[str, str]]) -> Handler | None:
+        for binding in bindings:
+            match binding:
+                case _DefBinding(name=name, line=line):
+                    return Handler(path=path, line=line, symbol=name)
+                case _FromBinding(module=module, level=level, attr=attr):
+                    target = self.resolve_module(path, module, level)
+                    if target is None or (target, attr) in seen:
+                        continue
+                    seen.add((target, attr))
+                    found = self._resolve_bindings(target, self._files[target].module_bindings.get(attr, []), seen)
+                    if found is not None:
+                        return found
+        return None
+
+
+def _inside(full: Path, real_root: Path) -> bool:
+    """False for a symlink that resolves outside the snapshot, or cannot be resolved (a loop)."""
+    if not full.is_symlink():
+        return True
+    try:
+        return full.resolve().is_relative_to(real_root)
+    except (OSError, RuntimeError):
+        return False
+
+
+def _index_file(full: Path, rel: str) -> tuple[_File, str | None]:
+    """The file's index record, and the reason it could not be decoded or parsed (None when it parsed)."""
+    try:
+        data = full.read_bytes()
+    except OSError as e:
+        return _File(lines=0), f"unreadable: {e}"
+    try:
+        # decode_source honours a BOM or PEP 263 cookie and translates newlines.
+        text = importlib.util.decode_source(data)
+        tree = ast.parse(text, filename=rel)
+    except (SyntaxError, ValueError, RecursionError) as e:
+        lines = _count_lines(data.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
+        return _File(lines=lines), f"{type(e).__name__}: {e}"
+    info = _File(lines=_count_lines(text), tree=tree)
+    _Collector(info).body(tree.body, info.module_bindings, "")
+    return info, None
+
+
+def _count_lines(text: str | bytes) -> int:
+    newline = "\n" if isinstance(text, str) else b"\n"
+    return text.count(newline) + (1 if text and not text.endswith(newline) else 0)
+
+
+def _is_type_checking(test: ast.expr) -> bool:
+    return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING")
+
+
+class _Collector:
+    """Fills a `_File` with the definitions, scopes, bindings and imports of its statements."""
+
+    def __init__(self, info: _File):
+        self._info = info
+
+    def body(self, stmts: list[ast.stmt], bindings: dict[str, list[_Binding]], prefix: str) -> None:
+        for stmt in stmts:
+            self._node(stmt, bindings, prefix)
+
+    def _node(self, node: ast.AST, bindings: dict[str, list[_Binding]], prefix: str) -> None:
+        match node:
+            case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.ClassDef():
+                bindings.setdefault(node.name, []).append(_DefBinding(node.name, node.lineno))
+                qualname = prefix + node.name
+                end = node.end_lineno or node.lineno
+                self._info.defs.append(Def(node.name, qualname, node.lineno, end))
+                scope = _Scope(node.lineno, end, isinstance(node, ast.ClassDef))
+                self._info.scopes.append(scope)
+                self.body(node.body, scope.bindings, qualname + ".")
+            case ast.Import(names=aliases):
+                for alias in aliases:
+                    self._info.imports.append(_Import(alias.name, 0, ()))
+                    if alias.asname:
+                        bindings.setdefault(alias.asname, []).append(_ModuleBinding(alias.name))
+                    else:
+                        top = alias.name.split(".")[0]
+                        bindings.setdefault(top, []).append(_ModuleBinding(top))
+            case ast.ImportFrom(module=module, level=level, names=aliases):
+                names = tuple(a.name for a in aliases if a.name != "*")
+                self._info.imports.append(_Import(module or "", level, names))
+                for alias in aliases:
+                    if alias.name != "*":
+                        binding = _FromBinding(module or "", level, alias.name)
+                        bindings.setdefault(alias.asname or alias.name, []).append(binding)
+            case ast.If() if _is_type_checking(node.test):
+                self.body(node.orelse, bindings, prefix)
+            case _:
+                # Statements nest inside compound statements, `except` handlers and `match` cases.
+                for child in ast.iter_child_nodes(node):
+                    if isinstance(child, (ast.stmt, ast.excepthandler, ast.match_case)):
+                        self._node(child, bindings, prefix)
