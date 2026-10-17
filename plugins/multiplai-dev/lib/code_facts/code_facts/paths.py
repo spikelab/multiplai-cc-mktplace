@@ -27,10 +27,10 @@ import re
 import secrets
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import jsonschema
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, ValidationError, model_validator
 
 from .explore import CallFn, Resolve
 from .models import _Model
@@ -48,7 +48,9 @@ HOP_LIMIT = 20
 REL_PATH = re.compile(r"^(?!/)(?!.*(^|/)\.\.?(/|$))[^\\]+$")
 PATH_ID = r"^p[1-9][0-9]*$"
 
-EntryKind = Literal["argparse", "click", "typer", "main", "script", "skill_command", "hook", "seed", "model"]
+# Output kinds of discovered entries; `model` is added only for fallback entries, which never merge.
+DiscoveredKind = Literal["argparse", "click", "typer", "main", "script", "skill_command", "hook", "seed"]
+EntryKind = Literal[DiscoveredKind, "model"]
 MatchKind = Literal["direct_call", "cli_argv", "cli_runner", "subprocess", "runpy"]
 DropStage = Literal["model_fallback_citation", "model_fallback_duplicate", "import_reachability", "trace_limit",
                     "trace", "no_changed_line", "cap"]
@@ -57,13 +59,44 @@ DiagnosticReason = Literal["parse_error", "unresolved_target", "unresolved_handl
 SkipReason = Literal["decode_error", "syntax_error"]
 FallbackState = Literal["ok", "failed", "skipped"]
 
+# A cut kept path breaks at hop 2 or later; a break at hop 1 leaves no hop, so
+# these three only ever reach a drop.
+CutReason = Literal["path_outside_root", "missing_file", "line_out_of_range", "text_mismatch",
+                    "base_side_citation", "unconnected_hop", "repeated_hop", "hop_limit"]
+BreakCode = Literal["malformed_answer", "empty_trace", "entry_mismatch", CutReason]
+DropReason = Literal["missing_citation", "citation_unverified", "duplicate", "unreachable", "over_trace_limit",
+                     "call_failed", BreakCode, "no_changed_line_covered", "over_cap"]
+
+# The closed reason codes of each drop stage, in stage sort order.
+DROP_REASONS: Mapping[DropStage, tuple[DropReason, ...]] = {
+    "model_fallback_citation": ("missing_citation", "citation_unverified"),
+    "model_fallback_duplicate": ("duplicate",),
+    "import_reachability": ("unreachable",),
+    "trace_limit": ("over_trace_limit",),
+    "trace": ("call_failed", *get_args(BreakCode)),
+    "no_changed_line": ("no_changed_line_covered",),
+    "cap": ("over_cap",),
+}
 # Drop stages that only a scoped run can produce.
 SCOPE_STAGES = frozenset({"import_reachability", "trace_limit", "no_changed_line", "cap"})
 
 
+def _pinned(fields: Iterable[str], **constraints: Any) -> dict[str, Any]:
+    """A schema for an object with `fields` where only `constraints` restrict their values."""
+    return {"properties": {name: constraints.get(name, True) for name in fields}, "additionalProperties": False}
+
+
+def _one_of(*arms: Mapping[str, Any]) -> Callable[[dict[str, Any]], None]:
+    """A `json_schema_extra` putting a model's cross-field rule into the schema: exactly one arm holds."""
+    def extra(schema: dict[str, Any]) -> None:
+        schema["oneOf"] = [_pinned(schema["properties"], **arm) for arm in arms]
+    return extra
+
+
 class _Strict(_Model):
     # Output models: code builds them, so an unknown key is a bug, not model chatter.
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    # Defaults are always serialised, so the schema requires them.
+    model_config = ConfigDict(extra="forbid", frozen=True, json_schema_serialization_defaults_required=True)
 
 
 # --- the paths.v1 models -----------------------------------------------------------------
@@ -84,7 +117,7 @@ class Handler(_Strict):
 
 class Invoker(_Strict):
     """Another entry that resolved to the same handler and was merged into this one."""
-    kind: str
+    kind: DiscoveredKind
     name: str
     location: Location
 
@@ -110,8 +143,8 @@ class PathHop(_Strict):
     side: Literal["head"] = "head"
 
 
-class E2ETest(_Strict):
-    """A test that invokes the path's entry; `line` is its `def`, `invocation_line` the matching call."""
+class _TestRecord(_Strict):
+    # Shared fields only: the two records are siblings so neither list accepts the other's records.
     node_id: str
     file: str = Field(pattern=REL_PATH)
     line: int = Field(ge=1)
@@ -119,7 +152,11 @@ class E2ETest(_Strict):
     invocation_line: int = Field(ge=1)
 
 
-class MockedE2ETest(E2ETest):
+class E2ETest(_TestRecord):
+    """A test that invokes the path's entry; `line` is its `def`, `invocation_line` the matching call."""
+
+
+class MockedE2ETest(_TestRecord):
     """An e2e test that patches the symbol at hop 2; the patch may sit in a fixture file."""
     patch_file: str = Field(pattern=REL_PATH)
     patch_line: int = Field(ge=1)
@@ -140,11 +177,16 @@ class E2EListing(_Strict):
 
 class TracedPath(_Strict):
     """A kept path. A cut path has `stops_at` (the 1-based index of the last hop kept) and `break_reason`."""
+    model_config = ConfigDict(json_schema_extra=_one_of(
+        {"stops_at": {"type": "null"}, "break_reason": {"type": "null"}},
+        {"stops_at": {"type": "integer"}, "break_reason": {"type": "string"}},
+    ))
+
     id: str = Field(pattern=PATH_ID)
     entry: PathEntry
     hops: list[PathHop] = Field(min_length=1, max_length=HOP_LIMIT)
-    stops_at: int | None
-    break_reason: str | None = Field(min_length=1)
+    stops_at: int | None = Field(ge=1)
+    break_reason: CutReason | None
     changed_lines_covered: list[Location]
     tests: E2EListing
 
@@ -159,10 +201,20 @@ class TracedPath(_Strict):
 
 class PathDrop(_Strict):
     """An entry or path left out, with the stage that dropped it and a reason code; `detail` is for humans."""
+    model_config = ConfigDict(json_schema_extra=_one_of(
+        *({"stage": {"const": stage}, "reason": {"enum": list(reasons)}} for stage, reasons in DROP_REASONS.items())
+    ))
+
     stage: DropStage
-    reason: str = Field(min_length=1)
+    reason: DropReason
     detail: str
     entry: PathEntry
+
+    @model_validator(mode="after")
+    def _reason_of_stage(self) -> PathDrop:
+        if self.reason not in DROP_REASONS[self.stage]:
+            raise ValueError(f"{self.reason!r} is not a reason of drop stage {self.stage!r}")
+        return self
 
 
 class PathDiagnostic(_Strict):
@@ -181,6 +233,11 @@ class ListingSkip(_Strict):
 
 class FallbackStatus(_Strict):
     """What the model fallback did; `reason` says why it failed and is null otherwise."""
+    model_config = ConfigDict(json_schema_extra=_one_of(
+        {"status": {"const": "failed"}, "reason": {"type": "string"}},
+        {"status": {"enum": ["ok", "skipped"]}, "reason": {"type": "null"}},
+    ))
+
     status: FallbackState
     reason: str | None = Field(min_length=1)
 
@@ -193,6 +250,14 @@ class FallbackStatus(_Strict):
 
 class PathsResult(_Strict):
     """The paths.v1 document. `scoped` is true exactly when changed lines were given; `cap` is null otherwise."""
+    model_config = ConfigDict(json_schema_extra=_one_of(
+        {"scoped": {"const": True}, "cap": {"type": "integer"}},
+        {"scoped": {"const": False}, "cap": {"type": "null"},
+         "paths": {"items": _pinned(TracedPath.model_fields, changed_lines_covered={"maxItems": 0})},
+         "dropped": {"items": _pinned(PathDrop.model_fields, stage={
+             "enum": [stage for stage in DROP_REASONS if stage not in SCOPE_STAGES]})}},
+    ))
+
     schema_version: Literal["paths.v1"]
     commit: str
     scoped: bool
@@ -231,8 +296,9 @@ class Seed(_Strict):
 
 def paths_schema_text() -> str:
     """The JSON Schema for PathsResult, in its committed form (`schema/paths.v1.schema.json`)."""
+    # Serialisation mode: the schema describes the documents `write_paths_file` writes.
     schema = {"$schema": JSON_SCHEMA_DRAFT, "$id": f"{SCHEMA_VERSION}.schema.json",
-              **PathsResult.model_json_schema()}
+              **PathsResult.model_json_schema(mode="serialization")}
     return json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -344,18 +410,35 @@ def serialise_paths(result: PathsResult) -> str:
 
 
 def write_paths_file(result: PathsResult, path: Path) -> Path:
-    """Write `result` to `path` as paths.v1 JSON, atomically, after validating it against the schema.
+    """Write `result` to `path` as paths.v1 JSON, atomically, after validating it.
 
-    Raises ValueError naming the JSON pointer of the first schema error; then
-    nothing is written and an existing file at `path` is left as it was.
+    The text is checked against the schema, then parsed back into the model,
+    which also checks the rules a schema cannot state (contiguous ids, disjoint
+    test lists) on lists mutated after construction. Raises ValueError naming
+    the JSON pointer of the first error; then nothing is written and an
+    existing file at `path` is left as it was.
     """
     text = serialise_paths(result)
-    error = jsonschema.exceptions.best_match(_validator().iter_errors(json.loads(text)))
+    document = json.loads(text)
+    errors = list(_validator().iter_errors(document))
+    # `oneOf` only carries cross-field rules; a value invalid on its own is the better pointer.
+    own = [e for e in errors if "oneOf" not in e.schema_path]
+    error = jsonschema.exceptions.best_match(own or errors)
     if error is not None:
-        pointer = "/" + "/".join(map(str, error.absolute_path))
-        raise ValueError(f"{SCHEMA_VERSION} document is invalid at {pointer}: {error.message}")
+        raise _invalid(error.absolute_path, error.message)
+    try:
+        PathsResult.model_validate(document)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        raise _invalid(first["loc"], first["msg"]) from exc
     _write_atomic(path, text.encode("utf-8"))
     return path
+
+
+def _invalid(location: Iterable[str | int], message: str) -> ValueError:
+    """The error for an invalid document, naming the JSON pointer of the failing value."""
+    pointer = "/" + "/".join(map(str, location))
+    return ValueError(f"{SCHEMA_VERSION} document is invalid at {pointer}: {message}")
 
 
 def _write_atomic(path: Path, data: bytes) -> None:

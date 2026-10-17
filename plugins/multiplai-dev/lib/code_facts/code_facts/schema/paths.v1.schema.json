@@ -76,6 +76,33 @@
     "FallbackStatus": {
       "additionalProperties": false,
       "description": "What the model fallback did; `reason` says why it failed and is null otherwise.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "failed"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "ok",
+                "skipped"
+              ]
+            },
+            "reason": {
+              "type": "null"
+            }
+          }
+        }
+      ],
       "properties": {
         "status": {
           "enum": [
@@ -145,6 +172,16 @@
       "description": "Another entry that resolved to the same handler and was merged into this one.",
       "properties": {
         "kind": {
+          "enum": [
+            "argparse",
+            "click",
+            "typer",
+            "main",
+            "script",
+            "skill_command",
+            "hook",
+            "seed"
+          ],
           "title": "Kind",
           "type": "string"
         },
@@ -317,6 +354,125 @@
     "PathDrop": {
       "additionalProperties": false,
       "description": "An entry or path left out, with the stage that dropped it and a reason code; `detail` is for humans.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "stage": {
+              "const": "model_fallback_citation"
+            },
+            "reason": {
+              "enum": [
+                "missing_citation",
+                "citation_unverified"
+              ]
+            },
+            "detail": true,
+            "entry": true
+          }
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "stage": {
+              "const": "model_fallback_duplicate"
+            },
+            "reason": {
+              "enum": [
+                "duplicate"
+              ]
+            },
+            "detail": true,
+            "entry": true
+          }
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "stage": {
+              "const": "import_reachability"
+            },
+            "reason": {
+              "enum": [
+                "unreachable"
+              ]
+            },
+            "detail": true,
+            "entry": true
+          }
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "stage": {
+              "const": "trace_limit"
+            },
+            "reason": {
+              "enum": [
+                "over_trace_limit"
+              ]
+            },
+            "detail": true,
+            "entry": true
+          }
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "stage": {
+              "const": "trace"
+            },
+            "reason": {
+              "enum": [
+                "call_failed",
+                "malformed_answer",
+                "empty_trace",
+                "entry_mismatch",
+                "path_outside_root",
+                "missing_file",
+                "line_out_of_range",
+                "text_mismatch",
+                "base_side_citation",
+                "unconnected_hop",
+                "repeated_hop",
+                "hop_limit"
+              ]
+            },
+            "detail": true,
+            "entry": true
+          }
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "stage": {
+              "const": "no_changed_line"
+            },
+            "reason": {
+              "enum": [
+                "no_changed_line_covered"
+              ]
+            },
+            "detail": true,
+            "entry": true
+          }
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "stage": {
+              "const": "cap"
+            },
+            "reason": {
+              "enum": [
+                "over_cap"
+              ]
+            },
+            "detail": true,
+            "entry": true
+          }
+        }
+      ],
       "properties": {
         "stage": {
           "enum": [
@@ -332,7 +488,27 @@
           "type": "string"
         },
         "reason": {
-          "minLength": 1,
+          "enum": [
+            "missing_citation",
+            "citation_unverified",
+            "duplicate",
+            "unreachable",
+            "over_trace_limit",
+            "call_failed",
+            "malformed_answer",
+            "empty_trace",
+            "entry_mismatch",
+            "path_outside_root",
+            "missing_file",
+            "line_out_of_range",
+            "text_mismatch",
+            "base_side_citation",
+            "unconnected_hop",
+            "repeated_hop",
+            "hop_limit",
+            "no_changed_line_covered",
+            "over_cap"
+          ],
           "title": "Reason",
           "type": "string"
         },
@@ -463,7 +639,9 @@
         "path",
         "line_start",
         "line_end",
-        "quote"
+        "quote",
+        "note",
+        "side"
       ],
       "title": "PathHop",
       "type": "object"
@@ -471,6 +649,40 @@
     "TracedPath": {
       "additionalProperties": false,
       "description": "A kept path. A cut path has `stops_at` (the 1-based index of the last hop kept) and `break_reason`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": true,
+            "entry": true,
+            "hops": true,
+            "stops_at": {
+              "type": "null"
+            },
+            "break_reason": {
+              "type": "null"
+            },
+            "changed_lines_covered": true,
+            "tests": true
+          }
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": true,
+            "entry": true,
+            "hops": true,
+            "stops_at": {
+              "type": "integer"
+            },
+            "break_reason": {
+              "type": "string"
+            },
+            "changed_lines_covered": true,
+            "tests": true
+          }
+        }
+      ],
       "properties": {
         "id": {
           "pattern": "^p[1-9][0-9]*$",
@@ -492,6 +704,7 @@
         "stops_at": {
           "anyOf": [
             {
+              "minimum": 1,
               "type": "integer"
             },
             {
@@ -503,7 +716,16 @@
         "break_reason": {
           "anyOf": [
             {
-              "minLength": 1,
+              "enum": [
+                "path_outside_root",
+                "missing_file",
+                "line_out_of_range",
+                "text_mismatch",
+                "base_side_citation",
+                "unconnected_hop",
+                "repeated_hop",
+                "hop_limit"
+              ],
               "type": "string"
             },
             {
@@ -538,6 +760,75 @@
   },
   "additionalProperties": false,
   "description": "The paths.v1 document. `scoped` is true exactly when changed lines were given; `cap` is null otherwise.",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": true,
+        "commit": true,
+        "scoped": {
+          "const": true
+        },
+        "cap": {
+          "type": "integer"
+        },
+        "fallback": true,
+        "paths": true,
+        "dropped": true,
+        "diagnostics": true,
+        "test_listing_skips": true
+      }
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": true,
+        "commit": true,
+        "scoped": {
+          "const": false
+        },
+        "cap": {
+          "type": "null"
+        },
+        "fallback": true,
+        "paths": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": true,
+              "entry": true,
+              "hops": true,
+              "stops_at": true,
+              "break_reason": true,
+              "changed_lines_covered": {
+                "maxItems": 0
+              },
+              "tests": true
+            }
+          }
+        },
+        "dropped": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "stage": {
+                "enum": [
+                  "model_fallback_citation",
+                  "model_fallback_duplicate",
+                  "trace"
+                ]
+              },
+              "reason": true,
+              "detail": true,
+              "entry": true
+            }
+          }
+        },
+        "diagnostics": true,
+        "test_listing_skips": true
+      }
+    }
+  ],
   "properties": {
     "schema_version": {
       "const": "paths.v1",
