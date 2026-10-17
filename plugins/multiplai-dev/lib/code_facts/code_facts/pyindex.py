@@ -12,9 +12,14 @@ root, that holds `.git` or `pyproject.toml`; the snapshot root otherwise.
 
 Imports. Collected at every nesting level (function bodies, `try` blocks,
 methods) except inside `if TYPE_CHECKING:`, whose imports never run. A
-function-local import binds only inside that function. Resolution never
-leaves the importing file's repository: absolute imports are searched under
-`<repo>/`, then `<repo>/src/`, then the importing file's own directory.
+function-local import binds only inside that function. Name and module
+resolution never leaves the importing file's repository: absolute imports are
+searched under `<repo>/`, then `<repo>/src/`, then the importing file's own
+directory.
+
+Import graph. Every collected import is an edge. Absolute imports the
+repository lacks fall back to the other repository roots, and their `src/`, in
+sorted order, so a skill reaches a library it installs as a path dependency.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ import importlib.util
 import logging
 import os
 import posixpath
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -116,6 +121,7 @@ class PyIndex:
         self._parse_errors = parse_errors
         self._all_files = all_files
         self._imported: dict[str, list[str]] = {}
+        self._edges: dict[str, frozenset[str]] = {}
 
     @classmethod
     def build(cls, root: Path) -> PyIndex:
@@ -285,17 +291,56 @@ class PyIndex:
         `import a.b` also imports `a`; `from x import y` also imports `x/y.py` when that is a module.
         """
         if path not in self._imported:
-            found: set[str] = set()
-            info = self._files.get(path)
-            imports = info.imports if info else []
-            for imp in imports:
-                resolved = (self.resolve_module(path, dotted, imp.level) for dotted in imp.dotted_targets())
-                found.update(target for target in resolved if target)
-            found.discard(path)
-            self._imported[path] = sorted(found)
+            self._imported[path] = sorted(self._import_targets(path, self.resolve_module))
         return list(self._imported[path])
 
+    # --- import graph ---------------------------------------------------------------------
+
+    def import_edges(self, path: str) -> frozenset[str]:
+        """The files `path` imports at any nesting level, other repositories included (see the module doc).
+
+        Empty for a file that is not indexed or did not parse.
+        """
+        if path not in self._edges:
+            self._edges[path] = frozenset(self._import_targets(path, self._resolve_import))
+        return self._edges[path]
+
+    def import_distance(self, source: str, targets: frozenset[str]) -> int | None:
+        """The fewest import edges from `source` to any of `targets`: 0 when `source` is one, None with no path."""
+        frontier, seen, distance = {source}, {source}, 0
+        while frontier:
+            if not frontier.isdisjoint(targets):
+                return distance
+            frontier = {edge for f in frontier for edge in self.import_edges(f)} - seen
+            seen |= frontier
+            distance += 1
+        return None
+
     # --- internals ------------------------------------------------------------------------
+
+    def _import_targets(self, path: str, resolve: Callable[[str, str, int], str | None]) -> set[str]:
+        """The files `path`'s imports resolve to through `resolve`, `path` itself left out."""
+        info = self._files.get(path)
+        imports = info.imports if info else []
+        found = {target for imp in imports for dotted in imp.dotted_targets()
+                 if (target := resolve(path, dotted, imp.level)) is not None}
+        found.discard(path)
+        return found
+
+    def _resolve_import(self, importer: str, dotted: str, level: int = 0) -> str | None:
+        """`resolve_module`, then, for an absolute import, each other repository root and its `src/` in sorted
+        order.
+        """
+        found = self.resolve_module(importer, dotted, level)
+        if found is not None or level or not dotted:
+            return found
+        own = self.repo_root(importer)
+        for repo in sorted((self._repo_roots | {""}) - {own}):
+            for base in (repo, posixpath.join(repo, "src")):
+                found = self._module_file(posixpath.join(base, *dotted.split(".")))
+                if found is not None and self.repo_root(found) == repo:
+                    return found
+        return None
 
     def _absolute_bases(self, importer: str) -> list[str]:
         repo = self.repo_root(importer)

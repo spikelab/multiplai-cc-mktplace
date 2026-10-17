@@ -88,6 +88,7 @@ from .commands import (CommandLine, first_positional, hook_commands, is_hooks_fi
                        module_search_roots, parse_command_line, python_module, resolve_python_m, shell_commands)
 from .paths import (KIND_RANK, DiscoveredKind, Handler, Invoker, Location, PathDiagnostic, PathEntry, Seed,
                     _Strict, normalise_rel_path)
+from .paths import EntryKind as OutputKind
 from .pyindex import PyIndex
 
 log = logging.getLogger(__name__)
@@ -137,11 +138,15 @@ class Entry(_Strict):
     also_invoked_by: list[EntryInvoker]
 
 
+def output_kind(entry: Entry) -> OutputKind:
+    """The kind paths.v1 publishes for `entry`."""
+    return "model" if entry.kind == "model" else OUTPUT_KIND[entry.kind]
+
+
 def to_path_entry(entry: Entry) -> PathEntry:
     """The entry as paths.v1 publishes it: output kinds, its invokers' included, and no known edges."""
     invokers = [Invoker(kind=OUTPUT_KIND[i.kind], name=i.name, location=i.location) for i in entry.also_invoked_by]
-    kind = "model" if entry.kind == "model" else OUTPUT_KIND[entry.kind]
-    return PathEntry(kind=kind, name=entry.name, location=entry.location, handler=entry.handler,
+    return PathEntry(kind=output_kind(entry), name=entry.name, location=entry.location, handler=entry.handler,
                      invocation=entry.invocation, also_invoked_by=invokers)
 
 

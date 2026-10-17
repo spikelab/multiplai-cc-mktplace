@@ -110,3 +110,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   (1) The spec doesn't say whether the cross-repository fallback order is "repo_b/, repo_b/src/, repo_c/, …" or "all repository roots first, then all src/ directories". I picked fixtures that give the same answer under both readings. (2) Read literally, `from x import y` adds an edge to `x` only, not to `x`'s parent packages; the test follows that wording exactly. (3) The current `path_order` sorts by hop count only, and coverage-first ordering is new, so `order_paths` should replace it. (4) One test passes before implementation (the unscoped scenario), because that behaviour already exists.
+
+## Block 8 — Scope a run to the changed lines with reachability, trace limit, coverage and cap (implementer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  (1) D2 places scope in `paths.py`, but `entry_distance` needs `Entry` and `PyIndex`, and both of those import `paths.py`. So the scope filters went into a new `scope.py`, the module name the test helper already looks for. `order_paths` and `sort_drops` stay in `paths.py` because unscoped runs use them too. (2) D13 doesn't say whether the snapshot root counts as a fallback repository when it has no `.git` or `pyproject.toml`. I included it, as `""`, sorted before the other roots, and a module found there must belong to that root's repository. (3) As the spec words it, `from a.b import c` adds edges to `a/b/__init__.py` and `a/b/c.py` but not to `a/__init__.py`, even though Python does run `a/__init__.py`. I followed the spec.

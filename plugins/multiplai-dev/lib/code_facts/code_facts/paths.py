@@ -399,6 +399,7 @@ async def map_paths(
     from .entries import discover_entries
     from .fallback import run_fallback
     from .pyindex import PyIndex
+    from .scope import keep_covering, select_for_trace
     from .tracing import TraceContext, trace_entries
 
     for name, fn in (("call", call), ("resolve", resolve)):
@@ -424,25 +425,36 @@ async def map_paths(
             ctx=ctx, entries=discovery.entries, scope=None if changed is None else list(changed))
     else:
         status, added, fallback_drops = FallbackStatus(status="skipped", reason=None), [], []
-    outcomes = await trace_entries([*discovery.entries, *added], ctx=ctx, concurrency=concurrency)
-    traced = sorted((o for o in outcomes if isinstance(o, TracedPath)), key=path_order)
-    dropped = sorted([*fallback_drops, *(o for o in outcomes if isinstance(o, PathDrop))], key=drop_order)
+    entries = [*discovery.entries, *added]
+    to_trace, scope_drops = (entries, []) if changed is None else select_for_trace(
+        entries, index=index, changed=changed, trace_limit=trace_limit)
+    outcomes = await trace_entries(to_trace, ctx=ctx, concurrency=concurrency)
+    traced = [o for o in outcomes if isinstance(o, TracedPath)]
+    trace_drops = [o for o in outcomes if isinstance(o, PathDrop)]
+    kept, kept_drops = (order_paths(traced), []) if changed is None else keep_covering(
+        traced, changed=changed, cap=cap)
     return PathsResult(
         schema_version=SCHEMA_VERSION, commit=commit, scoped=scoped, cap=cap if scoped else None, fallback=status,
-        paths=assign_ids(traced), dropped=dropped, diagnostics=discovery.diagnostics, test_listing_skips=[],
+        paths=assign_ids(kept), dropped=sort_drops([*fallback_drops, *scope_drops, *trace_drops, *kept_drops]),
+        diagnostics=discovery.diagnostics, test_listing_skips=[],
     )
 
 
-def path_order(path: TracedPath) -> tuple[int, int, str, int]:
-    """The sort key of a kept path: fewest hops first, then entry kind rank, then entry location."""
-    entry = path.entry
-    return len(path.hops), KIND_RANK[entry.kind], entry.location.path, entry.location.line
+def order_paths(paths: Sequence[TracedPath]) -> list[TracedPath]:
+    """Kept paths in output order: most changed lines covered, fewest hops, entry kind rank, entry location."""
+    def key(path: TracedPath) -> tuple[int, int, int, str, int]:
+        entry = path.entry
+        return (-len(path.changed_lines_covered), len(path.hops), KIND_RANK[entry.kind], entry.location.path,
+                entry.location.line)
+    return sorted(paths, key=key)
 
 
-def drop_order(drop: PathDrop) -> tuple[int, str, int, str]:
-    """The sort key of a drop: stage order, then entry location, then entry kind."""
-    entry = drop.entry
-    return _STAGE_RANK[drop.stage], entry.location.path, entry.location.line, entry.kind
+def sort_drops(drops: Sequence[PathDrop]) -> list[PathDrop]:
+    """Drops in output order: stage order, then entry location, then entry kind."""
+    def key(drop: PathDrop) -> tuple[int, str, int, str]:
+        entry = drop.entry
+        return _STAGE_RANK[drop.stage], entry.location.path, entry.location.line, entry.kind
+    return sorted(drops, key=key)
 
 
 def assign_ids(paths: Sequence[TracedPath]) -> list[TracedPath]:
