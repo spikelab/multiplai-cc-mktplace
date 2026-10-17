@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from functools import partial
 from typing import Any, get_args
 
 from pydantic import field_validator
@@ -81,11 +82,6 @@ def fallback_key(commit: str, entries: Sequence[Entry], scope: Sequence[str] | N
     })
 
 
-def encode_fallback_answer(out: Any) -> dict:
-    """A fallback answer as stored: the validated FallbackAnswer's dump, or the reason it does not parse."""
-    return encode_answer(FallbackAnswer, out)
-
-
 async def run_fallback(*, ctx: TraceContext, entries: Sequence[Entry],
                        scope: Sequence[str] | None) -> tuple[FallbackStatus, list[Entry], list[PathDrop]]:
     """What the fallback agent adds to `entries` for `scope` (None: the whole snapshot).
@@ -96,7 +92,7 @@ async def run_fallback(*, ctx: TraceContext, entries: Sequence[Entry],
     stored = await ctx.answer(fallback_key(ctx.commit, entries, scope),
                               lambda: paths_fallback(commit=ctx.commit, scope=scope, entries=entries),
                               budget_label=lambda _: FALLBACK_LABEL, schema=FallbackAnswer,
-                              encode=encode_fallback_answer)
+                              encode=partial(encode_answer, FallbackAnswer))
     if (failed := _failed_status(stored)) is not None:
         return failed, [], []
     listed = FallbackAnswer.model_validate(stored).entries

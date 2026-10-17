@@ -509,14 +509,15 @@ def _index_file(full: Path, rel: str) -> tuple[_File, str | None]:
         text = importlib.util.decode_source(data)
         tree = ast.parse(text, filename=rel)
     except (SyntaxError, ValueError, RecursionError) as e:
-        lines = _count_lines(data.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
+        lines = count_lines(data.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
         return _File(lines=lines), f"{type(e).__name__}: {e}"
-    info = _File(lines=_count_lines(text), tree=tree)
+    info = _File(lines=count_lines(text), tree=tree)
     _Collector(info).body(tree.body, info.module_bindings, "")
     return info, None
 
 
-def _count_lines(text: str | bytes) -> int:
+def count_lines(text: str | bytes) -> int:
+    """The number of lines of `text`; a last line without a newline counts."""
     newline = "\n" if isinstance(text, str) else b"\n"
     return text.count(newline) + (1 if text and not text.endswith(newline) else 0)
 

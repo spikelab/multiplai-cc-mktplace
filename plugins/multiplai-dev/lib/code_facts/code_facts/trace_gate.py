@@ -34,7 +34,7 @@ from .entries import Entry, KnownEdge
 from .explore import Resolve, check_citation
 from .models import Citation, Side, _Model
 from .paths import HOP_LIMIT, BreakCode, Location, PathHop, _Strict, normalise_rel_path
-from .pyindex import PyIndex
+from .pyindex import PyIndex, count_lines
 
 log = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ def check_head_citation(root: Path, resolve: Resolve, path: str, line_start: int
         return Break("path_outside_root", str(e))
     if not (root / path).is_file():
         return Break("missing_file", f"{path} is not a file under the snapshot root")
-    lines = _line_count(root / path)
+    lines = count_lines((root / path).read_bytes())
     if not 1 <= line_start <= line_end <= lines:
         return Break("line_out_of_range",
                      f"lines {line_start}-{line_end} are not within the {lines} lines of {path}")
@@ -216,11 +216,6 @@ class _Gate:
             tokens = tokenize.generate_tokens(io.StringIO(text).readline)
             self._names[path] = [(tok.start[0], tok.string) for tok in tokens if tok.type == tokenize.NAME]
         return self._names[path]
-
-
-def _line_count(file: Path) -> int:
-    data = file.read_bytes()
-    return data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0)
 
 
 def _holds(hop: PathHop, location: Location) -> bool:

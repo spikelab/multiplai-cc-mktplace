@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal
 
@@ -121,15 +122,10 @@ def encode_answer(model: type[BaseModel], out: Any) -> dict:
     return answer.model_dump(mode="json")
 
 
-def encode_trace_answer(out: Any) -> dict:
-    """A trace or re-ask answer as stored: the validated TraceAnswer's dump, or the reason it does not parse."""
-    return encode_answer(TraceAnswer, out)
-
-
 def _trace_request(stage: Stage) -> dict[str, Any]:
     """How a trace or re-ask request is labelled, validated and stored."""
     return {"budget_label": lambda key: f"paths:{stage}:{key[:12]}", "schema": TraceAnswer,
-            "encode": encode_trace_answer}
+            "encode": partial(encode_answer, TraceAnswer)}
 
 
 async def trace_entries(entries: Sequence[Entry], *, ctx: TraceContext,
