@@ -15,6 +15,46 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.82.0] - 2026-10-17
+
+### Added
+- review: every change review now maps its code paths before the finders run
+  (a `--tree` or `--dir` review only with the new `--paths`), from each entry
+  point through the functions it calls, and writes them to `paths.json` beside
+  `findings.json`. At most 21 paths are kept, the ones covering the most
+  changed lines first. What the mapping could not do is listed in
+  `checks.json`'s new `coverage` list; it never stops the review.
+- review: two new kinds of finder run by default on a change review, besides
+  the dimension finders. A piece finder reviews one part of the diff (whole
+  files, grouped by package), and a path finder follows one mapped path from
+  its entry point to its last hop. Each writes a plain-text report
+  (`report-piece-<n>.md`, `report-path-<id>.md`) that a second call turns into
+  findings, which then pass the same citation gates, verification and merge.
+  A failed or stopped call is asked again by `resume`, which never pays twice
+  for a report it kept.
+- review: each finding in `findings.json` lists the ids of the mapped paths it
+  lies on (`paths`), and `review-<slug>.md` gains a `## Paths` section: each
+  path's entry point, who invokes it, the findings on it and its e2e tests,
+  then a line counting what the mapping left out.
+- review: the `conventions` finder also reads the Markdown docs its
+  `CLAUDE.md` and `coding-standards.md` files link, one level deep, and
+  reports a changed line that breaks one of them.
+- review: `--plan-only` and the start of a review print the piece and path
+  finders' approximate cost (about $38 on a 227 KB diff, before the dimension
+  finders and verification), a `WARNING:` when that is likely to pass the
+  budget, and on the 50 USD default a `NOTICE:` that a large change review can
+  stop partway. A budget stop says how many finder reports it kept; `resume`
+  with a higher `--max-cost-usd` continues without paying for them again.
+- review-viewer: `findings.json` findings may carry `paths`, and `checks.json`
+  may carry `coverage` and each convert call's `items`; the viewer accepts
+  them.
+
+### Changed
+- review: `--extra-finders` and `review.yaml`'s `extra_finders` have no
+  effect and print a notice; the piece finders replace them.
+- review: a change review costs more than before, because the piece and path
+  finders run on every one; the 50 USD default can stop a large one partway.
+
 ## [0.80.0] - 2026-10-17
 
 ### Added
