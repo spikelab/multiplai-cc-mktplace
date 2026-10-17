@@ -8,6 +8,8 @@ dependencies = [
     # multiplai_core.run_agent(), so core owns the SDK version floor.
     "multiplai-core[sdk]",
     "pydantic>=2",
+    # write_paths_file validates paths.json against its schema at runtime.
+    "jsonschema>=4",
 ]
 
 [project.optional-dependencies]

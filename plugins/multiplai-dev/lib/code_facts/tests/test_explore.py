@@ -122,6 +122,17 @@ def test_ask_stores_answers_records_failures_and_reraises_fatal():
     assert calls[0] == {"budget_label": "explore:unit", "allowed_tools": ["Read"], "cwd": "/snap"}
 
 
+def test_ask_treats_an_encode_failure_like_a_call_failure():
+    async def call(prompt, schema, **kw):
+        return object()
+
+    answers: dict[str, dict] = {}
+    errors: list[str] = []
+    asyncio.run(ask("unit:u1", "ok", call, answers, call_kwargs={}, errors=errors))
+    assert answers["unit:u1"]["error"]
+    assert errors == [f"explore unit:u1: {answers['unit:u1']['error']}"]
+
+
 def test_run_tasks_skips_answered_keys():
     asked: list[str] = []
 

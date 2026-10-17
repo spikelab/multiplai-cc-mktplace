@@ -14,12 +14,15 @@ commit with `git show`, never from what the agent says it read.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, TypeVar
+from typing import Any, Awaitable, Callable, Iterable, Mapping, TypeVar
 
 from multiplai_core.citations import check_quote, normalise_ws
+from pydantic import BaseModel
 
 from .models import Citation, Dropped, ExploreOutput, Fact, Side, Term, Unit
 
@@ -33,6 +36,8 @@ CallFn = Callable[..., Awaitable[Any]]
 
 # The reason a citation fails when `resolve` cannot place its path.
 UNRESOLVED = "path names no known repo"
+# The key `ask` stores a recoverable call failure under: `{CALL_ERROR: <first line>}`.
+CALL_ERROR = "error"
 
 
 async def bounded(items: Iterable[T], fn: Callable[[T], Awaitable[R]], limit: int) -> list[R]:
@@ -106,26 +111,45 @@ def unit_key(unit: Unit) -> str:
     return f"unit:{unit.id}"
 
 
+def explore_budget_label(key: str) -> str:
+    """The `budget_label` of an explore task: `explore:` and the key's kind (`unit`, `boundary`, ...)."""
+    return f"explore:{key.split(':')[0]}"
+
+
+def canonical_digest(value: Any) -> str:
+    """The sha256 hex of `value` as canonical JSON: the same for equal values, whatever their key order."""
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 async def ask(key: str, prompt: str, call: CallFn, answers: dict[str, dict], *,
-              call_kwargs: dict[str, Any], errors: list[str],
+              call_kwargs: Mapping[str, Any], errors: list[str],
               recoverable: tuple[type[BaseException], ...] = (Exception,),
               fatal: tuple[type[BaseException], ...] = (),
-              progress: Callable[[str], None] | None = None) -> None:
-    """Ask one explore task and store its answer in *answers* under *key*, as it returns.
+              progress: Callable[[str], None] | None = None,
+              schema: type[BaseModel] = ExploreOutput,
+              budget_label: Callable[[str], str] = explore_budget_label,
+              encode: Callable[[Any], dict] = BaseModel.model_dump) -> None:
+    """Ask one task and store its answer in *answers* under *key*, as it returns.
 
-    An exception in *fatal* propagates. One in *recoverable* is logged, stored
-    as `{"error": ...}` and appended to *errors*. Anything else propagates.
+    The call gets *schema* and `budget_label(key)`, which replaces any
+    `budget_label` in *call_kwargs*; *encode* turns what it returns into the
+    stored answer. An exception from the call or from *encode* is handled
+    alike: one in *fatal* propagates, one in *recoverable* is logged, stored as
+    `{"error": ...}` and appended to *errors*, and anything else propagates.
     """
+    label = budget_label(key)
     try:
-        out = await call(prompt, ExploreOutput, budget_label=f"explore:{key.split(':')[0]}", **call_kwargs)
-        answers[key] = out.model_dump()
+        answer = encode(await call(prompt, schema, **{**call_kwargs, "budget_label": label}))
     except fatal:
         raise
     except recoverable as e:
-        log.error("explore %s failed", key, exc_info=True)
+        log.error("%s (%s) failed", label, key, exc_info=True)
         first = (str(e).splitlines() or [type(e).__name__])[0][:200]
-        answers[key] = {"error": first}
+        answers[key] = {CALL_ERROR: first}
         errors.append(f"explore {key}: {first}")
+    else:
+        answers[key] = answer
     if progress:
         progress(f"  explore {key}: {len(answers[key].get('facts', []))} facts")
 
@@ -180,7 +204,7 @@ def gate_answers(answers: dict[str, dict], keep: Callable[[Citation | None], Cit
     dropped: list[Dropped] = []
 
     for key, raw in answers.items():
-        if "error" in raw:
+        if CALL_ERROR in raw:
             continue
         out = ExploreOutput.model_validate(raw)
         buckets = [("fact", out.facts), ("interface", out.interfaces), ("gotcha", out.gotchas)]

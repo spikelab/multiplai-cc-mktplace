@@ -1,0 +1,154 @@
+{
+  "generated_at": "2026-10-17T09:35:43.578372+00:00",
+  "kind": "review",
+  "block": {
+    "number": 10,
+    "name": "Separate tests that mock hop 2, and drop tests that patch out the handler"
+  },
+  "round": 1,
+  "head_sha": "9aa7e7d73e8eaed65ce28f9a87c2327927e6852a",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Patch scanning sits in its own module (e2e_patches.py). Listing stays synchronous, takes no CallFn and imports no walkthrough_pipeline. The new module starts with `from __future__ import annotations` and `log = logging.getLogger(__name__)`. Duplication was removed (handler_def is shared by entries._function and _bypassed_by_patching; body_nodes and call_argument are shared). Possible smells: generic AST helpers (`FUNCTION_DEFS`, `FunctionNode`, `body_nodes`, `call_argument`) now live in the patches module and e2e_tests.py imports them back from there (possible Misplaced Responsibility). Lookups are passed as raw `tuple[tuple[str, int], ...]` instead of `Location` (possible Primitive Obsession).",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "test_e2e_mocks_hop_2.py writes every snapshot into tmp_path and checks exact records (`record.model_dump() == {...}`), exact (node_id, patch_file, patch_line) triples and empty lists for the negative cases. It also runs the whole map_paths flow, including the cut-after-hop-1 control. Branches with real logic are not tested: the `self` skip for `Test*` methods, class-level patch decorators, `_fills_parameter` with a `new` argument, `@pytest.fixture(name=...)`, a nearer fixture hiding a farther one, and the self-named override in `_lookup`. The GREEN evidence is only the sentence 'All tests pass', with no output.",
+      "confidence": 0.7
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "All recognised forms are implemented: mock.patch and unittest.mock.patch as a decorator, a `with` item and `.start()`, patch.object, and both monkeypatch forms. Patches count from the test, from requested and autouse fixtures (followed transitively) in the test module and in every conftest.py up to the root (`_fixture_files`). Hop 2 matches at its defining module or under a name bound in hop 1. `patch_file` and `patch_line` are set from the matching Patch. A single-hop path and a path cut after hop 1 leave tests in e2e (`len(hops) < 2`). Patching the handler or a function holding a known edge drops the test (D15). `applied_patches` matches the interface exactly. One small divergence from pytest: an autouse fixture that a nearer definition overrides still contributes its patches.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The list_e2e_tests and match_invocations signatures are unchanged. list_e2e_tests passes `path.hops`, the retained hops from paths.py:443-444 keyed by the final ids. MockedE2ETest is built from `record.model_dump()` plus patch_file and patch_line, so the field order follows the Block 1 model. E2ECandidate gained a required `patches` field. Grep found no other construction site (only e2e_tests.py:538), and no direct `E2EIndex(` construction in the tests, so the change breaks no callers. `applied_patches` keeps the required `root` parameter even though it does not use it, and says so in its docstring.",
+      "confidence": 0.75
+    }
+  ],
+  "weighted_average": 3.871875,
+  "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 3.9"
+  },
+  "missing": [],
+  "extra": [
+    "The handler exclusion also drops tests that patch the handler under the name a known-edge `from` line looks up, e.g. `pkg.__main__.handle_open` (`Symbol.of(definition, handler.path, edge_lines)` in _bypassed_by_patching, e2e_tests.py:280). The implementer recorded this in implementation-notes.md as SPEC_IMPACT: clarify. It is a sensible extension.",
+    "The rules for which parameters request fixtures (mock-filled, `self` and defaulted parameters request nothing) go beyond the spec's 'requested by parameter name'. They follow pytest's getfuncargnames, and the implementer recorded them as a clarification."
+  ],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "PatchScan.of_test adds every autouse fixture in the chain directly, even when a nearer definition with the same name overrides it. Under pytest only the nearest definition runs, so the hidden fixture's patches are counted wrongly.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "e2e_patches.py of_test: `used += [f for level in chain for f in level.values() if f.autouse]`. Requested names go through `_lookup(chain, name)`, which respects hiding, but autouse fixtures skip it. pytest collects the autouse *names* and then resolves each to its nearest definition. Example: the test module defines a plain `no_run` that overrides an autouse `no_run` in conftest.py that patches pkg.core.run. pytest runs the module's fixture, but this code still counts the conftest patch and moves the test to mocks_hop_2, or drops it if the patch targets the handler. Fix: collect the autouse names (`{f.name for level in chain for f in level.values() if f.autouse}`) and resolve each with `_lookup(chain, name)`, as is done for requested names.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py",
+      "line": 109,
+      "reviewers": []
+    },
+    {
+      "claim": "Several fixture-resolution branches have no test, so a regression in them would silently change which fixtures are followed and which tests move or drop.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "No test in test_e2e_mocks_hop_2.py covers any of these: a `Test*` class method, so the `skip=mocked + (owner is not None)` self-skip and the class-level `owner.decorator_list` patches are untested; a mock decorator given a replacement (`_fills_parameter`'s `len(decorator.args) <= positional` / `k.arg != \"new\"`), where the next parameter must still count as a fixture request; `@pytest.fixture(name=\"...\")`; a module fixture hiding a conftest fixture of the same name; a fixture requesting its own name (`_lookup`'s `requester` branch). Fix: add one small scenario per branch, each asserting the exact mocked or e2e lists.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py",
+      "line": 104,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "Generic AST helpers that have nothing to do with patches (FUNCTION_DEFS, FunctionNode, body_nodes, call_argument) were moved into e2e_patches.py, and the core listing module now imports them back from the patch module.",
+      "severity": "Minor",
+      "confidence": 0.4,
+      "evidence": "e2e_tests.py: `from .e2e_patches import FUNCTION_DEFS, FunctionNode, Patch, PatchScan, Symbol, body_nodes, call_argument`. e2e_tests.py's `_calls`, `_Functions.of` and the matcher argv lookups now depend on e2e_patches for traversal and argument helpers. Possible Misplaced Responsibility: a change to patch recognition and a change to generic AST walking now touch the same module. Suggested fix: move these helpers to a small shared AST-utility module, or to pyindex.py, which both modules import.\nREJECTED: This is a module-layout preference, not a defect. The helpers live in e2e_patches.py because e2e_tests.py imports e2e_patches, so putting them in e2e_tests.py would create a cycle. Their behaviour is unchanged, and the project standards given here do not require a separate AST-utility module.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py",
+      "line": 34,
+      "reviewers": [],
+      "judge_reason": "This is a module-layout preference, not a defect. The helpers live in e2e_patches.py because e2e_tests.py imports e2e_patches, so putting them in e2e_tests.py would create a cycle. Their behaviour is unchanged, and the project standards given here do not require a separate AST-utility module."
+    },
+    {
+      "claim": "Patches made through `monkeypatch.context()`, or through a monkeypatch parameter under another name, are not recognised, because the setattr match is a literal dotted-name comparison.",
+      "severity": "Note",
+      "confidence": 0.35,
+      "evidence": "e2e_patches.py _patches: `case ast.Call(func=callee) if dotted_reference(callee) == _MONKEYPATCH_SETATTR`, with `_MONKEYPATCH_SETATTR = \"monkeypatch.setattr\"`. So `with monkeypatch.context() as m: m.setattr(\"pkg.core.run\", ...)` is missed and the test stays in e2e. The spec names only `monkeypatch.setattr`, so this is a coverage limit, not a violation. Possible fix: also accept `<name>.setattr` when `<name>` is bound by `with monkeypatch.context() as <name>`.\nREJECTED: The spec lists `monkeypatch.setattr` as the recognised form, and the reviewer agrees this is a coverage limit, not a violation. Extending recognition to `monkeypatch.context()` aliases would go beyond the spec.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py",
+      "line": 154,
+      "reviewers": [],
+      "judge_reason": "The spec lists `monkeypatch.setattr` as the recognised form, and the reviewer agrees this is a coverage limit, not a violation. Extending recognition to `monkeypatch.context()` aliases would go beyond the spec."
+    },
+    {
+      "claim": "A mocked record's 'earliest hop-2 patch' is the first patch in (file, line, target) order, so a patch in tests/conftest.py is chosen over one in the test module itself, because the file path sorts first.",
+      "severity": "Note",
+      "confidence": 0.3,
+      "evidence": "Patch is `@dataclass(frozen=True, order=True)` with fields file, line, target. of_test returns `tuple(sorted(found))`. Symbol.patched_by takes `next(...)` over that order. This is deterministic, and the e2e_tests.py docstring says 'adds the earliest hop-2 patch, which may be in a fixture or conftest.py'. The spec does not define 'earliest' across files, so this is an observation, not a defect.\nREJECTED: The reviewer calls this an observation, not a defect. The order is deterministic, it is documented in the e2e_tests.py docstring, and the spec does not define 'earliest' across files.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py",
+      "line": 80,
+      "reviewers": [],
+      "judge_reason": "The reviewer calls this an observation, not a defect. The order is deterministic, it is documented in the e2e_tests.py docstring, and the spec does not define 'earliest' across files."
+    },
+    {
+      "claim": "The implementer's GREEN claim is a bare sentence with no test output, so the full-suite pass after implementation cannot be checked from the report.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "The GREEN evidence is the single line 'All tests pass'. The RED evidence does show 24 failures out of the 27 tests in test_e2e_mocks_hop_2.py. The 3 that already passed (test_patching_another_symbol_leaves_the_test_in_e2e, test_a_single_hop_path_never_has_mocked_tests, test_map_paths_keeps_the_test_in_e2e_when_the_path_is_cut_after_hop_1) are the ones the test_writer note names as already passing.\nREJECTED: This concerns the implementer's report, not the diff. The RED evidence matches the test_writer's note about the 3 tests that already passed, and nothing in the diff shows a failing test.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_e2e_mocks_hop_2.py",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "This concerns the implementer's report, not the diff. The RED evidence matches the test_writer's note about the 3 tests that already passed, and nothing in the diff shows a failing test."
+    },
+    {
+      "claim": "Everything the refactor removed is re-established elsewhere: `_FUNCTION_DEFS`, `_NESTED` and `_FunctionDef` became FUNCTION_DEFS, _NESTED and FunctionNode in e2e_patches.py; `_argument` became call_argument with the same body; `_calls` now runs on body_nodes with the same nested-scope skipping; entries._function's inline def lookup became PyIndex.handler_def with the same predicate; `mocks_hop_2=[]` became _split_on_hop_2.",
+      "severity": "Note",
+      "confidence": 0.85,
+      "evidence": "Compared the removed lines in e2e_tests.py and entries.py:497 with e2e_patches.py's body_nodes and call_argument and pyindex.py:183-186. The logic matches line for line. Grep finds no remaining references to the old private names in the code_facts package or its tests.\nREJECTED: This finding confirms the refactor is behaviour-preserving and reports no problem, so there is nothing to fix.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 691,
+      "reviewers": [],
+      "judge_reason": "This finding confirms the refactor is behaviour-preserving and reports no problem, so there is nothing to fix."
+    },
+    {
+      "claim": "This block changes plugins/multiplai-dev without a version bump or CHANGELOG entry. CLAUDE.md enforces both per pull request, so the gap only matters if no later block of the change adds them.",
+      "severity": "Note",
+      "confidence": 0.25,
+      "evidence": "CLAUDE.md, Release convention: 'Steps 1 and 2 are enforced: the **`changelog-gate`** CI job fails a pull request that changes a plugin without both.' The diff touches code_facts sources but neither plugins/multiplai-dev/CHANGELOG.md nor the manifests. Because this is one block of a multi-block change, the bump probably belongs to the final block.\nREJECTED: This is one block of a multi-block change. The changelog-gate applies per pull request, and the version bump and CHANGELOG entry belong to the final block, as the reviewer acknowledges. This block has no defect here.",
+      "dimension": "conventions",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "This is one block of a multi-block change. The changelog-gate applies per pull request, and the version bump and CHANGELOG entry belong to the final block, as the reviewer acknowledges. This block has no defect here."
+    }
+  ],
+  "fix_brief": "Fix review issues: The block passed review. The judge accepted these findings and they are still open: fix them, and change nothing else.\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Minor] PatchScan.of_test adds every autouse fixture in the chain directly, even when a nearer definition with the same name overrides it. Under pytest only the nearest definition runs, so the hidden fixture's patches are counted wrongly. (plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py:109)\n  evidence: e2e_patches.py of_test: `used += [f for level in chain for f in level.values() if f.autouse]`. Requested names go through `_lookup(chain, name)`, which respects hiding, but autouse fixtures skip it. pytest collects the autouse *names* and then resolves each to its nearest definition. Example: the test module defines a plain `no_run` that overrides an autouse `no_run` in conftest.py that patches pkg.core.run. pytest runs the module's fixture, but this code still counts the conftest patch and moves the test to mocks_hop_2, or drops it if the patch targets the handler. Fix: collect the autouse names (`{f.name for level in chain for f in level.values() if f.autouse}`) and resolve each with `_lookup(chain, name)`, as is done for requested names.\n- [Minor] Several fixture-resolution branches have no test, so a regression in them would silently change which fixtures are followed and which tests move or drop. (plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py:104)\n  evidence: No test in test_e2e_mocks_hop_2.py covers any of these: a `Test*` class method, so the `skip=mocked + (owner is not None)` self-skip and the class-level `owner.decorator_list` patches are untested; a mock decorator given a replacement (`_fills_parameter`'s `len(decorator.args) <= positional` / `k.arg != \"new\"`), where the next parameter must still count as a fixture request; `@pytest.fixture(name=\"...\")`; a module fixture hiding a conftest fixture of the same name; a fixture requesting its own name (`_lookup`'s `requester` branch). Fix: add one small scenario per branch, each asserting the exact mocked or e2e lists.\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
+  "fix": {
+    "report": "Now the tests. I'll add one scenario per uncovered branch, plus the autouse-hiding regression.Tidy a leftover no-op expression in the parametrized test:All pass. Now confirm the new tests actually guard each branch: revert the fix, then apply a few one-line mutations, and check that a test fails each time.Every mutation is caught by its own test. Now the full suite, lint, and my diff:Both findings are fixed and the full suite passes (642 tests).\n\n**Finding 1: autouse fixtures ignored hiding.** In `PatchScan.of_test`, autouse fixtures were added directly, so one overridden by a nearer fixture of the same name still counted. Now the code collects the autouse *names* (sorted, so the order is fixed) and resolves each one through `_lookup`, the same way requested names are resolved. This matches pytest, where only the nearest definition runs.\n\n**Finding 2: untested branches.** I added six scenarios to `test_e2e_mocks_hop_2.py`, each asserting the exact `e2e` and `mocks_hop_2` lists:\n- **Autouse hidden:** an autouse `no_run` in `conftest.py` is hidden by a plain module `no_run`. It runs twice, once with the conftest patching `pkg.core.run` and once with it patching the handler. The test in the hiding module stays in `e2e`. A test beside it in another module still picks up the conftest patch, so it moves in the first run and is dropped in the second.\n- **Module fixture hides a conftest fixture:** a module-level `fake_run` overrides the conftest's `fake_run`, so the test stays in `e2e`.\n- **Fixture requests its own name** (the `requester` branch): `def fake_run(fake_run)` in the module gets the conftest one, so the test moves, with the conftest's patch line.\n- **`@pytest.fixture(name=\"quiet\")`:** a test requesting `quiet` moves; a test requesting the function's own name stays in `e2e`.\n- **Mock decorator with a replacement:** a positional replacement, `new=`, and `patch.object` with a replacement all leave the next parameter as a fixture request, so those tests move. The plain `patch` and `patch.object` versions without a replacement pass a mock into that parameter instead, so those tests stay in `e2e`.\n- **`Test*` class methods:** one class shows that `self` and the class-level mock parameter are skipped. A second shows that a class-level `@mock.patch(\"pkg.core.run\")` moves the test, with the decorator's line. A third shows a plain method's fixture request moving the test.\n\nTo check the new tests actually guard these branches, I put the old code back and then broke each branch with a one-line change: the self-skip, the class decorators, the `new=` check, the positional-replacement check, `name=`, hiding, and the `requester` branch. A new test failed every time. The new autouse test also fails on the old code. The file was restored after each run, and ruff is clean.\n\nI checked the rest of `e2e_patches.py` for the same mistake (a fixture name resolved without respecting hiding) and found no other case. `git diff` also shows `specs/changes/code-paths-lib/reviews/block-10-round-1.json` as changed; that change was already there before I started, and I didn't touch it.\n\nSTATUS: DONE\nTESTS_RUN: uv run --package walkthrough-pipeline --extra dev python -m pytest plugins/multiplai-dev/lib/code_facts/tests -q\nGREEN: 642 passed, 1 warning in 5.65s\nFILES: plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py, plugins/multiplai-dev/lib/code_facts/tests/test_e2e_mocks_hop_2.py\nSURPRISES: none\nSPEC_IMPACT: none\n\nSEARCHED:\n- Autouse fixtures bypass `_lookup` hiding: checked `of_test` (requested names already used `_lookup`; autouse was the only direct path), `_fixture_patches` (fixture requests go through `_lookup` with the requester; it has no autouse path of its own), `_fixtures_of` (a later fixture with the same name in one file overrides an earlier one, as in Python), `_fixture` (the registered name honours `name=`, and autouse names use that registered name), and the `seen` key `(file, name)` in `_fixture_patches`. No other instance.\n- Untested fixture-resolution branches: went through every branch of `of_test` (the owner self-skip, class `decorator_list`), `_fills_parameter` (positional count, `new=`, `patch` vs `patch.object`), `_fixture` (`name=`, `autouse=`), `_lookup` (nearest wins, the `requester` branch) and `requested_fixtures` (defaults, keyword-only, which were already covered). I added one test per uncovered branch and confirmed with the mutation runs above that each test fails when its branch is broken.\n\nTEST CHANGE REQUIRED: test_e2e_mocks_hop_2.py \u2014 added six new scenarios (seven test cases) for the branches named in the accepted finding (autouse hiding, module fixture hiding a conftest one, a fixture requesting its own name, `@pytest.fixture(name=...)`, mock decorators with a replacement, `Test*` class self-skip and class decorators). No existing test was changed.",
+    "success": true,
+    "timed_out": false,
+    "commit": "2cbebf228bbfe26d873e07e8a7af7818852f4210",
+    "searched": [
+      "Autouse fixtures bypass `_lookup` hiding: checked `of_test` (requested names already used `_lookup`; autouse was the only direct path), `_fixture_patches` (fixture requests go through `_lookup` with the requester; it has no autouse path of its own), `_fixtures_of` (a later fixture with the same name in one file overrides an earlier one, as in Python), `_fixture` (the registered name honours `name=`, and autouse names use that registered name), and the `seen` key `(file, name)` in `_fixture_patches`. No other instance.",
+      "Untested fixture-resolution branches: went through every branch of `of_test` (the owner self-skip, class `decorator_list`), `_fills_parameter` (positional count, `new=`, `patch` vs `patch.object`), `_fixture` (`name=`, `autouse=`), `_lookup` (nearest wins, the `requester` branch) and `requested_fixtures` (defaults, keyword-only, which were already covered). I added one test per uncovered branch and confirmed with the mutation runs above that each test fails when its branch is broken."
+    ],
+    "pass_kind": "fix_on_pass",
+    "kept": true
+  }
+}

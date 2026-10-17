@@ -307,12 +307,14 @@ name = "code-facts"
 version = "0.1.0"
 source = { editable = "plugins/multiplai-dev/lib/code_facts" }
 dependencies = [
+    { name = "jsonschema" },
     { name = "multiplai-core", extra = ["sdk"] },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "jsonschema", specifier = ">=4" },
     { name = "multiplai-core", extras = ["sdk"], git = "https://github.com/spikelab/multiplai-core?branch=main" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pytest", marker = "extra == 'dev'" },

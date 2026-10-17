@@ -1,0 +1,131 @@
+{
+  "generated_at": "2026-10-17T08:34:34.435355+00:00",
+  "kind": "fix_on_pass_review",
+  "block": {
+    "number": 8,
+    "name": "Scope a run to the changed lines with reachability, trace limit, coverage and cap"
+  },
+  "round": 2,
+  "head_sha": "653a1b7e57d0a17f2b51a9a5ec610d3ab7fc5750",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Boundaries hold: there is no model call in scope.py, and the graph lives in pyindex.py with order and drop sorting in paths.py. scope.py is a new module rather than the D2 placement in paths.py, because Entry and PyIndex both import paths.py. Deferring the import from paths.py avoids the cycle, and the deviation is disclosed. Import-target collection is de-duplicated via `_import_targets`. Smells that remain: possible Divergent Change, since map_paths now branches twice on `changed is None` (lines 429-439) to mix scoping with orchestration; and possible naming confusion, since entries.py aliases `paths.EntryKind as OutputKind` beside its own `EntryKind` (entries.py:91,96).",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "test_paths_scope.py covers edges (dotted parents, from-imports, relative imports, function-local, try and TYPE_CHECKING imports, third-party imports, syntax errors, cross-repository sorted fallback), BFS distance including the cycle, empty and deleted targets, all three entry-distance zero cases, handler vs location source, covered_lines inclusive and path-exact, order_paths across shuffled seeds, the sort_drops stage order, trace_limit ties, cap and ids, gate-cut hops, the fallback accounting, and byte determinism. Gaps: the multi-repository map_paths test does not exercise cross-repository import resolution, because repo_b/cli.py's `import mod` resolves inside repo_b's own src/. Nothing tests the snapshot-root `\"\"` fallback, and the over_trace_limit/over_cap `detail` text is never asserted.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 5,
+      "evidence": "All four filters match the block text. Reachability runs before any call (select_for_trace runs before trace_entries). The pre-trace key is (distance, KIND_RANK, path, line) (scope.py:39-42). Coverage collects distinct sorted (path, line) pairs within inclusive hop ranges (scope.py:44-48). The output key is (-covered, hops, KIND_RANK, path, line), and the cap is applied before assign_ids. The drop stage order comes from DROP_REASONS. An empty `{}` or missing-only mapping drops everything as unreachable (tested). Seed and fallback entries go through the same filter (tested). The defaults cap=10 and trace_limit=30 are unchanged. Disclosed interpretations: `from x import y` edges stop at `x` (spec literal), and the snapshot root is included in the fallback.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 5,
+      "evidence": "The produced signatures match the interface list exactly: import_edges, import_distance, entry_distance, covered_lines, order_paths and sort_drops. The consumed assign_ids, KIND_RANK and normalise_changed_lines are used as specified. Fallback survivors (`added`) are merged into `entries` before select_for_trace, so they flow through every scope stage. Ids are assigned after ordering and cap. Nothing still calls the removed path_order and drop_order. lib() in trace_fixtures.py now also searches `code_facts.scope`.",
+      "confidence": 1.0
+    }
+  ],
+  "weighted_average": 4.625,
+  "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 4.6"
+  },
+  "missing": [],
+  "extra": [
+    "pyindex.py:346: `_resolve_import` adds the snapshot root `\"\"` to the cross-repository fallback candidates even when it holds no `.git`/`pyproject.toml`. D13 and the block spec name only 'the other repository roots'. This is disclosed in implementation-notes (implementer, item 2), and no test pins it.",
+    "pyindex.py:342-344: `_resolve_import` refuses the cross-repository fallback whenever the importer's own repository resolves the top-level package. The spec states only the search order. This rule is stricter and is documented in the docstring as Python semantics."
+  ],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "The removed path_order/drop_order sort keys are preserved for unscoped runs by order_paths/sort_drops, and no caller of the old names remains.",
+      "severity": "Note",
+      "confidence": 0.9,
+      "evidence": "paths.py:447-461. order_paths's key is (-len(changed_lines_covered), len(hops), KIND_RANK, path, line), and tracing.py:190 always sets changed_lines_covered=[], so in unscoped runs the key reduces to the old path_order. sort_drops keeps the drop_order tuple unchanged. Grep for `path_order|drop_order` finds no remaining references.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 447,
+      "reviewers": []
+    },
+    {
+      "claim": "The snapshot root `\"\"` is treated as a cross-repository fallback candidate (sorted first) even when it has no repo marker. This goes beyond the spec's 'other repository roots', and no test covers it.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "pyindex.py:346 `for repo in sorted((self._repo_roots | {\"\"}) - {own}):`. Implementation-notes Block 8 implementer item (2) discloses it. No test in test_paths_scope.py builds a module at the snapshot root and imports it from inside a repository. Suggested fix: add a TestImportEdges case pinning this behaviour, or record the decision in the spec (SPEC_IMPACT clarify).",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/pyindex.py",
+      "line": 346,
+      "reviewers": []
+    },
+    {
+      "claim": "The implementer's claim that fallback entries go through the same scope pipeline holds: `added` is merged into `entries` before select_for_trace.",
+      "severity": "Note",
+      "confidence": 0.9,
+      "evidence": "paths.py:428 `entries = [*discovery.entries, *added]`, then line 432 `select_for_trace(entries, ...)`. test_fallback_entries_go_through_the_same_scope_filter_and_accounting asserts `nightly job` is dropped as `import_reachability/unreachable` and that kept plus dropped equals discovered + listed.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 428,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "The end-to-end multi-repository map_paths test never exercises cross-repository import resolution, because the importer and the changed module are in the same repository.",
+      "severity": "Minor",
+      "confidence": 0.7,
+      "evidence": "test_paths_scope.py test_multi_repository_paths_stay_relative_to_the_snapshot_root: `repo_b/cli.py` does `import mod`, and `repo_b/src/mod.py` resolves through own-repo `<repo>/src/` in resolve_module. repo_a/tools.py imports nothing from repo_b. The D13 fallback is covered only by the unit test TestImportEdges::test_absolute_imports_fall_back_to_other_repositories_in_sorted_order. Suggested fix: add a map_paths scenario where a repo_a entry imports a module that exists only in repo_b/src/, and assert that it is traced and not dropped as unreachable.\nREJECTED: The observation is correct, since repo_b/cli.py resolves `mod` through its own repository's src/. But D13 cross-repository resolution is already tested by TestImportEdges::test_absolute_imports_fall_back_to_other_repositories_in_sorted_order, which uses the spec's repo_b/src/mod.py fixture imported from repo_a. The end-to-end test is about paths staying relative to the snapshot root. The map_paths \u2192 entry_distance \u2192 import_distance \u2192 import_edges chain works the same way however an edge was resolved, so an end-to-end duplicate adds little.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_paths_scope.py",
+      "line": 438,
+      "reviewers": [],
+      "judge_reason": "The observation is correct, since repo_b/cli.py resolves `mod` through its own repository's src/. But D13 cross-repository resolution is already tested by TestImportEdges::test_absolute_imports_fall_back_to_other_repositories_in_sorted_order, which uses the spec's repo_b/src/mod.py fixture imported from repo_a. The end-to-end test is about paths staying relative to the snapshot root. The map_paths \u2192 entry_distance \u2192 import_distance \u2192 import_edges chain works the same way however an edge was resolved, so an end-to-end duplicate adds little."
+    },
+    {
+      "claim": "map_paths now branches twice on `changed is None` to choose between the scoping and pass-through paths: possible Divergent Change, with orchestration and scoping policy mixed in one function.",
+      "severity": "Minor",
+      "confidence": 0.4,
+      "evidence": "paths.py:429-439: `if changed is None: to_trace, scope_drops = entries, []` ... `if changed is None: kept, coverage_drops = order_paths(traced), []`. Suggested fix: scope.py could expose pre/post functions that handle `changed=None` themselves, leaving map_paths as straight-line orchestration.\nREJECTED: This is a style preference. The two `changed is None` branches in map_paths are short, keep the unscoped path visibly pass-through, and match the spec's split between scoped and unscoped runs. The project's standards do not ask for pushing the None-handling into scope.py.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 429,
+      "reviewers": [],
+      "judge_reason": "This is a style preference. The two `changed is None` branches in map_paths are short, keep the unscoped path visibly pass-through, and match the spec's split between scoped and unscoped runs. The project's standards do not ask for pushing the None-handling into scope.py."
+    },
+    {
+      "claim": "entries.py now has two names for kind types, a local `EntryKind` (discovery kinds) and `OutputKind` (an alias of paths.EntryKind). This invites confusion: possible naming smell.",
+      "severity": "Note",
+      "confidence": 0.35,
+      "evidence": "entries.py:91 `from .paths import EntryKind as OutputKind` alongside entries.py:96 `EntryKind = Literal[\"argparse_subcommand\", ...]`. The local `EntryKind` predates this block, so the alias is a workaround for an existing name clash.\nREJECTED: The local `EntryKind` (discovery kinds) predates this block, as the reviewer notes. Aliasing paths.EntryKind as OutputKind is the clear way around that existing clash, and the name matches the build's own terms: discovery kinds versus output kinds. This is not a defect introduced here.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 91,
+      "reviewers": [],
+      "judge_reason": "The local `EntryKind` (discovery kinds) predates this block, as the reviewer notes. Aliasing paths.EntryKind as OutputKind is the clear way around that existing clash, and the name matches the build's own terms: discovery kinds versus output kinds. This is not a defect introduced here."
+    },
+    {
+      "claim": "This diff changes plugins/multiplai-dev code but bumps no version and adds no plugin CHANGELOG entry. That may be deferred to a later block of the build.",
+      "severity": "Note",
+      "confidence": 0.3,
+      "evidence": "CLAUDE.md 'Release convention': \"the **`changelog-gate`** CI job fails a pull request that changes a plugin without both.\" The diff touches no marketplace.json, plugin.json or plugins/multiplai-dev/CHANGELOG.md. This is a multi-block build, so the bump probably belongs at the change level, not in this block.\nREJECTED: This is one block of a multi-block build. The version bump and plugin CHANGELOG entry belong at the change or PR level, not in each block's diff. The reviewer says as much.",
+      "dimension": "conventions",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/scope.py",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "This is one block of a multi-block build. The version bump and plugin CHANGELOG entry belong at the change or PR level, not in each block's diff. The reviewer says as much."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}
