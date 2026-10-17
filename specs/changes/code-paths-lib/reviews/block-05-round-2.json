@@ -1,0 +1,158 @@
+{
+  "generated_at": "2026-10-17T07:31:57.302714+00:00",
+  "kind": "fix_on_pass_review",
+  "block": {
+    "number": 5,
+    "name": "Discover click, typer, `[project.scripts]` and `__main__` entries, and merge duplicate invokers"
+  },
+  "round": 2,
+  "head_sha": "f743c00a7be501bae92bea5d7ddf342a7f85dd1f",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Clear sections in entries.py (click/typer, [project.scripts], __main__, merging) with shared helpers (`_static_entry`, `_in_source_order`, `_literal_str`, `_keyword`, `_reference`, `_function`). Kind dispatch is table-driven (`_COMMAND_METHODS`, `OUTPUT_KIND`, `KIND_RANK`). Discovery stays synchronous and static: no model call, nothing imported or executed. PyIndex gains two small, well-scoped methods (`files_named`, `resolve_global`). Possible Divergent Change: entries.py now also holds a hand-rolled TOML key-line scanner of about 110 lines (`_script_key_line`, `_toml_assigns`, `_toml_inline_items`, `_toml_value_end`, `_toml_string_end`, `_toml_key_path`, `_toml_unquoted`, \u2248L830-922), which is a different axis of change from the AST scanners. `_main_guard` is evaluated twice per main module (`_main_module_entries` and `_main_callees`).",
+      "confidence": 0.8
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "test_entries_cli_scripts.py asserts exact values: names, locations, handler triples, edge sets and diagnostics with lines. It proves no execution with `sentinel_prelude`, checks determinism by comparing JSON from reversed-seed runs byte for byte, and runs the block's three required scenarios through `map_paths` and `write_paths_file`. Gaps: no test for a click group imported from another module, a typer `app` object as a script target, `dynamic = [\"scripts\"]`, or duplicate click names. A Block 2 test (test_entries_argparse.py:332-356) was edited to accept the merged form, but the declared test changes say no existing test was changed, and the test's name ('declares one subcommand under each') no longer describes what it asserts. `test_callback_cls_positional_is_not_a_name` builds a fixture (`@app.callback(MyGroup)`) that typer's keyword-only API (unknowns.md:208) would reject.",
+      "confidence": 0.8
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "Every scenario in the block spec has code and a test: the click names, explicit names and stacked decorators; typer sub-app prefixes and callbacks; `[project.scripts]` in flat and src layouts, an external target as `unresolved_target`, invalid TOML as `parse_error`, and no crossing between repositories; `main_module` at the guard line or at line 1, the transparent wrappers including `raise SystemExit(...)`, and test-file exclusion; and merging by rank, location tie-break, sorted invokers, unioned edges, null and non-def handlers merging only on (kind, location), and output kinds in paths.json. Deviations: zero-callee `main_module` gets no `unresolved_handler`, contrary to D6 design.md:281. Groups and apps resolve only within one module. Typer app objects never resolve as script or main handlers. Click 8.2 suffix stripping is not done (disclosed).",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 5,
+      "evidence": "`merge_entries(entries: Sequence[Entry]) -> list[Entry]` and `main_module_handler(index, path) -> tuple[Location, Handler | None]` match the stated interfaces exactly. `to_path_entry` is the only path from Entry to PathEntry (tracing.py:173,184) and now maps invoker kinds through OUTPUT_KIND. Merged known edges flow through `entry.known_edges` into both the prompt (tracing.py:150) and the gate (tracing.py:165). The new `PyIndex.__init__` parameter has no external constructors. `KIND_RANK` is consumed from paths.py rather than redefined.",
+      "confidence": 0.8
+    }
+  ],
+  "weighted_average": 4.090625,
+  "gate": {
+    "passed": false,
+    "reason": "Spec-compliance verdict failed \u2014 missing: ['D6 (design.md:281) says an emitted entry with a null handler gets one `unresolved_handler` diagnostic, except argparse subcommands dispatched by comparison. `_main_module_entries` (entries.py:938, `if len(callees) < 2: return [entry], []`) emits a null-handler `main_module` with no diagnostic when the guard or module body calls no same-repository function. Only the several-callee case gets one.']; misunderstood: ['Click groups and typer apps are resolved only inside the decorating module (`groups.get(receiver)`, entries.py:658). A command module that does `from pkg.cli import cli` and then `@cli.command()` produces an `unresolved_target` diagnostic and no entry. unknowns.md:257 frames the receiver as bound \"in the same repository\", and split-file click CLIs are common.', 'A `typer.Typer()` app object is never a handler. `[project.scripts] tool = \"pkg.cli:app\"`, the canonical typer layout, resolves through `resolve_global`, which follows only def/class bindings, and then `_function`. It yields `unresolved_target` with the detail \"does not name a function of this repository\". An `if __name__ == \"__main__\": app()` guard yields a null-handler `main_module`.']"
+  },
+  "missing": [
+    "D6 (design.md:281) says an emitted entry with a null handler gets one `unresolved_handler` diagnostic, except argparse subcommands dispatched by comparison. `_main_module_entries` (entries.py:938, `if len(callees) < 2: return [entry], []`) emits a null-handler `main_module` with no diagnostic when the guard or module body calls no same-repository function. Only the several-callee case gets one."
+  ],
+  "extra": [
+    "`@<app>.callback(name=...)` is read as the typer callback's name (`_call_name_argument`, entries.py:739). unknowns.md:208 records `Typer.callback` as keyword-only with no name parameter. The spec gives no naming rule for callbacks."
+  ],
+  "misunderstood": [
+    "Click groups and typer apps are resolved only inside the decorating module (`groups.get(receiver)`, entries.py:658). A command module that does `from pkg.cli import cli` and then `@cli.command()` produces an `unresolved_target` diagnostic and no entry. unknowns.md:257 frames the receiver as bound \"in the same repository\", and split-file click CLIs are common.",
+    "A `typer.Typer()` app object is never a handler. `[project.scripts] tool = \"pkg.cli:app\"`, the canonical typer layout, resolves through `resolve_global`, which follows only def/class bindings, and then `_function`. It yields `unresolved_target` with the detail \"does not name a function of this repository\". An `if __name__ == \"__main__\": app()` guard yields a null-handler `main_module`."
+  ],
+  "accepted": [
+    {
+      "claim": "Click groups and typer apps are traced only within the decorating module. Commands registered on a group imported from another same-repository module are not emitted and get unresolved_target instead.",
+      "severity": "Minor",
+      "confidence": 0.7,
+      "evidence": "entries.py:658 `group = _CLICK_ROOT if receiver == \"click\" else groups.get(receiver)`. `groups` is built only from `_typer_apps(tree)` and `@...group` decorators in the same tree. The diagnostic text at :663 says \"is not traced to a click group or typer app of this module\". unknowns.md:257 assumes `<x>` is \"bound in the same repository\". Fix: when the receiver is not local, resolve it with `index.resolve_name(path, decorator.lineno, receiver)` to a `@click.group`-decorated def or a `typer.Typer()` assignment in the imported module, and take its prefix from there.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 658,
+      "reviewers": []
+    },
+    {
+      "claim": "The typer callback handling rests on an API claim that the project's own research contradicts. The docstring says callback's first positional parameter is `cls`, while unknowns.md:208 records `Typer.callback` as keyword-only with no name. The test fixture `@app.callback(MyGroup)` is therefore not a call typer accepts.",
+      "severity": "Note",
+      "confidence": 0.45,
+      "evidence": "entries.py:739-744 `_call_name_argument`: \"except for typer's `callback`, whose first positional parameter is `cls`\". It also honours `name=` for callback. unknowns.md:208: \"`Typer.callback(self, *, cls=..., ...)`. It is keyword-only and takes no name.\" Test `test_callback_cls_positional_is_not_a_name` uses `@app.callback(MyGroup)` and `@app.callback(name='root')`.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 739,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "The implementer's declared test changes omit the edit to the existing Block 2 test test_one_helper_under_two_parents_declares_one_subcommand_under_each. The edit keeps what the test checks but leaves its name stale.",
+      "severity": "Minor",
+      "confidence": 0.85,
+      "evidence": "Diff hunk in tests/test_entries_argparse.py @@ -346,7 +346,10 @@ adds `declared = [(e.name, e.location.line) for e in found] + [(i.name, i.location.line) for e in found for i in e.also_invoked_by]`. The declared changes say \"no existing test was changed\". implementation-notes.md Block 5 implementer item (1) admits the change.\nREJECTED: The edit to the Block 2 test is disclosed in implementation-notes.md (implementer item 1, refactorer note). The name is not stale: the test still checks one `list` declaration under each parent, because the merged one now appears in `also_invoked_by`. A mismatch in the change bookkeeping is not a defect in the block.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_entries_argparse.py",
+      "line": 332,
+      "reviewers": [],
+      "judge_reason": "The edit to the Block 2 test is disclosed in implementation-notes.md (implementer item 1, refactorer note). The name is not stale: the test still checks one `list` declaration under each parent, because the merged one now appears in `also_invoked_by`. A mismatch in the change bookkeeping is not a defect in the block."
+    },
+    {
+      "claim": "A main_module whose guard or body calls no same-repository function is emitted with a null handler and no unresolved_handler diagnostic. Design D6 requires one for every null-handler entry except comparison-dispatched argparse.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "entries.py:938 `if len(callees) < 2: return [entry], []`. design.md:281: \"An emitted entry with a `null` handler gets one `unresolved_handler` diagnostic, except argparse subcommands dispatched by comparison.\" The module docstring was changed to say \"a script with no function call ... leaves the handler null with no diagnostic\". Fix: emit an `unresolved_handler` diagnostic when `callees` is empty, or have the spec amended to match.\nREJECTED: Block 2's docstring, before this diff, already said a handler that does not resolve (a lambda, a local variable) is left null with no diagnostic. That partial reading of D6 was established in an earlier block, and this block extends it consistently: it emits `unresolved_handler` only for the ambiguous several-callee case. The implementer disclosed this as SPEC_IMPACT: clarify (item 3). A script that calls no function has nothing unresolved to report.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 938,
+      "reviewers": [],
+      "judge_reason": "Block 2's docstring, before this diff, already said a handler that does not resolve (a lambda, a local variable) is left null with no diagnostic. That partial reading of D6 was established in an earlier block, and this block extends it consistently: it emits `unresolved_handler` only for the ambiguous several-callee case. The implementer disclosed this as SPEC_IMPACT: clarify (item 3). A script that calls no function has nothing unresolved to report."
+    },
+    {
+      "claim": "Typer app objects never resolve as handlers. `[project.scripts] x = \"pkg.cli:app\"` (where `app = typer.Typer()`) yields an unresolved_target diagnostic that wrongly suggests the target is not in the repository, and an `app()` guard call leaves main_module's handler null.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "entries.py:818-826 `_script_handler` returns `_function(index, index.resolve_global(module_file, function))`. pyindex.py:241-246 `resolve_global` follows only `_DefBinding`/`_FromBinding` via `_resolve_bindings`, and assignments are not bindings. The detail text is \"does not name a function of this repository\". `_main_callees` uses the same `_function(... resolve_name ...)` filter. No test covers a typer app as a script target. Fix: map a script target or guard callee bound to a `typer.Typer()` app to that app's callback or single command, or at least give it a detail that says the target is a non-function object.\nREJECTED: The spec defines script targets as `\"<module>:<function>\"` with a known edge to the `def`, and a main_module handler must resolve to a function. A `typer.Typer()` object is not a def, and the spec gives no rule for mapping an app to a callback. The detail text \"does not name a function of this repository\" is accurate. The typer commands themselves are still discovered as `typer_command` entries, so their paths are not lost.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 818,
+      "reviewers": [],
+      "judge_reason": "The spec defines script targets as `\"<module>:<function>\"` with a known edge to the `def`, and a main_module handler must resolve to a function. A `typer.Typer()` object is not a def, and the spec gives no rule for mapping an app to a callback. The detail text \"does not name a function of this repository\" is accurate. The typer commands themselves are still discovered as `typer_command` entries, so their paths are not lost."
+    },
+    {
+      "claim": "Decorators imported by name or under an alias (`from click import command; @command()`, `import click as c; @c.command()`) are not recognised. The first form is skipped silently with no entry and no diagnostic.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "entries.py:730 `_decorator_site` returns None unless the target is `ast.Attribute` on an `ast.Name`, so `@command()` is skipped by `if site is None: continue`. :658 compares the literal `receiver == \"click\"`, so `@c.command()` falls through to an unresolved_target diagnostic. The spec says \"Every candidate examined but not emitted gets exactly one\" diagnostic. Fix: resolve the receiver or name through the module's import bindings to `click`/`typer`.\nREJECTED: The spec lists the recognised decorator forms literally (`@click.command`, `@<group>.command`, and so on). Aliased or name-imported click decorators are outside them. `@c.command()` under an alias still gets an `unresolved_target` diagnostic. A bare `@command()` is not a candidate under the spec's forms, so the rule that every examined candidate gets a diagnostic does not apply.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 730,
+      "reviewers": [],
+      "judge_reason": "The spec lists the recognised decorator forms literally (`@click.command`, `@<group>.command`, and so on). Aliased or name-imported click decorators are outside them. `@c.command()` under an alias still gets an `unresolved_target` diagnostic. A bare `@command()` is not a candidate under the spec's forms, so the rule that every examined candidate gets a diagnostic does not apply."
+    },
+    {
+      "claim": "A typer callback entry is named after its function (e.g. `main-callback`), a token the CLI never accepts. The spec has no naming rule for callbacks, and the implementer disclosed this.",
+      "severity": "Note",
+      "confidence": 0.4,
+      "evidence": "entries.py `_command_names` applies the command rule to `method == \"callback\"`. Test test_callback_cls_positional_is_not_a_name expects `\"main-callback\"`. implementation-notes.md Block 5 implementer (4): \"The spec has no naming rule for typer callbacks; the command rule is used.\" Later e2e `cli_runner`/`cli_argv` matching on these name tokens would never match. Suggest a spec clarification, e.g. naming a callback by its app's prefix.\nREJECTED: The block spec gives one naming rule \"for each\" decorator, typer `@<app>.callback` included: the explicit name, or the function name with `_` replaced by `-`. The implementation follows that literally and disclosed the gap. This is a request for a spec change, not a deviation from the spec.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 639,
+      "reviewers": [],
+      "judge_reason": "The block spec gives one naming rule \"for each\" decorator, typer `@<app>.callback` included: the explicit name, or the function name with `_` replaced by `-`. The implementation follows that literally and disclosed the gap. This is a request for a spec change, not a deviation from the spec."
+    },
+    {
+      "claim": "Possible Divergent Change: entries.py now contains a self-contained TOML key-line scanner of about 110 lines, alongside the AST-based discovery scanners.",
+      "severity": "Note",
+      "confidence": 0.4,
+      "evidence": "entries.py \u2248L830-922: `_TOML_KEY_SEGMENT`, `_TOML_DOTTED_KEY`, `_TOML_TABLE`, `_TOML_KEY`, `_script_key_line`, `_toml_assigns`, `_toml_inline_items`, `_toml_value_end`, `_toml_string_end`, `_toml_key_path`, `_toml_unquoted`. This text-scanning logic changes for TOML-syntax reasons, unrelated to discovery rules. Possible extraction into a small `toml_lines.py`.\nREJECTED: Moving the TOML key-line scanner into its own module is a style and organisation preference. No project standard in the build context asks for it.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 836,
+      "reviewers": [],
+      "judge_reason": "Moving the TOML key-line scanner into its own module is a style and organisation preference. No project standard in the build context asks for it."
+    },
+    {
+      "claim": "The refactorer's implementation note about a stray `plugins/multiplai-dev/lib/code_facts/uv.lock` is stale: no such file exists in the worktree and none is in this diff.",
+      "severity": "Note",
+      "confidence": 0.55,
+      "evidence": "implementation-notes.md (refactorer): \"added a lockfile at `plugins/multiplai-dev/lib/code_facts/uv.lock`\". Glob for that path returns no files.\nREJECTED: The note describes what the block-5 implementation commit did, not the final tree. A lockfile that was added and later removed is consistent with the reviewer finding no such file now. This is an implementation-notes history entry, not a defect in the block's code.",
+      "dimension": "Integration Coherence",
+      "file_path": "specs/changes/code-paths-lib/implementation-notes.md",
+      "line": 77,
+      "reviewers": [],
+      "judge_reason": "The note describes what the block-5 implementation commit did, not the final tree. A lockfile that was added and later removed is consistent with the reviewer finding no such file now. This is an implementation-notes history entry, not a defect in the block's code."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}
