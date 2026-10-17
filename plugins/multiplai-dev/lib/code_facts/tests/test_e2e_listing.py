@@ -338,6 +338,73 @@ def test_help_and_version_argv_is_excluded(tmp_path, flag):
     assert out["open"].e2e == []
 
 
+# The pr_pipeline shape: a parser builder, and a dispatcher the parsed args are handed to.
+BUILDER = src('''
+    import argparse
+
+    from pkg import commands
+
+
+    def build_parser():
+        parser = argparse.ArgumentParser(prog="pkg")
+        sub = parser.add_subparsers(dest="command", required=True)
+        sub.add_parser("open")
+        return parser
+
+
+    def main(argv=None):
+        return commands.run(build_parser().parse_args(argv))
+    ''')
+COMMANDS = "def run(args):\n    return 0\n"
+
+
+def test_a_bare_builder_parse_reaches_no_handler_and_is_not_listed(tmp_path):
+    body = src('''
+        import pytest
+
+        from pkg import commands
+        from pkg.__main__ import build_parser
+
+
+        def run(argv):
+            return commands.run(build_parser().parse_args(argv))
+
+
+        def test_refused():
+            with pytest.raises(SystemExit):
+                build_parser().parse_args(["open", "--draft", "--ready"])
+
+
+        def test_parsed_and_inspected():
+            args = build_parser().parse_args(["open"])
+            assert isinstance(args.command, str) and args.command == "open"
+
+
+        def test_through_the_helper():
+            assert run(["open"]) == 0
+
+
+        def test_handed_straight_to_the_dispatcher():
+            commands.run(build_parser().parse_args(["open"]))
+
+
+        def test_handed_to_the_dispatcher_by_name():
+            args = build_parser().parse_args(["open"])
+            commands.run(args)
+
+
+        def test_dispatched_through_set_defaults():
+            args = build_parser().parse_args(["open"])
+            args.func(args)
+        ''')
+    root = make_tree(tmp_path / "snap", {"pkg/__init__.py": "", "pkg/__main__.py": BUILDER,
+                                         "pkg/commands.py": COMMANDS, "tests/test_b.py": body})
+    out, _ = listing(root, "open")
+    assert [(t.node_id.split("::")[1], t.match) for t in out["open"].e2e] == [
+        ("test_through_the_helper", "cli_argv"), ("test_handed_straight_to_the_dispatcher", "cli_argv"),
+        ("test_handed_to_the_dispatcher_by_name", "cli_argv"), ("test_dispatched_through_set_defaults", "cli_argv")]
+
+
 def test_a_function_that_does_not_parse_args_is_not_the_program(tmp_path):
     body = "from pkg.__main__ import build\n\n\ndef test_b():\n    build([\"open\"])\n"
     out, _ = listing(snapshot(tmp_path, {"tests/test_b.py": body}), "open")
@@ -667,3 +734,5 @@ def test_live_pr_scripts_list_the_tests_that_go_through_the_run_helper(tmp_path)
     assert node("test_edit_preserves_a_human_change_outside_markers") in listed["edit"]
     assert node("test_edit_keeps_a_ticket_link_given_only_to_open") in listed["open"].keys() & listed["edit"].keys()
     assert node("test_render_prints_only_the_body_and_calls_no_gh") not in listed["open"]
+    # It only parses: argparse refuses the argv and no handler runs.
+    assert node("test_open_draft_and_ready_together_are_refused") not in listed["open"]

@@ -20,7 +20,10 @@ the argv must hold, in order:
 - `cli_argv`: for an argparse subcommand, a callee that resolves to a function
   of the parser's module whose body calls `.parse_args(` or
   `.parse_known_args(`, or `<f>().parse_args(argv)` with `f` a function of that
-  module; argv must hold the subcommand words.
+  module whose result is handed to a handler (an argument of a call to a
+  function of the snapshot, directly or through the name it is assigned to, or
+  `<name>.func(...)`): a bare parse runs no handler. Argv must hold the
+  subcommand words.
 - `cli_runner`: `<runner>.invoke(<app>, <args>)`, `app` resolving to a click
   group or command, or a typer app, of the command's module; args must hold the
   command words `app` does not supply itself. A typer app reaches the commands
@@ -543,16 +546,42 @@ class _TestScan:
     def _body(self, func: FunctionNode, path: str, env: _Env,
               depth: int) -> Iterator[Invocation]:
         """The invocations of a test body (depth 0) or of a helper inlined at `depth` with parameters `env`."""
+        handed_on = self._handed_on(func, path)
         for call in _calls(func):
-            yield from self._call(call, path, env, depth)
+            yield from self._call(call, path, env, depth, call in handed_on)
 
-    def _call(self, call: ast.Call, path: str, env: _Env, depth: int) -> Iterator[Invocation]:
+    def _handed_on(self, func: FunctionNode, path: str) -> set[ast.Call]:
+        """The calls of a body whose result reaches a handler: an argument of a call to a function of the
+        snapshot, directly or through a name it is assigned to, or a name whose `.func(...)` is called.
+        """
+        assigned: dict[str, list[ast.Call]] = {}
+        for node in body_nodes(func):
+            if isinstance(node, ast.Assign | ast.AnnAssign) and isinstance(node.value, ast.Call):
+                for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                    if isinstance(target, ast.Name):
+                        assigned.setdefault(target.id, []).append(node.value)
+        handed: set[ast.Call] = set()
+        for call in _calls(func):
+            callee = call.func
+            if isinstance(callee, ast.Attribute) and callee.attr == "func" and isinstance(callee.value, ast.Name):
+                handed.update(assigned.get(callee.value.id, ()))
+            reference = dotted_reference(callee)
+            if reference is None or self._index.resolve_name(path, call.lineno, reference) is None:
+                continue
+            for argument in [*call.args, *(k.value for k in call.keywords)]:
+                if isinstance(argument, ast.Call):
+                    handed.add(argument)
+                elif isinstance(argument, ast.Name):
+                    handed.update(assigned.get(argument.id, ()))
+        return handed
+
+    def _call(self, call: ast.Call, path: str, env: _Env, depth: int, handed_on: bool) -> Iterator[Invocation]:
         line = call.lineno
         reference = dotted_reference(call.func)
         handler = self._index.resolve_name(path, line, reference) if reference else None
         if depth == 0 and handler is not None:
             yield Invocation("direct_call", ("def", handler.path, handler.line), (), line)
-        for match, expr, reach in self._forms(call, path, reference, handler):
+        for match, expr, reach in self._forms(call, path, reference, handler, handed_on):
             # Inside a helper, only a form fed by a parameter is the test's invocation.
             if depth and not _uses(expr, env):
                 continue
@@ -563,14 +592,17 @@ class _TestScan:
         if handler is not None and depth < HELPER_DEPTH and self._is_helper(handler.path):
             yield from self._inlined(call, handler, path, env, depth)
 
-    def _forms(self, call: ast.Call, path: str, reference: str | None, handler: Handler | None) -> Iterator[_Form]:
-        """The match forms `call` has, whatever its argv turns out to be."""
+    def _forms(self, call: ast.Call, path: str, reference: str | None, handler: Handler | None,
+               handed_on: bool) -> Iterator[_Form]:
+        """The match forms `call` has, whatever its argv turns out to be. A builder parse counts only when its
+        result is `handed_on` to a handler: a bare parse runs none.
+        """
         line = call.lineno
         if handler is not None and self._functions.parses_args(handler):
             yield ("cli_argv", call_argument(call, 0, self._functions.first_parameter(handler)),
                    partial(_argv_reaches, ("program", handler.path)))
         callee = call.func
-        if isinstance(callee, ast.Attribute) and isinstance(callee.value, ast.Call):
+        if handed_on and isinstance(callee, ast.Attribute) and isinstance(callee.value, ast.Call):
             builder_ref = dotted_reference(callee.value.func) if callee.attr in _PARSE_METHODS else None
             builder = self._index.resolve_name(path, line, builder_ref) if builder_ref else None
             if builder is not None:

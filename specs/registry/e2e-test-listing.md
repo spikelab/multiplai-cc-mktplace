@@ -51,7 +51,7 @@ A test SHALL be listed for a path when its body contains a call whose callee res
 
 ### Requirement: CLI subcommand invocation is recognised
 For entries of kind argparse, click or typer subcommand, a test SHALL be listed when the subcommand's program is invoked with that subcommand's name as a token. The invocation must match one of these forms:
-- a call to a function of the subparser's module whose body calls `.parse_args(` or `.parse_known_args(`, or `<f>().parse_args(argv)` where `f` is a function of that module (a parser builder), whose argv argument is a literal list or tuple containing the subcommand name;
+- a call to a function of the subparser's module whose body calls `.parse_args(` or `.parse_known_args(`, or `<f>().parse_args(argv)` where `f` is a function of that module (a parser builder) and the parsed result is handed to a handler (an argument of a call to a function of the snapshot, directly or through the name it is assigned to, or `<name>.func(...)`), whose argv argument is a literal list or tuple containing the subcommand name;
 - `CliRunner().invoke(<resolved click/typer app>, <literal args>)` with the subcommand name in the args;
 - a subprocess invocation as defined in the subprocess requirement.
 
@@ -84,6 +84,10 @@ A test that calls a helper with literal arguments SHALL be matched through the h
 #### Scenario: Helper forwarding literal argv
 - **WHEN** a test module defines `def run(argv): return commands.run(build_parser().parse_args(argv))`, `build_parser` is defined in the module that declares the `open` subparser, and a test calls `run(["open", "--repo", str(repo)])`
 - **THEN** the test is listed for the `open` path with match kind `cli_argv` and the `run(...)` call's line as `invocation_line`
+
+#### Scenario: A bare builder parse is not listed
+- **WHEN** a test calls `build_parser().parse_args(["open", "--draft", "--ready"])` inside `pytest.raises(SystemExit)`, or assigns the parsed result and only inspects it
+- **THEN** the test is not listed for the `open` path, because no handler runs
 
 #### Scenario: Inlining stops after two helpers
 - **WHEN** `three(argv)` calls `two(argv)`, which calls `one(argv)`, which calls `main(argv)`, and one test calls `two(["open"])` and another `three(["open"])`
