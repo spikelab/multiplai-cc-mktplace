@@ -214,16 +214,34 @@ def _argparse_entries(index: PyIndex, dispatch: _DispatchIndex, path: str,
     return entries, diagnostics
 
 
-def _resolve_handler(index: PyIndex, dispatch: _DispatchIndex, path: str,
-                     command: _Subcommand) -> tuple[Handler | None, KnownEdge | None, str | None]:
-    """The handler, its known edge, and why a handler mechanism found for `command` did not resolve."""
+# A handler resolution: the handler, its known edge, and why a handler mechanism found did not resolve.
+_Resolution = tuple[Handler | None, KnownEdge | None, str | None]
+
+
+def _resolve_handler(index: PyIndex, dispatch: _DispatchIndex, path: str, command: _Subcommand) -> _Resolution:
+    """Resolve through `set_defaults(func=...)` when the subparser calls it, else through a dispatch dict."""
     if command.func is not None:
-        expr, line = command.func
-        handler = index.resolve_name(path, line, expr.id) if isinstance(expr, ast.Name) else None
-        if handler is None:
-            return None, None, (f"set_defaults(func={ast.unparse(expr)}) at line {line} is not a function "
-                                "defined in this repository")
-        return handler, _edge(path, dispatch.facts(path).func_call or line, handler), None
+        return _set_defaults_handler(index, dispatch, path, command.func)
+    return _dispatch_dict_handler(index, dispatch, path, command)
+
+
+def _set_defaults_handler(index: PyIndex, dispatch: _DispatchIndex, path: str,
+                          func: tuple[ast.expr, int]) -> _Resolution:
+    """The edge starts at the module's `args.func(...)` call, or at the `set_defaults` line when there is none."""
+    expr, line = func
+    handler = index.resolve_name(path, line, expr.id) if isinstance(expr, ast.Name) else None
+    if handler is None:
+        return None, None, (f"set_defaults(func={ast.unparse(expr)}) at line {line} is not a function "
+                            "defined in this repository")
+    return handler, _edge(path, dispatch.facts(path).func_call or line, handler), None
+
+
+def _dispatch_dict_handler(index: PyIndex, dispatch: _DispatchIndex, path: str,
+                           command: _Subcommand) -> _Resolution:
+    """The first dict item, in this module then in each same-repository module it imports, keyed by the
+    subcommand's own name and naming a function. The edge starts at the `<DICT>[...](...)` call in the dict's
+    module, or at the item's line when there is none. Comparisons such as `args.command == "x"` never resolve.
+    """
     unresolved = None
     for module in [path, *index.imported_files(path)]:
         facts = dispatch.facts(module)
@@ -270,9 +288,9 @@ class _DispatchIndex:
         return self._facts[path]
 
 
-def _dispatch_facts(tree: ast.Module) -> _DispatchFacts:
-    nodes = list(ast.walk(tree))
-    dict_names: dict[int, str] = {}
+def _assigned_dict_names(nodes: list[ast.AST]) -> dict[int, str]:
+    """`id(dict literal) -> name` for each dict literal assigned, alone, to a plain name."""
+    names: dict[int, str] = {}
     for node in nodes:
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
@@ -281,7 +299,13 @@ def _dispatch_facts(tree: ast.Module) -> _DispatchFacts:
         else:
             continue
         if isinstance(node.value, ast.Dict) and isinstance(target, ast.Name):
-            dict_names[id(node.value)] = target.id
+            names[id(node.value)] = target.id
+    return names
+
+
+def _dispatch_facts(tree: ast.Module) -> _DispatchFacts:
+    nodes = list(ast.walk(tree))
+    dict_names = _assigned_dict_names(nodes)
     func_calls: list[int] = []
     dict_calls: dict[str, int] = {}
     items: dict[str, list[_DictItem]] = {}

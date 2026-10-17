@@ -30,3 +30,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   (1) The test's `_ReversedScandir` stand-in had no `__next__`, and Python 3.12's `os.walk` calls `next()` on it; fixed in the test. (2) Block 1's `PathDiagnostic` requires `line ≥ 1` or null, so `seed_not_found` for a symbol seed on a missing file has `line: null`, against "line is null only for parse errors"; an absolute or escaping seed path raises `ValueError` instead of producing a diagnostic. (3) `unresolved_handler` is emitted only when a `set_defaults(func=…)` or a dispatch-dict value fails to resolve; a subcommand with no handler mechanism gets no diagnostic, unlike D6's "every null handler" wording. (4) Block 1's `Invoker.kind` is the output-kind Literal, so it can't hold discovery kinds in `also_invoked_by`. (5) Seed rules the spec leaves open: symbol wins over line; a line seed's location is the seed line; a line seed with no enclosing def gives `handler: null` and the name `<path>:<line>`. (6) Dispatch dicts match the `add_parser` literal, not the space-joined name, and are searched in the parser module plus its directly imported same-repo modules. (7) `entries.py` and `pyindex.py` import models from `paths.py`, so `map_paths` will need a local import of `entries` (or the models moved) to avoid a circular import.
+
+## Block 2 — Discover argparse subcommands and caller seeds from a static `PyIndex` (refactorer)
+- SPEC_IMPACT: none
+- SURPRISES:
+  `Diagnostic` in `entries.py` is an alias of block 1's `PathDiagnostic`, not a separate class. That works because the fields are identical. Also, `ruff check` flags `entries.py`'s import block (`I001`), which was there before this refactor.

@@ -76,6 +76,16 @@ class _Import:
     level: int
     names: tuple[str, ...]
 
+    def dotted_targets(self) -> list[str]:
+        """The dotted modules the statement imports, relative to its `level`.
+
+        `import a.b` also imports `a`; `from x import y` also names `x.y`, which counts when it is a module.
+        """
+        if self.names:
+            return [self.module] + [f"{self.module}.{n}" if self.module else n for n in self.names]
+        parts = self.module.split(".")
+        return [".".join(parts[:i]) for i in range(1, len(parts) + 1)]
+
 
 @dataclass
 class _Scope:
@@ -229,12 +239,8 @@ class PyIndex:
             info = self._files.get(path)
             imports = info.imports if info else []
             for imp in imports:
-                if imp.names:
-                    targets = [imp.module] + [f"{imp.module}.{n}" if imp.module else n for n in imp.names]
-                else:
-                    parts = imp.module.split(".")
-                    targets = [".".join(parts[:i]) for i in range(1, len(parts) + 1)]
-                found.update(t for t in (self.resolve_module(path, d, imp.level) for d in targets) if t)
+                resolved = (self.resolve_module(path, dotted, imp.level) for dotted in imp.dotted_targets())
+                found.update(target for target in resolved if target)
             found.discard(path)
             self._imported[path] = sorted(found)
         return list(self._imported[path])
