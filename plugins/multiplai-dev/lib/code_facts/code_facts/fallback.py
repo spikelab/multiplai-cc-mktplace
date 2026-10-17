@@ -20,7 +20,8 @@ drops it:
 Entries are checked in the order of what they cite, so which of two entries
 citing one line is kept does not depend on the order the model listed them.
 A kept entry has kind `model`, its location at the cited line, and as handler
-the `def` or `class` enclosing that line in a Python file.
+the function `def` enclosing that line in a Python file. A line in a class body
+outside any method has no handler.
 """
 
 from __future__ import annotations
@@ -185,10 +186,10 @@ def _listing_order(item: FallbackEntry) -> tuple[Any, ...]:
 
 
 def _enclosing_handler(index: PyIndex, location: Location) -> Handler | None:
-    """The innermost `def`/`class` holding `location` in a parsed Python file, else None."""
+    """The innermost function `def` holding `location` in a parsed Python file, else None."""
     if index.tree(location.path) is None:
         return None
-    found = index.enclosing_def(location.path, location.line)
+    found = index.enclosing_function(location.path, location.line)
     return Handler(path=location.path, line=found.start, symbol=found.name) if found else None
 
 

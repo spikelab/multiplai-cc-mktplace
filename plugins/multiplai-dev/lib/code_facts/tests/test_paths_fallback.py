@@ -24,6 +24,13 @@ def helper():
 
 
 REGISTRY = {"ruby": ruby_job}
+
+
+class Jobs:
+    LABEL = "nightly"
+
+    def run(self):
+        return ruby_job()
 """
 NOTES_SRC = "# Notes\n\nRun the ruby job from the registry.\n"
 
@@ -188,14 +195,19 @@ def test_unknown_kind_becomes_other(kind):
     assert entry.citation is None
 
 
-@pytest.mark.parametrize("form", ["model", "dict", "json"])
-def test_every_answer_form_gives_the_same_document(snap, tmp_path, form):
+def test_every_answer_form_gives_the_same_document(snap, tmp_path):
     raw = {"entries": [ruby_entry(snap)]}
-    answer = {"model": lambda: lib("FallbackAnswer").model_validate(raw), "dict": lambda: raw,
-              "json": lambda: json.dumps(raw)}[form]()
-    result = run_map(snap, fake(snap, answer), fallback=True)
-    assert (result.fallback.status, result.fallback.reason) == ("ok", None)
-    assert [(p.entry.kind, p.entry.location.path) for p in result.paths] == [("argparse", CLI), ("model", HIDDEN)]
+    forms = {"model": lib("FallbackAnswer").model_validate(raw), "dict": raw, "json": json.dumps(raw)}
+    written = {}
+    for form, answer in forms.items():
+        result = run_map(snap, fake(snap, answer), fallback=True)
+        assert (result.fallback.status, result.fallback.reason) == ("ok", None)
+        out = lib("write_paths_file")(result, tmp_path / f"paths-{form}.json")
+        written[form] = out.read_bytes()
+    assert written["model"] == written["dict"] == written["json"]
+    paths = json.loads(written["model"])["paths"]
+    assert [(p["entry"]["kind"], p["entry"]["location"]["path"]) for p in paths] == [("argparse", CLI),
+                                                                                       ("model", HIDDEN)]
 
 
 @pytest.mark.parametrize("answer", ["not json at all", {"entries": "nope"}, {"entries": [{"citation": 3}]}])
@@ -239,6 +251,8 @@ def test_handler_is_the_enclosing_def_only_for_python_lines_inside_one(snap):
         fb("module level", cite(snap, HIDDEN, "REGISTRY =")),
         fb("helper def", cite(snap, HIDDEN, "def helper(")),
         fb("in docs", cite(snap, NOTES, "Run the ruby job")),
+        fb("class body", cite(snap, HIDDEN, "LABEL =")),
+        fb("in method", cite(snap, HIDDEN, "return ruby_job()")),
     ]}
     ctx, entries = ctx_for(snap, fake(snap, answer))
     status, kept, dropped = run_fallback(ctx, entries)
@@ -246,11 +260,15 @@ def test_handler_is_the_enclosing_def_only_for_python_lines_inside_one(snap):
     got = {(e.location.path, e.location.line):
            (e.handler.path, e.handler.line, e.handler.symbol) if e.handler else None for e in kept}
     ruby, helper = snap.line(HIDDEN, "def ruby_job("), snap.line(HIDDEN, "def helper(")
+    run = snap.line(HIDDEN, "def run(")
     assert got == {
         (HIDDEN, snap.line(HIDDEN, "return helper()")): (HIDDEN, ruby, "ruby_job"),
         (HIDDEN, snap.line(HIDDEN, "REGISTRY =")): None,
         (HIDDEN, helper): (HIDDEN, helper, "helper"),
         (NOTES, snap.line(NOTES, "Run the ruby job")): None,
+        # A class is not a handler: its body outside a method has none, a method's body has the method.
+        (HIDDEN, snap.line(HIDDEN, "LABEL =")): None,
+        (HIDDEN, snap.line(HIDDEN, "return ruby_job()")): (HIDDEN, run, "run"),
     }
     # Kept entries come back in location order, whatever order the model listed them in.
     assert [(e.location.path, e.location.line) for e in kept] == sorted(got)
@@ -329,6 +347,18 @@ def test_line_of_a_deterministic_entry_is_a_duplicate(snap, needle):
     assert drops(result) == [("model_fallback_duplicate", "duplicate", "model", "opal again")]
     assert [p.entry.kind for p in result.paths] == ["argparse"]
     assert len([c for c in call.calls if c.stage == "trace"]) == 1
+
+
+def test_line_inside_a_deterministic_entry_handler_is_a_duplicate(snap):
+    # The cited body line is no entry's location, edge or handler line; only its enclosing def matches.
+    answer = {"entries": [fb("opal body", cite(snap, CLI, "return step1_opal(args)"))]}
+    ctx, entries = ctx_for(snap, fake(snap, answer))
+    status, kept, dropped = run_fallback(ctx, entries)
+    assert (status.status, kept) == ("ok", [])
+    (drop,) = dropped
+    assert (drop.stage, drop.reason, drop.entry.kind) == ("model_fallback_duplicate", "duplicate", "model")
+    assert "cmd_opal" in drop.detail and "handler" in drop.detail
+    assert (drop.entry.handler.line, drop.entry.handler.symbol) == (snap.line(CLI, "def cmd_opal("), "cmd_opal")
 
 
 def test_same_line_number_in_another_file_is_not_a_duplicate(tmp_path):

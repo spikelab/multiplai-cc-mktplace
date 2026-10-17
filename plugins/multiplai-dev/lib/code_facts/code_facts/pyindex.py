@@ -264,6 +264,11 @@ class PyIndex:
         containing = [d for d in self.defs(path) if d.start <= line <= d.end]
         return containing[-1] if containing else None
 
+    def enclosing_function(self, path: str, line: int) -> Def | None:
+        """The innermost function `def` whose span holds `line`; classes are skipped."""
+        containing = [d for d in self.defs(path) if not d.is_class and d.start <= line <= d.end]
+        return containing[-1] if containing else None
+
     def enclosing_scope(self, path: str, line: int) -> tuple[int, int]:
         """The innermost `def`/`class` span holding `line`, or the whole module. KeyError for an unindexed path."""
         info = self._files[path]

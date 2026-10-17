@@ -1,0 +1,186 @@
+{
+  "generated_at": "2026-10-17T08:14:44.968689+00:00",
+  "kind": "review",
+  "block": {
+    "number": 7,
+    "name": "Run a single read-only model fallback for entry points that static discovery missed"
+  },
+  "round": 1,
+  "head_sha": "7b7cf22c52f41097c51b73263f8623a62a4f2813",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Clean seams. `check_head_citation` and `Break` are made public and shared by the gate and the fallback. `encode_answer`, `TraceContext.answer` and `_trace_request` remove the trace-only coupling. fallback.py is one cohesive module: key, encode, run, `_Filter`, helpers. It defines `log` and starts with `from __future__ import annotations`. No model call happens in the gate or in discovery. Possible smells: entries.py:143 adds a `\"model\" if entry.kind == \"model\" else OUTPUT_KIND[...]` special case instead of one kind map. prompts.py `paths_fallback` and fallback.py import each other, which is resolved only by a deferred import inside the function body (possible Inappropriate Intimacy). `UNPLACED = Location(path=\"(unplaced)\")` puts a fake path into a field the contract describes as \"A line in a file under the snapshot root\".",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "395 lines of behavioural tests cover the call (one call, read-only, labelled, schema), the prompt (location order, \"already listed\", citation and untrusted rules, scope), parsing (unknown kind becomes `other`, three malformed shapes, empty answer), each unverified-citation form, three duplicate sources, the same line in another file, collapsing two entries on one line, first-failure order, the accounting invariant, cache reruns, and order-independent bytes. Gaps: the same-handler duplicate branch (`_Filter._duplicate`, second branch) is never exercised, because the `handler-line` case cites the `def` line, which `_taken` already rejects. `test_every_answer_form_gives_the_same_document` never compares documents across forms. The unscoped prompt text (\"whole snapshot\") is not asserted.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "All Block 7 scenarios are implemented: one call after discovery with `paths:fallback` and read-only tools; prompt and key contents; three answer forms; lenient kind; `failed`, `ok` and `skipped` statuses; recoverable vs propagated errors; the three-step filter in order with the right stage and reason literals; kept entries of kind `model` at the cited line, with the enclosing handler, sorted by location; multi-repo paths kept as written. The capability rule \"resolves to the same handler as such an entry\" is also implemented (fallback.py:168-170). Reachability and coverage for fallback survivors are deferred to block 8, as the spec says. Minor divergences: the handler can be a `class`, and drops with no in-root citation are recorded at a placeholder `(unplaced):1` location the spec does not define (the implementer flagged this).",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Produced interfaces match tasks.md exactly: `PATHS_FALLBACK_PROMPT_VERSION`, `paths_fallback(*, commit, scope, entries)`, `FallbackEntry`, `FallbackAnswer`, and `run_fallback(*, ctx, entries, scope) -> tuple[FallbackStatus, list[Entry], list[PathDrop]]`. Kept entries go through the unchanged `trace_entries`/`trace_key`/gate path. Their handler anchors gate rule 6, and `KIND_RANK['model']=9` orders them last. Widening `Entry.kind` to `EntryKind | ModelKind` is safe: the only `OUTPUT_KIND[e.kind]` lookup outside `to_path_entry` is the discovery merge at entries.py:1181, which model entries never reach. Loose seams: `fallback_key` keys only `[kind, path, line]`, while the prompt also shows each entry's name and handler. Two fallback entries at different lines inside one function both get traced, even though path-tracing says entries resolving to the same handler share one trace request.",
+      "confidence": 1.0
+    }
+  ],
+  "weighted_average": 4.0,
+  "gate": {
+    "passed": false,
+    "reason": "Spec-compliance verdict failed \u2014 misunderstood: ['fallback.py:186-192 `_enclosing_handler` uses `PyIndex.enclosing_def`, which returns the innermost `def` or `class` (pyindex.py:262-265). So a cited line in a class body but outside any method gets the class as its handler. The spec says: \"`handler` is the enclosing `def` when the cited file is Python and the line is inside one, and `null` otherwise\" (tasks.md:398, design.md:310). The module docstring states the def-or-class behaviour, so it is deliberate, but it goes beyond the written rule. Low impact.']"
+  },
+  "missing": [],
+  "extra": [
+    "specs/config.yaml is a new file that is not part of the block. It sets `context: \"Project: \\n\"` and a `tdd.test_command` (`uv run --package walkthrough-pipeline --extra dev python -m pytest plugins/multiplai-dev/lib/code_facts/tests -q`) that differs from the global constraint's test command (`uv run --directory plugins/multiplai-dev/lib/code_facts python -m pytest tests/`). It looks like a tooling artifact committed with the block."
+  ],
+  "misunderstood": [
+    "fallback.py:186-192 `_enclosing_handler` uses `PyIndex.enclosing_def`, which returns the innermost `def` or `class` (pyindex.py:262-265). So a cited line in a class body but outside any method gets the class as its handler. The spec says: \"`handler` is the enclosing `def` when the cited file is Python and the line is inside one, and `null` otherwise\" (tasks.md:398, design.md:310). The module docstring states the def-or-class behaviour, so it is deliberate, but it goes beyond the written rule. Low impact."
+  ],
+  "accepted": [
+    {
+      "claim": "No test exercises the handler-based duplicate branch of `_Filter._duplicate`. Every duplicate test is caught first by the `_taken` line check.",
+      "severity": "Minor",
+      "confidence": 0.85,
+      "evidence": "fallback.py `_duplicate`: `if _line(entry.location) in self._taken: return ...` then `if handler is not None and (handler.path, handler.line) in self._handlers: return f\"{where} is in {handler.symbol}, already a discovered entry point's handler\"`. `__init__` adds `self._taken.add((e.handler.path, e.handler.line))`. The test parametrize `pytest.param(\"def cmd_opal(\", id=\"handler-line\")` cites the handler's `def` line, which is already in `_taken`. No other test has a discovered handler that encloses a fallback citation.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_paths_fallback.py",
+      "line": 330,
+      "reviewers": []
+    },
+    {
+      "claim": "A kept entry's handler can be a `class`, though the spec says the handler is the enclosing `def`.",
+      "severity": "Note",
+      "confidence": 0.35,
+      "evidence": "fallback.py `_enclosing_handler` calls `index.enclosing_def`. pyindex.py:262-265: \"The innermost `def` or `class` whose span holds `line`.\" tasks.md:398: \"`handler` is the enclosing `def` when the cited file is Python and the line is inside one, and `null` otherwise.\"",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/fallback.py",
+      "line": 186,
+      "reviewers": []
+    },
+    {
+      "claim": "`test_every_answer_form_gives_the_same_document` does not compare the documents produced by the three answer forms. It only checks each form's status and path kinds separately, so its name overstates what it asserts.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "The test body runs `result = run_map(...)` per parametrized form and asserts `(result.fallback.status, result.fallback.reason) == (\"ok\", None)` and `[(p.entry.kind, p.entry.location.path) ...] == [(\"argparse\", CLI), (\"model\", HIDDEN)]`. No written bytes are compared across forms.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_paths_fallback.py",
+      "line": 189,
+      "reviewers": []
+    },
+    {
+      "claim": "The diff adds a new committed file, specs/config.yaml, that is outside the block's scope. Its test command differs from the global constraint's test command.",
+      "severity": "Note",
+      "confidence": 0.5,
+      "evidence": "`+test_command: uv run --package walkthrough-pipeline --extra dev python -m pytest plugins/multiplai-dev/lib/code_facts/tests -q` vs the global constraint \"Test command: `uv run --directory plugins/multiplai-dev/lib/code_facts python -m pytest tests/`\". It also has `+context: \"Project: \\n\"`.",
+      "dimension": "Spec Compliance",
+      "file_path": "specs/config.yaml",
+      "line": 1,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "Because the handler-duplicate rule treats the cited line's enclosing `def` as the entry's handler, a runtime registration line inside a discovered handler (for example `app.add_route(\"/x\", view)` inside a discovered `main()`) is dropped as `duplicate`. Yet the prompt explicitly invites citing \"the line where the entry point is defined or registered\" and names \"a handler registered at runtime\" as a target.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "prompts.py `paths_fallback`: \"- `citation`: the line where the entry point is defined or registered.\" and \"a hook or plugin a framework calls, a handler registered at runtime\". fallback.py `_place` \u2192 `_enclosing_handler(self._ctx.index, location)`. `_duplicate` drops when `(handler.path, handler.line) in self._handlers`. The handler-duplicate rule comes from the requirement text (entry-point-model-fallback.md:105) and is consistent with the spec's definition of a kept entry's handler, so this is a design-level false-negative risk, not a deviation. A possible mitigation is to ask in the prompt for the definition line, not the registration line.\nREJECTED: The reviewer concedes this follows the capability requirement ('resolves to the same handler as such an entry'). It also matches the block's own definition of a kept entry's handler as the enclosing def. This is a spec-level design concern, not a defect in the diff.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/fallback.py",
+      "line": 168,
+      "reviewers": [],
+      "judge_reason": "The reviewer concedes this follows the capability requirement ('resolves to the same handler as such an entry'). It also matches the block's own definition of a kept entry's handler as the enclosing def. This is a spec-level design concern, not a defect in the diff."
+    },
+    {
+      "claim": "Two fallback entries citing different lines inside the same function are both kept and traced separately, with distinct trace keys. Duplicate suppression among fallback entries compares only lines. Meanwhile path-tracing.md:4 says \"Entries that resolve to the same handler SHALL share one trace request.\"",
+      "severity": "Minor",
+      "confidence": 0.45,
+      "evidence": "fallback.py `apply`: on keep, only `self._taken.add(_line(placed.location))` is updated. `self._handlers` is never extended with kept entries' handlers. `trace_key` includes `entry.location.path, entry.location.line`, so the keys differ. `test_handler_is_the_enclosing_def_only_for_python_lines_inside_one` keeps two entries (\"in body\" and, separately, others) without checking whether shared handlers collapse.\nREJECTED: The block defines duplicates among fallback entries by line only ('an earlier fallback entry's line'). The same-handler rule applies to discovered entries. Trace-key construction and request sharing belong to Block 3's `trace_key`, not this block. The behaviour matches the block text.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/fallback.py",
+      "line": 146,
+      "reviewers": [],
+      "judge_reason": "The block defines duplicates among fallback entries by line only ('an earlier fallback entry's line'). The same-handler rule applies to discovered entries. Trace-key construction and request sharing belong to Block 3's `trace_key`, not this block. The behaviour matches the block text."
+    },
+    {
+      "claim": "The fallback cache key omits entry fields that the prompt contains (name, handler), so two runs whose prompts differ can share one cached answer. The realistic case is a caller-supplied seed `name` at the same location under the same commit label.",
+      "severity": "Note",
+      "confidence": 0.35,
+      "evidence": "fallback.py `fallback_key`: `\"entries\": sorted([e.kind, e.location.path, e.location.line] for e in entries)`. prompts.py `_listed_entry` renders `{entry.kind} `{entry.name}` at {path}:{line}, runs {handler.symbol} at {handler.path}:{handler.line}`. The spec asks for a key built from \"the sorted entry identities\", so this is compliant, but the key is narrower than the prompt.\nREJECTED: The spec says the key is built from 'the sorted entry identities'. Kind plus location is an identity under a fixed commit. The reviewer acknowledges the key is compliant, so this restates the spec rather than showing a deviation.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/fallback.py",
+      "line": 73,
+      "reviewers": [],
+      "judge_reason": "The spec says the key is built from 'the sorted entry identities'. Kind plus location is an identity under a fixed commit. The reviewer acknowledges the key is compliant, so this restates the spec rather than showing a deviation."
+    },
+    {
+      "claim": "Drops whose citation is missing or outside the root are published at the placeholder location `(unplaced):1`. The path passes `REL_PATH` but names no file under the snapshot root, which the `Location` contract describes.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "fallback.py: `UNPLACED = Location(path=\"(unplaced)\", line=1)`, used in `_place` for `missing_citation` and in `_cited_location` on `ValueError`. paths.py:114-115: `class Location(_Strict): \"\"\"A line in a file under the snapshot root.\"\"\"`. The implementer and the test writer both flagged that the spec leaves this undefined. A downstream consumer reading `dropped[].entry.location.path` as a file will see a non-file. The spec should define it, for example as a nullable location for unplaced drops.\nREJECTED: The spec gives no location for drops with no in-root citation, yet `PathEntry.location` is required. The implementer and the test writer both recorded the `(unplaced):1` placeholder in implementation-notes.md with SPEC_IMPACT: clarify. This is a documented decision on a spec gap, not a defect in the diff.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/fallback.py",
+      "line": 51,
+      "reviewers": [],
+      "judge_reason": "The spec gives no location for drops with no in-root citation, yet `PathEntry.location` is required. The implementer and the test writer both recorded the `(unplaced):1` placeholder in implementation-notes.md with SPEC_IMPACT: clarify. This is a documented decision on a spec gap, not a defect in the diff."
+    },
+    {
+      "claim": "`to_path_entry` adds a kind special case (`\"model\" if entry.kind == \"model\" else OUTPUT_KIND[entry.kind]`) instead of putting `model` in a single kind map: possible Repeated Switches / special-casing.",
+      "severity": "Note",
+      "confidence": 0.4,
+      "evidence": "entries.py:143: `kind = \"model\" if entry.kind == \"model\" else OUTPUT_KIND[entry.kind]`. `OUTPUT_KIND: dict[EntryKind, DiscoveredKind]` cannot hold `model` under its current types.\nREJECTED: This is a style preference. `OUTPUT_KIND` is typed `dict[EntryKind, DiscoveredKind]`, and `model` is not a discovery kind. A one-line special case is a reasonable choice, and the project's standards do not ask for anything else.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 143,
+      "reviewers": [],
+      "judge_reason": "This is a style preference. `OUTPUT_KIND` is typed `dict[EntryKind, DiscoveredKind]`, and `model` is not a discovery kind. A one-line special case is a reasonable choice, and the project's standards do not ask for anything else."
+    },
+    {
+      "claim": "prompts.py and fallback.py depend on each other at import time (fallback imports `paths_fallback` and the version, and prompts needs `FallbackAnswer`, `FALLBACK_KINDS` and `OTHER_KIND`). The cycle is broken only by a function-local import. The existing pattern for TraceAnswer instead puts the answer model in a module that prompts.py imports at top level (trace_gate.py).",
+      "severity": "Note",
+      "confidence": 0.4,
+      "evidence": "prompts.py `paths_fallback`: `# Deferred: the fallback module builds its prompt from this one.` then `from .fallback import FALLBACK_KINDS, OTHER_KIND, FallbackAnswer`. prompts.py:11 `from .trace_gate import TraceAnswer` is the top-level pattern used for trace prompts.\nREJECTED: The deferred import is commented and works. This codebase already uses function-local deferred imports to break module dependencies (see `map_paths` in paths.py: '# Deferred: these modules build on the models above'). Moving the model elsewhere is a style preference, not a defect.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/prompts.py",
+      "line": 226,
+      "reviewers": [],
+      "judge_reason": "The deferred import is commented and works. This codebase already uses function-local deferred imports to break module dependencies (see `map_paths` in paths.py: '# Deferred: these modules build on the models above'). Moving the model elsewhere is a style preference, not a defect."
+    },
+    {
+      "claim": "A single invalid entry (for example a citation with `line_start: 0`, `line_end < line_start`, or a missing `name`/`reason`) fails validation of the whole `FallbackAnswer`, so the fallback is `failed` and every other valid entry is lost. The rubric's fallback line says \"Each entry is validated on its own.\"",
+      "severity": "Minor",
+      "confidence": 0.4,
+      "evidence": "fallback.py `class FallbackAnswer(_Model): entries: list[FallbackEntry]`, validated as a whole by `encode_answer(FallbackAnswer, out)`. models.py:31-42 `Citation.line_start: int = Field(ge=1)` and the `line_end < line_start` validator raise inside the list. The test `{\"entries\": [{\"citation\": 3}]}` expects `failed`. The block text (\"A ValidationError gives fallback failed\") supports this behaviour, so it is a spec ambiguity, not a clear defect.\nREJECTED: The block states 'A `ValidationError` gives `fallback` `{\"status\": \"failed\", ...}`, and the run continues with deterministic entries only'. The test expecting `failed` for `{\"entries\": [{\"citation\": 3}]}` follows that text. The implementation matches the block spec.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/fallback.py",
+      "line": 69,
+      "reviewers": [],
+      "judge_reason": "The block states 'A `ValidationError` gives `fallback` `{\"status\": \"failed\", ...}`, and the run continues with deterministic entries only'. The test expecting `failed` for `{\"entries\": [{\"citation\": 3}]}` follows that text. The implementation matches the block spec."
+    }
+  ],
+  "fix_brief": "Fix review issues: Spec-compliance verdict failed \u2014 misunderstood: ['fallback.py:186-192 `_enclosing_handler` uses `PyIndex.enclosing_def`, which returns the innermost `def` or `class` (pyindex.py:262-265). So a cited line in a class body but outside any method gets the class as its handler. The spec says: \"`handler` is the enclosing `def` when the cited file is Python and the line is inside one, and `null` otherwise\" (tasks.md:398, design.md:310). The module docstring states the def-or-class behaviour, so it is deliberate, but it goes beyond the written rule. Low impact.']\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Minor] No test exercises the handler-based duplicate branch of `_Filter._duplicate`. Every duplicate test is caught first by the `_taken` line check. (plugins/multiplai-dev/lib/code_facts/tests/test_paths_fallback.py:330)\n  evidence: fallback.py `_duplicate`: `if _line(entry.location) in self._taken: return ...` then `if handler is not None and (handler.path, handler.line) in self._handlers: return f\"{where} is in {handler.symbol}, already a discovered entry point's handler\"`. `__init__` adds `self._taken.add((e.handler.path, e.handler.line))`. The test parametrize `pytest.param(\"def cmd_opal(\", id=\"handler-line\")` cites the handler's `def` line, which is already in `_taken`. No other test has a discovered handler that encloses a fallback citation.\n- [Note] A kept entry's handler can be a `class`, though the spec says the handler is the enclosing `def`. (plugins/multiplai-dev/lib/code_facts/code_facts/fallback.py:186)\n  evidence: fallback.py `_enclosing_handler` calls `index.enclosing_def`. pyindex.py:262-265: \"The innermost `def` or `class` whose span holds `line`.\" tasks.md:398: \"`handler` is the enclosing `def` when the cited file is Python and the line is inside one, and `null` otherwise.\"\n- [Minor] `test_every_answer_form_gives_the_same_document` does not compare the documents produced by the three answer forms. It only checks each form's status and path kinds separately, so its name overstates what it asserts. (plugins/multiplai-dev/lib/code_facts/tests/test_paths_fallback.py:189)\n  evidence: The test body runs `result = run_map(...)` per parametrized form and asserts `(result.fallback.status, result.fallback.reason) == (\"ok\", None)` and `[(p.entry.kind, p.entry.location.path) ...] == [(\"argparse\", CLI), (\"model\", HIDDEN)]`. No written bytes are compared across forms.\n- [Note] The diff adds a new committed file, specs/config.yaml, that is outside the block's scope. Its test command differs from the global constraint's test command. (specs/config.yaml:1)\n  evidence: `+test_command: uv run --package walkthrough-pipeline --extra dev python -m pytest plugins/multiplai-dev/lib/code_facts/tests -q` vs the global constraint \"Test command: `uv run --directory plugins/multiplai-dev/lib/code_facts python -m pytest tests/`\". It also has `+context: \"Project: \\n\"`.\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
+  "fix": {
+    "report": "I have the context I need. Next I'll make the fallback handler pick the enclosing function only, then add the missing tests.Now the tests.Checking that the new class-body test fails against the old `enclosing_def` behaviour:Now checking that the handler-duplicate test fails when that branch is removed:Both new tests fail when the fix is reverted, so they guard real behaviour. Next I'll take `specs/config.yaml` out of the diff and run the full suite.I fixed all four findings. The full suite passes (521 tests) with both the pipeline's test command and the project's own command.\n\n**What changed**\n- **Handler is now the enclosing function, not a class** (spec verdict and the Note finding). I added `PyIndex.enclosing_function` in `pyindex.py`. It returns the innermost function `def` around a line and skips classes. `_enclosing_handler` in `fallback.py` now uses it, and the module docstring says so. A line in a class body outside any method now gets no handler, and a line inside a method gets the method. I added a small `Jobs` class to the `pkg/hidden.py` fixture and two cases to `test_handler_is_the_enclosing_def_only_for_python_lines_inside_one`. That test fails if I switch back to `enclosing_def`.\n- **The handler-based duplicate check is now tested.** The new test `test_line_inside_a_deterministic_entry_handler_is_a_duplicate` cites `return step1_opal(args)`, a body line of `cmd_opal`. That line is not any entry's location, edge `from` line or handler line, so only the handler check can drop it. The test checks that the drop message names `cmd_opal`, and it fails if I disable that branch.\n- **The answer-form test now does what its name says.** `test_every_answer_form_gives_the_same_document` is no longer parametrized. It runs all three answer forms (model, dict, JSON string), writes each result with `write_paths_file`, and asserts the three files are byte-identical. It also keeps the status and path-kind checks.\n- **`specs/config.yaml` is out of the block's diff.** I ran `git rm --cached`, so the removal is staged and the file is still on disk for the pipeline.\n\n**One thing to watch:** if the pipeline commits with something like `git add -A`, `specs/config.yaml` will be committed again. I did not add a git exclude rule, because this worktree shares its `info/exclude` file with the main checkout.\n\nSEARCHED:\n- `_enclosing_handler` returning a class: every `enclosing_def` call under `code_facts/` (`fallback.py`, `entries.py:1001` seed handler, `pyindex.enclosing_scope`). I changed only the fallback call. The seed call belongs to block 2 and is not in this block's diff, and `enclosing_scope` is meant to include classes for the gate. I also checked `_Filter.__init__`'s `_handlers` set, which still only holds handlers that have a symbol.\n- Handler-based duplicate branch untested: both branches of `_Filter._duplicate` (`_taken` line and handler), every duplicate test in `test_paths_fallback.py` (the three-case parametrized test, the two-entries-on-one-line test, the first-failing-check test, the accounting test). None of them reached the handler branch before the new test.\n- Answer-form test's name overstating what it checks: every test in `test_paths_fallback.py` whose name claims \"same\", \"identical\" or \"does not change\" (`test_prompt_does_not_depend_on_entry_order` compares strings, `test_model_order_does_not_change_the_written_file` and `test_rerun_with_the_cache...` compare bytes). Only the answer-form test was wrong.\n- `specs/config.yaml` out of scope: `git diff e03a6c80 --stat` for this block. The only other non-library file is `specs/changes/code-paths-lib/implementation-notes.md`, which is pipeline-owned.\n\nSTATUS: DONE\nTESTS_RUN: uv run --package walkthrough-pipeline --extra dev python -m pytest plugins/multiplai-dev/lib/code_facts/tests -q\nGREEN: 521 passed, 1 warning in 5.89s\nFILES: plugins/multiplai-dev/lib/code_facts/code_facts/fallback.py, plugins/multiplai-dev/lib/code_facts/code_facts/pyindex.py, plugins/multiplai-dev/lib/code_facts/tests/test_paths_fallback.py, specs/config.yaml (untracked from git, still on disk)\nSURPRISES: `PyIndex` had no lookup for the enclosing function only, so I added `enclosing_function`. Block 2's seed rule (\"handler is the enclosing def at the seed's line\") still uses the def-or-class `enclosing_def`. I left it alone because it is outside this block.\nSPEC_IMPACT: none\nTEST CHANGE REQUIRED: test_paths_fallback.py::test_handler_is_the_enclosing_def_only_for_python_lines_inside_one \u2014 the fixture gained a `Jobs` class and the test gained class-body and method cases, to pin \"handler is the enclosing `def`\" (tasks.md:398) as the adjudicated finding asked.\nTEST CHANGE REQUIRED: test_paths_fallback.py::test_every_answer_form_gives_the_same_document \u2014 it never compared the three forms' documents, so its name overstated it (adjudicated finding). It now compares the written bytes.\nTEST CHANGE REQUIRED: test_paths_fallback.py::test_line_inside_a_deterministic_entry_handler_is_a_duplicate \u2014 new test for the handler-based duplicate branch, which no test reached before (adjudicated finding).",
+    "success": true,
+    "timed_out": false,
+    "commit": null,
+    "searched": [
+      "`_enclosing_handler` returning a class: every `enclosing_def` call under `code_facts/` (`fallback.py`, `entries.py:1001` seed handler, `pyindex.enclosing_scope`). I changed only the fallback call. The seed call belongs to block 2 and is not in this block's diff, and `enclosing_scope` is meant to include classes for the gate. I also checked `_Filter.__init__`'s `_handlers` set, which still only holds handlers that have a symbol.",
+      "Handler-based duplicate branch untested: both branches of `_Filter._duplicate` (`_taken` line and handler), every duplicate test in `test_paths_fallback.py` (the three-case parametrized test, the two-entries-on-one-line test, the first-failing-check test, the accounting test). None of them reached the handler branch before the new test.",
+      "Answer-form test's name overstating what it checks: every test in `test_paths_fallback.py` whose name claims \"same\", \"identical\" or \"does not change\" (`test_prompt_does_not_depend_on_entry_order` compares strings, `test_model_order_does_not_change_the_written_file` and `test_rerun_with_the_cache...` compare bytes). Only the answer-form test was wrong.",
+      "`specs/config.yaml` out of scope: `git diff e03a6c80 --stat` for this block. The only other non-library file is `specs/changes/code-paths-lib/implementation-notes.md`, which is pipeline-owned."
+    ]
+  }
+}
