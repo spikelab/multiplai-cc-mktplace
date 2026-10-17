@@ -16,7 +16,7 @@ import fixture_repo
 import path_fixtures
 from code_facts import Seed
 from fakes import FakeAgents
-from test_paths_stage import VIEWER_SCHEMA, _click_run, _paths_body, _state, _trace_calls, spy  # noqa: F401
+from test_paths_stage import VIEWER_SCHEMA, _click_run, _paths_body, _state, _trace_calls
 from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.state import STATE_FILE
@@ -176,7 +176,7 @@ def test_buildme_scans_only_the_markdown(tmp_path):
     tree = ast.parse(BUILDME_WALKTHROUGHS.read_text())
     suffix = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
                   and any(isinstance(t, ast.Name) and t.id == "SUFFIX" for t in n.targets))
-    assert f'directory.glob(f"*{{SUFFIX}}")' in BUILDME_WALKTHROUGHS.read_text()
+    assert 'directory.glob(f"*{SUFFIX}")' in BUILDME_WALKTHROUGHS.read_text()
     (tmp_path / "x-walkthrough.md").write_text("# x\n")
     (tmp_path / "x-paths.json").write_text("{}")
     assert [p.name for p in tmp_path.glob(f"*{suffix}")] == ["x-walkthrough.md"]

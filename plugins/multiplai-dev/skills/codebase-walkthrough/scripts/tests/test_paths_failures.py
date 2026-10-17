@@ -11,8 +11,7 @@ import code_facts
 import path_fixtures
 from fakes import FakeAgents
 from test_paths_render import _render, _result, _state as _render_state
-from test_paths_stage import (_answer_files, _click_run, _paths_body, _state, _trace_answer_files, _trace_calls,
-                              spy)  # noqa: F401  (spy: a fixture)
+from test_paths_stage import _answer_files, _click_run, _paths_body, _state, _trace_answer_files, _trace_calls
 from walkthrough_pipeline import budget, sdk
 from walkthrough_pipeline.__main__ import TRUST_MESSAGE, main
 from walkthrough_pipeline.render import split_sections
