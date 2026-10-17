@@ -67,6 +67,16 @@ class TraceContext:
             "encode": encode,
         }
 
+    async def answer(self, key: str, prompt: Callable[[], str], *, budget_label: Callable[[str], str],
+                     schema: type[BaseModel], encode: Callable[[Any], dict]) -> dict:
+        """The stored answer under `key`, asking for it first (one call, `prompt` built only then) when there is
+        none.
+        """
+        if key not in self.answers:
+            await ask(key, prompt(), self.call, self.answers,
+                      **self.ask_kwargs(budget_label=budget_label, schema=schema, encode=encode))
+        return self.answers[key]
+
 
 def trace_key(entry: Entry, ctx: TraceContext) -> str:
     """The content key of an entry's first trace; independent of the order of any input."""
@@ -112,12 +122,14 @@ def encode_answer(model: type[BaseModel], out: Any) -> dict:
 
 
 def encode_trace_answer(out: Any) -> dict:
+    """A trace or re-ask answer as stored: the validated TraceAnswer's dump, or the reason it does not parse."""
     return encode_answer(TraceAnswer, out)
 
 
-def _trace_ask_kwargs(ctx: TraceContext, stage: Stage) -> dict[str, Any]:
-    return ctx.ask_kwargs(budget_label=lambda key: f"paths:{stage}:{key[:12]}", schema=TraceAnswer,
-                          encode=encode_trace_answer)
+def _trace_request(stage: Stage) -> dict[str, Any]:
+    """How a trace or re-ask request is labelled, validated and stored."""
+    return {"budget_label": lambda key: f"paths:{stage}:{key[:12]}", "schema": TraceAnswer,
+            "encode": encode_trace_answer}
 
 
 async def trace_entries(entries: Sequence[Entry], *, ctx: TraceContext,
@@ -129,7 +141,7 @@ async def trace_entries(entries: Sequence[Entry], *, ctx: TraceContext,
     """
     first = {trace_key(e, ctx): _trace_prompt(e, ctx) for e in entries}
     await run_tasks(list(first.items()), ctx.call, ctx.answers, concurrency=concurrency,
-                    **_trace_ask_kwargs(ctx, "trace"))
+                    **ctx.ask_kwargs(**_trace_request("trace")))
     return await bounded(entries, lambda e: trace_entry(e, ctx=ctx), concurrency)
 
 
@@ -142,15 +154,15 @@ async def trace_entry(entry: Entry, *, ctx: TraceContext) -> TracedPath | PathDr
 
 async def _trace(entry: Entry, ctx: TraceContext) -> TracedPath | PathDrop:
     key = trace_key(entry, ctx)
-    first = await _answer(ctx, "trace", key, lambda: _trace_prompt(entry, ctx))
+    first = await ctx.answer(key, lambda: _trace_prompt(entry, ctx), **_trace_request("trace"))
     if (failed := _call_failed(entry, first)) is not None:
         return failed
     gated = _gate(first, entry, ctx)
     if gated.break_reason in (None, "hop_limit"):
         return _cut(entry, gated)
-    second = await _answer(ctx, "reask", reask_key(key, first, gated), lambda: paths_reask(
+    second = await ctx.answer(reask_key(key, first, gated), lambda: paths_reask(
         entry, commit=ctx.commit, broken_at=gated.broken_at, break_reason=gated.break_reason,
-        detail=gated.detail, accepted=gated.accepted))
+        detail=gated.detail, accepted=gated.accepted), **_trace_request("reask"))
     if (failed := _call_failed(entry, second)) is not None:
         return failed
     return _cut(entry, _gate(second, entry, ctx))
@@ -159,13 +171,6 @@ async def _trace(entry: Entry, ctx: TraceContext) -> TracedPath | PathDrop:
 def _trace_prompt(entry: Entry, ctx: TraceContext) -> str:
     return paths_trace(entry, commit=ctx.commit, changed_lines=ctx.changed_lines, known_edges=entry.known_edges,
                        places=ctx.places)
-
-
-async def _answer(ctx: TraceContext, stage: Stage, key: str, prompt: Callable[[], str]) -> dict:
-    """The stored answer under `key`, asking for it first when there is none."""
-    if key not in ctx.answers:
-        await ask(key, prompt(), ctx.call, ctx.answers, **_trace_ask_kwargs(ctx, stage))
-    return ctx.answers[key]
 
 
 def _gate(answer: dict, entry: Entry, ctx: TraceContext) -> GateResult:

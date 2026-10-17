@@ -33,7 +33,7 @@ from pydantic import field_validator
 
 from .cache import cache_key
 from .entries import Entry, EntryKind, to_path_entry
-from .explore import CALL_ERROR, ask
+from .explore import CALL_ERROR
 from .models import Citation, _Model
 from .paths import DropReason, DropStage, FallbackStatus, Handler, Location, PathDrop, normalise_rel_path
 from .prompts import PATHS_FALLBACK_PROMPT_VERSION, paths_fallback
@@ -81,6 +81,7 @@ def fallback_key(commit: str, entries: Sequence[Entry], scope: Sequence[str] | N
 
 
 def encode_fallback_answer(out: Any) -> dict:
+    """A fallback answer as stored: the validated FallbackAnswer's dump, or the reason it does not parse."""
     return encode_answer(FallbackAnswer, out)
 
 
@@ -91,22 +92,27 @@ async def run_fallback(*, ctx: TraceContext, entries: Sequence[Entry],
     Returns the fallback's status, the kept entries in location order, and the
     drops of the others (see the module docstring).
     """
-    key = fallback_key(ctx.commit, entries, scope)
-    if key not in ctx.answers:
-        await ask(key, paths_fallback(commit=ctx.commit, scope=scope, entries=entries), ctx.call, ctx.answers,
-                  **ctx.ask_kwargs(budget_label=lambda _: FALLBACK_LABEL, schema=FallbackAnswer,
-                                   encode=encode_fallback_answer))
-    stored = ctx.answers[key]
-    for marker, what in ((CALL_ERROR, "the fallback call failed"), (MALFORMED, "the fallback answer is malformed")):
-        if marker in stored:
-            log.warning("%s: %s", what, stored[marker])
-            return FallbackStatus(status="failed", reason=f"{what}: {stored[marker]}"), [], []
+    stored = await ctx.answer(fallback_key(ctx.commit, entries, scope),
+                              lambda: paths_fallback(commit=ctx.commit, scope=scope, entries=entries),
+                              budget_label=lambda _: FALLBACK_LABEL, schema=FallbackAnswer,
+                              encode=encode_fallback_answer)
+    if (failed := _failed_status(stored)) is not None:
+        return failed, [], []
     listed = FallbackAnswer.model_validate(stored).entries
     kept, dropped = _Filter(ctx, entries).apply(listed)
     log.info("fallback listed %d entries: %d kept, %d dropped", len(listed), len(kept), len(dropped))
     if ctx.progress:
         ctx.progress(f"  fallback: {len(kept)} entries kept, {len(dropped)} dropped")
     return FallbackStatus(status="ok", reason=None), kept, dropped
+
+
+def _failed_status(stored: dict) -> FallbackStatus | None:
+    """The `failed` status when `stored` records a recoverable call failure or a malformed answer, else None."""
+    for marker, what in ((CALL_ERROR, "the fallback call failed"), (MALFORMED, "the fallback answer is malformed")):
+        if marker in stored:
+            log.warning("%s: %s", what, stored[marker])
+            return FallbackStatus(status="failed", reason=f"{what}: {stored[marker]}")
+    return None
 
 
 class _Filter:

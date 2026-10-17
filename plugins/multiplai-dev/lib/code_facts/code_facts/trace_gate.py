@@ -164,11 +164,11 @@ class _Gate:
         if not earlier:
             if not self._anchored(cited):
                 return Break("entry_mismatch", f"{_where(cited)} holds neither the entry line "
-                                                f"{self._entry.location.path}:{self._entry.location.line} "
-                                                "nor its handler's line")
+                                               f"{self._entry.location.path}:{self._entry.location.line} "
+                                               "nor its handler's line")
         elif not self._connected(earlier[-1], cited):
             return Break("unconnected_hop", f"nothing connects {_where(earlier[-1])} to {cited.symbol_called!r} "
-                                             f"at {_where(cited)}")
+                                            f"at {_where(cited)}")
         if any(_span(h) == _span(cited) for h in earlier):
             return Break("repeated_hop", f"{_where(cited)} is already an earlier hop")
         return None
