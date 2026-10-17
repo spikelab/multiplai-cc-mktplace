@@ -1,0 +1,121 @@
+{
+  "generated_at": "2026-10-17T08:31:18.021094+00:00",
+  "kind": "review",
+  "block": {
+    "number": 8,
+    "name": "Scope a run to the changed lines with reachability, trace limit, coverage and cap"
+  },
+  "round": 1,
+  "head_sha": "a3257a4f61a79f08545fb2cfd9b179fa757e17f5",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The scope filters sit in a new scope.py. D2 placed them in paths.py; the move was disclosed and is justified by the entries/pyindex \u2192 paths import direction, since paths.py imports scope only in a deferred import (paths.py:402). The import graph is in pyindex.py, where the rubric says it belongs. order_paths and sort_drops are shared by the scoped and unscoped flows. map_paths stays short, with each stage handed off to a named function. Minor possible smell: entries.py now has two different types both called `EntryKind`, its own discovery Literal (line 96) and paths.EntryKind imported as `OutputKind` (line 91), which is easy to misread. No model call in scope, no walkthrough_pipeline import.",
+      "confidence": 0.8
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "Tests check observable results: drop stage and reason per entry, ids, changed_lines_covered values, and written bytes. Call accounting through `traced(call)` is always paired with an assertion on the result. Coverage includes edge cases (inclusive range, distinct values, path-exact matching), the order key under 5 shuffles, and drop sort order across all 7 stages. Gaps: the cross-repository fallback is tested only at the import_edges unit level. test_multi_repository_paths_stay_relative_to_the_snapshot_root resolves `import mod` through repo_b's own `src/`, not through another repository, so no end-to-end test shows a cross-repo import making an entry reachable. The `\"\"` snapshot-root fallback is also untested.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "All four filters match the spec. Reachability: distance 0 for a changed location, invoker or handler file, otherwise BFS from the handler module or the location module (scope.py:24-36). Trace limit uses the key (distance, KIND_RANK, path, line) (scope.py:39-42). Coverage is distinct, sorted and inclusive (scope.py:45-49). Cap and order use (-covered, hops, KIND_RANK, path, line) (paths.py:447-453), with ids assigned after the cap (paths.py:442). Stage names and reasons match the Literals. Drop sort follows the stage order. Seed and model entries go through the same pipeline. Small divergences: the cross-repo fallback is permissive for partly-present packages (see findings), and the `\"\"` root is included.",
+      "confidence": 0.8
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Every produced interface matches the stated signature: import_edges, import_distance, entry_distance, covered_lines, order_paths, sort_drops. Fallback survivors (`added`) are merged into `entries` before select_for_trace (paths.py:428-432), so they pass every scope stage. Ids are assigned after ordering and cap. The removed path_order and drop_order have no remaining callers (grep finds no references). trace_fixtures.lib now searches code_facts.scope. As the block spec intends, scope.py's names are not exported from __init__.",
+      "confidence": 0.8
+    }
+  ],
+  "weighted_average": 3.8968749999999996,
+  "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 3.9"
+  },
+  "missing": [],
+  "extra": [
+    "pyindex.py:340 adds the snapshot root `\"\"` as a fallback repository even when it holds no `.git` or `pyproject.toml`, and sorts it before every other root. Spec D13 mentions only \"the other repository roots\". The implementer disclosed this in implementation-notes.md, but no test covers it."
+  ],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "The cross-repository fallback in `_resolve_import` runs for every unresolved dotted target, including `pkg.name` targets made up from `from pkg import name` where `name` is a function and the own repository has `pkg`. If another repository has a same-named package containing `name.py`, a spurious cross-repo edge is added. Real Python would never import it, because `pkg` is already bound to the own repository's package.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "pyindex.py:91 `return [self.module] + [f\"{self.module}.{n}\" ...]` builds candidate targets that may be names rather than modules. pyindex.py:336-344: `found = self.resolve_module(...); if found is not None or level or not dotted: return found` and then the loop over other repos. The fallback is skipped only when the full dotted target resolves, not when its top-level package already resolves locally.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/pyindex.py",
+      "line": 336,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "The snapshot root `\"\"` is used as a fallback repository even when it is not a repository root, and it is sorted before every other root. This goes beyond D13's \"other repository roots\", and no test exercises it.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "pyindex.py:340 `for repo in sorted((self._repo_roots | {\"\"}) - {own}):`. TestImportEdges::test_absolute_imports_fall_back_to_other_repositories_in_sorted_order has no module at the snapshot root, so the `\"\"` branch is never hit. The implementer's notes item (2) discloses the choice.\nREJECTED: The index's own model treats `\"\"` as a repository root. Per the pyindex module doc, `repo_root` returns the snapshot root when no `.git`/`pyproject.toml` encloses a file, so files at the top level belong to repository `\"\"`. Including it among the 'other repository roots' is therefore consistent with D13, and `\"\"` sorting first follows from the required sorted order. The implementer disclosed and justified the choice in the notes, which is a deliberate decision, not a deviation.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/pyindex.py",
+      "line": 340,
+      "reviewers": [],
+      "judge_reason": "The index's own model treats `\"\"` as a repository root. Per the pyindex module doc, `repo_root` returns the snapshot root when no `.git`/`pyproject.toml` encloses a file, so files at the top level belong to repository `\"\"`. Including it among the 'other repository roots' is therefore consistent with D13, and `\"\"` sorting first follows from the required sorted order. The implementer disclosed and justified the choice in the notes, which is a deliberate decision, not a deviation."
+    },
+    {
+      "claim": "No end-to-end map_paths test shows the cross-repository import fallback (D13) making an entry reachable. The multi-repository test resolves `import mod` through repo_b's own `src/` directory, which `resolve_module` already handled before this block.",
+      "severity": "Minor",
+      "confidence": 0.7,
+      "evidence": "test_paths_scope.py test_multi_repository_paths_stay_relative_to_the_snapshot_root: `repo_b/cli.py` does `import mod` and `repo_b/src/mod.py` exists, which is own-repository `<repo>/src/` resolution. The only cross-repo assertion is the unit-level `index.import_edges(\"repo_a/tool.py\") == {\"repo_b/src/mod.py\", ...}`.\nREJECTED: `import_distance` reaches the graph only through `import_edges`, and `entry_distance` only through `import_distance`. All three have direct unit tests, including the cross-repo `import_edges` case with sorted-order precedence. The map_paths multi-repository test is about snapshot-relative paths and coverage, which it does exercise. An extra end-to-end cross-repo test would duplicate coverage of trivial wiring, not close a real gap.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_paths_scope.py",
+      "line": 452,
+      "reviewers": [],
+      "judge_reason": "`import_distance` reaches the graph only through `import_edges`, and `entry_distance` only through `import_distance`. All three have direct unit tests, including the cross-repo `import_edges` case with sorted-order precedence. The map_paths multi-repository test is about snapshot-relative paths and coverage, which it does exercise. An extra end-to-end cross-repo test would duplicate coverage of trivial wiring, not close a real gap."
+    },
+    {
+      "claim": "entries.py now has two different types both called `EntryKind`: its own discovery Literal (line 96), and paths.EntryKind imported under the alias `OutputKind` (line 91) as a second `from .paths import` statement. This is a possible naming smell that makes kind-related code easy to misread.",
+      "severity": "Note",
+      "confidence": 0.5,
+      "evidence": "entries.py:89-91 `from .paths import (KIND_RANK, DiscoveredKind, ...)` followed by `from .paths import EntryKind as OutputKind`; entries.py:96 `EntryKind = Literal[\"argparse_subcommand\", ...]`.\nREJECTED: This is a style preference. The alias `OutputKind` exists precisely to tell the published kind apart from the module's discovery `EntryKind`. It is used once, in the clearly named `output_kind`. There is no defect and no project standard asks for a different arrangement.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 91,
+      "reviewers": [],
+      "judge_reason": "This is a style preference. The alias `OutputKind` exists precisely to tell the published kind apart from the module's discovery `EntryKind`. It is used once, in the clearly named `output_kind`. There is no defect and no project standard asks for a different arrangement."
+    },
+    {
+      "claim": "Implementer claim verified: scope logic went into a new scope.py instead of paths.py (D2) to avoid a circular import. scope.py imports `.entries` and `.pyindex` at module level, both of which import `.paths`, while paths.py imports `.scope` only inside map_paths, matching its existing deferred-import pattern.",
+      "severity": "Note",
+      "confidence": 0.85,
+      "evidence": "scope.py:17-19 `from .entries import Entry, output_kind, to_path_entry` / `from .paths import ...` / `from .pyindex import PyIndex`; paths.py:397-403 `# Deferred: these modules build on the models above.` ... `from .scope import keep_covering, select_for_trace`.\nREJECTED: This is an accurate verification note, not a defect. `scope.py` imports at module level and `paths.py` defers its `.scope` import inside `map_paths`, so the circular import is avoided as the implementer described. Nothing needs fixing.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/scope.py",
+      "line": 17,
+      "reviewers": [],
+      "judge_reason": "This is an accurate verification note, not a defect. `scope.py` imports at module level and `paths.py` defers its `.scope` import inside `map_paths`, so the circular import is avoided as the implementer described. Nothing needs fixing."
+    },
+    {
+      "claim": "No behaviour was lost in the removals. The deleted `path_order` and `drop_order` have no remaining callers, and their sort keys live on in `order_paths` (with coverage now first, which is a no-op when unscoped) and `sort_drops`. The deleted inline loop in `imported_files` is reproduced exactly by `_import_targets(path, self.resolve_module)`.",
+      "severity": "Note",
+      "confidence": 0.85,
+      "evidence": "Removed: `return len(path.hops), KIND_RANK[entry.kind], entry.location.path, entry.location.line` and `return _STAGE_RANK[drop.stage], ...`. New: paths.py:451-452 and paths.py:460. Removed loop `found.update(target for target in resolved if target); found.discard(path)`. New: pyindex.py:325-327. Grep for `path_order|drop_order` finds no references.\nREJECTED: This is an accurate verification note, not a defect. `order_paths` and `sort_drops` keep the old keys, adding coverage-first, which is a no-op when unscoped. `_import_targets(path, self.resolve_module)` reproduces the old `imported_files` loop. No action is needed.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 447,
+      "reviewers": [],
+      "judge_reason": "This is an accurate verification note, not a defect. `order_paths` and `sort_drops` keep the old keys, adding coverage-first, which is a no-op when unscoped. `_import_targets(path, self.resolve_module)` reproduces the old `imported_files` loop. No action is needed."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}
