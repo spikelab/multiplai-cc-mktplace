@@ -407,3 +407,162 @@ def test_paths_status_is_a_named_tuple_of_status_result_and_detail(findings_path
     assert isinstance(got, PathsStatus) and PathsStatus._fields == ("status", "result", "detail")
     status, result, detail = got
     assert status == "accepted" and result.commit == HEAD and isinstance(detail, str)
+
+
+# --- files on a path become viewable (block 2) --------------------------------------------
+
+# Every entry, handler and hop file in the fixture; not also_invoked_by (scripts/nightly.sh)
+# and not a test file.
+FIXTURE_PATH_FILES = {
+    "app/cli.py", "app/checkout.py", "app/service.py", "app/new_feature.py",
+    "hooks/pre_commit.py", "lib/hooks/handler.py",
+    "skills/shop/SKILL.md", "app/refunds.py",
+    "scripts/points_report.py",
+    "app/big.py",
+}
+
+
+def test_path_files_are_the_entry_handler_and_hop_files_of_every_path():
+    from code_facts.paths import PathsResult
+    from review_viewer.server import _path_files
+
+    result = PathsResult.model_validate(paths_doc())
+    assert _path_files(result) == FIXTURE_PATH_FILES
+    assert "scripts/nightly.sh" not in _path_files(result)  # also_invoked_by: never a link
+    assert not any(f.startswith("tests/") for f in _path_files(result))
+
+    only_p5 = paths_doc()
+    only_p5["paths"] = [only_p5["paths"][4]]
+    only_p5["paths"][0]["id"] = "p1"
+    p5 = PathsResult.model_validate(only_p5)
+    assert p5.paths[0].entry.handler is None
+    assert _path_files(p5) == {"app/big.py"}
+
+
+def test_path_ranges_are_the_entry_handler_and_hop_lines_in_one_file():
+    from code_facts.paths import PathsResult
+    from review_viewer.server import _path_ranges
+
+    result = PathsResult.model_validate(paths_doc())
+    # p5: entry app/big.py:1 (no handler), hops 2000 and 3000-3001.
+    assert _path_ranges(result, "app/big.py") == [(1, 1), (2000, 2000), (3000, 3001)]
+    # p6: entry app/cli.py:30 and handler app/cli.py:44; p1: entry app/cli.py:12.
+    assert _path_ranges(result, "app/cli.py") == [(12, 12), (30, 30), (44, 44)]
+    assert _path_ranges(result, "scripts/nightly.sh") == []
+
+
+def test_allowed_paths_without_extra_is_the_set_it_was(fixture_repo, findings_path):
+    from review_viewer.gitdata import allowed_paths
+    from review_viewer.models import load_findings
+
+    ff = load_findings(findings_path)
+    for listed in ([], ["app/service.py", "README.md"]):
+        before = allowed_paths(ff.target, ff, listed)
+        assert allowed_paths(ff.target, ff, listed, extra=()) == before
+        assert allowed_paths(ff.target, ff, listed, extra=["lib/x.py"]) == before | {"lib/x.py"}
+
+
+def _tree_review(dir_: Path, fixture_repo, paths_content=None) -> Path:
+    """A review of the fixture repo's app/ directory only: assets/ is outside it."""
+    from review_viewer.gitdata import diff_findings, tree_target
+
+    repo, _, head = fixture_repo
+    dir_.mkdir()
+    out = dir_ / "findings.json"
+    out.write_text(diff_findings(tree_target(repo, head, "app")).model_dump_json(), encoding="utf-8")
+    if paths_content is not None:
+        _write(dir_, paths_content)
+    return out
+
+
+def _hop_into_assets(doc: dict) -> dict:
+    doc["paths"][0]["hops"][1]["path"] = "assets/logo.bin"
+    return doc
+
+
+def test_a_tree_review_opens_a_hop_file_outside_its_directory_only_from_an_accepted_paths_json(
+        start_live, fixture_repo, tmp_path):
+    _, _, head = fixture_repo
+    file_route = "/api/targets/{}/file?path={}"
+
+    plain = start_live(path=_tree_review(tmp_path / "plain", fixture_repo))
+    assert "assets/logo.bin" not in plain.viewer.targets[plain.slug].allowed
+    assert plain.request("GET", file_route.format(plain.slug, "assets/logo.bin"))[0] == 404
+
+    accepted = start_live(path=_tree_review(tmp_path / "accepted", fixture_repo, _hop_into_assets(paths_doc())))
+    state = accepted.viewer.targets[accepted.slug]
+    assert state.paths is not None and state.paths.commit == head
+    status, view = accepted.request("GET", file_route.format(accepted.slug, "assets/logo.bin"))
+    assert status == 200 and view["path"] == "assets/logo.bin" and view["binary"] is True
+    # Not changed, not cited and on no path: still refused.
+    assert accepted.request("GET", file_route.format(accepted.slug, "lib/elsewhere.py"))[0] == 404
+
+    stale = start_live(path=_tree_review(tmp_path / "stale", fixture_repo,
+                                         _set(_hop_into_assets(paths_doc()), commit=BASE)))
+    assert stale.viewer.targets[stale.slug].paths is None
+    assert "assets/logo.bin" not in stale.viewer.targets[stale.slug].allowed
+    assert stale.request("GET", file_route.format(stale.slug, "assets/logo.bin"))[0] == 404
+
+
+def test_when_git_cannot_list_the_repo_the_path_files_are_still_allowed(
+        start_live, findings_path, monkeypatch):
+    from review_viewer import server
+    from review_viewer.gitdata import GitError
+
+    def no_listing(target):
+        raise GitError("ls-tree failed")
+
+    monkeypatch.setattr(server, "repo_files", no_listing)
+    _write(findings_path.parent, paths_doc())
+    live = start_live()
+    state = live.viewer.targets[live.slug]
+    assert state.repo_files == []
+    assert FIXTURE_PATH_FILES <= state.allowed
+    assert "scripts/nightly.sh" not in state.allowed
+    assert "tests/e2e/test_run.py" not in state.allowed
+
+
+def test_a_rejected_paths_json_allows_no_file(start_live, findings_path, monkeypatch):
+    from review_viewer import server
+    from review_viewer.gitdata import GitError
+
+    def no_listing(target):
+        raise GitError("ls-tree failed")
+
+    monkeypatch.setattr(server, "repo_files", no_listing)
+    without = start_live().viewer.targets
+    _write(findings_path.parent, _set(paths_doc(), commit=HEAD.upper()))
+    with_stale = start_live().viewer.targets
+    (a,), (b,) = without.values(), with_stale.values()
+    assert b.allowed == a.allowed and "hooks/pre_commit.py" not in b.allowed
+
+
+def _row_numbers(view: dict) -> set[int]:
+    return {r["n"] for r in view["rows"] if r["n"] is not None}
+
+
+def test_file_view_keeps_extra_ranges_unfolded_in_a_large_file(fixture_repo, findings_path):
+    from review_viewer.gitdata import file_view
+    from review_viewer.models import load_findings
+
+    ff = load_findings(findings_path)
+    plain = file_view(ff.target, "app/big.py", ff).to_dict()
+    assert plain["truncated"] and 3000 not in _row_numbers(plain)
+    view = file_view(ff.target, "app/big.py", ff, extra_ranges=[(3000, 3001)]).to_dict()
+    assert view["truncated"]
+    assert set(range(2988, 3014)) <= _row_numbers(view)  # the range, and 12 lines either side
+    assert 2987 not in _row_numbers(view) and 3014 not in _row_numbers(view)
+    assert _row_numbers(plain) <= _row_numbers(view)
+
+
+def test_the_file_route_unfolds_the_hop_lines_of_an_accepted_paths_json(start_live, findings_path):
+    route = "/api/targets/{}/file?path=app/big.py"
+    plain = start_live()
+    status, before = plain.request("GET", route.format(plain.slug))
+    assert status == 200 and 3000 not in _row_numbers(before)
+
+    _write(findings_path.parent, paths_doc())
+    live = start_live()
+    status, view = live.request("GET", route.format(live.slug))
+    assert status == 200 and view["truncated"]
+    assert {1, 2000, 3000, 3001} <= _row_numbers(view)

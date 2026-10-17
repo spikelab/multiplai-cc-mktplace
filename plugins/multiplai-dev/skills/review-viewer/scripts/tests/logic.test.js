@@ -1250,6 +1250,191 @@ test("the Paths tab sits right after Checked, hidden until a paths.json is loade
   assert.match(appJs, /\$\("tab-paths"\)\.hidden = !paths;/);
 });
 
+// --- paths: cards (block 2) ---------------------------------------------------------
+
+const PATHS_SCHEMA = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "..", "lib", "code_facts",
+  "code_facts", "schema", "paths.v1.schema.json"), "utf8")).$defs;
+const pathById = (id) => pathsDoc.paths.find((p) => p.id === id);
+const F_A = "b561bd34ce", F_B = "7ca6553fd7", F_C = "cebb020bdb", F_D = "6cd45b4314";
+const countedFixture = () => L.countedFindings(L.shownFindings(findingsDoc.findings, findingsDoc.mode));
+const ids = (fs_) => fs_.map((f) => f.id);
+
+test("the fixture has a path with findings and a counted test, a broken one, a mocked-only one and a bare one", () => {
+  const p1 = pathById("p1"), p2 = pathById("p2"), p3 = pathById("p3"), p4 = pathById("p4");
+  assert.ok(findingsDoc.findings.some((f) => (f.paths || []).includes("p1")) && p1.tests.e2e.length);
+  assert.ok(p2.stops_at && p2.break_reason);
+  assert.ok(!p3.tests.e2e.length && p3.tests.mocks_hop_2.length);
+  assert.ok(!p4.tests.e2e.length && !p4.tests.mocks_hop_2.length);
+  assert.equal(pathsDoc.commit, findingsDoc.target.head_sha);
+  const known = new Set(pathsDoc.paths.map((p) => p.id));
+  for (const f of findingsDoc.findings) for (const id of f.paths || []) assert.ok(known.has(id), f.id + " names " + id);
+});
+
+test("counted findings: the shown ones minus the refuted ones", () => {
+  assert.equal(L.isRefuted({ status: "refuted" }), true);
+  assert.equal(L.isRefuted({ status: "confirmed" }), false);
+  // F-C is refuted, F-D is low-value (not shown), the gate-rejected one is not shown.
+  assert.deepEqual(ids(countedFixture()), [F_A, F_B]);
+  // A decided finding is still shown, so it still counts.
+  assert.deepEqual(ids(L.countedFindings([{ id: "x", status: "confirmed" }, { id: "y", status: "refuted" }])), ["x"]);
+});
+
+test("findings map to every path they lie on, in counted order", () => {
+  const byPath = L.findingsByPath(countedFixture());
+  assert.ok(byPath instanceof Map);
+  assert.deepEqual(ids(byPath.get("p1")), [F_A, F_B]);
+  assert.deepEqual(ids(byPath.get("p4")), [F_A]);
+  assert.equal(byPath.has("p6"), false, "F-C is refuted");
+  assert.equal(byPath.has("p2"), false, "F-D is not shown");
+  assert.deepEqual([...byPath.keys()].sort(), ["p1", "p4"]);
+  // No paths field, an empty list, and an id like __proto__ are all harmless.
+  const odd = L.findingsByPath([{ id: "a" }, { id: "b", paths: [] }, { id: "c", paths: ["__proto__"] }]);
+  assert.deepEqual([...odd.keys()], ["__proto__"]);
+});
+
+test("paths with counted findings sort first, each group in paths.json order", () => {
+  const byPath = L.findingsByPath(countedFixture());
+  assert.deepEqual(L.sortPaths(pathsDoc.paths, byPath).map((p) => p.id), ["p1", "p4", "p2", "p3", "p5", "p6"]);
+  const four = ["A", "B", "C", "D"].map((id) => ({ id: id }));
+  const some = new Map([["B", [{ id: "f1" }]], ["D", [{ id: "f2" }]]]);
+  assert.deepEqual(L.sortPaths(four, some).map((p) => p.id), ["B", "D", "A", "C"]);
+  assert.deepEqual(L.sortPaths(four, new Map()).map((p) => p.id), ["A", "B", "C", "D"]);
+  assert.deepEqual(L.sortPaths(four, new Map([["A", []]])).map((p) => p.id), ["A", "B", "C", "D"]);
+});
+
+test("the path helpers never change their inputs", () => {
+  const paths = structuredClone(pathsDoc.paths);
+  const findings = structuredClone(findingsDoc.findings);
+  const shown = L.shownFindings(findings);
+  const counted = L.countedFindings(shown);
+  const byPath = L.findingsByPath(counted);
+  const sorted = L.sortPaths(paths, byPath);
+  assert.notEqual(sorted, paths);
+  for (const p of paths) L.pathCardModel(p, byPath);
+  assert.deepEqual(paths, pathsDoc.paths);
+  assert.deepEqual(findings, findingsDoc.findings);
+  assert.deepEqual(ids(counted), [F_A, F_B]);
+});
+
+test("a card shows the entry, its kind and invokers, the handler and every hop as a link target", () => {
+  const byPath = L.findingsByPath(countedFixture());
+  const m = L.pathCardModel(pathById("p1"), byPath);
+  assert.equal(m.id, "p1");
+  assert.equal(m.domId, "path-card-p1");
+  assert.deepEqual(m.entry, { name: "shop checkout", kind: "CLI command", invokedBy: "a person at the command line",
+    file: "app/cli.py", line: 12 });
+  assert.deepEqual(m.alsoInvokedBy, [{ name: "scripts/nightly.sh", kind: "script", where: "scripts/nightly.sh:4" }]);
+  assert.deepEqual(m.handler, { symbol: "checkout", file: "app/checkout.py", line: 3 });
+  assert.deepEqual(m.hops, [
+    { n: 1, symbol: "total", file: "app/service.py", lineStart: 8, lineEnd: 9, label: "total at app/service.py:8-9" },
+    { n: 2, symbol: "points_for", file: "app/new_feature.py", lineStart: 4, lineEnd: 5,
+      label: "points_for at app/new_feature.py:4-5" },
+  ]);
+  assert.equal(m.broken, null);
+  assert.deepEqual(m.findings, [
+    { id: F_A, severity: "HIGH", claim: "total() now raises KeyError for line items without a qty field" },
+    { id: F_B, severity: "MEDIUM", claim: "refund() logs order[\"id\"], which may be absent" }]);
+  assert.deepEqual(m.tests.counted.map((t) => t.nodeId), ["tests/e2e/test_run.py::test_run_cli"]);
+  assert.deepEqual(m.tests.mocked.map((t) => t.nodeId), ["tests/e2e/test_run.py::test_run_cli_mocked"]);
+  assert.equal(m.tests.noE2e, false);
+  // A one-line hop has no range; a missing handler is null; no finding means an empty list.
+  const p5 = L.pathCardModel(pathById("p5"), byPath);
+  assert.equal(p5.handler, null);
+  assert.equal(p5.hops[0].label, "value_2000 at app/big.py:2000");
+  assert.deepEqual(p5.findings, []);
+  for (const p of pathsDoc.paths) {
+    for (const h of L.pathCardModel(p, byPath).hops) assert.ok(h.symbol, p.id + " hop " + h.n + " has no symbol");
+  }
+});
+
+test("a broken trace says after which hop it stopped and why, and keeps the hops it reached", () => {
+  const m = L.pathCardModel(pathById("p2"), new Map());
+  assert.equal(m.hops.length, 2);
+  assert.deepEqual(m.broken, { after: "refund", file: "app/service.py", line: 18, code: "unconnected_hop",
+    text: "the next call could not be connected",
+    marker: "trace broken after refund (app/service.py:18): the next call could not be connected" });
+  const cut = structuredClone(pathById("p1"));
+  cut.stops_at = 1;
+  cut.break_reason = "hop_limit";
+  const c = L.pathCardModel(cut, new Map());
+  assert.deepEqual(c.hops.map((h) => h.symbol), ["total"]);
+  assert.equal(c.broken.marker, "trace broken after total (app/service.py:8): the hop limit was reached");
+  assert.equal(L.breakReasonText("some_new_code"), "some_new_code");
+});
+
+test("e2e tests: counted ones, mocked ones not counted, and \"no e2e test\" when none counts", () => {
+  const lines = (id) => L.pathTestLines(L.pathCardModel(pathById(id), new Map()).tests);
+  assert.deepEqual(lines("p1"), [
+    { kind: "counted", text: "✓ tests/e2e/test_run.py::test_run_cli (cli_argv)" },
+    { kind: "mocked", text: "○ tests/e2e/test_run.py::test_run_cli_mocked — not counted (patched at tests/e2e/conftest.py:7)" }]);
+  assert.deepEqual(lines("p6"), [{ kind: "counted", text: "✓ tests/e2e/test_run.py::test_run_discount (cli_argv)" }]);
+  const p3 = L.pathCardModel(pathById("p3"), new Map());
+  assert.equal(p3.tests.noE2e, true);
+  assert.deepEqual(lines("p3"), [
+    { kind: "none", text: "no e2e test" },
+    { kind: "mocked", text: "○ tests/e2e/test_refund.py::test_refund_mocked — not counted (patched at tests/e2e/test_refund.py:9)" }]);
+  const p4 = L.pathCardModel(pathById("p4"), new Map());
+  assert.equal(p4.tests.noE2e, true);
+  assert.deepEqual([p4.tests.counted, p4.tests.mocked], [[], []]);
+  assert.deepEqual(lines("p4"), [{ kind: "none", text: "no e2e test" }]);
+  for (const id of ["p1", "p2", "p5", "p6"]) assert.equal(L.hasCountedE2e(pathById(id)), true, id);
+  for (const id of ["p3", "p4"]) assert.equal(L.hasCountedE2e(pathById(id)), false, id);
+});
+
+test("every entry kind and break reason paths.v1 allows has words of its own", () => {
+  const kinds = PATHS_SCHEMA.PathEntry.properties.kind.enum;
+  assert.ok(kinds.includes("model") && kinds.includes("argparse"));
+  for (const k of kinds.concat(PATHS_SCHEMA.Invoker.properties.kind.enum)) {
+    assert.ok(Object.prototype.hasOwnProperty.call(L.KIND_LABELS, k), "kind " + k + " has no label");
+    assert.equal(L.kindLabel(k), L.KIND_LABELS[k]);
+  }
+  assert.equal(L.kindLabel("some_new_kind"), "entry point");
+  assert.equal(L.kindLabel("argparse"), "CLI command");
+  assert.equal(L.kindLabel("skill_command"), "skill command");
+  assert.equal(L.kindLabel("hook"), "hook");
+  assert.equal(L.kindLabel("script"), "script");
+  assert.equal(L.kindLabel("model"), "entry point");
+  const reasons = PATHS_SCHEMA.TracedPath.properties.break_reason.anyOf.find((a) => a.enum).enum;
+  for (const r of reasons) {
+    assert.ok(Object.prototype.hasOwnProperty.call(L.BREAK_REASONS, r), "break reason " + r + " has no text");
+    assert.equal(L.breakReasonText(r), L.BREAK_REASONS[r]);
+  }
+  assert.equal(L.breakReasonText("base_side_citation"), "a hop cited the old code, not the change");
+});
+
+test("a card model holds no field the panel must not show, and keeps markup as text", () => {
+  const forbidden = new Set(["dropped", "diagnostics", "fallback", "scoped", "cap", "changed_lines_covered",
+    "changedLinesCovered", "invocation_line", "quote"]);
+  const walk = (v, where) => {
+    if (Array.isArray(v)) v.forEach((x, i) => walk(x, where + "[" + i + "]"));
+    else if (v && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) {
+        assert.ok(!forbidden.has(k), where + "." + k);
+        walk(x, where + "." + k);
+      }
+    }
+  };
+  for (const p of pathsDoc.paths) walk(L.pathCardModel(p, new Map()), p.id);
+  const evil = structuredClone(pathById("p1"));
+  evil.entry.name = "<script>alert(1)</script>";
+  evil.entry.invoked_by = "<b>x</b>";
+  const m = L.pathCardModel(evil, new Map());
+  assert.equal(m.entry.name, "<script>alert(1)</script>");
+  assert.equal(m.entry.invokedBy, "<b>x</b>");
+});
+
+test("app.js renders the Paths panel from the tested helpers, with no innerHTML", () => {
+  const section = (appJs.match(/\/\/ --- paths ---[\s\S]*?(?=\n  \/\/ --- )/) || [""])[0];
+  assert.ok(section.length > 200, "app.js has a // --- paths --- section");
+  assert.doesNotMatch(section, /innerHTML/);
+  assert.match(section, /L\.countedFindings\(state\.shown\)/);
+  assert.match(section, /L\.sortPaths\(/);
+  assert.match(section, /L\.pathCardModel\(/);
+  assert.match(section, /L\.pathTestLines\(/);
+  assert.match(appJs, /renderPaths\(\);/);
+  assert.equal(L.helpSection("paths"), "help-paths");
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {
