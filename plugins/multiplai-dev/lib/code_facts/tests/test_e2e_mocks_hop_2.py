@@ -380,6 +380,177 @@ def test_a_conftest_at_the_snapshot_root_counts(tmp_path):
     assert mocked(out["open"]) == [("tests/test_r.py::test_x", "conftest.py", line_of(conftest, "setattr"))]
 
 
+AUTOUSE_CONFTEST = src('''
+    import pytest
+
+
+    @pytest.fixture(autouse=True)
+    def no_run(monkeypatch):
+        monkeypatch.setattr("{target}", lambda args: 0)
+    ''')
+
+PLAIN_NO_RUN = src('''
+    import pytest
+
+    from pkg.__main__ import main
+
+
+    @pytest.fixture
+    def no_run():
+        return None
+
+
+    def test_x():
+        main(["open"])
+    ''')
+
+
+@pytest.mark.parametrize("target", ["pkg.core.run", "pkg.cli.handle_open"])
+def test_a_plain_module_fixture_hides_an_autouse_conftest_fixture_of_the_same_name(tmp_path, target):
+    # Only the module's no_run runs, so the conftest patch neither moves nor drops test_x. test_y,
+    # beside it, still gets the conftest patch: moved for hop 2, not listed for the handler.
+    plain = "from pkg.__main__ import main\n\n\ndef test_y():\n    main([\"open\"])\n"
+    conftest = AUTOUSE_CONFTEST.format(target=target)
+    out = listing(snapshot(tmp_path, {"tests/conftest.py": conftest, "tests/test_hidden.py": PLAIN_NO_RUN,
+                                      "tests/test_seen.py": plain}))
+    assert e2e_ids(out["open"]) == ["tests/test_hidden.py::test_x"]
+    seen = [("tests/test_seen.py::test_y", "tests/conftest.py", line_of(conftest, "monkeypatch.setattr"))]
+    assert mocked(out["open"]) == (seen if target == "pkg.core.run" else [])
+
+
+def test_a_module_fixture_hides_a_conftest_fixture_of_the_same_name(tmp_path):
+    hiding = src('''
+        import pytest
+
+        from pkg.__main__ import main
+
+
+        @pytest.fixture
+        def fake_run():
+            return None
+
+
+        def test_x(fake_run):
+            main(["open"])
+        ''')
+    seen = "from pkg.__main__ import main\n\n\ndef test_y(fake_run):\n    main([\"open\"])\n"
+    out = listing(snapshot(tmp_path, {"tests/conftest.py": CONFTEST, "tests/test_hidden.py": hiding,
+                                      "tests/test_seen.py": seen}))
+    assert e2e_ids(out["open"]) == ["tests/test_hidden.py::test_x"]
+    assert mocked(out["open"]) == [("tests/test_seen.py::test_y", "tests/conftest.py",
+                                    line_of(CONFTEST, "monkeypatch.setattr"))]
+
+
+def test_a_fixture_requesting_its_own_name_gets_the_one_it_hides(tmp_path):
+    body = src('''
+        import pytest
+
+        from pkg.__main__ import main
+
+
+        @pytest.fixture
+        def fake_run(fake_run):
+            return fake_run
+
+
+        def test_x(fake_run):
+            main(["open"])
+        ''')
+    out = listing(snapshot(tmp_path, {"tests/conftest.py": CONFTEST, "tests/test_s.py": body}))
+    assert mocked(out["open"]) == [("tests/test_s.py::test_x", "tests/conftest.py",
+                                    line_of(CONFTEST, "monkeypatch.setattr"))]
+    assert out["open"].e2e == []
+
+
+def test_a_fixture_is_requested_by_its_name_argument_not_its_function_name(tmp_path):
+    body = IMPORTS + src('''
+        @pytest.fixture(name="quiet")
+        def _quiet_fixture():
+            with mock.patch("pkg.core.run"):
+                yield
+
+
+        def test_by_name(quiet):
+            main(["open"])
+
+
+        def test_by_function_name(_quiet_fixture):
+            main(["open"])
+        ''')
+    out = listing(snapshot(tmp_path, {"tests/test_n.py": body}))
+    assert mocked(out["open"]) == [("tests/test_n.py::test_by_name", "tests/test_n.py",
+                                    line_of(body, "mock.patch"))]
+    assert e2e_ids(out["open"]) == ["tests/test_n.py::test_by_function_name"]
+
+
+def test_a_mock_decorator_given_a_replacement_fills_no_parameter(tmp_path):
+    # fake_run is the conftest fixture unless a decorator passes a mock into that parameter.
+    body = IMPORTS + src('''
+        @mock.patch("pkg.core.log", lambda m: None)
+        def test_positional_new(fake_run):
+            main(["open"])
+
+
+        @mock.patch("pkg.core.log", new=lambda m: None)
+        def test_keyword_new(fake_run):
+            main(["open"])
+
+
+        @mock.patch.object(core, "log", lambda m: None)
+        def test_object_new(fake_run):
+            main(["open"])
+
+
+        @mock.patch("pkg.core.log")
+        def test_mock_passed(fake_run):
+            main(["open"])
+
+
+        @mock.patch.object(core, "log")
+        def test_object_mock_passed(fake_run):
+            main(["open"])
+        ''')
+    out = listing(snapshot(tmp_path, {"tests/conftest.py": CONFTEST, "tests/test_d.py": body}))
+    patch_line = line_of(CONFTEST, "monkeypatch.setattr")
+    assert mocked(out["open"]) == [(f"tests/test_d.py::{name}", "tests/conftest.py", patch_line)
+                                   for name in ("test_positional_new", "test_keyword_new", "test_object_new")]
+    assert e2e_ids(out["open"]) == ["tests/test_d.py::test_mock_passed", "tests/test_d.py::test_object_mock_passed"]
+
+
+def test_test_class_methods_skip_self_and_apply_class_decorators(tmp_path):
+    # conftest's fake_log patches hop 2, so a parameter wrongly read as a request would move the test.
+    conftest = src('''
+        import pytest
+
+
+        @pytest.fixture
+        def fake_log(monkeypatch):
+            monkeypatch.setattr("pkg.core.run", lambda args: 0)
+        ''')
+    body = IMPORTS + src('''
+        @mock.patch("pkg.core.log")
+        class TestLogged:
+            def test_m(self, fake_log):
+                main(["open"])
+
+
+        @mock.patch("pkg.core.run")
+        class TestRunPatched:
+            def test_n(self, fake):
+                main(["open"])
+
+
+        class TestPlain:
+            def test_o(self, fake_log):
+                main(["open"])
+        ''')
+    out = listing(snapshot(tmp_path, {"tests/conftest.py": conftest, "tests/test_c.py": body}))
+    assert e2e_ids(out["open"]) == ["tests/test_c.py::TestLogged::test_m"]
+    assert mocked(out["open"]) == [
+        ("tests/test_c.py::TestRunPatched::test_n", "tests/test_c.py", line_of(body, '@mock.patch("pkg.core.run")')),
+        ("tests/test_c.py::TestPlain::test_o", "tests/conftest.py", line_of(conftest, "monkeypatch.setattr"))]
+
+
 # --- handler-patch exclusion (D15) ---------------------------------------------------------
 
 

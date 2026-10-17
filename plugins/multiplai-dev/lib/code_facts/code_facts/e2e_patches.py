@@ -105,8 +105,9 @@ class PatchScan:
         mocked = sum(self._fills_parameter(test_file, d) for d in decorators)
         requested = requested_fixtures(func, skip=mocked + (owner is not None))
         chain = [self._fixtures_of(f) for f in _fixture_files(test_file)]
-        used = [f for name in requested if (f := _lookup(chain, name)) is not None]
-        used += [f for level in chain for f in level.values() if f.autouse]
+        # As in pytest, an autouse name runs its nearest definition, which may hide the autouse one.
+        autouse = sorted({f.name for level in chain for f in level.values() if f.autouse})
+        used = [f for name in (*requested, *autouse) if (f := _lookup(chain, name)) is not None]
         found |= _fixture_patches(chain, used)
         return tuple(sorted(found))
 
