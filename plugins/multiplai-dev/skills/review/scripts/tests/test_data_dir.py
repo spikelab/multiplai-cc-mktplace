@@ -491,6 +491,7 @@ import asyncio, sys
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
+import paths_stub
 from conftest import high_finding
 from review_pipeline import ledger, sdk
 from review_pipeline.__main__ import main
@@ -510,6 +511,7 @@ async def fake(prompt, schema, *, budget_label="", **kwargs):
 
 
 sdk.agent_call_structured = fake
+paths_stub.install()
 sys.exit(main(sys.argv[3:]))
 """
 
@@ -1175,6 +1177,7 @@ import os, shutil, sys
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
+import paths_stub
 from review_pipeline import ledger, orchestrator, rounds, sdk, target
 from test_orchestrator import FakeAgents
 
@@ -1186,6 +1189,7 @@ base, head = sys.argv[4], sys.argv[5]
 target._pr_view = lambda repo, n: {"headRefOid": head, "baseRefOid": base, "headRefName": "feature",
                                    "baseRefName": "main", "title": "t", "body": ""}
 sdk.agent_call_structured = FakeAgents()
+paths_stub.install()
 where, nth = sys.argv[3].split(":")
 calls = [0]
 
