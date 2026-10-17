@@ -494,7 +494,7 @@ def _function(index: PyIndex, handler: Handler | None) -> Handler | None:
     """`handler` when it is a function `def`; None for a class or nothing."""
     if handler is None:
         return None
-    found = next((d for d in index.defs(handler.path) if d.start == handler.line and d.name == handler.symbol), None)
+    found = index.handler_def(handler)
     return handler if found is not None and not found.is_class else None
 
 

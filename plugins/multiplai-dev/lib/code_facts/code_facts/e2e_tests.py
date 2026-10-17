@@ -190,7 +190,7 @@ def match_invocations(e2e_index: E2EIndex, entry: Entry, *, root: Path) -> list[
     bypassed = _bypassed_by_patching(index, entry)
     records = []
     for test in e2e_index.tests:
-        if any(s.named_by(index, p.target) for p in test.patches for s in bypassed):
+        if any(symbol.patched_by(index, test.patches) for symbol in bypassed):
             continue
         hits = [i for i in test.invocations if any(t.reached_by(i) for t in targets)]
         if hits:
@@ -234,8 +234,7 @@ def _split_on_hop_2(e2e_index: E2EIndex, records: Sequence[E2ETest], hops: Seque
     e2e: list[E2ETest] = []
     mocked: list[MockedE2ETest] = []
     for record in records:
-        patch = None if hop_2 is None else next(
-            (p for p in e2e_index.candidate(record.node_id).patches if hop_2.named_by(index, p.target)), None)
+        patch = None if hop_2 is None else hop_2.patched_by(index, e2e_index.candidate(record.node_id).patches)
         if patch is None:
             e2e.append(record)
         else:
@@ -248,16 +247,24 @@ def _hop_2_symbol(index: PyIndex, hops: Sequence[PathHop]) -> Symbol | None:
     if len(hops) < 2:
         return None
     first, second = hops[0], hops[1]
-    name = second.symbol_called.rpartition(".")[2]
-    cited = [d for d in index.defs(second.path) if d.name == name
-             and (second.line_start <= d.start <= second.line_end or d.start <= second.line_start <= d.end)]
-    if not cited:
+    cited = _cited_def(index, second)
+    if cited is None:
         return None
     # Lines in one scope see the same names: one lookup per innermost definition.
     lookups: dict[Def | None, int] = {}
     for line in range(first.line_start, first.line_end + 1):
         lookups.setdefault(index.enclosing_def(first.path, line), line)
-    return Symbol.of(cited[-1], second.path, ((first.path, line) for line in lookups.values()))
+    return Symbol.of(cited, second.path, ((first.path, line) for line in lookups.values()))
+
+
+def _cited_def(index: PyIndex, hop: PathHop) -> Def | None:
+    """The last `def` or `class`, in source order, named like the last part of the hop's called symbol and
+    either starting within the hop's cited lines or spanning their first line; None when there is none.
+    """
+    name = hop.symbol_called.rpartition(".")[2]
+    cited = [d for d in index.defs(hop.path) if d.name == name
+             and (hop.line_start <= d.start <= hop.line_end or d.start <= hop.line_start <= d.end)]
+    return cited[-1] if cited else None
 
 
 def _bypassed_by_patching(index: PyIndex, entry: Entry) -> list[Symbol]:
@@ -268,8 +275,7 @@ def _bypassed_by_patching(index: PyIndex, entry: Entry) -> list[Symbol]:
     symbols = []
     handler = entry.handler
     if handler is not None and handler.symbol is not None:
-        definition = next((d for d in index.defs(handler.path) if d.start == handler.line
-                           and d.name == handler.symbol), None)
+        definition = index.handler_def(handler)
         if definition is not None:
             symbols.append(Symbol.of(definition, handler.path, edge_lines))
     for path, line in edge_lines:

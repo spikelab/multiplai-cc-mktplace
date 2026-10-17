@@ -180,6 +180,11 @@ class PyIndex:
         info = self._files.get(path)
         return list(info.defs) if info else []
 
+    def handler_def(self, handler: Handler) -> Def | None:
+        """The `def` or `class` `handler` names, matched by line and name; None when `handler` names neither."""
+        return next((d for d in self.defs(handler.path) if d.start == handler.line and d.name == handler.symbol),
+                    None)
+
     def files_named(self, name: str) -> list[str]:
         """Every walked file of the snapshot, of any type, whose base name is `name`, in path order."""
         return sorted(f for f in self._all_files if posixpath.basename(f) == name)

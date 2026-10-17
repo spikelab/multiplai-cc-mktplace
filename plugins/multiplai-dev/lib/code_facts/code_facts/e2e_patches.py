@@ -77,6 +77,10 @@ class Symbol:
                 return True
         return False
 
+    def patched_by(self, index: PyIndex, patches: Iterable[Patch]) -> Patch | None:
+        """The first of `patches` that replaces this symbol (the earliest, for sorted patches); None if none does."""
+        return next((p for p in patches if self.named_by(index, p.target)), None)
+
 
 @dataclass(frozen=True)
 class _Fixture:
