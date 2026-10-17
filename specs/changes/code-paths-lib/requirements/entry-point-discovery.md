@@ -265,6 +265,8 @@ The known edge goes from the command's line to one of two targets:
 
 The entry's `handler` is the subcommand's handler in the first case, and the `main_module` handler of the target file in the second, so a command merges with the entry it runs.
 
+A `python -m` command that cannot be tokenised (an unclosed quote) SHALL NOT be emitted, and a diagnostic with reason `unresolved_target` SHALL be recorded at its line.
+
 #### Scenario: Module in scripts directory
 - **WHEN** `skills/pr/SKILL.md` contains a `bash` block with `python3 -m pr_pipeline open --draft`
 - **AND** `skills/pr/scripts/pr_pipeline/__main__.py` exists
@@ -313,9 +315,9 @@ The target SHALL then be resolved through shell launchers:
 1. Leading launcher tokens are stripped while they are `sh`, `bash`, `/bin/sh`, `/bin/bash`, `exec`, `env`, an environment assignment, a `.sh` file that exists in the snapshot, or `uv run` with its flags.
 2. `python[3] -m X`, or `-m X` left after a launcher, uses the same rules as `SKILL.md` commands.
 3. Otherwise the first `.py` token that exists resolves as a `main_module` script: its location is the `if __name__ == "__main__":` line or line 1, and its handler is the `main_module` handler.
-4. Only when the command names neither a module nor a `.py` file does the hook target the stripped launcher, or else the first existing file it names, at line 1 with `symbol: null`.
+4. Only when no module or `.py` target exists (the command names none, or the one it names is missing) does the hook target the stripped launcher, or else the first existing file it names, at line 1 with `symbol: null`.
 
-A `python -m` module or `.py` file that does not exist is a missing target. Discovery SHALL add a known edge from the command's line to the resolved target.
+When none of these exists, or the command cannot be tokenised, the target is missing. Discovery SHALL add a known edge from the command's line to the resolved target.
 
 #### Scenario: Plugin hook running a Python script
 - **WHEN** `plugin/hooks/hooks.json` has a `PreToolUse` hook with matcher `Bash` and command `python3 ${CLAUDE_PLUGIN_ROOT}/hooks/guard.py`
@@ -334,6 +336,12 @@ A `python -m` module or `.py` file that does not exist is a missing target. Disc
 - **WHEN** a hook runs `sh ${CLAUDE_PLUGIN_ROOT}/hooks/run.sh --warm`
 - **THEN** its known edge targets line 1 of `plugin/hooks/run.sh`
 - **AND** its handler is `{path: "plugin/hooks/run.sh", line: 1, symbol: null}`
+
+#### Scenario: Missing script behind a launcher
+- **WHEN** a hook runs `sh ${CLAUDE_PLUGIN_ROOT}/hooks/run.sh ${CLAUDE_PLUGIN_ROOT}/scripts/gone.py`
+- **AND** `plugin/hooks/run.sh` exists but `gone.py` does not
+- **THEN** its known edge targets line 1 of `plugin/hooks/run.sh`
+- **AND** no diagnostic is recorded
 
 #### Scenario: Settings file hook
 - **WHEN** `.claude/settings.local.json` defines a `Stop` hook running `python3 "$CLAUDE_PROJECT_DIR/scripts/stop.py"`

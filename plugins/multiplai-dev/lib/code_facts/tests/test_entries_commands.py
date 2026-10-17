@@ -189,6 +189,39 @@ class TestSkillCommands:
         assert all(i.kind != "skill_command" for e in disc.entries for i in e.also_invoked_by)
         assert disc.diagnostics == []
 
+    @pytest.mark.parametrize(("block", "invocation"), [
+        (fenced("console", "$ python3 -m pr_pipeline open"), "python3 -m pr_pipeline open"),
+        ("~~~bash\n```\npython3 -m pr_pipeline open\n~~~\n", "python3 -m pr_pipeline open"),
+    ])
+    def test_console_prompts_and_tilde_fences(self, tmp_path, block, invocation):
+        text = skill_md(block)
+        (e,) = of_kind(discover(pr_tree(tmp_path, text)), "skill_command")
+        assert (e.name, e.invocation, e.location.line) == (
+            "pr: pr_pipeline open", invocation, line_of(text, "python3 -m pr_pipeline open"))
+
+    def test_a_backtick_line_with_a_backtick_in_its_info_string_opens_no_fence(self, tmp_path):
+        text = skill_md("```sh```\n", fenced("python", "python -m pr_pipeline open"))
+        disc = discover(pr_tree(tmp_path, text))
+        assert of_kind(disc, "skill_command") == []
+        assert disc.diagnostics == []
+
+    @pytest.mark.parametrize(("command", "name"), [
+        ("python -m pr_pipeline --help 2>&1", "pr: pr_pipeline"),
+        ("python3 -m pr_pipeline open 2>/dev/null", "pr: pr_pipeline open"),
+        ("python3 -m pr_pipeline open --draft 1> out.txt", "pr: pr_pipeline open"),
+    ])
+    def test_redirection_file_descriptors_are_not_positionals(self, tmp_path, command, name):
+        text = skill_md(fenced("bash", command))
+        e = holder(discover(pr_tree(tmp_path, text)), "skill_command", name)
+        assert invoker_location(e, "skill_command", name) == (PR_SKILL, line_of(text, command))
+
+    def test_an_untokenisable_python_m_command_is_diagnosed_and_other_lines_are_not(self, tmp_path):
+        text = skill_md(fenced("bash", 'echo "it\'s\npython3 -m pr_pipeline open "unclosed'))
+        disc = discover(pr_tree(tmp_path, text))
+        assert of_kind(disc, "skill_command") == []
+        assert [(d.path, d.line, d.reason) for d in disc.diagnostics] == [
+            (PR_SKILL, line_of(text, "python3 -m pr_pipeline"), "unresolved_target")]
+
     def test_unresolvable_module_is_diagnosed_at_its_line_and_not_emitted(self, tmp_path):
         text = skill_md(fenced("bash", "echo start\npython -m missing_mod run"))
         disc = discover(pr_tree(tmp_path, text))
@@ -339,6 +372,37 @@ class TestHookCommands:
         assert (e.name, e.location.line) == ("Setup", command_line(text, warm))
         assert handler(e) == ("plugin/hooks/run.sh", 1, None)
         assert edges(e) == {("plugin/hooks/hooks.json", e.location.line, "plugin/hooks/run.sh", 1)}
+
+    @pytest.mark.parametrize("rest", ['"${CLAUDE_PLUGIN_ROOT}/scripts/gone.py"', "-m missing_mod run"])
+    def test_a_missing_python_target_behind_a_launcher_targets_the_launcher(self, tmp_path, rest):
+        command = f"{RUN} {rest}"
+        text = hooks_doc(("Stop", None, [command]))
+        root = make_tree(tmp_path / "snap", {"plugin/.claude-plugin/plugin.json": PLUGIN_JSON,
+                                             "plugin/hooks/hooks.json": text, "plugin/hooks/run.sh": RUN_SH})
+        disc = discover(root)
+        (e,) = of_kind(disc, "hook_command")
+        assert handler(e) == ("plugin/hooks/run.sh", 1, None)
+        assert edges(e) == {("plugin/hooks/hooks.json", command_line(text, command), "plugin/hooks/run.sh", 1)}
+        assert disc.diagnostics == []
+
+    def test_a_launcher_in_a_pruned_directory_is_not_a_target(self, tmp_path):
+        command = 'sh "${CLAUDE_PLUGIN_ROOT}/build/run.sh" --warm'
+        text = hooks_doc(("Setup", None, [command]))
+        root = make_tree(tmp_path / "snap", {"plugin/.claude-plugin/plugin.json": PLUGIN_JSON,
+                                             "plugin/hooks/hooks.json": text, "plugin/build/run.sh": RUN_SH})
+        disc = discover(root)
+        assert of_kind(disc, "hook_command") == []
+        assert diags(disc, "unresolved_target") == [("plugin/hooks/hooks.json", command_line(text, command))]
+
+    def test_an_untokenisable_hook_command_is_diagnosed_at_its_line(self, tmp_path):
+        command = 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/a.py'
+        text = hooks_doc(("Stop", None, [command]))
+        root = make_tree(tmp_path / "snap", {"plugin/.claude-plugin/plugin.json": PLUGIN_JSON,
+                                             "plugin/hooks/hooks.json": text,
+                                             "plugin/scripts/a.py": GUARDLESS_SCRIPT})
+        disc = discover(root)
+        assert of_kind(disc, "hook_command") == []
+        assert diags(disc, "unresolved_target") == [("plugin/hooks/hooks.json", command_line(text, command))]
 
     def test_identical_command_strings_are_assigned_lines_in_document_order(self, tmp_path):
         warm = f"{RUN} --warm"
@@ -551,6 +615,19 @@ class TestCommandTokens:
     def test_a_sh_file_that_does_not_exist_is_kept(self, plugin):
         command = 'sh "${CLAUDE_PLUGIN_ROOT}/hooks/nope.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/a.py"'
         assert tokens(command, plugin) == ["plugin/hooks/nope.sh", "plugin/scripts/a.py"]
+
+    def test_a_sh_file_in_a_pruned_directory_is_kept(self, plugin):
+        make_tree(plugin, {"plugin/node_modules/x/run.sh": RUN_SH})
+        command = 'sh "${CLAUDE_PLUGIN_ROOT}/node_modules/x/run.sh" --warm'
+        assert tokens(command, plugin) == ["plugin/node_modules/x/run.sh", "--warm"]
+
+    @pytest.mark.parametrize(("command", "expected"), [
+        ("python3 -m pkg --help 2>&1", ["python3", "-m", "pkg", "--help"]),
+        ("python3 -m pkg run 2>/dev/null | tee log", ["python3", "-m", "pkg", "run"]),
+        ("python3 -m pkg run 10>&-", ["python3", "-m", "pkg", "run"]),
+    ])
+    def test_redirection_file_descriptors_are_dropped(self, plugin, command, expected):
+        assert tokens(command, plugin) == expected
 
     def test_non_launcher_first_token_is_left_alone(self, plugin):
         assert tokens("python3 -m pkg.hook", plugin) == ["python3", "-m", "pkg.hook"]

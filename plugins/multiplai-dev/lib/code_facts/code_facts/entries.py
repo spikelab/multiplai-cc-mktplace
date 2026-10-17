@@ -84,8 +84,8 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field
 
-from .commands import (CommandLine, first_positional, hook_commands, is_hooks_file, module_search_roots,
-                       parse_command_line, python_module, resolve_python_m, shell_commands)
+from .commands import (CommandLine, first_positional, hook_commands, is_hooks_file, looks_like_python_m,
+                       module_search_roots, parse_command_line, python_module, resolve_python_m, shell_commands)
 from .paths import (KIND_RANK, DiscoveredKind, Handler, Invoker, Location, PathDiagnostic, PathEntry, Seed,
                     _Strict, normalise_rel_path)
 from .pyindex import PyIndex
@@ -1051,8 +1051,11 @@ def _skill_command_entries(root: Path, index: PyIndex, subcommands: _Subcommands
     diagnostics: list[Diagnostic] = []
     for line, invocation in shell_commands(text):
         try:
-            command = parse_command_line(invocation, source_file=path, root=root)
-        except ValueError:
+            command = parse_command_line(invocation, source_file=path, root=root, index=index)
+        except ValueError as e:
+            if looks_like_python_m(invocation):
+                diagnostics.append(Diagnostic(path=path, line=line, reason="unresolved_target",
+                                              detail=f"{invocation!r} cannot be tokenised: {e}"))
             continue
         module = python_module(command.tokens)
         if module is None:
@@ -1078,7 +1081,7 @@ def _hook_entries(root: Path, index: PyIndex, subcommands: _Subcommands, path: s
     diagnostics: list[Diagnostic] = []
     for hook in hooks:
         try:
-            command = parse_command_line(hook.command, source_file=path, root=root)
+            command = parse_command_line(hook.command, source_file=path, root=root, index=index)
         except ValueError as e:
             target: _CommandTarget | str = f"the command cannot be tokenised: {e}"
         else:
@@ -1093,22 +1096,28 @@ def _hook_entries(root: Path, index: PyIndex, subcommands: _Subcommands, path: s
 
 def _hook_target(index: PyIndex, subcommands: _Subcommands, command: CommandLine,
                  source_file: str) -> _CommandTarget | str:
-    """What a hook runs past its launchers: a `python -m` module, else the first `.py` it names, else the
-    launcher or file it names, at line 1. The reason it has no target, when none of them exists.
+    """What a hook runs past its launchers: its `python -m` module, else the first existing `.py` it names.
+    When neither exists, the stripped launcher or else the first existing file it names, at line 1. The
+    reason it has no target, when none of them exists.
     """
     module = python_module(command.tokens)
+    missing: str | None = None
     if module is not None:
-        return _module_target(index, subcommands, command, source_file, *module)
-    scripts = [command.snapshot_path(token) for token in command.tokens if token.endswith(".py")]
-    if scripts:
+        target = _module_target(index, subcommands, command, source_file, *module)
+        if isinstance(target, _CommandTarget):
+            return target
+        missing = target
+    else:
+        scripts = [command.snapshot_path(token) for token in command.tokens if token.endswith(".py")]
         script = next((s for s in scripts if s is not None and index.has_file(s)), None)
-        if script is None:
-            return "no script it names exists in the snapshot"
-        return _CommandTarget(*main_module_handler(index, script))
+        if script is not None:
+            return _CommandTarget(*main_module_handler(index, script))
+        if scripts:
+            missing = "no script it names exists in the snapshot"
     named = (command.snapshot_path(token) for token in command.tokens)
     file = command.launcher or next((f for f in named if f and index.has_file(f)), None)
     if file is None:
-        return "it runs no file of the snapshot"
+        return missing or "it runs no file of the snapshot"
     return _CommandTarget.at_file(file)
 
 

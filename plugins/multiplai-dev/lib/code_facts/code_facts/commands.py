@@ -14,6 +14,8 @@ and leading launchers are stripped: environment assignments, `sh`, `bash`,
 `/bin/sh`, `/bin/bash`, `exec`, `env`, an existing `.sh` file, and `uv run` with
 its flags. A relative path is relative to the repository root, the directory a
 hook or skill command runs from, unless a `cd` or `uv run --directory` moved it.
+The repository root, and whether a file exists, come from the snapshot's
+`PyIndex`, so a file in a pruned directory is never a launcher.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from .pyindex import PyIndex, is_repo_dir
+from .pyindex import PyIndex
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +52,9 @@ _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _VARIABLE = re.compile(r"\$\{(CLAUDE_[A-Z_]+)\}|\$(CLAUDE_[A-Z_]+)(?![A-Za-z0-9_])")
 _MODULE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 _OPERATOR_CHARS = frozenset("();<>|&")
+_FD_NUMBER = re.compile(r"\d+")
+# Whether a command line that failed to tokenise was meant to run `python -m`.
+_PYTHON_M_TEXT = re.compile(r"(?:^|[\s/])(?:python(?:3(?:\.\d+)?)?|uv\s+run)\s(?:.*\s)?-m\s")
 _FENCE_OPEN = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 _FENCE_CLOSE = re.compile(r"^\s*(`{3,}|~{3,})\s*$")
 _JSON_STRING = re.compile(r'"(?:[^"\\\n]|\\.)*"')
@@ -78,35 +83,51 @@ class CommandLine:
 def command_tokens(command: str, *, source_file: str, root: Path) -> list[str]:
     """The words of `command` as run from `source_file`, variables expanded and launchers stripped.
 
+    Indexes the snapshot on every call; a caller holding a `PyIndex` uses `parse_command_line`.
     Raises ValueError when the command cannot be tokenised (an unclosed quote).
     """
-    return list(parse_command_line(command, source_file=source_file, root=root).tokens)
+    index = PyIndex.build(root)
+    return list(parse_command_line(command, source_file=source_file, root=root, index=index).tokens)
 
 
-def parse_command_line(command: str, *, source_file: str, root: Path) -> CommandLine:
-    """`command` as written in `source_file`, a snapshot-relative path. Raises ValueError as `command_tokens`."""
+def parse_command_line(command: str, *, source_file: str, root: Path, index: PyIndex) -> CommandLine:
+    """`command` as written in `source_file`, a snapshot-relative path, in the snapshot `index` covers.
+
+    Raises ValueError as `command_tokens`.
+    """
     root = Path(root).absolute()
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
-    variables = _variables(root, source_file)
+    variables = _variables(root, source_file, index)
     words = [_VARIABLE.sub(lambda m: variables.get(m[1] or m[2], m[0]), word) for word in lexer]
-    cwd = root / _project_dir(root, source_file)
+    cwd = root / index.repo_root(source_file)
     moved: list[Path] = []
     for segment, operator in _segments(words):
         if len(segment) == 2 and segment[0] == "cd" and operator == "&&":
             cwd = cwd / segment[1]
             moved.append(cwd)
             continue
-        return _strip_launchers(segment, cwd, moved, root)
+        return _strip_launchers(segment, cwd, moved, root, index)
     return CommandLine((), (), None, cwd, root)
 
 
+def looks_like_python_m(command: str) -> bool:
+    """Whether the raw text of a command that could not be tokenised runs `python -m` or `uv run -m`."""
+    return _PYTHON_M_TEXT.search(command) is not None
+
+
 def _segments(words: list[str]) -> list[tuple[list[str], str | None]]:
-    """The words between shell operators, each with the operator that ends it."""
+    """The words between shell operators, each with the operator that ends it.
+
+    A number just before a redirection is its file descriptor (`2>&1`), not a word
+    of the command; the lexer has already lost the spacing that would tell `2 >` apart.
+    """
     segments: list[tuple[list[str], str | None]] = []
     current: list[str] = []
     for word in words:
         if word and set(word) <= _OPERATOR_CHARS:
+            if word[0] in "<>" and current and _FD_NUMBER.fullmatch(current[-1]):
+                current.pop()
             segments.append((current, word))
             current = []
         else:
@@ -115,7 +136,7 @@ def _segments(words: list[str]) -> list[tuple[list[str], str | None]]:
     return segments
 
 
-def _strip_launchers(words: list[str], cwd: Path, moved: list[Path], root: Path) -> CommandLine:
+def _strip_launchers(words: list[str], cwd: Path, moved: list[Path], root: Path, index: PyIndex) -> CommandLine:
     """The command left once the leading assignments, launchers and `uv run` options of `words` are stripped."""
     pythonpath: list[Path] = []
     launcher = None
@@ -131,7 +152,7 @@ def _strip_launchers(words: list[str], cwd: Path, moved: list[Path], root: Path)
             position += 1
         elif word == "uv" and words[position + 1:position + 2] == ["run"]:
             position, cwd = _skip_uv_run_options(words, position + 2, cwd, moved)
-        elif (script := _existing_shell_script(word, cwd, root)) is not None:
+        elif (script := _existing_shell_script(word, cwd, root, index)) is not None:
             launcher = script
             position += 1
         else:
@@ -141,12 +162,12 @@ def _strip_launchers(words: list[str], cwd: Path, moved: list[Path], root: Path)
     return CommandLine(tuple(words[position:]), search_dirs, launcher, cwd, root)
 
 
-def _existing_shell_script(word: str, cwd: Path, root: Path) -> str | None:
-    """The snapshot-relative path of the `.sh` file `word` names, when it exists in the snapshot."""
+def _existing_shell_script(word: str, cwd: Path, root: Path, index: PyIndex) -> str | None:
+    """The snapshot-relative path of the `.sh` file `word` names, when discovery walked it."""
     if not word.endswith(".sh"):
         return None
     script = _relative(root, cwd / word)
-    return script if script is not None and (root / script).is_file() else None
+    return script if script is not None and index.has_file(script) else None
 
 
 def _skip_uv_run_options(words: list[str], position: int, cwd: Path, moved: list[Path]) -> tuple[int, Path]:
@@ -171,10 +192,10 @@ def _skip_uv_run_options(words: list[str], position: int, cwd: Path, moved: list
     return position, cwd
 
 
-def _variables(root: Path, source_file: str) -> dict[str, str]:
+def _variables(root: Path, source_file: str, index: PyIndex) -> dict[str, str]:
     """The Claude Code variables a command in `source_file` may use, as absolute paths."""
-    found = {"CLAUDE_PLUGIN_ROOT": str(root / _plugin_root(root, source_file)),
-             "CLAUDE_PROJECT_DIR": str(root / _project_dir(root, source_file))}
+    found = {"CLAUDE_PLUGIN_ROOT": str(root / _plugin_root(index, source_file)),
+             "CLAUDE_PROJECT_DIR": str(root / index.repo_root(source_file))}
     if posixpath.basename(source_file) == "SKILL.md":
         found["CLAUDE_SKILL_DIR"] = str(root / posixpath.dirname(source_file))
     return found
@@ -190,17 +211,12 @@ def _ancestors(source_file: str) -> Iterator[str]:
         directory = posixpath.dirname(directory)
 
 
-def _plugin_root(root: Path, source_file: str) -> str:
+def _plugin_root(index: PyIndex, source_file: str) -> str:
     """The nearest ancestor with `.claude-plugin/plugin.json`, else the parent of the file's directory."""
     for directory in _ancestors(source_file):
-        if (root / directory / ".claude-plugin" / "plugin.json").is_file():
+        if index.has_file(posixpath.join(directory, ".claude-plugin", "plugin.json")):
             return directory
     return posixpath.dirname(posixpath.dirname(source_file))
-
-
-def _project_dir(root: Path, source_file: str) -> str:
-    """The repository root of `source_file`, as `PyIndex.repo_root` finds it."""
-    return next((d for d in _ancestors(source_file) if d and is_repo_dir(root / d)), "")
 
 
 def _relative(root: Path, path: Path) -> str | None:

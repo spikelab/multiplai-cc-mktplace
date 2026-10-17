@@ -262,14 +262,15 @@ Discovery reads files from `root` only. It never imports or executes target code
 - **Known edge target.**
   - If the first positional argument after the module names a discovered subcommand of that module, the edge goes to that subcommand's handler, or to its `add_parser` line when the handler is `null`.
   - Otherwise the edge goes to the `main_module` location.
-- **Handler.** The edge target's `def` when it is one, and `null` otherwise.
+- **Handler.** The subcommand's handler (`null` when unresolved) in the first case, and the Rule 6 `main_module` handler of the target file otherwise, so a command merges with the entry it runs.
+- **Untokenisable command.** A `python -m` command that `shlex` cannot split gives `unresolved_target` at its line.
 
 **Rule 8: hooks.**
 - **Sources.** `hooks.json` and `.claude/settings*.json`, for `"type": "command"` hooks only.
 - **Launcher resolution (new).** The command is tokenised after variable expansion. Leading tokens are stripped while they are an interpreter or launcher: `sh`, `bash`, `/bin/sh`, `/bin/bash`, `exec`, `env`, a `.sh` file that exists under `root`, or `uv run` with its flags. Resolution then continues on the remaining tokens:
   - `python[3] -m X`, or `-m X` after a launcher, resolves as for `SKILL.md`.
-  - The first `.py` token that exists resolves as a `main_module`-style script: guard line and single-call handler.
-  - Only when no `.py` or `-m` target exists does the hook target the launcher or other file itself, at line 1 with `symbol: null`.
+  - The first `.py` token that exists resolves as a `main_module`-style script: the guard line, and the Rule 6 `main_module` handler.
+  - Only when no `.py` or `-m` target exists (none is named, or the one named is missing) does the hook target the stripped launcher, or else the first existing file it names, at line 1 with `symbol: null`. When none of these exists, or the command cannot be tokenised, the hook gives `unresolved_target`.
 - **Effect.** The 8 real `sh run.sh <script>.py` hooks resolve to 8 different scripts.
 
 **Rule 9: seeds.**

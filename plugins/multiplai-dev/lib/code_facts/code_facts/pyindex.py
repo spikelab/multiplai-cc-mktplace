@@ -368,11 +368,6 @@ class PyIndex:
         return False
 
 
-def is_repo_dir(directory: Path) -> bool:
-    """Whether `directory` holds a repository marker, so is a repository root."""
-    return any((directory / marker).exists() for marker in REPO_MARKERS)
-
-
 def _inside(full: Path, real_root: Path) -> bool:
     """False for a symlink that resolves outside the snapshot, or cannot be resolved (a loop)."""
     if not full.is_symlink():
