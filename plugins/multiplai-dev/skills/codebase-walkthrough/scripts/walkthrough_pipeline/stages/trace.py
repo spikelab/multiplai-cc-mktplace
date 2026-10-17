@@ -195,7 +195,8 @@ class _FatalLatch:
 
 
 def _trace_call(ctx: RunContext, root: Path, latch: _FatalLatch) -> code_facts.CallFn:
-    """The model call for `map_paths`: the walkthrough's sdk, read-only, on the trace model, in the snapshot."""
+    """The model call for `map_paths`: the walkthrough's sdk, read-only, on the trace model, reading only the
+    target repo's snapshot."""
     cfg = ctx.config
 
     async def call(prompt: str, schema, **_kw):
@@ -204,7 +205,7 @@ def _trace_call(ctx: RunContext, root: Path, latch: _FatalLatch) -> code_facts.C
         try:
             return await sdk.agent_call_structured(
                 prompt, schema, allowed_tools=sdk.TRACE_TOOLS, model=cfg.trace_model, effort=cfg.effort,
-                max_turns=cfg.max_turns, cwd=str(root), budget_label="trace")
+                max_turns=cfg.max_turns, cwd=str(root), budget_label="trace", read_roots=[str(root)])
         except FATAL as e:
             latch.exc = e
             raise

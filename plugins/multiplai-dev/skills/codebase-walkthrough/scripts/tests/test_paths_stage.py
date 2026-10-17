@@ -111,6 +111,8 @@ def test_trace_calls_go_through_the_sdk_read_only_on_the_trace_model_and_count_a
         assert not set(c["allowed_tools"]) & {"Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "WebFetch"}
         assert (c["model"], c["effort"]) == ("trace-model", "high")
         assert Path(c["cwd"]).resolve() == snapshot
+        # Reads stop at the target repo's snapshot, not just start there.
+        assert [Path(r).resolve() for r in c["read_roots"]] == [snapshot]
         assert c["budget_label"] == "trace"
     by_label = _state(run_dir)["budget"]["by_label"]
     assert by_label["trace"] == pytest.approx(0.01 * len(calls))
