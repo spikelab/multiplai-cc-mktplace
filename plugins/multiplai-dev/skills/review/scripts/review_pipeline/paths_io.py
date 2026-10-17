@@ -3,7 +3,8 @@
 `code_facts.map_paths` writes nothing the review reads directly; the paths
 stage writes its result to `paths.json` with `code_facts.write_paths_file`,
 and every later reader (the path finders, path ids on findings, the report's
-Paths section) goes through `load_paths`, so a schema change is one edit here.
+Paths section) goes through `load_paths`, and the path finders read each path
+as a `PathView` (`views`), so a schema change is one edit here.
 This module also turns what the mapping could not do (dropped entries, cut
 traces) into coverage records.
 """
@@ -11,7 +12,9 @@ traces) into coverage records.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from code_facts.paths import PathDrop, PathsResult, TracedPath
 
@@ -68,3 +71,64 @@ def classify_broken(path: TracedPath) -> CoverageRecord:
     """A kept path whose trace was cut: still mapped, but only up to hop `stops_at`."""
     return CoverageRecord(stage="paths", subject=path.id, level="error", reason="broken-trace",
                           detail=f"stops at hop {path.stops_at}")
+
+
+class Anchor(NamedTuple):
+    """The code an entry dispatches to."""
+    path: str
+    line: int | None
+    symbol: str | None
+
+
+class Hop(NamedTuple):
+    file: str
+    line: int | None
+    description: str
+
+
+class E2ETest(NamedTuple):
+    """A test listed for a path; `mocked` when it patches hop 2, so it does not count as end to end."""
+    id: str
+    mocked: bool
+
+
+@dataclass(frozen=True)
+class PathView:
+    """One mapped path as a path finder's prompt shows it."""
+    id: str
+    name: str
+    file: str
+    line: int | None
+    handler: Anchor | None
+    invokers: tuple[str, ...]
+    hops: tuple[Hop, ...]
+    changed_lines: tuple[tuple[str, int], ...]
+    e2e: tuple[E2ETest, ...]
+    broken_at: int | None  # the last hop the trace kept, when it was cut
+
+
+def _hop_description(hop) -> str:
+    text = f"calls `{hop.symbol_called}`: {hop.quote}"
+    return f"{text} ({hop.note})" if hop.note else text
+
+
+def views(result: PathsResult) -> list[PathView]:
+    """Every path of *result* in its order, a repeated id kept once (the first)."""
+    out: list[PathView] = []
+    seen: set[str] = set()
+    for p in result.paths:
+        if p.id in seen:
+            continue
+        seen.add(p.id)
+        e = p.entry
+        handler = Anchor(e.handler.path, e.handler.line, e.handler.symbol) if e.handler else None
+        invokers = (e.invoked_by, *(f"{i.name} at {i.location.path}:{i.location.line}" for i in e.also_invoked_by))
+        out.append(PathView(
+            id=p.id, name=e.name, file=e.location.path, line=e.location.line, handler=handler,
+            invokers=tuple(invokers),
+            hops=tuple(Hop(h.path, h.line_start, _hop_description(h)) for h in p.hops),
+            changed_lines=tuple((c.path, c.line) for c in p.changed_lines_covered),
+            e2e=tuple([E2ETest(t.node_id, False) for t in p.tests.e2e]
+                      + [E2ETest(t.node_id, True) for t in p.tests.mocks_hop_2]),
+            broken_at=p.stops_at))
+    return out

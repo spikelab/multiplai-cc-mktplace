@@ -7,9 +7,11 @@ commits, so `history` does not run.
 
 A change review also runs one piece finder per stored piece of its diff
 (`state.pieces`, from `chunks.split_pieces`), keyed `"piece@<id>"`, after the
-dimension finders. A piece finder writes a plain-text report
+dimension finders, and every review with mapped paths one path finder per
+path (`state.path_ids`, read back from `paths.json`), keyed `"path@<id>"`,
+last. Each writes a plain-text report
 (`sdk.agent_call_text`), stored in `state.finder_reports` and written as
-`report-piece-<id>.md` before a second call converts it into findings
+`report-piece-<id>.md` or `report-path-<id>.md` before a second call converts it into findings
 (`run_reported`). Its findings then go through the same dedupe and
 `finding_gate` as the dimension finders'. Only `RepoTrustError` and a budget
 stop end the stage; a failed report or convert call is recorded in coverage
@@ -35,7 +37,9 @@ from ..models import (AgentCheck, ConvertedItem, ConvertOutput, CoverageRecord, 
                       FinderReport, FinderResult, GateCheck, Need, Rejected, ReviewState, TargetInfo)
 from ..prompts import DIFF_PROMPT_CHARS, commits_block, deps_block, description_block, settings_block, workspace_block
 from ..prompts import find as prompt
+from ..paths_io import load_paths, views
 from ..prompts.convert import build_convert
+from ..prompts.path import build_path
 from ..prompts.piece import build_piece
 from ..state import save_state
 from . import RunContext, bounded, fix_citation, relative_path
@@ -206,7 +210,7 @@ def group_facts(facts: list[Fact], group: list[str] | None) -> list[Fact]:
     return [f for f in facts if any(c.path in files for c in f.citations)]
 
 
-# --- report-then-convert: the piece finders (and, later, the path finders) --------------------------
+# --- report-then-convert: the piece and path finders -----------------------------------------------
 
 
 def report_file_name(key: str) -> str:
@@ -377,22 +381,33 @@ def shared_blocks(target: TargetInfo) -> str:
 
 
 def reported_finders(state: ReviewState, ctx: RunContext) -> list[tuple[str, str, list[str], dict]]:
-    """(key, prompt, given labels, diff hunks) of each piece finder of a change review, in piece order.
+    """(key, prompt, given labels, diff hunks) of each piece finder, then each path finder.
 
-    A piece with no file (a meta piece holding only omitted lockfiles) has nothing to review.
+    Pieces run on a change review only, in piece order; a piece with no file
+    (a meta piece holding only omitted lockfiles) has nothing to review. Path
+    finders run for each id in `state.path_ids`, in `paths.json` order, when
+    the paths stage produced the file (`paths_io.load_paths`); a resumed run
+    reads the stored file and maps nothing again.
     """
     target = state.target
-    if target.is_tree:
-        return []
     shared = shared_blocks(target)
     out = []
-    for p in state.pieces or []:
+    for p in ([] if target.is_tree else state.pieces or []):
         if not p.files:
             continue
         diff = piece_diff_text(ctx.diff, p)
         labels = [f"piece {p.id} ({len(p.files)} file{'' if len(p.files) == 1 else 's'}, {p.chars} characters)"]
         given = checks.prompt_labels(target, extra=labels)
         out.append((f"piece@{p.id}", build_piece(p, diff, workspace=shared), given, checks.diff_hunks(diff)))
+    result = load_paths(ctx.target_dir, state) if ctx.target_dir is not None and state.path_ids else None
+    if result is not None:
+        wanted = set(state.path_ids)
+        hunks = checks.diff_hunks(ctx.diff[:DIFF_PROMPT_CHARS]) if ctx.diff else {}
+        for view in views(result):
+            if view.id not in wanted:
+                continue
+            given = checks.prompt_labels(target, extra=[f"path {view.id} ({len(view.hops)} hops)"])
+            out.append((f"path@{view.id}", build_path(view, workspace=shared), given, hunks))
     return out
 
 

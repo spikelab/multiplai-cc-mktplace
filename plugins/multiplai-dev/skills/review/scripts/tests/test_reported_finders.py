@@ -236,6 +236,11 @@ def piece_ids(state: ReviewState) -> dict[str, int]:
     return {p.files[0].split("/")[0]: p.id for p in state.pieces or [] if p.files}
 
 
+def piece_reports(state: ReviewState) -> dict:
+    """The piece finders' reports (conftest's stub mapping also gives every change review one path)."""
+    return {k: r for k, r in state.finder_reports.items() if k.startswith("piece@")}
+
+
 def find_subjects(target_dir: Path) -> list[str]:
     checks = json.loads((target_dir / "checks.json").read_text())
     return [a["subject"] for a in checks["agents"] if a["stage"] == "find"]
@@ -254,7 +259,7 @@ def test_a_change_review_runs_one_piece_finder_per_piece_beside_the_dimension_fi
     assert len(state.pieces) == pieces
     assert sorted(c["package"] for c in fake.text_calls) == [name(i) for i in range(1, pieces + 1)]
     assert len([label for label in fake.other_calls if label.startswith("find:")]) == DIMENSION_FINDERS
-    assert sorted(state.finder_reports) == sorted(f"piece@{i}" for i in range(1, pieces + 1))
+    assert sorted(piece_reports(state)) == sorted(f"piece@{i}" for i in range(1, pieces + 1))
     subjects = find_subjects(target_dir)
     assert len(subjects) == len(set(subjects))
     assert {f"piece@{i}" for i in range(1, pieces + 1)} <= set(subjects)
@@ -281,7 +286,7 @@ def test_a_diff_with_no_reviewable_file_launches_no_piece_finder_and_find_still_
     assert review(repo, base, head, tmp_path / "out") == 0
     _, state = saved(tmp_path / "out")
     assert fake.text_calls == [] and fake.convert_calls == []
-    assert state.past("find") and state.finder_reports == {}
+    assert state.past("find") and piece_reports(state) == {}
     assert len([label for label in fake.other_calls if label.startswith("find:")]) == DIMENSION_FINDERS
 
 
@@ -308,7 +313,7 @@ def test_every_round_runs_the_piece_finders_and_the_kept_round_keeps_its_reports
     assert review(repo, base, head, out) == 0
     assert len(second.text_calls) == 4
     target_dir, state = saved(out)
-    assert len(state.finder_reports) == 4
+    assert len(piece_reports(state)) == 4
     (kept,) = sorted((target_dir / "rounds").iterdir())
     assert sorted(p.name for p in kept.glob("report-piece-*.md")) == [f"report-piece-{i}.md" for i in (1, 2, 3, 4)]
 
@@ -461,8 +466,8 @@ def test_a_budget_stop_after_five_of_nine_pieces_keeps_their_reports_and_resume_
     fake = model(stop_report=6)
     assert review(repo, base, head, tmp_path / "out") == 4
     target_dir, state = saved(tmp_path / "out")
-    assert len(state.finder_reports) == 5 and all(r.converted for r in state.finder_reports.values())
-    for key in state.finder_reports:
+    assert len(piece_reports(state)) == 5 and all(r.converted for r in piece_reports(state).values())
+    for key in piece_reports(state):
         assert (target_dir / f"report-piece-{key.split('@')[1]}.md").exists()
     done = [c["package"] for c in fake.text_calls[:5]]
     after = len(fake.text_calls)
@@ -470,7 +475,7 @@ def test_a_budget_stop_after_five_of_nine_pieces_keeps_their_reports_and_resume_
     asked = [c["package"] for c in fake.text_calls[after:]]
     assert len(asked) == 4 and not set(asked) & set(done)
     _, finished = saved(tmp_path / "out")
-    assert len(finished.finder_reports) == 9
+    assert len(piece_reports(finished)) == 9
 
 
 def test_a_stop_between_report_and_convert_keeps_the_report_and_resume_only_converts(tmp_path, model):
@@ -636,10 +641,12 @@ def traced_path(i: int, *, stops_at: int | None = None, note: str = "", e2e: boo
     hops = [PathHop(symbol_called=f"step{i}_{k}", path=f"p0{k}/m.py", line_start=1, line_end=1,
                     quote=f"p0{k}_1 = 1", note=note if k == 2 else "") for k in (1, 2, 3)]
     tests = E2EListing(
-        e2e=[E2ETest(node_id=f"tests/test_cli.py::test_cmd{i}", file="tests/test_cli.py", line=3, match="name")]
+        e2e=[E2ETest(node_id=f"tests/test_cli.py::test_cmd{i}", file="tests/test_cli.py", line=3,
+                     match="cli_argv", invocation_line=4)]
         if e2e else [],
         mocks_hop_2=[MockedE2ETest(node_id=f"tests/test_cli.py::test_mocked{i}", file="tests/test_cli.py", line=9,
-                                   match="name", patch_file="tests/test_cli.py", patch_line=8)] if e2e else [])
+                                   match="cli_argv", invocation_line=10, patch_file="tests/test_cli.py",
+                                   patch_line=8)] if e2e else [])
     return TracedPath(id=f"p{i}", entry=path_entry(i, name_), hops=hops, stops_at=stops_at,
                       break_reason="text_mismatch" if stops_at else None,
                       changed_lines_covered=[Location(path="p01/m.py", line=2)], tests=tests)
@@ -826,7 +833,9 @@ def test_a_trust_error_from_a_path_finder_stops_the_review(tmp_path, model, mapp
 
 
 def view_of(path: TracedPath):
-    (view,) = new("paths_io", "views")(paths_result("a" * 40, [path]))
+    """*path*'s view; built without validation, since paths.v1 numbers a lone path p1."""
+    result = PathsResult.model_construct(**{**dict(paths_result("a" * 40, [])), "paths": [path]})
+    (view,) = new("paths_io", "views")(result)
     return view
 
 

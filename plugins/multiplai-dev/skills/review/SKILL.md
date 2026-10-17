@@ -262,8 +262,9 @@ ecosystems' lock files are not read; for those the agents have `WebFetch`.
 
 ## The kinds of finder
 
-The find stage runs two kinds of finder on a change review, and only the
-first on a `--tree` or `--dir` review.
+The find stage runs three kinds of finder on a change review. A `--tree` or
+`--dir` review runs the dimension finders, and the path finders only with
+`--paths`.
 
 - **Dimension finders** (`diff-bugs`, `callers`, `history`, `conventions`,
   `tests`, `trim`): each reads the whole change for one aspect and answers
@@ -279,23 +280,35 @@ first on a `--tree` or `--dir` review.
   given its piece's whole diff and owns the defects in or caused by those
   changes, but may read any file of the snapshot; it reports every severity,
   LOW included, and advice.
+- **Path finders**, keyed `path@<id>`: one per path in `paths.json` (see "The
+  paths stage"), in its order, at most 21. Each is given its path (the entry
+  point and who invokes it, every hop with its file and line, the changed
+  lines on it, and its e2e tests or "No e2e test is listed for this path.")
+  and follows it from the entry through every hop to the last, reading every
+  function on it in every file. It reports defects on the path or in how the
+  path uses changed code, every severity and advice, and cites a changed
+  line first when the defect involves one. A cut trace says where it stops,
+  and the finder reads on from there. No path finder runs when the mapping
+  failed or found no path; the other finders run as usual.
 
-A piece finder writes a plain-text report, which is saved in the run's state
-and as `report-piece-<id>.md` beside `findings.json` as soon as it returns.
+A piece or path finder writes a plain-text report, which is saved in the
+run's state and as `report-piece-<id>.md` or `report-path-<id>.md` beside
+`findings.json` as soon as it returns.
 A second call then turns the report into findings: it opens the files the
 report names to copy exact quotes, keeps one finding per item, and judges
 none (an item without a stated severity, advice included, is LOW). Those
 findings go through the same gates, verification and merge as every other
 finding. Whether each item was a defect or advice is recorded only in
-`checks.json`, on the `piece@<id> convert` entry. Both calls have only
+`checks.json`, on the `<key> convert` entry. Both calls have only
 `Read`, `Grep` and `Glob`, and both count towards `--max-cost-usd`. A report
 of `NO FINDINGS` needs no second call.
 
 A failed report or convert call is listed in the review's errors and its
 coverage, and the other finders go on. After a stop, `resume` asks only for
 what is missing: a stored report is never asked again, only its convert
-call. Every review round runs the piece finders again; a kept round keeps its
-reports.
+call, and the path finders are built from the stored `paths.json`. Every
+review round runs the piece and path finders again, under the same keys; a
+kept round keeps its reports.
 
 `--extra-finders` (with or without a number) and `extra_finders` in
 `review.yaml` are still accepted and do nothing: the review prints

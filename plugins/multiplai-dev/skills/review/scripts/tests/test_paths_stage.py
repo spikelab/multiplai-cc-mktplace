@@ -703,7 +703,8 @@ def test_a_kept_round_holds_paths_json_and_a_fresh_run_starts_without_the_old_ca
     (kept,) = (target_dir / "rounds").glob("*/paths.json")
     assert kept.read_bytes() == first
     assert fake.calls[1] == []  # the first run's answers were cleared before this run mapped
-    assert not (target_dir / "report-path-p1.md").exists()
+    # The last round's report was cleared; the file there now is this round's path finder's.
+    assert (target_dir / "report-path-p1.md").read_text() != "last round's report"
     assert (kept.parent / "report-path-p1.md").read_text() == "last round's report"
 
 
