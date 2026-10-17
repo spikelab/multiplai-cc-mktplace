@@ -75,3 +75,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   The block-5 implementation commit edited a Block 2 test (`tests/test_entries_argparse.py`) and added a lockfile at `plugins/multiplai-dev/lib/code_facts/uv.lock`, though the design says only the root `uv.lock` changes. `Entry.also_invoked_by` uses a new `EntryInvoker` model with discovery kinds, not the `Invoker` type the Block 2 interface states. My refactor changed none of this.
+
+## Block 6 — Discover `SKILL.md` and hook commands, resolving through shell launchers (test_writer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  A command naming no subcommand edges to the main_module location (guard line or line 1), and "handler = the edge target's def, else null" then makes its handler null, so the spec's hook + SKILL.md `python -m pkg` merge scenario could never happen. The tests expect such commands to take the main_module's handler (the def main() that the guard calls). Unspecified details pinned by the tests: command_tokens may return absolute or root-relative paths; resolve_python_m returns `<pkg>/__main__.py` or `<mod>.py`, with "" meaning the snapshot root. The spec-file amendments the block asks for were not made, since this agent writes tests only.
