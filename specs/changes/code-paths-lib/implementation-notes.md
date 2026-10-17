@@ -35,3 +35,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: none
 - SURPRISES:
   `Diagnostic` in `entries.py` is an alias of block 1's `PathDiagnostic`, not a separate class. That works because the fields are identical. Also, `ruff check` flags `entries.py`'s import block (`I001`), which was there before this refactor.
+
+## Block 3 — Trace each discovered entry into a gated, linear path with one re-ask (test_writer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  (1) The block doesn't say what an empty hop list gives at the gate level; the tests expect `gate_hops([])` to return broken_at 1 with `empty_trace`, matching trace-gate's "Empty hop list". (2) `TraceContext` is undefined, so `trace_entry` is tested only through `map_paths`. (3) The fake needs `paths_reask` to name the entry (its handler symbol or name) even when there are no accepted hops, because re-ask labels can't be linked back to an entry. (4) trace-gate's "Malformed or empty answers break at hop 1" scenarios still say "stops_at = 1"; that is gate-level `broken_at`, and I left them alone because they are outside D1 rows 2–5. (5) Whether `assign_ids` itself sorts is left open: the ordering is tested through `map_paths`, and `assign_ids` only on input that is already ordered.

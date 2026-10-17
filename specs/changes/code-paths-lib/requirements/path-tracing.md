@@ -36,9 +36,9 @@ Every trace request and every re-ask SHALL go through the `CallFn` passed by the
 - **THEN** the import succeeds and `map_paths` runs end to end with a fake `CallFn`
 
 #### Scenario: No library-level retry
-- **WHEN** the fake `CallFn` raises an exception for one entry's trace request
+- **WHEN** the fake `CallFn` raises `RuntimeError` for one entry's trace request, and `map_paths` is called with `recoverable=(RuntimeError,)`
 - **THEN** the `CallFn` was called exactly once for that entry
-- **AND** that entry is recorded as dropped with a reason indicating the trace call failed
+- **AND** that entry is recorded as dropped with stage `trace` and reason `call_failed`
 
 ### Requirement: Trace prompt carries the entry, the scope and known edges
 Each trace request SHALL include:

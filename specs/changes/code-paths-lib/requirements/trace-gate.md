@@ -180,7 +180,7 @@ The gate SHALL accept at most 20 hops. Hops beyond the 20th SHALL be discarded a
 
 #### Scenario: Over-long trace
 - **WHEN** an answer contains 25 hops and the first 20 are valid
-- **THEN** the result has 20 hops, `stops_at` = 21 and `break_reason` = `hop_limit`
+- **THEN** the result has 20 hops, `stops_at` = 20 and `break_reason` = `hop_limit`
 - **AND** no re-ask is issued
 
 #### Scenario: Exactly 20 hops
@@ -235,12 +235,12 @@ If the re-asked answer still breaks, the path SHALL keep only the re-asked answe
 
 #### Scenario: Cut after re-ask
 - **WHEN** the re-asked answer breaks at hop 3 with `unconnected_hop`
-- **THEN** the path holds hops 1–2 of the re-asked answer, `stops_at` = 3 and `break_reason` = `unconnected_hop`
+- **THEN** the path holds hops 1–2 of the re-asked answer, `stops_at` = 2 and `break_reason` = `unconnected_hop`
 
 #### Scenario: Cut at hop 1
 - **WHEN** the re-asked answer breaks at hop 1
-- **THEN** the path holds zero hops, `stops_at` = 1 and `break_reason` is set
-- **AND** the path is still returned to the scope step, which records any drop
+- **THEN** no path is returned for the entry
+- **AND** the entry is recorded as dropped with stage `trace` and the hop-1 break code as its reason
 
 #### Scenario: Valid path fields
 - **WHEN** a path passes every check
