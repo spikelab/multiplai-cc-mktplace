@@ -1435,6 +1435,43 @@ test("app.js renders the Paths panel from the tested helpers, with no innerHTML"
   assert.equal(L.helpSection("paths"), "help-paths");
 });
 
+// --- paths: the summary line, the unlisted-tests note, no paths (block 3) -------------
+
+const pathWith = (id, e2e, mocked) => ({ id: id, tests: {
+  e2e: Array.from({ length: e2e }, (_, i) => ({ node_id: id + "::t" + i })),
+  mocks_hop_2: Array.from({ length: mocked }, (_, i) => ({ node_id: id + "::m" + i })) } });
+
+test("the summary line counts paths, those with findings and those with no counted e2e test", () => {
+  const byPath = L.findingsByPath(countedFixture());
+  assert.equal(L.pathsSummary(pathsDoc.paths, byPath), "6 paths, 2 with findings, 2 with no e2e test");
+  // p6's only finding (F-C) is refuted, so p6 is not "with findings".
+  assert.equal(byPath.has("p6"), false);
+  const four = [pathWith("A", 1, 0), pathWith("B", 0, 1), pathWith("C", 0, 0), pathWith("D", 2, 1)];
+  assert.equal(L.pathsSummary(four, new Map([["D", [{ id: "f" }]]])), "4 paths, 1 with findings, 2 with no e2e test");
+  assert.equal(L.pathsSummary([pathWith("A", 1, 0)], new Map()), "1 path, 0 with findings, 0 with no e2e test");
+  assert.equal(L.pathsSummary([], new Map()), "0 paths, 0 with findings, 0 with no e2e test");
+  assert.equal(L.pathsSummary([pathWith("A", 0, 2)], new Map([["A", []]])), "1 path, 0 with findings, 1 with no e2e test");
+});
+
+test("a muted note says the e2e results may be incomplete only when some test files were not listed", () => {
+  assert.equal(L.hasUnlistedTests(pathsDoc), true);
+  assert.equal(L.hasUnlistedTests(Object.assign({}, pathsDoc, { test_listing_skips: [] })), false);
+  assert.equal(L.hasUnlistedTests(null), false);
+  assert.equal(L.UNLISTED_TESTS_NOTE, "Some test files could not be listed, so the e2e test results may be incomplete.");
+  assert.equal(L.NO_PATHS_TEXT, "No entry points reach the changed code.");
+});
+
+test("app.js puts the summary line, then the note, then the cards or the no-paths message", () => {
+  const section = (appJs.match(/\/\/ --- paths ---[\s\S]*?(?=\n  \/\/ --- )/) || [""])[0];
+  const render = (section.match(/function renderPaths\(\)[\s\S]*?\n  \}/) || [""])[0];
+  assert.match(render, /const byPath = L\.findingsByPath\(L\.countedFindings\(state\.shown\)\);/);
+  const order = ["L.pathsSummary(doc.paths, byPath)", "L.hasUnlistedTests(doc)", "L.UNLISTED_TESTS_NOTE",
+    "L.NO_PATHS_TEXT", "L.sortPaths(doc.paths, byPath)"].map((needle) => render.indexOf(needle));
+  assert.ok(order.every((i) => i >= 0), "renderPaths uses " + order);
+  assert.deepEqual(order, order.slice().sort((a, b) => a - b), "summary, note, then the cards");
+  assert.equal((render.match(/L\.findingsByPath\(/g) || []).length, 1, "one byPath feeds the order and the summary");
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {
