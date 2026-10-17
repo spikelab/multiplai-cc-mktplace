@@ -105,3 +105,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   Besides the cited-line rule, `_Filter._duplicate` also drops a fallback entry whose enclosing `def` is a discovered entry's handler. That follows the requirement "resolves to the same handler as such an entry" (entry-point-model-fallback), but the block text and design D8 list only line matches. I kept the behaviour as it was.
+
+## Block 8 — Scope a run to the changed lines with reachability, trace limit, coverage and cap (test_writer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  (1) The spec doesn't say whether the cross-repository fallback order is "repo_b/, repo_b/src/, repo_c/, …" or "all repository roots first, then all src/ directories". I picked fixtures that give the same answer under both readings. (2) Read literally, `from x import y` adds an edge to `x` only, not to `x`'s parent packages; the test follows that wording exactly. (3) The current `path_order` sorts by hop count only, and coverage-first ordering is new, so `order_paths` should replace it. (4) One test passes before implementation (the unscoped scenario), because that behaviour already exists.

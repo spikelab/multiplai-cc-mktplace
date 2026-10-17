@@ -25,7 +25,7 @@ def lib(name: str) -> Any:
     """A code_facts name from whichever module defines it, looked up at call time."""
     for mod in ("code_facts", "code_facts.trace_gate", "code_facts.paths", "code_facts.prompts",
                 "code_facts.entries", "code_facts.pyindex", "code_facts.commands", "code_facts.fallback",
-                "code_facts.tracing"):
+                "code_facts.tracing", "code_facts.scope"):
         try:
             module = importlib.import_module(mod)
         except ModuleNotFoundError:
