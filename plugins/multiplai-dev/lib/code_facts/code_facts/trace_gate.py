@@ -86,7 +86,7 @@ def gate_hops(hops: Sequence[TraceHop], *, root: Path, resolve: Resolve, entry: 
     accepted: list[PathHop] = []
     for n, hop in enumerate(hops[:HOP_LIMIT], start=1):
         checked = gate.check(hop, accepted)
-        if isinstance(checked, _Break):
+        if isinstance(checked, Break):
             log.debug("trace of %s breaks at hop %d: %s (%s)", entry.name, n, checked.code, checked.detail)
             return GateResult(accepted=accepted, broken_at=n, break_reason=checked.code, detail=checked.detail)
         accepted.append(checked)
@@ -97,9 +97,30 @@ def gate_hops(hops: Sequence[TraceHop], *, root: Path, resolve: Resolve, entry: 
 
 
 @dataclass(frozen=True)
-class _Break:
+class Break:
+    """The first rule a hop or citation breaks, and why."""
     code: BreakCode
     detail: str
+
+
+def check_head_citation(root: Path, resolve: Resolve, path: str, line_start: int, line_end: int,
+                        quote: str) -> str | Break:
+    """Rules 1-4 for one citation re-read at head: its normalised path when it passes, else its first break."""
+    try:
+        path = normalise_rel_path(root, path)
+    except ValueError as e:
+        return Break("path_outside_root", str(e))
+    if not (root / path).is_file():
+        return Break("missing_file", f"{path} is not a file under the snapshot root")
+    lines = _line_count(root / path)
+    if not 1 <= line_start <= line_end <= lines:
+        return Break("line_out_of_range",
+                     f"lines {line_start}-{line_end} are not within the {lines} lines of {path}")
+    reason = check_citation(Citation(path=path, line_start=line_start, line_end=line_end, quote=quote, side="head"),
+                            resolve)
+    if reason is not None:
+        return Break("text_mismatch", f"{path}:{line_start}-{line_end}: {reason}")
+    return path
 
 
 class _Gate:
@@ -119,48 +140,37 @@ class _Gate:
     def _index(self) -> PyIndex:
         return self._given_index if self._given_index is not None else PyIndex.build(self._root)
 
-    def check(self, hop: TraceHop, earlier: Sequence[PathHop]) -> PathHop | _Break:
+    def check(self, hop: TraceHop, earlier: Sequence[PathHop]) -> PathHop | Break:
         """The hop as accepted, or its first break given the hops `earlier` accepted."""
         cited = self._cite(hop)
-        if isinstance(cited, _Break):
+        if isinstance(cited, Break):
             return cited
         return self._link(cited, earlier) or cited
 
-    def _cite(self, hop: TraceHop) -> PathHop | _Break:
+    def _cite(self, hop: TraceHop) -> PathHop | Break:
         """Rules 1-5: the hop as a head-side citation that re-reads, or the first rule it breaks."""
-        try:
-            path = normalise_rel_path(self._root, hop.path)
-        except ValueError as e:
-            return _Break("path_outside_root", str(e))
-        if not (self._root / path).is_file():
-            return _Break("missing_file", f"{path} is not a file under the snapshot root")
-        lines = _line_count(self._root / path)
-        if not 1 <= hop.line_start <= hop.line_end <= lines:
-            return _Break("line_out_of_range", f"lines {hop.line_start}-{hop.line_end} are not within the "
-                                               f"{lines} lines of {path}")
+        # Always re-read at head: a base-side hop is reported by its own rule, after the text.
+        path = check_head_citation(self._root, self._resolve, hop.path, hop.line_start, hop.line_end, hop.quote)
+        if isinstance(path, Break):
+            return path
         cited = PathHop(symbol_called=hop.symbol_called, path=path, line_start=hop.line_start,
                         line_end=hop.line_end, quote=hop.quote, note=hop.note)
-        # Always re-read at head: a base-side hop is reported by its own rule, after the text.
-        reason = check_citation(Citation(path=path, line_start=hop.line_start, line_end=hop.line_end,
-                                         quote=hop.quote, side="head"), self._resolve)
-        if reason is not None:
-            return _Break("text_mismatch", f"{_where(cited)}: {reason}")
         if hop.side == "base":
-            return _Break("base_side_citation", f"{_where(cited)} cites the base side")
+            return Break("base_side_citation", f"{_where(cited)} cites the base side")
         return cited
 
-    def _link(self, cited: PathHop, earlier: Sequence[PathHop]) -> _Break | None:
+    def _link(self, cited: PathHop, earlier: Sequence[PathHop]) -> Break | None:
         """Rules 6-8: the first rule a re-read hop breaks in its place after `earlier`, or None."""
         if not earlier:
             if not self._anchored(cited):
-                return _Break("entry_mismatch", f"{_where(cited)} holds neither the entry line "
+                return Break("entry_mismatch", f"{_where(cited)} holds neither the entry line "
                                                 f"{self._entry.location.path}:{self._entry.location.line} "
                                                 "nor its handler's line")
         elif not self._connected(earlier[-1], cited):
-            return _Break("unconnected_hop", f"nothing connects {_where(earlier[-1])} to {cited.symbol_called!r} "
+            return Break("unconnected_hop", f"nothing connects {_where(earlier[-1])} to {cited.symbol_called!r} "
                                              f"at {_where(cited)}")
         if any(_span(h) == _span(cited) for h in earlier):
-            return _Break("repeated_hop", f"{_where(cited)} is already an earlier hop")
+            return Break("repeated_hop", f"{_where(cited)} is already an earlier hop")
         return None
 
     def _anchored(self, hop: PathHop) -> bool:

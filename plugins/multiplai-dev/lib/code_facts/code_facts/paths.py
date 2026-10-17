@@ -397,6 +397,7 @@ async def map_paths(
     # Deferred: these modules build on the models above.
     from .cache import ANSWERS_DIR, _DiskAnswers, purge_failed
     from .entries import discover_entries
+    from .fallback import run_fallback
     from .pyindex import PyIndex
     from .tracing import TraceContext, trace_entries
 
@@ -417,13 +418,17 @@ async def map_paths(
     ctx = TraceContext(root=root, commit=commit, resolve=resolve, call=call, index=index, changed_lines=changed,
                        places=tuple(places), answers=answers, recoverable=recoverable,
                        call_kwargs=dict(call_kwargs or {}), progress=progress)
-    outcomes = await trace_entries(discovery.entries, ctx=ctx, concurrency=concurrency)
+    if fallback:
+        # The fallback's scope is the changed files, or the whole snapshot when unscoped.
+        status, added, fallback_drops = await run_fallback(
+            ctx=ctx, entries=discovery.entries, scope=None if changed is None else list(changed))
+    else:
+        status, added, fallback_drops = FallbackStatus(status="skipped", reason=None), [], []
+    outcomes = await trace_entries([*discovery.entries, *added], ctx=ctx, concurrency=concurrency)
     traced = sorted((o for o in outcomes if isinstance(o, TracedPath)), key=path_order)
-    dropped = sorted((o for o in outcomes if isinstance(o, PathDrop)), key=drop_order)
-    # Until the model fallback exists, every run records it as skipped.
+    dropped = sorted([*fallback_drops, *(o for o in outcomes if isinstance(o, PathDrop))], key=drop_order)
     return PathsResult(
-        schema_version=SCHEMA_VERSION, commit=commit, scoped=scoped, cap=cap if scoped else None,
-        fallback=FallbackStatus(status="skipped", reason=None),
+        schema_version=SCHEMA_VERSION, commit=commit, scoped=scoped, cap=cap if scoped else None, fallback=status,
         paths=assign_ids(traced), dropped=dropped, diagnostics=discovery.diagnostics, test_listing_skips=[],
     )
 

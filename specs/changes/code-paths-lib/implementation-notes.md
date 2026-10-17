@@ -95,3 +95,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   The capability spec drops a fallback entry that resolves to the same handler as a deterministic one; the block description and D8 compare only lines, so the tests follow the block. No location is defined for drops of entries with no citation, a `../` path or an absolute path, yet `PathEntry.location` is required and must be a valid relative path. The duplicate check is unclear on whether it compares path and line or the line alone; the tests use path and line. `check_quote` passes a range that runs past the end of the file, so a separate range check is needed. The `fallback=False` test already passes because today's stub always reports `skipped`.
+
+## Block 7 — Run a single read-only model fallback for entry points that static discovery missed (implementer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  The `Entry` interface lists only the 8 discovery kinds, but `run_fallback` must return `Entry` objects that publish as `model`, so `Entry.kind` was widened to accept `"model"`. A dropped entry with no in-root citation needs a placeholder location (`(unplaced)`, line 1) because `PathEntry.location` is required and the spec gives none. The capability spec's same-handler duplicate rule is missing from D8 and the block; I implemented it. `check_quote` doesn't check whether a range runs past the end of the file, so the fallback reuses the gate's range check. A circular import (the prompt needs `FallbackAnswer`'s schema, and `fallback.py` needs the prompt) is broken by a deferred import inside `paths_fallback`.

@@ -101,6 +101,9 @@ OUTPUT_KIND: dict[EntryKind, DiscoveredKind] = {
     "project_script": "script", "skill_command": "skill_command", "hook_command": "hook", "seed": "seed",
 }
 
+# The kind of an entry the model fallback adds; it is published as is and never merges.
+ModelKind = Literal["model"]
+
 # The discovery diagnostic is the paths.v1 diagnostic, so it is published unchanged.
 Diagnostic = PathDiagnostic
 
@@ -122,8 +125,10 @@ class EntryInvoker(_Strict):
 
 
 class Entry(_Strict):
-    """A discovered entry point. `known_edges` is internal: paths.v1 does not publish it."""
-    kind: EntryKind
+    """A discovered entry point, or one the model fallback added. `known_edges` is internal: paths.v1 does not
+    publish it.
+    """
+    kind: EntryKind | ModelKind
     name: str = Field(min_length=1)
     location: Location
     handler: Handler | None
@@ -135,7 +140,8 @@ class Entry(_Strict):
 def to_path_entry(entry: Entry) -> PathEntry:
     """The entry as paths.v1 publishes it: output kinds, its invokers' included, and no known edges."""
     invokers = [Invoker(kind=OUTPUT_KIND[i.kind], name=i.name, location=i.location) for i in entry.also_invoked_by]
-    return PathEntry(kind=OUTPUT_KIND[entry.kind], name=entry.name, location=entry.location, handler=entry.handler,
+    kind = "model" if entry.kind == "model" else OUTPUT_KIND[entry.kind]
+    return PathEntry(kind=kind, name=entry.name, location=entry.location, handler=entry.handler,
                      invocation=entry.invocation, also_invoked_by=invokers)
 
 

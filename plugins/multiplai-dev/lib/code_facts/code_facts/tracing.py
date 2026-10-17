@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 Stage = Literal["trace", "reask"]
 
 # Stored-answer markers: `ask` stores a recoverable call failure under CALL_ERROR;
-# an answer that does not parse is stored under "malformed". A TraceAnswer has neither key.
+# an answer that does not parse is stored under "malformed". No answer model has either key.
 MALFORMED = "malformed"
 
 # A valid placeholder: `assign_ids` numbers kept paths once they are ordered.
@@ -58,12 +58,13 @@ class TraceContext:
     call_kwargs: Mapping[str, Any]
     progress: Callable[[str], None] | None = None
 
-    def ask_kwargs(self, stage: Stage) -> dict[str, Any]:
-        """The `ask` arguments for one stage: read-only tools and `cwd` overwrite the caller's."""
+    def ask_kwargs(self, *, budget_label: Callable[[str], str], schema: type[BaseModel],
+                   encode: Callable[[Any], dict]) -> dict[str, Any]:
+        """The `ask` arguments of one kind of request: read-only tools and `cwd` overwrite the caller's."""
         return {
             "call_kwargs": {**self.call_kwargs, "allowed_tools": list(AGENT_TOOLS), "cwd": str(self.root)},
-            "errors": [], "recoverable": self.recoverable, "schema": TraceAnswer,
-            "budget_label": lambda key: f"paths:{stage}:{key[:12]}", "encode": encode_trace_answer,
+            "errors": [], "recoverable": self.recoverable, "schema": schema, "budget_label": budget_label,
+            "encode": encode,
         }
 
 
@@ -90,18 +91,17 @@ def reask_key(first_key: str, first_answer: dict, gated: GateResult) -> str:
     })
 
 
-def encode_trace_answer(out: Any) -> dict:
-    """A call's answer as stored: the validated TraceAnswer's dump, or the reason it does not parse.
+def encode_answer(model: type[BaseModel], out: Any) -> dict:
+    """A call's answer as stored: the validated `model`'s dump, or the reason it does not parse.
 
-    The call may return a TraceAnswer, another model, a dict or a JSON string.
-    Any answer that cannot be read as a TraceAnswer is malformed, so one odd
-    answer costs only its own entry.
+    The call may return a `model`, another model, a dict or a JSON string. Any
+    answer that cannot be read as a `model` is malformed, so one odd answer
+    costs only what it answers.
     """
     try:
         if isinstance(out, BaseModel):
             out = out.model_dump(mode="json")
-        answer = (TraceAnswer.model_validate_json(out) if isinstance(out, (str, bytes))
-                  else TraceAnswer.model_validate(out))
+        answer = model.model_validate_json(out) if isinstance(out, (str, bytes)) else model.model_validate(out)
     except ValidationError as e:
         first = e.errors()[0]
         where = ".".join(map(str, first["loc"]))
@@ -109,6 +109,15 @@ def encode_trace_answer(out: Any) -> dict:
     except Exception as e:  # a foreign model's own dump failing, e.g. PydanticSerializationError
         return {MALFORMED: (str(e).splitlines() or [type(e).__name__])[0][:200]}
     return answer.model_dump(mode="json")
+
+
+def encode_trace_answer(out: Any) -> dict:
+    return encode_answer(TraceAnswer, out)
+
+
+def _trace_ask_kwargs(ctx: TraceContext, stage: Stage) -> dict[str, Any]:
+    return ctx.ask_kwargs(budget_label=lambda key: f"paths:{stage}:{key[:12]}", schema=TraceAnswer,
+                          encode=encode_trace_answer)
 
 
 async def trace_entries(entries: Sequence[Entry], *, ctx: TraceContext,
@@ -119,7 +128,8 @@ async def trace_entries(entries: Sequence[Entry], *, ctx: TraceContext,
     gated, and re-asked at most once.
     """
     first = {trace_key(e, ctx): _trace_prompt(e, ctx) for e in entries}
-    await run_tasks(list(first.items()), ctx.call, ctx.answers, concurrency=concurrency, **ctx.ask_kwargs("trace"))
+    await run_tasks(list(first.items()), ctx.call, ctx.answers, concurrency=concurrency,
+                    **_trace_ask_kwargs(ctx, "trace"))
     return await bounded(entries, lambda e: trace_entry(e, ctx=ctx), concurrency)
 
 
@@ -154,7 +164,7 @@ def _trace_prompt(entry: Entry, ctx: TraceContext) -> str:
 async def _answer(ctx: TraceContext, stage: Stage, key: str, prompt: Callable[[], str]) -> dict:
     """The stored answer under `key`, asking for it first when there is none."""
     if key not in ctx.answers:
-        await ask(key, prompt(), ctx.call, ctx.answers, **ctx.ask_kwargs(stage))
+        await ask(key, prompt(), ctx.call, ctx.answers, **_trace_ask_kwargs(ctx, stage))
     return ctx.answers[key]
 
 
