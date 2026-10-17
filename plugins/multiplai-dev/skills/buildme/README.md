@@ -126,7 +126,11 @@ not re-run it.
 `unknowns.md` is threaded into the `tasks` generation context and into the
 **test_writer**'s context (and deliberately not the refactorer's) — the payoff is
 that documented edge cases arrive as tests. Controls: `--skip-explainers`,
-`explainers: {enabled: true}` in `specs/config.yaml`. Default **on**.
+`explainers: {enabled: true}` in `specs/config.yaml`. Default **off**: the
+dependency scan is broken. It flags every backtick-quoted word in the specs
+(`assert`, `followed`, `hops`), and no build has yet produced an entry for a
+real new dependency. Turn it on only after
+[#375](https://github.com/spikelab/multiplai-cc-mktplace/issues/375) is fixed.
 
 ### Phase 4: Design Audit
 
@@ -720,7 +724,7 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
 
 | Key | Default | Effect |
 |-----|---------|--------|
-| `explainers: {enabled}` | `true` | The unknowns/edge-case explainer pass |
+| `explainers: {enabled}` | `false` | The unknowns/edge-case explainer pass. Off: its dependency scan is broken (#375) |
 | `prototype: {enabled}` | `auto` | `auto` \| `true` \| `false` — the prototype stage |
 | `respec: {halt_on_contradiction}` | `false` | Stop the build on a `SPEC_IMPACT: contradicts` note |
 | `git: {worktree, push, pr}` | `true, true, draft` | Git lifecycle (`pr`: `draft` \| `ready` \| `none`) |
