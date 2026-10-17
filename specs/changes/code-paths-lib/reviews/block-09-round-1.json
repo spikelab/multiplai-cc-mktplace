@@ -1,0 +1,166 @@
+{
+  "generated_at": "2026-10-17T08:58:30.812588+00:00",
+  "kind": "review",
+  "block": {
+    "number": 9,
+    "name": "List end-to-end tests that statically invoke each kept path's entry"
+  },
+  "round": 1,
+  "head_sha": "385e0896892d3fd76e2b02bf1c6179be8aa5b2ae",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Listing is its own synchronous module (e2e_tests.py, the D2 name) with no CallFn and no walkthrough_pipeline import. It reuses `parse_command_line`, `python_module`, `first_positional`, `hook_commands`, `shell_commands`, `main_module_handler` and the extracted `dotted_reference`/`snapshot_files`. Possible smells remain: `_Targets._declared` is another `match kind` on string entry kinds, alongside the scanners in entries.py (possible Repeated Switches). `cli_apps` re-runs `_decorated_command_entries` per call (possible Duplicated Code with discovery). `_unreadable_reason` re-decodes a file whose parse error PyIndex already recorded.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "The tests assert exact `(node_id, match, invocation_line)` tuples, exact skip dumps, byte-identical JSON under reversed enumeration, and Popen/os.system patched to raise. The map_paths test pairs call accounting with result assertions. The test-file change (the `_ReversedScandir` `__next__`) is justified, because Python 3.12 `os.walk` calls `next()` on the scandir result, and the reversed-order intent is kept. Gaps: no test checks that a subcommand word appearing as an option value is not counted (for example `main(['render','--name','open'])`), no test covers a console script reaching a subcommand, and none covers a typer runner.",
+      "confidence": 0.7
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "All five matchers, also_invoked_by invokers, the skip-dir list (build/dist searched), test patterns, Test* class methods, nested-def exclusion, help/version exclusion, D15 inlining to depth 2, dedup at the earliest line with the tie order, sorting, and decode_error/syntax_error skips are implemented and tested. The two gaps the implementer admits (console script \u2192 subcommand, typer app with no prefix) are small divergences. `mocks_hop_2` is always `[]`, which this block's spec does not cover.",
+      "confidence": 0.7
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "`E2EIndex.build(root, index)`, `E2EIndex.skips()`, `match_invocations(e2e_index, entry, *, root)` and `list_e2e_tests(root, paths, entries, *, index)` match the produced interfaces exactly. map_paths passes final ids. One seam is loose: map_paths rebuilds the path\u2192Entry mapping by re-deriving `(output_kind(e), e.location, e.name)` over `to_trace` instead of carrying the Entry along with the TracedPath. A collision would silently overwrite, and a mismatch would raise a KeyError. The block uses `parse_command_line` instead of the listed Block 6 `command_tokens` consumer, which is acceptable because it is the shared tokenizer.",
+      "confidence": 0.7
+    }
+  ],
+  "weighted_average": 3.85625,
+  "gate": {
+    "passed": false,
+    "reason": "Spec-compliance verdict failed \u2014 missing: [\"A console script whose target is an argparse program's `main` (for example `subprocess.run(['mytool', 'open'])`, with `mytool` mapped to the parser's main) is not matched to that program's subcommand paths, only to the `project_script` entry. `_declared` for `argparse_subcommand` returns only `('program', path)` and `('module', m)` targets, never `('command', <script>)`. The implementer admits this in note (4). The CLI requirement says 'a subprocess invocation as defined in the subprocess requirement' should match a subcommand.\", 'A single-command typer app called through `CliRunner().invoke(app, [...])` without its mount name is missed. `cli_apps` keeps a typer app only `if group.prefix is not None`. The implementer admits this in note (3).']"
+  },
+  "missing": [
+    "A console script whose target is an argparse program's `main` (for example `subprocess.run(['mytool', 'open'])`, with `mytool` mapped to the parser's main) is not matched to that program's subcommand paths, only to the `project_script` entry. `_declared` for `argparse_subcommand` returns only `('program', path)` and `('module', m)` targets, never `('command', <script>)`. The implementer admits this in note (4). The CLI requirement says 'a subprocess invocation as defined in the subprocess requirement' should match a subcommand.",
+    "A single-command typer app called through `CliRunner().invoke(app, [...])` without its mount name is missed. `cli_apps` keeps a typer app only `if group.prefix is not None`. The implementer admits this in note (3)."
+  ],
+  "extra": [
+    "`python <script>.py` subprocess matching against a `main_module` entry's file (`_Target(('script', location.path))`) and the new `commands.python_script` go beyond the spec's listed `-m <module>` / console-script / hook forms. The module docstring documents them and they are harmless.",
+    "`PyIndex.including()` and `PyIndex.qualified_name()` are new public PyIndex methods that the stated interfaces do not include. Both are used by e2e_tests.py."
+  ],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "A console script mapped to an argparse program's main does not list tests for that program's subcommand paths. `subprocess.run(['mytool', 'open'])` reaches only the `project_script` entry and never the `open` path.",
+      "severity": "Minor",
+      "confidence": 0.75,
+      "evidence": "e2e_tests.py `_Targets._declared`: `case \"argparse_subcommand\": ... return {_Target((\"program\", location.path), words), *(_Target((\"module\", m), words) for m in modules)}`. No `(\"command\", <script name>)` target is produced. Implementer note (4) admits the gap. requirements/e2e-test-listing.md lists 'a subprocess invocation as defined in the subprocess requirement' as a CLI subcommand form.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 218,
+      "reviewers": []
+    },
+    {
+      "claim": "A typer app with no mount prefix is left out of `cli_apps`, so `CliRunner().invoke(app, [...])` against a single-command or unnamed typer app never matches as cli_runner.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "entries.py `cli_apps`: `apps = {name: group.prefix for name, group in _typer_apps(tree).items() if group.prefix is not None}`. Implementer note (3) admits that 'a single-command typer app invoked without its name is missed'.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 721,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "map_paths finds each kept path's Entry by re-deriving a `(kind, location, name)` key over `to_trace`. Two traced entries with the same triple would silently overwrite each other, and any drift between `to_path_entry` and `output_kind` would raise a bare KeyError after all the model calls have been paid for.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "paths.py: `traced_from = {(output_kind(e), e.location, e.name): e for e in to_trace}` then `traced_from[(p.entry.kind, p.entry.location, p.entry.name)] for p in paths`. Carrying the source Entry alongside the TracedPath (or returning it from trace_entries) would remove the reconstruction.\nREJECTED: This is speculative. `(kind, location, name)` is the identity discovery uses for entries, and merged invokers are folded into one entry, so two traced entries cannot share the triple. `output_kind` is the same mapping `to_path_entry` uses. The diff shows no actual collision or drift.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 442,
+      "reviewers": [],
+      "judge_reason": "This is speculative. `(kind, location, name)` is the identity discovery uses for entries, and merged invokers are folded into one entry, so two traced entries cannot share the triple. `output_kind` is the same mapping `to_path_entry` uses. The diff shows no actual collision or drift."
+    },
+    {
+      "claim": "A subcommand word is matched anywhere in argv in order, including as an option value. `main(['render', '--title', 'open'])` would list the test for the `open` path as well as `render`.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "e2e_tests.py `_Target.reached_by` \u2192 `_in_order(self.words, invocation.argv)`, which checks `all(word in remaining for word in words)` with no positional or option awareness. The spec only says 'containing the subcommand name', so this is a precision issue, not a spec violation.\nREJECTED: The block spec says argv is 'containing the subcommand token', and the requirement says 'with that subcommand's name as a token'. `_in_order` implements exactly that. The reviewer agrees it is not a spec violation. Making the check option-aware would change the specified matching rule, not fix a defect in it.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 196,
+      "reviewers": [],
+      "judge_reason": "The block spec says argv is 'containing the subcommand token', and the requirement says 'with that subcommand's name as a token'. `_in_order` implements exactly that. The reviewer agrees it is not a spec violation. Making the check option-aware would change the specified matching rule, not fix a defect in it."
+    },
+    {
+      "claim": "`PyIndex.qualified_name` skips a non-import binding visible in scope and falls through to a later import binding. A local definition or reassignment that shadows `subprocess` or `run` could still be classified as `subprocess.run`.",
+      "severity": "Minor",
+      "confidence": 0.35,
+      "evidence": "pyindex.py `qualified_name`: `for binding in self._visible(path, line, head): match binding: case _ModuleBinding(...): return ...; case _FromBinding(...) if module: return ...`. There is no `case _: return None` for a `_DefBinding`, so iteration continues past it.\nREJECTED: `PyIndex` stores several bindings per name and treats them as alternatives (`resolve_name` iterates `module_bindings.get(name, [])` the same way). `qualified_name` follows that model, as its docstring says ('scopes as for resolve_name'). A function-local rebinding shadows through scope lookup. The remaining case, an import and a def of the same name in one scope, is an unshown edge case.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/pyindex.py",
+      "line": 272,
+      "reviewers": [],
+      "judge_reason": "`PyIndex` stores several bindings per name and treats them as alternatives (`resolve_name` iterates `module_bindings.get(name, [])` the same way). `qualified_name` follows that model, as its docstring says ('scopes as for resolve_name'). A function-local rebinding shadows through scope lookup. The remaining case, an import and a def of the same name in one scope, is an unshown edge case."
+    },
+    {
+      "claim": "Possible Repeated Switches: a second string-kind `match` over entry kinds sits in `_Targets._declared`, separate from discovery's own per-kind logic. `cli_apps` re-runs `_decorated_command_entries` for every click/typer entry it is asked about.",
+      "severity": "Minor",
+      "confidence": 0.45,
+      "evidence": "e2e_tests.py `_declared`: `match kind: case \"argparse_subcommand\": ... case \"click_command\" | \"typer_command\": ... case \"main_module\": ... case \"project_script\": ... case \"skill_command\" | \"hook_command\":`. entries.py `cli_apps` loops `for entry in _decorated_command_entries(path, tree)[0]`.\nREJECTED: This is a style or efficiency preference. `_declared` maps entry kinds to invocation targets, which is a different job from discovery's per-kind parsing. Re-running `_decorated_command_entries` per click or typer entry is a negligible cost the project's standards do not address.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 215,
+      "reviewers": [],
+      "judge_reason": "This is a style or efficiency preference. `_declared` maps entry kinds to invocation targets, which is a different job from discovery's per-kind parsing. Re-running `_decorated_command_entries` per click or typer entry is a negligible cost the project's standards do not address."
+    },
+    {
+      "claim": "The declared test change to `_ReversedScandir` (adding `__iter__` returning self and `__next__`) keeps the test's intent. Python 3.12 `os.walk` calls `next()` on the scandir result, and the entries are still reversed.",
+      "severity": "Note",
+      "confidence": 0.7,
+      "evidence": "test_e2e_listing.py `_ReversedScandir.__init__`: `self._entries = iter(list(reversed(list(it))))`, `__iter__` returns self, `__next__` returns `next(self._entries)`. The test still asserts `dump() == first` and 9 records for `open`.\nREJECTED: This is a confirmation that the `_ReversedScandir` change keeps the test's intent, not a defect. No action is needed.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_e2e_listing.py",
+      "line": 470,
+      "reviewers": [],
+      "judge_reason": "This is a confirmation that the `_ReversedScandir` change keeps the test's intent, not a defect. No action is needed."
+    },
+    {
+      "claim": "No content was lost in the removals: `_reference` \u2192 `dotted_reference` has the same body, the `PyIndex.build` \u2192 `_walk` refactor keeps the repo-marker check before pruning, sorted traversal and the `_inside`/`is_file` guard, and the `python_module` \u2192 `_past_interpreter` split behaves the same.",
+      "severity": "Note",
+      "confidence": 0.8,
+      "evidence": "pyindex.py `_walk`: `names = {*dirnames, *filenames}` is captured before `dirnames[:] = sorted(d for d in dirnames if d not in skip_dirs)`, and `rels` filters `_inside(full := Path(dirpath, name), real_root) and full.is_file()` over `sorted(filenames)`. commands.py `python_module` keeps `len(rest) >= 2 and rest[0] == \"-m\"`.\nREJECTED: This is a confirmation that the refactors are behaviour-preserving, not a defect. No action is needed.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/pyindex.py",
+      "line": 470,
+      "reviewers": [],
+      "judge_reason": "This is a confirmation that the refactors are behaviour-preserving, not a defect. No action is needed."
+    },
+    {
+      "claim": "The diff changes plugins/multiplai-dev without a version bump or CHANGELOG entry. CLAUDE.md says the changelog gate fails such a PR, though the bump may be planned for the end of this multi-block build.",
+      "severity": "Note",
+      "confidence": 0.3,
+      "evidence": "CLAUDE.md: \"release notes: a changed plugin must carry a version bump and an entry\". No `.claude-plugin/marketplace.json`, `plugin.json` or `plugins/multiplai-dev/CHANGELOG.md` hunk is in the diff.\nREJECTED: This is block 9 of a multi-block build. The plugin version bump and CHANGELOG entry belong to the PR as a whole, not to each block's diff, and the reviewer concedes the bump may be planned at the end.",
+      "dimension": "conventions",
+      "file_path": "plugins/multiplai-dev/CHANGELOG.md",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "This is block 9 of a multi-block build. The plugin version bump and CHANGELOG entry belong to the PR as a whole, not to each block's diff, and the reviewer concedes the bump may be planned at the end."
+    }
+  ],
+  "fix_brief": "Fix review issues: Spec-compliance verdict failed \u2014 missing: [\"A console script whose target is an argparse program's `main` (for example `subprocess.run(['mytool', 'open'])`, with `mytool` mapped to the parser's main) is not matched to that program's subcommand paths, only to the `project_script` entry. `_declared` for `argparse_subcommand` returns only `('program', path)` and `('module', m)` targets, never `('command', <script>)`. The implementer admits this in note (4). The CLI requirement says 'a subprocess invocation as defined in the subprocess requirement' should match a subcommand.\", 'A single-command typer app called through `CliRunner().invoke(app, [...])` without its mount name is missed. `cli_apps` keeps a typer app only `if group.prefix is not None`. The implementer admits this in note (3).']\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Minor] A console script mapped to an argparse program's main does not list tests for that program's subcommand paths. `subprocess.run(['mytool', 'open'])` reaches only the `project_script` entry and never the `open` path. (plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py:218)\n  evidence: e2e_tests.py `_Targets._declared`: `case \"argparse_subcommand\": ... return {_Target((\"program\", location.path), words), *(_Target((\"module\", m), words) for m in modules)}`. No `(\"command\", <script name>)` target is produced. Implementer note (4) admits the gap. requirements/e2e-test-listing.md lists 'a subprocess invocation as defined in the subprocess requirement' as a CLI subcommand form.\n- [Minor] A typer app with no mount prefix is left out of `cli_apps`, so `CliRunner().invoke(app, [...])` against a single-command or unnamed typer app never matches as cli_runner. (plugins/multiplai-dev/lib/code_facts/code_facts/entries.py:721)\n  evidence: entries.py `cli_apps`: `apps = {name: group.prefix for name, group in _typer_apps(tree).items() if group.prefix is not None}`. Implementer note (3) admits that 'a single-command typer app invoked without its name is missed'.\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
+  "fix": {
+    "report": "I'll start by looking at the current state of the relevant code.I'm going through the existing listing tests and the click and typer helpers before I fix the two gaps.Now the edits. In `entries.py` I'm replacing `cli_apps` with per-command routes that account for typer single-command apps and callbacks, and I'm exposing console scripts so listing can match them.Now the click/typer section rewrite.Next, console scripts. I'm sharing the `[project.scripts]` reader between discovery and listing.Now the listing side in `e2e_tests.py`.I'll replace the predicate lambdas with a plain `(path, name=None)` filter. It reads better and avoids loop-variable closures.Everything still passes. Next I'm adding regression tests for both findings and the related cases I found, in a new test file so the existing tests stay untouched.All 10 pass. Next I'll confirm they fail on the pre-fix code.Nine fail on the old code. The tenth is the negative control, which should pass on both versions. Next I'll review the diff, update the module docs and lint.The diff looks right. A few tidy-ups: an inaccurate \"source order\" docstring, a missing docstring, a cryptic helper name, and None checks that can never fire. First I'll look at the ruff findings.Ruff's isort complaint covers import wrapping the project already uses in this file (the `.commands` import was flagged before my change), so I'm leaving that alone. Next the cleanups:The sed left a dangling line break. Fixing the wording:Both review findings are fixed, along with three related gaps I found while checking for the same mistake. The full suite passes: 608 tests, including 10 new ones. Nine of the new tests fail on the old code; the tenth is a negative control that passes on both.\n\n**Finding 1: a console script running an argparse program now reaches that program's subcommands.** `subprocess.run([\"prog\", \"open\"])` is now listed for the `open` path (match `subprocess`) when `prog` maps to a function in the parser module. Before, it only reached the `project_script` entry.\n- `entries.py` has a new `console_scripts(root, index)`, which shares one `pyproject.toml` reader with discovery. It also records scripts whose target is a variable (a typer `app`), which discovery reports as `unresolved_target`.\n- `E2EIndex.build` reads the scripts once per snapshot, and the argparse case in `_declared` adds a target for each script that runs the program.\n\n**Finding 2: typer apps are now matched the way typer actually runs them.** The real cause was not the `prefix is not None` filter the reviewer pointed to. That filter only drops apps mounted under a non-literal name, and those commands are never entries anyway. The real cause was that matching required the command's own name in the args, and a single-command typer app is run without its name. `cli_apps` is replaced by `cli_routes(path, tree)`, which lists, for each command, which app can invoke it and which words the args must hold:\n- An app with exactly one command, no callback and nothing mounted on it runs that command with no name.\n- A typer callback is reached by any invocation of its app. The old code required the callback's function name, which nobody types.\n- A typer app only reaches commands of its own sub-apps. The old code let `invoke(single, [\"sync\"])` wrongly match `sync` from an unrelated app in the same module.\n\n**Same mistake in the click/typer branch:** console scripts and `python -m` launchers were also missed for click and typer subcommands:\n- `subprocess.run([\"clicktool\", \"sync\"])` now reaches `cli sync`.\n- `subprocess.run([\"ttool\", \"users\", \"add-user\"])` (a script naming a typer app) now reaches `users add-user`.\n- `python -m app push`, where `app/__main__.py` calls `cli()`, now reaches `cli push`.\n\n**One gap left:** `python -m` of a module whose `if __name__ == \"__main__\"` block calls a typer `app()` still doesn't reach that app's subcommands. The app is a variable, not a function, so it can't be the module's handler.\n\nI added the new tests as a separate file, `tests/test_e2e_launchers.py`, and changed no existing test.\n\nSTATUS: DONE_WITH_CONCERNS\nTESTS_RUN: uv run --package walkthrough-pipeline --extra dev python -m pytest plugins/multiplai-dev/lib/code_facts/tests -q\nGREEN: 608 passed, 1 warning in 5.15s\nFILES: plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py, plugins/multiplai-dev/lib/code_facts/code_facts/entries.py, plugins/multiplai-dev/lib/code_facts/tests/test_e2e_launchers.py\nSURPRISES: (1) The typer finding's stated cause (`group.prefix is not None`) is wrong. The real cause is matching on the command's own name, which typer does not use for a single-command app. (2) Typer callbacks had the same problem, and commands could match through an unrelated typer app in the same module; both are fixed. (3) `python -m` of a module that calls a typer `app()` variable still doesn't reach its subcommands, because that call is not a function handler. (4) Ruff's import-sort rule (I001) flags this file's wrapped-import style, which the code already used before this change; I left it.\nSPEC_IMPACT: clarify. The CLI requirement doesn't say how typer single-command apps or callbacks are invoked, or that a console script or `python -m` running a click or typer app reaches its subcommands. I followed typer's actual dispatch rules.\n\nSEARCHED:\n- Console script \u2192 argparse subcommand: every branch of `_Targets._declared`. `argparse_subcommand` was missing script targets (fixed). `click_command`/`typer_command` were missing both script and `python -m` targets (fixed, except typer `-m`). `main_module` and `project_script` already get scripts through merged `also_invoked_by` or their own command key. `skill_command`/`hook_command` match by command text. Also checked `_program_modules` (now shares `_modules_running`) and `_project_script_entries`/`_script_handler` in `entries.py` (now share `_scripts_table`/`_script_target`).\n- Typer app missed by the runner: `cli_apps` (replaced by `cli_routes`), `_typer_apps` (now records each app's parent), `_decorated_command_entries` (now built on `_decorated_commands`, which keeps receiver and method), `_command_names`, and `_TestScan._app` (it resolves typer variables to `(\"app\", module_file, name)`, which matches `CliRoute.app`). Checked the click routes for the same name problem: none, since a click function supplies its own full name. Found and fixed the typer callback-name problem and the unrelated-app overmatch.\n\nTEST CHANGE REQUIRED: Added a new file, tests/test_e2e_launchers.py, with regression tests for the two accepted findings and the related launcher and typer cases (console script \u2192 argparse/click/typer subcommands, `python -m` of a click package, typer single-command, callback, mounted and unrelated apps). No existing test was modified.",
+    "success": true,
+    "timed_out": false,
+    "commit": null,
+    "searched": [
+      "Console script \u2192 argparse subcommand: every branch of `_Targets._declared`. `argparse_subcommand` was missing script targets (fixed). `click_command`/`typer_command` were missing both script and `python -m` targets (fixed, except typer `-m`). `main_module` and `project_script` already get scripts through merged `also_invoked_by` or their own command key. `skill_command`/`hook_command` match by command text. Also checked `_program_modules` (now shares `_modules_running`) and `_project_script_entries`/`_script_handler` in `entries.py` (now share `_scripts_table`/`_script_target`).",
+      "Typer app missed by the runner: `cli_apps` (replaced by `cli_routes`), `_typer_apps` (now records each app's parent), `_decorated_command_entries` (now built on `_decorated_commands`, which keeps receiver and method), `_command_names`, and `_TestScan._app` (it resolves typer variables to `(\"app\", module_file, name)`, which matches `CliRoute.app`). Checked the click routes for the same name problem: none, since a click function supplies its own full name. Found and fixed the typer callback-name problem and the unrelated-app overmatch."
+    ]
+  }
+}

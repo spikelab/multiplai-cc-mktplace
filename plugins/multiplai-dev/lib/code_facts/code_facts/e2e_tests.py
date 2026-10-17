@@ -23,13 +23,18 @@ the argv must hold, in order:
   module; argv must hold the subcommand words.
 - `cli_runner`: `<runner>.invoke(<app>, <args>)`, `app` resolving to a click
   group or command, or a typer app, of the command's module; args must hold the
-  command words `app` does not supply itself.
+  command words `app` does not supply itself. A typer app reaches the commands
+  of the apps mounted below it; a callback runs whenever its app does; and an
+  app with one command, no callback and no sub-app runs it with no name.
 - `subprocess`: `subprocess.run`, `call`, `check_call`, `check_output` or
   `Popen` of a command: `python -m <module> ...` (`sys.executable`, `python`,
   `python3`), `python <script>.py ...`, or a console script by name. It reaches
   a subcommand's module with its words, a `main_module`, a `[project.scripts]`
   name, and a `SKILL.md` or hook command line (its first positional word must
-  then be present too).
+  then be present too). A program is run by a console script naming a function
+  of its parser module, or its click or typer app, and by `python -m` of a module
+  whose `main_module` handler is such a function: these reach its subcommands
+  with the same words.
 - `runpy`: `runpy.run_module("<module>", ...)`, reaching a `main_module`.
 
 Argv is literal when it is a list or tuple display, whose elements that are not
@@ -64,7 +69,7 @@ from typing import get_args
 
 from .commands import (first_positional, hook_commands, parse_command_line, python_module, python_script,
                        shell_commands)
-from .entries import Entry, cli_apps, main_module_handler
+from .entries import ConsoleScript, Entry, cli_routes, console_scripts, main_module_handler
 from .paths import E2EListing, E2ETest, Handler, ListingSkip, Location, MatchKind, SkipReason, TracedPath
 from .pyindex import PyIndex, dotted_reference, snapshot_files
 
@@ -118,9 +123,11 @@ class E2ECandidate:
 class E2EIndex:
     """The test functions of a snapshot and their invocations, parsed once and matched against every entry."""
 
-    def __init__(self, index: PyIndex, tests: Sequence[E2ECandidate], skips: Sequence[ListingSkip]):
+    def __init__(self, index: PyIndex, tests: Sequence[E2ECandidate], skips: Sequence[ListingSkip],
+                 scripts: Sequence[ConsoleScript] = ()):
         self.index = index
         self.tests = tuple(tests)
+        self.scripts = tuple(scripts)
         self._skips = tuple(sorted(skips, key=lambda s: s.file))
 
     @classmethod
@@ -141,7 +148,7 @@ class E2EIndex:
             else:
                 tests += _TestScan(index, functions, rel).candidates(tree)
         log.debug("listed %d tests under %s (%d test files skipped)", len(tests), root, len(skips))
-        return cls(index, tests, skips)
+        return cls(index, tests, skips, console_scripts(root, index))
 
     def skips(self) -> list[ListingSkip]:
         """The test files that could not be decoded or parsed, in path order."""
@@ -161,7 +168,7 @@ def list_e2e_tests(root: Path, paths: Sequence[TracedPath], entries: Mapping[str
 
 def match_invocations(e2e_index: E2EIndex, entry: Entry, *, root: Path) -> list[E2ETest]:
     """The tests that invoke `entry` or one of its invokers, one record each, sorted by (file, line, node_id)."""
-    targets = _Targets(Path(root), e2e_index.index).of(entry)
+    targets = _Targets(Path(root), e2e_index.index, e2e_index.scripts).of(entry)
     records = []
     for test in e2e_index.tests:
         hits = [i for i in test.invocations if any(t.reached_by(i) for t in targets)]
@@ -201,6 +208,11 @@ class _Target:
         return invocation.key == self.key and _in_order(self.words, invocation.argv)
 
 
+def _is_target_in(target_path: str, target_name: str | None, path: str, name: str | None) -> bool:
+    """Whether a target is in `path`, and is called `name` when one is given."""
+    return target_path == path and (name is None or target_name == name)
+
+
 def _in_order(words: Argv, argv: Argv) -> bool:
     """Whether `words` occur in `argv` in order, not necessarily adjacent."""
     remaining = iter(argv)
@@ -210,9 +222,10 @@ def _in_order(words: Argv, argv: Argv) -> bool:
 class _Targets:
     """The targets of an entry: its handler, and the ways its own declaration and each invoker are run."""
 
-    def __init__(self, root: Path, index: PyIndex):
+    def __init__(self, root: Path, index: PyIndex, scripts: Sequence[ConsoleScript]):
         self._root = root
         self._index = index
+        self._scripts = scripts
 
     def of(self, entry: Entry) -> frozenset[_Target]:
         found: set[_Target] = set()
@@ -229,10 +242,12 @@ class _Targets:
         words = tuple(name.split(" "))
         match kind:
             case "argparse_subcommand":
-                modules = self._program_modules(location.path)
-                return {_Target(("program", location.path), words), *(_Target(("module", m), words) for m in modules)}
+                program = location.path
+                launchers = [("program", program), *(("module", m) for m in self._program_modules(program)),
+                             *self._scripts_running(program)]
+                return {_Target(key, words) for key in launchers}
             case "click_command" | "typer_command":
-                return self._app_targets(location.path, words)
+                return self._app_targets(location.path, name)
             case "main_module":
                 return {_Target(("module", name)), _Target(("script", location.path))}
             case "project_script":
@@ -247,24 +262,48 @@ class _Targets:
         """The modules `python -m` runs the parser module `program` as: its own, and its package's when the
         package's `__main__.py` hands over to a function of `program`.
         """
-        modules = []
         own = self._index.module_name(program)
-        if own:
-            modules.append(own.removesuffix(".__main__"))
-        package_main = posixpath.join(posixpath.dirname(program), "__main__.py")
-        package = self._index.module_name(package_main)
-        if package_main != program and package:
-            _, handler = main_module_handler(self._index, package_main)
-            if handler is not None and handler.path == program:
-                modules.append(package.removesuffix(".__main__"))
+        own_modules = [own.removesuffix(".__main__")] if own else []
+        return list(dict.fromkeys([*own_modules, *self._modules_running(program)]))
+
+    def _modules_running(self, path: str, name: str | None = None) -> list[str]:
+        """The modules, `path`'s own or its package's, whose `main_module` handler is a function of `path`, the
+        one called `name` when given.
+        """
+        package_main = posixpath.join(posixpath.dirname(path), "__main__.py")
+        modules = []
+        for main in dict.fromkeys((path, package_main)):
+            module = self._index.module_name(main)
+            _, handler = main_module_handler(self._index, main)
+            if module and handler is not None and _is_target_in(handler.path, handler.symbol, path, name):
+                modules.append(module.removesuffix(".__main__"))
         return modules
 
-    def _app_targets(self, path: str, words: Argv) -> set[_Target]:
-        """Each app of the module that the command can be invoked through, with the words it leaves to args."""
+    def _scripts_running(self, path: str, name: str | None = None) -> list[_Key]:
+        """The console scripts whose target is in `path`, the one called `name` when given. A target is the `def`
+        its name means, else the module-level name itself.
+        """
+        keys: list[_Key] = []
+        for script in self._scripts:
+            handler = script.handler
+            target = (handler.path, handler.symbol) if handler is not None else (script.module_file, script.attribute)
+            if _is_target_in(*target, path, name):
+                keys.append(("command", script.name))
+        return keys
+
+    def _app_targets(self, path: str, command: str) -> set[_Target]:
+        """Each way to run the click or typer command `command` of the module through one of its apps: a test
+        runner invoking the app, a console script naming it, or `python -m` of a module that calls it, with the
+        command name words the app leaves to its arguments.
+        """
         tree = self._index.tree(path)
-        apps = cli_apps(path, tree) if tree is not None else {}
-        return {_Target(("app", path, app), words[len(supplied):])
-                for app, supplied in apps.items() if words[:len(supplied)] == supplied}
+        found: set[_Target] = set()
+        for route in cli_routes(path, tree) if tree is not None else ():
+            if route.command == command:
+                launchers = [("app", path, route.app), *self._scripts_running(path, route.app),
+                             *(("module", m) for m in self._modules_running(path, route.app))]
+                found |= {_Target(key, route.words) for key in launchers}
+        return found
 
     def _commands_at(self, kind: str, location: Location) -> list[str]:
         """The command text of a `SKILL.md` or hook invoker, re-read at its location."""

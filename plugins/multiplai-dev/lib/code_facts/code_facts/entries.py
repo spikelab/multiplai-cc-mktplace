@@ -656,10 +656,29 @@ def _dispatch_facts(tree: ast.Module) -> _DispatchFacts:
 @dataclass(frozen=True)
 class _CommandGroup:
     """What commands are declared on: a click group or a typer app, with the names it puts before theirs.
-    `prefix` is None when one of those names is not a literal.
+    `prefix` is None when one of those names is not a literal. `parent` is the app a typer app is mounted on.
     """
     kind: EntryKind
     prefix: tuple[str, ...] | None
+    parent: str | None = None
+
+
+@dataclass(frozen=True)
+class _Command:
+    """A click or typer command entry, with the group or app it is declared on and the decorator method."""
+    entry: Entry
+    receiver: str
+    method: str
+
+
+@dataclass(frozen=True)
+class CliRoute:
+    """How a test runner reaches a click or typer command: `<runner>.invoke(<app>, <args>)`, with `app` a name
+    of the command's module and `args` holding `words`, in order.
+    """
+    command: str
+    app: str
+    words: tuple[str, ...]
 
 
 _CLICK_ROOT = _CommandGroup("click_command", ())
@@ -672,6 +691,13 @@ _ANY_COMMAND_METHOD = frozenset().union(*_COMMAND_METHODS.values())
 
 
 def _decorated_command_entries(path: str, tree: ast.Module) -> _Found:
+    """The click and typer command entries a module declares on its own groups and apps, in source order."""
+    commands, diagnostics = _decorated_commands(path, tree, dict(_typer_apps(tree)))
+    return [command.entry for command in commands], diagnostics
+
+
+def _decorated_commands(path: str, tree: ast.Module,
+                        typer_apps: dict[str, _CommandGroup]) -> tuple[list[_Command], list[Diagnostic]]:
     """The click and typer commands a module declares on its own groups and apps, in source order.
 
     A click group is known from its decorator on, as click registers it when the
@@ -680,8 +706,8 @@ def _decorated_command_entries(path: str, tree: ast.Module) -> _Found:
     """
     if not _imports_any(tree, {"click", "typer"}):
         return [], []
-    groups: dict[str, _CommandGroup] = dict(_typer_apps(tree))
-    entries: list[Entry] = []
+    groups: dict[str, _CommandGroup] = dict(typer_apps)
+    commands: list[_Command] = []
     diagnostics: list[Diagnostic] = []
     functions = _in_source_order(n for n in ast.walk(tree) if isinstance(n, _FUNCTION_NODES))
     for func in functions:
@@ -707,22 +733,69 @@ def _decorated_command_entries(path: str, tree: ast.Module) -> _Found:
             if group.kind == "click_command" and method == "group":
                 groups[func.name] = _CommandGroup("click_command", names)
             handler = Handler(path=path, line=func.lineno, symbol=func.name)
-            entries.append(_static_entry(group.kind, " ".join(names), path, decorator.lineno, handler))
-    return entries, diagnostics
+            entry = _static_entry(group.kind, " ".join(names), path, decorator.lineno, handler)
+            commands.append(_Command(entry, receiver, method))
+    return commands, diagnostics
 
 
-def cli_apps(path: str, tree: ast.Module) -> dict[str, tuple[str, ...]]:
-    """`name -> words` of each click group or command and typer app the module defines: the command name words
-    that invoking it (`CliRunner().invoke(<name>, ...)`) supplies before its own arguments. A click function's
-    words are its full command name; a typer app's are the names it is mounted under.
+def cli_routes(path: str, tree: ast.Module) -> list[CliRoute]:
+    """Every way a test runner can invoke a click or typer command entry of the module.
+
+    A click group or command, invoked as itself, supplies its own full name, so
+    args hold the rest of a command's name. A typer app supplies the names it is
+    mounted under, and reaches the commands of the apps mounted below it: args
+    hold the rest of a command's name, or of a callback's app, as a callback runs
+    whenever its app does. A typer app with one command, no callback and nothing
+    mounted on it runs that command with no command name, as typer does.
     """
     if not _imports_any(tree, {"click", "typer"}):
-        return {}
-    apps = {name: group.prefix for name, group in _typer_apps(tree).items() if group.prefix is not None}
-    for entry in _decorated_command_entries(path, tree)[0]:
-        if entry.kind == "click_command" and entry.handler is not None and entry.handler.symbol is not None:
-            apps[entry.handler.symbol] = tuple(entry.name.split(" "))
-    return apps
+        return []
+    typer_apps = _typer_apps(tree)
+    commands = _decorated_commands(path, tree, typer_apps)[0]
+    routes = _click_routes([c for c in commands if c.entry.kind == "click_command"])
+    routes += _typer_routes(typer_apps, [c for c in commands if c.entry.kind == "typer_command"])
+    return routes
+
+
+def _click_routes(commands: list[_Command]) -> list[CliRoute]:
+    """Each click command reached through itself or a group whose name starts its own."""
+    names = [(c.entry.handler.symbol, tuple(c.entry.name.split(" "))) for c in commands
+             if c.entry.handler is not None and c.entry.handler.symbol is not None]
+    return [CliRoute(" ".join(words), app, words[len(supplied):])
+            for _, words in names for app, supplied in names if words[:len(supplied)] == supplied]
+
+
+def _typer_routes(apps: dict[str, _CommandGroup], commands: list[_Command]) -> list[CliRoute]:
+    """Each typer command reached through the app it is declared on and every app that app is mounted below."""
+    mounted_on = {group.parent for group in apps.values()}
+    routes = []
+    for command in commands:
+        name = tuple(command.entry.name.split(" "))
+        for app in _typer_ancestors(apps, command.receiver):
+            # An emitted command's name starts with the literal prefix of every app above it.
+            supplied = len(apps[app].prefix or ())
+            if command.method == "callback":
+                words = name[supplied:-1]
+            elif app == command.receiver and app not in mounted_on and _sole_typer_command(commands, app):
+                words = ()
+            else:
+                words = name[supplied:]
+            routes.append(CliRoute(command.entry.name, app, words))
+    return routes
+
+
+def _typer_ancestors(apps: dict[str, _CommandGroup], app: str) -> list[str]:
+    """`app`, then each app it is mounted below, nearest first."""
+    chain = [app]
+    while (parent := apps[chain[-1]].parent) is not None and parent in apps and parent not in chain:
+        chain.append(parent)
+    return chain
+
+
+def _sole_typer_command(commands: list[_Command], app: str) -> bool:
+    """Whether `app` declares exactly one command and no callback."""
+    declared = [c.method for c in commands if c.receiver == app]
+    return declared == ["command"]
 
 
 def _command_names(group: _CommandGroup, receiver: str, method: str, call: ast.Call | None,
@@ -773,7 +846,8 @@ def _typer_apps(tree: ast.Module) -> dict[str, _CommandGroup]:
         literal = _literal_str(segment)
         return None if base is None or literal is None else (*base, literal)
 
-    return {app: _CommandGroup("typer_command", prefix(app, frozenset())) for app in created}
+    return {app: _CommandGroup("typer_command", prefix(app, frozenset()), mounts.get(app, (None,))[0])
+            for app in created}
 
 
 def _decorator_site(decorator: ast.expr) -> tuple[str, str, ast.Call | None] | None:
@@ -832,17 +906,49 @@ def _in_source_order[N: ast.AST](nodes: Iterable[N]) -> list[N]:
 # --- [project.scripts] ------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class ConsoleScript:
+    """A `[project.scripts]` key whose module resolves in its repository: the module-level `attribute` of
+    `module_file` it runs, and `handler`, the function `def` that name means, when it means one.
+    """
+    name: str
+    module_file: str
+    attribute: str
+    handler: Handler | None
+
+
+def console_scripts(root: Path, index: PyIndex) -> list[ConsoleScript]:
+    """The console scripts of every readable `pyproject.toml`, in file then key order."""
+    found = []
+    for path in index.files_named("pyproject.toml"):
+        try:
+            _, scripts = _scripts_table(root, path)
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+            log.debug("cannot read the scripts of %s: %s", path, e)
+            continue
+        for name, target in scripts.items():
+            resolved = _script_target(index, path, target) if name else None
+            if resolved is not None:
+                module_file, attribute = resolved
+                handler = _function(index, index.resolve_global(module_file, attribute))
+                found.append(ConsoleScript(name, module_file, attribute, handler))
+    return found
+
+
+def _scripts_table(root: Path, path: str) -> tuple[str, dict[str, object]]:
+    """The text of the `pyproject.toml` at `path` and its `[project.scripts]` table, empty when it has none."""
+    text = (root / path).read_bytes().decode("utf-8")
+    project = tomllib.loads(text).get("project")
+    scripts = project.get("scripts") if isinstance(project, dict) else None
+    return text, scripts if isinstance(scripts, dict) else {}
+
+
 def _project_script_entries(root: Path, index: PyIndex, path: str) -> _Found:
     """One entry per `[project.scripts]` key of the `pyproject.toml` at `path` whose target resolves."""
     try:
-        text = (root / path).read_bytes().decode("utf-8")
-        document = tomllib.loads(text)
+        text, scripts = _scripts_table(root, path)
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
         return _unreadable(path, e)
-    project = document.get("project")
-    scripts = project.get("scripts") if isinstance(project, dict) else None
-    if not isinstance(scripts, dict):
-        return [], []
     entries: list[Entry] = []
     diagnostics: list[Diagnostic] = []
     for name, target in scripts.items():
@@ -859,13 +965,19 @@ def _project_script_entries(root: Path, index: PyIndex, path: str) -> _Found:
 
 def _script_handler(index: PyIndex, pyproject: str, target: object) -> Handler | None:
     """The `def` a `"<module>:<function>"` script target names, searched for in the pyproject's repository."""
+    resolved = _script_target(index, pyproject, target)
+    return _function(index, index.resolve_global(*resolved)) if resolved else None
+
+
+def _script_target(index: PyIndex, pyproject: str, target: object) -> tuple[str, str] | None:
+    """`(module file, name)` of a `"<module>:<name>"` script target whose module is in the pyproject's
+    repository.
+    """
     if not isinstance(target, str):
         return None
-    module, _, function = (part.strip() for part in target.partition(":"))
-    if not (module and function):
-        return None
-    module_file = index.resolve_module(pyproject, module)
-    return _function(index, index.resolve_global(module_file, function)) if module_file else None
+    module, _, name = (part.strip() for part in target.partition(":"))
+    module_file = index.resolve_module(pyproject, module) if module and name else None
+    return (module_file, name) if module_file else None
 
 
 _TOML_TABLE = re.compile(r"^\s*\[\[?\s*([^\[\]]+?)\s*\]\]?\s*(?:#.*)?$")
