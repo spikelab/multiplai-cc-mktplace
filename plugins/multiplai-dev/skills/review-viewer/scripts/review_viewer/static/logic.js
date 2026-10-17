@@ -1564,6 +1564,32 @@
     return !!(doc && doc.test_listing_skips && doc.test_listing_skips.length);
   }
 
+  /* A finding's path ids against the loaded paths.json: in the finding's
+   * order, each id once, as {id, path} or {id, path: null, missing: true}
+   * for an id the file does not have. [] with no ids or no paths.json. */
+  function resolvePathRefs(ids, doc) {
+    if (!doc || !Array.isArray(ids)) return [];
+    const known = new Map((doc.paths || []).map((p) => [p.id, p]));
+    const seen = new Set();
+    const out = [];
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(known.has(id) ? { id: id, path: known.get(id) } : { id: id, path: null, missing: true });
+    }
+    return out;
+  }
+
+  /* The "Paths" section of a finding's page, refuted findings included, or
+   * null when the finding names no path or no paths.json was loaded. */
+  function findingPathsSection(finding, doc) {
+    const refs = resolvePathRefs(finding && finding.paths, doc);
+    if (!refs.length) return null;
+    return { entries: refs.map((r) => r.path
+      ? { id: r.id, label: r.path.entry.name, kind: kindLabel(r.path.entry.kind), link: true, note: null }
+      : { id: r.id, label: r.id, kind: null, link: false, note: "not in paths.json" }) };
+  }
+
   /* The lines under a card's "E2E tests:": each counted test, "no e2e test"
    * when none counts (also when only mocked ones exist), then each mocked
    * test marked not counted. */
@@ -1646,6 +1672,7 @@
     findingsByPath: findingsByPath, sortPaths: sortPaths, hasCountedE2e: hasCountedE2e,
     pathCardModel: pathCardModel, pathTestLines: pathTestLines, pathsSummary: pathsSummary,
     hasUnlistedTests: hasUnlistedTests, UNLISTED_TESTS_NOTE: UNLISTED_TESTS_NOTE, NO_PATHS_TEXT: NO_PATHS_TEXT,
+    resolvePathRefs: resolvePathRefs, findingPathsSection: findingPathsSection,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;

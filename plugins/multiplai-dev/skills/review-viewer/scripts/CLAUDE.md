@@ -117,7 +117,10 @@ file route passes the lines they point at (`server._path_ranges`) to
 `file_view(extra_ranges=…)`, which keeps them in view in a file over 4000
 lines. The cards come from `logic.js` (`countedFindings`, `findingsByPath`,
 `sortPaths`, `pathCardModel`, `pathTestLines`, `pathsSummary`, `hasUnlistedTests`);
-`app.js` only renders them.
+`app.js` only renders them. A finding's page lists the paths it lies on
+(`findingPathsSection`, from `resolvePathRefs`; refuted findings too, an id
+the file lacks marked `not in paths.json`); each link opens the Paths tab at
+the card `path-card-<id>` and marks it `is-target`.
 
 ## Protocol 2: the mailbox (`<dir of findings.json>/viewer/`)
 

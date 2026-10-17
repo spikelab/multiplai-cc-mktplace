@@ -75,6 +75,8 @@
     defGen: 0,
     defEvent: null,
     pointer: null,
+    // The path card a finding's Paths link opened; marked until another target loads.
+    targetPathId: null,
   };
 
   // --- small helpers ---------------------------------------------------------
@@ -333,6 +335,7 @@
     state.fileNote = null;
     state.badgeOpen = null;
     state.blockPin = null;
+    state.targetPathId = null;
     if (!state.tabChosen) state.tab = "summary";
     const target = state.detail.findings.target;
     $("title").textContent = target.label;
@@ -1376,7 +1379,17 @@
     }
     kids.push(el("div", { class: "label", text: "E2E tests:" }), el("ul", { class: "path-list" },
       L.pathTestLines(m.tests).map((t) => el("li", { class: "mono small path-test-" + t.kind, text: t.text }))));
-    return el("article", { id: m.domId, class: "path-card" }, kids);
+    return el("article", { id: m.domId, class: "path-card" + (m.id === state.targetPathId ? " is-target" : "") }, kids);
+  }
+
+  /* A finding's Paths link: open the Paths tab at that path's card, and mark
+   * it as the one the link pointed at. */
+  function showPathCard(id) {
+    state.targetPathId = id;
+    setTab("paths");
+    renderPaths();
+    const card = document.getElementById("path-card-" + id);
+    if (card) card.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
   }
 
   /* The Paths tab: the cards, paths with counted findings first. Counted
@@ -1554,6 +1567,17 @@
       box.appendChild(el("div", { class: "label", text: "Explained in the walkthrough" }));
       for (const s of steps) {
         box.appendChild(el("button", { class: "cite-link", text: s.title, onclick: () => selectStep(s.id, { open: true }) }));
+      }
+    }
+    const onPaths = L.findingPathsSection(f, state.detail.paths);
+    if (onPaths) {
+      box.appendChild(el("div", { class: "label", text: "Paths" }));
+      for (const p of onPaths.entries) {
+        box.appendChild(p.link
+          ? el("button", { type: "button", class: "cite-link", onclick: () => showPathCard(p.id) },
+            [el("span", { class: "mono muted", text: p.id }), " " + p.label + " ", el("span", { class: "badge", text: p.kind })])
+          : el("div", { class: "small" }, [el("span", { class: "mono", text: p.id }),
+            el("span", { class: "muted", text: " " + p.note })]));
       }
     }
     box.appendChild(decisionBox(f));
