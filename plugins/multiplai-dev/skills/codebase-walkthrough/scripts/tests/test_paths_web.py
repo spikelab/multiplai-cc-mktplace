@@ -131,3 +131,18 @@ def test_no_target_repo_edges_means_no_places_and_no_seeds(references):
     from walkthrough_pipeline.stages.trace import known_places, web_seeds
     state = _state(references=references)
     assert known_places(state) == [] and web_seeds(state) == []
+
+
+def test_a_route_another_repo_calls_is_matched_by_its_full_route_not_a_suffix():
+    """Mounted at `v1/`, `items/status/` is the route mobile/ calls; `status/` only shares its last segment."""
+    from walkthrough_pipeline.stages.trace import known_places, web_seeds
+    fns = [SymbolEntry(kind="function", name=n, path="site/shop/views.py", line=line, quote=f"def {n}(request):")
+           for n, line in (("status", 1), ("item_status", 5))]
+    state = _state(symbols=[_url("status/", 6, "views.status"), _url("items/status/", 7, "views.item_status"), *fns],
+                   references=[_ref("site", "url-include", "shop.urls mounted at 'v1/'", "site/project/urls.py", 3),
+                               _ref("mobile", "http-route", "v1/items/status/", "mobile/api.py", 4)])
+    assert web_seeds(state) == [
+        Seed(path="shop/views.py", symbol="item_status", name="mobile: HTTP /v1/items/status/"),
+        Seed(path="shop/views.py", symbol="status", name="HTTP /status/"),
+    ]
+    assert known_places(state)[0] == Location(path="shop/urls.py", line=7)

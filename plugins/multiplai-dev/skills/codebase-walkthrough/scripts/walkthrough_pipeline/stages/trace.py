@@ -35,6 +35,7 @@ from code_facts import Location, Seed
 
 from .. import budget, sdk
 from ..models import STAGES, Reference, SymbolEntry, WalkState
+from ..references import full_routes
 from ..render import left_out_count
 from . import RunContext
 
@@ -96,11 +97,18 @@ def _route_seed(state: WalkState, url: SymbolEntry, name: str) -> Seed | None:
 
 
 def _matching_route(state: WalkState, route: str) -> SymbolEntry | None:
-    """The target's url entry a full route (with its mount prefix) names."""
+    """The target's url entry a full route (with its mount prefix) names.
+
+    The boundary stage names a called route by its key in `full_routes`, so that table is asked first. Else
+    the longest url whose segments end the route: a bare suffix match would take `status/` for `items/status/`.
+    """
+    found = full_routes(state.symbols, state.references).get(route.lstrip("/"))
+    if found is not None:
+        return found
     want = route.strip("/")
-    urls = [e for e in state.symbols if e.kind == "url"]
-    return next((e for e in urls if e.name.strip("/") == want), None) or next(
-        (e for e in urls if e.name.strip("/") and want.endswith(e.name.strip("/"))), None)
+    urls = [e for e in state.symbols if e.kind == "url" and e.name.strip("/")]
+    ends = [e for e in urls if want == e.name.strip("/") or want.endswith("/" + e.name.strip("/"))]
+    return max(ends, key=lambda e: len(e.name.strip("/")), default=None)
 
 
 def _task(state: WalkState, task: str) -> SymbolEntry | None:
