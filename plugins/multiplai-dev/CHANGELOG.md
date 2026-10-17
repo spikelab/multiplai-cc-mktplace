@@ -22,7 +22,9 @@ time, not derived from a tag.
   code_facts' `map_paths`, so a walkthrough of a CLI or skill repository
   traces its argparse, click and typer commands, scripts, `__main__` modules,
   skill commands and hooks, not only web routes. The whole module is the
-  scope: every entry point whose path reaches it is traced.
+  scope: every entry point whose path reaches it is traced. Web routes,
+  routes called from other repositories and Celery beat entries are still
+  traced, now starting at their handler function.
 - codebase-walkthrough: the "End-to-end scenarios" section is replaced by a
   **Paths** section, rendered by code. For each path it gives the entry
   point, its kind and who invokes it, the hops as `path:line` links with ids

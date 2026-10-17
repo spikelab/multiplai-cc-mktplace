@@ -25,8 +25,11 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
    API collection. One agent per resource links the docs to the code.
 5. **trace** — `code_facts.map_paths` finds the entry points of the module's
    repository (argparse, click and typer commands, `[project.scripts]`,
-   `__main__` modules, `python -m` commands in a `SKILL.md`, hooks) and one
-   agent per entry follows the code hop by hop. The whole module is the
+   `__main__` modules, `python -m` commands in a `SKILL.md`, hooks). The web
+   entries the boundary stage found are added as caller seeds, each at its
+   handler: webhook routes, routes called from other repositories, Celery
+   beat entries, then the other routes. One agent per entry follows the code
+   hop by hop. The whole module is the
    scope: every entry whose path reaches one of its lines is kept, up to
    `--scenarios` paths (default 21), and code gates every hop. Every entry
    left out (over the cap, unreachable, a trace that failed) is listed with

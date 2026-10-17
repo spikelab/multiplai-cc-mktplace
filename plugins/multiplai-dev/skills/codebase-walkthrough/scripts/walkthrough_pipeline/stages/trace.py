@@ -6,18 +6,27 @@ agent, gates every hop and ranks the paths. The walkthrough passes the whole
 module as the changed lines, so every entry that reaches it is kept, up to
 `--scenarios` paths. Answers are kept under `<run dir>/paths-cache/`, so a
 resumed run asks only for the ones it does not have.
+
+Web entries are not found by `map_paths`; the boundary stage found them, and
+they are passed as caller seeds in the old seed order: webhook routes, routes
+called from other repositories, Celery beat entries, then the other routes.
+Each is seeded at its handler's `def`, or at its registration line when the
+handler cannot be named. The boundary edges (routes, tasks, the target side
+of cross-repository references) are the gate's known places.
 """
 
 from __future__ import annotations
 
 import logging
 import posixpath
+import re
 from pathlib import Path
 
 import code_facts
+from code_facts import Location, Seed
 
 from .. import sdk
-from ..models import WalkState
+from ..models import Reference, SymbolEntry, WalkState
 from ..render import left_out_count
 from . import RunContext
 
@@ -41,6 +50,107 @@ def module_lines(state: WalkState, root: Path) -> dict[str, set[int]]:
         n = data.count(b"\n") + (0 if not data or data.endswith(b"\n") else 1)
         if n:
             out[rel] = set(range(1, n + 1))
+    return out
+
+
+def _rel(state: WalkState, ws: str) -> str | None:
+    """The repo-relative form of a workspace path in the target repo, else None."""
+    key, _, rel = ws.partition("/")
+    return rel if key == state.target.repo_key and rel else None
+
+
+def _route_name(route: str) -> str:
+    return "HTTP /" + route.lstrip("/")
+
+
+def _view_handler(state: WalkState, url: SymbolEntry) -> tuple[str, str] | None:
+    """(repo-relative file, name) of the function or class a route's view names, when exactly one matches."""
+    dotted = re.match(r"\s*([A-Za-z_][\w.]*)", url.detail.get("view", ""))
+    if not dotted or dotted.group(1) in ("include", "path", "re_path"):
+        return None
+    parts = [p for p in dotted.group(1).split(".") if p not in ("as_view", "view")]
+    if not parts:
+        return None
+    name, qualifier = parts[-1], parts[-2] if len(parts) > 1 else ""
+    found = [e for e in state.symbols if e.kind in ("function", "class") and e.name == name and _rel(state, e.path)]
+    if qualifier:
+        found = [e for e in found if posixpath.splitext(posixpath.basename(e.path))[0] == qualifier] or found
+    return (_rel(state, found[0].path), name) if len(found) == 1 else None
+
+
+def _route_seed(state: WalkState, url: SymbolEntry, name: str) -> Seed | None:
+    """A route's seed at its handler, else at its registration line."""
+    handler = _view_handler(state, url)
+    if handler:
+        return Seed(path=handler[0], symbol=handler[1], name=name)
+    rel = _rel(state, url.path)
+    return Seed(path=rel, line=url.line, name=name) if rel else None
+
+
+def _matching_route(state: WalkState, route: str) -> SymbolEntry | None:
+    """The target's url entry a full route (with its mount prefix) names."""
+    want = route.strip("/")
+    urls = [e for e in state.symbols if e.kind == "url"]
+    return next((e for e in urls if e.name.strip("/") == want), None) or next(
+        (e for e in urls if e.name.strip("/") and want.endswith(e.name.strip("/"))), None)
+
+
+def _task(state: WalkState, task: str) -> SymbolEntry | None:
+    return next((e for e in state.symbols if e.kind == "celery-task" and e.name == task), None)
+
+
+def web_seeds(state: WalkState) -> list[Seed]:
+    """Caller seeds for the web entries the boundary stage found, defined in the target repo only."""
+    urls = [e for e in state.symbols if e.kind == "url"]
+    seeds: list[Seed] = []
+    taken: set[str] = set()
+
+    def add(key: str, seed: Seed | None) -> None:
+        if seed is not None and key not in taken:
+            taken.add(key)
+            seeds.append(seed)
+
+    for e in urls:
+        hay = (e.name + " " + e.detail.get("view", "") + " " + e.detail.get("url_name", "")).lower()
+        if "webhook" in hay or "wbhk" in hay:
+            add("route:" + e.name, _route_seed(state, e, _route_name(e.name)))
+    for r in state.references:
+        if r.kind == "http-route" and r.repo != state.target.repo_key:
+            url = _matching_route(state, r.symbol)
+            if url is not None:
+                add("route:" + url.name, _route_seed(state, url, f"{r.repo}: {_route_name(r.symbol)}"))
+    for r in state.references:
+        if r.kind == "celery-name":
+            task, name = _task(state, r.symbol), f"{r.symbol} (beat)"
+            if task is not None and task.detail.get("function") and _rel(state, task.path):
+                add("task:" + r.symbol, Seed(path=_rel(state, task.path), symbol=task.detail["function"], name=name))
+            elif _rel(state, r.path):
+                add("task:" + r.symbol, Seed(path=_rel(state, r.path), line=r.line, name=name))
+    for e in urls:
+        add("route:" + e.name, _route_seed(state, e, _route_name(e.name)))
+    return seeds
+
+
+def known_places(state: WalkState) -> list[Location]:
+    """The boundary edges under the target repo's root: the target side of each cross-repository
+    reference, then every route, then every task and beat entry. First-seen order, no duplicates."""
+    found: list[SymbolEntry | Reference] = []
+    for r in state.references:
+        if r.repo == state.target.repo_key:
+            continue
+        if r.kind == "http-route":
+            found.append(_matching_route(state, r.symbol))
+        elif r.kind == "celery-name":
+            found.append(_task(state, r.symbol))
+    found += [e for e in state.symbols if e.kind == "url"]
+    found += [e for e in state.symbols if e.kind == "celery-task"]
+    found += [r for r in state.references if r.kind == "celery-name" and r.repo == state.target.repo_key]
+    out: list[Location] = []
+    for e in found:
+        rel = _rel(state, e.path) if e is not None else None
+        place = Location(path=rel, line=e.line) if rel else None
+        if place is not None and place not in out:
+            out.append(place)
     return out
 
 
@@ -80,8 +190,8 @@ async def run_trace(state: WalkState, ctx: RunContext) -> WalkState:
         resolve=_resolver(state),
         call=_trace_call(ctx, root),
         changed_lines=module_lines(state, root),
-        seeds=[],
-        places=[],
+        seeds=web_seeds(state),
+        places=known_places(state),
         cap=int(state.options.get("scenarios") or 21),
         trace_limit=TRACE_LIMIT,
         concurrency=ctx.config.concurrency,
