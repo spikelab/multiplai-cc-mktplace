@@ -1,0 +1,150 @@
+{
+  "generated_at": "2026-10-17T07:01:22.143149+00:00",
+  "kind": "review",
+  "block": {
+    "number": 4,
+    "name": "Persist answers on disk so reruns resume and stay byte-identical"
+  },
+  "round": 1,
+  "head_sha": "83e1c85436ba6230a6b8444626f2ba8401bc30e6",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The new cache.py has one job: keys and persistence. It meets the global constraints (`from __future__ import annotations`, `log = logging.getLogger(__name__)`). There is no module-level mutable state; each `map_paths` call builds its own `_DiskAnswers`. The CALL_ERROR marker and `canonical_digest` exist once. Small points: cache.py imports `write_atomic` from the contract module paths.py, so a generic I/O helper is coupled to the schema module. The key-format check in `_file` runs only when there is a directory, so in-memory mode accepts keys that disk mode rejects. D2's module table does not list cache.py, which the implementer disclosed.",
+      "confidence": 0.8
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "Tests check written bytes, `PathsResult.dropped` and `.paths`, and the exact (stage, entry) of each call, never call counts alone. The atomic-write test patches `os.replace` and checks that the old bytes survive and no temp file is left. Weaknesses: the interrupt test uses a fixed `asyncio.sleep(0.2)` to order completions (test_paths_cache.py:300). The `cache()` helper (lines 20-29) looks the names up in six candidate modules, so the tests never pin where the interface lives. No test covers a cached file that is valid JSON but not a valid TraceAnswer.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "Storage path `<cache_dir>/paths-answers/<sha256>.json`, temp file then fsync then os.replace, load at start-up, purge of `{\"error\":\u2026}` per `map_paths` call, the trace and re-ask key inputs (tracing.py:73-90), and every listed test scenario are all present. Deviations: the spec says stored answers are 're-validated into its answer model when read', but a loaded object is only checked to be a dict (cache.py:110). Validation happens later, unguarded, in `_gate` (tracing.py:164), so a wrong-shape cached answer crashes the run instead of being a miss. `cache_key` hashes with `ensure_ascii=False` and wraps the payload in `{kind, payload}`; the interface text names plain `json.dumps(payload, sort_keys, separators)` (disclosed). `cache_dir=None` uses `_DiskAnswers(None)`, not a plain dict (disclosed; behaves the same).",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "`_DiskAnswers` works as a drop-in for `TraceContext.answers: MutableMapping[str, dict]` (tracing.py:56). `ask` and `run_tasks` are unchanged apart from the marker constant. `encode_trace_answer` already returns `model_dump(mode=\"json\")` dicts, so the in-memory value and the value loaded from disk are equal, and `canonical_digest(first_answer)` in `reask_key` is the same on the first run and on reruns; the zero-call re-ask test confirms this. The circular-import order holds: cache imports paths at module level, and paths imports cache only inside the function. Seam weaknesses: the store's tolerance of bad files ends at JSON parsing, so the gate is the first place that sees a malformed object. A key that is not a hex digest fails only when `cache_dir` is set.",
+      "confidence": 0.75
+    }
+  ],
+  "weighted_average": 3.88125,
+  "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 3.9"
+  },
+  "missing": [],
+  "extra": [],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "A cached answer file that is a valid JSON object but not a valid TraceAnswer, and has neither the `error` nor the `malformed` marker, crashes `map_paths` with an unwrapped pydantic ValidationError instead of being treated as a miss and asked again. This goes against the spec's 're-validated into its answer model when read' and the module's own 'An unreadable one is a miss, asked again'. Fix: validate when loading or when reading. Either `_load` takes a validator and drops (with a warning) objects that fail `TraceAnswer.model_validate` unless they carry CALL_ERROR or MALFORMED, or `_answer` in tracing.py catches the ValidationError on a cached value, deletes the key and asks again.",
+      "severity": "Minor",
+      "confidence": 0.65,
+      "evidence": "cache.py:110-113 `if not isinstance(value, dict): log.warning(...); continue` then `answers[path.stem] = value` (shape is never checked). tracing.py:158 `return ctx.answers[key]` \u2192 tracing.py:164 `gate_hops(TraceAnswer.model_validate(answer).hops, ...)`, outside any try. Before this block, answers came only from `encode_trace_answer`, so this validation could not fail. Disk loading adds a new input that can. A realistic trigger is a change to the TraceAnswer schema without a bump to PATHS_TRACE_PROMPT_VERSION.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/cache.py",
+      "line": 110,
+      "reviewers": []
+    },
+    {
+      "claim": "Key validation differs between modes. `_file` raises ValueError for a key that is not a 64-hex digest, but only when a directory is set. In-memory mode (`cache_dir=None`, the default and what most tests use) accepts any key. A future caller using a non-digest key (for example `unit:<id>`-style keys like explore's) would pass every no-cache test and fail only in production runs with a cache. Fix: check the key in `__setitem__` whatever the mode, or document that keys must come from `cache_key`.",
+      "severity": "Minor",
+      "confidence": 0.45,
+      "evidence": "cache.py:65-66 `if self._directory is not None: write_atomic(self._file(key), ...)`; cache.py:82-85 `_file` holds the only `KEY.fullmatch` check.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/cache.py",
+      "line": 82,
+      "reviewers": []
+    },
+    {
+      "claim": "The interrupted-resume test orders completions with a fixed `asyncio.sleep(0.2)`. The rubric asks for 'no fixed sleeps; any random delays are used only to perturb completion order'. The quick answers already finish at FakeCall's `sleep(0)`, so an asyncio.Event that the late calls await (set once three answers are stored) would make the ordering explicit and drop the 0.2 s wall-clock wait.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "test_paths_cache.py:298-301 `if recorder._entry(prompt) in late: await asyncio.sleep(0.2); raise Interrupted(\"killed\")`",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_paths_cache.py",
+      "line": 300,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "Every answer file in the directory, for every commit ever mapped, is read and parsed into memory on each `map_paths` call. Keys include `commit`, so a long-lived `cache_dir` grows without bound, and start-up cost and memory grow with it, even though one run looks up only its own keys. Nothing evicts old entries. Fix: load lazily per key in `__getitem__`/`__contains__` (a stat or read of `<key>.json`), or document that cache_dir is per-review and short-lived.",
+      "severity": "Minor",
+      "confidence": 0.45,
+      "evidence": "cache.py:57 `self._answers = _load(directory)`; cache.py:101 `for path in sorted(directory.glob(\"*.json\"))`; tracing.py:75 trace key includes `\"commit\": ctx.commit`.\nREJECTED: Contradicts the spec. Block 4 says explicitly: 'At start-up every file in the directory is loaded'. Eager loading is the specified design. Lazy loading or eviction would be a spec change, not a fix to this block.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/cache.py",
+      "line": 57,
+      "reviewers": [],
+      "judge_reason": "Contradicts the spec. Block 4 says explicitly: 'At start-up every file in the directory is loaded'. Eager loading is the specified design. Lazy loading or eviction would be a spec change, not a fix to this block."
+    },
+    {
+      "claim": "The test helper `cache()` looks up `_DiskAnswers`, `cache_key` and `purge_failed` in any of six modules, so the suite never pins which module the produced interface lives in. Moving the names would not break a test. That is acceptable while the spec leaves the module open (the test writer disclosed this), but now that `code_facts.cache` exists the lookup could be a direct import.",
+      "severity": "Note",
+      "confidence": 0.4,
+      "evidence": "test_paths_cache.py:20-29 `for mod in (\"code_facts.cache\", \"code_facts.answers\", \"code_facts.paths\", \"code_facts.tracing\", \"code_facts.explore\", \"code_facts\"): ...`\nREJECTED: The spec's interface names no module for `_DiskAnswers`, `cache_key` or `purge_failed`, and the test writer disclosed this. Pinning the tests to `code_facts.cache` would assert something the spec does not require. This is a style preference.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_paths_cache.py",
+      "line": 20,
+      "reviewers": [],
+      "judge_reason": "The spec's interface names no module for `_DiskAnswers`, `cache_key` or `purge_failed`, and the test writer disclosed this. Pinning the tests to `code_facts.cache` would assert something the spec does not require. This is a style preference."
+    },
+    {
+      "claim": "`cache_key` does not hash exactly what the interface text says. It hashes `{\"kind\": kind, \"payload\": payload}` through `canonical_digest`, which passes `ensure_ascii=False`. The interface says `json.dumps(payload, sort_keys=True, separators=(\",\", \":\"))` with kind included, and that call defaults to ensure_ascii=True. Keys differ only for non-ASCII payloads and are internal to this cache, so the impact is nil unless another tool must reproduce them. The refactorer disclosed this; a spec clarification would settle it.",
+      "severity": "Note",
+      "confidence": 0.5,
+      "evidence": "cache.py:41 `return canonical_digest({\"kind\": kind, \"payload\": dict(payload)})`; explore.py:121 `json.dumps(value, sort_keys=True, separators=(\",\", \":\"), ensure_ascii=False)`\nREJECTED: The keys are internal to this cache, and no other tool needs to reproduce them. `canonical_digest` with ensure_ascii=False matches the project's global serialisation (`ensure_ascii=False`) and the existing key scheme. The difference shows only for non-ASCII payloads, has no functional effect, and the refactorer already disclosed it. Changing the code would improve nothing; at most this is a spec wording clarification.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/cache.py",
+      "line": 41,
+      "reviewers": [],
+      "judge_reason": "The keys are internal to this cache, and no other tool needs to reproduce them. `canonical_digest` with ensure_ascii=False matches the project's global serialisation (`ensure_ascii=False`) and the existing key scheme. The difference shows only for non-ASCII payloads, has no functional effect, and the refactorer already disclosed it. Changing the code would improve nothing; at most this is a spec wording clarification."
+    },
+    {
+      "claim": "With `cache_dir=None`, `map_paths` uses a memory-only `_DiskAnswers(None)` where the spec says 'keeps a plain dict'. The implementer disclosed this and it behaves the same: no files are written, and test_map_paths_contract.py:135-136 confirms the cache directory is never created. It does mean the no-cache path now runs through the new class, including the `BaseModel` coercion in `__setitem__`.",
+      "severity": "Note",
+      "confidence": 0.6,
+      "evidence": "paths.py:413 `answers = _DiskAnswers(cache_dir / ANSWERS_DIR if cache_dir is not None else None)`\nREJECTED: The produced interface itself declares `_DiskAnswers.__init__(self, directory: Path | None)`, so the memory-only mode is part of the spec. It keeps the same per-run, empty-at-start semantics, writes nothing, and gives `purge_failed` its declared type. The implementer disclosed it, and the reviewer agrees it behaves the same.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 413,
+      "reviewers": [],
+      "judge_reason": "The produced interface itself declares `_DiskAnswers.__init__(self, directory: Path | None)`, so the memory-only mode is part of the spec. It keeps the same per-run, empty-at-start semantics, writes nothing, and gives `purge_failed` its declared type. The implementer disclosed it, and the reviewer agrees it behaves the same."
+    },
+    {
+      "claim": "No guarantee was lost in the removed or replaced lines. The `_write_atomic` \u2192 `write_atomic` rename has no callers left under the old name in code_facts (the other `_write_atomic` is a separate function in build_pipeline/epic/store.py). Removing `CALL_ERROR = \"error\"` from tracing.py is covered by the import from explore.py with the same value. Replacing `answers={}` with `_DiskAnswers(None)` keeps the same per-run, empty-at-start semantics. Moving the 'error' literal into `CALL_ERROR` in `ask` and `gate_answers` changes no value.",
+      "severity": "Note",
+      "confidence": 0.85,
+      "evidence": "explore.py:40 `CALL_ERROR = \"error\"`; tracing.py:28 `from .explore import CALL_ERROR, ...`; paths.py:478 `write_atomic(path, text.encode(\"utf-8\"))`; grep for `_write_atomic` under code_facts returns nothing.\nREJECTED: This is a confirmation that nothing was lost, not a defect. There is nothing to fix.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/tracing.py",
+      "line": 28,
+      "reviewers": [],
+      "judge_reason": "This is a confirmation that nothing was lost, not a defect. There is nothing to fix."
+    },
+    {
+      "claim": "A write killed by SIGKILL or a power loss between the temp-file create and os.replace leaves a `.<key>.json.<hex>.tmp` file in paths-answers/. `_load` ignores these (glob `*.json` does not match them) but never deletes them, so they pile up. The `except BaseException` cleanup in `write_atomic` covers only exceptions inside the process. Fix: at load time, delete `.*.tmp` files older than the run, or at least log them.",
+      "severity": "Note",
+      "confidence": 0.35,
+      "evidence": "paths.py:490 `tmp = path.with_name(f\".{path.name}.{secrets.token_hex(8)}.tmp\")`; cache.py:101 `directory.glob(\"*.json\")`\nREJECTED: The spec defines the write procedure (temp file, fsync, os.replace), and the diff follows it. Orphaned temp files appear only after SIGKILL or power loss mid-write, and `_load` already ignores them. Deleting `.tmp` files at start-up could race with a concurrent writer. The impact is negligible and nothing asks for this cleanup.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/cache.py",
+      "line": 101,
+      "reviewers": [],
+      "judge_reason": "The spec defines the write procedure (temp file, fsync, os.replace), and the diff follows it. Orphaned temp files appear only after SIGKILL or power loss mid-write, and `_load` already ignores them. Deleting `.tmp` files at start-up could race with a concurrent writer. The impact is negligible and nothing asks for this cleanup."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}
