@@ -130,3 +130,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: none
 - SURPRISES:
   The block-9 implementation commit (d5f570b9) also changed tests/test_e2e_listing.py by 7 lines, so part of the test contract was edited after the test step. The module is named e2e_tests.py, matching design D2, while the rubric refers to e2e.py.
+
+## Block 10 — Separate tests that mock hop 2, and drop tests that patch out the handler (test_writer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  Discovery puts the argparse known-edge `from` line on `set_defaults` in main(), not on `args.func(args)` in a separate dispatch() function as the design suggests, so the edge-function test now finds that function from discovery. The function-local-binding rule makes a patch of `pkg.cli.go` count as hop 2, although at runtime that patch would raise AttributeError. 3 negative-scenario tests already pass because the current listing puts every test in e2e.
