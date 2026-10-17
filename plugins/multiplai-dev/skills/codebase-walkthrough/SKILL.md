@@ -40,7 +40,8 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
    ids `p<n>h<k>`, where the trace stops if it broke and why, and the e2e
    tests that run it (or "no e2e test").
 6. **write** — one agent per section, with no tools, writes from the checked
-   claims only and refers to code by citation id. Code turns the ids into
+   claims only and refers to code by citation id. Each path gets one or two
+   paragraphs written from its checked hops, citing them by hop id. Code turns the ids into
    `path:line` links and inserts the code snippets from the commit.
 
 Between the stages, gates written in Python re-read every cited line range

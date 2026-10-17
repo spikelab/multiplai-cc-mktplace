@@ -1,6 +1,6 @@
-"""write: one agent per section, no tools. Input is gated facts and doc claims only.
+"""write: one agent per section, no tools. Input is gated facts, path hops and doc claims only.
 
-Agents refer to code by citation id (`[[c42]]`); `render.py` turns ids into
+Agents refer to code by citation id (`[[c42]]`, `[[p2h3]]` for a path hop); `render.py` turns ids into
 `path:line` links and puts in snippets taken from the commit, so a model never
 types a code snippet. `write_gate` checks every paragraph. A failing paragraph
 gets one rewrite with its failure list; if it still fails it is cut from the
@@ -12,12 +12,13 @@ each checked again by `glossary_gate`.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 
 from .. import sdk
 from ..gates import Corpus, glossary_gate, write_gate
-from ..models import Fact, Section, SectionOutput, WalkState
+from ..models import Fact, PathsResult, Section, SectionOutput, WalkState, hop_id
 from ..prompts import write_section
 from . import RunContext, bounded
 
@@ -25,7 +26,8 @@ log = logging.getLogger(__name__)
 
 MATERIAL_MAX_CHARS = 60_000
 
-# (key, title) in document order. `write_specs` expands the per-unit ones; code renders the Paths body.
+# (key, title) in document order. `write_specs` expands the per-unit and per-path ones; code renders
+# the rest of the Paths body.
 HUMAN_SECTIONS = [
     ("overview", "Overview"),
     ("glossary", "Glossary"),
@@ -80,6 +82,18 @@ def _facts(state: WalkState, prefixes: tuple[str, ...]) -> list[Fact]:
     return [f for f in state.facts if f.source.startswith(prefixes)]
 
 
+def hop_prompt_block(result: PathsResult, repo_key: str) -> str:
+    """The "Path hops" material: every hop id with its called symbol, `path:start-end` and quote."""
+    out = ["Path hops (checked by a program; cite a hop as [[<id>]], e.g. "
+           f"[[{hop_id(result.paths[0].id, 1)}]]):" if result.paths else "Path hops: none."]
+    for path in result.paths:
+        for k, hop in enumerate(path.hops, start=1):
+            note = f" — {hop.note}" if hop.note else ""
+            out.append(f"- [{hop_id(path.id, k)}] `{hop.symbol_called}` {repo_key}/{hop.path}:{hop.line_start}-"
+                       f"{hop.line_end} {json.dumps(' '.join(hop.quote.split())[:200], ensure_ascii=False)}{note}")
+    return "\n".join(out)
+
+
 def write_specs(state: WalkState) -> list[Spec]:
     name = state.target.package
     if state.options.get("mode") == "agent":
@@ -102,6 +116,12 @@ def write_specs(state: WalkState) -> list[Spec]:
     specs.append(Spec("overview", "Overview",
                       f"Two or three paragraphs: what `{name}` is for, what it talks to, and how its parts fit. "
                       f"Reference counts found by code: {bnd}.", _material(purposes + unit_facts[:120])))
+    for path in state.paths.paths if state.paths else []:
+        one = state.paths.model_copy(update={"paths": [path]})
+        specs.append(Spec(f"path:{path.id}", f"{path.id}: {path.entry.name}",
+                          "One or two paragraphs telling this path end to end, from its entry point, citing each "
+                          "hop by its id. The program lists the entry, the hops and the e2e tests after your text.",
+                          hop_prompt_block(one, state.target.repo_key)))
     for u in state.units:
         facts = [_fact_line(f) for f in state.facts if f.source.startswith(f"unit:{u.id}/") or
                  f.source.startswith(f"unit:{u.id}:reask/")]

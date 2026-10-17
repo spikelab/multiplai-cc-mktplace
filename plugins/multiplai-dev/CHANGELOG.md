@@ -30,7 +30,9 @@ time, not derived from a tag.
   point, its kind and who invokes it, the hops as `path:line` links with ids
   (`p2h3`), where the trace stops and why, and the e2e tests that run it, or
   "no e2e test". The coverage table's "Scenarios cut short" row becomes
-  "Paths traced" and "Paths cut short".
+  "Paths traced" and "Paths cut short". Each path still opens with one or two
+  paragraphs written from its checked hops; a hop cited in prose links to
+  its line and to the hop in the Paths section.
 - codebase-walkthrough: `--scenarios` now caps the number of paths, and its
   default rises from 6 to 21; a value below 1 is rejected. Every entry point
   left out, over the cap or for another reason, is listed with its stage and

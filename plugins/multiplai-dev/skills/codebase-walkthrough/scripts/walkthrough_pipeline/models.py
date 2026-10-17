@@ -7,7 +7,8 @@ string is a path the agents' `Read` tool can open and a path `gates.py` can
 split back into (repo, path) to re-read with `git show <sha>:<path>`.
 
 Ids. A gated citation gets the id `c<N>` and a gated fact `f<N>`, assigned by
-code in the order they pass. The write agents refer to code only by those ids.
+code in the order they pass; hop k of path `p<n>` is `p<n>h<k>`. The write
+agents refer to code only by those ids.
 """
 
 from __future__ import annotations
@@ -177,10 +178,21 @@ class WalkState(BaseModel):
         return STAGES.index(self.stage) >= STAGES.index(stage)
 
     def citation_index(self) -> dict[str, Citation]:
+        """Every citation id the writers may use: `cN` from the facts, `p{n}h{k}` for path n's hop k."""
         out: dict[str, Citation] = {}
         for fact in self.facts:
             for c in fact.citations:
                 if c.id:
                     out[c.id] = c
+        for path in self.paths.paths if self.paths else []:
+            for k, hop in enumerate(path.hops, start=1):
+                hid = hop_id(path.id, k)
+                out[hid] = Citation(path=self.target.ws(hop.path), line_start=hop.line_start,
+                                    line_end=hop.line_end, quote=hop.quote, id=hid)
         return out
+
+
+def hop_id(path_id: str, k: int) -> str:
+    """The id of path `path_id`'s hop k (1-based): `p2` hop 3 is `p2h3`."""
+    return f"{path_id}h{k}"
 

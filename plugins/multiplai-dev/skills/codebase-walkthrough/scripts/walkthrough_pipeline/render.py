@@ -28,6 +28,7 @@ LANG = {".py": "python", ".ts": "typescript", ".tsx": "tsx", ".js": "javascript"
         ".sqlx": "sql", ".yml": "yaml", ".yaml": "yaml", ".json": "json", ".md": "markdown", ".html": "markup",
         ".sh": "bash", ".toml": "toml"}
 SNIPPET_MAX_LINES = 40
+HOP_ID = re.compile(r"p\d+h\d+")
 
 
 class Linker:
@@ -76,8 +77,13 @@ class Linker:
             c = self.citations.get(m.group(1))
             return "\n\n" + self.snippet(c) + "\n\n" if c else ""
         text = re.sub(r"\[\[snippet:([a-z0-9]+)\]\]", snip, text)
-        return CITE_ID.sub(lambda m: self.link(self.citations[m.group(1)]) if m.group(1) in self.citations else "",
-                           text)
+        def cite(m: re.Match) -> str:
+            c = self.citations.get(m.group(1))
+            if c is None:
+                return ""
+            # A hop citation also points at the hop's anchor in the Paths section.
+            return self.link(c) + (f" ([{c.id}](#{c.id}))" if c.id and HOP_ID.fullmatch(c.id) else "")
+        return CITE_ID.sub(cite, text)
 
 
 def _mermaid_id(i: int) -> str:
@@ -137,6 +143,9 @@ def _path_block(state: WalkState, lk: Linker, path: TracedPath) -> list[str]:
     key = state.target.repo_key
     pid, entry, hops = path.id, path.entry, path.hops
     out = [f"**{pid}** — `{entry.name}` ({KIND_LABELS.get(entry.kind, entry.kind)})", ""]
+    written = state.sections.get(f"path:{pid}")
+    if written:
+        out += [p for para in written.paragraphs for p in (lk.expand(para), "")]
     loc = entry.location
     first = hops[0]
     if first.path == loc.path and first.line_start <= loc.line <= first.line_end:
