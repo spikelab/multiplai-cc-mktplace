@@ -198,6 +198,8 @@ def _entries_left_out(m: int) -> str:
 
 def render_paths_section(state: WalkState, linker: Linker) -> str:
     """The Paths body: a lead sentence, then one block per path in map_paths order."""
+    if state.paths_error:
+        return f"Path finding failed: {state.paths_error}"
     paths = state.paths.paths if state.paths else []
     m = left_out_count(state.paths) if state.paths else 0
     if not paths:

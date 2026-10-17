@@ -33,7 +33,9 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
    scope: every entry whose path reaches one of its lines is kept, up to
    `--scenarios` paths (default 21), and code gates every hop. Every entry
    left out (over the cap, unreachable, a trace that failed) is listed with
-   its stage and reason in the **Left out** table under Coverage. The walkthrough's **Paths** section lists each path: its
+   its stage and reason in the **Left out** table under Coverage. If path
+   finding itself fails, the Paths section says why and the rest of the
+   walkthrough is still written; a trust or budget stop still halts the run. The walkthrough's **Paths** section lists each path: its
    entry point, kind and who invokes it, its hops as `path:line` links with
    ids `p<n>h<k>`, where the trace stops if it broke and why, and the e2e
    tests that run it (or "no e2e test").

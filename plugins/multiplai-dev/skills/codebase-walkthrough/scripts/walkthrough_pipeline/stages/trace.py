@@ -13,6 +13,13 @@ called from other repositories, Celery beat entries, then the other routes.
 Each is seeded at its handler's `def`, or at its registration line when the
 handler cannot be named. The boundary edges (routes, tasks, the target side
 of cross-repository references) are the gate's known places.
+
+Failures. An agent failure on one entry is a drop that `map_paths` reports.
+Any other failure of `map_paths` is recorded in `state.paths_error` and
+`state.errors`, and the walkthrough is still written. A trust or budget stop
+halts the run: every model call goes through `_trace_call`, whose latch keeps
+the first such stop and raises it again on every later call, and `run_trace`
+raises it whatever `map_paths` made of it.
 """
 
 from __future__ import annotations
@@ -20,13 +27,14 @@ from __future__ import annotations
 import logging
 import posixpath
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import code_facts
 from code_facts import Location, Seed
 
-from .. import sdk
-from ..models import Reference, SymbolEntry, WalkState
+from .. import budget, sdk
+from ..models import STAGES, Reference, SymbolEntry, WalkState
 from ..render import left_out_count
 from . import RunContext
 
@@ -166,15 +174,40 @@ def _resolver(state: WalkState) -> code_facts.Resolve:
     return resolve
 
 
-def _trace_call(ctx: RunContext, root: Path) -> code_facts.CallFn:
+# The stops that halt the run; any other exception of a call is for map_paths to handle.
+FATAL = (sdk.RepoTrustError, budget.BudgetExceededError)
+
+
+@dataclass
+class _FatalLatch:
+    """The first trust or budget stop raised by a trace call, kept so no later call is made."""
+    exc: BaseException | None = None
+
+
+def _trace_call(ctx: RunContext, root: Path, latch: _FatalLatch) -> code_facts.CallFn:
     """The model call for `map_paths`: the walkthrough's sdk, read-only, on the trace model, in the snapshot."""
     cfg = ctx.config
 
     async def call(prompt: str, schema, **_kw):
-        return await sdk.agent_call_structured(
-            prompt, schema, allowed_tools=sdk.TRACE_TOOLS, model=cfg.trace_model, effort=cfg.effort,
-            max_turns=cfg.max_turns, cwd=str(root), budget_label="trace")
+        if latch.exc is not None:
+            raise latch.exc
+        try:
+            return await sdk.agent_call_structured(
+                prompt, schema, allowed_tools=sdk.TRACE_TOOLS, model=cfg.trace_model, effort=cfg.effort,
+                max_turns=cfg.max_turns, cwd=str(root), budget_label="trace")
+        except FATAL as e:
+            latch.exc = e
+            raise
     return call
+
+
+def rewind_legacy_trace(state: WalkState) -> WalkState:
+    """A human-mode state past `trace` with neither paths nor a paths error was written before path
+    finding: send it back to the stage before `trace`, so a resume traces instead of rendering no paths."""
+    if (state.options.get("mode") != "agent" and state.past("trace") and state.paths is None
+            and state.paths_error is None):
+        state.stage = STAGES[STAGES.index("trace") - 1]
+    return state
 
 
 async def run_trace(state: WalkState, ctx: RunContext) -> WalkState:
@@ -184,22 +217,41 @@ async def run_trace(state: WalkState, ctx: RunContext) -> WalkState:
         state.stage = "trace"
         return state
     root = ctx.snap_root / state.target.repo_key
-    result = await code_facts.map_paths(
-        root=root,
-        commit=state.target.head_sha,
-        resolve=_resolver(state),
-        call=_trace_call(ctx, root),
-        changed_lines=module_lines(state, root),
-        seeds=web_seeds(state),
-        places=known_places(state),
-        cap=int(state.options.get("scenarios") or 21),
-        trace_limit=TRACE_LIMIT,
-        concurrency=ctx.config.concurrency,
-        cache_dir=ctx.run_dir / "paths-cache",
-        recoverable=(sdk.AgentCallError,),
-        progress=ctx.progress.line if ctx.progress else None,
-    )
-    state.paths = result
+    latch = _FatalLatch()
+    budget.check(stage="trace")
+    try:
+        result = await code_facts.map_paths(
+            root=root,
+            commit=state.target.head_sha,
+            resolve=_resolver(state),
+            call=_trace_call(ctx, root, latch),
+            changed_lines=module_lines(state, root),
+            seeds=web_seeds(state),
+            places=known_places(state),
+            cap=int(state.options.get("scenarios") or 21),
+            trace_limit=TRACE_LIMIT,
+            concurrency=ctx.config.concurrency,
+            cache_dir=ctx.run_dir / "paths-cache",
+            recoverable=(sdk.AgentCallError,),
+            progress=ctx.progress.line if ctx.progress else None,
+        )
+    except Exception as e:
+        if latch.exc is not None:
+            raise latch.exc
+        if isinstance(e, FATAL):
+            raise
+        # Only the type is logged: a message can quote code.
+        log.error("trace: map_paths failed (%s)", type(e).__name__)
+        if ctx.progress:
+            ctx.progress.line(f"  trace: failed ({type(e).__name__})")
+        state.errors.append(f"trace: {type(e).__name__}: {e}")
+        state.paths, state.paths_error = None, f"{type(e).__name__}: {e}"
+        ctx.counts = {"failed": 1}
+        state.stage = "trace"
+        return state
+    if latch.exc is not None:
+        raise latch.exc
+    state.paths, state.paths_error = result, None
     ctx.counts = {"paths": len(result.paths),
                   "cut_short": sum(1 for p in result.paths if p.stops_at is not None),
                   "left_out": left_out_count(result)}

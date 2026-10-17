@@ -36,6 +36,11 @@ time, not derived from a tag.
   left out, over the cap or for another reason, is listed with its stage and
   reason in a new **Left out** table under Coverage, and counted in the
   "Entries left out" row.
+- codebase-walkthrough: a trace that fails for one entry point no longer
+  costs the others; it is listed under **Left out**. If path finding fails as
+  a whole, the Paths section says why and the walkthrough is still written.
+  Resuming a run saved by an earlier version, after its trace stage, traces
+  again rather than reporting no paths.
 
 ## [0.80.0] - 2026-10-17
 

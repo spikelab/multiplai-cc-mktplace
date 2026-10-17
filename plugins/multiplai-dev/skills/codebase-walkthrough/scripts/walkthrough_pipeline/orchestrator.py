@@ -30,7 +30,7 @@ from .render import write_outputs
 from .stages import RunContext
 from .stages.docs import run_docs
 from .stages.explore import run_explore
-from .stages.trace import run_trace
+from .stages.trace import rewind_legacy_trace, run_trace
 from .stages.write import run_write
 from .state import STATE_FILE, load_state, save_state
 
@@ -294,4 +294,5 @@ async def resume(run_dir: Path, config: WalkConfig, *, session_id: str = "",
             raise WalkError("the docs stage of this run is already done; --docs/--no-docs can no longer change it")
         state.options["docs"] = docs
         state.docs = {}
+    rewind_legacy_trace(state)
     return await run_state(state, run_dir, config, session_id=session_id)

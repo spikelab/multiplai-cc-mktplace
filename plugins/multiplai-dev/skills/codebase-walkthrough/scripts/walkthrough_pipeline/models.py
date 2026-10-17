@@ -164,6 +164,7 @@ class WalkState(BaseModel):
     docs: dict = Field(default_factory=dict)
     docs_answers: dict[str, dict] = Field(default_factory=dict)
     paths: PathsResult | None = None                                # the trace stage's map_paths result
+    paths_error: str | None = None                                  # "<ExceptionType>: <message>" when it failed
     sections: dict[str, Section] = Field(default_factory=dict)
     write_answers: dict[str, dict] = Field(default_factory=dict)
     dropped: list[Dropped] = Field(default_factory=list)
