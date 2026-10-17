@@ -115,3 +115,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   (1) D2 places scope in `paths.py`, but `entry_distance` needs `Entry` and `PyIndex`, and both of those import `paths.py`. So the scope filters went into a new `scope.py`, the module name the test helper already looks for. `order_paths` and `sort_drops` stay in `paths.py` because unscoped runs use them too. (2) D13 doesn't say whether the snapshot root counts as a fallback repository when it has no `.git` or `pyproject.toml`. I included it, as `""`, sorted before the other roots, and a module found there must belong to that root's repository. (3) As the spec words it, `from a.b import c` adds edges to `a/b/__init__.py` and `a/b/c.py` but not to `a/__init__.py`, even though Python does run `a/__init__.py`. I followed the spec.
+
+## Block 9 — List end-to-end tests that statically invoke each kept path's entry (test_writer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  (1) The live pr tests pass argv as literal lists with computed elements (`str(repo)`), and their `run(argv)` helper calls `build_parser().parse_args(argv)` rather than a function that itself calls parse_args. The tests require both to match as cli_argv, which goes beyond "literal list of string constants". (2) The spec's console-script scenario uses `--help`, which the D15 exclusion forbids; the test uses `build` instead. (3) Unspecified behaviour pinned: build/ and dist/ are searched by listing; a zero-byte test file is neither a skip nor a test; the module may be `code_facts.e2e_tests` or `code_facts.e2e`. (4) The D1#13 spec amendment was not made; this agent writes tests only.
