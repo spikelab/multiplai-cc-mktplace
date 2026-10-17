@@ -62,6 +62,16 @@ async def test_the_allow_list_reaches_run_agent_and_core_builds_the_deny_list(tr
         ("/repo", "walkthrough", "find:diff-bugs", "m", "high")
 
 
+
+async def test_read_roots_reach_run_agent_on_both_attempts_and_are_absent_unless_given(trusted, fake_run):
+    calls, replies = fake_run
+    replies += [_result("not json"), _result('{"value": 1}'), _result('{"value": 2}')]
+    await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.TRACE_TOOLS, cwd="/snap/repo",
+                                    read_roots=["/snap/repo"])
+    assert [c["read_roots"] for c in calls] == [["/snap/repo"], ["/snap/repo"]]   # the reformat re-ask too
+    await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.EXPLORE_TOOLS, cwd="/snap")
+    assert calls[-1]["read_roots"] is None                                        # run_agent installs no hook
+
 def test_every_stage_gets_only_read_grep_glob():
     for tools in (sdk.EXPLORE_TOOLS, sdk.TRACE_TOOLS, sdk.DOCS_TOOLS):
         assert tools == ["Read", "Grep", "Glob"]

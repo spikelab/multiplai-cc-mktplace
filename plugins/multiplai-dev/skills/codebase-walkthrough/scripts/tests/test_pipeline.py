@@ -38,9 +38,10 @@ def test_run_writes_markdown_and_json_but_no_html(done_run):
     assert not md_path.with_suffix(".html").exists()
     assert md_path.with_suffix(".json").exists()
     md_heads = markdown_headings(md)
-    for title in ("Overview", "Glossary", "End-to-end scenarios", "Module tour", "Who calls it and what it calls",
+    for title in ("Overview", "Glossary", "Paths", "Module tour", "Who calls it and what it calls",
                   "Data stores and config", "Vendor docs", "Gotchas and questions for the owner", "Coverage"):
         assert title in md_heads
+    assert "End-to-end scenarios" not in md_heads
 
 
 def test_boundary_json_lists_every_planted_reference_once(done_run):
@@ -69,7 +70,9 @@ def test_finished_walkthrough_passes_check(done_run, capsys):
 def test_walkthrough_content(done_run):
     md_path, _, _ = done_run
     md = md_path.read_text()
-    assert "engine/bookings/urls.py:6" in md                       # the webhook route, linked
+    # The webhook route and the beat task, traced from their handlers as caller seeds.
+    assert "`HTTP /hooks/acme/` (caller seed)" in md and "`bookings.poll (beat)` (caller seed)" in md
+    assert "[`engine/bookings/views.py:5`](" in md and "[`engine/bookings/tasks.py:5`](" in md
     assert re.search(r"\| `ACME_ENV` \| \[`engine/project/settings.py:5`\]", md)
     assert "`/bookings/{}/ack`" in md and "`/webhooks`" in md
     assert "acme-api-collection/bookings/ack.yml" in md
