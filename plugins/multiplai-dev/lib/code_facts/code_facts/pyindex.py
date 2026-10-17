@@ -17,9 +17,10 @@ resolution never leaves the importing file's repository: absolute imports are
 searched under `<repo>/`, then `<repo>/src/`, then the importing file's own
 directory.
 
-Import graph. Every collected import is an edge. Absolute imports the
-repository lacks fall back to the other repository roots, and their `src/`, in
-sorted order, so a skill reaches a library it installs as a path dependency.
+Import graph. Every collected import is an edge. Absolute imports whose
+top-level package the repository lacks fall back to the other repository roots,
+and their `src/`, in sorted order, so a skill reaches a library it installs as
+a path dependency.
 """
 
 from __future__ import annotations
@@ -331,18 +332,27 @@ class PyIndex:
         """`resolve_module`, falling back, for an absolute import, to each other repository root and its `src/`.
 
         Other repositories are tried in sorted order; a hit counts only when the
-        file belongs to the repository searched.
+        file belongs to the repository searched. As in Python, the first place
+        that has the top-level package binds it, so `pkg.name` is looked up
+        only there: never elsewhere when the importer's repository has `pkg`.
         """
         found = self.resolve_module(importer, dotted, level)
         if found is not None or level or not dotted:
             return found
+        top = dotted.split(".", 1)[0]
+        if self.resolve_module(importer, top) is not None:
+            return None
         own = self.repo_root(importer)
         for repo in sorted((self._repo_roots | {""}) - {own}):
             for base in (repo, posixpath.join(repo, "src")):
-                found = self._module_file(posixpath.join(base, *dotted.split(".")))
-                if found is not None and self.repo_root(found) == repo:
-                    return found
+                if self._repo_module(repo, base, top) is not None:
+                    return self._repo_module(repo, base, dotted)
         return None
+
+    def _repo_module(self, repo: str, base: str, dotted: str) -> str | None:
+        """The file for `<base>/<dotted>` when it belongs to `repo`, or None."""
+        found = self._module_file(posixpath.join(base, *dotted.split(".")))
+        return found if found is not None and self.repo_root(found) == repo else None
 
     def _absolute_bases(self, importer: str) -> list[str]:
         repo = self.repo_root(importer)
