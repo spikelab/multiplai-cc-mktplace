@@ -1,0 +1,163 @@
+{
+  "generated_at": "2026-10-17T09:10:14.340589+00:00",
+  "kind": "review",
+  "block": {
+    "number": 9,
+    "name": "List end-to-end tests that statically invoke each kept path's entry"
+  },
+  "round": 2,
+  "head_sha": "c4a8ac680b354a7d29d744dda9b452df7e3c69dd",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Listing is its own synchronous module with no `CallFn`. Shared helpers were hoisted (`dotted_reference`, `_walk`, `_past_interpreter`, `_script_target`), and kind dispatch sits in one `match kind` inside `_Targets._declared`. Possible Primitive Obsession: what an invocation reaches is an untyped `_Key = tuple[str | int, ...]` tagged with the strings \"def\"/\"program\"/\"app\"/\"module\"/\"script\"/\"command\" (e2e_tests.py:99). The rubric's `cli_targets`/`find_subcommand` bridge does not exist; `cli_routes` does that job instead.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "Tests check exact records (node_id, match, `invocation_line` via `line_of`), skip dumps, byte-identical results under reversed enumeration, and patched Popen/os.system with sentinels. They also cover the live pr copy test, the map_paths integration with stage accounting paired with result assertions, and negative cases (another module, non-literal argv, help flags, an unrelated typer app). Gaps: no test for `parse_known_args`, click string args, a `python -m` false positive on a parser module without a `__main__` guard, or a console script naming a non-parsing function of the parser module.",
+      "confidence": 0.7
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "Every Block 9 scenario has code and a test: scope, direct/alias/module-attribute calls, cli_argv including the builder form, CliRunner, subprocess in its 5 forms plus string/shell, runpy, console script, hook string, merged invoker, help/version exclusion, D15 helpers from the test module, conftest and the tests/ tree, 2-level depth, dedup, tie order, sort, multi-path, empty lists, syntax/decode skips, and the live pr helper. `mocks_hop_2` is always `[]`, which matches this block's scope (hop-2 is not in Block 9's description). Some over-matching exists in the launcher extensions (see findings).",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The produced signatures match the interface list (`E2EIndex.build`, `E2EIndex.skips`, `match_invocations`, `list_e2e_tests`). Ids are final before listing. The block uses `parse_command_line` with the shared index rather than the listed `command_tokens` (equivalent, without re-indexing), and does not consume `import_edges`. The Entry for each path is recovered in paths.py:442 through a `(output_kind, location, name)` tuple lookup instead of being carried from tracing, which is a loose seam.",
+      "confidence": 0.7
+    }
+  ],
+  "weighted_average": 3.865625,
+  "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 3.9"
+  },
+  "missing": [],
+  "extra": [
+    "Matching extends beyond the spec's subprocess forms: `python <script>.py` (`python_script`), console scripts and `python -m` of a launcher module reaching argparse/click/typer subcommands (`_scripts_running`, `_modules_running`), and typer routing rules (a callback runs with its app; a single-command app needs no command name). All of it is documented in the e2e_tests.py docstring and tested in test_e2e_launchers.py.",
+    "New `PyIndex.including()` and `PyIndex.qualified_name()`, plus the `snapshot_files` walker in pyindex.py, to support test listing."
+  ],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "The implementer's notes (3) and (4) describe limitations the final code no longer has: single-command typer apps without a name, and console scripts reaching argparse subcommands.",
+      "severity": "Minor",
+      "confidence": 0.85,
+      "evidence": "implementation-notes.md: \"so a single-command typer app invoked without its name is missed\" and \"(4) A console script that targets an argparse program's main does not match that program's subcommand paths\". By contrast, entries.py:779 `elif app == command.receiver and app not in mounted_on and _sole_typer_command(commands, app): words = ()`, e2e_tests.py `_declared` argparse case `*self._scripts_running(program)`, and test_e2e_launchers.py asserts both behaviours.",
+      "dimension": "Spec Compliance",
+      "file_path": "specs/changes/code-paths-lib/implementation-notes.md",
+      "line": 125,
+      "reviewers": []
+    },
+    {
+      "claim": "`_program_modules` always adds the parser module's own dotted name as a `python -m` launcher, even when that module has no `__main__` guard. So `python -m pkg.cli open` gets listed for `open` when the parser lives in `pkg/cli.py`, though running it would never parse argv.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "e2e_tests.py:266 `own_modules = [own.removesuffix(\".__main__\")] if own else []`. It is added unconditionally, unlike `_modules_running`, which checks `main_module_handler`. Fix: include the own module only when it is a `__main__.py`, or when `main_module_handler(index, program)` resolves to a function in it. Add a negative test.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 266,
+      "reviewers": []
+    },
+    {
+      "claim": "For argparse, `_scripts_running(program)` is called with `name=None`, so a console script naming any function of the parser module counts as running the program, including one that never calls `parse_args` (such as `build` in the fixture's MAIN).",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "e2e_tests.py `_declared`: `*self._scripts_running(program)`; `_scripts_running`: `if _is_target_in(*target, path, name)` with name None, so any symbol in the path matches. The only negative test, `test_a_console_script_of_another_function_does_not_reach_the_subcommand`, uses a function in a different module (pkg/cli.py). Fix: require the script's handler to satisfy `_Functions.parses_args`, or to be the `main_module` handler.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 282,
+      "reviewers": []
+    },
+    {
+      "claim": "Some matcher branches have no test: `parse_known_args`, CliRunner args given as a string, and BOM/PEP 263 handling for test files.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "e2e_tests.py `_PARSE_METHODS = frozenset({\"parse_args\", \"parse_known_args\"})`; `_args_reaches` accepts a string via `shlex.split`. No test in test_e2e_listing.py or test_e2e_launchers.py uses `parse_known_args` or `invoke(cli, \"sync\")`.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_e2e_listing.py",
+      "line": 1,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "map_paths recovers each kept path's Entry through a dict keyed on `(output_kind, location, name)`. If two traced entries share that key, one silently overwrites the other, and any drift between `to_path_entry` and the key raises KeyError.",
+      "severity": "Minor",
+      "confidence": 0.4,
+      "evidence": "paths.py:442-444 `traced_from = {(output_kind(e), e.location, e.name): e for e in to_trace}` ... `traced_from[(p.entry.kind, p.entry.location, p.entry.name)]`. tracing.py:188 builds `TracedPath(entry=to_path_entry(entry))`, so the key holds today, but nothing enforces uniqueness. Fix: have tracing return the source Entry together with each TracedPath, or assert the keys are unique.\nREJECTED: This is speculative. TracedPath.entry is built by `to_path_entry(entry)`, so the key matches by construction. Two traced entries with identical output kind, location and name would be the same declaration, which discovery already merges via `also_invoked_by`. The diff shows no concrete collision or drift.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 442,
+      "reviewers": [],
+      "judge_reason": "This is speculative. TracedPath.entry is built by `to_path_entry(entry)`, so the key matches by construction. Two traced entries with identical output kind, location and name would be the same declaration, which discovery already merges via `also_invoked_by`. The diff shows no concrete collision or drift."
+    },
+    {
+      "claim": "What an invocation reaches is a stringly-tagged untyped tuple, which is possible Primitive Obsession. Typos in the tag strings would silently never match.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "e2e_tests.py:99 `_Key = tuple[str | int, ...]` with tags \"def\", \"program\", \"app\", \"module\", \"script\", \"command\" spelled inline across `_Targets` and `_TestScan` (e.g. `(\"program\", handler.path)`, `(\"app\", module_file, name)`). Fix: use small frozen dataclasses or a Literal tag type.\nREJECTED: This is a style preference. The `_Key` tuples are private, documented in a comment at their definition, and compared only within this module. The project standards do not require typed tags, and a mistyped tag would break existing tests that cover each key kind.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 99,
+      "reviewers": [],
+      "judge_reason": "This is a style preference. The `_Key` tuples are private, documented in a comment at their definition, and compared only within this module. The project standards do not require typed tags, and a mistyped tag would break existing tests that cover each key kind."
+    },
+    {
+      "claim": "Subprocess commands on the test side are not stripped of launchers (`uv run`, `env`, `bash`, assignments), while the hook and SKILL.md side is stripped via `parse_command_line`. So a test running the hook's exact command text, when that text contains a launcher, does not match.",
+      "severity": "Note",
+      "confidence": 0.45,
+      "evidence": "e2e_tests.py `_command_reaches` \u2192 `_shell_words` \u2192 `_reached_command(words, ...)` with no launcher stripping, whereas `_command_target` uses `parse_command_line(...)`. The spec only requires the python/sys.executable forms and the hook's configured command, and the spec scenario (`python3 hooks/guard.py`) passes.\nREJECTED: The spec requires only the `sys.executable`/`python`/`python3 -m` forms, the console script name, or the hook's `command_tokens`, which are already launcher-stripped. The reviewer concedes that the spec scenario passes. Launcher stripping on the test side would extend behaviour, not fix a deviation.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 333,
+      "reviewers": [],
+      "judge_reason": "The spec requires only the `sys.executable`/`python`/`python3 -m` forms, the console script name, or the hook's `command_tokens`, which are already launcher-stripped. The reviewer concedes that the spec scenario passes. Launcher stripping on the test side would extend behaviour, not fix a deviation."
+    },
+    {
+      "claim": "The block consumes `parse_command_line` (with the shared PyIndex) instead of the listed `command_tokens`, and does not use the listed `PyIndex.import_edges`. The behaviour is equivalent and avoids re-indexing, but it deviates from the stated Consumes list.",
+      "severity": "Note",
+      "confidence": 0.5,
+      "evidence": "e2e_tests.py imports `first_positional, hook_commands, parse_command_line, python_module, python_script, shell_commands`; commands.py:83-90 `command_tokens` rebuilds `PyIndex.build(root)` per call; `import_edges` is never referenced in e2e_tests.py.\nREJECTED: `parse_command_line` with the shared PyIndex produces the same tokens as `command_tokens`, without rebuilding `PyIndex.build(root)` on every call. That is a deliberate and better choice. Not consuming `import_edges` is harmless, since nothing in the block's behaviour requires it. The produced interfaces are unchanged.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 70,
+      "reviewers": [],
+      "judge_reason": "`parse_command_line` with the shared PyIndex produces the same tokens as `command_tokens`, without rebuilding `PyIndex.build(root)` on every call. That is a deliberate and better choice. Not consuming `import_edges` is harmless, since nothing in the block's behaviour requires it. The produced interfaces are unchanged."
+    },
+    {
+      "claim": "test_e2e_launchers.py is a new test file covering behaviour beyond the RED-gated tests, and it is not listed under DECLARED TEST CHANGES. It is additive and weakens nothing, but it was not under the test-writer contract.",
+      "severity": "Note",
+      "confidence": 0.5,
+      "evidence": "The diff adds plugins/multiplai-dev/lib/code_facts/tests/test_e2e_launchers.py (146 lines). The RED evidence lists only test_e2e_listing.py failures, and the declared changes mention only `_ReversedScandir`.\nREJECTED: The new test file is purely additive and pins behaviour the implementation actually provides: launchers and typer routing. It weakens no RED-gated test. The process concern the refactorer notes was the 7-line edit to test_e2e_listing.py, not this file. Adding coverage is not a defect.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_e2e_launchers.py",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "The new test file is purely additive and pins behaviour the implementation actually provides: launchers and typer routing. It weakens no RED-gated test. The process concern the refactorer notes was the 7-line edit to test_e2e_listing.py, not this file. Adding coverage is not a defect."
+    },
+    {
+      "claim": "The plugin's code changes, but this diff has no version bump or CHANGELOG entry for multiplai-dev. That may be intended for the end of the multi-block change.",
+      "severity": "Note",
+      "confidence": 0.3,
+      "evidence": "CLAUDE.md: \"Steps 1 and 2 are enforced: the **`changelog-gate`** CI job fails a pull request that changes a plugin without both.\" The diff touches plugins/multiplai-dev/lib/code_facts/* only, with no plugins/multiplai-dev/CHANGELOG.md or plugin.json change.\nREJECTED: This is one block of a multi-block change, and the changelog gate applies per pull request. The version bump and CHANGELOG entry belong to the end of the change, not to each block's diff.",
+      "dimension": "conventions",
+      "file_path": "plugins/multiplai-dev/CHANGELOG.md",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "This is one block of a multi-block change, and the changelog gate applies per pull request. The version bump and CHANGELOG entry belong to the end of the change, not to each block's diff."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}
