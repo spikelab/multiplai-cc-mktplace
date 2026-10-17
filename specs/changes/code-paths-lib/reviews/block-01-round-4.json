@@ -1,0 +1,148 @@
+{
+  "generated_at": "2026-10-17T05:42:48.144188+00:00",
+  "kind": "fix_on_pass_review",
+  "block": {
+    "number": 1,
+    "name": "Write an empty but valid `paths.v1` document through `map_paths` and `write_paths_file`"
+  },
+  "round": 4,
+  "head_sha": "ab687f88374be66e7323edc1857523d50e2c2ca2",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "paths.py holds only the contract: Literal-typed kinds, stages and reasons, the DROP_REASONS mapping that drives both the model validator and the schema oneOf, schema generation, the writer and a stub map_paths. Domain concepts are typed (InvokerKind, EntryKind, CutReason, DropReason as Literals; Location and Handler as models). No walkthrough_pipeline import. `_validator()` is a functools.cache of an immutable validator, not mutable cross-run state. The unused map_paths parameters are the specified signature. Possible Divergent Change risk: `normalise_rel_path` lives in paths.py, but the rubric expects one shared normaliser for changed lines, places, scope_paths, gate rule 1 and fallback citations. That is fine for now, but later blocks must reuse it rather than re-implement it. Minor: conftest.py adds mid-file imports with `# noqa: E402`.",
+      "confidence": 0.8
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "Tests check observable outcomes: exact model_dump of the empty document, written bytes (exactly one trailing \\n, non-ASCII kept), declaration-order keys, a byte-identical round trip, the error pointer for top-level and array-index failures, preservation of an existing file, and no temp file after a failed fsync or replace. Argument checks assert `call.calls == []`, paired with pytest.raises. There is a full-coverage fixture plus a reflection test that every enum value is used. Weaknesses: test_equivalent_spellings_write_identical_files is vacuous, because the empty result never contains changed lines and the two files would match even without normalisation; the direct normalise_changed_lines test does cover it. Model leniency (lax bool/int coercion) is not pinned. The `paths_name` lookup across three modules is an unusual indirection.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "All block-1 bullets are implemented and tested. Schema: $schema and $id match facts.v1 (facts.v1.schema.json:159-160), every object has additionalProperties:false, plus the location pattern, minimum 1, the id pattern, hops 1\u201320 and closed enums. write_paths_file: the exact serialisation, validator_for from importlib.resources, ValueError naming the '/'-joined absolute_path, and atomic replace. map_paths: TypeError for a non-callable call or resolve, ValueError for abs, escaping or <1 lines and for cap/trace_limit<1 only when scoped, cap null when unscoped, fallback skipped. The model rejects stops_at/break_reason mismatch, out-of-range stops_at and overlapping tests. Exports added and existing ones kept. jsonschema>=4 declared and locked. Spec amendments made. Deductions: the $defs names depart from D16, and within-list node_id uniqueness from the amended test-listing requirement is not enforced.",
+      "confidence": 0.8
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The map_paths signature and defaults match the interface exactly (test_map_paths_signature_and_defaults). The exports are a superset of the old ones. The schema is generated from the models, so there is no drift. Narrowing `Invoker.kind`, `TracedPath.break_reason` and `PathDrop.reason` from the interface's `str` to Literals is stricter than the stated interface. Block 2 must map discovery kinds (`argparse_subcommand` \u2192 `argparse`) before building an Invoker, and the gate must route hop-1 codes to drops only. Both are documented in implementation-notes.md and match D12. Loose seam: no task in tasks.md schedules the multiplai-dev version bump or CHANGELOG entry that CLAUDE.md's changelog-gate requires on any PR touching the plugin.",
+      "confidence": 0.7
+    }
+  ],
+  "weighted_average": 3.884375,
+  "gate": {
+    "passed": false,
+    "reason": "Spec-compliance verdict failed \u2014 missing: [\"Spec 'Test-listing shape' (paths-output-contract.md, as amended) says each `node_id` appears at most once in each array and each array is sorted by (file, line, node_id). E2EListing._disjoint only checks overlap between the two lists. The block's required model rejections list only the overlap, so this is low impact, but the amended requirement is not enforced anywhere in the contract layer.\"]; misunderstood: [\"design.md D16 ('Structure') says '`$defs` cover `location`, `handler`, `entry`, `invoker`, `hop`, `path`, `e2eTest`, `mockedE2eTest`, `drop`, `diagnostic` and `skip`'. The committed schema uses pydantic class names instead (`Location`, `PathEntry`, `PathHop`, `TracedPath`, `PathDrop`, `PathDiagnostic`, `ListingSkip`, `E2ETest`, `MockedE2ETest`, \u2026). The implementer declared this in implementation-notes.md, but it departs from the design's named $defs, which external consumers might reference by `$ref`.\"]"
+  },
+  "missing": [
+    "Spec 'Test-listing shape' (paths-output-contract.md, as amended) says each `node_id` appears at most once in each array and each array is sorted by (file, line, node_id). E2EListing._disjoint only checks overlap between the two lists. The block's required model rejections list only the overlap, so this is low impact, but the amended requirement is not enforced anywhere in the contract layer."
+  ],
+  "extra": [
+    "_Strict adds `json_schema_serialization_defaults_required=True` to the interface's `ConfigDict(extra=\"forbid\", frozen=True)`, so `note` and `side` are required in the schema. This is deliberate and documented in implementation-notes.md, and harmless.",
+    "The models enforce extra cross-field rules beyond the three the block lists: scoped \u21d4 cap set, contiguous p1..pN ids, no scope-stage drops and no coverage when unscoped, and a fallback reason exactly when the status is failed. These come from D4/D14 and are documented.",
+    "normalise_changed_lines raises TypeError for a non-int or bool line. The spec does not cover this case."
+  ],
+  "misunderstood": [
+    "design.md D16 ('Structure') says '`$defs` cover `location`, `handler`, `entry`, `invoker`, `hop`, `path`, `e2eTest`, `mockedE2eTest`, `drop`, `diagnostic` and `skip`'. The committed schema uses pydantic class names instead (`Location`, `PathEntry`, `PathHop`, `TracedPath`, `PathDrop`, `PathDiagnostic`, `ListingSkip`, `E2ETest`, `MockedE2ETest`, \u2026). The implementer declared this in implementation-notes.md, but it departs from the design's named $defs, which external consumers might reference by `$ref`."
+  ],
+  "accepted": [
+    {
+      "claim": "The committed schema's $defs names (`Location`, `PathEntry`, `PathHop`, `TracedPath`, `PathDrop`, `PathDiagnostic`, `ListingSkip`, `E2ETest`, `MockedE2ETest`, \u2026) differ from the names design.md D16 specifies (`location`, `handler`, `entry`, `invoker`, `hop`, `path`, `e2eTest`, `mockedE2eTest`, `drop`, `diagnostic`, `skip`).",
+      "severity": "Minor",
+      "confidence": 0.65,
+      "evidence": "design.md:448 '`$defs` cover `location`, `handler`, `entry`, `invoker`, `hop`, `path`, `e2eTest`, `mockedE2eTest`, `drop`, `diagnostic` and `skip`.' versus schema/paths.v1.schema.json '\"$defs\": { \"E2EListing\": \u2026, \"PathEntry\": \u2026, \"TracedPath\": \u2026 }'. The implementer acknowledged this in implementation-notes.md: '`$defs` use class names rather than D16's lowercase names'. Fix: either pass a `ref_template`/`GenerateJsonSchema` subclass that maps class names to D16's names in paths_schema_text() and regenerate, or record the departure in the respec so D16 matches the generated schema.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/schema/paths.v1.schema.json",
+      "line": 4,
+      "reviewers": []
+    },
+    {
+      "claim": "test_equivalent_spellings_write_identical_files cannot fail on a normalisation bug, because the empty result never carries changed-line paths into the written document.",
+      "severity": "Minor",
+      "confidence": 0.75,
+      "evidence": "test_map_paths_contract.py: `write(_map(empty_snapshot, changed_lines={\"./pkg/core.py\": [10]}), a)` and `write(_map(..., {\"pkg/core.py\": [10]}), b)`, then `assert a.read_bytes() == b.read_bytes()`. map_paths in paths.py calls `normalise_changed_lines(root, changed_lines)` and discards the result, and the returned PathsResult has `paths=[]`. Both files are identical whatever normalisation does. Normalisation is still covered directly by test_normalise_changed_lines_strips_dot_and_dedupes. Fix: note that this test only becomes meaningful once coverage lands, or drop it until then.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_map_paths_contract.py",
+      "line": 121,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "The output models use pydantic's lax mode. PathsResult.model_validate_json accepts documents the schema rejects, such as `\"scoped\": \"false\"` or `\"line\": \"3\"`, and silently coerces them, so a hand-edited paths.json loads without error.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "paths.py: `scoped: bool`, `line: int = Field(ge=1)`, `cap: int | None` on `_Strict(_Model)` with `ConfigDict(extra=\"forbid\", frozen=True, \u2026)` and no `strict=True`. test_paths_schema.py checks `((\"scoped\",), \"false\")` only against the schema, not the model. The spec direction 'schema-valid \u21d2 parses' still holds, so this is a leniency rather than a contract break. The rubric lists `StrictBool` as an edge case to pin. Fix: add `strict=True` to _Strict's ConfigDict (or use StrictBool/StrictInt on these fields), and extend test_schema_rejects to also assert that the model rejects `scoped: \"false\"`.\nREJECTED: Neither the block nor the amended spec requires the models to reject coercible values. The block lists exactly which things the models must reject, and strict typing is not among them. The contract runs one way: schema-valid documents parse, and documents written by `write_paths_file` validate and round-trip byte-identically. Both still hold. Leniency on hand-edited input is a preference, not a deviation.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 97,
+      "reviewers": [],
+      "judge_reason": "Neither the block nor the amended spec requires the models to reject coercible values. The block lists exactly which things the models must reject, and strict typing is not among them. The contract runs one way: schema-valid documents parse, and documents written by `write_paths_file` validate and round-trip byte-identically. Both still hold. Leniency on hand-edited input is a preference, not a deviation."
+    },
+    {
+      "claim": "E2EListing does not enforce the amended requirement that each node_id appears at most once within a single array. Only the cross-list overlap is rejected.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "paths-output-contract.md (amended): 'Each array is sorted by `(file, line, node_id)`, and each `node_id` appears at most once in it.' paths.py E2EListing._disjoint only computes `{t.node_id for t in self.e2e} & {t.node_id for t in self.mocks_hop_2}`. The block lists only the overlap as a model rejection, so this is a gap in the contract layer rather than a block-1 requirement. Fix: also reject duplicate node_ids within e2e and within mocks_hop_2 in the same validator, or leave this to the block-8 listing and its tests.\nREJECTED: The amended 'Schema and models agree' requirement in this diff names the cross-field rules the model enforces: contiguous ids, `stops_at` bounds and cross-list overlap. Within-array uniqueness is not among them. The block likewise lists only the overlap as a model rejection. Producing a sorted, de-duplicated listing is the job of the later test-listing block.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 167,
+      "reviewers": [],
+      "judge_reason": "The amended 'Schema and models agree' requirement in this diff names the cross-field rules the model enforces: contiguous ids, `stops_at` bounds and cross-list overlap. Within-array uniqueness is not among them. The block likewise lists only the overlap as a model rejection. Producing a sorted, de-duplicated listing is the job of the later test-listing block."
+    },
+    {
+      "claim": "The diff changes plugins/multiplai-dev without a version bump or CHANGELOG entry, and no task in tasks.md schedules one. CLAUDE.md says the changelog-gate fails such a PR.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "CLAUDE.md 'Release convention': 'Bump `version` for that plugin in `.claude-plugin/marketplace.json` (and in `plugins/<name>/.claude-plugin/plugin.json` \u2026)' and 'Steps 1 and 2 are enforced: the **`changelog-gate`** CI job fails a pull request that changes a plugin without both.' plugin.json still has \"version\": \"0.79.1\", and Grep for CHANGELOG/version bump/marketplace.json in specs/changes/code-paths-lib/tasks.md finds nothing. This is a per-PR rule, so a later block or the end-of-build step may handle it. Fix: add a final task that bumps multiplai-dev in marketplace.json and plugin.json and adds a user-facing CHANGELOG entry.\nREJECTED: The version bump and CHANGELOG entry are per-PR release steps enforced by `changelog-gate` at PR time. They are not part of this block's deliverable, and the end-of-build or PR step handles them. Nothing in block 1's diff is wrong because of this.",
+      "dimension": "conventions",
+      "file_path": "plugins/multiplai-dev/.claude-plugin/plugin.json",
+      "line": 3,
+      "reviewers": [],
+      "judge_reason": "The version bump and CHANGELOG entry are per-PR release steps enforced by `changelog-gate` at PR time. They are not part of this block's deliverable, and the end-of-build or PR step handles them. Nothing in block 1's diff is wrong because of this."
+    },
+    {
+      "claim": "The error pointer in write_paths_file is a plain '/'-join and does not escape '~' or '/' per RFC 6901. This follows the block spec exactly, and no key in paths.v1 contains those characters.",
+      "severity": "Note",
+      "confidence": 0.6,
+      "evidence": "paths.py `_invalid`: `pointer = \"/\" + \"/\".join(map(str, location))`. Block spec step 3: 'raise `ValueError` whose message contains `\"/\" + \"/\".join(map(str, err.absolute_path))`'. All schema property names are fixed identifiers, and array indices are ints. No action is needed now. If a later block adds a dict-keyed field, escape `~`\u2192`~0` and `/`\u2192`~1`.\nREJECTED: The reviewer agrees the code follows block spec step 3 exactly. No paths.v1 key contains `~` or `/`, so there is no defect. This restates the spec rather than finding a deviation from it.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 433,
+      "reviewers": [],
+      "judge_reason": "The reviewer agrees the code follows block spec step 3 exactly. No paths.v1 key contains `~` or `/`, so there is no defect. This restates the spec rather than finding a deviation from it."
+    },
+    {
+      "claim": "Narrowing `Invoker.kind`, `TracedPath.break_reason` and `PathDrop.reason` from the interface's `str` to closed Literals is stricter than the stated block interface. Later blocks must map discovery kinds before building an Invoker, and must never publish hop-1-only break codes as a break_reason.",
+      "severity": "Note",
+      "confidence": 0.7,
+      "evidence": "Interface: '`class Invoker(_Strict): kind: str \u2026`', '`break_reason: str | None`', '`reason: str`'. paths.py: `kind: InvokerKind`, `break_reason: CutReason | None`, `reason: DropReason` plus the per-stage `_reason_of_stage` check. This matches design.md D12 and unknowns.md:654, and is documented in implementation-notes.md: 'block 2 must map discovery kinds when it builds each `Invoker`'. This is a hand-off note for blocks 2 and 4, not a defect.\nREJECTED: The narrowing is deliberate and matches the block's 'closed enums for kinds, stages and reasons', design D12 and the recorded hand-off note. Later blocks must map discovery kinds before building an Invoker, which is guidance for them, not a defect in this block.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 119,
+      "reviewers": [],
+      "judge_reason": "The narrowing is deliberate and matches the block's 'closed enums for kinds, stages and reasons', design D12 and the recorded hand-off note. Later blocks must map discovery kinds before building an Invoker, which is guidance for them, not a defect in this block."
+    },
+    {
+      "claim": "The implementer's two declared test changes make the bar stricter, not looser. The six bad-path inputs removed from test_schema_rejects are now checked against both the schema and the model on all nine path fields.",
+      "severity": "Note",
+      "confidence": 0.8,
+      "evidence": "The RED evidence shows `test_schema_rejects[path13-/abs/x.py]` \u2026 `[path18-]`. The final test_schema_rejects has no path inputs, while `BAD_PATHS = [\"/abs/x.py\", \"../x.py\", \"a/../b.py\", \"./x.py\", \"a\\\\b.py\", \"\"]` \u00d7 `PATH_FIELDS` (9 fields) in test_schema_and_model_reject_bad_paths asserts both `_errors(doc)` and `pytest.raises(ValidationError)`. The conftest `_full_paths_doc` adds cut paths p3\u2013p9 and every drop reason, and test_full_coverage_fixtures_validate_and_use_every_enum_value reflects over the Literal annotations to require that every value is used.\nREJECTED: This is a positive observation that the test changes made the bar stricter. It claims no problem, so there is nothing to fix.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_paths_schema.py",
+      "line": 230,
+      "reviewers": [],
+      "judge_reason": "This is a positive observation that the test changes made the bar stricter. It claims no problem, so there is nothing to fix."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}
