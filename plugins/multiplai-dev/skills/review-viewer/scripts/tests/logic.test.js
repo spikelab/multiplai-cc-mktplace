@@ -1472,6 +1472,53 @@ test("app.js puts the summary line, then the note, then the cards or the no-path
   assert.equal((render.match(/L\.findingsByPath\(/g) || []).length, 1, "one byPath feeds the order and the summary");
 });
 
+// --- paths: a finding's own Paths section (block 4) ----------------------------------
+
+test("a finding's path ids resolve in the finding's order, once each, unknown ones marked", () => {
+  const refs = (ids_, doc) => L.resolvePathRefs(ids_, doc === undefined ? pathsDoc : doc);
+  assert.deepEqual(refs(["p2", "p1"]), [{ id: "p2", path: pathById("p2") }, { id: "p1", path: pathById("p1") }]);
+  assert.deepEqual(refs(["p1", "p3", "p1"]).map((r) => r.id), ["p1", "p3"]);
+  assert.deepEqual(refs(["p1", "p9"]), [{ id: "p1", path: pathById("p1") }, { id: "p9", path: null, missing: true }]);
+  assert.deepEqual(refs(["p8", "p9"]), [{ id: "p8", path: null, missing: true }, { id: "p9", path: null, missing: true }]);
+  assert.deepEqual(refs(["__proto__", "constructor"]).map((r) => r.missing), [true, true]);
+  assert.deepEqual(refs([]), []);
+  assert.deepEqual(refs(null), []);
+  assert.deepEqual(refs(["p1", "p2"], null), []);
+  const idsIn = ["p2", "p9", "p2"], docIn = structuredClone(pathsDoc);
+  L.resolvePathRefs(idsIn, docIn);
+  assert.deepEqual(idsIn, ["p2", "p9", "p2"]);
+  assert.deepEqual(docIn, pathsDoc);
+});
+
+test("a finding's Paths section: entry name, kind and id, a link when known, none without ids or paths.json", () => {
+  const byId = (id) => findingsDoc.findings.find((f) => f.id === id);
+  assert.deepEqual(L.findingPathsSection(byId(F_A), pathsDoc), { entries: [
+    { id: "p1", label: "shop checkout", kind: "CLI command", link: true, note: null },
+    { id: "p4", label: "scripts/points_report.py", kind: "script", link: true, note: null }] });
+  // A refuted finding keeps its links, though it counts for no path.
+  assert.deepEqual(L.findingPathsSection(byId(F_C), pathsDoc), { entries: [
+    { id: "p6", label: "shop discount", kind: "CLI command", link: true, note: null }] });
+  assert.deepEqual(L.findingPathsSection({ id: "x", paths: ["p9", "p2"] }, pathsDoc), { entries: [
+    { id: "p9", label: "p9", kind: null, link: false, note: "not in paths.json" },
+    { id: "p2", label: "pre-commit discount check", kind: "hook", link: true, note: null }] });
+  assert.equal(L.findingPathsSection(byId(F_A), null), null, "no paths.json loaded");
+  assert.equal(L.findingPathsSection({ id: "x" }, pathsDoc), null, "no paths field");
+  assert.equal(L.findingPathsSection({ id: "x", paths: [] }, pathsDoc), null, "an empty list");
+});
+
+test("app.js links a finding's paths to their cards and marks only the card it opened", () => {
+  assert.match(appJs, /L\.findingPathsSection\(f, state\.detail\.paths\)/);
+  const show = (appJs.match(/function showPathCard\(id\)[\s\S]*?\n  \}/) || [""])[0];
+  assert.match(show, /state\.targetPathId = id;/);
+  assert.match(show, /setTab\("paths"\)/);
+  assert.match(show, /document\.getElementById\("path-card-" \+ id\)/);
+  assert.match(show, /scrollIntoView\(\{ block: "start"/);
+  assert.match(appJs, /class: "path-card" \+ \(m\.id === state\.targetPathId \? " is-target" : ""\)/);
+  const load = (appJs.match(/async function loadTarget\(slug\)[\s\S]*?\n  \}/) || [""])[0];
+  assert.match(load, /state\.targetPathId = null;/);
+  assert.match(appJs, /targetPathId: null,/);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {
