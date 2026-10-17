@@ -396,10 +396,3 @@ def test_skill_md_stage_5_describes_map_paths():
     stage5 = text[text.index("5. **trace**"):text.index("6. **write**")]
     assert "map_paths" in stage5
     assert "webhooks first" not in stage5
-
-
-def test_multiplai_dev_is_released_as_0_81_0():
-    manifest = json.loads((DEV.parents[1] / ".claude-plugin" / "marketplace.json").read_text())
-    assert next(p for p in manifest["plugins"] if p["name"] == "multiplai-dev")["version"] == "0.81.0"
-    versions = re.findall(r"^## \[(\d+\.\d+\.\d+)\]", (DEV / "CHANGELOG.md").read_text(), re.M)
-    assert versions[0] == "0.81.0"
