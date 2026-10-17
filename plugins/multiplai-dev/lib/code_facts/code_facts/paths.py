@@ -1,0 +1,367 @@
+"""The paths.v1 contract: the output models, their JSON Schema, `map_paths` and `write_paths_file`.
+
+A path runs from one entry point (a CLI subcommand, a hook, a skill command, …)
+through the code it calls. `map_paths` returns a `PathsResult`; only
+`write_paths_file` writes `paths.json`, and only after the document validates
+against `schema/paths.v1.schema.json`.
+
+Locations. Every path in the output is relative to the snapshot root passed to
+`map_paths`, uses `/`, and has no `.` or `..` segment. Lines are 1-based.
+
+Field order. Serialisation order is declaration order, which is also the
+schema's `properties` order, so the field order of every model below is part of
+the contract.
+
+The committed schema is generated: `paths_schema_text()` is its source.
+"""
+
+from __future__ import annotations
+
+import functools
+import importlib.resources
+import json
+import logging
+import os
+import posixpath
+import re
+import secrets
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from pathlib import Path
+from typing import Any, Literal
+
+import jsonschema
+from pydantic import ConfigDict, Field, model_validator
+
+from .explore import CallFn, Resolve
+from .models import _Model
+
+log = logging.getLogger(__name__)
+
+SCHEMA_VERSION = "paths.v1"
+SCHEMA_RESOURCE = ("schema", "paths.v1.schema.json")
+# The same draft as review's facts.v1 schema.
+JSON_SCHEMA_DRAFT = "https://json-schema.org/draft/2020-12/schema"
+HOP_LIMIT = 20
+
+# Relative, no leading `/`, no `.` or `..` segment, no backslash. Compiled, so
+# pydantic matches it with Python's `re`, which supports the lookaheads.
+REL_PATH = re.compile(r"^(?!/)(?!.*(^|/)\.\.?(/|$))[^\\]+$")
+PATH_ID = r"^p[1-9][0-9]*$"
+
+EntryKind = Literal["argparse", "click", "typer", "main", "script", "skill_command", "hook", "seed", "model"]
+MatchKind = Literal["direct_call", "cli_argv", "cli_runner", "subprocess", "runpy"]
+DropStage = Literal["model_fallback_citation", "model_fallback_duplicate", "import_reachability", "trace_limit",
+                    "trace", "no_changed_line", "cap"]
+DiagnosticReason = Literal["parse_error", "unresolved_target", "unresolved_handler", "dynamic_name",
+                           "seed_not_found"]
+SkipReason = Literal["decode_error", "syntax_error"]
+FallbackState = Literal["ok", "failed", "skipped"]
+
+# Drop stages that only a scoped run can produce.
+SCOPE_STAGES = frozenset({"import_reachability", "trace_limit", "no_changed_line", "cap"})
+
+
+class _Strict(_Model):
+    # Output models: code builds them, so an unknown key is a bug, not model chatter.
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+# --- the paths.v1 models -----------------------------------------------------------------
+
+
+class Location(_Strict):
+    """A line in a file under the snapshot root."""
+    path: str = Field(pattern=REL_PATH)
+    line: int = Field(ge=1)
+
+
+class Handler(_Strict):
+    """The code an entry runs: a function's `def` line, or line 1 of a non-Python target (no symbol)."""
+    path: str = Field(pattern=REL_PATH)
+    line: int = Field(ge=1)
+    symbol: str | None
+
+
+class Invoker(_Strict):
+    """Another entry that resolved to the same handler and was merged into this one."""
+    kind: str
+    name: str
+    location: Location
+
+
+class PathEntry(_Strict):
+    """Where a path starts: the declaration line, and the handler it dispatches to."""
+    kind: EntryKind
+    name: str
+    location: Location
+    handler: Handler | None
+    invocation: str | None
+    also_invoked_by: list[Invoker]
+
+
+class PathHop(_Strict):
+    """One step of a path. The fields of the codebase-walkthrough `Hop`, then the commit side."""
+    symbol_called: str
+    path: str = Field(pattern=REL_PATH)
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+    quote: str
+    note: str = ""
+    side: Literal["head"] = "head"
+
+
+class E2ETest(_Strict):
+    """A test that invokes the path's entry; `line` is its `def`, `invocation_line` the matching call."""
+    node_id: str
+    file: str = Field(pattern=REL_PATH)
+    line: int = Field(ge=1)
+    match: MatchKind
+    invocation_line: int = Field(ge=1)
+
+
+class MockedE2ETest(E2ETest):
+    """An e2e test that patches the symbol at hop 2; the patch may sit in a fixture file."""
+    patch_file: str = Field(pattern=REL_PATH)
+    patch_line: int = Field(ge=1)
+
+
+class E2EListing(_Strict):
+    """Tests of a path, sorted by (file, line, node_id). A test is in at most one list."""
+    e2e: list[E2ETest]
+    mocks_hop_2: list[MockedE2ETest]
+
+    @model_validator(mode="after")
+    def _disjoint(self) -> E2EListing:
+        both = {t.node_id for t in self.e2e} & {t.node_id for t in self.mocks_hop_2}
+        if both:
+            raise ValueError(f"listed in both e2e and mocks_hop_2: {sorted(both)}")
+        return self
+
+
+class TracedPath(_Strict):
+    """A kept path. A cut path has `stops_at` (the 1-based index of the last hop kept) and `break_reason`."""
+    id: str = Field(pattern=PATH_ID)
+    entry: PathEntry
+    hops: list[PathHop] = Field(min_length=1, max_length=HOP_LIMIT)
+    stops_at: int | None
+    break_reason: str | None = Field(min_length=1)
+    changed_lines_covered: list[Location]
+    tests: E2EListing
+
+    @model_validator(mode="after")
+    def _cut(self) -> TracedPath:
+        if (self.stops_at is None) != (self.break_reason is None):
+            raise ValueError("stops_at and break_reason are set together or not at all")
+        if self.stops_at is not None and not 1 <= self.stops_at <= len(self.hops):
+            raise ValueError(f"stops_at {self.stops_at} is not a hop index in 1..{len(self.hops)}")
+        return self
+
+
+class PathDrop(_Strict):
+    """An entry or path left out, with the stage that dropped it and a reason code; `detail` is for humans."""
+    stage: DropStage
+    reason: str = Field(min_length=1)
+    detail: str
+    entry: PathEntry
+
+
+class PathDiagnostic(_Strict):
+    """A discovery candidate that was examined but not emitted, or an entry whose handler did not resolve."""
+    path: str = Field(pattern=REL_PATH)
+    line: int | None = Field(ge=1)
+    reason: DiagnosticReason
+    detail: str
+
+
+class ListingSkip(_Strict):
+    """A test file the e2e listing could not read."""
+    file: str = Field(pattern=REL_PATH)
+    reason: SkipReason
+
+
+class FallbackStatus(_Strict):
+    """What the model fallback did; `reason` says why it failed and is null otherwise."""
+    status: FallbackState
+    reason: str | None = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _reason_iff_failed(self) -> FallbackStatus:
+        if (self.status == "failed") != (self.reason is not None):
+            raise ValueError("fallback reason is given exactly when the status is failed")
+        return self
+
+
+class PathsResult(_Strict):
+    """The paths.v1 document. `scoped` is true exactly when changed lines were given; `cap` is null otherwise."""
+    schema_version: Literal["paths.v1"]
+    commit: str
+    scoped: bool
+    cap: int | None = Field(ge=1)
+    fallback: FallbackStatus
+    paths: list[TracedPath]
+    dropped: list[PathDrop]
+    diagnostics: list[PathDiagnostic]
+    test_listing_skips: list[ListingSkip]
+
+    @model_validator(mode="after")
+    def _consistent(self) -> PathsResult:
+        if self.scoped != (self.cap is not None):
+            raise ValueError("cap is set exactly when the run is scoped")
+        ids = [p.id for p in self.paths]
+        if ids != [f"p{n}" for n in range(1, len(ids) + 1)]:
+            raise ValueError(f"path ids are not p1..p{len(ids)} in order: {ids}")
+        if not self.scoped:
+            if any(d.stage in SCOPE_STAGES for d in self.dropped):
+                raise ValueError("an unscoped run has no scope-stage drops")
+            if any(p.changed_lines_covered for p in self.paths):
+                raise ValueError("an unscoped run covers no changed lines")
+        return self
+
+
+class Seed(_Strict):
+    """A caller-chosen entry: a path plus a line or a symbol, with an optional display name."""
+    path: str
+    line: int | None = None
+    symbol: str | None = None
+    name: str | None = None
+
+
+# --- schema ----------------------------------------------------------------------------------
+
+
+def paths_schema_text() -> str:
+    """The JSON Schema for PathsResult, in its committed form (`schema/paths.v1.schema.json`)."""
+    schema = {"$schema": JSON_SCHEMA_DRAFT, "$id": f"{SCHEMA_VERSION}.schema.json",
+              **PathsResult.model_json_schema()}
+    return json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
+
+
+@functools.cache
+def _validator() -> jsonschema.protocols.Validator:
+    text = importlib.resources.files("code_facts").joinpath(*SCHEMA_RESOURCE).read_text(encoding="utf-8")
+    schema = json.loads(text)
+    return jsonschema.validators.validator_for(schema)(schema)
+
+
+# --- arguments -------------------------------------------------------------------------------
+
+
+def normalise_rel_path(root: Path, path: str) -> str:
+    """`path` as a POSIX path relative to `root`, with `.` segments and a leading `./` removed.
+
+    Raises ValueError for an empty, absolute or backslashed path, or one that
+    resolves outside `root`. The file does not have to exist.
+    """
+    if not path or "\\" in path:
+        raise ValueError(f"not a relative POSIX path: {path!r}")
+    if posixpath.isabs(path):
+        raise ValueError(f"absolute path: {path!r}")
+    norm = posixpath.normpath(path)
+    if norm == "." or norm == ".." or norm.startswith("../"):
+        raise ValueError(f"path escapes the snapshot root: {path!r}")
+    if not (root / norm).resolve().is_relative_to(root.resolve()):
+        raise ValueError(f"path resolves outside the snapshot root: {path!r}")
+    return norm
+
+
+def normalise_changed_lines(root: Path, changed_lines: Mapping[str, Iterable[int]]) -> dict[str, frozenset[int]]:
+    """Changed lines keyed by normalised path; two spellings of one file are merged.
+
+    Raises ValueError for a bad path (see `normalise_rel_path`) or a line below 1.
+    """
+    out: dict[str, set[int]] = {}
+    for path, lines in changed_lines.items():
+        norm = normalise_rel_path(root, path)
+        bucket = out.setdefault(norm, set())
+        for line in lines:
+            if isinstance(line, bool) or not isinstance(line, int):
+                raise TypeError(f"changed line in {path!r} is not an int: {line!r}")
+            if line < 1:
+                raise ValueError(f"changed line in {path!r} is below 1: {line}")
+            bucket.add(line)
+    return {path: frozenset(out[path]) for path in sorted(out)}
+
+
+def _require_positive(name: str, value: int) -> None:
+    if value < 1:
+        raise ValueError(f"{name} must be at least 1 when changed lines are given, got {value}")
+
+
+# --- mapping ---------------------------------------------------------------------------------
+
+
+async def map_paths(
+    *,
+    root: Path,
+    commit: str,
+    resolve: Resolve,
+    call: CallFn,
+    changed_lines: Mapping[str, Iterable[int]] | None = None,
+    seeds: Sequence[Seed] = (),
+    places: Sequence[Location] = (),
+    cap: int = 10,
+    trace_limit: int = 30,
+    concurrency: int = 4,
+    cache_dir: Path | None = None,
+    fallback: bool = True,
+    recoverable: tuple[type[BaseException], ...] = (),
+    call_kwargs: Mapping[str, Any] | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> PathsResult:
+    """The paths from every entry point in the snapshot at `root`.
+
+    `commit` is the label written to the result; citations are re-read through
+    `resolve`, and every model call goes through `call`. Scoping (reachability,
+    `trace_limit`, coverage, `cap`) applies only when `changed_lines` is not
+    None. Arguments are checked before any model call. Nothing is written
+    outside `cache_dir`.
+    """
+    for name, fn in (("call", call), ("resolve", resolve)):
+        if not callable(fn):
+            raise TypeError(f"{name} must be callable, got {type(fn).__name__}")
+    scoped = changed_lines is not None
+    if scoped:
+        _require_positive("cap", cap)
+        _require_positive("trace_limit", trace_limit)
+        normalise_changed_lines(root, changed_lines)
+    log.info("mapping paths at %s (%s)", commit, "scoped" if scoped else "unscoped")
+    # Until the model fallback exists, every run records it as skipped.
+    return PathsResult(
+        schema_version=SCHEMA_VERSION, commit=commit, scoped=scoped, cap=cap if scoped else None,
+        fallback=FallbackStatus(status="skipped", reason=None),
+        paths=[], dropped=[], diagnostics=[], test_listing_skips=[],
+    )
+
+
+# --- writing ---------------------------------------------------------------------------------
+
+
+def write_paths_file(result: PathsResult, path: Path) -> Path:
+    """Write `result` to `path` as paths.v1 JSON, atomically, after validating it against the schema.
+
+    Raises ValueError naming the JSON pointer of the first schema error; then
+    nothing is written and an existing file at `path` is left as it was.
+    """
+    text = json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
+    error = jsonschema.exceptions.best_match(_validator().iter_errors(json.loads(text)))
+    if error is not None:
+        pointer = "/" + "/".join(map(str, error.absolute_path))
+        raise ValueError(f"{SCHEMA_VERSION} document is invalid at {pointer}: {error.message}")
+    _write_atomic(path, text.encode("utf-8"))
+    return path
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Write via a temp file in the same directory, fsync'd, then renamed over `path`."""
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    # os.open with 0o666 so the umask applies, as for a plain write.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise

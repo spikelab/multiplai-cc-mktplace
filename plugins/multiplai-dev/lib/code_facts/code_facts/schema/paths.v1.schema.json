@@ -1,0 +1,612 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "paths.v1.schema.json",
+  "$defs": {
+    "E2EListing": {
+      "additionalProperties": false,
+      "description": "Tests of a path, sorted by (file, line, node_id). A test is in at most one list.",
+      "properties": {
+        "e2e": {
+          "items": {
+            "$ref": "#/$defs/E2ETest"
+          },
+          "title": "E2E",
+          "type": "array"
+        },
+        "mocks_hop_2": {
+          "items": {
+            "$ref": "#/$defs/MockedE2ETest"
+          },
+          "title": "Mocks Hop 2",
+          "type": "array"
+        }
+      },
+      "required": [
+        "e2e",
+        "mocks_hop_2"
+      ],
+      "title": "E2EListing",
+      "type": "object"
+    },
+    "E2ETest": {
+      "additionalProperties": false,
+      "description": "A test that invokes the path's entry; `line` is its `def`, `invocation_line` the matching call.",
+      "properties": {
+        "node_id": {
+          "title": "Node Id",
+          "type": "string"
+        },
+        "file": {
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$))[^\\\\]+$",
+          "title": "File",
+          "type": "string"
+        },
+        "line": {
+          "minimum": 1,
+          "title": "Line",
+          "type": "integer"
+        },
+        "match": {
+          "enum": [
+            "direct_call",
+            "cli_argv",
+            "cli_runner",
+            "subprocess",
+            "runpy"
+          ],
+          "title": "Match",
+          "type": "string"
+        },
+        "invocation_line": {
+          "minimum": 1,
+          "title": "Invocation Line",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "node_id",
+        "file",
+        "line",
+        "match",
+        "invocation_line"
+      ],
+      "title": "E2ETest",
+      "type": "object"
+    },
+    "FallbackStatus": {
+      "additionalProperties": false,
+      "description": "What the model fallback did; `reason` says why it failed and is null otherwise.",
+      "properties": {
+        "status": {
+          "enum": [
+            "ok",
+            "failed",
+            "skipped"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "status",
+        "reason"
+      ],
+      "title": "FallbackStatus",
+      "type": "object"
+    },
+    "Handler": {
+      "additionalProperties": false,
+      "description": "The code an entry runs: a function's `def` line, or line 1 of a non-Python target (no symbol).",
+      "properties": {
+        "path": {
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$))[^\\\\]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "line": {
+          "minimum": 1,
+          "title": "Line",
+          "type": "integer"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Symbol"
+        }
+      },
+      "required": [
+        "path",
+        "line",
+        "symbol"
+      ],
+      "title": "Handler",
+      "type": "object"
+    },
+    "Invoker": {
+      "additionalProperties": false,
+      "description": "Another entry that resolved to the same handler and was merged into this one.",
+      "properties": {
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "location"
+      ],
+      "title": "Invoker",
+      "type": "object"
+    },
+    "ListingSkip": {
+      "additionalProperties": false,
+      "description": "A test file the e2e listing could not read.",
+      "properties": {
+        "file": {
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$))[^\\\\]+$",
+          "title": "File",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "decode_error",
+            "syntax_error"
+          ],
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "reason"
+      ],
+      "title": "ListingSkip",
+      "type": "object"
+    },
+    "Location": {
+      "additionalProperties": false,
+      "description": "A line in a file under the snapshot root.",
+      "properties": {
+        "path": {
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$))[^\\\\]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "line": {
+          "minimum": 1,
+          "title": "Line",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "line"
+      ],
+      "title": "Location",
+      "type": "object"
+    },
+    "MockedE2ETest": {
+      "additionalProperties": false,
+      "description": "An e2e test that patches the symbol at hop 2; the patch may sit in a fixture file.",
+      "properties": {
+        "node_id": {
+          "title": "Node Id",
+          "type": "string"
+        },
+        "file": {
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$))[^\\\\]+$",
+          "title": "File",
+          "type": "string"
+        },
+        "line": {
+          "minimum": 1,
+          "title": "Line",
+          "type": "integer"
+        },
+        "match": {
+          "enum": [
+            "direct_call",
+            "cli_argv",
+            "cli_runner",
+            "subprocess",
+            "runpy"
+          ],
+          "title": "Match",
+          "type": "string"
+        },
+        "invocation_line": {
+          "minimum": 1,
+          "title": "Invocation Line",
+          "type": "integer"
+        },
+        "patch_file": {
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$))[^\\\\]+$",
+          "title": "Patch File",
+          "type": "string"
+        },
+        "patch_line": {
+          "minimum": 1,
+          "title": "Patch Line",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "node_id",
+        "file",
+        "line",
+        "match",
+        "invocation_line",
+        "patch_file",
+        "patch_line"
+      ],
+      "title": "MockedE2ETest",
+      "type": "object"
+    },
+    "PathDiagnostic": {
+      "additionalProperties": false,
+      "description": "A discovery candidate that was examined but not emitted, or an entry whose handler did not resolve.",
+      "properties": {
+        "path": {
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$))[^\\\\]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Line"
+        },
+        "reason": {
+          "enum": [
+            "parse_error",
+            "unresolved_target",
+            "unresolved_handler",
+            "dynamic_name",
+            "seed_not_found"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "line",
+        "reason",
+        "detail"
+      ],
+      "title": "PathDiagnostic",
+      "type": "object"
+    },
+    "PathDrop": {
+      "additionalProperties": false,
+      "description": "An entry or path left out, with the stage that dropped it and a reason code; `detail` is for humans.",
+      "properties": {
+        "stage": {
+          "enum": [
+            "model_fallback_citation",
+            "model_fallback_duplicate",
+            "import_reachability",
+            "trace_limit",
+            "trace",
+            "no_changed_line",
+            "cap"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "entry": {
+          "$ref": "#/$defs/PathEntry"
+        }
+      },
+      "required": [
+        "stage",
+        "reason",
+        "detail",
+        "entry"
+      ],
+      "title": "PathDrop",
+      "type": "object"
+    },
+    "PathEntry": {
+      "additionalProperties": false,
+      "description": "Where a path starts: the declaration line, and the handler it dispatches to.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "argparse",
+            "click",
+            "typer",
+            "main",
+            "script",
+            "skill_command",
+            "hook",
+            "seed",
+            "model"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "handler": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Handler"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invocation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Invocation"
+        },
+        "also_invoked_by": {
+          "items": {
+            "$ref": "#/$defs/Invoker"
+          },
+          "title": "Also Invoked By",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "location",
+        "handler",
+        "invocation",
+        "also_invoked_by"
+      ],
+      "title": "PathEntry",
+      "type": "object"
+    },
+    "PathHop": {
+      "additionalProperties": false,
+      "description": "One step of a path. The fields of the codebase-walkthrough `Hop`, then the commit side.",
+      "properties": {
+        "symbol_called": {
+          "title": "Symbol Called",
+          "type": "string"
+        },
+        "path": {
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$))[^\\\\]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "line_start": {
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        },
+        "line_end": {
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "quote": {
+          "title": "Quote",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        },
+        "side": {
+          "const": "head",
+          "default": "head",
+          "title": "Side",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol_called",
+        "path",
+        "line_start",
+        "line_end",
+        "quote"
+      ],
+      "title": "PathHop",
+      "type": "object"
+    },
+    "TracedPath": {
+      "additionalProperties": false,
+      "description": "A kept path. A cut path has `stops_at` (the 1-based index of the last hop kept) and `break_reason`.",
+      "properties": {
+        "id": {
+          "pattern": "^p[1-9][0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "entry": {
+          "$ref": "#/$defs/PathEntry"
+        },
+        "hops": {
+          "items": {
+            "$ref": "#/$defs/PathHop"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Hops",
+          "type": "array"
+        },
+        "stops_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Stops At"
+        },
+        "break_reason": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Break Reason"
+        },
+        "changed_lines_covered": {
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "title": "Changed Lines Covered",
+          "type": "array"
+        },
+        "tests": {
+          "$ref": "#/$defs/E2EListing"
+        }
+      },
+      "required": [
+        "id",
+        "entry",
+        "hops",
+        "stops_at",
+        "break_reason",
+        "changed_lines_covered",
+        "tests"
+      ],
+      "title": "TracedPath",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The paths.v1 document. `scoped` is true exactly when changed lines were given; `cap` is null otherwise.",
+  "properties": {
+    "schema_version": {
+      "const": "paths.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "commit": {
+      "title": "Commit",
+      "type": "string"
+    },
+    "scoped": {
+      "title": "Scoped",
+      "type": "boolean"
+    },
+    "cap": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Cap"
+    },
+    "fallback": {
+      "$ref": "#/$defs/FallbackStatus"
+    },
+    "paths": {
+      "items": {
+        "$ref": "#/$defs/TracedPath"
+      },
+      "title": "Paths",
+      "type": "array"
+    },
+    "dropped": {
+      "items": {
+        "$ref": "#/$defs/PathDrop"
+      },
+      "title": "Dropped",
+      "type": "array"
+    },
+    "diagnostics": {
+      "items": {
+        "$ref": "#/$defs/PathDiagnostic"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    },
+    "test_listing_skips": {
+      "items": {
+        "$ref": "#/$defs/ListingSkip"
+      },
+      "title": "Test Listing Skips",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "commit",
+    "scoped",
+    "cap",
+    "fallback",
+    "paths",
+    "dropped",
+    "diagnostics",
+    "test_listing_skips"
+  ],
+  "title": "PathsResult",
+  "type": "object"
+}

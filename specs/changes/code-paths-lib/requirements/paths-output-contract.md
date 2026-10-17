@@ -15,7 +15,8 @@
 ### Requirement: `map_paths` returns a model and writes only cache files
 `map_paths(...)` SHALL take its inputs as keyword arguments:
 - snapshot root;
-- commit;
+- commit, the label written to `paths.json`;
+- caller-supplied `Resolve`, through which citations are re-read at the commit (as for `explore`);
 - caller-supplied `CallFn`;
 - optional changed lines;
 - optional seeds;
@@ -32,7 +33,7 @@ It SHALL return the top-level result model. It SHALL NOT write `paths.json` or a
 - **AND** no file other than files under the cache location is created or modified in the temporary directory
 
 #### Scenario: Missing required argument
-- **WHEN** `map_paths` is called without a `CallFn`
+- **WHEN** `map_paths` is called without a `CallFn`, or without a `Resolve`
 - **THEN** it raises `TypeError` before any discovery or model call happens
 
 ### Requirement: Schema file exists and follows the review facts schema style
@@ -121,18 +122,18 @@ An entry object SHALL have these fields:
 - **AND** each entry's `location.line` is the line of its `add_parser` call
 
 ### Requirement: Hop object shape mirrors the walkthrough Hop
-A hop object SHALL use the same field names and meanings as `Hop` in `walkthrough_pipeline/models.py:122-128`. Its citation SHALL use `code_facts`' `Citation` shape, with `side` defaulting to `"head"`. The library SHALL NOT import from `walkthrough_pipeline`.
+A hop object SHALL be flat: the fields of `Hop` in `walkthrough_pipeline/models.py:122-128`, with the same names, types and order, followed by `side`, the constant `"head"` with that default. It SHALL NOT embed a `Citation`, so no citation `id` reaches the output. The library SHALL NOT import from `walkthrough_pipeline`.
 
 #### Scenario: Field names match
-- **WHEN** a test compares the hop model's field names with the field names of the walkthrough `Hop` model
-- **THEN** the two sets are equal, except that the citation field is typed as `code_facts.Citation`
+- **WHEN** a test compares the hop model's fields with the fields of the walkthrough `Hop` model, read by parsing its source with `ast`
+- **THEN** the hop model declares the walkthrough fields in the same order with the same annotations, followed by `side: Literal["head"]`
 
 #### Scenario: No cross-import
 - **WHEN** the source files under `code_facts/` are searched for `walkthrough_pipeline`
 - **THEN** no import statement references it
 
 #### Scenario: Default side
-- **WHEN** a hop citation is built without an explicit side and serialised
+- **WHEN** a hop is built without an explicit side and serialised
 - **THEN** the JSON has `"side": "head"`
 
 ### Requirement: Locations are relative to the snapshot root
@@ -192,37 +193,50 @@ The ids in `paths` SHALL be `p1`, `p2`, ..., `pN` in array order, with no gaps o
 - **THEN** every path has `"changed_lines_covered": []`
 
 ### Requirement: Test-listing shape
-The `tests` field SHALL be an object with two arrays, `e2e` and `mocks_hop_2`:
-- Each item is a test id of the form `<root-relative path>::<qualified test name>`.
-- Each array is sorted lexically with no duplicates.
-- No test id appears in both arrays.
+The `tests` field SHALL be an object with two arrays of test records, `e2e` and `mocks_hop_2`:
+- An `e2e` record has `node_id`, `file`, `line`, `match` and `invocation_line`, in that order. `node_id` has the form `<root-relative path>::<qualified test name>`.
+- A `mocks_hop_2` record has the same fields, then `patch_file` and `patch_line`, because the hop-2 patch may be in a fixture file.
+- Each array is sorted by `(file, line, node_id)`, and each `node_id` appears at most once in it.
+- No `node_id` appears in both arrays.
 - Both arrays are empty when no test invokes the entry.
 
 #### Scenario: Mocked test listed separately
 - **WHEN** a fixture test invokes the entry structurally but patches the hop-2 target
-- **THEN** its id appears in `mocks_hop_2` and not in `e2e`
+- **THEN** its record appears in `mocks_hop_2`, with `patch_file` and `patch_line`, and not in `e2e`
 
 #### Scenario: Overlap rejected
-- **WHEN** the model is built with the same test id in both arrays
+- **WHEN** the model is built with the same `node_id` in both arrays
 - **THEN** model validation raises an error
 
 ### Requirement: Every drop is recorded with a reason
-Each item of `dropped` SHALL have these fields:
-- `stage`: one of `model_fallback_citation`, `import_reachability`, `trace_limit`, `no_changed_line`, `cap`.
-- `entry`: an entry object.
-- `reason`: a non-empty string.
+Each item of `dropped` SHALL have these fields, in this order:
+- `stage`: one of `model_fallback_citation`, `model_fallback_duplicate`, `import_reachability`, `trace_limit`, `trace`, `no_changed_line`, `cap`.
+- `reason`: a non-empty code from the stage's closed set:
 
-Drop records SHALL be sorted by `stage` in the order listed above, then by entry `location.path`, then `location.line`, then `kind`. When `scoped` is `false`, records with the stages `import_reachability`, `no_changed_line` and `cap` SHALL NOT appear.
+  | Stage | Reasons |
+  |---|---|
+  | `model_fallback_citation` | `missing_citation`, `citation_unverified` |
+  | `model_fallback_duplicate` | `duplicate` |
+  | `import_reachability` | `unreachable` |
+  | `trace_limit` | `over_trace_limit` |
+  | `trace` | `call_failed`, or any trace-gate break code |
+  | `no_changed_line` | `no_changed_line_covered` |
+  | `cap` | `over_cap` |
+
+- `detail`: free text for humans, never parsed.
+- `entry`: an entry object.
+
+Drop records SHALL be sorted by `stage` in the order listed above, then by entry `location.path`, then `location.line`, then `kind`. When `scoped` is `false`, records with the stages `import_reachability`, `trace_limit`, `no_changed_line` and `cap` SHALL NOT appear.
 
 #### Scenario: Cap drop recorded
 - **WHEN** a scoped fixture run has 3 qualifying paths and `cap=2`
 - **THEN** `paths` has 2 items
-- **AND** `dropped` has exactly one record with `"stage": "cap"` and a non-empty reason
+- **AND** `dropped` has exactly one record with `"stage": "cap"` and `"reason": "over_cap"`
 
 #### Scenario: Uncited model entry recorded
 - **WHEN** a stub fallback agent returns an entry whose citation does not re-read at the commit
 - **THEN** no path has that entry
-- **AND** `dropped` has a record with `"stage": "model_fallback_citation"` for it
+- **AND** `dropped` has a record with `"stage": "model_fallback_citation"` and `"reason": "citation_unverified"` for it
 
 #### Scenario: Empty reason rejected
 - **WHEN** a drop record with `"reason": ""` is validated
