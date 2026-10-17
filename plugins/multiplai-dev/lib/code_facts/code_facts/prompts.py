@@ -138,11 +138,7 @@ def paths_trace(entry: Entry, *, commit: str, changed_lines: Mapping[str, frozen
     edges = sorted(f"{e.from_.path}:{e.from_.line} -> {e.to.path}:{e.to.line}" for e in known_edges)
     shown_places = sorted(f"{p.path}:{p.line}" for p in places)
     return f"""You are tracing one code path, from an entry point to its last effect, for an engineer reviewing it.
-Your working directory holds a snapshot of the code at commit {commit}. Read the code with the Read, Grep
-and Glob tools. Do not guess what code does.
-
-Entry point:
-{_entry_lines(entry)}
+{_snapshot_and_entry(entry, commit)}
 
 {scope}
 
@@ -162,11 +158,7 @@ def paths_reask(entry: Entry, *, commit: str, broken_at: int, break_reason: str,
                     for n, h in enumerate(accepted, start=1))
     return f"""An earlier trace of this code path failed a check at hop {broken_at}: {break_reason}
 ({detail}). Trace the path again from hop 1.
-Your working directory holds a snapshot of the code at commit {commit}. Read the code with the Read, Grep
-and Glob tools. Do not guess what code does.
-
-Entry point:
-{_entry_lines(entry)}
+{_snapshot_and_entry(entry, commit)}
 
 The hops before hop {broken_at} passed every check:
 {kept}
@@ -192,6 +184,15 @@ Schema:
 {schema_json(TraceAnswer)}
 
 Answer with ONE JSON object and nothing after it."""
+
+
+def _snapshot_and_entry(entry: Entry, commit: str) -> str:
+    """The part of every trace prompt that names the snapshot, the agent's tools and the entry point."""
+    return f"""Your working directory holds a snapshot of the code at commit {commit}. Read the code with the Read, Grep
+and Glob tools. Do not guess what code does.
+
+Entry point:
+{_entry_lines(entry)}"""
 
 
 def _entry_lines(entry: Entry) -> str:

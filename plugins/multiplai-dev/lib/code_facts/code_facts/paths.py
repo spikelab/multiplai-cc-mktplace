@@ -77,6 +77,8 @@ DROP_REASONS: Mapping[DropStage, tuple[DropReason, ...]] = {
     "no_changed_line": ("no_changed_line_covered",),
     "cap": ("over_cap",),
 }
+# The sort rank of each drop stage: its position in DROP_REASONS.
+_STAGE_RANK = {stage: rank for rank, stage in enumerate(DROP_REASONS)}
 # Drop stages that only a scoped run can produce.
 SCOPE_STAGES = frozenset({"import_reachability", "trace_limit", "no_changed_line", "cap"})
 
@@ -426,9 +428,6 @@ def path_order(path: TracedPath) -> tuple[int, int, str, int]:
     """The sort key of a kept path: fewest hops first, then entry kind rank, then entry location."""
     entry = path.entry
     return len(path.hops), KIND_RANK[entry.kind], entry.location.path, entry.location.line
-
-
-_STAGE_RANK = {stage: rank for rank, stage in enumerate(DROP_REASONS)}
 
 
 def drop_order(drop: PathDrop) -> tuple[int, str, int, str]:

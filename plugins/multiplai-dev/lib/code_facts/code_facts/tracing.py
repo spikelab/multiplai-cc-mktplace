@@ -129,16 +129,16 @@ async def trace_entry(entry: Entry, *, ctx: TraceContext) -> TracedPath | PathDr
 async def _trace(entry: Entry, ctx: TraceContext) -> TracedPath | PathDrop:
     key = trace_key(entry, ctx)
     first = await _answer(ctx, "trace", key, lambda: _trace_prompt(entry, ctx))
-    if CALL_ERROR in first:
-        return _drop(entry, "call_failed", first[CALL_ERROR])
+    if (failed := _call_failed(entry, first)) is not None:
+        return failed
     gated = _gate(first, entry, ctx)
     if gated.break_reason in (None, "hop_limit"):
         return _cut(entry, gated)
     second = await _answer(ctx, "reask", reask_key(key, first, gated), lambda: paths_reask(
         entry, commit=ctx.commit, broken_at=gated.broken_at, break_reason=gated.break_reason,
         detail=gated.detail, accepted=gated.accepted))
-    if CALL_ERROR in second:
-        return _drop(entry, "call_failed", second[CALL_ERROR])
+    if (failed := _call_failed(entry, second)) is not None:
+        return failed
     return _cut(entry, _gate(second, entry, ctx))
 
 
@@ -169,6 +169,11 @@ def _cut(entry: Entry, gated: GateResult) -> TracedPath | PathDrop:
     return TracedPath(id=UNNUMBERED, entry=to_path_entry(entry), hops=gated.accepted,
                       stops_at=len(gated.accepted) if cut else None, break_reason=gated.break_reason,
                       changed_lines_covered=[], tests=E2EListing(e2e=[], mocks_hop_2=[]))
+
+
+def _call_failed(entry: Entry, answer: dict) -> PathDrop | None:
+    """The `call_failed` drop when `answer` records a recoverable call failure, else None."""
+    return _drop(entry, "call_failed", answer[CALL_ERROR]) if CALL_ERROR in answer else None
 
 
 def _drop(entry: Entry, reason: DropReason, detail: str) -> PathDrop:

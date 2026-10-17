@@ -121,6 +121,13 @@ class _Gate:
 
     def check(self, hop: TraceHop, earlier: Sequence[PathHop]) -> PathHop | _Break:
         """The hop as accepted, or its first break given the hops `earlier` accepted."""
+        cited = self._cite(hop)
+        if isinstance(cited, _Break):
+            return cited
+        return self._link(cited, earlier) or cited
+
+    def _cite(self, hop: TraceHop) -> PathHop | _Break:
+        """Rules 1-5: the hop as a head-side citation that re-reads, or the first rule it breaks."""
         try:
             path = normalise_rel_path(self._root, hop.path)
         except ValueError as e:
@@ -140,6 +147,10 @@ class _Gate:
             return _Break("text_mismatch", f"{_where(cited)}: {reason}")
         if hop.side == "base":
             return _Break("base_side_citation", f"{_where(cited)} cites the base side")
+        return cited
+
+    def _link(self, cited: PathHop, earlier: Sequence[PathHop]) -> _Break | None:
+        """Rules 6-8: the first rule a re-read hop breaks in its place after `earlier`, or None."""
         if not earlier:
             if not self._anchored(cited):
                 return _Break("entry_mismatch", f"{_where(cited)} holds neither the entry line "
@@ -150,7 +161,7 @@ class _Gate:
                                              f"at {_where(cited)}")
         if any(_span(h) == _span(cited) for h in earlier):
             return _Break("repeated_hop", f"{_where(cited)} is already an earlier hop")
-        return cited
+        return None
 
     def _anchored(self, hop: PathHop) -> bool:
         handler = self._entry.handler
@@ -167,16 +178,26 @@ class _Gate:
         scope (`prev`'s cited range outside Python) into `hop`'s range; a place
         must lie in `hop`'s range.
         """
-        name = hop.symbol_called.strip().rsplit(".", 1)[-1]
-        if self._index.tree(prev.path) is not None:
-            start, end = self._index.enclosing_scope(prev.path, prev.line_start)
-            named = any(start <= line <= end and token == name for line, token in self._name_tokens(prev.path))
-        else:
-            start, end = prev.line_start, prev.line_end
-            named = bool(name) and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", prev.quote) is not None
+        start, end = self._scope(prev)
+        named = self._is_named(prev, hop.symbol_called.strip().rsplit(".", 1)[-1], start, end)
         by_edge = any(edge.from_.path == prev.path and start <= edge.from_.line <= end and _holds(hop, edge.to)
                       for edge in self._edges)
         return named or by_edge or any(_holds(hop, place) for place in self._places)
+
+    def _is_python(self, hop: PathHop) -> bool:
+        return self._index.tree(hop.path) is not None
+
+    def _scope(self, hop: PathHop) -> tuple[int, int]:
+        """The lines a connection from `hop` may start in: its enclosing scope, or its cited range outside Python."""
+        if self._is_python(hop):
+            return self._index.enclosing_scope(hop.path, hop.line_start)
+        return hop.line_start, hop.line_end
+
+    def _is_named(self, hop: PathHop, name: str, start: int, end: int) -> bool:
+        """Whether `name` is a NAME token in lines `start`-`end` of `hop`'s file, or a whole word of its quote."""
+        if self._is_python(hop):
+            return any(start <= line <= end and token == name for line, token in self._name_tokens(hop.path))
+        return bool(name) and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", hop.quote) is not None
 
     def _name_tokens(self, path: str) -> list[tuple[int, str]]:
         """`(line, name)` of every NAME token of a parsed Python file."""
