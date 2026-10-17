@@ -8,6 +8,7 @@ lines merges until they do (greedy grouping can overshoot by one or two).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from .target import LOCKFILES
@@ -109,3 +110,50 @@ def finder_chunks(files: list[FileChange]) -> list[Chunk]:
         a, b = chunks[best], chunks[best + 1]
         chunks[best:best + 2] = [Chunk(files=a.files + b.files, lines=a.lines + b.lines, text=a.text + b.text)]
     return chunks
+
+
+_HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def head_changed_lines(diff: str) -> dict[str, list[int]]:
+    """The head-side line numbers of each file's added lines, under its head path, in diff order.
+
+    A hunk's body is counted from its `@@` lengths, never recognised by its
+    first characters, so an added line reading `++ b/x` is a line, not a file
+    header. The text is split on `\n` only, which is how git numbers lines. A
+    deleted file, a pure deletion and a binary file contribute nothing; a
+    renamed file appears under its new path.
+    """
+    out: dict[str, list[int]] = {}
+    lines = diff.split("\n")
+    path: str | None = None
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        if line.startswith("diff --git "):
+            path = None
+        elif line.startswith("+++ ") and path is None:
+            name = line[4:].rstrip("\r")
+            path = "" if name == "/dev/null" else name[2:] if name.startswith("b/") else name
+        elif (m := _HUNK.match(line)) and path is not None:
+            old_left = int(m.group(1)) if m.group(1) is not None else 1
+            number = int(m.group(2))
+            new_left = int(m.group(3)) if m.group(3) is not None else 1
+            while (old_left > 0 or new_left > 0) and i < len(lines):
+                body = lines[i]
+                i += 1
+                if body.startswith("\\"):  # "\ No newline at end of file"
+                    continue
+                if body.startswith("+"):
+                    if path:
+                        out.setdefault(path, []).append(number)
+                    number += 1
+                    new_left -= 1
+                elif body.startswith("-"):
+                    old_left -= 1
+                else:
+                    number += 1
+                    new_left -= 1
+                    old_left -= 1
+    return out

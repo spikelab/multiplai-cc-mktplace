@@ -1,4 +1,4 @@
-"""target → [explain] → find → verify → merge → repeats → assess → export → render.
+"""target → [explain] → paths → find → verify → merge → repeats → assess → export → render.
 
 `review-state.json` is written after every stage; `resume` reloads it and
 continues from the first stage not yet done.
@@ -33,6 +33,7 @@ from .render import count_line, listed, summary_path, write_review, write_rollup
 from .stages import RunContext
 from .stages.assess import run_assess
 from .stages.explain import run_explain
+from .stages.paths import run_paths
 from .stages.find import file_chars, file_groups, finder_dimensions, run_find
 from .stages.merge import run_merge
 from .stages.repeats import run_repeats
@@ -43,6 +44,7 @@ log = logging.getLogger(__name__)
 
 STAGE_FUNCTIONS = (
     ("explain", run_explain),  # only with `explain: true`
+    ("paths", run_paths),  # every change review; a tree review only with `--paths`
     ("find", run_find),
     ("verify", run_verify),
     ("merge", run_merge),
@@ -96,6 +98,7 @@ class TargetSpec:
     restart: bool = False  # start over even when the ledger shows an interrupted run
     trim: bool = False  # a tree review also runs the trim finder (`--trim`)
     extra_finders: bool = False  # a change review's first round adds the extra finders
+    paths: bool = False  # a tree review also maps its paths (`--paths`); a change review always does
 
 
 def _count_line(counts: dict[str, int]) -> str:
@@ -354,6 +357,7 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
     # before this one. A run that stopped before export is kept as a round but not counted.
     extra = spec.extra_finders and not info.is_tree and rounds.finished_rounds(target_dir) == 0
     return (ReviewState(target=info, mode=spec.mode, trim=spec.trim, extra_finders=extra,
+                        paths_enabled=spec.paths and info.is_tree,
                         needs=[gated_need(n) for n in needs]), target_dir)
 
 
@@ -533,6 +537,9 @@ async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, sessi
         # The last round's facts.json is kept in rounds/ by prepare; the explain stage writes
         # this run's one, and a run with explain off must not leave the old one beside its findings.
         (target_dir / FACTS_FILE).unlink(missing_ok=True)
+        # The same for the last run's finder reports, paths.json and the paths answer cache:
+        # this run maps again from an empty cache; `resume` keeps them.
+        rounds.clear_stale_outputs(target_dir)
         return await run_state(state, target_dir, config, session_id=session_id)
 
 

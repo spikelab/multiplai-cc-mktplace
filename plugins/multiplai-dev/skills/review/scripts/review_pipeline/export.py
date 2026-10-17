@@ -315,6 +315,8 @@ def to_checks_file(state: ReviewState, *, generated_at: datetime | None = None) 
         "agents": [_agent(c) for c in agents],
         "gates": [{"finding_id": g.finding_id, "gate": g.gate, "passed": g.passed, "rule": g.rule}
                   for g in state.gate_checks],
+        # What a stage could not cover (`checks.add_coverage`), in the order it was recorded.
+        "coverage": [c.model_dump(mode="json") for c in state.coverage],
     }
 
 

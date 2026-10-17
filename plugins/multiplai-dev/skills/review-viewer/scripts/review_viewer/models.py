@@ -259,6 +259,15 @@ class GateEntry(_Strict):
     rule: str = ""
 
 
+class CoverageEntry(_Strict):
+    """What a review stage could not cover, and why (review's `checks.add_coverage`)."""
+    stage: Literal["paths", "find", "conventions"]
+    subject: str
+    level: Literal["info", "error"]
+    reason: str
+    detail: str = ""
+
+
 class ChecksFile(_Strict):
     schema_version: Literal[1]
     generated_at: datetime
@@ -266,6 +275,7 @@ class ChecksFile(_Strict):
     target: Target
     agents: list[AgentEntry]
     gates: list[GateEntry]
+    coverage: list[CoverageEntry] | None = None  # review 0.82+; absent in older files
 
 
 def load_checks(path: str | Path) -> ChecksFile:

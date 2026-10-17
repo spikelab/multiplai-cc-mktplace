@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .gates import citation_gate
-from .models import Citation, TargetInfo
+from .models import Citation, CoverageRecord, TargetInfo
 from .stages import relative_path
 
 SEEN_MARKS = ("read", "searched", "diff", "prompt", "fetched", "not-seen")
@@ -195,3 +195,29 @@ def cited_ranges(citations: list[Citation]) -> dict[str, list[tuple[int, int]]]:
         if not c.is_web:
             ranges.setdefault(c.path, []).append((c.line_start, c.line_end))
     return ranges
+
+
+# The `state.errors` line of each error-level coverage record, by (stage, reason).
+ERROR_LINES = {
+    ("paths", "trace-failed"): "paths trace {subject}: {detail}",
+    ("paths", "broken-trace"): "paths broken {subject}: {detail}",
+    ("paths", "fallback-failed"): "paths fallback-failed: {detail}",
+    ("paths", "mapping-failed"): "paths mapping-failed: {detail}",
+    ("paths", "mapping-empty"): "paths mapping-empty: no paths were mapped",
+    ("paths", "duplicate-id"): "paths duplicate-id {subject}",
+    ("find", "finder-failed"): "{subject}: {detail}",
+    ("find", "convert-failed"): "{subject} convert: {detail}",
+}
+
+
+def add_coverage(state, record: CoverageRecord) -> None:
+    """Record *record* in `state.coverage`; an error-level one also adds its `state.errors` line.
+
+    The one place both are written, so the coverage list and the failure
+    count in the review header never disagree.
+    """
+    state.coverage.append(record)
+    if record.level == "error":
+        form = ERROR_LINES.get((record.stage, record.reason), "{stage} {reason} {subject}: {detail}")
+        state.errors.append(form.format(stage=record.stage, reason=record.reason, subject=record.subject,
+                                        detail=record.detail))

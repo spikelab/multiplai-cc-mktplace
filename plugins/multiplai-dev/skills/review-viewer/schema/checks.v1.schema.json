@@ -201,6 +201,50 @@
       "title": "CheckedVerdict",
       "type": "object"
     },
+    "CoverageEntry": {
+      "additionalProperties": false,
+      "description": "What a review stage could not cover, and why (review's `checks.add_coverage`).",
+      "properties": {
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "level": {
+          "enum": [
+            "info",
+            "error"
+          ],
+          "title": "Level",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "stage": {
+          "enum": [
+            "paths",
+            "find",
+            "conventions"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage",
+        "subject",
+        "level",
+        "reason"
+      ],
+      "title": "CoverageEntry",
+      "type": "object"
+    },
     "GateEntry": {
       "additionalProperties": false,
       "properties": {
@@ -380,6 +424,21 @@
       },
       "title": "Agents",
       "type": "array"
+    },
+    "coverage": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/CoverageEntry"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Coverage"
     },
     "gates": {
       "items": {

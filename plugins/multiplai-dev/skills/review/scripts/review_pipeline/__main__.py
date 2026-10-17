@@ -124,6 +124,9 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--extra-finders", action="store_true",
                     help="A change review's first round also runs one finder per ~600 changed lines "
                          "(at most 6), each reading only its part of the diff (review.yaml: extra_finders)")
+    rv.add_argument("--paths", action="store_true",
+                    help="With --tree or --dir: also map the code paths from each entry point before the finders "
+                         "and write paths.json (a change review always does)")
     rv.add_argument("--plan-only", action="store_true",
                     help="Print the file groups and how many finder calls the review would make, "
                          "write plan.txt, and stop before any model call")
@@ -253,6 +256,10 @@ def main(argv: list[str] | None = None) -> int:
             print("ERROR: --trim goes with --tree or --dir; a change review runs the trim finder unless "
                   "review.yaml sets trim: false", file=sys.stderr)
             return 2
+        if args.paths and args.tree is None and not args.dir:
+            print("ERROR: --paths goes with --tree or --dir; a change review always maps its paths",
+                  file=sys.stderr)
+            return 2
         if args.extra_finders and (args.tree is not None or args.dir):
             print("ERROR: --extra-finders goes with a change review (--branch, --pr or --range)", file=sys.stderr)
             return 2
@@ -267,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
                                        base_branch=args.base_branch, fetch=args.fetch,
                                        tree=args.tree, path=args.path, dir=args.dir, mode=args.mode,
                                        restart=args.restart, trim=args.trim,
-                                       extra_finders=args.extra_finders)
+                                       extra_finders=args.extra_finders, paths=args.paths)
         if args.plan_only:
             # Reads git only: nothing reaches a model, so no trust is needed and no ledger is kept.
             try:

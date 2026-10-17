@@ -27,7 +27,7 @@ SEVERITIES: tuple[str, ...] = ("HIGH", "MEDIUM", "LOW")
 
 # Stage names in run order. `ReviewState.stage` holds the last one completed.
 STAGES: tuple[str, ...] = (
-    "target", "explain", "find", "verify", "merge", "repeats", "assess", "export", "render", "done",
+    "target", "explain", "paths", "find", "verify", "merge", "repeats", "assess", "export", "render", "done",
 )
 # Stages a checkpoint written before 0.22 can name. Both ran after verify, so
 # a resumed review of that age continues with merge.
@@ -383,6 +383,19 @@ class ExplainedFacts(BaseModel):
     dropped: list[FactDropped] = Field(default_factory=list)
 
 
+class CoverageRecord(BaseModel):
+    """What a stage could not cover, or covered only in part, and why (`checks.add_coverage`).
+
+    `error` records also go to `state.errors`; `info` records (normal scoping, a
+    doc left out for the budget) only to `checks.json` and the report's gap line.
+    """
+    stage: Literal["paths", "find", "conventions"]
+    subject: str  # "p3", "review_cmd at a.py:2", "piece@2", "docs/gone.md"
+    level: Literal["info", "error"]
+    reason: str  # a closed vocabulary per stage: see checks.ERROR_LINES
+    detail: str = ""
+
+
 class ReviewState(BaseModel):
     target: TargetInfo
     stage: str = "target"  # last stage completed
@@ -396,6 +409,16 @@ class ReviewState(BaseModel):
     # option was given and the change has no earlier finished round. Set when the review starts;
     # `resume` keeps it.
     extra_finders: bool = False
+    # The paths stage (`stages/paths.py`). `paths_enabled` is a tree review's `--paths` (a change
+    # review always maps paths); `resume` keeps it. `paths_status` says what the stage did, and
+    # `path_ids` are the ids in `paths.json`, in file order. A checkpoint saved at or past find
+    # before the stage existed keeps "not-run", which every reader of paths takes as no paths.
+    paths_enabled: bool = False
+    paths_status: Literal["not-run", "skipped", "ok", "empty", "failed"] = "not-run"
+    paths_failure: str | None = None  # why a failed or empty mapping has no paths
+    path_ids: list[str] = Field(default_factory=list)
+    # What a stage could not cover (`checks.add_coverage`), exported as `checks.json`'s `coverage`.
+    coverage: list[CoverageRecord] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
     verdicts: dict[str, Verdict] = Field(default_factory=dict)  # by finding id
     rejected: list[Rejected] = Field(default_factory=list)

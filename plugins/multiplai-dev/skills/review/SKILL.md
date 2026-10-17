@@ -7,7 +7,8 @@ when_to_use: 'Triggers: review this branch, review PR, deep review, /multiplai-d
 # Review
 
 Run a code review as a pipeline of separate agents, with gates written in
-Python between them:
+Python between them. Before the finders, the **paths** stage maps the code
+paths through the change from each entry point (see "The paths stage" below).
 
 1. **find** — five finders, one per aspect (`diff-bugs`, `callers`, `history`,
    `conventions`, `tests`), plus the `trim` finder, which judges the tests and
@@ -146,6 +147,39 @@ so it does not sink below findings a person can already act on. Needs are in
 `findings.json` (top-level `needs`, and `needs` on each finding they block),
 in a **Needs you** section of `summary-<slug>.md`, and on review-viewer's
 **Needs you** tab.
+
+## The paths stage
+
+Before find, every change review maps the **code paths** through the change:
+from each entry point (a CLI command, a `__main__`, a script, a hook, a skill
+command) through the functions it calls, as `code_facts` traces them in the
+head snapshot. The lines handed to it are the lines the change adds or
+modifies at head, under their head paths; a deleted file or a pure deletion
+gives none. At most 21 paths are kept, the ones covering the most changed lines
+first, from at most 30 traced entries. The result is written to
+`<out>/<repo>/<object>/paths.json` beside `findings.json`, in the `paths.v1`
+format (`lib/code_facts/code_facts/schema/paths.v1.schema.json`), even when no
+path was found, and a kept round keeps its copy.
+
+A `--tree` or `--dir` review maps paths only with `--paths`, over every line of
+every reviewed file. Without it the stage is skipped: no call, no cost, no
+`paths.json`. `--paths` with `--branch`, `--pr` or `--range` exits 2: a change
+review always maps its paths.
+
+The mapping agents read the snapshot with `Read`, `Grep` and `Glob` only, under
+the budget label `paths`, and count towards `--max-cost-usd`. Each answer is
+kept under `paths-cache/paths-answers/` as it returns, so a budget stop keeps
+what was paid for and `resume` asks only for the rest; a fresh `review` of the
+same target starts with an empty cache.
+
+What the mapping could not do goes to `checks.json`'s `coverage` list. Entries
+left out by scoping (not reaching the change, past the trace limit or the cap)
+are `info` only. An entry whose trace failed, a path whose trace stops partway,
+a failed model fallback, a mapping that raised and one that found no path are
+`error` records, and each also adds a `paths ...` line to the review's failures.
+None of them stops the review: find runs, with no paths when there are none. A
+repository not trusted (`--trust-repo`) or a budget stop ends the run, as in
+every stage.
 
 ## Rules the `conventions` finder reads
 
