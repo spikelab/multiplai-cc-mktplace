@@ -15,6 +15,36 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.83.0] - 2026-10-17
+
+### Added
+- review-viewer: a review whose `paths.json` names exactly the reviewed head
+  commit and validates as code_facts' `paths.v1` gets a **Paths** tab after
+  Checked. One card per entry point that reaches the change shows its kind
+  and who runs it, its handler and hops (each opens the code at that line),
+  where a broken trace stopped, the findings on it, and its e2e tests: the
+  counted ones, mocked ones marked "not counted", or "no e2e test". Paths with
+  findings come first, under a line counting the paths, those with findings
+  and those with no e2e test, and a note when some test files could not be
+  listed.
+- review-viewer: each finding's page lists the paths it lies on, refuted
+  findings included, each linked to its card; an id the file lacks shows as
+  "not in paths.json".
+- review-viewer: `walkthrough status` prints a `paths:` line (accepted, stale,
+  invalid or none) with each accepted path's entry name, and the skill tells
+  the session to name every path in the walkthrough's overview and lets steps
+  follow a path's hops through the changed code.
+
+### Changed
+- review-viewer: a hop, entry or handler file of an accepted path can be
+  opened in the code pane even when the review does not list it (a tree
+  review of one directory, or a repository git could not list), and in a file
+  over 4000 lines the lines a path points at stay in view.
+- review-viewer: a review without `paths.json`, or with one for other commits
+  or one that does not validate, opens exactly as before; a rejected file is
+  logged once. review-viewer now depends on code_facts, only to validate the
+  file.
+
 ## [0.82.0] - 2026-10-17
 
 ### Added

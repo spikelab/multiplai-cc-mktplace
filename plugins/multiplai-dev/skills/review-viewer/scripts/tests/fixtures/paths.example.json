@@ -1,0 +1,389 @@
+{
+  "schema_version": "paths.v1",
+  "commit": "9758b094b37d97b0db1c7b3f4d1ad2534ff2b6d5",
+  "scoped": true,
+  "cap": 21,
+  "fallback": {
+    "status": "ok",
+    "reason": null
+  },
+  "paths": [
+    {
+      "id": "p1",
+      "entry": {
+        "kind": "argparse",
+        "name": "shop checkout",
+        "location": {
+          "path": "app/cli.py",
+          "line": 12
+        },
+        "handler": {
+          "path": "app/checkout.py",
+          "line": 3,
+          "symbol": "checkout"
+        },
+        "invocation": "shop checkout",
+        "invoked_by": "a person at the command line",
+        "also_invoked_by": [
+          {
+            "kind": "script",
+            "name": "scripts/nightly.sh",
+            "location": {
+              "path": "scripts/nightly.sh",
+              "line": 4
+            }
+          }
+        ]
+      },
+      "hops": [
+        {
+          "symbol_called": "total",
+          "path": "app/service.py",
+          "line_start": 8,
+          "line_end": 9,
+          "quote": "def total(items):\n    return sum(i[\"price\"] * i[\"qty\"] for i in items)",
+          "note": "",
+          "side": "head"
+        },
+        {
+          "symbol_called": "points_for",
+          "path": "app/new_feature.py",
+          "line_start": 4,
+          "line_end": 5,
+          "quote": "def points_for(amount):\n    return int(amount // 10)",
+          "note": "",
+          "side": "head"
+        }
+      ],
+      "stops_at": null,
+      "break_reason": null,
+      "changed_lines_covered": [
+        {
+          "path": "app/service.py",
+          "line": 9
+        },
+        {
+          "path": "app/new_feature.py",
+          "line": 5
+        }
+      ],
+      "tests": {
+        "e2e": [
+          {
+            "node_id": "tests/e2e/test_run.py::test_run_cli",
+            "file": "tests/e2e/test_run.py",
+            "line": 10,
+            "match": "cli_argv",
+            "invocation_line": 12
+          }
+        ],
+        "mocks_hop_2": [
+          {
+            "node_id": "tests/e2e/test_run.py::test_run_cli_mocked",
+            "file": "tests/e2e/test_run.py",
+            "line": 30,
+            "match": "cli_argv",
+            "invocation_line": 32,
+            "patch_file": "tests/e2e/conftest.py",
+            "patch_line": 7
+          }
+        ]
+      }
+    },
+    {
+      "id": "p2",
+      "entry": {
+        "kind": "hook",
+        "name": "pre-commit discount check",
+        "location": {
+          "path": "hooks/pre_commit.py",
+          "line": 5
+        },
+        "handler": {
+          "path": "lib/hooks/handler.py",
+          "line": 9,
+          "symbol": "check_discounts"
+        },
+        "invocation": null,
+        "invoked_by": "git, before each commit",
+        "also_invoked_by": []
+      },
+      "hops": [
+        {
+          "symbol_called": "apply_discount",
+          "path": "app/service.py",
+          "line_start": 12,
+          "line_end": 15,
+          "quote": "def apply_discount(amount, pct):",
+          "note": "",
+          "side": "head"
+        },
+        {
+          "symbol_called": "refund",
+          "path": "app/service.py",
+          "line_start": 18,
+          "line_end": 21,
+          "quote": "def refund(order):",
+          "note": "",
+          "side": "head"
+        }
+      ],
+      "stops_at": 2,
+      "break_reason": "unconnected_hop",
+      "changed_lines_covered": [
+        {
+          "path": "app/service.py",
+          "line": 13
+        }
+      ],
+      "tests": {
+        "e2e": [
+          {
+            "node_id": "tests/e2e/test_hooks.py::test_pre_commit",
+            "file": "tests/e2e/test_hooks.py",
+            "line": 8,
+            "match": "subprocess",
+            "invocation_line": 10
+          }
+        ],
+        "mocks_hop_2": []
+      }
+    },
+    {
+      "id": "p3",
+      "entry": {
+        "kind": "skill_command",
+        "name": "/shop:refund",
+        "location": {
+          "path": "skills/shop/SKILL.md",
+          "line": 20
+        },
+        "handler": {
+          "path": "app/refunds.py",
+          "line": 1,
+          "symbol": null
+        },
+        "invocation": "/shop:refund",
+        "invoked_by": "a Claude Code session running the skill",
+        "also_invoked_by": []
+      },
+      "hops": [
+        {
+          "symbol_called": "refund",
+          "path": "app/service.py",
+          "line_start": 18,
+          "line_end": 21,
+          "quote": "def refund(order):",
+          "note": "",
+          "side": "head"
+        }
+      ],
+      "stops_at": null,
+      "break_reason": null,
+      "changed_lines_covered": [
+        {
+          "path": "app/service.py",
+          "line": 20
+        }
+      ],
+      "tests": {
+        "e2e": [],
+        "mocks_hop_2": [
+          {
+            "node_id": "tests/e2e/test_refund.py::test_refund_mocked",
+            "file": "tests/e2e/test_refund.py",
+            "line": 14,
+            "match": "cli_argv",
+            "invocation_line": 16,
+            "patch_file": "tests/e2e/test_refund.py",
+            "patch_line": 9
+          }
+        ]
+      }
+    },
+    {
+      "id": "p4",
+      "entry": {
+        "kind": "script",
+        "name": "scripts/points_report.py",
+        "location": {
+          "path": "scripts/points_report.py",
+          "line": 1
+        },
+        "handler": {
+          "path": "scripts/points_report.py",
+          "line": 6,
+          "symbol": "main"
+        },
+        "invocation": null,
+        "invoked_by": "a person running the script",
+        "also_invoked_by": []
+      },
+      "hops": [
+        {
+          "symbol_called": "points_for",
+          "path": "app/new_feature.py",
+          "line_start": 4,
+          "line_end": 5,
+          "quote": "def points_for(amount):\n    return int(amount // 10)",
+          "note": "",
+          "side": "head"
+        }
+      ],
+      "stops_at": null,
+      "break_reason": null,
+      "changed_lines_covered": [
+        {
+          "path": "app/new_feature.py",
+          "line": 5
+        }
+      ],
+      "tests": {
+        "e2e": [],
+        "mocks_hop_2": []
+      }
+    },
+    {
+      "id": "p5",
+      "entry": {
+        "kind": "main",
+        "name": "app/big.py",
+        "location": {
+          "path": "app/big.py",
+          "line": 1
+        },
+        "handler": null,
+        "invocation": null,
+        "invoked_by": "python -m app.big",
+        "also_invoked_by": []
+      },
+      "hops": [
+        {
+          "symbol_called": "value_2000",
+          "path": "app/big.py",
+          "line_start": 2000,
+          "line_end": 2000,
+          "quote": "value_2000 = 'changed'",
+          "note": "",
+          "side": "head"
+        },
+        {
+          "symbol_called": "value_3000",
+          "path": "app/big.py",
+          "line_start": 3000,
+          "line_end": 3001,
+          "quote": "value_3000 = 3000\nvalue_3001 = 3001",
+          "note": "",
+          "side": "head"
+        }
+      ],
+      "stops_at": null,
+      "break_reason": null,
+      "changed_lines_covered": [
+        {
+          "path": "app/big.py",
+          "line": 2000
+        }
+      ],
+      "tests": {
+        "e2e": [
+          {
+            "node_id": "tests/e2e/test_big.py::test_big_main",
+            "file": "tests/e2e/test_big.py",
+            "line": 4,
+            "match": "runpy",
+            "invocation_line": 6
+          }
+        ],
+        "mocks_hop_2": []
+      }
+    },
+    {
+      "id": "p6",
+      "entry": {
+        "kind": "argparse",
+        "name": "shop discount",
+        "location": {
+          "path": "app/cli.py",
+          "line": 30
+        },
+        "handler": {
+          "path": "app/cli.py",
+          "line": 44,
+          "symbol": "cmd_discount"
+        },
+        "invocation": "shop discount",
+        "invoked_by": "a person at the command line",
+        "also_invoked_by": []
+      },
+      "hops": [
+        {
+          "symbol_called": "apply_discount",
+          "path": "app/service.py",
+          "line_start": 12,
+          "line_end": 15,
+          "quote": "def apply_discount(amount, pct):",
+          "note": "",
+          "side": "head"
+        }
+      ],
+      "stops_at": null,
+      "break_reason": null,
+      "changed_lines_covered": [
+        {
+          "path": "app/service.py",
+          "line": 14
+        }
+      ],
+      "tests": {
+        "e2e": [
+          {
+            "node_id": "tests/e2e/test_run.py::test_run_discount",
+            "file": "tests/e2e/test_run.py",
+            "line": 50,
+            "match": "cli_argv",
+            "invocation_line": 52
+          }
+        ],
+        "mocks_hop_2": []
+      }
+    }
+  ],
+  "dropped": [
+    {
+      "stage": "cap",
+      "reason": "over_cap",
+      "detail": "22nd entry over the cap of 21",
+      "entry": {
+        "kind": "argparse",
+        "name": "shop export",
+        "location": {
+          "path": "app/cli.py",
+          "line": 60
+        },
+        "handler": {
+          "path": "app/export.py",
+          "line": 2,
+          "symbol": "export"
+        },
+        "invocation": "shop export",
+        "invoked_by": "a person at the command line",
+        "also_invoked_by": []
+      }
+    }
+  ],
+  "diagnostics": [
+    {
+      "path": "app/plugins.py",
+      "line": 7,
+      "reason": "dynamic_name",
+      "detail": "subcommand name built at runtime"
+    }
+  ],
+  "test_listing_skips": [
+    {
+      "file": "tests/e2e/test_broken.py",
+      "reason": "syntax_error"
+    }
+  ]
+}

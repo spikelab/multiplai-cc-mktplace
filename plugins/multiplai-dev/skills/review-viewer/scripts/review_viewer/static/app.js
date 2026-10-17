@@ -75,6 +75,8 @@
     defGen: 0,
     defEvent: null,
     pointer: null,
+    // The path card a finding's Paths link opened; marked until another target loads.
+    targetPathId: null,
   };
 
   // --- small helpers ---------------------------------------------------------
@@ -333,6 +335,7 @@
     state.fileNote = null;
     state.badgeOpen = null;
     state.blockPin = null;
+    state.targetPathId = null;
     if (!state.tabChosen) state.tab = "summary";
     const target = state.detail.findings.target;
     $("title").textContent = target.label;
@@ -344,6 +347,7 @@
     renderWalk();
     renderSummary();
     renderChecked();
+    renderPaths();
     schedulePrRefresh();
     state.walkSince = Date.now();
     const walkGen = state.pollGen;
@@ -415,13 +419,16 @@
   }
 
   const TABS = { summary: ["tab-summary", "summary"], walk: ["tab-walk", "walkthrough"], finding: ["tab-finding", "finding"],
-    needs: ["tab-needs", "needs"], checked: ["tab-checked", "checked"] };
+    needs: ["tab-needs", "needs"], checked: ["tab-checked", "checked"], paths: ["tab-paths", "paths"] };
 
   function renderTabs() {
     if (state.view) renderFileNav();
     const checks = state.detail && state.detail.checks;
-    if (state.tab === "checked" && !checks) state.tab = "summary";
+    const paths = state.detail && state.detail.paths;
+    state.tab = L.resolveTab(state.tab, { checks: checks, paths: paths });
     $("tab-checked").hidden = !checks;
+    $("tab-paths").hidden = !paths;
+    $("paths-count").textContent = paths ? String(paths.paths.length) : "";
     const needs = state.detail ? L.needsItems(state.shownFile).length : 0;
     if (state.tab === "needs" && !needs) state.tab = "summary";
     $("tab-needs").hidden = !needs;
@@ -1338,6 +1345,71 @@
     node.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
   }
 
+  // --- paths --- the review's paths.json: one card per path (code_facts' paths.v1) ----
+
+  /* A link that opens *file* at *start*..*end* in the code pane. */
+  function codeLink(text, file, start, end) {
+    return el("button", { type: "button", class: "cite-link mono", text: text, onclick: () => openFile(file, start, end) });
+  }
+
+  /* One card, from L.pathCardModel. Text from paths.json is only ever set as text. */
+  function pathCard(m) {
+    const h = m.handler;
+    const kids = [
+      el("div", { class: "path-head" }, [el("span", { class: "mono muted", text: m.id }), " ",
+        el("strong", { text: m.entry.name }), " ", el("span", { class: "badge", text: m.entry.kind })]),
+      el("p", { class: "small", text: "Invoked by " + m.entry.invokedBy }),
+    ];
+    if (m.alsoInvokedBy.length) {
+      kids.push(el("p", { class: "small muted", text: "Also invoked by: " +
+        m.alsoInvokedBy.map((a) => a.name + " (" + a.kind + ", " + a.where + ")").join("; ") }));
+    }
+    kids.push(
+      el("div", { class: "small" }, ["Entry: ", codeLink(m.entry.file + ":" + m.entry.line, m.entry.file, m.entry.line)]),
+      el("div", { class: "small" }, ["Handler: ", h
+        ? codeLink((h.symbol ? h.symbol + " at " : "") + h.file + ":" + h.line, h.file, h.line)
+        : el("span", { class: "muted", text: "none recorded" })]),
+      el("ol", { class: "path-hops" }, m.hops.map((hop) =>
+        el("li", {}, [codeLink(hop.label, hop.file, hop.lineStart, hop.lineEnd)]))));
+    if (m.broken) kids.push(el("p", { class: "path-broken", title: m.broken.code, text: m.broken.marker }));
+    if (m.findings.length) {
+      kids.push(el("div", { class: "label", text: "Findings" }), el("ul", { class: "path-list" }, m.findings.map((f) =>
+        el("li", {}, [el("button", { type: "button", class: "cite-link", onclick: () => selectFinding(f.id) },
+          [el("span", { class: "badge " + f.severity, text: f.severity }), " " + f.claim])]))));
+    }
+    kids.push(el("div", { class: "label", text: "E2E tests:" }), el("ul", { class: "path-list" },
+      L.pathTestLines(m.tests).map((t) => el("li", { class: "mono small path-test-" + t.kind, text: t.text }))));
+    return el("article", { id: m.domId, class: "path-card" + (m.id === state.targetPathId ? " is-target" : "") }, kids);
+  }
+
+  /* A finding's Paths link: open the Paths tab at that path's card, and mark
+   * it as the one the link pointed at. */
+  function showPathCard(id) {
+    state.targetPathId = id;
+    setTab("paths");
+    renderPaths();
+    const card = document.getElementById("path-card-" + id);
+    if (card) card.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
+  }
+
+  /* The Paths tab: the cards, paths with counted findings first. Counted
+   * findings are the shown ones minus the refuted ones, like every count. */
+  function renderPaths() {
+    const box = $("paths");
+    const doc = state.detail && state.detail.paths;
+    box.replaceChildren();
+    if (!doc) return;
+    const byPath = L.findingsByPath(L.countedFindings(state.shown));
+    box.appendChild(sectionLabel("Paths through the change", "paths"));
+    box.appendChild(el("p", { class: "paths-summary", text: L.pathsSummary(doc.paths, byPath) }));
+    if (L.hasUnlistedTests(doc)) box.appendChild(el("p", { class: "muted small", text: L.UNLISTED_TESTS_NOTE }));
+    if (!doc.paths.length) {
+      box.appendChild(el("p", { class: "muted", text: L.NO_PATHS_TEXT }));
+      return;
+    }
+    for (const p of L.sortPaths(doc.paths, byPath)) box.appendChild(pathCard(L.pathCardModel(p, byPath)));
+  }
+
   // --- finding detail ----------------------------------------------------------
 
   async function selectFinding(id, opts) {
@@ -1495,6 +1567,17 @@
       box.appendChild(el("div", { class: "label", text: "Explained in the walkthrough" }));
       for (const s of steps) {
         box.appendChild(el("button", { class: "cite-link", text: s.title, onclick: () => selectStep(s.id, { open: true }) }));
+      }
+    }
+    const onPaths = L.findingPathsSection(f, state.detail.paths);
+    if (onPaths) {
+      box.appendChild(el("div", { class: "label", text: "Paths" }));
+      for (const p of onPaths.entries) {
+        box.appendChild(p.link
+          ? el("button", { type: "button", class: "cite-link", onclick: () => showPathCard(p.id) },
+            [el("span", { class: "mono muted", text: p.id }), " " + p.label + " ", el("span", { class: "badge", text: p.kind })])
+          : el("div", { class: "small" }, [el("span", { class: "mono", text: p.id }),
+            el("span", { class: "muted", text: " " + p.note })]));
       }
     }
     box.appendChild(decisionBox(f));
@@ -2816,6 +2899,7 @@
     $("tab-summary").addEventListener("click", () => setTab("summary"));
     $("tab-walk").addEventListener("click", () => setTab("walk"));
     $("tab-checked").addEventListener("click", () => setTab("checked"));
+    $("tab-paths").addEventListener("click", () => setTab("paths"));
     $("tab-needs").addEventListener("click", () => setTab("needs"));
     $("help-btn").addEventListener("click", () => openHelp("top"));
     $("keys-btn").addEventListener("click", () => openHelp("keys"));
