@@ -1,0 +1,135 @@
+{
+  "generated_at": "2026-10-17T07:06:23.236564+00:00",
+  "kind": "fix_on_pass_review",
+  "block": {
+    "number": 4,
+    "name": "Persist answers on disk so reruns resume and stay byte-identical"
+  },
+  "round": 2,
+  "head_sha": "1a447c7d402979e57f760f0d2ee7de4a82ab2c6e",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The new `cache.py` has one job: keys plus a persistent mapping. `CALL_ERROR` and `write_atomic` are shared rather than duplicated. `ask` and `run_tasks` are reused unchanged, since `_DiskAnswers` is just a MutableMapping. There is no global mutable state: the cache is built for each `map_paths` call (paths.py:413). Possible smells: the general IO helper `write_atomic` now lives in the contract module `paths.py` and is imported by `cache.py` (cache.py:28); `_DiskAnswers` is underscore-private but imported across modules (paths.py:398); and the cache.py docstring leaves re-validation to callers, so that logic sits in tracing (`_readable`), not next to the store.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "Results are checked with byte-identical `write_paths_file` comparisons (one == two, resumed == whole, again == first). Call counts are paired with result assertions in most tests. Drop stage and reason are asserted in the failed-call test. Atomic-write failure checks both the old bytes and temp-file cleanup. There are no fixed sleeps. Weaknesses: `test_without_a_cache_dir_nothing_carries_over_between_runs` only counts calls and never checks that `map_paths(cache_dir=None)` writes nothing (that is only checked at the `_DiskAnswers` level). The interrupted test reaches into the private `FakeCall._entry`. The `cache()` helper searches six modules for each name, so the tests do not pin where the interface lives.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "Storage path `<cache_dir>/paths-answers/<hex>.json`, temp file + fsync + `os.replace`, `model_dump(mode=\"json\")` for models, load at start-up, re-validation on read, purging `{\"error\":\u2026}` at the start of `map_paths`, and both key input tables are all implemented. All five listed test scenarios are present and assert what the spec says. The deviations are minor and declared: the `cache_key` hashing formula (a kind/payload wrapper plus `ensure_ascii=False`) and `_DiskAnswers(None)` in place of a plain dict.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "One key scheme (`cache_key`) serves trace and reask, and `fallback` is reserved in `CacheKind`. Lookups work the same in memory and on disk, because both go through `_DiskAnswers`. Output is rebuilt from this run's `trace_key`s (tracing.py:121), not by iterating the cache directory. `ask` still receives the same mapping protocol. The `CALL_ERROR` move and the `_write_atomic` \u2192 `write_atomic` rename have no callers left behind (grep confirms). Loose seam: the reask key hashes `first_answer` with `canonical_digest` while the trace key uses `cache_key`, so the 'sha256 of the first answer' is a second, separate hashing convention.",
+      "confidence": 1.0
+    }
+  ],
+  "weighted_average": 4.0,
+  "gate": {
+    "passed": false,
+    "reason": "Spec-compliance verdict failed \u2014 misunderstood: ['cache.py:41-43 \u2014 the interface says `cache_key` is the \\'sha256 hex of `json.dumps(payload, sort_keys=True, separators=(\",\", \":\"))` with `kind` included\\'. The code hashes `{\"kind\": kind, \"payload\": payload}` through `canonical_digest`, which also passes `ensure_ascii=False` (explore.py:121). Keys are still stable and independent of order, but they differ from the literal spec formula for non-ASCII paths. The refactorer recorded this in the notes and left it unresolved.', \"paths.py:413 \u2014 the spec says '`cache_dir=None` keeps a plain dict'. The code uses `_DiskAnswers(None)` instead. It behaves the same except for the new key validation. The implementer declared this deviation.\"]"
+  },
+  "missing": [],
+  "extra": [
+    "cache.py:66-67 \u2014 `_DiskAnswers.__setitem__` rejects any key that is not a 64-character hex digest, even in memory-only mode. The spec only asks for hex file names. The check is harmless for every current caller, because all keys come from `cache_key`."
+  ],
+  "misunderstood": [
+    "cache.py:41-43 \u2014 the interface says `cache_key` is the 'sha256 hex of `json.dumps(payload, sort_keys=True, separators=(\",\", \":\"))` with `kind` included'. The code hashes `{\"kind\": kind, \"payload\": payload}` through `canonical_digest`, which also passes `ensure_ascii=False` (explore.py:121). Keys are still stable and independent of order, but they differ from the literal spec formula for non-ASCII paths. The refactorer recorded this in the notes and left it unresolved.",
+    "paths.py:413 \u2014 the spec says '`cache_dir=None` keeps a plain dict'. The code uses `_DiskAnswers(None)` instead. It behaves the same except for the new key validation. The implementer declared this deviation."
+  ],
+  "accepted": [
+    {
+      "claim": "No test checks that `map_paths(..., cache_dir=None)` leaves the filesystem untouched. The map_paths-level test only counts calls, and the no-write check exists only for `_DiskAnswers(None)` used directly.",
+      "severity": "Minor",
+      "confidence": 0.7,
+      "evidence": "test_paths_cache.py `test_without_a_cache_dir_nothing_carries_over_between_runs` asserts only `len(call.calls) == 2`; `test_disk_answers_without_a_directory_are_in_memory` checks `list(tmp_path.iterdir()) == []` but never calls map_paths. Suggested fix: chdir to tmp_path in the run test and assert that no new files appear beside the snapshot.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_paths_cache.py",
+      "line": 197,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "`cache_key` does not hash the exact formula in the interface: it wraps the payload as `{\"kind\": kind, \"payload\": payload}` and serialises with `ensure_ascii=False`, so for non-ASCII payloads its digest differs from `sha256(json.dumps(payload, sort_keys=True, separators=(\",\", \":\")))` with kind included in any other way.",
+      "severity": "Minor",
+      "confidence": 0.75,
+      "evidence": "cache.py:41-43 `return canonical_digest({\"kind\": kind, \"payload\": dict(payload)})`; explore.py:121 `json.dumps(value, sort_keys=True, separators=(\",\", \":\"), ensure_ascii=False)`; the implementation notes (refactorer) acknowledge this and left it unresolved.\nREJECTED: The interface says only \"with `kind` included\" and does not say how, so no external party can reproduce an exact digest. Wrapping the payload as `{\"kind\", \"payload\"}` is a valid reading. `ensure_ascii=False` (via `canonical_digest`, explore.py) changes only the byte encoding of an already canonical form. Keys stay deterministic and order-independent, and the cache_key test checks exactly that. Nothing outside this module computes or compares these keys, so the difference cannot be observed and fixing it would not improve the block.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/cache.py",
+      "line": 43,
+      "reviewers": [],
+      "judge_reason": "The interface says only \"with `kind` included\" and does not say how, so no external party can reproduce an exact digest. Wrapping the payload as `{\"kind\", \"payload\"}` is a valid reading. `ensure_ascii=False` (via `canonical_digest`, explore.py) changes only the byte encoding of an already canonical form. Keys stay deterministic and order-independent, and the cache_key test checks exactly that. Nothing outside this module computes or compares these keys, so the difference cannot be observed and fixing it would not improve the block."
+    },
+    {
+      "claim": "With `cache_dir=None`, `map_paths` uses a memory-only `_DiskAnswers` rather than the plain dict the spec names. Behaviour is the same except that non-hex keys now raise ValueError.",
+      "severity": "Note",
+      "confidence": 0.85,
+      "evidence": "paths.py:413 `answers = _DiskAnswers(cache_dir / ANSWERS_DIR if cache_dir is not None else None)`; cache.py:66-67 key check runs whether or not there is a directory.\nREJECTED: Using `_DiskAnswers(None)` (paths.py:413) is a recorded implementer decision, made so that `purge_failed` gets its declared type. Every key `map_paths` stores comes from `cache_key`, so the hex-key check in cache.py:66-67 never fires on real input. Behaviour without a directory is otherwise identical, and the cached and uncached modes now store values the same way. Special-casing a plain dict would add a branch and change nothing a caller can see.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 413,
+      "reviewers": [],
+      "judge_reason": "Using `_DiskAnswers(None)` (paths.py:413) is a recorded implementer decision, made so that `purge_failed` gets its declared type. Every key `map_paths` stores comes from `cache_key`, so the hex-key check in cache.py:66-67 never fires on real input. Behaviour without a directory is otherwise identical, and the cached and uncached modes now store values the same way. Special-casing a plain dict would add a branch and change nothing a caller can see."
+    },
+    {
+      "claim": "The interrupted-resume test depends on the private `FakeCall._entry` helper, so renaming that helper would break the test for reasons unrelated to what it asserts.",
+      "severity": "Note",
+      "confidence": 0.6,
+      "evidence": "test_paths_cache.py `if recorder._entry(prompt) in late:`; trace_fixtures.py:155 `def _entry(self, prompt: str) -> str | None:`\nREJECTED: `FakeCall._entry` belongs to the suite's own test helper, `trace_fixtures`. A test using a sibling fixture's helper is a style preference, not a defect in the block.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_paths_cache.py",
+      "line": 318,
+      "reviewers": [],
+      "judge_reason": "`FakeCall._entry` belongs to the suite's own test helper, `trace_fixtures`. A test using a sibling fixture's helper is a style preference, not a defect in the block."
+    },
+    {
+      "claim": "The cache never evicts anything, and `_DiskAnswers.__init__` loads every answer file into memory. A long-lived `cache_dir` reused across many commits grows without bound, and each run's start-up time and memory grow with it, even though only this run's keys are ever read.",
+      "severity": "Note",
+      "confidence": 0.55,
+      "evidence": "cache.py:57-59 `self._answers = _load(directory)`; cache.py:99 `for path in sorted(directory.glob(\"*.json\")):`. The spec does say 'At start-up every file in the directory is loaded', so this is spec-conformant; it is an operational observation.\nREJECTED: The spec says \"At start-up every file in the directory is loaded\", and the reviewer concedes the code conforms. Eviction is not in scope for this block. The finding restates a consequence of the spec rather than a deviation from it.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/cache.py",
+      "line": 99,
+      "reviewers": [],
+      "judge_reason": "The spec says \"At start-up every file in the directory is loaded\", and the reviewer concedes the code conforms. Eviction is not in scope for this block. The finding restates a consequence of the spec rather than a deviation from it."
+    },
+    {
+      "claim": "`_DiskAnswers.__setitem__` runs synchronous file IO including `os.fsync` on the event loop thread for every stored answer. Under concurrency this briefly stalls all other in-flight tasks.",
+      "severity": "Note",
+      "confidence": 0.5,
+      "evidence": "cache.py:69-70 `if self._directory is not None: write_atomic(self._file(key), _encode(value))`, called from `ask` (explore.py:152) inside the async TaskGroup. Model calls take seconds and an fsync takes milliseconds, so the impact is small.\nREJECTED: The spec requires a temp file, then `fsync`, then `os.replace` on each `__setitem__`. The reviewer notes the stall is milliseconds against model calls that take seconds. Moving the write off the event loop would add complexity for no meaningful gain.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/cache.py",
+      "line": 70,
+      "reviewers": [],
+      "judge_reason": "The spec requires a temp file, then `fsync`, then `os.replace` on each `__setitem__`. The reviewer notes the stall is milliseconds against model calls that take seconds. Moving the write off the event loop would add complexity for no meaningful gain."
+    },
+    {
+      "claim": "The general atomic-write helper was made public in `paths.py` (the output-contract module) so that `cache.py` could import it. This is a possible Inappropriate Intimacy: the cache now depends on the contract module for a filesystem utility.",
+      "severity": "Note",
+      "confidence": 0.4,
+      "evidence": "paths.py:488 `def write_atomic(path: Path, data: bytes) -> None:` (renamed from `_write_atomic`); cache.py:28 `from .paths import write_atomic`.\nREJECTED: `write_atomic` already lived in paths.py. Making it public lets the cache reuse the one fsync'd atomic writer instead of duplicating it, and both writers then share identical semantics. Which module the helper sits in is a style preference the project standards do not address.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/cache.py",
+      "line": 28,
+      "reviewers": [],
+      "judge_reason": "`write_atomic` already lived in paths.py. Making it public lets the cache reuse the one fsync'd atomic writer instead of duplicating it, and both writers then share identical semantics. Which module the helper sits in is a style preference the project standards do not address."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}
