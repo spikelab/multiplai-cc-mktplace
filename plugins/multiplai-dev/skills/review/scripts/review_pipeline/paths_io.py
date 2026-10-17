@@ -4,7 +4,8 @@
 stage writes its result to `paths.json` with `code_facts.write_paths_file`,
 and every later reader (the path finders, path ids on findings, the report's
 Paths section) goes through `load_paths`, and the path finders read each path
-as a `PathView` (`views`), so a schema change is one edit here.
+as a `PathView` (`views`), so a schema change is one edit here. After merge,
+`assign_paths` gives each finding the ids of the paths it lies on.
 This module also turns what the mapping could not do (dropped entries, cut
 traces) into coverage records.
 """
@@ -12,13 +13,14 @@ traces) into coverage records.
 from __future__ import annotations
 
 import logging
+import posixpath
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
 from code_facts.paths import PathDrop, PathsResult, TracedPath
 
-from .models import CoverageRecord, ReviewState
+from .models import DEPS_DIR, CoverageRecord, Finding, ReviewState
 
 log = logging.getLogger(__name__)
 
@@ -131,4 +133,53 @@ def views(result: PathsResult) -> list[PathView]:
             e2e=tuple([E2ETest(t.node_id, False) for t in p.tests.e2e]
                       + [E2ETest(t.node_id, True) for t in p.tests.mocks_hop_2]),
             broken_at=p.stops_at))
+    return out
+
+
+def _norm(path: str | None) -> str:
+    """A repo-relative POSIX path: `posixpath.normpath`, no leading `./`, no trailing `/`."""
+    if not path:
+        return ""
+    text = posixpath.normpath(path.strip())
+    while text.startswith("./"):
+        text = text[2:]
+    return "" if text == "." else text.rstrip("/")
+
+
+def _anchor(path: str | None, line) -> tuple[str, int] | None:
+    file = _norm(path)
+    if not file or not isinstance(line, int) or isinstance(line, bool) or line < 1:
+        return None
+    return file, line
+
+
+def anchors(view: PathView) -> list[tuple[str, int]]:
+    """(file, line) of the path's entry, its handler and every hop, in that order; a malformed one is skipped."""
+    found = [_anchor(view.file, view.line)]
+    if view.handler is not None:
+        found.append(_anchor(view.handler.path, view.handler.line))
+    found += [_anchor(h.file, h.line) for h in view.hops]
+    return [a for a in found if a is not None]
+
+
+def assign_paths(findings: list[Finding], result: PathsResult | None) -> list[Finding]:
+    """*findings*, in order, each with `paths` set to the ids of the paths it lies on (None for none).
+
+    A finding lies on a path when one of its citations names the same file as
+    an anchor (`anchors`) and its line range contains the anchor's line. A
+    citation into `.review-deps/` never counts. Ids are listed once, in
+    `paths.json` order. Only `paths` changes; with no *result* the findings
+    are returned as they are.
+    """
+    if result is None:
+        return findings
+    by_path = [(v.id, anchors(v)) for v in views(result)]
+    out = []
+    for f in findings:
+        ranges = [(_norm(c.path), c.line_start, c.line_end) for c in f.citations
+                  if not c.is_web and not _norm(c.path).startswith(DEPS_DIR + "/")]
+        ids = [pid for pid, points in by_path
+               if any(file == cfile and start <= line <= end
+                      for file, line in points for cfile, start, end in ranges)]
+        out.append(f.model_copy(update={"paths": ids or None}))
     return out

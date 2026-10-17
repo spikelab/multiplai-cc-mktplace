@@ -180,6 +180,17 @@ None of them stops the review: find runs, with no paths when there are none. A
 repository not trusted (`--trust-repo`) or a budget stop ends the run, as in
 every stage.
 
+### Path ids on findings
+
+After merge, each finding in `findings.json` gets a `paths` list: the ids of
+the mapped paths it lies on, in `paths.json` order, each once. A finding lies
+on a path when one of its citations names the file of the path's entry, its
+handler or one of its hops, and the citation's lines (both ends included)
+contain that line. Citations into `.review-deps/` never count. A finding on
+no path has no `paths` key, and a review without paths (a tree review without
+`--paths`, or a mapping that failed or found none) writes none. Nothing else
+about a finding changes.
+
 ## Rules the `conventions` finder reads
 
 The `conventions` finder reads every `coding-standards.md` and every

@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator
 
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "schema"
 SCHEMA_PATH = SCHEMA_DIR / "findings.v1.schema.json"
@@ -89,6 +89,10 @@ class Assessment(_Strict):
     earlier_note: str | None = None
 
 
+# `Finding.paths` as the schema states it: optional, but never null when present.
+PATH_IDS_SCHEMA = {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": True}
+
+
 class Finding(_Strict):
     id: str = Field(pattern=r"^[0-9a-f]{10}$")
     severity: Literal["HIGH", "MEDIUM", "LOW"]
@@ -122,6 +126,18 @@ class Finding(_Strict):
     # for what only the trim finder reported, else from the topic. Absent in
     # older files; readers then use the topic.
     section: Literal["code", "tests", "docs", "trim"] | None = None
+    # The ids of the mapped paths (review's `paths.json`) the finding lies on, in that file's
+    # order (multiplai-dev 0.82+). Absent when it lies on none; never null or empty.
+    paths: Annotated[list[str] | None, WithJsonSchema(PATH_IDS_SCHEMA)] = None
+
+    @field_validator("paths")
+    @classmethod
+    def _unique_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        if any(not v for v in value) or len(set(value)) != len(value):
+            raise ValueError("paths must be distinct, non-empty path ids")
+        return value
 
 
 class Target(_Strict):

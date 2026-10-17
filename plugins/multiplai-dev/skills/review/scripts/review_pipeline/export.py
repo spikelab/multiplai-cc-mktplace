@@ -73,6 +73,8 @@ def _citation(c: Citation) -> dict:
 
 
 def _finding(f: Finding, status: str, reason: str | None, expected: str | None) -> dict:
+    # `paths` only when the finding lies on a mapped path: never null, never [].
+    on_paths = {"paths": list(f.paths)} if f.paths else {}
     return {
         "id": f.id,
         "severity": f.severity,
@@ -85,6 +87,7 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
         "citations": [_citation(c) for c in f.citations],
         "verdict_reason": reason,
         "expected_behaviour": expected or None,
+        **on_paths,
     }
 
 

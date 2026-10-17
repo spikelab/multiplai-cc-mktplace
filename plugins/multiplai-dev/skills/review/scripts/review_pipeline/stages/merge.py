@@ -15,6 +15,10 @@ defect. Each such set becomes one finding that keeps:
 Every finding merged away goes to `state.merged` with the id it was merged
 into. An agent failure leaves its group unmerged and is listed in
 `state.errors`.
+
+Then each finding gets the ids of the mapped paths it lies on
+(`paths_io.assign_paths` over this run's `paths.json`), recomputed whenever
+merge runs, so a resumed run keeps no stale id.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import logging
 
 from .. import checks, sdk
 from ..models import SEVERITIES, AgentCheck, DuplicateSet, Finding, Merged, MergeOutput, ReviewState, is_trim
+from ..paths_io import assign_paths, load_paths
 from ..prompts import merge as prompt
 from . import RunContext, bounded
 
@@ -249,6 +254,8 @@ async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     removed = apply_duplicate_sets(state, [(g, state.merge_answers.get(group_key(g), [])) for g in groups])
     _record_merges(state, groups)
+    paths = load_paths(ctx.target_dir, state) if ctx.target_dir is not None else None
+    state.findings = assign_paths(state.findings, paths)
 
     ctx.counts = {"groups": len(groups), "merged": len(removed), "agent_failures": failures}
     state.stage = "merge"

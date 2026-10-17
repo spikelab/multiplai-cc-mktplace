@@ -95,6 +95,9 @@ class Finding(_Model):
     # Every finder that reported this defect: the first one, then any whose
     # finding was dropped as a word-for-word copy or merged into this one.
     finders: list[str] = Field(default_factory=list)
+    # The ids of the mapped paths the finding lies on (`paths_io.assign_paths`, after merge), in
+    # `paths.json` order; None when it lies on none or the review mapped no path.
+    paths: list[str] | None = None
 
     @model_validator(mode="after")
     def _compute_id(self) -> "Finding":
