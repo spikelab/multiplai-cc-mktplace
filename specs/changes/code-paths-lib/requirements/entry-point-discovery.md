@@ -239,7 +239,7 @@ Test files SHALL be excluded. These are files named `test_*.py`, `*_test.py` or 
 - **AND** entries from other files are still returned
 
 ### Requirement: python -m commands in SKILL.md fenced shell blocks are discovered
-In every `SKILL.md`, discovery SHALL scan fenced code blocks whose info string is `bash`, `sh`, `shell`, `zsh` or `console`. For each command that runs `python -m <module>` or `python3 -m <module>`, it SHALL emit one `skill_command` entry. A command optionally prefixed by `uv run` or by environment assignments also counts.
+In every `SKILL.md`, discovery SHALL scan fenced code blocks whose info string is `bash`, `sh`, `shell`, `zsh` or `console`. Commands are tokenised with `shlex` after joining `\` line continuations. For each command that runs `python -m <module>` or `python3 -m <module>`, it SHALL emit one `skill_command` entry. A command optionally prefixed by environment assignments, by `cd <dir> &&`, or by `uv run [--directory D | --project D | other flags]` also counts.
 
 For each entry:
 
@@ -250,13 +250,20 @@ For each entry:
 The module SHALL be resolved by searching these roots in order. The first match wins:
 
 1. Any directory named in a `PYTHONPATH=` assignment in the command.
-2. Any directory named in a `cd <dir> &&` prefix in the command.
+2. Any directory named in a `cd <dir> &&` prefix, or by `uv run --directory` or `--project`, in the command.
 3. The `SKILL.md` directory.
 4. Its `scripts/` subdirectory.
 5. The repository root.
 6. `<repository root>/src`.
 
-`${CLAUDE_SKILL_DIR}` and `${CLAUDE_PLUGIN_ROOT}` are expanded where they appear.
+`${CLAUDE_SKILL_DIR}` (the `SKILL.md` directory) and `${CLAUDE_PLUGIN_ROOT}` (as for hooks) are expanded where they appear.
+
+The known edge goes from the command's line to one of two targets:
+
+- If the first positional argument after the module names a discovered argparse subcommand of that module, the edge goes to that subcommand's handler, or to its `add_parser` line when the handler is `null`.
+- Otherwise the edge goes to the module's `main_module` location: its `if __name__ == "__main__":` line, or line 1 without one.
+
+The entry's `handler` is the subcommand's handler in the first case, and the `main_module` handler of the target file in the second, so a command merges with the entry it runs.
 
 #### Scenario: Module in scripts directory
 - **WHEN** `skills/pr/SKILL.md` contains a `bash` block with `python3 -m pr_pipeline open --draft`
@@ -277,7 +284,7 @@ The module SHALL be resolved by searching these roots in order. The first match 
 
 #### Scenario: Command naming no subcommand
 - **WHEN** the command is `python -m pr_pipeline --help`
-- **THEN** the known edge points to line 1 of `pr_pipeline/__main__.py`
+- **THEN** the known edge points to the `main_module` location of `pr_pipeline/__main__.py`: its `if __name__ == "__main__":` line, or line 1 when it has no such guard
 
 #### Scenario: Non-shell fenced blocks and prose ignored
 - **WHEN** `SKILL.md` contains `python -m foo` inside a `python` fenced block, inside an unlabelled fenced block, and in inline prose
@@ -296,16 +303,19 @@ Discovery SHALL read every `hooks.json` file and every `.claude/settings*.json` 
 - `name` is `<event>:<matcher>`, or `<event>` when there is no matcher.
 - `location` is the line of the file on which that command string appears. When identical command strings appear more than once, occurrences are assigned in document order.
 
-The target SHALL be resolved as follows:
+The command is tokenised after expanding variables:
 
-- A `python -m` target uses the same rules as `SKILL.md` commands.
-- A script path argument is resolved after expanding variables:
-  - `${CLAUDE_PLUGIN_ROOT}` becomes the nearest ancestor of the hooks file that contains `.claude-plugin/plugin.json`. If there is none, it becomes the parent of the hooks file's directory.
-  - `$CLAUDE_PROJECT_DIR` and `${CLAUDE_PROJECT_DIR}` become the repository root.
+- `${CLAUDE_PLUGIN_ROOT}` becomes the nearest ancestor of the hooks file that contains `.claude-plugin/plugin.json`. If there is none, it becomes the parent of the hooks file's directory.
+- `$CLAUDE_PROJECT_DIR` and `${CLAUDE_PROJECT_DIR}` become the repository root.
 
-For a Python script target, the handler is resolved as for a `main_module`. For any other existing file, the handler is line 1 of that file.
+The target SHALL then be resolved through shell launchers:
 
-Discovery SHALL add a known edge from the command's line to the resolved target.
+1. Leading launcher tokens are stripped while they are `sh`, `bash`, `/bin/sh`, `/bin/bash`, `exec`, `env`, an environment assignment, a `.sh` file that exists in the snapshot, or `uv run` with its flags.
+2. `python[3] -m X`, or `-m X` left after a launcher, uses the same rules as `SKILL.md` commands.
+3. Otherwise the first `.py` token that exists resolves as a `main_module` script: its location is the `if __name__ == "__main__":` line or line 1, and its handler is the `main_module` handler.
+4. Only when the command names neither a module nor a `.py` file does the hook target the stripped launcher, or else the first existing file it names, at line 1 with `symbol: null`.
+
+A `python -m` module or `.py` file that does not exist is a missing target. Discovery SHALL add a known edge from the command's line to the resolved target.
 
 #### Scenario: Plugin hook running a Python script
 - **WHEN** `plugin/hooks/hooks.json` has a `PreToolUse` hook with matcher `Bash` and command `python3 ${CLAUDE_PLUGIN_ROOT}/hooks/guard.py`
@@ -313,6 +323,17 @@ Discovery SHALL add a known edge from the command's line to the resolved target.
 - **AND** `plugin/hooks/guard.py` exists
 - **THEN** a `hook_command` entry named `PreToolUse:Bash` is emitted
 - **AND** its known edge targets `plugin/hooks/guard.py`
+
+#### Scenario: Hooks run through a shared launcher stay separate
+- **WHEN** `plugin/hooks/hooks.json` has 8 hooks, each running `sh ${CLAUDE_PLUGIN_ROOT}/hooks/run.sh ${CLAUDE_PLUGIN_ROOT}/scripts/<script>.py` for a different script
+- **AND** `plugin/hooks/run.sh` and every script exist
+- **THEN** 8 entries are emitted, one per hook
+- **AND** each one's known edge and handler target its own script, never `run.sh`
+
+#### Scenario: Hook with no Python target
+- **WHEN** a hook runs `sh ${CLAUDE_PLUGIN_ROOT}/hooks/run.sh --warm`
+- **THEN** its known edge targets line 1 of `plugin/hooks/run.sh`
+- **AND** its handler is `{path: "plugin/hooks/run.sh", line: 1, symbol: null}`
 
 #### Scenario: Settings file hook
 - **WHEN** `.claude/settings.local.json` defines a `Stop` hook running `python3 "$CLAUDE_PROJECT_DIR/scripts/stop.py"`

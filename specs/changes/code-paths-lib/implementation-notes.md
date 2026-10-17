@@ -80,3 +80,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   A command naming no subcommand edges to the main_module location (guard line or line 1), and "handler = the edge target's def, else null" then makes its handler null, so the spec's hook + SKILL.md `python -m pkg` merge scenario could never happen. The tests expect such commands to take the main_module's handler (the def main() that the guard calls). Unspecified details pinned by the tests: command_tokens may return absolute or root-relative paths; resolve_python_m returns `<pkg>/__main__.py` or `<mod>.py`, with "" meaning the snapshot root. The spec-file amendments the block asks for were not made, since this agent writes tests only.
+
+## Block 6 — Discover `SKILL.md` and hook commands, resolving through shell launchers (implementer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  (1) D6 rule 7 says a command's handler is "the edge target's def, else null", but that makes a no-subcommand command's handler null, so the spec's "hook and SKILL.md invoke the same module → one entry" could never happen; command entries instead take the main_module handler of the target file (spec amended to say so). (2) D2's module layout has no home for command parsing; it went into a new code_facts/commands.py so later e2e subprocess matching can share it, which meant adding that module to the test helper's lookup list. (3) Unspecified choices: hook `python -m` uses the hooks file's directory where SKILL.md uses its own; relative paths run from the repository root; a named but missing `.py` or `-m` target is `unresolved_target` rather than a launcher fallback; only top-level argparse subcommands are matched by a command's first positional.

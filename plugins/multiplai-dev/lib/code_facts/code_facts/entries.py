@@ -33,6 +33,25 @@ or line 1 of a guardless `__main__.py`. Its handler is the one same-repository
 function the guard body (or the module body) calls, looking through `sys.exit`,
 `exit`, `SystemExit`, `asyncio.run` and `raise SystemExit(...)`.
 
+`SKILL.md` commands. A `skill_command` entry per `python[3] -m <module>`
+command in a `bash`, `sh`, `shell`, `zsh` or `console` fence of a `SKILL.md`,
+named `<skill dir>: <module> [<first positional>]`. The module is looked for in
+the command's `PYTHONPATH`, `cd`, `--directory` and `--project` directories,
+the `SKILL.md` directory and its `scripts/`, then the repository root and its
+`src/`. When the first positional names an argparse subcommand of that module,
+the known edge goes to the subcommand's handler, or to its `add_parser` line
+when it has none; otherwise it goes to the module's `main_module` location.
+
+Hooks. A `hook_command` entry per `"type": "command"` hook of a `hooks.json` or
+`.claude/settings*.json`, named `<event>[:<matcher>]`, on its command string's
+line. Past its launchers (`sh run.sh`, `uv run`, ...), a `python -m` resolves as
+in a `SKILL.md`, else the first `.py` it names resolves as a `main_module`
+script; a command naming neither targets its launcher or file at line 1.
+
+A command entry's handler is the subcommand's handler, or the handler of the
+`main_module` location its edge reaches, so a command merges into the entry it
+runs.
+
 Seeds. A caller seed becomes a `seed` entry whose handler is the named symbol,
 or the innermost `def`/`class` enclosing the seed's line.
 
@@ -65,6 +84,8 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field
 
+from .commands import (CommandLine, first_positional, hook_commands, is_hooks_file, module_search_roots,
+                       parse_command_line, python_module, resolve_python_m, shell_commands)
 from .paths import (KIND_RANK, DiscoveredKind, Handler, Invoker, Location, PathDiagnostic, PathEntry, Seed,
                     _Strict, normalise_rel_path)
 from .pyindex import PyIndex
@@ -135,6 +156,10 @@ def discover_entries(root: Path, seeds: Sequence[Seed] = (), *, index: PyIndex |
     diagnostics = [Diagnostic(path=path, line=None, reason="parse_error", detail=detail)
                    for path, detail in index.parse_errors()]
     for found, problems in _scans(root, index):
+        entries += found
+        diagnostics += problems
+    subcommands = _Subcommands(index, entries)
+    for found, problems in _command_scans(root, index, subcommands):
         entries += found
         diagnostics += problems
     for seed, path in zip(seeds, seed_paths, strict=True):
@@ -961,6 +986,138 @@ def _seed_entry(index: PyIndex, seed: Seed, path: str) -> Entry | Diagnostic:
     handler = Handler(path=path, line=found.start, symbol=found.name) if found else None
     default_name = f"{path}:{found.name}" if found else f"{path}:{line}"
     return _static_entry("seed", seed.name or default_name, path, line, handler)
+
+
+# --- SKILL.md and hook commands -----------------------------------------------------------------
+
+
+class _Subcommands:
+    """The top-level argparse subcommands discovered per module file, for a command that names one."""
+
+    def __init__(self, index: PyIndex, entries: Iterable[Entry]):
+        self._index = index
+        self._by_file: dict[str, dict[str, Entry]] = {}
+        argparse = (e for e in entries if e.kind == "argparse_subcommand" and " " not in e.name)
+        for entry in sorted(argparse, key=lambda e: (e.location.path, e.location.line)):
+            self._by_file.setdefault(entry.location.path, {}).setdefault(entry.name, entry)
+
+    def find(self, module_file: str, name: str) -> Entry | None:
+        """Subcommand `name` declared in `module_file`, else in the first same-repository module it imports."""
+        for path in [module_file, *self._index.imported_files(module_file)]:
+            found = self._by_file.get(path, {}).get(name)
+            if found is not None:
+                return found
+        return None
+
+
+@dataclass(frozen=True)
+class _CommandTarget:
+    """Where a command lands: the end of its known edge, and the handler its entry takes."""
+    to: Location
+    handler: Handler | None
+
+
+def _command_scans(root: Path, index: PyIndex, subcommands: _Subcommands) -> Iterator[_Found]:
+    for path in index.files_named("SKILL.md"):
+        yield _skill_command_entries(root, index, subcommands, path)
+    for path in filter(is_hooks_file, index.walked_files()):
+        yield _hook_entries(root, index, subcommands, path)
+
+
+def _skill_command_entries(root: Path, index: PyIndex, subcommands: _Subcommands, path: str) -> _Found:
+    """One entry per `python -m` command in the shell fences of the `SKILL.md` at `path`."""
+    try:
+        text = (root / path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        return [], [Diagnostic(path=path, line=None, reason="parse_error", detail=f"{type(e).__name__}: {e}")]
+    skill = posixpath.basename(posixpath.dirname(path)) or root.absolute().name
+    entries: list[Entry] = []
+    diagnostics: list[Diagnostic] = []
+    for line, invocation in shell_commands(text):
+        try:
+            command = parse_command_line(invocation, source_file=path, root=root)
+        except ValueError:
+            continue
+        module = python_module(command.tokens)
+        if module is None:
+            continue
+        name, arguments = module
+        target = _module_target(index, subcommands, command, path, name, arguments)
+        if isinstance(target, str):
+            diagnostics.append(Diagnostic(path=path, line=line, reason="unresolved_target", detail=target))
+            continue
+        positional = first_positional(arguments)
+        entry_name = f"{skill}: {name}" + (f" {positional}" if positional else "")
+        entries.append(_command_entry("skill_command", entry_name, path, line, invocation, target))
+    return entries, diagnostics
+
+
+def _hook_entries(root: Path, index: PyIndex, subcommands: _Subcommands, path: str) -> _Found:
+    """One entry per command hook of the hooks or settings file at `path` whose target resolves."""
+    try:
+        hooks = hook_commands((root / path).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as e:
+        return [], [Diagnostic(path=path, line=None, reason="parse_error", detail=f"{type(e).__name__}: {e}")]
+    entries: list[Entry] = []
+    diagnostics: list[Diagnostic] = []
+    for hook in hooks:
+        try:
+            command = parse_command_line(hook.command, source_file=path, root=root)
+        except ValueError as e:
+            target: _CommandTarget | str = f"the command cannot be tokenised: {e}"
+        else:
+            target = _hook_target(index, subcommands, command, path)
+        if isinstance(target, str):
+            diagnostics.append(Diagnostic(path=path, line=hook.line, reason="unresolved_target",
+                                          detail=f"hook {hook.name} runs {hook.command!r}: {target}"))
+            continue
+        entries.append(_command_entry("hook_command", hook.name, path, hook.line, hook.command, target))
+    return entries, diagnostics
+
+
+def _hook_target(index: PyIndex, subcommands: _Subcommands, command: CommandLine,
+                 source_file: str) -> _CommandTarget | str:
+    """What a hook runs past its launchers: a `python -m` module, else the first `.py` it names, else the
+    launcher or file it names, at line 1. The reason it has no target, when none of them exists.
+    """
+    module = python_module(command.tokens)
+    if module is not None:
+        return _module_target(index, subcommands, command, source_file, *module)
+    scripts = [command.snapshot_path(token) for token in command.tokens if token.endswith(".py")]
+    if scripts:
+        script = next((s for s in scripts if s is not None and index.has_file(s)), None)
+        if script is None:
+            return "no script it names exists in the snapshot"
+        return _CommandTarget(*main_module_handler(index, script))
+    named = (command.snapshot_path(token) for token in command.tokens)
+    file = command.launcher or next((f for f in named if f and index.has_file(f)), None)
+    if file is None:
+        return "it runs no file of the snapshot"
+    return _CommandTarget(Location(path=file, line=1), Handler(path=file, line=1, symbol=None))
+
+
+def _module_target(index: PyIndex, subcommands: _Subcommands, command: CommandLine, source_file: str,
+                   module: str, arguments: Sequence[str]) -> _CommandTarget | str:
+    """Where `python -m <module> <arguments>` lands, or the reason it lands nowhere."""
+    roots = module_search_roots(command, source_file, index.repo_root(source_file))
+    module_file = resolve_python_m(module, roots, index)
+    if module_file is None:
+        return f"python -m {module}: no such module under {', '.join(repr(r) for r in roots)}"
+    positional = first_positional(arguments)
+    subcommand = subcommands.find(module_file, positional) if positional else None
+    if subcommand is None:
+        return _CommandTarget(*main_module_handler(index, module_file))
+    if subcommand.handler is None:
+        return _CommandTarget(subcommand.location, None)
+    handler = subcommand.handler
+    return _CommandTarget(Location(path=handler.path, line=handler.line), handler)
+
+
+def _command_entry(kind: EntryKind, name: str, path: str, line: int, invocation: str,
+                   target: _CommandTarget) -> Entry:
+    location = Location(path=path, line=line)
+    return Entry(kind=kind, name=name, location=location, handler=target.handler, invocation=invocation,
+                 known_edges=[KnownEdge(from_=location, to=target.to)], also_invoked_by=[])
 
 
 # --- merging ----------------------------------------------------------------------------------

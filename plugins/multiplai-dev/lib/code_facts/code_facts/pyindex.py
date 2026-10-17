@@ -173,6 +173,14 @@ class PyIndex:
         """Every walked file of the snapshot, of any type, whose base name is `name`, in path order."""
         return sorted(f for f in self._all_files if posixpath.basename(f) == name)
 
+    def walked_files(self) -> list[str]:
+        """Every walked file of the snapshot, of any type, in path order."""
+        return sorted(self._all_files)
+
+    def has_file(self, path: str) -> bool:
+        """Whether `path` is a walked file of the snapshot, of any type."""
+        return path in self._all_files
+
     def parse_errors(self) -> list[tuple[str, str]]:
         """`(path, detail)` of every `.py` file that could not be decoded or parsed, in path order."""
         return sorted(self._parse_errors.items())
@@ -358,6 +366,11 @@ class PyIndex:
                         if self._external(target, self._files[target].module_bindings.get(attr, []), seen):
                             return True
         return False
+
+
+def is_repo_dir(directory: Path) -> bool:
+    """Whether `directory` holds a repository marker, so is a repository root."""
+    return any((directory / marker).exists() for marker in REPO_MARKERS)
 
 
 def _inside(full: Path, real_root: Path) -> bool:

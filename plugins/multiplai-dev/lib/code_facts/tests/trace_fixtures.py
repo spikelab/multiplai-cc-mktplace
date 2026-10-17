@@ -24,7 +24,7 @@ DEPTH = 4  # cmd_<n> -> step1_<n> -> step2_<n> -> step3_<n>
 def lib(name: str) -> Any:
     """A code_facts name from whichever module defines it, looked up at call time."""
     for mod in ("code_facts", "code_facts.trace_gate", "code_facts.paths", "code_facts.prompts",
-                "code_facts.entries", "code_facts.pyindex"):
+                "code_facts.entries", "code_facts.pyindex", "code_facts.commands"):
         try:
             module = importlib.import_module(mod)
         except ModuleNotFoundError:
