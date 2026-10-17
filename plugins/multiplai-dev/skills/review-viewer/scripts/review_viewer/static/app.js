@@ -344,6 +344,7 @@
     renderWalk();
     renderSummary();
     renderChecked();
+    renderPaths();
     schedulePrRefresh();
     state.walkSince = Date.now();
     const walkGen = state.pollGen;
@@ -1339,6 +1340,55 @@
     if (!node) return;
     node.open = true;
     node.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
+  }
+
+  // --- paths --- the review's paths.json: one card per path (code_facts' paths.v1) ----
+
+  /* A link that opens *file* at *start*..*end* in the code pane. */
+  function codeLink(text, file, start, end) {
+    return el("button", { type: "button", class: "cite-link mono", text: text, onclick: () => openFile(file, start, end) });
+  }
+
+  /* One card, from L.pathCardModel. Text from paths.json is only ever set as text. */
+  function pathCard(m) {
+    const h = m.handler;
+    const kids = [
+      el("div", { class: "path-head" }, [el("span", { class: "mono muted", text: m.id }), " ",
+        el("strong", { text: m.entry.name }), " ", el("span", { class: "badge", text: m.entry.kind })]),
+      el("p", { class: "small", text: "Invoked by " + m.entry.invokedBy }),
+    ];
+    if (m.alsoInvokedBy.length) {
+      kids.push(el("p", { class: "small muted", text: "Also invoked by: " +
+        m.alsoInvokedBy.map((a) => a.name + " (" + a.kind + ", " + a.where + ")").join("; ") }));
+    }
+    kids.push(
+      el("div", { class: "small" }, ["Entry: ", codeLink(m.entry.file + ":" + m.entry.line, m.entry.file, m.entry.line)]),
+      el("div", { class: "small" }, ["Handler: ", h
+        ? codeLink((h.symbol ? h.symbol + " at " : "") + h.file + ":" + h.line, h.file, h.line)
+        : el("span", { class: "muted", text: "none recorded" })]),
+      el("ol", { class: "path-hops" }, m.hops.map((hop) =>
+        el("li", {}, [codeLink(hop.label, hop.file, hop.lineStart, hop.lineEnd)]))));
+    if (m.broken) kids.push(el("p", { class: "path-broken", title: m.broken.code, text: m.broken.marker }));
+    if (m.findings.length) {
+      kids.push(el("div", { class: "label", text: "Findings" }), el("ul", { class: "path-list" }, m.findings.map((f) =>
+        el("li", {}, [el("button", { type: "button", class: "cite-link", onclick: () => selectFinding(f.id) },
+          [el("span", { class: "badge " + f.severity, text: f.severity }), " " + f.claim])]))));
+    }
+    kids.push(el("div", { class: "label", text: "E2E tests:" }), el("ul", { class: "path-list" },
+      L.pathTestLines(m.tests).map((t) => el("li", { class: "mono small path-test-" + t.kind, text: t.text }))));
+    return el("article", { id: m.domId, class: "path-card" }, kids);
+  }
+
+  /* The Paths tab: the cards, paths with counted findings first. Counted
+   * findings are the shown ones minus the refuted ones, like every count. */
+  function renderPaths() {
+    const box = $("paths");
+    const doc = state.detail && state.detail.paths;
+    box.replaceChildren();
+    if (!doc) return;
+    const byPath = L.findingsByPath(L.countedFindings(state.shown));
+    box.appendChild(sectionLabel("Paths through the change", "paths"));
+    for (const p of L.sortPaths(doc.paths, byPath)) box.appendChild(pathCard(L.pathCardModel(p, byPath)));
   }
 
   // --- finding detail ----------------------------------------------------------

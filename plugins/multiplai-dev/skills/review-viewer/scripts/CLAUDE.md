@@ -110,7 +110,13 @@ looked for nowhere else, and `REVIEW_FILES` does not name it. A stale or
 invalid file logs one `paths.json ignored (<status>): <path> <detail>`
 warning; an absent one logs nothing. `/api/targets/<slug>` returns the
 accepted document as `paths` (null otherwise), in the same response as the
-findings; the page's Paths tab is shown only when it is set.
+findings; the page's Paths tab is shown only when it is set. An accepted
+file adds each path's entry, handler and hop files to `allowed_paths()`
+(`server._path_files`; never `also_invoked_by`, test or patch files), and the
+file route passes the lines they point at (`server._path_ranges`) to
+`file_view(extra_ranges=…)`, which keeps them in view in a file over 4000
+lines. The cards come from `logic.js` (`countedFindings`, `findingsByPath`,
+`sortPaths`, `pathCardModel`, `pathTestLines`); `app.js` only renders them.
 
 ## Protocol 2: the mailbox (`<dir of findings.json>/viewer/`)
 

@@ -133,7 +133,13 @@
    * leave the list, so what is left is what still needs you. */
   function isHidden(finding, decisions) {
     const d = decisions && decisions[finding.id];
-    return HIDDEN_STATUSES.has(finding.status) || !!(d && d.decision);
+    return isRefuted(finding) || !!(d && d.decision);
+  }
+
+  /* The verifier refuted the finding: it leaves the list and the code
+   * markers, and it never counts toward a path having findings. */
+  function isRefuted(finding) {
+    return HIDDEN_STATUSES.has(finding.status);
   }
 
   /* The shown findings by section (Code, Tests, Docs, Trim), then severity, in the
@@ -1430,6 +1436,128 @@
     return tab;
   }
 
+  const own = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
+  /* Words for each paths.v1 entry kind (code_facts' EntryKind). `model` is an
+   * entry the model fallback found; the page does not say how it was found. */
+  const KIND_LABELS = {
+    argparse: "CLI command", click: "CLI command", typer: "CLI command", main: "main module",
+    script: "script", skill_command: "skill command", hook: "hook", seed: "chosen entry point",
+    model: "entry point",
+  };
+
+  function kindLabel(kind) {
+    return own(KIND_LABELS, kind) ? KIND_LABELS[kind] : "entry point";
+  }
+
+  /* Why a trace stopped, for each paths.v1 break reason (code_facts' CutReason). */
+  const BREAK_REASONS = {
+    path_outside_root: "a hop pointed outside the repository",
+    missing_file: "a hop named a file that does not exist",
+    line_out_of_range: "a hop cited lines past the end of its file",
+    text_mismatch: "a hop's quoted code did not match the file",
+    base_side_citation: "a hop cited the old code, not the change",
+    unconnected_hop: "the next call could not be connected",
+    repeated_hop: "the trace came back to a hop it had already taken",
+    hop_limit: "the hop limit was reached",
+  };
+
+  /* A break reason in words; a code this page does not know shows as it is. */
+  function breakReasonText(code) {
+    return own(BREAK_REASONS, code) ? BREAK_REASONS[code] : String(code);
+  }
+
+  /* The findings that count for paths: the shown ones (shownFindings, so the
+   * same filter as every other count) minus the refuted ones. */
+  function countedFindings(shown) {
+    return (shown || []).filter((f) => !isRefuted(f));
+  }
+
+  /* path id -> the counted findings on it, in counted order. A finding on
+   * two paths is under both; one with no `paths` is under none. */
+  function findingsByPath(counted) {
+    const byPath = new Map();
+    for (const f of counted || []) {
+      for (const id of Array.isArray(f.paths) ? f.paths : []) {
+        if (!byPath.has(id)) byPath.set(id, []);
+        if (byPath.get(id).indexOf(f) < 0) byPath.get(id).push(f);
+      }
+    }
+    return byPath;
+  }
+
+  function onPath(byPath, id) {
+    const list = byPath && byPath.get(id);
+    return !!(list && list.length);
+  }
+
+  /* A new array: the paths with counted findings first, then the rest, each
+   * group in paths.json order. */
+  function sortPaths(paths, byPath) {
+    const list = paths || [];
+    return list.filter((p) => onPath(byPath, p.id)).concat(list.filter((p) => !onPath(byPath, p.id)));
+  }
+
+  /* A test that mocks hop 2 does not run the real path, so only `e2e` counts. */
+  function hasCountedE2e(path) {
+    return !!(path && path.tests && path.tests.e2e && path.tests.e2e.length);
+  }
+
+  function lineLabel(file, start, end) {
+    return file + ":" + start + (end != null && end !== start ? "-" + end : "");
+  }
+
+  /* What a path's card shows, from one paths.v1 path and findingsByPath.
+   * Only the fields named here are read: never dropped, diagnostics, the
+   * fallback status, scoped, cap or changed_lines_covered. A broken trace
+   * keeps the hops it reached and says after which one it stopped. */
+  function pathCardModel(path, byPath) {
+    const e = path.entry;
+    const reached = path.stops_at ? path.hops.slice(0, path.stops_at) : path.hops;
+    let broken = null;
+    if (path.break_reason) {
+      const last = path.stops_at ? path.hops[path.stops_at - 1] : null;
+      const at = last ? { after: last.symbol_called, file: last.path, line: last.line_start }
+        : e.handler ? { after: e.handler.symbol || e.name, file: e.handler.path, line: e.handler.line }
+          : { after: e.name, file: e.location.path, line: e.location.line };
+      const text = breakReasonText(path.break_reason);
+      broken = { after: at.after, file: at.file, line: at.line, code: path.break_reason, text: text,
+        marker: "trace broken after " + at.after + " (" + at.file + ":" + at.line + "): " + text };
+    }
+    const counted = (path.tests.e2e || []).map((t) => ({ nodeId: t.node_id, match: t.match }));
+    return {
+      id: path.id,
+      domId: "path-card-" + path.id,
+      entry: { name: e.name, kind: kindLabel(e.kind), invokedBy: e.invoked_by, file: e.location.path, line: e.location.line },
+      alsoInvokedBy: (e.also_invoked_by || []).map((a) => ({ name: a.name, kind: kindLabel(a.kind),
+        where: lineLabel(a.location.path, a.location.line) })),
+      handler: e.handler ? { symbol: e.handler.symbol, file: e.handler.path, line: e.handler.line } : null,
+      hops: reached.map((h, i) => ({ n: i + 1, symbol: h.symbol_called, file: h.path, lineStart: h.line_start,
+        lineEnd: h.line_end, label: h.symbol_called + " at " + lineLabel(h.path, h.line_start, h.line_end) })),
+      broken: broken,
+      findings: ((byPath && byPath.get(path.id)) || []).map((f) => ({ id: f.id, severity: f.severity, claim: f.claim })),
+      tests: {
+        counted: counted,
+        mocked: (path.tests.mocks_hop_2 || []).map((t) => ({ nodeId: t.node_id, patchFile: t.patch_file,
+          patchLine: t.patch_line })),
+        noE2e: !counted.length,
+      },
+    };
+  }
+
+  /* The lines under a card's "E2E tests:": each counted test, "no e2e test"
+   * when none counts (also when only mocked ones exist), then each mocked
+   * test marked not counted. */
+  function pathTestLines(tests) {
+    const out = tests.counted.map((t) => ({ kind: "counted", text: "✓ " + t.nodeId + " (" + t.match + ")" }));
+    if (tests.noE2e) out.push({ kind: "none", text: "no e2e test" });
+    for (const t of tests.mocked) {
+      out.push({ kind: "mocked", text: "○ " + t.nodeId + " — not counted (patched at " +
+        lineLabel(t.patchFile, t.patchLine) + ")" });
+    }
+    return out;
+  }
+
   // --- the help dialog ------------------------------------------------------------
 
   /* The id of the help dialog's section for each topic a "?" button names.
@@ -1447,6 +1575,7 @@
     needs: "help-needs",
     run: "help-run",
     keys: "help-keys",
+    paths: "help-paths",
   };
 
   /* The section id a "?" opens; an unknown topic opens the help at the top. */
@@ -1493,7 +1622,10 @@
     findingParts: findingParts,
     citationWarning: citationWarning,
     HELP_SECTIONS: HELP_SECTIONS, helpSection: helpSection,
-    resolveTab: resolveTab,
+    resolveTab: resolveTab, isRefuted: isRefuted, KIND_LABELS: KIND_LABELS, kindLabel: kindLabel,
+    BREAK_REASONS: BREAK_REASONS, breakReasonText: breakReasonText, countedFindings: countedFindings,
+    findingsByPath: findingsByPath, sortPaths: sortPaths, hasCountedE2e: hasCountedE2e,
+    pathCardModel: pathCardModel, pathTestLines: pathTestLines,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;

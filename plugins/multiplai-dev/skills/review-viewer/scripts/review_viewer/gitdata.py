@@ -18,6 +18,7 @@ import posixpath
 import re
 import shutil
 import subprocess
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -243,12 +244,15 @@ def repo_files(target: Target) -> list[str]:
 
 
 def allowed_paths(target: Target, findings: FindingsFile | None,
-                  listed: list[str] | None = None) -> set[str]:
+                  listed: list[str] | None = None, extra: Iterable[str] = ()) -> set[str]:
     """The paths the file route serves: changed files, finding and citation
-    paths, and `listed` (`repo_files()`: every file git lists at head). Any
-    other path, `../` included, is refused with PathNotInReview."""
+    paths, `listed` (`repo_files()`: every file git lists at head) and `extra`
+    (the entry, handler and hop files of an accepted paths.json, which
+    paths.v1 already holds to relative paths with no `..`). Any other path,
+    `../` included, is refused with PathNotInReview."""
     paths = set(target.files_changed)
     paths.update(listed or [])
+    paths.update(extra)
     if findings is not None:
         for f in findings.findings:
             paths.add(f.file)
@@ -350,8 +354,11 @@ def _exists_at(repo: str, sha: str, path: str) -> bool:
 
 
 def file_view(target: Target, path: str, findings: FindingsFile | None = None,
-              allowed: set[str] | None = None) -> FileView:
-    """The file at head, with the diff folded in and cited ranges attached."""
+              allowed: set[str] | None = None,
+              extra_ranges: Sequence[tuple[int, int]] = ()) -> FileView:
+    """The file at head, with the diff folded in and cited ranges attached.
+    In a file too large to show whole, `extra_ranges` (a path's entry, handler
+    and hop lines) stay in view like cited ranges, without being marked cited."""
     if allowed is None:
         allowed = allowed_paths(target, findings)
     if path not in allowed:
@@ -388,7 +395,7 @@ def file_view(target: Target, path: str, findings: FindingsFile | None = None,
         touched = added | set(deleted_before)
         for n in touched:
             keep.update(range(n - HUNK_CONTEXT, n + HUNK_CONTEXT + 1))
-        for start, end in view.cited_ranges:
+        for start, end in [*view.cited_ranges, *extra_ranges]:
             keep.update(range(start - CITED_CONTEXT, end + CITED_CONTEXT + 1))
         if not keep:
             # Nothing changed or cited here (a file outside the change): its top.

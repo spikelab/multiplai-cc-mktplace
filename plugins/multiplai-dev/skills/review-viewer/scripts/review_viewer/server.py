@@ -250,6 +250,32 @@ def paths_beside(review_dir: Path, head_sha: str | None) -> PathsResult | None:
     return result
 
 
+def _path_files(result: PathsResult) -> set[str]:
+    """The files a page link on a path can open: each path's entry, handler
+    (when it has one) and hop files. Not `also_invoked_by` locations, test
+    files or patch sites, which the page shows as text."""
+    files: set[str] = set()
+    for p in result.paths:
+        files.add(p.entry.location.path)
+        if p.entry.handler is not None:
+            files.add(p.entry.handler.path)
+        files.update(h.path for h in p.hops)
+    return files
+
+
+def _path_ranges(result: PathsResult, path: str) -> list[tuple[int, int]]:
+    """The lines of *path* a path's links point at (entry, handler, hops),
+    sorted, for `file_view` to keep in view in a large file."""
+    ranges: set[tuple[int, int]] = set()
+    for p in result.paths:
+        if p.entry.location.path == path:
+            ranges.add((p.entry.location.line, p.entry.location.line))
+        if p.entry.handler is not None and p.entry.handler.path == path:
+            ranges.add((p.entry.handler.line, p.entry.handler.line))
+        ranges.update((h.line_start, h.line_end) for h in p.hops if h.path == path)
+    return sorted(ranges)
+
+
 def summarise(state: TargetState) -> dict:
     counts: dict[str, dict[str, int]] = {"severity": {}, "status": {}}
     for f in state.findings.findings:
@@ -455,7 +481,8 @@ def make_handler(viewer: Viewer):
 
         def _file(self, state: TargetState, path: str) -> None:
             try:
-                view = file_view(state.findings.target, path, state.findings, state.allowed)
+                hops = _path_ranges(state.paths, path) if state.paths is not None else []
+                view = file_view(state.findings.target, path, state.findings, state.allowed, extra_ranges=hops)
             except PathNotInReview:
                 raise _Reject(404, "path is not part of this review")
             except GitError as exc:
@@ -597,7 +624,8 @@ def build_viewer(findings: list[tuple[FindingsFile, Path]], *, agent: str, sessi
             log.warning("cannot list the files at %s: %s", ff.target.head_sha[:12], exc)
             listed = []
         paths = paths_beside(Path(box).parent, ff.target.head_sha)
-        targets[ff.target.slug] = TargetState(ff, mailbox, allowed_paths(ff.target, ff, listed),
+        allowed = allowed_paths(ff.target, ff, listed, extra=_path_files(paths) if paths is not None else ())
+        targets[ff.target.slug] = TargetState(ff, mailbox, allowed,
                                               pr=extra.get("pr"), notice=extra.get("notice"),
                                               stats=extra.get("stats"),
                                               checks=checks_beside(ff, Path(box).parent),

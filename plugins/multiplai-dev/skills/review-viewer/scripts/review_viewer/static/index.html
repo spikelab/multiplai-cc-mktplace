@@ -208,6 +208,7 @@
       <a href="#help-checked">The Checked tab</a>
       <a href="#help-findings">Findings, verdicts and labels</a>
       <a href="#help-needs">Needs you</a>
+      <a href="#help-paths">The Paths tab</a>
       <a href="#help-run">Run</a>
       <a href="#help-keys">Keyboard shortcuts</a>
     </nav>
@@ -493,6 +494,24 @@
       <p>The page runs nothing: read a command before you run it. Code keeps a command only when it is one
         short line, has no pipes, redirects or chained commands, and is a known read-only form; otherwise the item
         shows where to look instead, when the review named a place.</p>
+    </section>
+
+    <section id="help-paths" class="help-sec" tabindex="-1" aria-labelledby="help-h-paths">
+      <h3 id="help-h-paths">The Paths tab</h3>
+      <p>Shown when the review wrote a <code>paths.json</code> for exactly the commit under review. A
+        <b>path</b> starts at an entry point that reaches the changed code (a CLI command, a hook, a skill
+        command, a script) and follows the calls it makes, one hop at a time. Each card names the entry
+        point, its kind and who runs it, its handler and its hops; every one links to the code at that
+        line.</p>
+      <p>Paths with findings come first, each group in the order the review listed them. A finding
+        counts when the page shows it and it is not refuted. A refuted finding still links to its paths
+        from its own page.</p>
+      <p><b>trace broken after …</b>: the review could follow the calls only this far; the card lists the
+        hops it reached and says why it stopped.</p>
+      <p><b>E2E tests</b>: the end-to-end tests that run the entry point. A test marked <b>not counted</b>
+        mocks the second hop, so it does not run the real path. <b>no e2e test</b> means no test counts,
+        also when mocked ones exist. When some test files could not be read, a note under the summary says
+        the test results may be incomplete.</p>
     </section>
 
     <section id="help-run" class="help-sec" tabindex="-1" aria-labelledby="help-h-run">
