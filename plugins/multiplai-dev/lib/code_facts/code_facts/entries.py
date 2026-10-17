@@ -36,13 +36,20 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field
 
-from .paths import Handler, Invoker, Location, PathDiagnostic, Seed, _Strict, normalise_rel_path
+from .paths import (DiscoveredKind, Handler, Invoker, Location, PathDiagnostic, PathEntry, Seed, _Strict,
+                    normalise_rel_path)
 from .pyindex import PyIndex
 
 log = logging.getLogger(__name__)
 
 EntryKind = Literal["argparse_subcommand", "click_command", "typer_command", "project_script", "main_module",
                     "skill_command", "hook_command", "seed"]
+
+# The kind paths.v1 publishes for each discovery kind.
+OUTPUT_KIND: dict[EntryKind, DiscoveredKind] = {
+    "argparse_subcommand": "argparse", "click_command": "click", "typer_command": "typer", "main_module": "main",
+    "project_script": "script", "skill_command": "skill_command", "hook_command": "hook", "seed": "seed",
+}
 
 # The discovery diagnostic is the paths.v1 diagnostic, so it is published unchanged.
 Diagnostic = PathDiagnostic
@@ -66,6 +73,12 @@ class Entry(_Strict):
     invocation: str | None
     known_edges: list[KnownEdge]
     also_invoked_by: list[Invoker]
+
+
+def to_path_entry(entry: Entry) -> PathEntry:
+    """The entry as paths.v1 publishes it: the output kind, and no known edges."""
+    return PathEntry(kind=OUTPUT_KIND[entry.kind], name=entry.name, location=entry.location, handler=entry.handler,
+                     invocation=entry.invocation, also_invoked_by=entry.also_invoked_by)
 
 
 class Discovery(_Strict):

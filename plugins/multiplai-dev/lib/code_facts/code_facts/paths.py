@@ -80,6 +80,13 @@ DROP_REASONS: Mapping[DropStage, tuple[DropReason, ...]] = {
 # Drop stages that only a scoped run can produce.
 SCOPE_STAGES = frozenset({"import_reachability", "trace_limit", "no_changed_line", "cap"})
 
+# The fixed entry ranking: merge precedence, pre-trace order and output order all use it.
+KIND_RANK: dict[EntryKind, int] = {"argparse": 1, "click": 2, "typer": 3, "main": 4, "script": 5,
+                                   "skill_command": 6, "hook": 7, "seed": 8, "model": 9}
+
+# The only tools an agent of `map_paths` gets, whatever the caller's `call_kwargs` say.
+AGENT_TOOLS = ("Read", "Grep", "Glob")
+
 
 def _pinned(fields: Iterable[str], **constraints: Any) -> dict[str, Any]:
     """A schema for an object with `fields` where only `constraints` restrict their values."""
@@ -384,21 +391,55 @@ async def map_paths(
     None. Arguments are checked before any model call. Nothing is written
     outside `cache_dir`.
     """
+    # Deferred: these modules build on the models above.
+    from .entries import discover_entries
+    from .pyindex import PyIndex
+    from .tracing import TraceContext, trace_entries
+
     for name, fn in (("call", call), ("resolve", resolve)):
         if not callable(fn):
             raise TypeError(f"{name} must be callable, got {type(fn).__name__}")
     scoped = changed_lines is not None
+    changed = None
     if scoped:
         _require_positive("cap", cap)
         _require_positive("trace_limit", trace_limit)
-        normalise_changed_lines(root, changed_lines)
+        changed = normalise_changed_lines(root, changed_lines)
     log.info("mapping paths at %s (%s)", commit, "scoped" if scoped else "unscoped")
+    index = PyIndex.build(root)
+    discovery = discover_entries(root, seeds, index=index)
+    ctx = TraceContext(root=root, commit=commit, resolve=resolve, call=call, index=index, changed_lines=changed,
+                       places=tuple(places), answers={}, recoverable=recoverable,
+                       call_kwargs=dict(call_kwargs or {}), progress=progress)
+    outcomes = await trace_entries(discovery.entries, ctx=ctx, concurrency=concurrency)
+    traced = sorted((o for o in outcomes if isinstance(o, TracedPath)), key=path_order)
+    dropped = sorted((o for o in outcomes if isinstance(o, PathDrop)), key=drop_order)
     # Until the model fallback exists, every run records it as skipped.
     return PathsResult(
         schema_version=SCHEMA_VERSION, commit=commit, scoped=scoped, cap=cap if scoped else None,
         fallback=FallbackStatus(status="skipped", reason=None),
-        paths=[], dropped=[], diagnostics=[], test_listing_skips=[],
+        paths=assign_ids(traced), dropped=dropped, diagnostics=discovery.diagnostics, test_listing_skips=[],
     )
+
+
+def path_order(path: TracedPath) -> tuple[int, int, str, int]:
+    """The sort key of a kept path: fewest hops first, then entry kind rank, then entry location."""
+    entry = path.entry
+    return len(path.hops), KIND_RANK[entry.kind], entry.location.path, entry.location.line
+
+
+_STAGE_RANK = {stage: rank for rank, stage in enumerate(DROP_REASONS)}
+
+
+def drop_order(drop: PathDrop) -> tuple[int, str, int, str]:
+    """The sort key of a drop: stage order, then entry location, then entry kind."""
+    entry = drop.entry
+    return _STAGE_RANK[drop.stage], entry.location.path, entry.location.line, entry.kind
+
+
+def assign_ids(paths: Sequence[TracedPath]) -> list[TracedPath]:
+    """`paths` numbered `p1`…`pN` in the order given."""
+    return [path.model_copy(update={"id": f"p{n}"}) for n, path in enumerate(paths, start=1)]
 
 
 # --- writing ---------------------------------------------------------------------------------
