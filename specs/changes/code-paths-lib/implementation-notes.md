@@ -125,3 +125,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   (1) The live pr `run(argv)` helper calls `build_parser().parse_args(argv)`, so `<builder>().parse_args(argv)` with the builder in the parser's module also counts as cli_argv. (2) Literal lists with computed elements match on their constant tokens; spec text said "string constants" only. (3) Typer apps are module-level variables that resolve_name cannot see, so the runner matcher falls back to the new PyIndex.qualified_name plus resolve_module. Typer words are relative to the app's mount prefix, so a single-command typer app invoked without its name is missed. (4) A console script that targets an argparse program's main does not match that program's subcommand paths, only the project_script entry. (5) The reversed-scandir test fake was not an iterator, so Python 3.12 os.walk failed inside the pre-existing PyIndex.build. (6) build/ and dist/ test files are outside PyIndex, so they are added through the new PyIndex.including(). (7) Function-local name scoping for stdlib callees comes from the new qualified_name, so other PyIndex internals were not duplicated.
+
+## Block 9 — List end-to-end tests that statically invoke each kept path's entry (refactorer)
+- SPEC_IMPACT: none
+- SURPRISES:
+  The block-9 implementation commit (d5f570b9) also changed tests/test_e2e_listing.py by 7 lines, so part of the test contract was edited after the test step. The module is named e2e_tests.py, matching design D2, while the rubric refers to e2e.py.

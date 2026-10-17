@@ -79,11 +79,13 @@ _EXCLUDED_FLAGS = frozenset({"-h", "--help", "--version"})
 _PARSE_METHODS = frozenset({"parse_args", "parse_known_args"})
 _SUBPROCESS_CALLS = frozenset(f"subprocess.{name}" for name in ("run", "call", "check_call", "check_output", "Popen"))
 _RUN_MODULE = "runpy.run_module"
-_NESTED = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+_FUNCTION_DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
+_NESTED = (*_FUNCTION_DEFS, ast.ClassDef)
 # An element of a literal argv that is not a string literal.
 _UNKNOWN = ""
 
 Argv = tuple[str, ...]
+_FunctionDef = ast.FunctionDef | ast.AsyncFunctionDef
 # A literal argument: a list or tuple display's words, or a string.
 _Literal = Argv | str
 _Env = Mapping[str, _Literal]
@@ -200,6 +202,7 @@ class _Target:
 
 
 def _in_order(words: Argv, argv: Argv) -> bool:
+    """Whether `words` occur in `argv` in order, not necessarily adjacent."""
     remaining = iter(argv)
     return all(word in remaining for word in words)
 
@@ -323,18 +326,20 @@ class _Functions:
 
     def __init__(self, index: PyIndex):
         self._index = index
-        self._defs: dict[tuple[str, int], ast.FunctionDef | ast.AsyncFunctionDef | None] = {}
+        self._defs: dict[tuple[str, int], _FunctionDef | None] = {}
 
-    def of(self, handler: Handler) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    def of(self, handler: Handler) -> _FunctionDef | None:
+        """The `def` of the handler, matched by line and name; None when it is not a function."""
         key = (handler.path, handler.line)
         if key not in self._defs:
             tree = self._index.tree(handler.path)
             nodes = ast.walk(tree) if tree is not None else ()
-            self._defs[key] = next((n for n in nodes if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            self._defs[key] = next((n for n in nodes if isinstance(n, _FUNCTION_DEFS)
                                     and n.lineno == handler.line and n.name == handler.symbol), None)
         return self._defs[key]
 
     def first_parameter(self, handler: Handler) -> str | None:
+        """The name of the function's first positional parameter, the one its argv is passed as."""
         func = self.of(handler)
         positional = func.args.posonlyargs + func.args.args if func is not None else []
         return positional[0].arg if positional else None
@@ -360,22 +365,27 @@ def _argv_reaches(key: _Key, value: _Literal) -> _Reached | None:
 
 def _args_reaches(key: _Key, value: _Literal) -> _Reached | None:
     """A click runner's args: a list or tuple, or a string it splits as a shell would."""
-    words = value if isinstance(value, tuple) else _split(value)
+    words = _shell_words(value)
     return (key, words) if words is not None else None
 
 
 def _command_reaches(script_path: _PathOf, value: _Literal) -> _Reached | None:
-    words = value if isinstance(value, tuple) else _split(value)
+    """A subprocess command: a list or tuple, or a string split as a shell would."""
+    words = _shell_words(value)
     return _reached_command(words, script_path) if words is not None else None
 
 
 def _module_reaches(value: _Literal) -> _Reached | None:
+    """`runpy.run_module`'s module name: a string."""
     return (("module", value), ()) if isinstance(value, str) else None
 
 
-def _split(command: str) -> Argv | None:
+def _shell_words(value: _Literal) -> Argv | None:
+    """The words of a list or tuple as they are, or of a string split as a shell would; None when unsplittable."""
+    if isinstance(value, tuple):
+        return value
     try:
-        return tuple(shlex.split(command))
+        return tuple(shlex.split(value))
     except ValueError:
         return None
 
@@ -399,7 +409,7 @@ class _TestScan:
                                        invocations=invocations)
         return list(found.values())
 
-    def _body(self, func: ast.FunctionDef | ast.AsyncFunctionDef, path: str, env: _Env,
+    def _body(self, func: _FunctionDef, path: str, env: _Env,
               depth: int) -> Iterator[Invocation]:
         """The invocations of a test body (depth 0) or of a helper inlined at `depth` with parameters `env`."""
         for call in _calls(func):
@@ -501,7 +511,7 @@ class _TestScan:
         for invocation in self._body(func, helper.path, bound, depth + 1):
             yield replace(invocation, line=call.lineno)
 
-    def _bind(self, func: ast.FunctionDef | ast.AsyncFunctionDef, call: ast.Call, path: str,
+    def _bind(self, func: _FunctionDef, call: ast.Call, path: str,
               env: _Env) -> dict[str, _Literal]:
         """The helper's parameters that `call` passes a literal to."""
         positional = [a.arg for a in func.args.posonlyargs + func.args.args]
@@ -532,19 +542,18 @@ class _TestScan:
                 and not is_test_file(path))
 
 
-def _test_functions(tree: ast.Module) -> Iterator[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]:
+def _test_functions(tree: ast.Module) -> Iterator[tuple[str, _FunctionDef]]:
     """`(qualified name, def)` of each module-level `test*` function and `test*` method of a `Test*` class."""
-    functions = (ast.FunctionDef, ast.AsyncFunctionDef)
     for node in tree.body:
-        if isinstance(node, functions) and node.name.startswith("test"):
+        if isinstance(node, _FUNCTION_DEFS) and node.name.startswith("test"):
             yield node.name, node
         elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
             for item in node.body:
-                if isinstance(item, functions) and item.name.startswith("test"):
+                if isinstance(item, _FUNCTION_DEFS) and item.name.startswith("test"):
                     yield f"{node.name}::{item.name}", item
 
 
-def _calls(func: ast.FunctionDef | ast.AsyncFunctionDef) -> Iterator[ast.Call]:
+def _calls(func: _FunctionDef) -> Iterator[ast.Call]:
     """The calls of a function body, outside the `def`s and classes nested in it."""
     stack: list[ast.AST] = list(func.body)
     while stack:
@@ -564,6 +573,7 @@ def _argument(call: ast.Call, position: int, keyword: str | None) -> ast.expr | 
 
 
 def _uses(expr: ast.expr | None, env: _Env) -> bool:
+    """Whether `expr` reads one of the helper parameters bound in `env`."""
     return expr is not None and any(isinstance(n, ast.Name) and n.id in env for n in ast.walk(expr))
 
 
