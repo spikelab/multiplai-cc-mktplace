@@ -1,795 +1,584 @@
-## 1. Walking skeleton: the `paths.json` contract and an empty `map_paths`
+## 1. Walking skeleton: the `paths.json` contract, `write_paths_file`, a validating `map_paths`, and the amended specs
 
-This block adds `code_facts/paths.py` with these pieces:
-- every output model, built on `_Strict(_Model)` with `ConfigDict(extra="forbid", regex_engine="python-re", validate_assignment=True, populate_by_name=True)`;
-- the `EntryKind` StrEnum and `KIND_RANK`;
-- `schema_text()` and the committed `code_facts/schema/paths.v1.schema.json`, loaded through `importlib.resources`, with `$schema` hard-coded to `https://json-schema.org/draft/2020-12/schema` and `$id` set to `paths.v1.schema.json`;
-- `write_paths_file`;
-- a keyword-only `map_paths` that returns an empty `PathsResult` that passes the schema. It sets `scoped = changed_lines is not None` and echoes `cap` only when scoped, otherwise `null`. The fallback is always `skipped`, with one of these reasons:
-  - `"disabled"` when `model_fallback=False`;
-  - `"empty_scope"` when `changed_lines == {}`, or when unscoped with empty `scope_paths`;
-  - the interim `"not_implemented"` in every other case.
+This block adds the first runnable `map_paths`.
+- **Output models.** The frozen output models live in `plugins/multiplai-dev/lib/code_facts/code_facts/path_models.py`. They subclass `code_facts.models._Model` and use `ConfigDict(extra="forbid", frozen=True, regex_engine="python-re")`.
+- **Schema.** A hand-written `code_facts/code_facts/schema/paths.v1.schema.json` is loaded through `importlib.resources.files("code_facts") / "schema" / "paths.v1.schema.json"`.
+  - `$schema` equals the value in `facts.v1.schema.json` byte for byte. `$id` is `paths.v1.schema.json`.
+  - Every object has `additionalProperties: false`, including the citation `$def`.
+  - Each `$def`'s `properties` order equals its model's field order.
+  - `schema_version` (`"paths.v1"`, required, no default) and every other top-level field appear in `required`, in this order: `schema_version, commit, scoped, cap, paths, dropped, fallback, diagnostics, test_listing_skips`.
+- **`map_paths` skeleton.** It checks every input before any `CallFn` call:
+  - a missing `call` raises `TypeError`;
+  - `changed_lines` keys are normalised to POSIX form with any leading `./` removed;
+  - keys that are absolute, escape the root, or contain `..`, `\`, or NUL raise `ValueError`;
+  - values are materialised once into sorted, de-duplicated tuples, so a generator works;
+  - a `bool`, non-`int`, or `int < 1` value raises `ValueError`;
+  - keys whose line set is empty are dropped, and a key naming a missing file is accepted;
+  - when scoped, `cap < 1` or `trace_limit < 1` raises `ValueError`;
+  - `call_kwargs` containing `allowed_tools`, `cwd`, or `budget_label` raises `ValueError`.
 
-It also runs `uv add 'jsonschema>=4'` as a runtime dependency followed by `uv lock`, and adds the new exports to `code_facts/__init__.py` while keeping every earlier export.
+  On a repository with no entries and `fallback=False` (the only fallback mode until Block 7), it returns `paths=()`, `dropped=()`, `fallback={"status": "skipped", "reason": "disabled"}`, `cap=None` when unscoped, and `scoped` set to `changed_lines is not None`. It writes nothing outside `cache_dir`.
+- **Model validators.**
+  - `stops_at` and `break_reason` are both null or both set, with `1 ≤ stops_at ≤ len(hops) ≤ 20`.
+  - Ids match `^p[1-9][0-9]*$` and are contiguous; an empty `paths` is contiguous.
+  - `tests.e2e` and `tests.mocks_hop_2` share no `node_id`.
+  - Each drop `reason` is legal for its `stage`, per the D14 table.
+  - `scoped=False` forces `cap=None`, and drop stages `import_reachability`, `trace_limit`, `no_changed_line` and `cap` are not allowed.
+  - `scoped` is a `StrictBool`, so `"false"` is rejected by both the model and the schema.
+  - Paths match `^(?!/)(?!.*(^|/)\.\.?(/|$))[^\\\n]+$` in the model and in the schema. So `"a/b.py\n"`, `/abs/x.py`, `../x.py`, `./a.py` and `a\b.py` are rejected by both. `line ≥ 1` is enforced.
+  - Assigning any attribute raises `ValidationError` of type `frozen_instance`. Late fields are set with `model_copy(update=…)`, followed by re-validation.
+  - `f"{EntryKind.seed}" == "seed"` holds, and `KIND_RANK` (not alphabetical `sorted(EntryKind)`) defines rank.
+- **`write_paths_file`.**
+  - It serialises with `json.dumps(result.model_dump(mode="json", by_alias=True), indent=2, ensure_ascii=False) + "\n"`.
+  - It validates with `jsonschema.Draft202012Validator`, imported inside the function. It then re-validates through `PathsResult.model_validate`, so instances built with `model_construct` cannot get past the model invariants.
+  - On failure it raises `PathsSchemaError` naming an RFC 6901 pointer:
+    - each `absolute_path` element is converted with `str()`, and `~` and `/` are escaped as `~0` and `~1`;
+    - for `required` and `additionalProperties` errors the offending key is appended, so a missing `dropped` reports `/dropped` and a `model_construct` `schema_version="bad"` reports `/schema_version`;
+    - an error under an array (`/paths/0/hops/3/line`) never raises `TypeError`;
+    - errors are sorted by `tuple(str(p) for p in absolute_path)`.
+  - On failure it leaves any existing target byte-for-byte unchanged and creates no file.
+  - Writing goes through `atomic_write_text`:
+    - `tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")`, UTF-8, `fsync`, and `chmod` to the existing target's mode or `0o666 & ~umask` (never the `mkstemp` `0600`);
+    - then `os.replace`;
+    - the temp file is unlinked on any `BaseException`, so a serialiser patched to raise mid-write leaves no temp file.
+  - The output ends in exactly one `\n`, and a read-back plus rewrite is byte-identical.
+  - Validation needs no network: it passes with `socket.socket` patched to raise.
+- **Hop parity.** A test `ast`-parses `walkthrough_pipeline/models.py` by file path (code_facts never imports `walkthrough_pipeline`). It asserts that every walkthrough `Hop` field name is either a field of the output `Hop` (`symbol_called`, `citation`, `note`) or a field of its `code_facts.models.Citation`. A serialised citation without an explicit side carries `"side": "head"`.
+- **Dependency and lock.** `jsonschema>=4` is added to `[project].dependencies` in `plugins/multiplai-dev/lib/code_facts/pyproject.toml`. The root `uv.lock` is regenerated with `uv lock` at the repository root. The block proves all of the following:
+  - `uv lock --check` passes;
+  - `uv sync --all-packages --frozen && uv run python -c "import code_facts"` succeeds;
+  - an isolated `python -I` subprocess that sets `sys.modules["jsonschema"] = None` can still import `code_facts`.
 
-`write_paths_file` works in this order:
-1. `model_dump(mode="json", by_alias=True)`.
-2. `jsonschema.Draft202012Validator`.
-3. `PathsResult.model_validate` on the dumped dict, to apply the cross-field invariants the schema cannot express.
-4. `json.dumps(indent=2, ensure_ascii=False) + "\n"`, written as UTF-8 to a same-directory `tempfile.mkstemp(prefix="." + name + ".", suffix=".tmp")`.
-5. `os.replace` onto the target, chmod to `0o666 & ~umask`, and `unlink(missing_ok=True)` of the tempfile in `finally`.
-
-Any failure raises `PathsSchemaError`. Its `.pointer` is an RFC 6901 pointer built from `str(part)` for each `absolute_path` element: integer indices are stringified, `~` and `/` are escaped, and `required` / `additionalProperties` errors also name the offending key. It must never raise `TypeError`, must leave the target untouched, and must leave no `*.tmp` file behind. A serialiser patched to raise mid-write must leave the old bytes in place.
-
-The acceptance tests cover these edge cases:
-- The path rule `^(?!/)(?!.*\n)(?!.*(^|/)\.\.?(/|$))[^\\]+$` gives the same verdict in pydantic and in jsonschema:
-  - accepts `a/.hidden/b.py`;
-  - rejects `""`, `./a.py`, `a/../b`, `/abs/x.py`, `a\b.py` and `a/b.py\n`.
-- `"scoped": "false"` is rejected, because the field is `StrictBool`.
-- All nine top-level fields appear in the schema's `required` list, because none has a default.
-- These are rejected:
-  - `stops_at=2` together with `break_reason=None`;
-  - `stops_at > len(hops)`;
-  - `scoped=False` with a non-null `cap`;
-  - an unscoped result that contains a `cap` or `no_changed_line` drop;
-  - a node id that appears in both `tests.e2e` and `tests.mocks_hop_2`;
-  - non-contiguous ids;
-  - `"kind": "route"`.
-- Changing a model after it is constructed raises.
-- The schema's `$schema` equals the value in `skills/review/schema/facts.v1.schema.json` (read in the test only).
-- `Draft202012Validator.check_schema` passes.
-- The committed schema file matches `schema_text()` byte for byte.
-- A default unscoped call records `skipped` / `"empty_scope"` even though `model_fallback=True` is the default.
-
-Guard tests:
-- the `Hop` field names equal the walkthrough `Hop` fields, read by AST-parsing `walkthrough_pipeline/models.py`, plus `side`;
-- no module under `code_facts/` imports `walkthrough_pipeline`;
-- no library function or class name starts with `test` or `Test`.
-
-Run it with `uv run pytest tests/test_paths_contract.py` from `plugins/multiplai-dev/lib/code_facts`. The existing suite must pass unchanged.
+  No package named after a field or keyword (`file`, `line`, `kind`, `other`, `start`, `with`, `route`, ...) appears in either file.
+- **Spec amendments, written first.** Every spec text that D18 lists is rewritten under `specs/changes/<this change>/`:
+  - trace-gate: an internal `broken_at`; `stops_at` = retained-hop count (hops 1–2 → 2; over-long → 20); cut at hop 1 → `trace`/`cut_at_entry` drop;
+  - path-tracing: D14 drop codes, and two-call scenarios for zero and unparseable answers;
+  - contract: D3 `EntryKind` plus `source`/`handler`/`invocation`; nine top-level fields; `tests.e2e`/`tests.mocks_hop_2` records; the D14 drop table; the schema path;
+  - fallback: `other`/`GET /items`, a `malformed_entry` scenario, and the `citation_unverified` accounting scenario;
+  - path-scope: stage-ordered drops and the merged-invoker coverage scenarios;
+  - discovery: live `COMMANDS` resolution for pr_pipeline, plus a synthetic `if args.command == "x"` fixture; lower-cased click names; the D7 merge key; `uv run --directory`; `snapshot_mismatch`;
+  - e2e: the key renames;
+  - proposal: the `pr_pipeline/commands.py:400,409` citation.
+- **How to run it.** `uv run --directory plugins/multiplai-dev/lib/code_facts python -m pytest tests/` runs `map_paths` on an empty `tmp_path` repository and `write_paths_file`s the result, and the existing code_facts suite passes unmodified.
 
 Interfaces:
-- Produces: `class EntryKind(enum.StrEnum)` with members `argparse_subcommand, click_command, typer_command, main_module, project_script, skill_command, hook_command, seed, other`
-- Produces: `KIND_RANK: Mapping[EntryKind, int]` (a `MappingProxyType` built from `list(EntryKind)`; `KIND_RANK[EntryKind.other] == 8`)
-- Produces: `MAX_HOPS: int = 20`
-- Produces: `class Location(_Strict): path: str; line: int`
-- Produces: `class HandlerRef(_Strict): path: str; line: int; symbol: str`
-- Produces: `class KnownEdge(_Strict): from_: Location = Field(alias="from"); to: Location`
-- Produces: `class Invoker(_Strict): kind: EntryKind; name: str; location: Location`
-- Produces: `class Entry(_Strict): kind: EntryKind; name: str; location: Location; handler: HandlerRef | None; invocation: str | None; known_edges: list[KnownEdge]; also_invoked_by: list[Invoker]; source: Literal["discovered", "seed", "model"]`
-- Produces: `class Hop(_Strict): symbol_called: str; path: str; line_start: int; line_end: int; quote: str; note: str = ""; side: Literal["base", "head"] = "head"`
-- Produces: `BreakReason = Literal["malformed_answer", "empty_trace", "path_outside_root", "missing_file", "line_out_of_range", "text_mismatch", "base_side_citation", "entry_mismatch", "unconnected_hop", "repeated_hop", "hop_limit"]`
-- Produces: `PublishedBreakReason = Literal["path_outside_root", "missing_file", "line_out_of_range", "text_mismatch", "base_side_citation", "unconnected_hop", "repeated_hop", "hop_limit"]`
-- Produces: `class E2ERecord(_Strict): node_id: str; file: str; line: int; match: Literal["direct_call", "cli_argv", "cli_runner", "subprocess", "runpy"]; invocation_line: int`
-- Produces: `class MockedE2ERecord(E2ERecord): patch_line: int`
-- Produces: `class E2EListing(_Strict): e2e: list[E2ERecord]; mocks_hop_2: list[MockedE2ERecord]`
-- Produces: `class TracedPath(_Strict): id: str; entry: Entry; hops: list[Hop]; stops_at: int | None; break_reason: PublishedBreakReason | None; changed_lines_covered: list[Location]; tests: E2EListing`
-- Produces: `DropStage = Literal["model_fallback_citation", "import_reachability", "trace_limit", "trace", "no_changed_line", "cap"]`
-- Produces: `DropReason = Literal["missing_citation", "citation_unverified", "duplicate", "unreachable", "over_trace_limit", "trace_call_failed", "malformed_trace", "empty_trace", "cut_at_entry", "no_changed_line_covered", "over_cap"]`
-- Produces: `class DropRecord(_Strict): stage: DropStage; entry: Entry; reason: DropReason` (a validator enforces the D11 reason set allowed for each stage)
-- Produces: `class Diagnostic(_Strict): path: str; line: int | None; reason: Literal["parse_error", "unresolved_target", "unresolved_handler", "dynamic_name", "seed_not_found"]; detail: str`
-- Produces: `class ListingSkip(_Strict): file: str; reason: Literal["decode_error", "syntax_error"]`
-- Produces: `class FallbackOutcome(_Strict): status: Literal["ok", "failed", "skipped"]; reason: str | None`
-- Produces: `class PathsResult(_Strict): schema_version: Literal["paths.v1"]; commit: str; scoped: StrictBool; cap: int | None; fallback: FallbackOutcome; paths: list[TracedPath]; dropped: list[DropRecord]; diagnostics: list[Diagnostic]; test_listing_skips: list[ListingSkip]`
-- Produces: `class Seed(_Model): path: str; line: int | None = None; symbol: str | None = None; name: str | None = None`
-- Produces: `class Place(_Model): path: str; line: int`
-- Produces: `class PathsSchemaError(ValueError): pointer: str`
-- Produces: `def schema_text() -> str`
+- Produces: `async def map_paths(*, root: Path, commit: str, resolve: Resolve, call: CallFn, cache_dir: Path, changed_lines: Mapping[str, Iterable[int]] | None = None, seeds: Sequence[Seed] = (), places: Sequence[Place] = (), cap: int = 5, trace_limit: int = 20, concurrency: int = DEFAULT_CONCURRENCY, fallback: bool = True, fatal: tuple[type[BaseException], ...] = (), call_kwargs: Mapping[str, Any] | None = None) -> PathsResult`
 - Produces: `def write_paths_file(result: PathsResult, path: Path) -> None`
-- Produces: `async def map_paths(*, root: Path, commit: str, call: CallFn, resolve: Resolve, changed_lines: Mapping[str, Iterable[int]] | None = None, seeds: Sequence[Seed] = (), places: Sequence[Place] = (), cap: int = 6, trace_limit: int | None = None, scope_paths: Sequence[str] = (), model_fallback: bool = True, concurrency: int | None = None, recoverable: tuple[type[BaseException], ...] = (), fatal: tuple[type[BaseException], ...] = (), cache_dir: Path | None = None, call_kwargs: Mapping[str, Any] | None = None) -> PathsResult`
+- Produces: `class PathsSchemaError(ValueError)` with attribute `pointer: str`
+- Produces: `def paths_schema() -> dict[str, Any]`
+- Produces: `def atomic_write_text(path: Path, text: str) -> None`
+- Produces: `def normalise_rel_path(root: Path, path: str) -> str` (raises `ValueError` for empty, `.`, absolute, `..`, backslash or NUL paths; strips leading `./` and duplicate slashes)
+- Produces: `def normalise_changed_lines(root: Path, changed_lines: Mapping[str, Iterable[int]]) -> dict[str, tuple[int, ...]]`
+- Produces: `class EntryKind(StrEnum)` with values `argparse_subcommand, click_command, typer_command, main_module, project_script, skill_command, hook_command, seed, other`; `KIND_RANK: tuple[EntryKind, ...]` in that order
+- Produces: `class DropStage(StrEnum)` with values `model_fallback_citation, import_reachability, trace_limit, trace, no_changed_line, cap`; `class DropReason(StrEnum)` with values `missing_citation, citation_unverified, malformed_entry, duplicate, unreachable, over_trace_limit, trace_call_failed, malformed_answer, empty_trace, cut_at_entry, no_changed_line_covered, over_cap`
+- Produces: `class BreakReason(StrEnum)` with values `malformed_answer, empty_trace, path_outside_root, missing_file, line_out_of_range, text_mismatch, base_side_citation, entry_mismatch, unconnected_hop, repeated_hop, hop_limit`; `class OutputBreakReason(StrEnum)` (the same values minus `malformed_answer` and `empty_trace`)
+- Produces: `class DiagnosticReason(StrEnum)` with values `parse_error, unresolved_target, unresolved_handler, dynamic_name, seed_not_found, snapshot_mismatch`; `class E2EMatch(StrEnum)` with values `direct_call, cli_argv, cli_runner, subprocess, runpy`
+- Produces: `class Location(path: str, line: int)`; `class HandlerRef(path: str, line: int, symbol: str)`; `class InvokerRecord(kind: EntryKind, name: str, location: Location)`
+- Produces: `class EntryRecord(kind: EntryKind, name: str, source: Literal["discovery", "seed", "model"], location: Location, handler: HandlerRef | None, invocation: str | None, also_invoked_by: tuple[InvokerRecord, ...])`
+- Produces: `class Hop(symbol_called: str, citation: Citation, note: str = "")` where `Citation` is `code_facts.models.Citation`
+- Produces: `class E2ERecord(node_id: str, file: str, line: int, match: E2EMatch, invocation_line: int)`; `class MockedE2ERecord(E2ERecord)` adding `patch_line: int`; `class TestListing(e2e: tuple[E2ERecord, ...] = (), mocks_hop_2: tuple[MockedE2ERecord, ...] = ())`
+- Produces: `class PathRecord(id: str, entry: EntryRecord, hops: tuple[Hop, ...], stops_at: int | None, break_reason: OutputBreakReason | None, changed_lines_covered: tuple[Location, ...], tests: TestListing)`
+- Produces: `class EntryRef(kind: EntryKind, name: str, source: Literal["discovery", "seed", "model"], location: Location | None)`; `class DropRecord(stage: DropStage, reason: DropReason, detail: str, entry: EntryRef)`
+- Produces: `class Diagnostic(path: str, line: int | None, reason: DiagnosticReason, detail: str)`; `class FallbackStatus(status: Literal["ok", "failed", "skipped"], reason: str | None)`; `class TestListingSkip(file: str, reason: Literal["decode_error", "syntax_error"])`
+- Produces: `class PathsResult(schema_version: Literal["paths.v1"], commit: str, scoped: StrictBool, cap: int | None, paths: tuple[PathRecord, ...], dropped: tuple[DropRecord, ...], fallback: FallbackStatus, diagnostics: tuple[Diagnostic, ...], test_listing_skips: tuple[TestListingSkip, ...])`
+- Produces: `class Seed(path: str, line: int | None = None, symbol: str | None = None, name: str | None = None)`; `class Place(path: str, line: int)`
+- Produces: `HOP_LIMIT = 20`; `DEFAULT_CONCURRENCY = 4`; `ALLOWED_TOOLS = ("Read", "Grep", "Glob")`
 
-Satisfies:
-- paths-output-contract:
-  - Public entry points exported from the library: both scenarios
-  - `map_paths` returns a model and writes only cache files: both
-  - Schema file exists and follows the review facts schema style: all three
-  - Top-level document shape: all four
-  - Path object shape: both
-  - Entry object shape: Unknown kind rejected
-  - Hop object shape mirrors the walkthrough Hop: all three
-  - Locations are relative to the snapshot root: Absolute or escaping path rejected; Line zero rejected
-  - Cut paths carry stop and reason together: Mismatched pair rejected
-  - Test-listing shape: Overlap rejected
-  - Every drop is recorded with a reason: Empty reason rejected
-  - Empty results are valid
-  - `write_paths_file` validates before writing: both
-  - `write_paths_file` writes atomically
-  - Byte-stable serialisation: Trailing newline
-  - Round-trip between file and model: both
-  - Schema and models agree: both
-  - Schema validation dependency is declared
-- entry-point-model-fallback: Fallback can be disabled by the caller
+Satisfies: paths-output-contract (Public entry points exported from the library; `map_paths` returns a model and writes only cache files; Schema file exists and follows the review facts schema style; Top-level document shape; Path object shape; Entry object shape; Hop object shape mirrors the walkthrough Hop; Locations are relative to the snapshot root; Cut paths carry stop and reason together — "Mismatched pair rejected"; Test-listing shape — "Overlap rejected"; Every drop is recorded with a reason — "Empty reason rejected"; Empty results are valid; `write_paths_file` validates before writing; `write_paths_file` writes atomically; Byte-stable serialisation — "Trailing newline"; Round-trip between file and model; Schema and models agree; Schema validation dependency is declared); path-scope-and-cap (Changed-line paths are validated and normalised; Cap limits kept paths — "Invalid cap rejected"; Trace limit bounds the number of entries traced — "Invalid trace limit rejected"); entry-point-model-fallback (Fallback can be disabled by the caller)
 
-## 2. Discovery core: snapshot walker, module index, `__main__` entries, seeds, merge and diagnostics
+## 2. Discovery of entries declared in Python source: argparse, click, typer, `__main__`, seeds, merging
 
-This block adds `code_facts/pyindex.py` and `code_facts/entries.py`. `discover_entries` is synchronous, takes no `CallFn`, and never imports snapshot code. `map_paths` now copies `Discovery.diagnostics` into `PathsResult.diagnostics`.
+This block delivers `pyindex.py`, `imports.py` and `entries.discover_entries`. Together they return sorted entries and diagnostics for the Python-declared kinds. Discovery never calls a model, never imports or executes snapshot code (sentinel-writing, raising modules leave no file and raise nothing), and never spawns a subprocess (a test passes with `subprocess.Popen` and `os.system` patched to raise).
 
-**Walker.**
-- Uses `os.scandir`, sorted by name.
-- Prunes `.git`, `node_modules`, `.venv`, `venv`, `__pycache__`, `site-packages`, `build` and `dist` at any depth before descending. Matching is exact and case-sensitive, and the root's own basename is never tested.
-- Does not follow a symlink whose `resolve()` is outside the root.
-- Keeps a visited set of `(st_dev, st_ino)`, so symlink loops inside the root terminate. `RuntimeError` / `OSError` from `resolve()` on a loop is caught. `PermissionError` on an unreadable directory is logged and that directory is skipped.
+**`SnapshotIndex(root)`: walking the tree**
+- One sorted `os.scandir` walk.
+- It skips the directories `.git`, `node_modules`, `.venv`, `venv`, `__pycache__`, `site-packages`, `build` and `dist` at any depth, matching names exactly and case-sensitively. A root that is itself named `site-packages` is still walked.
+- It does not follow a symlink whose `resolve()` is outside `root`. It keeps a `(st_dev, st_ino)` visited set, so a loop inside `root` (`a/loop -> ..`) terminates and each file appears once. Python 3.12's `RuntimeError` from `resolve()` on a symlink loop is caught.
 
-**Repository roots.** A repository root is the nearest directory at or below the snapshot root that contains `.git` (file or directory) or `pyproject.toml`.
+**`SnapshotIndex(root)`: repository roots and module lookup**
+- A file's repository root is the nearest ancestor at or below `root` that contains `.git` (a file or a directory) or `pyproject.toml`.
+- Dotted names resolve against `<repo>`, then `<repo>/src`, and never cross into another repository. A package (`a/__init__.py`) wins over a same-named module (`a.py`), matching `importlib.util.find_spec`.
 
-**Module index.**
-- Searches, in order: the repo root, then `<repo>/src`, then each nested `pyproject.toml` directory and its `src/`. The first root that matches wins, and resolution never crosses into another repository.
-- When both `a.py` and `a/__init__.py` exist, it picks `a/__init__.py`, as CPython does.
+**`SnapshotIndex(root)`: parsing**
+- Each file is parsed once: its bytes go to `ast.parse`, so PEP 263 cookies and BOMs are honoured.
+- The whole-file `tokenize` stream is cached alongside.
+- Any of `SyntaxError`, `UnicodeDecodeError`, `ValueError`, `RecursionError`, `MemoryError` or `OSError` becomes exactly one `parse_error` diagnostic with `line=None`. That holds for NUL bytes, 300-deep brackets, a `-`×200000 expression and a `chmod 000` file, and no file aborts discovery.
+- An empty `.py` file parses to zero entries and produces no diagnostic.
 
-**Parse cache.** Files are passed to `ast.parse` as bytes, so PEP 263 cookies and BOMs are honoured. `SyntaxError` (including NUL bytes), `UnicodeDecodeError`, `ValueError`, `RecursionError` and `MemoryError` each produce exactly one `parse_error` diagnostic with `line=None`. One bad file never aborts discovery.
+**`ImportGraph`**
+- `import a.b.c` adds edges to `a/__init__.py`, `a/b/__init__.py` and `a/b/c.py`.
+- `from x import y` adds edges to `x`, and to `x/y.py` when that file exists.
+- `from . import b` is handled (`module=None`).
+- A relative import resolves against the importer's package: the file's own directory for an `__init__.py`.
+- A `level` deeper than the package adds no edge, as do unparseable modules and third-party imports.
+- `reaches` terminates on cycles.
 
-**`__main__` scanner.**
-- A package `__main__.py` gives an entry at line 1, named with the dotted package name.
-- A top-level `if __name__ == "__main__":` gives an entry at the `if` line. It is recognised with either operand order and either quote style, only directly in `Module.body`, and only in non-test files. Test files are `test_*.py`, `*_test.py`, `conftest.py` and anything under `tests/`.
-- When one `__main__.py` has both forms, it emits only the line-1 package entry and resolves the handler from the guard body.
-- A zero-byte `__main__.py` emits no entry. It records `parse_error`, `line=None`, detail `"empty file"`.
-- The handler resolves when the body's single top-level statement is a call to `Name(...)` or `mod.Name(...)`. It also resolves through `sys.exit(X())`, `raise SystemExit(X())` and `asyncio.run(X())`, picking `X`, not `sys.exit`.
-- A single call whose target is outside the repository gives `handler=None` plus an `unresolved_handler` diagnostic.
+**argparse**
+- One entry per `add_parser(<literal>)` on an `add_subparsers()` result in the same function. Nested names are space-joined, and `name="x"` given as a keyword is handled.
+- A non-literal first argument (`Name`, f-string, `BinOp`, `Starred`) produces exactly one `dynamic_name` diagnostic.
+- Handlers resolve through `set_defaults(func=<Name>)`, or through a dispatch-dict literal in the same module.
+- A dispatch dict in another module of the same repository also counts, but only when the parser module `reaches` it and that module calls `<DICT>[args.<dest>](...)`.
+- Known edges run to the handler's `def` line:
+  - from the dispatch call line, or else the `set_defaults` or dict-entry line;
+  - and in every resolved case, also from the `add_parser` line.
 
-**Seeds.**
-- Seeds are sorted before processing.
-- A `line` seed resolves to the innermost `FunctionDef` / `AsyncFunctionDef` whose span, including its decorator lines, contains that line.
-- A `symbol` seed resolves to the last top-level definition with that name.
-- A missing file, a line out of range, an unknown symbol, a module-level line with no enclosing function, an absolute path, a `..` path, or a path that reaches outside the root through a symlink each give `seed_not_found`.
-- A seed into an unparseable file gives only that file's `parse_error`.
-- Two identical seeds give one entry.
+  On the live pr_pipeline shape, `open`, `edit` and `render` resolve to `cmd_open`, `cmd_edit` and `cmd_render` in `commands.py`, with edges from `commands.py:409`.
+- A synthetic `if args.command == "x"` fixture keeps `handler=None` at its `add_parser` line.
+- A handler imported from a third-party package becomes `handler=None` plus an `unresolved_handler` diagnostic.
 
-**Merge.**
-- Entries are grouped by `(handler.path, handler.line)`. Entries with `handler=None` are grouped only when their `location` is identical.
-- The kept entry is the one with the smallest `(KIND_RANK, location.path, location.line)`.
-- `also_invoked_by` is sorted by `(path, line, kind, name)`.
-- `known_edges` are unioned, de-duplicated and sorted.
+**`main_module`**
+- A package `__main__.py` produces an entry at line 1 named with the dotted package name.
+- A non-test top-level `if __name__ == "__main__":` produces an entry at the `if` line. Test files (`test_*.py`, `*_test.py`, `conftest.py`, anything under `tests/`) are excluded.
+- The handler is the single called function. `sys.exit(main())`, `raise SystemExit(main())` and `asyncio.run(main())` are unwrapped to `main`. A callee that resolves outside the repository is never a handler.
+- A `__main__.py` whose body also has a guard produces a single entry.
 
-**Output order.** Entries are sorted by `(location.path, location.line, kind, name)`. Diagnostics are sorted by `(path, -1 if line is None else line, reason, detail)`.
+**Seeds**
+- A seed resolves to the innermost `def` or `async def` whose span, counting from its first decorator line, contains the line. A seed can also name a symbol directly.
+- A missing file, a line outside `1..len(lines)`, an unknown symbol, an absolute or escaping path, or no enclosing function each produce one `seed_not_found` diagnostic and no exception.
+- The output does not depend on the order the seeds are given in.
 
-**Tests.**
-- A spy `CallFn` records zero calls.
-- `subprocess.Popen` and `os.system` are patched to raise, and discovery still runs.
-- A sentinel `__main__.py` that writes a file and raises at import still yields its entry, and the file is never created.
-- A seed duplicating a `main_module` handler merges into it.
-- Test helper `tests/repo_fixture.py::build_repo` writes trees with `shutil.copytree(..., dirs_exist_ok=True)` semantics and runs `git init` plus a commit with a fixed author and `GIT_CEILING_DIRECTORIES`.
-- `tests/conftest.py` sets `collect_ignore_glob = ["fixtures/*"]`, so fixture `test_*.py` and `conftest.py` files are never collected.
+**click and typer**
+- The decorator receiver must resolve to a `click.group`/`click.command` binding, a `@<group>.group` result, `app.cli` (Flask), or `typer.Typer(...)`. So Dash `@app.callback(...)` and discord `@bot.command()` produce no entry.
+- Click accepts both `@cli.command` and `@cli.command()`. For Typer, only the call form registers a command.
+- Default names are `function_name.lower().replace("_", "-")`, with no suffix stripping, so `Deploy_All` becomes `deploy-all`.
+- Explicit literal names are kept verbatim. An empty explicit name falls back to the function name, and a non-literal name gives `dynamic_name`.
+- Group prefixes and `add_typer(name=…)` prefixes are space-joined. A nameless `add_typer` adds no prefix.
+- The handler is the decorated `def`, and the known edge runs from the decorator line to the `def` line.
 
-Run it with `uv run pytest tests/test_discovery_core.py`.
+**Output**
+- Merging keys on `(handler.path, handler.line)`, or on `location` when there is no handler. The entry with the lowest `KIND_RANK`, then the smallest location, wins. The others go into `also_invoked_by`, sorted by `(path, line, kind)`, and their edges are de-duplicated and unioned. Unresolved subcommands on different lines stay separate.
+- Entries are sorted by `(location.path, location.line, kind, name)` and diagnostics by `(path, line or 0, reason)`.
+- Every path is POSIX and relative to the snapshot root, including in multi-repository fixtures.
+- Two runs, and runs with seeds `[A, B]` and `[B, A]`, serialise byte-identically.
 
-Interfaces:
-- Produces: `def build_index(root: Path) -> PyIndex`
-- Produces: `class PyIndex` with `root: Path`, `def files(self) -> list[str]`, `def parse(self, rel: str) -> ast.Module | None`, `def parse_error(self, rel: str) -> str | None`, `def repo_root(self, rel: str) -> str`, `def module_name(self, rel: str) -> str | None`, `def resolve_module(self, dotted: str, *, from_file: str, extra_roots: Sequence[str] = ()) -> str | None`, `def resolve_symbol(self, rel: str, name: str) -> HandlerRef | None`
-- Produces: `class Discovery(NamedTuple): entries: list[Entry]; diagnostics: list[Diagnostic]`
-- Produces: `def discover_entries(root: Path, *, seeds: Sequence[Seed] = (), index: PyIndex | None = None) -> Discovery`
-- Produces: `def build_repo(dest: Path, tree: Mapping[str, str | bytes], *, git: bool = True) -> Path` (in `tests/repo_fixture.py`)
-- Consumes: Block 1: `class Entry(_Strict): kind: EntryKind; name: str; location: Location; handler: HandlerRef | None; invocation: str | None; known_edges: list[KnownEdge]; also_invoked_by: list[Invoker]; source: Literal["discovered", "seed", "model"]`
-- Consumes: Block 1: `class Diagnostic(_Strict): path: str; line: int | None; reason: Literal["parse_error", "unresolved_target", "unresolved_handler", "dynamic_name", "seed_not_found"]; detail: str`
-- Consumes: Block 1: `class Seed(_Model): path: str; line: int | None = None; symbol: str | None = None; name: str | None = None`
-- Consumes: Block 1: `KIND_RANK: Mapping[EntryKind, int]`
-- Consumes: Block 1: `async def map_paths(*, root: Path, commit: str, call: CallFn, resolve: Resolve, changed_lines: Mapping[str, Iterable[int]] | None = None, seeds: Sequence[Seed] = (), places: Sequence[Place] = (), cap: int = 6, trace_limit: int | None = None, scope_paths: Sequence[str] = (), model_fallback: bool = True, concurrency: int | None = None, recoverable: tuple[type[BaseException], ...] = (), fatal: tuple[type[BaseException], ...] = (), cache_dir: Path | None = None, call_kwargs: Mapping[str, Any] | None = None) -> PathsResult`
-
-Satisfies:
-- entry-point-discovery:
-  - Discovery is deterministic and makes no model call: both scenarios
-  - Discovery never imports or runs target code: the `__main__.py` half of "Module with import-time side effects"
-  - Excluded and unsafe locations are not scanned: both
-  - `__main__` modules and packages are discovered: all four
-  - Caller-supplied seeds become entries: all three
-  - Discovery output is stably ordered: both
-
-## 3. Trace slice: one gated trace per entry, re-ask, drops, ordering and ids
-
-**Calling the model.**
-- `map_paths` now traces every discovered entry, under `bounded(concurrency or DEFAULT_CONCURRENCY)`. `concurrency < 1` raises `ValueError`.
-- Each entry gets one `ask(..., schema=TraceAnswer)`. `allowed_tools` is forced to exactly `["Read", "Grep", "Glob"]` and `cwd=str(root)`, both layered over `call_kwargs`.
-- Answers are kept in an in-memory dict keyed by `canonical_digest`. The digest is `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)` over builtins with str keys only, then SHA-256. The key covers commit, entry `(kind, location, handler)`, sorted compressed changed ranges, sorted edges and places, and `TRACE_PROMPT_VERSION`.
-
-**Changes to `code_facts.explore.ask`.** All are backward compatible, and the existing explore tests stay green:
-- a new keyword `schema`, defaulting to `ExploreOutput`;
-- `dict`, `str` and `bytes` results are normalised with `model_validate` / `model_validate_json` before `model_dump`;
-- a `budget_label` in `call_kwargs` overrides the default instead of raising `TypeError`;
-- a stored error is the first non-empty line, cut to 200 characters, or the exception type name when there is none.
-
-**Validation before any `CallFn` call.**
-- `normalise_changed_lines` materialises each iterable once, so generators work.
-- It raises `ValueError` for:
-  - `str` / `bytes` values, `bool` or non-`int` lines, and lines below 1;
-  - absolute, escaping or NUL-containing paths.
-- It strips a leading `./` and tolerates missing files.
-- Places are validated the same way.
-
-**Prompt and gate.**
-- `trace_entry` starts with `TRACE_MARKER`. It gives the kind, location, handler symbol and commit, the changed ranges or the literal "There is no change scope; trace the chain to the entry's last effect.", the fenced edges and places, the cap of 20, `citation_rules()`, `UNTRUSTED_RULES` and `schema_json(TraceAnswer)`. An empty `invocation` is rendered as `(empty)`, because `fence("")` yields nothing.
-- `TraceAnswer.hops` is required. A `{}`, a misspelt key or a stored `{"error": …}` is therefore `malformed_answer` or `trace_call_failed`, never `empty_trace`.
-- `check_trace` applies rules 1–6 in order:
-  1. `path_outside_root`: empty path, `.`, an absolute path (even inside the root), a `..` part, a backslash, NUL, or a leading `//`. Accepted paths are stored normalised.
-  2. `missing_file`: `resolve(path, "head")` returns `None`; a bad sha; or `git cat-file -t <sha>:<rel>` is not `blob`, which covers directories and gitlinks. A missing `git` binary raises `FileNotFoundError` instead.
-  3. `line_out_of_range`: uses the git line count `text.count("\n") + (1 if text and not text.endswith("\n") else 0)`, so a zero-byte file has 0 lines.
-  4. `text_mismatch`: through `check_quote`. Empty or whitespace-only quotes fail here.
-  5. `base_side_citation`.
-  6. `entry_mismatch`: hop 1 only. Hop 1 must match the location file and line, or the handler path and line.
-- `hop_limit`: when there are more than 20 hops, the first 20 are kept and checked. If they all pass, the result is `broken_at=21`, published `stops_at=20`, and there is no re-ask.
-
-**Re-ask and drops.**
-- Every other break gets exactly one `retrace_entry` call, starting with `RETRACE_MARKER`. It carries the broken index, the reason literal, the detail and the accepted prefix.
-- The re-answer replaces the first answer, even when it is worse. A test documents this.
-- If the re-answer still breaks at hop 1, the entry is dropped at stage `trace` with reason `malformed_trace`, `empty_trace` or `cut_at_entry`.
-- An error type listed in `recoverable` gives a `trace_call_failed` drop.
-- Any other error, or a type in `fatal`, propagates unchanged, never as an `ExceptionGroup`, and nothing further is called for that entry.
-
-**Ordering and ids.** Kept paths are sorted by `-len(changed_lines_covered)` (always 0 at this stage), then hop count ascending, then `KIND_RANK`, then path, then line. Ids `p1..pN` are given after sorting. Kept plus dropped equals the number of entries.
-
-**Test helpers and conventions.**
-- `tests/fakes.py::FakeCall` keys answers by marker and by the entry's `path:line`. It answers any unmarked prompt with `schema.model_validate({"entries": []})`. It records `calls`, `trace_calls` and `max_in_flight`, and can add random delays or raise chosen errors.
-- Fixture hop chains name hop n+1's symbol inside hop n's cited lines, so these tests still pass once Block 4 adds connectivity.
-- Scoped tests choose changed lines that the faked hops cover and import-reach. They also pass `model_fallback=False` whenever they assert total call counts, so they still pass once Blocks 11 and 12 land.
-
-**Tests run in this block.**
-- One end-to-end run on seed and `__main__` fixtures, including a `repo_b/cli.py` multi-repo root.
-- Byte-identical `paths.json` across concurrency 1 and 8 with random delays.
-- Byte-identical `paths.json` for entries traced in two different orders with fresh caches.
-
-Run it with `uv run pytest tests/test_trace_slice.py`.
+Exercise this with `discover_entries(fixture_root)` on the fixtures under `tests/fixtures/paths/`.
 
 Interfaces:
-- Produces: `class AnswerHop(_Model): symbol_called: str; path: str; line_start: int; line_end: int; quote: str; note: str = ""; side: Literal["base", "head"] = "head"`
-- Produces: `class TraceAnswer(_Model): hops: list[AnswerHop]`
-- Produces: `class GateOutcome(NamedTuple): accepted: list[Hop]; broken_at: int | None; reason: BreakReason | None; detail: str`
-- Produces: `def check_trace(hops: Sequence[AnswerHop], *, entry: Entry, edges: Sequence[KnownEdge], places: Sequence[Place], resolve: Resolve, root: Path) -> GateOutcome`
-- Produces: `TRACE_PROMPT_VERSION: str = "trace.v1"`, `TRACE_MARKER: str = "<!-- code_facts:trace_entry -->"`, `RETRACE_MARKER: str = "<!-- code_facts:retrace_entry -->"`
-- Produces: `def trace_entry(*, entry: Entry, commit: str, changed: Mapping[str, Sequence[int]] | None, edges: Sequence[KnownEdge], places: Sequence[Place]) -> str`
-- Produces: `def retrace_entry(*, entry: Entry, commit: str, changed: Mapping[str, Sequence[int]] | None, edges: Sequence[KnownEdge], places: Sequence[Place], broken_at: int, reason: BreakReason, detail: str, accepted: Sequence[Hop]) -> str`
-- Produces: `async def ask(key: str, prompt: str, call: CallFn, answers: MutableMapping[str, dict], *, call_kwargs: dict[str, Any], errors: list[str], recoverable: tuple[type[BaseException], ...] = (Exception,), fatal: tuple[type[BaseException], ...] = (), progress: Callable[[str], None] | None = None, schema: type[BaseModel] = ExploreOutput) -> None`
-- Produces: `def canonical_digest(obj: Any) -> str`
-- Produces: `def normalise_changed_lines(root: Path, changed_lines: Mapping[str, Iterable[int]]) -> dict[str, list[int]]`
-- Produces: `def normalise_places(root: Path, places: Sequence[Place]) -> list[Place]`
-- Produces: `DEFAULT_CONCURRENCY: int = 4`
-- Produces: `class FakeCall` with `async def __call__(self, prompt: str, schema: type[BaseModel], **kwargs: Any) -> Any` and attributes `calls: list[tuple[str, type[BaseModel], dict]]`, `trace_calls: int`, `max_in_flight: int` (in `tests/fakes.py`)
-- Produces: `def prefix_resolver(root: Path) -> Resolve` (in `tests/repo_fixture.py`)
-- Consumes: Block 1: `class Hop(_Strict): symbol_called: str; path: str; line_start: int; line_end: int; quote: str; note: str = ""; side: Literal["base", "head"] = "head"`
-- Consumes: Block 1: `class TracedPath(_Strict): id: str; entry: Entry; hops: list[Hop]; stops_at: int | None; break_reason: PublishedBreakReason | None; changed_lines_covered: list[Location]; tests: E2EListing`
-- Consumes: Block 1: `class DropRecord(_Strict): stage: DropStage; entry: Entry; reason: DropReason`
-- Consumes: Block 1: `class Place(_Model): path: str; line: int`
-- Consumes: Block 2: `def discover_entries(root: Path, *, seeds: Sequence[Seed] = (), index: PyIndex | None = None) -> Discovery`
-- Consumes: Block 2: `def build_repo(dest: Path, tree: Mapping[str, str | bytes], *, git: bool = True) -> Path`
+- Produces: `class SnapshotIndex` with `def __init__(self, root: Path) -> None`, `def files(self) -> tuple[str, ...]`, `def repo_root(self, rel: str) -> str`, `def module_file(self, repo: str, dotted: str, extra_roots: Sequence[str] = ()) -> str | None`, `def module_name(self, rel: str) -> str | None`, `def parse(self, rel: str) -> ast.Module | None`, `def tokens(self, rel: str) -> list[tokenize.TokenInfo] | None`, `def text_lines(self, rel: str) -> list[str] | None`, `def parse_failure(self, rel: str) -> Diagnostic | None`, `def enclosing_def(self, rel: str, line: int) -> HandlerRef | None`
+- Produces: `def build_import_graph(index: SnapshotIndex) -> ImportGraph`; `class ImportGraph` with `def imports(self, rel: str) -> frozenset[str]` and `def reaches(self, src: str, dst: str) -> bool`
+- Produces: `class KnownEdge(from_: Location = Field(alias="from"), to: Location)`
+- Produces: `class DiscoveredEntry(kind: EntryKind, name: str, source: Literal["discovery", "seed"], location: Location, handler: HandlerRef | None, invocation: str | None, known_edges: tuple[KnownEdge, ...], also_invoked_by: tuple[InvokerRecord, ...])`
+- Produces: `class Discovery(entries: tuple[DiscoveredEntry, ...], diagnostics: tuple[Diagnostic, ...])`
+- Produces: `def discover_entries(root: Path, seeds: Sequence[Seed] = ()) -> Discovery`
+- Produces: `def merge_entries(entries: Iterable[DiscoveredEntry]) -> tuple[DiscoveredEntry, ...]`
+- Produces: `def to_entry_record(entry: DiscoveredEntry) -> EntryRecord`
+- Consumes: Block 1: `class Location(path: str, line: int)`; `class HandlerRef(path: str, line: int, symbol: str)`; `class InvokerRecord(kind: EntryKind, name: str, location: Location)`; `class Diagnostic(path: str, line: int | None, reason: DiagnosticReason, detail: str)`; `class Seed(path: str, line: int | None = None, symbol: str | None = None, name: str | None = None)`; `class EntryKind(StrEnum)`; `KIND_RANK: tuple[EntryKind, ...]`; `class EntryRecord(kind: EntryKind, name: str, source: Literal["discovery", "seed", "model"], location: Location, handler: HandlerRef | None, invocation: str | None, also_invoked_by: tuple[InvokerRecord, ...])`; `def normalise_rel_path(root: Path, path: str) -> str`
 
-Satisfies:
-- path-tracing:
-  - One trace agent per traced entry: One request per surviving entry
-  - Trace agents are read-only: both
-  - Model calls go only through the caller's CallFn: both
-  - Trace prompt carries the entry, the scope and known edges: No changed lines given
-  - An answer is one linear chain of hops: all three
-  - Hops cite head-side code only: both
-  - Hop limit of 20: both
-  - Empty or malformed answers are dropped, not fatal: both
-  - Every answer passes through the trace gate
-  - Bounded concurrency: both
-  - Snapshot-relative locations: both
-  - Deterministic trace output
-- trace-gate:
-  - Gate is deterministic and makes no model call: both
-  - Gate does not import the walkthrough pipeline
-  - Break reasons come from a fixed set
-  - Malformed or empty answers break at hop 1: both
-  - Hop paths stay inside the snapshot root: all three
-  - Every hop citation re-reads at the commit: all four
-  - Citations are head-side only: both
-  - Hop 1 is anchored at the entry: all three
-  - Traces are capped at 20 hops: both
-  - The first broken hop decides the outcome: Later hops ignored after a break
-  - A broken trace gets exactly one re-ask: all four
-  - An unrepaired trace is cut at the break: all three
-  - Re-asks use the resumable answer cache: Order independence
-  - CallFn failures during a re-ask propagate
-- paths-output-contract:
-  - Locations are relative to the snapshot root: Multi-repository snapshot
-  - Cut paths carry stop and reason together: Complete path; Cut path
-  - Ids are contiguous and follow array order: both
-  - Changed-line coverage field: Unscoped coverage empty
-  - Byte-stable serialisation: Concurrency does not affect output
-- path-scope-and-cap:
-  - Changed-line paths are validated and normalised: Absolute path rejected; Path escaping the snapshot rejected; Non-positive line rejected; Equivalent spellings normalise to one file
-  - Deterministic path ordering: Tie broken by kind then location; Independent of completion order
+Satisfies: entry-point-discovery (Discovery is deterministic and makes no model call; Discovery never imports or runs target code; Entry record shape; Paths are relative to the snapshot root, including multi-repository snapshots; Excluded and unsafe locations are not scanned; argparse subcommands are discovered; argparse handlers resolve through set_defaults and dispatch dicts only, as amended; argparse dispatch lines become known edges; click and typer commands are discovered; __main__ modules and packages are discovered; Caller-supplied seeds become entries; Entries resolving to the same handler are merged — "Unresolved handlers not merged" and "Seed duplicating a discovered entry"; Discovery output is stably ordered; Every skipped candidate is explained)
 
-## 4. Gate connectivity: name references, known edges, caller places and repeated hops
+## 3. Discovery of entries declared in config and docs: `[project.scripts]`, `SKILL.md` commands, hook commands
 
-`check_trace` gains rule 7, `unconnected_hop`, and rule 8, `repeated_hop`. They run after rules 1–6, for each hop n+1 where n ≥ 1.
+This block extends `discover_entries` with three new entry kinds. Each kind resolves against the module index from Block 2, carries a handler as defined in D6, and merges across kinds.
 
-Hop n+1 is connected if any of these holds:
-- **(a) Name reference.** One of the name candidates of `symbol_called` is a `NAME` token inside hop n's cited line range. The candidates are: the full dotted text with call arguments stripped; each dotted suffix; and the last segment, with `.delay`, `.apply_async`, `.s`, `.si` and `.signature` removed.
-  - For `.py` files, the whole file at the commit is tokenized once with `tokenize.generate_tokens`, and tokens are filtered by `tok.start[0]`. That avoids fragment problems such as dedents, ranges that start inside docstrings, and stray `IndentationError`.
-  - If the whole file raises `TokenError` or any `SyntaxError`, including `IndentationError` and `TabError`, the cited lines are matched by regex instead, with quoted spans and `#` comments stripped first.
-  - Names inside f-string replacement fields count on Python 3.12+. Names only in comments, plain strings or docstrings do not.
-  - Non-`.py` files never connect by name.
-  - An empty `symbol_called` can only connect through (b) or (c).
-- **(b) Known edge.** An edge in the `edges` argument runs from a line inside hop n's range to a line inside hop n+1's range. `map_paths` passes `entry.known_edges`, which already includes the edges of merged invokers.
-- **(c) Caller place.** Hop n+1's range contains a place from `places`. A place never excuses a failed citation.
+**`[project.scripts]`**
+- Every `pyproject.toml` is read as bytes, decoded as `utf-8-sig`, and parsed with `tomllib.loads`.
+- These all become one `parse_error` diagnostic for the whole file, and other files still yield their entries:
+  - `TOMLDecodeError`, including duplicate keys;
+  - `UnicodeDecodeError`;
+  - `RecursionError`.
+- Each plain key under a `[project.scripts]` header becomes a `project_script` entry:
+  - the key's line is found by a line scan that handles quoted keys;
+  - extras suffixes are stripped, and spaces around `:` are allowed (`"pkg.mod : main [x]"` resolves like `pkg.mod:main`);
+  - a known edge runs from the key line to the target `def`.
+- These shapes produce one `unresolved_target` diagnostic and never crash:
+  - a module-only value, a non-string value, or a `module:obj.attr` value;
+  - an inline-table or dotted-key `scripts`, reported at the `[project]` header line;
+  - a target that does not resolve under the declaring project's own roots (nested `scripts/` projects never bind to another project's same-named package).
+- `dynamic = ["scripts"]` and `[tool.poetry.scripts]` yield no entries and no diagnostic.
 
-Rule 8 breaks a hop whose normalised `(path, line_start, line_end)` equals that of any earlier hop. For example, A→B→A breaks at hop 3. Ranges that overlap but are not identical are accepted.
+**`SKILL.md` commands**
+- Only backtick fences whose first info-string word is exactly `bash`, `sh`, `shell`, `zsh` or `console` are scanned. Prose, `python` fences, untagged fences and tilde fences are ignored.
+- Inside a `console` fence, only lines that start with `$ ` are commands. The prompt is stripped and output lines are never matched.
+- Line continuations (`\`, plus `> ` inside `console`) are joined.
+- If `shlex.split` raises `ValueError` (an unbalanced quote), that line gets one `parse_error` diagnostic and scanning continues.
+- An empty token list is not a candidate.
+- Tokens from the first token that starts with `#` onward are discarded, so an inline comment never becomes the subcommand.
+- Handling of command prefixes:
+  - leading `NAME=value` assignments are removed;
+  - a `PYTHONPATH=` value is split on `:`, empty components are dropped, and each component becomes a search root, left to right;
+  - `cd <dir> &&` adds a search root;
+  - `uv run --directory DIR` and `--project DIR` add their roots right after the `PYTHONPATH` roots;
+  - `--frozen`, `--no-sync`, `--quiet`/`-q`, `--package NAME`, `--extra NAME` and `--with SPEC` are skipped;
+  - any other `uv run` option, an `-mpkg` token, `python -I`/`-E`/`-P`, or an unknown `$VAR` gives `unresolved_target`.
+- Only `${CLAUDE_SKILL_DIR}` and `${CLAUDE_PLUGIN_ROOT}` are expanded.
+- The search-root order is the one in the spec.
+- The entry is named `<skill dir>: <module> [<first positional>]`, with `invocation` holding the joined command.
+- The known edge goes to the resolved subcommand's handler if there is one. Otherwise it goes to that subcommand's `add_parser` line. Otherwise it goes to `<module>/__main__.py:1`; for example, a placeholder `<command>` argument matches no subcommand.
+- `handler` is the edge target as a `HandlerRef`, with symbol `__main__` for a line-1 fallback. This lets a `SKILL.md` command merge with the package's `main_module`.
 
-The rule-order test needs two cases. A hop that is both out of range and unconnected reports `line_out_of_range`. As a control, the same hop with an in-range line reports `unconnected_hop`. Re-asks triggered by `unconnected_hop` and `repeated_hop` reuse the Block 3 machinery.
+**Hook commands**
+- Only `hooks.<event>[].hooks[]` objects in `hooks.json` and `.claude/settings*.json` are read, and only those with `"type": "command"` and a string `command`.
+- `statusLine` and `prompt` hooks are ignored, as is a file without the `"hooks"` wrapper.
+- These become `parse_error` and do not crash:
+  - an empty file, invalid JSON, or a BOM-prefixed file (it is decoded as `utf-8-sig`);
+  - `RecursionError`;
+  - wrongly typed shapes such as `"hooks": null` or a list.
+- Each command's line is found by searching the raw text for `json.dumps(cmd, ensure_ascii=False)` and then for `json.dumps(cmd)`. Repeated strings are assigned in document order. If neither form is found, the result is `unresolved_target` at line 1.
+- The entry is named `<event>:<matcher>`, or `<event>` when there is no matcher.
+- Variable expansion:
+  - `${CLAUDE_PLUGIN_ROOT}` becomes the nearest ancestor that contains `.claude-plugin/plugin.json`, or else the parent of the hooks file's directory;
+  - `$CLAUDE_PROJECT_DIR` and `${CLAUDE_PROJECT_DIR}` become the repository root, including the quoted form `"$CLAUDE_PROJECT_DIR"/x.sh`;
+  - any other variable, such as `$CLAUDE_CONFIG_DIR`, gives `unresolved_target`.
+- Target resolution:
+  - only the first simple command, after an optional `cd <dir> &&`, is considered, so `mkdir …; bash x.sh` resolves nothing and gives `unresolved_target`;
+  - a `python -m` target uses the `SKILL.md` rules;
+  - a Python script uses the `main_module` handler rules;
+  - any other existing file resolves to line 1;
+  - a missing file gives `unresolved_target`.
 
-Run it with `uv run pytest tests/test_gate_connectivity.py`. The tests call `check_trace` directly and also go through `map_paths` with places.
-
-Interfaces:
-- Produces: `def check_trace(hops: Sequence[AnswerHop], *, entry: Entry, edges: Sequence[KnownEdge], places: Sequence[Place], resolve: Resolve, root: Path) -> GateOutcome` (now applies rules 7 and 8)
-- Consumes: Block 3: `def check_trace(hops: Sequence[AnswerHop], *, entry: Entry, edges: Sequence[KnownEdge], places: Sequence[Place], resolve: Resolve, root: Path) -> GateOutcome`
-- Consumes: Block 3: `class FakeCall` with `async def __call__(self, prompt: str, schema: type[BaseModel], **kwargs: Any) -> Any`
-- Consumes: Block 1: `class KnownEdge(_Strict): from_: Location = Field(alias="from"); to: Location`
-
-Satisfies:
-- trace-gate:
-  - Consecutive hops are connected by a reference or a known edge: all three scenarios
-  - Caller-supplied places are accepted as connections: both
-  - Repeated hops break the path
-  - The first broken hop decides the outcome: Multiple failures on one hop
-
-## 5. argparse subcommands: entries, handlers, dispatch edges and CLI targets
-
-This block adds the argparse scanner to `entries.py`.
-
-**Which `add_parser` calls it recognises.**
-- Calls on names bound to `add_subparsers(...)` in the same function or module scope.
-- Chained calls of the form `parser.add_subparsers(...).add_parser(...)`.
-- One level of helper registration, where a function parameter receives a bound subparsers object at a call site in the same repository.
-
-**Naming.**
-- Nested names are joined with single spaces.
-- A name counts as literal when it is an `ast.Constant` str (which includes folded implicit concatenation), a `JoinedStr` made only of constants, or a `name=` keyword.
-- Any other name, a missing name, or `""` gives `dynamic_name` and no entry.
-- Duplicate literal names give two entries. A test pins this.
-
-**Handlers.**
-- Resolved only from `set_defaults(func=Name)`, `set_defaults(func=mod.attr)`, or a dispatch dict literal in the same module as the `add_parser` call. The target is followed through same-repo imports.
-- `lambda`, `partial`, other keys, third-party targets and dicts in other modules give `handler=None` plus `unresolved_handler`.
-- `args.command == "x"` comparisons are ignored.
-
-**Edges.** A known edge runs from the `args.func(...)` or `HANDLERS[...](...)` call line in that module to the `def` line. When no such call exists, it runs from the `set_defaults` line or the dict entry line instead.
-
-**Two `pr_pipeline` fixtures.** Both yield `open`, `edit` and `render` with `handler=None` at their `add_parser` lines:
-- the spec shape, which dispatches on `args.command`;
-- the live shape, with a `COMMANDS` dict in a sibling `commands.py`.
-
-**End-to-end tests.**
-- A `FakeCall` answers hop 1 at an `add_parser` line and hop 2 at `cmd_open`. With no place, the result is two calls and a path with `stops_at=1` and `unconnected_hop`. With a place at `cmd_open`, the path is accepted.
-- `write_paths_file` output keeps kind `argparse_subcommand` and the `add_parser` line.
-- The trace prompt for a resolved subcommand contains the dispatch edge.
-
-Run it with `uv run pytest tests/test_argparse.py`.
-
-Interfaces:
-- Produces: `class SymbolRef(NamedTuple): module: str; path: str; symbol: str`
-- Produces: `class CliTargets(NamedTuple): programs: list[SymbolRef]; apps: list[SymbolRef]; tokens: tuple[str, ...]; aliases: tuple[str, ...]`
-- Produces: `def cli_targets(entry: Entry, index: PyIndex) -> CliTargets | None` (for `argparse_subcommand`:
-  - `programs` holds the function that builds the parser and calls `add_subparsers`, plus a module-level `main` that calls it;
-  - `apps=[]`;
-  - `tokens` is `entry.name.split(" ")`;
-  - `aliases` are the literal `aliases=` values;
-  - other kinds return `None`)
-- Produces: `def find_subcommand(entries: Sequence[Entry], package_dir: str, token: str) -> Entry | None` (returns the `argparse_subcommand` entry whose `location.path` starts with `package_dir + "/"` and whose `name` or alias equals `token`; ties go to the smallest `(location.path, location.line)`)
-- Consumes: Block 2: `class PyIndex` with `def resolve_symbol(self, rel: str, name: str) -> HandlerRef | None` and `def parse(self, rel: str) -> ast.Module | None`
-- Consumes: Block 2: `def discover_entries(root: Path, *, seeds: Sequence[Seed] = (), index: PyIndex | None = None) -> Discovery`
-- Consumes: Block 3: `def trace_entry(*, entry: Entry, commit: str, changed: Mapping[str, Sequence[int]] | None, edges: Sequence[KnownEdge], places: Sequence[Place]) -> str`
-- Consumes: Block 4: `def check_trace(hops: Sequence[AnswerHop], *, entry: Entry, edges: Sequence[KnownEdge], places: Sequence[Place], resolve: Resolve, root: Path) -> GateOutcome`
-
-Satisfies:
-- entry-point-discovery:
-  - argparse subcommands are discovered: all three scenarios
-  - argparse handlers resolve through set_defaults and dispatch dicts only: all four
-  - argparse dispatch lines become known edges: both
-  - Entries resolving to the same handler are merged: Unresolved handlers not merged
-- path-tracing: Trace prompt carries the entry, the scope and known edges: Prompt contents
-- paths-output-contract: Entry object shape: Known discovery case keeps the add_parser line
-- trace-gate: Discovery edges are accepted as connections: `args.command` dispatch
-
-## 6. click and typer commands
-
-This block adds the click/typer scanner. A decorator only counts when its receiver can be traced back to one of:
-- a `click.group`-decorated function;
-- `click.Group(...)` or `typer.Typer(...)`, including the aliases `import click as c`, `from click import command, group` and `from typer import Typer`.
-
-So discord.py `@bot.command()`, Dash `@app.callback(...)` and Slack `@app.command("/x")` produce no entries.
-
-**Accepted forms.**
-- The bare `@cli.command` and `@cli.group` forms count for click (8.1+).
-- A bare `@app.command` counts for typer and registers nothing.
-- `async def` is recognised.
-
-**Naming.**
-- A literal name given positionally or as `name=` is used verbatim. `""` falls back to the derived name.
-- Click derived names use `f.__name__.lower().replace("_", "-")`, then strip a trailing `-command`, `-cmd`, `-group` or `-grp` (Click ≥ 8.2). So `sync_cmd` becomes `sync`, and `Deploy_All` becomes `deploy-all`.
-- Typer derived names lowercase and replace `_` with `-` but strip nothing.
-- Entry names are prefixed by the parent group names, including the root group's own name, as the spec expects for `cli build-all`.
-- Typer group names come from `add_typer(name=)`, then `Typer(name=)`. A sub-app with neither has its commands merged into the parent (Typer ≥ 0.15).
-- A name that is not a literal gives `dynamic_name`.
-- Duplicate names under one group give two entries. A test pins this.
-
-**Location and edges.** The location is the decorator line. The handler is the `def` line. The known edge runs from the decorator line to the `def` line.
-
-**`cli_targets` for click/typer entries.** It returns:
-- `apps=[<root group/app SymbolRef>]`;
-- `tokens` = the name path after the root token;
-- `tokens=()` for a single-command typer app with no callback, because Typer omits the token there;
-- `programs=[]`.
-
-**Tests.** The sentinel fixture's click module, which writes a file and raises at import, still yields its entries. A caller seed on a `click_command` handler is folded into that entry's `also_invoked_by`.
-
-Run it with `uv run pytest tests/test_click_typer.py`.
-
-Interfaces:
-- Produces: `def cli_targets(entry: Entry, index: PyIndex) -> CliTargets | None` (now also returns `CliTargets` for `click_command` and `typer_command`, as described above)
-- Consumes: Block 5: `def cli_targets(entry: Entry, index: PyIndex) -> CliTargets | None`
-- Consumes: Block 5: `class CliTargets(NamedTuple): programs: list[SymbolRef]; apps: list[SymbolRef]; tokens: tuple[str, ...]; aliases: tuple[str, ...]`
-- Consumes: Block 2: `def discover_entries(root: Path, *, seeds: Sequence[Seed] = (), index: PyIndex | None = None) -> Discovery`
-
-Satisfies:
-- entry-point-discovery:
-  - click and typer commands are discovered: all three scenarios
-  - Discovery never imports or runs target code: the click-module half of "Module with import-time side effects"
-  - Entries resolving to the same handler are merged: Seed duplicating a discovered entry
-
-## 7. `[project.scripts]` entries and multi-repository resolution
-
-This block adds the `[project.scripts]` scanner.
-
-**Parsing errors.** Each `pyproject.toml` is read with `tomllib.load` on a binary file. Each of these gives one `parse_error` with `line=None` and leaves other files unaffected:
-- `TOMLDecodeError`, including duplicate keys;
-- `UnicodeDecodeError`;
-- `RecursionError`.
-
-**Finding each key's line.** A line scan finds each key in these places:
-- under `[project.scripts]`, including the spaced header `[ project . scripts ]` and the quoted header `[project."scripts"]`;
-- quoted keys;
-- dotted `scripts.<key> =` lines under `[project]`;
-- an inline `scripts = {…}`, which gives the `scripts =` line.
-
-The scan skips comments. When no line can be found, the entry uses the `[project]` header line.
-
-**Values.**
-- Extras suffixes and spaces around the colon are stripped, so `pkg.mod : main [x]` behaves like `pkg.mod:main`.
-- `module:obj.attr` resolves to the definition of `obj`, and the symbol is `obj.attr`.
-- A target assigned at module level, such as `app = typer.Typer()`, resolves to its assignment line.
-- A function re-exported through a package `__init__` is followed.
-- Non-string values and module-only references give `unresolved_target` at the key line.
-- `dynamic = ["scripts"]` gives no entries and no diagnostic. A test pins this.
-
-**Module search.** Modules are looked up under the file's own repository root, then `src/`, then nested roots, and never in another repository. A third-party target gives `unresolved_target`. The known edge runs from the key line to the handler `def` line.
-
-**End-to-end tests.**
-- Two repositories each declaring a script, with `run = "tool.cli:main"` resolving only inside `repo_a`.
-- A script and `pkg/__main__.py` sharing `def main` merge into one `main_module` entry.
-- A script and an argparse subcommand sharing a handler produce exactly one trace request. The written path has exactly one `also_invoked_by` record, for the `project_script` invoker.
-- A hop at the script target line is accepted through the script known edge.
-
-Run it with `uv run pytest tests/test_project_scripts.py`.
+**Merging across kinds and the end-to-end check**
+- `[project.scripts] tool = "pkg.cli:main"` together with `pkg/__main__.py` produces one `main_module` entry. Its `also_invoked_by` holds `tool`, and its `known_edges` include the edge from the `pyproject.toml` key line.
+- A hook and a `SKILL.md` command that both run `python -m pkg` produce one entry.
+- On a fixture with one entry of every kind:
+  - every entry has all seven fields;
+  - paths are relative and contain no `..`;
+  - every `line` is between 1 and the file's line count;
+  - a fixture with one broken `.py` file, one invalid `hooks.json`, one external script target, one `add_parser(name_var)` and one missing seed returns exactly five diagnostics, with reasons `parse_error`, `parse_error`, `unresolved_target`, `dynamic_name` and `seed_not_found`.
 
 Interfaces:
 - Produces: (none)
-- Consumes: Block 2: `class PyIndex` with `def repo_root(self, rel: str) -> str`, `def resolve_module(self, dotted: str, *, from_file: str, extra_roots: Sequence[str] = ()) -> str | None` and `def resolve_symbol(self, rel: str, name: str) -> HandlerRef | None`
-- Consumes: Block 2: `def discover_entries(root: Path, *, seeds: Sequence[Seed] = (), index: PyIndex | None = None) -> Discovery`
-- Consumes: Block 1: `def write_paths_file(result: PathsResult, path: Path) -> None`
-- Consumes: Block 3: `class FakeCall` with `async def __call__(self, prompt: str, schema: type[BaseModel], **kwargs: Any) -> Any`
+- Consumes: Block 2: `def discover_entries(root: Path, seeds: Sequence[Seed] = ()) -> Discovery`; `def merge_entries(entries: Iterable[DiscoveredEntry]) -> tuple[DiscoveredEntry, ...]`; `class SnapshotIndex` with `def module_file(self, repo: str, dotted: str, extra_roots: Sequence[str] = ()) -> str | None` and `def repo_root(self, rel: str) -> str`; `class DiscoveredEntry(kind: EntryKind, name: str, source: Literal["discovery", "seed"], location: Location, handler: HandlerRef | None, invocation: str | None, known_edges: tuple[KnownEdge, ...], also_invoked_by: tuple[InvokerRecord, ...])`; `class KnownEdge(from_: Location = Field(alias="from"), to: Location)`
+- Consumes: Block 1: `class Diagnostic(path: str, line: int | None, reason: DiagnosticReason, detail: str)`; `class EntryKind(StrEnum)`
 
-Satisfies:
-- entry-point-discovery:
-  - [project.scripts] entries are discovered: all three scenarios
-  - Paths are relative to the snapshot root, including multi-repository snapshots: both
-  - Entries resolving to the same handler are merged: Script and __main__ resolve to the same main()
-- paths-output-contract: Entry object shape: Deduplicated invokers recorded
-- path-tracing: One trace agent per traced entry: De-duplicated entries share a trace
-- trace-gate: Discovery edges are accepted as connections: Script target edge
+Satisfies: entry-point-discovery ([project.scripts] entries are discovered; python -m commands in SKILL.md fenced shell blocks are discovered, including the amended `uv run --directory` scenario; Hook commands are discovered; Entries resolving to the same handler are merged — "Script and __main__ resolve to the same main()" and "Hook and SKILL.md invoke the same module"; Entry record shape — "Fields present and well-formed"; Every skipped candidate is explained — "Mixed failures in one fixture")
 
-## 8. `python -m` commands in `SKILL.md`
+## 4. Pure trace gate `check_trace`
 
-This block adds the `SKILL.md` scanner and the shared command parser.
+This block delivers `code_facts/gate.py`. Its `check_trace` checks hops in order and stops at the first hop that breaks. A broken hop reports the first rule it fails, in this order: `path_outside_root`, `missing_file`, `line_out_of_range`, `text_mismatch`, `base_side_citation`, `entry_mismatch` (hop 1 only), `unconnected_hop` (hop 2 onward), `repeated_hop`. The function is pure:
+- it reads files only through the injected `read`, `quote_ok` and `tokens` callables;
+- it never imports `walkthrough_pipeline` (an AST scan of every `code_facts` module asserts this);
+- it never calls a model (a stub `CallFn` that fails the test if called is never invoked);
+- it gives equal outcomes for equal inputs.
 
-**Fenced blocks.** CommonMark fences are parsed: either backticks or tildes, at least 3 characters, indented up to 3 spaces. The info string's first word must match exactly one of `bash`, `sh`, `shell`, `zsh` or `console`. A closing fence must use the same character and be at least as long. An unclosed fence runs to end of file.
+**Path rule (rule 1).**
+- The check is lexical, on `PurePosixPath(path).parts`. It never uses `is_relative_to` after a join.
+- These paths break as `path_outside_root`: empty, `.`, absolute, `//x`, any `..` segment, a backslash, or a NUL.
+- Leading `./` and duplicate slashes are normalised away, and the normalised path is what accepted hops store. So `./pkg/a.py` and `pkg/a.py` compare equal everywhere, and every accepted path passes the output path pattern.
+- `repo_b/pkg/mod.py` passes in a multi-repo snapshot.
 
-**Command lines.**
-- Lines ending in `\` are joined.
-- In `console` blocks only lines starting with `$ ` are commands, and `> ` continuation prompts are stripped.
-- `parse_command_line` tokenizes with `shlex.shlex(posix=True, punctuation_chars=True)` and splits on `;`, `&&`, `||` and `|`, so a glued `cd x&&python3` is handled.
-- An unbalanced quote raises `ValueError`, which is recorded as `parse_error` at that line.
+**Reading and quoting (rules 2–5).**
+- `read` returns `None` for a missing file or a non-blob, and that becomes `missing_file`.
+- `line_out_of_range` is computed from `len(lines)` before any quote check, because `check_quote` silently clamps `line_end` at end of file. So line 500 of a 40-line file breaks, and so does `line_end` past EOF.
+- An empty or whitespace-only quote, or a quote that differs from the file, is `text_mismatch`.
+- An explicit `side == "base"` is `base_side_citation`. It is checked after the head-side text rules, so a base-side citation of text that does not exist at head reports `text_mismatch`. That oddity is pinned by a test.
 
-**Resolving the target.** `resolve_command` works in this order:
-1. Peels env assignments, `env`, and `uv run` with its value-taking options (`--directory`, `--project`, `--with`, `--python`/`-p`, `--package`).
-2. Accepts `python`, `python3` or `python3.X` with `-I`, `-E` (both ignore `PYTHONPATH`), `-P` (drops the cwd root) and `-u`.
-3. Matches `-m <mod>` and `-m<mod>`. The first positional is the first later token that does not start with `-` or `#`.
-4. Expands `${CLAUDE_SKILL_DIR}`, and `${CLAUDE_PLUGIN_ROOT}` to the nearest ancestor holding `.claude-plugin/plugin.json`. Other `$VAR`, `$(…)` and `~` stay literal.
-5. Searches `PYTHONPATH` entries left to right (empty segments skipped), then the `cd` / `--directory` directory, then the `SKILL.md` directory, then `scripts/`, then the repository root, then `<repo>/src`.
+**Anchoring (rule 6).** Hop 1 passes `entry_mismatch` if either holds:
+- it cites the entry's `location.path` with a range that includes `location.line`;
+- it cites `handler.path` with a range that includes `handler.line`. The path must match: `other.py` at the handler's line number still fails.
 
-**Entries and edges.**
-- Each matched command becomes a `skill_command` entry named `<skill dir>: <module> [<first positional>]`, with `invocation` set to the joined command.
-- The known edge points to:
-  1. `find_subcommand`'s handler;
-  2. otherwise its `add_parser` line;
-  3. otherwise line 1 of `__main__.py`, which also covers placeholders like `<command>`.
-- An unresolvable module gives `unresolved_target`. Python fences, unlabelled fences and prose give nothing.
+**Connectivity (rule 7).** Hop n+1 connects to hop n if any of these holds:
+- **Name.** The last identifier of `symbol_called`, taken after dropping any argument list (`self._ack(rev)` gives `_ack`, `cli.handle_open` gives `handle_open`), appears as a `NAME` token inside hop n's range.
+  - Tokens come from the whole-file `tokenize` stream, not from a fragment. This means a range that starts mid-block or inside a docstring never raises `IndentationError` or `TabError`, and docstring prose is never treated as code.
+  - If the whole file fails to tokenize (`TokenError` or any `SyntaxError` subclass), a fallback strips quoted spans and `#` comments from the cited lines and matches identifiers in what is left.
+  - A name that appears only in a comment or a plain string does not connect.
+  - Non-Python files never connect by name.
+- **Known edge.** An edge's `from` line is inside hop n's range and its `to` line is inside hop n+1's range.
+- **Place.** A place falls inside hop n+1's range. A matching place does not excuse a bad citation: a mismatched quote still breaks as `text_mismatch`.
 
-Run it with `uv run pytest tests/test_skill_commands.py`.
+**Repeats, limits and degenerate input.**
+- A hop whose normalised `(path, line_start, line_end)` equals any earlier hop's breaks as `repeated_hop`. An immediate self-repeat breaks at `broken_at=2`. Ranges that overlap but are not equal do not count as repeats.
+- Only the first `hop_limit` hops are checked:
+  - 21 or 25 valid hops give 20 accepted hops, `broken_at=21` and `reason=hop_limit`;
+  - a broken hop at position 21 or later is never seen;
+  - exactly 20 valid hops give `broken_at=None`.
+- An empty list gives `broken_at=1`, `reason=empty_trace`.
 
-Interfaces:
-- Produces: `class CommandTarget(NamedTuple): module: str | None; script: str | None; path: str; first_positional: str | None`
-- Produces: `def parse_command_line(text: str) -> list[list[str]]`
-- Produces: `def resolve_command(segments: list[list[str]], *, index: PyIndex, source_file: str, default_roots: Sequence[str], variables: Mapping[str, str]) -> CommandTarget | None`
-- Produces: `def command_edge(target: CommandTarget, entries: Sequence[Entry]) -> Location`
-- Consumes: Block 5: `def find_subcommand(entries: Sequence[Entry], package_dir: str, token: str) -> Entry | None`
-- Consumes: Block 2: `class PyIndex` with `def resolve_module(self, dotted: str, *, from_file: str, extra_roots: Sequence[str] = ()) -> str | None` and `def repo_root(self, rel: str) -> str`
-- Consumes: Block 2: `def discover_entries(root: Path, *, seeds: Sequence[Seed] = (), index: PyIndex | None = None) -> Discovery`
-
-Satisfies:
-- entry-point-discovery: python -m commands in SKILL.md fenced shell blocks are discovered: all six scenarios
-
-## 9. Hook commands, and discovery across all entry kinds
-
-This block adds the hook scanner for `hooks.json` and `.claude/settings*.json`.
-
-**Reading and walking files.**
-- Files are decoded as `utf-8-sig`, so a BOM is tolerated, and parsed with `json.loads`.
-- `JSONDecodeError`, `RecursionError` and `UnicodeDecodeError` each give a `parse_error` with `line=None`.
-- A missing `"hooks"` wrapper, `"hooks": null`, or a list where an object is expected gives `parse_error` with a shape detail, never a crash.
-- The scanner walks `hooks.<event>[].{matcher, hooks[]}` and keeps only `"type": "command"`. `statusLine` is ignored.
-
-**Lines and tokens.**
-- A command's line is found by matching `"command"\s*:\s*<encoded>` in the raw text. Both `json.dumps(cmd)` and `json.dumps(cmd, ensure_ascii=False)` encodings are tried, and repeated commands are assigned in document order. If neither encoding is found, the line falls back to the `"hooks"` key line.
-- Tokens are `[command, *args]` in exec form. In shell form they come from Block 8's `parse_command_line`, so commands like `mkdir …; bash script.sh || true` resolve per segment.
-
-**Variables and targets.**
-- `${CLAUDE_PLUGIN_ROOT}` expands to the nearest ancestor holding `.claude-plugin/plugin.json`, or else the parent of the hooks file's directory.
-- `$CLAUDE_PROJECT_DIR` and `${CLAUDE_PROJECT_DIR}` expand to the repository root.
-- `python -m` targets use `resolve_command`.
-- Python script targets get `main_module` handler rules.
-- Other existing files, including the script argument of `bash` or `sh`, resolve to line 1.
-- Missing targets give `unresolved_target` at the command line.
-- Entries are named `<event>:<matcher>` or `<event>`, with `invocation` set to the command string. The known edge runs from the command line to the target.
-
-**Fixtures closing out discovery.**
-- A hook and a `SKILL.md` command running `python -m pkg` merge into one entry with the other recorded in `also_invoked_by`.
-- A mixed-failure fixture gives exactly five diagnostics: two `parse_error`, one `unresolved_target`, one `dynamic_name`, one `seed_not_found`. Every valid entry is still returned.
-- An every-kind fixture checks for all entries:
-  - all seven fields are present;
-  - every path is POSIX, relative and has no `..`;
-  - every line is between 1 and the file's line count.
-- A hop at a hook target is accepted through the hook known edge.
-
-Run it with `uv run pytest tests/test_hooks.py`.
+**How to run it.** Use direct unit tests with fake `read`, `quote_ok` and `tokens`. Cover every trace-gate rule scenario and the "first broken hop decides" and multiple-failure ordering scenarios.
 
 Interfaces:
-- Produces: (none)
-- Consumes: Block 8: `def parse_command_line(text: str) -> list[list[str]]`
-- Consumes: Block 8: `def resolve_command(segments: list[list[str]], *, index: PyIndex, source_file: str, default_roots: Sequence[str], variables: Mapping[str, str]) -> CommandTarget | None`
-- Consumes: Block 8: `def command_edge(target: CommandTarget, entries: Sequence[Entry]) -> Location`
-- Consumes: Block 2: `def discover_entries(root: Path, *, seeds: Sequence[Seed] = (), index: PyIndex | None = None) -> Discovery`
-- Consumes: Block 4: `def check_trace(hops: Sequence[AnswerHop], *, entry: Entry, edges: Sequence[KnownEdge], places: Sequence[Place], resolve: Resolve, root: Path) -> GateOutcome`
+- Produces: `class GateOutcome(accepted: tuple[Hop, ...], broken_at: int | None, reason: BreakReason | None, detail: str)`
+- Produces: `def check_trace(hops: Sequence[Hop], entry: EntryRecord, edges: Sequence[KnownEdge], places: Sequence[Place], read: Callable[[str], list[str] | None], quote_ok: Callable[[Citation], bool], tokens: Callable[[str], list[tokenize.TokenInfo] | None], hop_limit: int = HOP_LIMIT) -> GateOutcome`
+- Consumes: Block 1: `class Hop(symbol_called: str, citation: Citation, note: str = "")`; `class EntryRecord(kind: EntryKind, name: str, source: Literal["discovery", "seed", "model"], location: Location, handler: HandlerRef | None, invocation: str | None, also_invoked_by: tuple[InvokerRecord, ...])`; `class Place(path: str, line: int)`; `class BreakReason(StrEnum)`; `HOP_LIMIT = 20`
+- Consumes: Block 2: `class KnownEdge(from_: Location = Field(alias="from"), to: Location)`
 
-Satisfies:
-- entry-point-discovery:
-  - Hook commands are discovered: all five scenarios
-  - Entries resolving to the same handler are merged: Hook and SKILL.md invoke the same module
-  - Every skipped candidate is explained: Mixed failures in one fixture
-  - Entry record shape: Fields present and well-formed
-- trace-gate: Discovery edges are accepted as connections: Hook command edge
+Satisfies: trace-gate (Gate is deterministic and makes no model call; Gate does not import the walkthrough pipeline; Break reasons come from a fixed set; Hop paths stay inside the snapshot root; Every hop citation re-reads at the commit; Citations are head-side only; Hop 1 is anchored at the entry; Consecutive hops are connected by a reference or a known edge; Caller-supplied places are accepted as connections; Discovery edges are accepted as connections; Repeated hops break the path; Traces are capped at 20 hops, as amended; The first broken hop decides the outcome); path-tracing (Hops cite head-side code only; Snapshot-relative locations — "Path escaping the root")
 
-## 10. Persistent answer cache and resumable runs
+## 5. Unscoped tracing through `map_paths`: discovery, snapshot check, one trace per entry, one re-ask, cut or drop, ordered `paths.json`
 
-**`DirAnswers`.** Passing `cache_dir` backs answers with `DirAnswers`, which stores one file per key: `cache_dir/<sha256(key)>.json` containing `{"key": key, "answer": answer}`.
-- The directory is created with `mkdir(parents=True, exist_ok=True)`. `Path("")` and a `cache_dir` that is a file raise `ValueError`.
-- A probe write at the start of `map_paths` means a read-only directory raises `OSError` before the first paid call.
-- `__setitem__` writes a `.`-prefixed `.tmp` tempfile in the same directory, then `fsync`, then `os.replace`.
-- `__getitem__` treats a missing, zero-byte, truncated or invalid-JSON file, or a key mismatch, as `KeyError`. The entry is asked again rather than aborting the run.
-- `__iter__` lists only `*.json` files and never stray `.tmp` files.
+**What the block does.** `map_paths` runs the whole unscoped path for real, still with `fallback=False`.
+- **Git check.** It runs `shutil.which("git")` before any call. If git is missing it raises `RuntimeError`; it does not misreport every hop as `missing_file`.
+- **Discovery.** It calls `discover_entries(root, seeds)` and copies the diagnostics into the result.
+- **Snapshot check.** For each entry it compares the snapshot's `location` line, and `handler` line when there is one, with `make_git_reader(resolve)`. A missing file or a differing line removes the entry and adds a `snapshot_mismatch` diagnostic. Example: an untracked file that defines an entry, or a working-tree edit that shifts a `def`.
+- **Git reader.** It runs a fixed argv `git -C <repo> cat-file blob <sha>:<rel>` with `shell=False`, `stdin=DEVNULL` and `check=False`. Results are cached per `(repo, sha, rel)` within the run.
+  - It returns `None` for a non-zero exit (a bad sha, a directory, or a path that is not a blob) and for a path containing NUL.
+  - It decodes with `errors="replace"`.
+  - It splits on `"\n"` only and drops one trailing empty element, so `"a\nb\n"` has 2 lines and an empty blob has 0.
+- **Tracing.** Each surviving entry gets exactly one `paths:trace` call through `explore.bounded(concurrency)`, so peak in-flight calls never exceed the limit and `concurrency=1` never overlaps.
+  - Each call is `await call(prompt, TraceAnswer, allowed_tools=["Read", "Grep", "Glob"], cwd=str(root), budget_label="paths:trace", **call_kwargs)`.
+  - Re-asks are identical except for the label, which is `paths:retrace`.
+  - Entries that share a handler share one trace.
 
-**Run behaviour.**
-- At the start of a run, every `{"error": …}` entry under this run's keys is deleted, so recoverable failures are asked again on the next run.
-- Output is rebuilt by looking up this run's own computed keys in canonical order, never by iterating the directory. Answers from other commits in a shared directory are ignored.
-- With `cache_dir=None`, nothing is written anywhere, including the working directory.
+**Prompts.**
+- `trace_entry` includes the citation rules and the untrusted-content rules.
+- It includes the entry's kind, name, location, handler and invocation. These are fenced with `multiplai_core.untrusted.fence`, which is stated to transform backticks and injection-shaped text.
+- It includes the commit and the sentence `There is no change scope; trace to the entry's last effect.`
+- It includes the applicable edges and places, the number `20`, the `TraceAnswer` schema, and verbatim the line `Hop 1 MUST cite <location.path>:<location.line> (or <handler.path>:<handler.line>) with its exact text, even when that file is not Python.`. The parenthesised part is omitted when there is no handler.
+- `retrace_entry` adds the broken hop index, the literal reason code, the detail and the accepted prefix.
+- `TRACE_PROMPT_VERSION = 1`. A drift-guard test pins a SHA-256 of the rendered `trace_entry` and `retrace_entry` text next to the version.
 
-**Tests.**
-- A drift guard pins `TRACE_PROMPT_VERSION` together with a SHA-256 of `trace_entry` and `retrace_entry` rendered for a fixed entry. Editing any prompt rule fails the test until the version is bumped.
-- Bumping the version re-asks every entry.
-- Reordered seeds, changed lines and places give zero calls and byte-identical output.
-- Adding a changed line re-asks the entries whose prompts include that file.
-- A run with re-asks, repeated with the same cache, makes zero calls.
-- A run over 5 entries interrupted after 3 answers makes exactly 2 calls on rerun, and its output equals an uninterrupted run.
-- Two runs from a shared cache write byte-identical `paths.json`, with ids stable.
+**Answers and cache.** `cached_call` replaces `explore.ask`/`run_tasks`, which stay unchanged. An inspect-signature test confirms this.
+- **Normalisation.** It turns a model instance (via `model_dump` then `model_validate`, so `model_construct` instances are re-checked), a dict, or a JSON string (`model_validate_json`) into the answer model.
+  - `TraceAnswer` is `extra="forbid"` at the top level and requires `hops`. So `{}`, a misspelt key, a second alternative chain and Markdown-fenced JSON are all `malformed_answer`.
+  - `HopAnswer` keeps `side`, so `side: "base"` survives parsing.
+- **Storage.**
+  - Only valid answers are stored, at `<cache_dir>/paths/<kind>/<sha256 hex>.json` as `{"key": …, "answer": …}`, written through `atomic_write_text`. `cache_dir` is created with `mkdir(parents=True, exist_ok=True)`.
+  - A zero-byte, truncated, mismatched-key or invalid file counts as a miss and is overwritten, never raised.
+  - `.tmp` files are never read.
+- **Keys.** Keys are `canonical_key` = SHA-256 of `json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)`, built from str-keyed dicts of builtins and lists sorted explicitly.
+  - The trace key covers the commit, entry identity, sorted edges and places, and the version.
+  - The re-ask key adds `broken_at`, the reason and the SHA-256 of the canonical first answer.
 
-Run it with `uv run pytest tests/test_answer_cache.py`.
+**Policy.**
+- **First-call exception.** An exception whose type is in `fatal` propagates. Any other exception on the first trace call drops the entry with stage `trace`, reason `trace_call_failed`, after exactly one call. Nothing is cached and no re-ask is made, so a rerun retries it.
+- **Re-ask.** A malformed or empty answer counts as `broken_at=1`. Any break other than `hop_limit` gets exactly one re-ask. Its exceptions propagate unchanged, and no further call is made.
+- **Re-answer.** The re-answer replaces the first answer:
+  - a re-answer that is malformed or empty drops the entry as `trace`/`malformed_answer` or `trace`/`empty_trace`, after exactly two calls;
+  - one that breaks at hop 1 drops the entry as `trace`/`cut_at_entry`;
+  - one that breaks at hop k > 1 keeps hops `1..k-1` with `stops_at=k-1` and its reason;
+  - a 21-hop answer keeps 20 hops with `stops_at=20` and `hop_limit`, after one call.
+- **Ordering and ids.**
+  - Kept paths are sorted by hop count ascending, then `KIND_RANK`, then `location.path`, then `location.line`, then `name`. The sort runs on results gathered into a dict, so completion order doesn't matter.
+  - Ids `p1..pN` are assigned last.
+  - `changed_lines_covered` is `[]`.
+  - Kept paths plus drops equal the number of entries after merging and the snapshot check.
 
-Interfaces:
-- Produces: `class DirAnswers(MutableMapping[str, dict])` with `def __init__(self, directory: Path) -> None`
-- Consumes: Block 3: `def canonical_digest(obj: Any) -> str`
-- Consumes: Block 3: `async def ask(key: str, prompt: str, call: CallFn, answers: MutableMapping[str, dict], *, call_kwargs: dict[str, Any], errors: list[str], recoverable: tuple[type[BaseException], ...] = (Exception,), fatal: tuple[type[BaseException], ...] = (), progress: Callable[[str], None] | None = None, schema: type[BaseModel] = ExploreOutput) -> None`
-- Consumes: Block 3: `TRACE_PROMPT_VERSION: str = "trace.v1"`
-- Consumes: Block 3: `def trace_entry(*, entry: Entry, commit: str, changed: Mapping[str, Sequence[int]] | None, edges: Sequence[KnownEdge], places: Sequence[Place]) -> str`
-- Consumes: Block 3: `def retrace_entry(*, entry: Entry, commit: str, changed: Mapping[str, Sequence[int]] | None, edges: Sequence[KnownEdge], places: Sequence[Place], broken_at: int, reason: BreakReason, detail: str, accepted: Sequence[Hop]) -> str`
-
-Satisfies:
-- path-tracing:
-  - Answer cache keyed independently of order: all three scenarios
-  - Resumable runs: Resume after interruption
-- trace-gate: Re-asks use the resumable answer cache: Resume makes no calls
-- paths-output-contract: Byte-stable serialisation: Reproducible run
-- path-scope-and-cap: Path ids assigned after ordering and cap: Stable ids on rerun
-
-## 11. Change scope: import reachability, trace limit, coverage filter and cap
-
-This block applies only when `changed_lines is not None`.
-
-**Import graph.** `PyIndex.import_distances` builds a static import graph from `Import` and `ImportFrom`:
-- `level` and `module=None` are handled, and `from a import b` resolves to the submodule when one exists, otherwise to `a/__init__.py`.
-- `import a.b.c` also adds edges to the parent `__init__.py` files.
-- A star import adds an edge to its module.
-- Unparseable modules have no out-edges, and unresolved or third-party imports add none.
-- It runs a reverse BFS from the changed `.py` files and terminates on cycles.
-
-**Distances and drops.**
-- An entry's distance is 0 when its location file changed. Otherwise it is the distance of its handler module, or of its location module when the location is `.py`.
-- Entries with no distance are dropped as `import_reachability` / `unreachable` before any call. That covers missing files, non-`.py` changes that only affect other files, and dynamic imports.
-- `changed_lines={}` drops every entry this way and makes zero calls.
-
-**Trace limit.** Reachable entries are ordered by `(distance, KIND_RANK, path, line)`. Entries beyond `trace_limit` (default `4 * cap`) are dropped as `trace_limit` / `over_trace_limit`. A scoped `cap < 1` or `trace_limit < 1`, or a `bool` value, raises `ValueError` before any call. When unscoped, both are ignored, and `trace_limit=0` traces everything; a test pins this.
-
-**Coverage.**
-- Only retained hops count, so hops after a cut and hops past 20 never count.
-- Normalised hop paths are compared with the changed-line keys, inclusive at both ends.
-- `changed_lines_covered` is sorted and de-duplicated.
-- A path covering nothing is dropped as `no_changed_line` / `no_changed_line_covered`.
-
-**Ordering, cap and ids.** Paths are ordered with real coverage counts, then capped; paths beyond the cap are dropped as `cap` / `over_cap`. Ids `p1..pN` are given after the cap. Drops are sorted by stage order, then `(location.path, location.line, kind)`. Kept plus all drops equals E.
-
-**Tests also cover:**
-- missing-file tolerance;
-- the multi-repo `repo_b/src/mod.py` case;
-- tie-breaking by hop count when coverage is equal;
-- schema validation of all four scope drop reasons.
-
-Run it with `uv run pytest tests/test_scope.py`.
+**How to verify.** Use a recording `FakeCall` keyed on prompt markers, with random delays, an in-flight counter decremented in `finally`, and chosen exceptions, together with a prefix-splitting `resolve` over a `git init` `tmp_path` fixture. The following all hold:
+- A full run writes a schema-valid `paths.json`.
+- A rerun from the same cache makes zero calls and gives byte-identical output.
+- Concurrency 1 and concurrency 8 give byte-identical output.
+- Reversing seeds and places gives byte-identical output.
+- A run interrupted after 3 of 5 traces makes exactly 2 calls on rerun.
+- Bumping `TRACE_PROMPT_VERSION` re-asks every entry.
 
 Interfaces:
-- Produces: `def import_distances(self, changed: Iterable[str]) -> dict[str, int]` (a method on `PyIndex`; keys are root-relative `.py` paths, values are BFS distances to a changed file)
-- Consumes: Block 2: `def build_index(root: Path) -> PyIndex`
-- Consumes: Block 3: `def normalise_changed_lines(root: Path, changed_lines: Mapping[str, Iterable[int]]) -> dict[str, list[int]]`
-- Consumes: Block 1: `class DropRecord(_Strict): stage: DropStage; entry: Entry; reason: DropReason`
-- Consumes: Block 1: `KIND_RANK: Mapping[EntryKind, int]`
+- Produces: `def make_git_reader(resolve: Resolve) -> Callable[[str], list[str] | None]`
+- Produces: `def make_quote_check(resolve: Resolve) -> Callable[[Citation], bool]`
+- Produces: `class HopAnswer(_Model)` with fields `symbol_called: str`, `citation: Citation`, `note: str = ""`; `class TraceAnswer(_Model)` with fields `hops: list[HopAnswer]` (required) and `notes: str = ""`, top-level `extra="forbid"`
+- Produces: `def trace_entry(entry: EntryRecord, commit: str, scope: Mapping[str, tuple[int, ...]] | None, edges: Sequence[KnownEdge], places: Sequence[Place], hop_limit: int = HOP_LIMIT) -> str`
+- Produces: `def retrace_entry(entry: EntryRecord, commit: str, scope: Mapping[str, tuple[int, ...]] | None, edges: Sequence[KnownEdge], places: Sequence[Place], broken_at: int, reason: BreakReason, detail: str, accepted: Sequence[Hop], hop_limit: int = HOP_LIMIT) -> str`
+- Produces: `TRACE_PROMPT_VERSION = 1`
+- Produces: `def canonical_key(material: Mapping[str, Any]) -> str`
+- Produces: `async def cached_call(*, cache_dir: Path, kind: Literal["fallback", "trace", "retrace"], key_material: Mapping[str, Any], prompt: str, schema: type[_Model], label: str, call: CallFn, root: Path, call_kwargs: Mapping[str, Any]) -> _Model`
+- Produces: `def path_sort_key(path: PathRecord) -> tuple[int, int, int, str, int, str]` returning `(-len(path.changed_lines_covered), len(path.hops), KIND_RANK.index(path.entry.kind), path.entry.location.path, path.entry.location.line, path.entry.name)`
+- Consumes: Block 1: `async def map_paths(*, root: Path, commit: str, resolve: Resolve, call: CallFn, cache_dir: Path, changed_lines: Mapping[str, Iterable[int]] | None = None, seeds: Sequence[Seed] = (), places: Sequence[Place] = (), cap: int = 5, trace_limit: int = 20, concurrency: int = DEFAULT_CONCURRENCY, fallback: bool = True, fatal: tuple[type[BaseException], ...] = (), call_kwargs: Mapping[str, Any] | None = None) -> PathsResult`; `def atomic_write_text(path: Path, text: str) -> None`; `class PathRecord(id: str, entry: EntryRecord, hops: tuple[Hop, ...], stops_at: int | None, break_reason: OutputBreakReason | None, changed_lines_covered: tuple[Location, ...], tests: TestListing)`; `class DropRecord(stage: DropStage, reason: DropReason, detail: str, entry: EntryRef)`; `ALLOWED_TOOLS = ("Read", "Grep", "Glob")`
+- Consumes: Block 2: `def discover_entries(root: Path, seeds: Sequence[Seed] = ()) -> Discovery`; `def to_entry_record(entry: DiscoveredEntry) -> EntryRecord`; `class SnapshotIndex` with `def tokens(self, rel: str) -> list[tokenize.TokenInfo] | None` and `def text_lines(self, rel: str) -> list[str] | None`
+- Consumes: Block 4: `def check_trace(hops: Sequence[Hop], entry: EntryRecord, edges: Sequence[KnownEdge], places: Sequence[Place], read: Callable[[str], list[str] | None], quote_ok: Callable[[Citation], bool], tokens: Callable[[str], list[tokenize.TokenInfo] | None], hop_limit: int = HOP_LIMIT) -> GateOutcome`
 
-Satisfies:
-- path-scope-and-cap:
-  - Scoping is active only when changed lines are supplied: both scenarios
-  - Changed-line paths are validated and normalised: Missing file tolerated; Multi-repository snapshot paths
-  - Static import-graph reachability pre-filter: all seven
-  - Trace limit bounds the number of entries traced: all three
-  - Post-trace coverage filter: all four
-  - Deterministic path ordering: More coverage ranks first; Duplicate coverage counted once; Tie broken by hop count
-  - Cap limits kept paths: all three
-  - Path ids assigned after ordering and cap: Contiguous ids
-  - Every scope drop records a reason: all three
-- path-tracing: One trace agent per traced entry: Pre-filtered entries are not traced
-- paths-output-contract:
-  - Changed-line coverage field: Coverage listed
-  - Every drop is recorded with a reason: Cap drop recorded
+Satisfies: path-tracing (One trace agent per traced entry; Trace agents are read-only; Model calls go only through the caller's CallFn; Trace prompt carries the entry, the scope and known edges — "No changed lines given"; An answer is one linear chain of hops; Hop limit of 20; Empty or malformed answers are dropped, not fatal, as amended; Every answer passes through the trace gate; Bounded concurrency; Answer cache keyed independently of order; Resumable runs; Snapshot-relative locations; Deterministic trace output); trace-gate (Malformed or empty answers break at hop 1; A broken trace gets exactly one re-ask; An unrepaired trace is cut at the break; Re-asks use the resumable answer cache; CallFn failures during a re-ask propagate); paths-output-contract (Cut paths carry stop and reason together; Ids are contiguous and follow array order; Byte-stable serialisation — "Reproducible run" and "Concurrency does not affect output"; Entry object shape — "Known discovery case keeps the add_parser line", as amended; Changed-line coverage field — "Unscoped coverage empty"); path-scope-and-cap (Scoping is active only when changed lines are supplied — "No changed lines means no scope filtering")
 
-## 12. Model fallback for entry points discovery missed
+## 6. Change scope: import reachability, trace limit, changed-line coverage, cap, accounting
 
-**The call.** This replaces Block 1's interim `"not_implemented"` reason with a real fallback. At most one `ask(..., schema=FallbackAnswer)` is made per run:
-- The prompt starts with `FALLBACK_MARKER`, lists the sorted deterministic entries, names the scope, and asks only for new entry points.
-- Tools are exactly `Read`, `Grep` and `Glob`.
-- The cache key is `fallback:` plus `canonical_digest` of the sorted entries `(kind, name, location)`, the sorted normalised scope, the commit and `TRACE_PROMPT_VERSION`.
-- `scope_paths` is validated like changed lines. A bare `str` or an absolute or escaping path raises `ValueError` before any call.
-- `model_fallback=False` gives `skipped`/`"disabled"`. An empty scope gives `skipped`/`"empty_scope"`.
+With `changed_lines` supplied, `map_paths` writes `scoped: true` and the integer `cap`, and filters entries and paths as follows.
 
-**Answers and status.**
-- `FallbackAnswer.entries` is a list of raw dicts. Each is validated on its own as `FallbackEntry`, so one bad citation, such as `line_end < line_start` or `line_start: 0`, costs only that entry.
-- An answer that fails as a whole gives `failed`, with a reason of at most 200 characters: the first error's location and message, `include_url=False`.
-- A `recoverable` error gives `failed`. A non-recoverable or `fatal` error propagates after exactly one attempt.
+**Reachability distance.**
+- `reverse_distances` runs one reverse BFS over the Block 2 import graph. It is seeded at the changed `.py` files and keeps a visited set, so import cycles terminate.
+- An entry's distance is 0 when either its `location.path` or any `also_invoked_by[].location.path` is a changed file. This covers a change to only `SKILL.md`, `hooks.json` or a `[project.scripts]` key line, which keeps the merged path.
+- Otherwise its distance is the minimum BFS distance over its handler file and the targets of its known edges.
+- An entry with no finite distance is dropped at stage `import_reachability` with reason `unreachable`, and no call is made for it. This includes:
+  - an entry reached only through `importlib.import_module`;
+  - an entry whose importer has a syntax error;
+  - an entry whose handler only reads a changed JSON file.
 
-**Post-processing, in order:**
-1. A missing citation gives `missing_citation`.
-2. These give `citation_unverified`: a raw path that is absolute (even inside the root), contains `..` or does not resolve; `side == "base"`; a `line_end` past the end of the file by git line count; or a failed `check_citation`.
-3. A non-string or unknown `kind` becomes `other`.
-4. Entries citing the same `(path, line_start)` are collapsed, keeping the first by `(path, line, kind, name)`.
-5. An entry is dropped as `duplicate` when its `(path, line)` equals a deterministic or seed location or handler line, or when its enclosing `def` is a deterministic handler.
+**Trace limit.**
+- Reachable entries are sorted by `(distance, KIND_RANK, location.path, location.line, name)`.
+- Entries past `trace_limit` are dropped at stage `trace_limit` with reason `over_trace_limit`, and no call is made for them.
+- The limit counts attempts. A failed trace does not free its slot for the next entry.
 
-**Survivors.** Survivors are sorted by location, get `source="model"`, and then go through reachability, trace limit, tracing, coverage and cap like any other entry.
+**Coverage and cap.**
+- A changed line is covered when either holds:
+  - it falls in the inclusive cited range of a retained hop in the same normalised file;
+  - it equals the entry's `location`, or an `also_invoked_by` location.
+- Hops dropped by a cut or past the 20-hop limit never count.
+- `changed_lines_covered` holds distinct `{path, line}` values, sorted.
+- A path with no coverage is dropped at stage `no_changed_line` with reason `no_changed_line_covered`.
+- Kept paths are ordered by `path_sort_key`: covered count descending, then hop count ascending, then kind rank, path, line and name.
+- Paths past `cap` are dropped at stage `cap` with reason `over_cap`, before ids `p1..pN` are assigned.
 
-**Tests.**
-- Fallback drop records are present.
-- Two stubs listing the same entries in different orders write byte-identical `paths.json`.
-- A rerun with the same `cache_dir` makes zero fallback calls.
+**Prompt, keys and boundary cases.**
+- When scoped, the trace prompt and the trace key carry the changed lines as sorted, merged ranges. A 50,000-line rewrite therefore renders as one range.
+- Reordered `changed_lines` keys and values hit the same keys, so the second run makes zero calls. Adding one changed line re-asks every entry whose prompt includes that file.
+- `{}` (or a mapping in which every key has no lines) is scoped. It gives zero paths, every entry `unreachable`, and zero `CallFn` calls.
+- A changed path naming a deleted file is accepted, and every entry is `unreachable`.
+- With `cap=2` on 7 qualifying paths, 5 `over_cap` drops are recorded and the ids are exactly `p1`, `p2`.
 
-Run it with `uv run pytest tests/test_fallback.py`.
+**Accounting check.** A fixture that triggers every stage proves that kept paths plus drop records equal E. Each entry has at most one drop record, never also appears as a kept path, and the drops are sorted in stage order, then path, line and kind. Run it with `FakeCall` and `write_paths_file`, and assert on the drops and `changed_lines_covered`.
 
 Interfaces:
-- Produces: `FALLBACK_MARKER: str = "<!-- code_facts:entry_fallback -->"`
-- Produces: `class FallbackEntry(_Model): kind: str; name: str; citation: Citation | None = None; reason: str = ""`
-- Produces: `class FallbackAnswer(_Model): entries: list[dict[str, Any]]`
-- Produces: `def entry_fallback(*, entries: Sequence[Entry], scope: Sequence[str], commit: str) -> str`
-- Consumes: Block 3: `async def ask(key: str, prompt: str, call: CallFn, answers: MutableMapping[str, dict], *, call_kwargs: dict[str, Any], errors: list[str], recoverable: tuple[type[BaseException], ...] = (Exception,), fatal: tuple[type[BaseException], ...] = (), progress: Callable[[str], None] | None = None, schema: type[BaseModel] = ExploreOutput) -> None`
-- Consumes: Block 3: `def canonical_digest(obj: Any) -> str`
-- Consumes: Block 3: `def normalise_changed_lines(root: Path, changed_lines: Mapping[str, Iterable[int]]) -> dict[str, list[int]]`
-- Consumes: Block 11: `def import_distances(self, changed: Iterable[str]) -> dict[str, int]`
-- Consumes: Block 10: `class DirAnswers(MutableMapping[str, dict])` with `def __init__(self, directory: Path) -> None`
+- Produces: `def reverse_distances(graph: ImportGraph, seeds: Iterable[str]) -> dict[str, int]`
+- Produces: `def entry_distance(entry: DiscoveredEntry, changed: Mapping[str, tuple[int, ...]], distances: Mapping[str, int]) -> int | None`
+- Produces: `def covered_lines(hops: Sequence[Hop], entry: EntryRecord, changed: Mapping[str, tuple[int, ...]]) -> tuple[Location, ...]`
+- Consumes: Block 1: `def normalise_changed_lines(root: Path, changed_lines: Mapping[str, Iterable[int]]) -> dict[str, tuple[int, ...]]`; `class DropRecord(stage: DropStage, reason: DropReason, detail: str, entry: EntryRef)`
+- Consumes: Block 2: `def build_import_graph(index: SnapshotIndex) -> ImportGraph`; `class ImportGraph` with `def imports(self, rel: str) -> frozenset[str]` and `def reaches(self, src: str, dst: str) -> bool`; `class DiscoveredEntry(kind: EntryKind, name: str, source: Literal["discovery", "seed"], location: Location, handler: HandlerRef | None, invocation: str | None, known_edges: tuple[KnownEdge, ...], also_invoked_by: tuple[InvokerRecord, ...])`
+- Consumes: Block 5: `def path_sort_key(path: PathRecord) -> tuple[int, int, int, str, int, str]`; `def trace_entry(entry: EntryRecord, commit: str, scope: Mapping[str, tuple[int, ...]] | None, edges: Sequence[KnownEdge], places: Sequence[Place], hop_limit: int = HOP_LIMIT) -> str`; `def canonical_key(material: Mapping[str, Any]) -> str`
 
-Satisfies:
-- entry-point-model-fallback:
-  - Single fallback agent per run: all three scenarios
-  - Fallback agent is read-only
-  - Fallback response shape: all three
-  - Malformed fallback answer does not fail the run: both
-  - CallFn errors are not retried
-  - Citation must re-read at the commit: all five
-  - Paths are relative to the snapshot root
-  - Fallback entries do not duplicate deterministic entries: both
-  - Fallback entries go through the same scope filter
-  - Fallback is deterministic and resumable: both
-- paths-output-contract: Every drop is recorded with a reason: Uncited model entry recorded
+Satisfies: path-scope-and-cap (Scoping is active only when changed lines are supplied — "Changed lines given activates scoping"; Changed-line paths are validated and normalised — "Missing file tolerated" and "Multi-repository snapshot paths"; Static import-graph reachability pre-filter; Trace limit bounds the number of entries traced; Post-trace coverage filter; Deterministic path ordering; Cap limits kept paths; Path ids assigned after ordering and cap; Every scope drop records a reason, with the amended merged-invoker scenarios); path-tracing (One trace agent per traced entry — "Pre-filtered entries are not traced"; Trace prompt carries the entry, the scope and known edges — "Prompt contents"; Answer cache keyed independently of order — "Changed scope misses the cache"); paths-output-contract (Top-level document shape — "Scoped run"; Changed-line coverage field — "Coverage listed"; Every drop is recorded with a reason — "Cap drop recorded")
 
-## 13. Static end-to-end test listing per path
+## 7. Model fallback for entries that deterministic discovery missed
 
-This block adds `code_facts/e2e.py`. `map_paths` now fills each path's `tests` and `PathsResult.test_listing_skips`.
+**What runs.** With `fallback=True` (the default), `map_paths` makes at most one `paths:fallback` call after discovery and the snapshot check, using the same read-only call shape as tracing.
+- The `entry_fallback` prompt lists the deterministic entries by location and kind, asks only for new ones, and names the scope:
+  - the changed files when scoped;
+  - otherwise the seed paths;
+  - otherwise the whole snapshot.
+- A scoped run with no changed files skips the call. It records `fallback={"status": "skipped", "reason": "empty_scope"}`.
 
-**Finding test files.**
-- Files named `test_*.py` and `*_test.py` are found under the root, skipping `.git`, `.venv`, `venv`, `node_modules`, `__pycache__` and `site-packages`. `build` and `dist` are walked.
-- Each file is read as bytes and decoded strictly as `utf-8-sig`. A decode failure gives `decode_error`.
-- These failures from `ast.parse` give `syntax_error`: `SyntaxError` (including NUL bytes), `ValueError`, `RecursionError`, `MemoryError`.
-- A zero-byte file gives no tests and no skip.
-- Tests are module-level `test*` functions, including `async def`, and `test*` methods of module-level `Test*` classes that have no `__init__` / `__new__` and do not set `__test__ = False`.
-- Node ids are `<root-relative file>::[Class::]name`.
+**Parsing and status.**
+- The answer is parsed in two levels:
+  - The outer `FallbackAnswer{entries: list[Any]}` must validate. If it doesn't, the run continues with deterministic entries only and records `status: failed`. The reason is the first error rendered as `"<loc>: <msg>"` from `errors(include_url=False)`, cut to 200 characters, so model input is never echoed.
+  - Each raw item is then validated on its own as `FallbackEntry`. One bad item costs only that item.
+- `{"entries": []}` gives `status: ok`.
 
-**Resolving names.** Names resolve through module-level imports and imports inside the test body. The extra roots are the nearest `pyproject.toml` ancestor, the parent of `tests/`, and the test file's own directory. Re-exports through a package `__init__` are followed. A name rebound locally (`main = Mock()`) never matches.
+**What each raw item becomes.** Each raw item counts once in E, and is either kept or recorded with stage `model_fallback_citation`:
 
-**Matchers.** Each matcher is checked against the entry and against every `also_invoked_by` invoker:
-- `direct_call`
+| Item | Result |
+|---|---|
+| Absent or `null` citation | `missing_citation` |
+| Non-object item, missing `kind`, or missing or empty `name` | `malformed_entry` |
+| Absolute, `..` or unresolvable path | `citation_unverified` |
+| `line_end < line_start`, or `line_start < 1` | `citation_unverified` |
+| `line_end` past the end of the file (checked explicitly, because `check_quote` clamps) | `citation_unverified` |
+| Empty or mismatched quote | `citation_unverified` |
+| `side: "base"` | `citation_unverified` |
+| A line or enclosing handler equal to a deterministic or seed entry's location or handler | `duplicate` |
+| A repeat of an earlier kept fallback line | `duplicate` |
+
+- Absolute paths are rejected on the raw string, before any `ws_path` normalisation.
+- A drop for an item with no valid location carries `location: null`.
+
+**Kept entries.**
+- Kind matching is exact: an unknown kind such as `route`, `argparse` or `Route` becomes `other`, and `name` keeps the model's display name, e.g. `GET /items`.
+- Kept entries get `source: "model"`, a handler set to the enclosing `def`, and a location relative to the snapshot root. In a multi-repo snapshot that looks like `repo_b/cli.py:5`.
+- They are ordered by location, whatever order the model listed them in.
+- They then go through the same reachability, trace-limit, coverage and cap stages as deterministic entries, with the same drop reasons.
+
+**Cache.**
+- The cache key is `canonical_key({"v": FALLBACK_PROMPT_VERSION, "commit": commit, "entries": sorted deterministic identities, "scope": sorted scope})`.
+- A resumed run makes zero fallback calls. Two stubs that return the same entries in a different order give byte-identical `paths.json`.
+- The drift-guard test also pins a hash of the rendered `entry_fallback` text next to `FALLBACK_PROMPT_VERSION = 1`. Editing the template without bumping the version fails the test.
+
+**Errors.** Any exception the `CallFn` raises during the fallback propagates. It is not cached, and the stub records exactly one attempt.
+
+**How to exercise it.** Use a `FakeCall` fallback stub against a fixture with two argparse subcommands, then `write_paths_file`. Accounting must hold with one valid item plus one `line_end < line_start` item.
+
+Interfaces:
+- Produces: `class FallbackEntry(_Model)` with fields `kind: str`, `name: str = Field(min_length=1)`, `citation: Citation | None = None`, `reason: str = ""`; `class FallbackAnswer(_Model)` with field `entries: list[Any]` (required)
+- Produces: `def entry_fallback(entries: Sequence[EntryRecord], scope: Sequence[str]) -> str`
+- Produces: `FALLBACK_PROMPT_VERSION = 1`
+- Consumes: Block 5: `async def cached_call(*, cache_dir: Path, kind: Literal["fallback", "trace", "retrace"], key_material: Mapping[str, Any], prompt: str, schema: type[_Model], label: str, call: CallFn, root: Path, call_kwargs: Mapping[str, Any]) -> _Model`; `def canonical_key(material: Mapping[str, Any]) -> str`; `def make_quote_check(resolve: Resolve) -> Callable[[Citation], bool]`; `def make_git_reader(resolve: Resolve) -> Callable[[str], list[str] | None]`
+- Consumes: Block 2: `class SnapshotIndex` with `def enclosing_def(self, rel: str, line: int) -> HandlerRef | None`
+- Consumes: Block 1: `def normalise_rel_path(root: Path, path: str) -> str`; `class FallbackStatus(status: Literal["ok", "failed", "skipped"], reason: str | None)`; `class EntryKind(StrEnum)`; `class DropRecord(stage: DropStage, reason: DropReason, detail: str, entry: EntryRef)`
+
+Satisfies: entry-point-model-fallback (Single fallback agent per run; Fallback agent is read-only; Fallback response shape, as amended; Malformed fallback answer does not fail the run; CallFn errors are not retried; Citation must re-read at the commit; Paths are relative to the snapshot root; Fallback entries do not duplicate deterministic entries; Fallback entries go through the same scope filter; Fallback is deterministic and resumable); paths-output-contract (Every drop is recorded with a reason — "Uncited model entry recorded"; Empty results are valid — "Repository with no entry points"); entry-point-discovery (Discovery is deterministic and makes no model call — "No model call during discovery")
+
+## 8. Static e2e listing: tests that structurally invoke each path's entry
+
+**What it adds.** `code_facts/e2e.py` fills `tests.e2e` on every kept path. It does this by reading test sources only. It never imports a test module, never collects tests, and never runs a subprocess or a `CallFn`. A guard test patches `subprocess.Popen` and `os.system` to raise during listing. A test file whose top-level code raises and writes a marker leaves no marker, and its tests are still considered.
+
+**Which files and tests are scanned.**
+- Files matching `test_*.py` or `*_test.py` under the snapshot root.
+- These directories are skipped: `.git`, `.venv`, `venv`, `node_modules`, `__pycache__`, `site-packages`.
+- Tests are module-level `test*` `def`/`async def` functions, and `test*` methods of module-level `Test*` classes. Nested functions and helper functions are excluded.
+
+**Reading each file.**
+- Bytes are decoded as strict UTF-8 first. A failure becomes `decode_error`.
+- The text then goes to `ast.parse`. `SyntaxError` (NUL bytes included), `ValueError`, `RecursionError` and `MemoryError` all become `syntax_error`. Both reasons go into `test_listing_skips` with a root-relative `file`.
+- An empty file gives no tests and no skip entry.
+
+**Name resolution.** Callee names are resolved through:
+- module-level imports;
+- imports inside the test function body;
+- `import a.b as c`;
+- `from a.b import x as y`;
+- attribute chains on imported modules;
+- `from .x import y` re-exports in a package `__init__`, so `from pkg import run` matches a handler in `pkg/impl.py`.
+
+Extra roots are the nearest `pyproject.toml` ancestor, the parent of the test's `tests/` directory, and the test file's own directory. A name rebound locally inside the test (`main = Mock()`) does not resolve to the import.
+
+**Match kinds, in tie-break order.**
+- `direct_call`: the callee resolves to `(handler.path, handler.symbol)`. A same-named symbol from another module does not match.
 - `cli_argv`:
-  - the callee is a program or owning function from `cli_targets`, or `X().parse_args` on one;
-  - the first argument is a literal list or tuple;
-  - only its string constants are compared, against the tokens as an ordered subsequence;
-  - an empty argv never matches a subcommand entry.
+  - The callee is the program's resolved `main`, or `<parser builder>().parse_args`, in the subparser's module.
+  - The argv is a literal list or tuple. Only its string-constant elements are compared, so `str(repo)` elements are allowed.
+  - Those constants must contain the subcommand tokens as an ordered subsequence, so global options may come first.
+  - A non-literal argv, or an empty `main([])`, never matches a subcommand entry.
 - `cli_runner`:
-  - `.invoke(<app>, args)` on a receiver that is any of: a `CliRunner()` call from `click.testing` or `typer.testing`; a name bound to one; a fixture parameter returning one; or pytest-click's `cli_runner`;
-  - `args` may be a literal list, tuple or string (string split with `shlex`), given positionally or as `args=`;
-  - `tokens=()` matches single-command typer apps.
-- `subprocess`: `run`, `call`, `check_call`, `check_output` and `Popen` with a literal list or string; interpreters `sys.executable`, `python` and `python3` are normalised; matches `-m <mod> [sub]`, a script name, or the hook command.
-- `runpy`
+  - The receiver is a `CliRunner()` call, or a name bound to one, imported from `click.testing` or `typer.testing`.
+  - The first argument resolves to the click group or Typer app.
+  - The args are a literal list, or a string constant split with `shlex`.
+- `subprocess`:
+  - Covers `subprocess.run`, `call`, `check_call`, `check_output` and `Popen`.
+  - The command is a literal list, or a string constant split with `shlex`. The interpreters `sys.executable`, `python` and `python3` are treated as equal.
+  - It matches `python -m <module> [<subcommand>]` for `main_module` and `skill_command` entries, so `otherpkg` never matches `pkg`.
+  - It matches the project script name as the first token.
+  - It matches a token-equal hook command.
+- `runpy`: `runpy.run_module("<module>", …)`.
 
-**Hop-2 patches.** These move a test to `mocks_hop_2`, with `patch_line` set to the patch call's own line:
-- a patch on the retained hop 2's symbol, at its defining module or at hop 1's import alias, as:
-  - a decorator;
-  - a class-level `@patch` on `Test*` classes;
-  - a `with` item (each `context_expr` line, tuple items, `AsyncWith`);
-  - `.start()` on a patcher bound earlier. A patcher that is never started does not count.
-- `patch.object(<resolved>, "<name>")`;
-- `monkeypatch.setattr` (two positional arguments with a string first is the dotted form; three positional arguments with a string first is not a patch) on `monkeypatch`, `pytest.MonkeyPatch()` or a `MonkeyPatch.context()` receiver.
+A test that matches the entry, or any `also_invoked_by` invoker, is listed. A test can appear on several paths.
 
-Patches count inside the test, and inside fixtures that reach it:
-- requested by parameter, `@pytest.mark.usefixtures`, `pytestmark` or truthy literal `autouse`;
-- defined with `pytest.fixture`, an aliased `fixture` import, or `name=`;
-- coming from the module or from `conftest.py` files up to the root, with the nearest definition winning by name, followed transitively with a visited set.
+**Records and output.**
+- Each test is listed once per path. Its record keeps the minimum `Call.lineno` as `invocation_line`, chosen explicitly rather than by `ast.walk` order. On that line, the first match kind in the order above wins.
+- Records are sorted by `(file, line, node_id)`. `node_id` is `<root-relative file>::[Class::]name`, so it carries the `repo-b/` prefix in multi-repository snapshots.
+- Every path always has both lists. With no test files, both lists are `[]`.
+- Two runs, including one with `os.scandir` order reversed, give byte-identical output.
 
-**Edge rules, output and run command.**
-- A path with one retained hop always has empty `mocks_hop_2`.
-- Each test is de-duplicated to its earliest `invocation_line`, then by match order `direct_call`, `cli_argv`, `cli_runner`, `subprocess`, `runpy`.
-- Lists are sorted by `(file, line, node_id)`, and the result is byte-identical when filesystem order is reversed.
-- Run it with `uv run pytest tests/test_e2e_listing.py`. Fixture suites live under `tests/fixtures/paths/` and are kept out of collection.
+**How to exercise it.** Run `map_paths` on fixtures holding argparse, click, `__main__`, project-script and hook entries plus their test suites. Then assert on `tests.e2e` and `test_listing_skips` in the written `paths.json`.
 
 Interfaces:
-- Produces: `def list_e2e_tests(root: Path, paths: Sequence[TracedPath], entries: Sequence[Entry], index: PyIndex) -> tuple[dict[str, E2EListing], list[ListingSkip]]` (keyed by path id)
-- Consumes: Block 6: `def cli_targets(entry: Entry, index: PyIndex) -> CliTargets | None` (the click/typer contract: `apps=[<root group/app>]`, `tokens` as the name path after the root token, `()` for single-command typer apps)
-- Consumes: Block 5: `class CliTargets(NamedTuple): programs: list[SymbolRef]; apps: list[SymbolRef]; tokens: tuple[str, ...]; aliases: tuple[str, ...]`
-- Consumes: Block 8: `def parse_command_line(text: str) -> list[list[str]]`
-- Consumes: Block 2: `class PyIndex` with `def resolve_module(self, dotted: str, *, from_file: str, extra_roots: Sequence[str] = ()) -> str | None` and `def resolve_symbol(self, rel: str, name: str) -> HandlerRef | None`
-- Consumes: Block 1: `class E2EListing(_Strict): e2e: list[E2ERecord]; mocks_hop_2: list[MockedE2ERecord]`
-- Consumes: Block 1: `class ListingSkip(_Strict): file: str; reason: Literal["decode_error", "syntax_error"]`
+- Produces: `def list_e2e_tests(index: SnapshotIndex, paths: Sequence[PathRecord]) -> tuple[dict[str, TestListing], tuple[TestListingSkip, ...]]` (keyed by path id)
+- Consumes: Block 2: `class SnapshotIndex` with `def files(self) -> tuple[str, ...]`, `def parse(self, rel: str) -> ast.Module | None`, `def module_file(self, repo: str, dotted: str, extra_roots: Sequence[str] = ()) -> str | None`, `def module_name(self, rel: str) -> str | None` and `def repo_root(self, rel: str) -> str`
+- Consumes: Block 1: `class PathRecord(id: str, entry: EntryRecord, hops: tuple[Hop, ...], stops_at: int | None, break_reason: OutputBreakReason | None, changed_lines_covered: tuple[Location, ...], tests: TestListing)`; `class TestListing(e2e: tuple[E2ERecord, ...] = (), mocks_hop_2: tuple[MockedE2ERecord, ...] = ())`; `class E2ERecord(node_id: str, file: str, line: int, match: E2EMatch, invocation_line: int)`; `class TestListingSkip(file: str, reason: Literal["decode_error", "syntax_error"])`; `class E2EMatch(StrEnum)`
 
-Satisfies:
-- e2e-test-listing:
-  - Listing runs statically with no model call and no execution: all three scenarios
-  - Test discovery scope: all three
-  - Direct handler invocation is recognised: all three
-  - CLI subcommand invocation is recognised: all four
-  - Subprocess, runpy and script invocation is recognised: all five
-  - Alternate invokers count
-  - Tests that mock hop 2 are listed separately: all five
-  - Hop-2 patches applied by fixtures are recognised: both
-  - Listing applies to cut paths
-  - Listed test record shape
-  - Deterministic ordering and deduplication: all three
-  - Empty lists are explicit
-  - Unreadable test files are skipped with a reason: both
-- paths-output-contract: Test-listing shape: Mocked test listed separately
+Satisfies: e2e-test-listing (Listing runs statically with no model call and no execution; Test discovery scope; Direct handler invocation is recognised; CLI subcommand invocation is recognised; Subprocess, runpy and script invocation is recognised; Alternate invokers count; Listed test record shape; Deterministic ordering and deduplication; Empty lists are explicit; Unreadable test files are skipped with a reason); paths-output-contract (Test-listing shape, as amended)
+
+## 9. Hop-2 patch classification: tests that mock the second hop move to `tests.mocks_hop_2`
+
+This block extends `list_e2e_tests` so that a test is moved into `tests.mocks_hop_2` when it patches the path's hop-2 symbol. Such a test is written as a `MockedE2ERecord`, it is removed from `tests.e2e`, and its `patch_line` is the patch call's own line, which may be in a `conftest.py`. The hop-2 symbol comes from the second retained hop: the last identifier of `symbol_called`, together with the module named by its `citation.path`. If a path has fewer than two retained hops (a single-hop path, or a path cut after hop 1), no test moves, even when the test patches what the model originally proposed as hop 2.
+
+**Which targets count as hop 2**
+- `<defining module>.<symbol>`.
+- `<hop-1 module>.<name bound by hop 1's imports>`.
+- A test that patches only another symbol, such as `pkg.core.log`, stays in `tests.e2e`.
+
+**Patch forms recognised**
+- `mock.patch` / `unittest.mock.patch` / `patch` with a dotted string literal, used as a decorator, as a `with` item, or through `.start()` on a patcher created in the same function or fixture:
+  - every item of a multi-item `with` counts, and each one uses its own `context_expr.lineno`, never `With.lineno`;
+  - `async with` items count.
+- `patch.object(<resolved obj>, "<name>")`.
+- `monkeypatch.setattr` in either form:
+  - dotted string: two positional arguments where the first is a string containing a dot;
+  - object form: three positional arguments;
+  - keyword arguments are accepted in both.
+
+**Ignored, and leaving the test in `tests.e2e`**
+- A `patch(...)` that is constructed but never started.
+- A dotless string target.
+- A non-literal or f-string target.
+- A three-argument `setattr` whose first argument is a string.
+
+**Patches applied by fixtures**
+A patch applied in a fixture counts when the test either:
+- requests the fixture by parameter name, honouring `name=` aliases, or
+- the fixture is autouse: `autouse` is any truthy constant.
+
+The fixture decorator may be written as `pytest.fixture`, `import pytest as pt`, or `from pytest import fixture as fx`. Lookup rules:
+- Fixtures are looked up in the test module, then in each `conftest.py` from the test's directory up to the snapshot root.
+- Each fixture name resolves to its nearest definition. A module-level, non-patching `foo` therefore overrides an autouse conftest `foo` that patches.
+- Fixture-to-fixture requests are followed transitively with a visited set, so cycles terminate.
+- A patch wrapped around a fixture's `yield` counts.
+- A `conftest.py` that fails to decode or parse is recorded in `test_listing_skips` and contributes no fixtures.
+
+**Exercising and verifying**
+Run `map_paths` on a fixture suite containing:
+- decorator, `with`, `.start()`, `patch.object` and both `setattr` patches;
+- an unrequested non-autouse fixture;
+- a requested `tests/conftest.py` fixture that calls `monkeypatch.setattr("pkg.core.run", ...)`.
+
+Assert that every `mocks_hop_2` record has the expected `line`, `invocation_line`, `match` and `patch_line`. For example, a `@mock.patch("pkg.core.run")` decorator at line 9 on a test at line 10 that calls `main(["open"])` at line 12 gives `line` 10, `invocation_line` 12, `match` `cli_argv` and `patch_line` 9. Also assert that the two lists stay disjoint, which is checked by `write_paths_file`.
+
+Interfaces:
+- Produces: (none)
+- Consumes: Block 8: `def list_e2e_tests(index: SnapshotIndex, paths: Sequence[PathRecord]) -> tuple[dict[str, TestListing], tuple[TestListingSkip, ...]]`
+- Consumes: Block 1: `class MockedE2ERecord(E2ERecord)` adding `patch_line: int`; `class Hop(symbol_called: str, citation: Citation, note: str = "")`
+- Consumes: Block 2: `class SnapshotIndex` with `def parse(self, rel: str) -> ast.Module | None`, `def module_name(self, rel: str) -> str | None` and `def module_file(self, repo: str, dotted: str, extra_roots: Sequence[str] = ()) -> str | None`
+
+Satisfies: e2e-test-listing (Tests that mock hop 2 are listed separately; Hop-2 patches applied by fixtures are recognised; Listing applies to cut paths; Listed test record shape — "Record fields are populated"); paths-output-contract (Test-listing shape — "Mocked test listed separately")
