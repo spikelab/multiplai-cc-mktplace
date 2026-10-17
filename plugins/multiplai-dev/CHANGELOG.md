@@ -43,6 +43,9 @@ time, not derived from a tag.
   a whole, the Paths section says why and the walkthrough is still written.
   Resuming a run saved by an earlier version, after its trace stage, traces
   again rather than reporting no paths.
+- codebase-walkthrough: trace agents can now read only the target repository's
+  snapshot (`read_roots`), not any absolute path. Before, the working directory
+  set where relative paths started but did not limit reads.
 
 ### Added
 - codebase-walkthrough: in human mode a run also writes `<name>-paths.json`
