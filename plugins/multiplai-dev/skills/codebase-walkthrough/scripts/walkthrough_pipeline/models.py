@@ -16,6 +16,7 @@ from typing import Literal
 
 # The explore answers and units live in code_facts, shared with review and buildme.
 from code_facts.models import Citation, Dropped, ExploreOutput, Fact, FilePurpose, Term, Unit  # noqa: F401
+from code_facts.paths import PathsResult
 from pydantic import BaseModel, ConfigDict, Field
 
 # Stage names in run order. `WalkState.stage` holds the last one completed.
@@ -119,20 +120,6 @@ class DocsOutput(_Model):
     disagreements: list[Disagreement] = Field(default_factory=list)
 
 
-class Hop(_Model):
-    symbol_called: str
-    path: str
-    line_start: int = Field(ge=1)
-    line_end: int = Field(ge=1)
-    quote: str
-    note: str = ""
-
-
-class TraceOutput(_Model):
-    title: str = ""
-    hops: list[Hop] = Field(default_factory=list)
-
-
 class Paragraph(_Model):
     text: str
 
@@ -144,14 +131,6 @@ class SectionOutput(_Model):
 
 
 # --- stage records in the state ------------------------------------------------------
-
-
-class Scenario(BaseModel):
-    seed: dict                 # the boundary entry it starts from (SymbolEntry or Reference dump)
-    title: str = ""
-    hops: list[Hop] = Field(default_factory=list)
-    stops_at: int | None = None   # 1-based hop index the trace stops at, when it broke
-    break_reason: str = ""
 
 
 class Section(BaseModel):
@@ -184,8 +163,7 @@ class WalkState(BaseModel):
     uncovered_entries: list[str] = Field(default_factory=list)
     docs: dict = Field(default_factory=dict)
     docs_answers: dict[str, dict] = Field(default_factory=dict)
-    scenarios: list[Scenario] = Field(default_factory=list)
-    trace_answers: dict[str, dict] = Field(default_factory=dict)
+    paths: PathsResult | None = None                                # the trace stage's map_paths result
     sections: dict[str, Section] = Field(default_factory=dict)
     write_answers: dict[str, dict] = Field(default_factory=dict)
     dropped: list[Dropped] = Field(default_factory=list)
@@ -203,13 +181,5 @@ class WalkState(BaseModel):
             for c in fact.citations:
                 if c.id:
                     out[c.id] = c
-        for sc in self.scenarios:
-            for i, hop in enumerate(sc.hops):
-                cid = hop_citation_id(self.scenarios.index(sc), i)
-                out[cid] = Citation(path=hop.path, line_start=hop.line_start, line_end=hop.line_end,
-                                    quote=hop.quote, id=cid)
         return out
 
-
-def hop_citation_id(scenario: int, hop: int) -> str:
-    return f"s{scenario + 1}h{hop + 1}"

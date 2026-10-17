@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from multiplai_core.citations import check_quote, file_at, lines_at
 from multiplai_core.citations import normalise_ws as normalise
 
-from .models import (Citation, Fact, GateResult, Hop, Reference, RepoInfo, SymbolEntry, TargetInfo, Unit)
+from .models import (Citation, Fact, GateResult, Reference, RepoInfo, SymbolEntry, TargetInfo, Unit)
 from .target import require_rg
 
 SMALL_FILE_LINES = 30
@@ -153,66 +153,6 @@ def doc_quote_gate(doc_texts: dict[str, str], url: str, doc_quote: str) -> GateR
     if q not in normalise(text).lower():
         return GateResult(passed=False, reason="doc quote not in the page")
     return GateResult(passed=True)
-
-
-# --- trace -----------------------------------------------------------------------------------
-
-
-DISPATCH_SUFFIXES = (".delay", ".apply_async", ".s", ".si", ".signature")
-
-
-def called_names(symbol: str) -> list[str]:
-    """Names hop k may be called by, most specific first.
-
-    `DolceChannex_webhooks.channex_webhook_handler` -> [that, `channex_webhook_handler`];
-    `self._ack(rev)` -> [`self._ack`, `_ack`]; `task.delay` -> [`task`];
-    a route or a Celery task name (`dolcechannex.poll_x`) is tried whole too.
-    """
-    s = symbol.strip().strip("`'\" ")
-    head = s.split("(")[0].strip()
-    for suffix in DISPATCH_SUFFIXES:
-        if head.endswith(suffix):
-            head = head[: -len(suffix)]
-    out = [x for x in (s, head) if x]
-    ids = re.findall(r"[A-Za-z_]\w*", head)
-    if ids and "/" not in head:
-        out.append(ids[-1])
-    return list(dict.fromkeys(out))
-
-
-def _defines(window: str, name: str) -> bool:
-    n = re.escape(name)
-    return bool(re.search(rf"\b(?:async\s+def|def|class)\s+{n}\b|^\s*{n}\s*[:=]|['\"]{n}['\"]", window, re.M))
-
-
-def trace_gate(repos: dict[str, RepoInfo], seed: SymbolEntry | Reference, hops: list[Hop],
-               places: list[tuple[str, int]]) -> tuple[int, str]:
-    """(number of good hops from the start, reason for the first bad one or "").
-
-    Hop 1 is the seed's entry. For k > 1, hop k-1's quote contains the name
-    hop k is called as, and hop k's lines define it, or hop k's lines hold a
-    boundary.json entry (*places*: a cross-repo reference, a route, a task).
-    """
-    if not hops:
-        return 0, "no hops"
-    for k, hop in enumerate(hops):
-        c = Citation(path=hop.path, line_start=hop.line_start, line_end=hop.line_end, quote=hop.quote)
-        g = citation_gate(repos, c)
-        if not g.passed:
-            return k, f"hop {k + 1}: {g.reason}"
-        if k == 0:
-            if hop.path != seed.path or not (hop.line_start <= seed.line <= hop.line_end):
-                return 0, f"hop 1 is not the seed {seed.path}:{seed.line}"
-            continue
-        prev = hops[k - 1]
-        names = [n for n in called_names(hop.symbol_called) if n in normalise(prev.quote)]
-        if not names:
-            return k, f"hop {k}'s quote does not contain {hop.symbol_called!r}"
-        window = "\n".join(lines_at_commit(repos, hop.path, hop.line_start, hop.line_end) or [])
-        edge = any(hop.path == p and hop.line_start <= ln <= hop.line_end for p, ln in places)
-        if not edge and not any(_defines(window, n) for n in names):
-            return k, f"hop {k + 1}'s lines do not define {names[-1]!r}"
-    return len(hops), ""
 
 
 # --- write -----------------------------------------------------------------------------------

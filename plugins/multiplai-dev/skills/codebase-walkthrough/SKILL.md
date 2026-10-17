@@ -23,8 +23,15 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
 4. **docs** — code fetches the vendor's `llms.txt` and the pages it lists that
    name a resource the code calls, and maps each API path to a request in the
    API collection. One agent per resource links the docs to the code.
-5. **trace** — one agent per entry point (webhooks first, then routes called
-   from other repositories) follows the code to its last effect, hop by hop.
+5. **trace** — `code_facts.map_paths` finds the entry points of the module's
+   repository (argparse, click and typer commands, `[project.scripts]`,
+   `__main__` modules, `python -m` commands in a `SKILL.md`, hooks) and one
+   agent per entry follows the code hop by hop. The whole module is the
+   scope: every entry whose path reaches one of its lines is kept, and code
+   gates every hop. The walkthrough's **Paths** section lists each path: its
+   entry point, kind and who invokes it, its hops as `path:line` links with
+   ids `p<n>h<k>`, where the trace stops if it broke and why, and the e2e
+   tests that run it (or "no e2e test").
 6. **write** — one agent per section, with no tools, writes from the checked
    claims only and refers to code by citation id. Code turns the ids into
    `path:line` links and inserts the code snippets from the commit.
@@ -83,7 +90,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 |-----|---------|---------|
 | target | Directory of the module, inside a git repository | required |
 | `--depth` | `overview` (skips test files), `standard`, `deep` | `standard` |
-| `--mode` | `human` (Markdown and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or scenarios) | `human` |
+| `--mode` | `human` (Markdown and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or paths) | `human` |
 | `--name` | Base file name | the module directory, lower-cased |
 | `--output` | Directory for the walkthrough files | `INBOX/` if it exists, else the current directory |
 | `--search-root` / `--repos` | Where to look for references | the nearest ancestor holding several repositories |

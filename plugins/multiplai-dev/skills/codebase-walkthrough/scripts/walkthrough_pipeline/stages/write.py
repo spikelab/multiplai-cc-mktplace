@@ -1,4 +1,4 @@
-"""write: one agent per section, no tools. Input is gated facts, hops and doc claims only.
+"""write: one agent per section, no tools. Input is gated facts and doc claims only.
 
 Agents refer to code by citation id (`[[c42]]`); `render.py` turns ids into
 `path:line` links and puts in snippets taken from the commit, so a model never
@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from .. import sdk
 from ..gates import Corpus, glossary_gate, write_gate
-from ..models import Fact, Section, SectionOutput, WalkState, hop_citation_id
+from ..models import Fact, Section, SectionOutput, WalkState
 from ..prompts import write_section
 from . import RunContext, bounded
 
@@ -25,11 +25,11 @@ log = logging.getLogger(__name__)
 
 MATERIAL_MAX_CHARS = 60_000
 
-# (key, title) in document order. `write_specs` expands the per-unit and per-scenario ones.
+# (key, title) in document order. `write_specs` expands the per-unit ones; code renders the Paths body.
 HUMAN_SECTIONS = [
     ("overview", "Overview"),
     ("glossary", "Glossary"),
-    ("scenarios", "End-to-end scenarios"),
+    ("paths", "Paths"),
     ("tour", "Module tour"),
     ("boundary", "Who calls it and what it calls"),
     ("data", "Data stores and config"),
@@ -102,14 +102,6 @@ def write_specs(state: WalkState) -> list[Spec]:
     specs.append(Spec("overview", "Overview",
                       f"Two or three paragraphs: what `{name}` is for, what it talks to, and how its parts fit. "
                       f"Reference counts found by code: {bnd}.", _material(purposes + unit_facts[:120])))
-    for i, sc in enumerate(state.scenarios):
-        if not sc.hops:
-            continue
-        hops = [f"- [{hop_citation_id(i, k)}] hop {k + 1}: `{h.symbol_called}` — {h.note}  ({h.path}:{h.line_start})"
-                for k, h in enumerate(sc.hops)]
-        specs.append(Spec(f"scenario:s{i + 1}", sc.title or f"Scenario {i + 1}",
-                          "One or two paragraphs telling this scenario end to end, citing each hop by its id. "
-                          "The program lists the hops after your text.", _material(hops)))
     for u in state.units:
         facts = [_fact_line(f) for f in state.facts if f.source.startswith(f"unit:{u.id}/") or
                  f.source.startswith(f"unit:{u.id}:reask/")]

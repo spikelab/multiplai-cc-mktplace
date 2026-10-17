@@ -15,6 +15,21 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.81.0] - 2026-10-17
+
+### Changed
+- codebase-walkthrough: the trace stage now finds its entry points with
+  code_facts' `map_paths`, so a walkthrough of a CLI or skill repository
+  traces its argparse, click and typer commands, scripts, `__main__` modules,
+  skill commands and hooks, not only web routes. The whole module is the
+  scope: every entry point whose path reaches it is traced.
+- codebase-walkthrough: the "End-to-end scenarios" section is replaced by a
+  **Paths** section, rendered by code. For each path it gives the entry
+  point, its kind and who invokes it, the hops as `path:line` links with ids
+  (`p2h3`), where the trace stops and why, and the e2e tests that run it, or
+  "no e2e test". The coverage table's "Scenarios cut short" row becomes
+  "Paths traced" and "Paths cut short".
+
 ## [0.80.0] - 2026-10-17
 
 ### Added

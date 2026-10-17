@@ -28,7 +28,7 @@ cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && \
 | `gates.py` | Every gate. Must never import or call `sdk`. `citation_gate` checks `split_path` itself, then calls `multiplai_core.citations.check_quote`; `file_at_commit`/`lines_at_commit` wrap core `file_at`/`lines_at`, whose cache is `gates.file_at.cache_clear()`. |
 | `partition.py` | Splits the target into units of at most `--unit-lines`; a directory stays whole when it fits. |
 | `docs.py`, `fetcher.py`, `netguard.py`, `untrusted.py` | `llms.txt`, page choice, fetch with SSRF and host checks on every redirect, fencing; local docs; the API collection (names, methods, URLs, header names; never `.env*` or `secret` fields). `fetcher.py` is a trimmed copy of deep-research's without trafilatura. |
-| `stages/` | `explore`, `docs`, `trace`, `write`. Each gates its agents' answers and does one re-ask for what failed. |
+| `stages/` | `explore`, `docs`, `trace`, `write`. Each gates its agents' answers and does one re-ask for what failed. `trace` hands the whole module to `code_facts.map_paths`, which finds the entry points, traces and gates each path; `render.render_paths_section` writes the Paths section from its result. |
 | `prompts.py` | One function per agent task; shared rule blocks. |
 | `render.py` | Expands `[[cN]]` / `[[snippet:cN]]` into `path:line` links and snippets from the commit; draws Mermaid from verified data; writes the Markdown and the coverage table. In human mode, `render_walkthrough_json()` also writes `<name>-walkthrough.json` for the review-viewer (v1, `review-viewer/schema/walkthrough.v1.schema.json`): base is git's empty tree, one step per H2 anchored on its links into the module directory (the commits and coverage tables, and a section with no such link, go in `overview_md`), every other file under it in `skipped`. `review-viewer/scripts/tests/fixtures/module-walkthrough.json` is a copy the viewer's suite checks; `test_the_viewer_fixture_is_what_run_writes` fails when it drifts. |
 | `check.py` | Re-checks a finished walkthrough's links and snippets against the commits in its header. |
@@ -44,7 +44,6 @@ cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && \
 | `partition_gate` | every target file is in exactly one unit and no unit is over the limit unless it is a single oversize file |
 | `file_coverage_gate` / `boundary_coverage_gate` | every file over 30 lines, and every boundary entry, has a surviving fact citing it |
 | `doc_quote_gate` | the page is one that was fetched and the normalised quote is in it |
-| `trace_gate` | hop 1 is the seed; each next hop's lines define or hold the name the previous hop called, or hold a boundary entry |
 | `write_gate` | every citation id is known, every `path:line` resolves, every backticked identifier is in the corpus, every Mermaid label is a known name |
 | `glossary_gate` | the term appears in the repos |
 | `sections_gate` | the output has every required H2 |

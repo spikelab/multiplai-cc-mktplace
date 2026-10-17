@@ -272,7 +272,7 @@ async def run_state(state: WalkState, run_dir: Path, config: WalkConfig, *, sess
     covered = len(t.files) - len([f for f in target_files_ws(t) if f not in {c.path for x in state.facts
                                                                             for c in x.citations}])
     message = (f"walkthrough finished: {len(state.facts)} facts, {covered}/{len(t.files)} files with facts, "
-               f"{len(state.scenarios)} scenarios")
+               f"{len(state.paths.paths) if state.paths else 0} paths")
     progress.done(f"{message} (${ledger.cost_usd:.2f})")
     print(f"{slug}: {message}; run dir {run_dir}", flush=True)
     log_event("walkthrough", "done", message, session_id=session_id, target=slug, facts=len(state.facts),
