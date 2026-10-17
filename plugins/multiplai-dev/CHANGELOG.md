@@ -29,6 +29,11 @@ time, not derived from a tag.
   (`p2h3`), where the trace stops and why, and the e2e tests that run it, or
   "no e2e test". The coverage table's "Scenarios cut short" row becomes
   "Paths traced" and "Paths cut short".
+- codebase-walkthrough: `--scenarios` now caps the number of paths, and its
+  default rises from 6 to 21; a value below 1 is rejected. Every entry point
+  left out, over the cap or for another reason, is listed with its stage and
+  reason in a new **Left out** table under Coverage, and counted in the
+  "Entries left out" row.
 
 ## [0.80.0] - 2026-10-17
 

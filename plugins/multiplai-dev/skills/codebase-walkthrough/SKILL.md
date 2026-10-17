@@ -27,8 +27,10 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
    repository (argparse, click and typer commands, `[project.scripts]`,
    `__main__` modules, `python -m` commands in a `SKILL.md`, hooks) and one
    agent per entry follows the code hop by hop. The whole module is the
-   scope: every entry whose path reaches one of its lines is kept, and code
-   gates every hop. The walkthrough's **Paths** section lists each path: its
+   scope: every entry whose path reaches one of its lines is kept, up to
+   `--scenarios` paths (default 21), and code gates every hop. Every entry
+   left out (over the cap, unreachable, a trace that failed) is listed with
+   its stage and reason in the **Left out** table under Coverage. The walkthrough's **Paths** section lists each path: its
    entry point, kind and who invokes it, its hops as `path:line` links with
    ids `p<n>h<k>`, where the trace stops if it broke and why, and the e2e
    tests that run it (or "no e2e test").
@@ -98,6 +100,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 | `--docs` | Vendor docs base URL with an `llms.txt` | none |
 | `--docs-dir` | Local docs directory (repeatable) | a directory next to the repos named after the vendor |
 | `--api-collection` | Bruno/OpenCollection directory | a directory next to the repos holding `opencollection.yml` |
+| `--scenarios` | Cap on the number of paths traced (the flag keeps its old name) | 21 |
 | `--max-usd` | Budget circuit breaker | 50 |
 
 ## Steps

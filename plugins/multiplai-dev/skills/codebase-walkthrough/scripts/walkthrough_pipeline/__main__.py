@@ -81,6 +81,17 @@ def _repo_key(text: str) -> str:
     return text
 
 
+def _positive_int(value: str) -> int:
+    """A whole number of at least 1 (`--scenarios`: the path cap)."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a whole number") from None
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {n}")
+    return n
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="walkthrough_pipeline",
@@ -108,7 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--docs-pages", type=int, default=30, help="Most doc pages fetched (default 30)")
     rn.add_argument("--api-collection", help="A Bruno/OpenCollection directory of API requests")
     rn.add_argument("--unit-lines", type=int, default=6000, help="Most lines per explore unit (default 6000)")
-    rn.add_argument("--scenarios", type=int, default=6, help="Most end-to-end scenarios traced (default 6)")
+    rn.add_argument("--scenarios", type=_positive_int, default=21,
+                    help="Cap on the number of paths traced (default: 21).")
     rn.add_argument("--lsp-timeout", type=float, default=300.0,
                     help="Seconds pyright-langserver gets for references (default 300; 0 = skip LSP)")
     _run_flags(rn)

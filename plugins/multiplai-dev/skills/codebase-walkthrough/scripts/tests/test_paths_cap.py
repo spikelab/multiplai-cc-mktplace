@@ -73,7 +73,7 @@ def test_25_commands_with_the_default_cap_trace_21_and_list_4_over_cap(tmp_path,
     assert [d.reason for d in result.dropped] == ["over_cap"] * 4
     md = md_path.read_text()
     body = _paths_body(md)
-    assert body.splitlines()[0] == ("21 paths reach this module. 4 entries were left out; "
+    assert body.strip().splitlines()[0] == ("21 paths reach this module. 4 entries were left out; "
                                     "see **Left out** under Coverage.")
     coverage = dict(split_sections(md)[1])["Coverage"]
     assert re.search(r"^\| Entries left out \| 4 \|", coverage, re.M)

@@ -65,7 +65,7 @@ class RunOptions:
     docs_pages: int = 30
     api_collection: str | None = None
     unit_lines: int = 6000
-    scenarios: int = 6
+    scenarios: int = 21          # the path cap
     lsp_timeout: float = 300.0
 
 

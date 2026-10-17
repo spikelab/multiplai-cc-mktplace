@@ -18,6 +18,7 @@ import code_facts
 
 from .. import sdk
 from ..models import WalkState
+from ..render import left_out_count
 from . import RunContext
 
 log = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ async def run_trace(state: WalkState, ctx: RunContext) -> WalkState:
     )
     state.paths = result
     ctx.counts = {"paths": len(result.paths),
-                  "cut_short": sum(1 for p in result.paths if p.stops_at is not None)}
+                  "cut_short": sum(1 for p in result.paths if p.stops_at is not None),
+                  "left_out": left_out_count(result)}
     state.stage = "trace"
     return state

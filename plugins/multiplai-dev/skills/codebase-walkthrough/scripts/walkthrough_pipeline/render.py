@@ -16,7 +16,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote as url_quote
 
-from code_facts.paths import PathHop, TracedPath
+from code_facts.paths import PathHop, PathsResult, TracedPath
 
 from .check import LINK
 from .gates import CITE_ID, file_at_commit, lines_at_commit, sections_gate
@@ -159,13 +159,53 @@ def _path_block(state: WalkState, lk: Linker, path: TracedPath) -> list[str]:
     return out
 
 
+# Diagnostics listed in Left out; only seed_not_found counts as an entry left out.
+LEFT_OUT_DIAGNOSTICS = ("seed_not_found", "dynamic_name")
+
+
+def left_out_count(result: PathsResult) -> int:
+    """Entries left out: every drop, plus every seed that was not found."""
+    return len(result.dropped) + sum(1 for d in result.diagnostics if d.reason == "seed_not_found")
+
+
+def render_left_out(result: PathsResult, repo_key: str) -> str:
+    """The `### Left out` table: drops, then diagnostics, then e2e listing skips. "" when there is no row.
+
+    Entries are plain text, never links: they are not claims, so `check` does not re-read them.
+    """
+    rows: list[tuple[str, str, str, str]] = []
+    for d in result.dropped:
+        loc = d.entry.location
+        rows.append((f"`{repo_key}/{loc.path}:{loc.line}` (`{d.entry.name}`)", d.stage, d.reason, d.detail))
+    for g in result.diagnostics:
+        if g.reason in LEFT_OUT_DIAGNOSTICS:
+            where = f"{repo_key}/{g.path}" + (f":{g.line}" if g.line is not None else "")
+            rows.append((f"`{where}`", "discover", g.reason, g.detail))
+    for skip in result.test_listing_skips:
+        rows.append((f"`{repo_key}/{skip.file}`", "e2e", "e2e_listing", skip.reason))
+    if not rows:
+        return ""
+    out = ["### Left out", "", "| Entry | Stage | Reason | Detail |", "|---|---|---|---|"]
+    out += [f"| {_cell(entry)} | {_cell(stage)} | `{_cell(reason)}` | {_cell(detail)} |"
+            for entry, stage, reason, detail in rows]
+    return "\n".join(out)
+
+
+def _entries_left_out(m: int) -> str:
+    return ("1 entry was left out" if m == 1 else f"{m} entries were left out") + \
+        "; see **Left out** under Coverage."
+
+
 def render_paths_section(state: WalkState, linker: Linker) -> str:
     """The Paths body: a lead sentence, then one block per path in map_paths order."""
     paths = state.paths.paths if state.paths else []
+    m = left_out_count(state.paths) if state.paths else 0
     if not paths:
-        return "No entry points reaching this module were found."
+        return f"No paths were traced. {_entries_left_out(m)}" if m else \
+            "No entry points reaching this module were found."
     n = len(paths)
-    out = ["1 path reaches this module." if n == 1 else f"{n} paths reach this module.", ""]
+    lead = "1 path reaches this module." if n == 1 else f"{n} paths reach this module."
+    out = [lead + (f" {_entries_left_out(m)}" if m else ""), ""]
     for path in paths:
         out += _path_block(state, linker, path) + [""]
     return "\n".join(out).rstrip()
@@ -200,12 +240,16 @@ def coverage_lines(state: WalkState) -> list[str]:
         paths = state.paths.paths if state.paths else []
         out.append(f"| Paths traced | {len(paths)} |")
         out.append(f"| Paths cut short | {sum(1 for p in paths if p.stops_at is not None)} |")
+        out.append(f"| Entries left out | {left_out_count(state.paths) if state.paths else 0} |")
     if state.lsp:
         lsp = state.lsp
         detail = (f"{lsp.get('status')} in {lsp.get('seconds')}s, {lsp.get('answered')} of {lsp.get('symbols')} "
                   "symbols answered" if not str(lsp.get("status", "")).startswith("skipped") else lsp.get("status"))
         out.append(f"| pyright references | {detail} |")
     out.append("")
+    left_out = render_left_out(state.paths, t.repo_key) if state.paths else ""
+    if left_out:
+        out += [left_out, ""]
     missing = [f for f in files if f not in cited]
     if missing:
         out.append(f"Files with no surviving fact ({len(missing)}):")
