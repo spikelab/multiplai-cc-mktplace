@@ -37,6 +37,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from multiplai_core.env import load_multiplai_conf
 from multiplai_core.stage_config import check_effort, coerce_int, conf_value, read_yaml_mapping
@@ -61,6 +62,9 @@ class ReviewConfig:
     effort: str | None = None
     max_turns: int = 60
     max_cost_usd: float | None = DEFAULT_MAX_USD
+    # Where `max_cost_usd` came from: "default" when no --max-cost-usd was given (the cost NOTICE
+    # prints then). No config file sets the budget today; "config" is kept for when one does.
+    max_cost_source: Literal["default", "cli", "config"] = "default"
     dimensions: tuple[str, ...] = field(default=DIMENSIONS)
     explain: bool = False
     find_with_facts: bool = False
@@ -112,8 +116,9 @@ def _yaml_path(out_dir: Path | None) -> Path | None:
     return path
 
 
-def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MAX_USD) -> ReviewConfig:
-    cfg = ReviewConfig(max_cost_usd=max_cost_usd)
+def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MAX_USD,
+                max_cost_source: Literal["default", "cli", "config"] = "default") -> ReviewConfig:
+    cfg = ReviewConfig(max_cost_usd=max_cost_usd, max_cost_source=max_cost_source)
     try:
         conf = load_multiplai_conf()
     except Exception as e:  # a broken conf file degrades to defaults

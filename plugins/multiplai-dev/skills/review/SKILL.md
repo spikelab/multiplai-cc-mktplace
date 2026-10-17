@@ -484,7 +484,9 @@ Use `--branch <name>` (reviewed against its merge-base with `origin/HEAD`) or
 `--plan-only` in the foreground and paste its total line to the user. When
 `finder calls` is over 20, ask the user to confirm the run and to choose
 `--max-cost-usd` before starting it. Say that the 50 USD default stops a large
-run part way, and that `resume` continues it with a higher ceiling. A batch is a YAML list of
+run part way, and that `resume` continues it with a higher ceiling. Every
+change review prints the piece and path finders' estimate when it starts
+(see Cost); pass any `WARNING:` or `NOTICE:` line on to the user. A batch is a YAML list of
 `{repo, branch|pr|range, tickets, deployed_in, mode}` (`batch --mode` sets
 the default for entries without one):
 
@@ -718,6 +720,29 @@ bodies and matching this regex (from `scripts/review_pipeline/pr_marker.py`):
 ```
 
 A change to the format changes `v`.
+
+## Cost
+
+On the reference change (PR #295, a 227 KB diff) the new finders cost about
+$14 for the piece finders and about $24 for the path finders (21 paths),
+about $38 together. That is before the dimension finders and verification
+(and the paths mapping), so a whole review of a change that size costs more.
+The piece figure scales with the characters of diff the pieces hold
+(lockfiles and binary files count for nothing), the path figure with the
+number of paths.
+
+`--plan-only`, the start of a review, and `resume` print the estimate on
+stderr as `cost (approximate): pieces $14 + paths $24 (up to 21 paths) =
+$38; ...` (a tree review with `--paths`: paths only; without it, nothing).
+When the estimate, with a third added for what it leaves out, reaches the
+budget left, a `WARNING:` line says the run will stop partway. A change
+review on the 50 USD default also prints a `NOTICE:`: the 50 USD default can
+stop a large change review partway, the reference change among them. A
+stopped review keeps every finder report it paid for; continue it with
+`python -m review_pipeline resume <out>/<repo>/<object> --trust-repo
+--max-cost-usd <higher>`, which asks only for what is missing. The review
+warns about cost but never refuses to start: the `--max-cost-usd` ledger is
+the only stop, and `--plan-only` exits the same either way.
 
 ## What a review cost: `run` and `runs.jsonl`
 

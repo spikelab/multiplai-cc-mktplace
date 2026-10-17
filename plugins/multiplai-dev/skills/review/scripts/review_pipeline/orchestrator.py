@@ -25,6 +25,7 @@ from multiplai_core.log_utils import log_event
 from . import budget, deps, ledger as review_ledger, rounds, runlock, target as target_mod, timings
 from .chunks import split_pieces
 from .config import ReviewConfig, run_config
+from .costs import cost_lines, kept_line
 from .export import producer, run_record, to_findings_file, write_checks_file, write_findings_file
 from .facts import FACTS_FILE
 from .gates import gated_need, reason_kind
@@ -226,6 +227,7 @@ async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig
             progress.failed(str(e))
             log_event("review", "budget_stop", str(e), session_id=session_id, level="WARNING",
                       target=t.slug, cost_usd=round(e.cost_usd, 4), stage=name)
+            e.kept = kept_line(state)  # the STOPPED message's last line
             raise
         except VerifyIncomplete as e:
             # The verdicts that came back are kept; `resume` asks only for the rest.
@@ -514,10 +516,18 @@ def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[st
     extra_finders_notice(config, spec)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, lock=lock)
+        print_cost_lines(state, config, resuming=False)
         text = plan_text(state, config)
         path = target_dir / "plan.txt"
         path.write_text(text, encoding="utf-8")
     return text, path
+
+
+def print_cost_lines(state: ReviewState, config: ReviewConfig, *, resuming: bool) -> None:
+    """The piece and path finders' estimate, WARNING and NOTICE (`costs.cost_lines`) on stderr. Advisory only."""
+    for line in cost_lines(state, budget=config.max_cost_usd or 0.0,
+                           budget_is_default=config.max_cost_source == "default", resuming=resuming):
+        print(line, file=sys.stderr, flush=True)
 
 
 EXTRA_FINDERS_NOTICE = "review: --extra-finders has no effect; per-piece finders now run by default"
@@ -560,6 +570,7 @@ async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, sessi
     extra_finders_notice(config, spec)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, check_interrupted=True, lock=lock)
+        print_cost_lines(state, config, resuming=False)  # after the pieces, before the paths stage
         # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.
         _set_aside_progress(target_dir)
         # The last round's facts.json is kept in rounds/ by prepare; the explain stage writes
@@ -579,6 +590,8 @@ async def resume(target_dir: Path, config: ReviewConfig, *, session_id: str = ""
         if state is None:
             raise ReviewError(f"no readable review-state.json in {target_dir}")
         extra_finders_notice(config)
+        if not state.past("find"):
+            print_cost_lines(state, config, resuming=True)
         return await run_state(state, target_dir, config, session_id=session_id)
 
 

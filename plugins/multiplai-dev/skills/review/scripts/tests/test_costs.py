@@ -154,7 +154,7 @@ def test_the_default_budget_notice_prints_on_a_change_review_even_under_the_budg
 
 
 def big_repo(tmp_path: Path, code_chars: int, lock_chars: int = 0) -> tuple[Path, str, str]:
-    """base -> head: `p01/m.py` gains *code_chars* characters of lines, `uv.lock` *lock_chars*."""
+    """base -> head: `p01/m.py` gains about *code_chars* characters of diff, `uv.lock` *lock_chars*."""
     repo = tmp_path / "big"
     (repo / "p01").mkdir(parents=True)
     git(repo, "init", "-q", "-b", "main")
@@ -164,7 +164,7 @@ def big_repo(tmp_path: Path, code_chars: int, lock_chars: int = 0) -> tuple[Path
     git(repo, "commit", "-q", "-m", "base")
     base = git(repo, "rev-parse", "HEAD")
     line = "value_%06d = %06d  # padding to make the line longer than most\n"
-    (repo / "p01" / "m.py").write_text("A = 0\n" + "".join(line % (i, i) for i in range(code_chars // 61)))
+    (repo / "p01" / "m.py").write_text("A = 0\n" + "".join(line % (i, i) for i in range(code_chars // (len(line % (0, 0)) + 1))))
     if lock_chars:
         (repo / "uv.lock").write_text("version = 1\n" + "".join(f"pkg-{i:06d} = 1\n" for i in range(lock_chars // 15)))
     git(repo, "add", "-A")
@@ -277,11 +277,11 @@ def test_the_warning_prints_before_the_paths_stage(tmp_path, capsys, model, mapp
 
 def test_skill_md_states_the_reference_figures_the_constants_hold():
     text = SKILL_MD.read_text(encoding="utf-8")
-    section = text.split("## Cost", 1)[1].split("\n## ", 1)[0]
+    section = " ".join(text.split("\n## Cost\n", 1)[1].split("\n## ", 1)[0].split())  # prose: lines rewrap
     piece = re.search(r"about \$(\d+) for the piece finders", section)
     path = re.search(r"about \$(\d+) for the path finders", section)
     assert piece and path and "227 KB" in section
     assert int(piece.group(1)) == round(costs().PIECE_REF_USD) and int(path.group(1)) == round(costs().PATH_REF_USD)
     assert "before the dimension finders and verification" in section
-    assert re.search(r"50 USD default .*stop", section, re.S) and "resume" in section and "--max-cost-usd" in section
+    assert re.search(r"50 USD default .*stop", section) and "resume" in section and "--max-cost-usd" in section
     assert "never refuses to start" in section

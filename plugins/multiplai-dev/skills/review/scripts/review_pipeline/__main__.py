@@ -72,8 +72,16 @@ def _trust_flag(p: argparse.ArgumentParser) -> None:
 
 
 def _budget_flag(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--max-cost-usd", type=float, default=DEFAULT_MAX_USD,
+    # None when not given, so the run knows it is on the default (the cost NOTICE): `_budget_of`.
+    p.add_argument("--max-cost-usd", type=float, default=None,
                    help=f"Circuit breaker per target, in USD (default {DEFAULT_MAX_USD:g}; 0 = no ceiling).")
+
+
+def _budget_of(args: argparse.Namespace) -> dict:
+    """`load_config`'s budget arguments: the default when --max-cost-usd was not given, 0 as no ceiling."""
+    if args.max_cost_usd is None:
+        return {"max_cost_usd": DEFAULT_MAX_USD, "max_cost_source": "default"}
+    return {"max_cost_usd": args.max_cost_usd or None, "max_cost_source": "cli"}
 
 
 def _deps_flag(p: argparse.ArgumentParser) -> None:
@@ -276,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
             # Reads git only: nothing reaches a model, so no trust is needed and no ledger is kept.
             try:
                 out.mkdir(parents=True, exist_ok=True)
-                config = load_config(out, max_cost_usd=args.max_cost_usd or None)
+                config = load_config(out, **_budget_of(args))
                 text, plan_path = orchestrator.plan_only(spec, out, config)
             except orchestrator.ReviewError as e:
                 print(f"ERROR: {e}", file=sys.stderr)
@@ -289,12 +297,12 @@ def main(argv: list[str] | None = None) -> int:
         print(TRUST_MESSAGE, file=sys.stderr)
         return 3
 
-    max_cost = args.max_cost_usd or None
+    max_cost = _budget_of(args)
     try:
         if args.command == "review":
             out.mkdir(parents=True, exist_ok=True)
             print(f"out: {out}", flush=True)
-            path = asyncio.run(orchestrator.review(spec, out, load_config(out, max_cost_usd=max_cost),
+            path = asyncio.run(orchestrator.review(spec, out, load_config(out, **max_cost),
                                                    session_id=args.session_id))
             render.write_rollups(out)
             render.write_runs(out)
@@ -305,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "resume":
             target_dir = Path(args.target_dir).expanduser().resolve()
             root = rounds.out_root(target_dir)
-            path = asyncio.run(orchestrator.resume(target_dir, load_config(root, max_cost_usd=max_cost),
+            path = asyncio.run(orchestrator.resume(target_dir, load_config(root, **max_cost),
                                                    session_id=args.session_id))
             render.write_rollups(root)
             render.write_runs(root)
@@ -322,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 try:
                     result = asyncio.run(orchestrator.assess_only(
-                        target_dir, load_config(rounds.out_root(target_dir), max_cost_usd=max_cost)))
+                        target_dir, load_config(rounds.out_root(target_dir), **max_cost)))
                 except sdk.RepoTrustError:
                     raise
                 except orchestrator.budget.BudgetExceededError as e:
@@ -350,7 +358,7 @@ def main(argv: list[str] | None = None) -> int:
             out.mkdir(parents=True, exist_ok=True)
             print(f"out: {out}", flush=True)
             written, failures = asyncio.run(orchestrator.batch(
-                specs, out, load_config(out, max_cost_usd=max_cost), parallel=args.parallel,
+                specs, out, load_config(out, **max_cost), parallel=args.parallel,
                 session_id=args.session_id))
             print("findings: " + " ".join(str(p) for p in written))
             print("checks: " + " ".join(str(p.parent / "checks.json") for p in written))
@@ -365,8 +373,9 @@ def main(argv: list[str] | None = None) -> int:
         print(TRUST_MESSAGE, file=sys.stderr)
         return 3
     except orchestrator.budget.BudgetExceededError as e:
+        kept = f"\n{e.kept}" if getattr(e, "kept", "") else ""
         print(f"STOPPED: {e}\n{e.diagnosis}\nResume with: python -m review_pipeline resume <out>/<repo>/<object> "
-              f"--max-cost-usd <higher>", file=sys.stderr)
+              f"--max-cost-usd <higher>{kept}", file=sys.stderr)
         return 4
     except VerifyIncomplete as e:
         print(f"STOPPED: {e}\nThe other verdicts are kept. Retry only these findings with: "
