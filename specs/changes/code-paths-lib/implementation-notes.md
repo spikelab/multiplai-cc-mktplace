@@ -85,3 +85,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   (1) D6 rule 7 says a command's handler is "the edge target's def, else null", but that makes a no-subcommand command's handler null, so the spec's "hook and SKILL.md invoke the same module → one entry" could never happen; command entries instead take the main_module handler of the target file (spec amended to say so). (2) D2's module layout has no home for command parsing; it went into a new code_facts/commands.py so later e2e subprocess matching can share it, which meant adding that module to the test helper's lookup list. (3) Unspecified choices: hook `python -m` uses the hooks file's directory where SKILL.md uses its own; relative paths run from the repository root; a named but missing `.py` or `-m` target is `unresolved_target` rather than a launcher fallback; only top-level argparse subcommands are matched by a command's first positional.
+
+## Block 6 — Discover `SKILL.md` and hook commands, resolving through shell launchers (refactorer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  A command that can't be tokenised (for example, an unclosed quote) is skipped with no diagnostic in a `SKILL.md`, but gets an `unresolved_target` diagnostic in a hooks file. The spec doesn't cover this case for either source.

@@ -187,8 +187,18 @@ def _scans(root: Path, index: PyIndex) -> Iterator[_Found]:
         yield _project_script_entries(root, index, path)
 
 
+def _unreadable(path: str, error: Exception) -> _Found:
+    """What a scanner finds in a file it cannot read or parse: no entries, and one file-level `parse_error`."""
+    return [], [Diagnostic(path=path, line=None, reason="parse_error", detail=f"{type(error).__name__}: {error}")]
+
+
+def _handler_location(handler: Handler) -> Location:
+    """The location of a handler's `def` (or of a non-Python target's line)."""
+    return Location(path=handler.path, line=handler.line)
+
+
 def _edge(from_path: str, from_line: int, to: Handler) -> KnownEdge:
-    return KnownEdge(from_=Location(path=from_path, line=from_line), to=Location(path=to.path, line=to.line))
+    return KnownEdge(from_=Location(path=from_path, line=from_line), to=_handler_location(to))
 
 
 def _static_entry(kind: EntryKind, name: str, path: str, line: int, handler: Handler | None,
@@ -814,7 +824,7 @@ def _project_script_entries(root: Path, index: PyIndex, path: str) -> _Found:
         text = (root / path).read_bytes().decode("utf-8")
         document = tomllib.loads(text)
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
-        return [], [Diagnostic(path=path, line=None, reason="parse_error", detail=f"{type(e).__name__}: {e}")]
+        return _unreadable(path, e)
     project = document.get("project")
     scripts = project.get("scripts") if isinstance(project, dict) else None
     if not isinstance(scripts, dict):
@@ -1016,8 +1026,14 @@ class _CommandTarget:
     to: Location
     handler: Handler | None
 
+    @classmethod
+    def at_file(cls, path: str) -> _CommandTarget:
+        """Line 1 of a launcher or other non-Python file the command runs, with a symbol-less handler."""
+        return cls(Location(path=path, line=1), Handler(path=path, line=1, symbol=None))
+
 
 def _command_scans(root: Path, index: PyIndex, subcommands: _Subcommands) -> Iterator[_Found]:
+    """What each command scanner finds: `SKILL.md` by `SKILL.md`, then hooks file by hooks file, in path order."""
     for path in index.files_named("SKILL.md"):
         yield _skill_command_entries(root, index, subcommands, path)
     for path in filter(is_hooks_file, index.walked_files()):
@@ -1029,7 +1045,7 @@ def _skill_command_entries(root: Path, index: PyIndex, subcommands: _Subcommands
     try:
         text = (root / path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
-        return [], [Diagnostic(path=path, line=None, reason="parse_error", detail=f"{type(e).__name__}: {e}")]
+        return _unreadable(path, e)
     skill = posixpath.basename(posixpath.dirname(path)) or root.absolute().name
     entries: list[Entry] = []
     diagnostics: list[Diagnostic] = []
@@ -1041,13 +1057,13 @@ def _skill_command_entries(root: Path, index: PyIndex, subcommands: _Subcommands
         module = python_module(command.tokens)
         if module is None:
             continue
-        name, arguments = module
-        target = _module_target(index, subcommands, command, path, name, arguments)
+        module_name, arguments = module
+        target = _module_target(index, subcommands, command, path, module_name, arguments)
         if isinstance(target, str):
             diagnostics.append(Diagnostic(path=path, line=line, reason="unresolved_target", detail=target))
             continue
         positional = first_positional(arguments)
-        entry_name = f"{skill}: {name}" + (f" {positional}" if positional else "")
+        entry_name = f"{skill}: {module_name}" + (f" {positional}" if positional else "")
         entries.append(_command_entry("skill_command", entry_name, path, line, invocation, target))
     return entries, diagnostics
 
@@ -1057,7 +1073,7 @@ def _hook_entries(root: Path, index: PyIndex, subcommands: _Subcommands, path: s
     try:
         hooks = hook_commands((root / path).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as e:
-        return [], [Diagnostic(path=path, line=None, reason="parse_error", detail=f"{type(e).__name__}: {e}")]
+        return _unreadable(path, e)
     entries: list[Entry] = []
     diagnostics: list[Diagnostic] = []
     for hook in hooks:
@@ -1093,7 +1109,7 @@ def _hook_target(index: PyIndex, subcommands: _Subcommands, command: CommandLine
     file = command.launcher or next((f for f in named if f and index.has_file(f)), None)
     if file is None:
         return "it runs no file of the snapshot"
-    return _CommandTarget(Location(path=file, line=1), Handler(path=file, line=1, symbol=None))
+    return _CommandTarget.at_file(file)
 
 
 def _module_target(index: PyIndex, subcommands: _Subcommands, command: CommandLine, source_file: str,
@@ -1109,12 +1125,12 @@ def _module_target(index: PyIndex, subcommands: _Subcommands, command: CommandLi
         return _CommandTarget(*main_module_handler(index, module_file))
     if subcommand.handler is None:
         return _CommandTarget(subcommand.location, None)
-    handler = subcommand.handler
-    return _CommandTarget(Location(path=handler.path, line=handler.line), handler)
+    return _CommandTarget(_handler_location(subcommand.handler), subcommand.handler)
 
 
 def _command_entry(kind: EntryKind, name: str, path: str, line: int, invocation: str,
                    target: _CommandTarget) -> Entry:
+    """An entry for the command `invocation` at `path:line`, with one known edge to where it lands."""
     location = Location(path=path, line=line)
     return Entry(kind=kind, name=name, location=location, handler=target.handler, invocation=invocation,
                  known_edges=[KnownEdge(from_=location, to=target.to)], also_invoked_by=[])
