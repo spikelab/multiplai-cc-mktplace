@@ -1,6 +1,0 @@
-context: "Project: \n"
-schema: spec-driven
-tdd:
-  enabled: true
-  test_command: uv run --package walkthrough-pipeline --extra dev python -m pytest
-    plugins/multiplai-dev/lib/code_facts/tests -q
