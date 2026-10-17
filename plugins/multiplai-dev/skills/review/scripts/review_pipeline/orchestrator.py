@@ -12,8 +12,9 @@ import hashlib
 import logging
 import os
 import shutil
+import sys
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,7 +23,7 @@ import yaml
 from multiplai_core.log_utils import log_event
 
 from . import budget, deps, ledger as review_ledger, rounds, runlock, target as target_mod, timings
-from .chunks import diff_files, finder_chunks, split_pieces
+from .chunks import split_pieces
 from .config import ReviewConfig, run_config
 from .export import producer, run_record, to_findings_file, write_checks_file, write_findings_file
 from .facts import FACTS_FILE
@@ -97,7 +98,7 @@ class TargetSpec:
     mode: str = "full"  # `full` or `critical` (models.MODES)
     restart: bool = False  # start over even when the ledger shows an interrupted run
     trim: bool = False  # a tree review also runs the trim finder (`--trim`)
-    extra_finders: bool = False  # a change review's first round adds the extra finders
+    extra_finders: bool = False  # `--extra-finders` was given: accepted, ignored, noticed once
     paths: bool = False  # a tree review also maps its paths (`--paths`); a change review always does
 
 
@@ -361,10 +362,7 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
                                   base_tree=target_mod.tree_paths(info.repo_path, info.base_sha))
         except target_mod.TargetError as e:
             raise ReviewError(str(e)) from e
-    # The extra finders run on a change's first complete round only: no finished round kept
-    # before this one. A run that stopped before export is kept as a round but not counted.
-    extra = spec.extra_finders and not info.is_tree and rounds.finished_rounds(target_dir) == 0
-    return (ReviewState(target=info, mode=spec.mode, trim=spec.trim, extra_finders=extra,
+    return (ReviewState(target=info, mode=spec.mode, trim=spec.trim,
                         paths_enabled=spec.paths and info.is_tree, pieces=pieces,
                         needs=[gated_need(n) for n in needs]), target_dir)
 
@@ -482,9 +480,6 @@ def plan_text(state: ReviewState, config: ReviewConfig) -> str:
         where = f" ({group[0]} .. {group[-1]})" if len(group) > 1 else (f" ({group[0]})" if group else "")
         lines.append(f"group {i}: {len(group)} files, {chars} characters{where}")
     calls = len(groups) * len(dims)
-    if state.extra_finders:  # the same chunks `run_find` asks, one call each
-        diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
-        calls += len(finder_chunks(diff_files(diff)))
     total = f"groups: {len(groups)}  finder calls: {calls}  files skipped: {len(t.skipped)}"
     found = deps.locked_git_deps(t) if config.deps else []  # read from git only; nothing is fetched
     if found:
@@ -516,7 +511,7 @@ def piece_plan_lines(state: ReviewState) -> list[str]:
 
 def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[str, Path]:
     """Resolve the target and write `plan.txt` beside `skipped.txt`; no model call, no ledger."""
-    spec = _extra_finders_from(config, spec)
+    extra_finders_notice(config, spec)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, lock=lock)
         text = plan_text(state, config)
@@ -525,9 +520,13 @@ def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[st
     return text, path
 
 
-def _extra_finders_from(config: ReviewConfig, spec: TargetSpec) -> TargetSpec:
-    """`review.yaml`'s `extra_finders: true` turns them on as `--extra-finders` does."""
-    return replace(spec, extra_finders=True) if config.extra_finders and not spec.extra_finders else spec
+EXTRA_FINDERS_NOTICE = "review: --extra-finders has no effect; per-piece finders now run by default"
+
+
+def extra_finders_notice(config: ReviewConfig, spec: TargetSpec | None = None) -> None:
+    """One line on stderr when `--extra-finders` or `review.yaml`'s `extra_finders` was given; both are ignored."""
+    if config.extra_finders or (spec is not None and spec.extra_finders):
+        print(EXTRA_FINDERS_NOTICE, file=sys.stderr, flush=True)
 
 
 def _set_aside_progress(target_dir: Path) -> None:
@@ -558,7 +557,7 @@ def _set_aside_progress(target_dir: Path) -> None:
 
 
 async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:
-    spec = _extra_finders_from(config, spec)
+    extra_finders_notice(config, spec)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, check_interrupted=True, lock=lock)
         # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.
@@ -579,6 +578,7 @@ async def resume(target_dir: Path, config: ReviewConfig, *, session_id: str = ""
         state = load_state(target_dir / "review-state.json")
         if state is None:
             raise ReviewError(f"no readable review-state.json in {target_dir}")
+        extra_finders_notice(config)
         return await run_state(state, target_dir, config, session_id=session_id)
 
 

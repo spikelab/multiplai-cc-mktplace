@@ -335,6 +335,8 @@ class AgentCheck(BaseModel):
     findings: list[dict] = Field(default_factory=list)
     # Verifiers: status, reason, citations (marked), and whether verdict_gate lowered it.
     verdict: dict | None = None
+    # A convert call (`<key> convert`): each item's kind, severity and finding id (`ConvertedItem`).
+    items: list[dict] | None = None
 
 
 class GateCheck(BaseModel):
@@ -399,6 +401,23 @@ class Piece(BaseModel):
     chars: int = 0  # characters of diff, headers included; binary files count 0
 
 
+class ConvertedItem(BaseModel):
+    """One item of a converted report, as `checks.json` records it: its kind is recorded nowhere else."""
+    kind: Literal["defect", "advice"]
+    severity: Severity
+    finding_id: str | None = None  # None when the item named no location a finding could stand on
+
+
+class FinderReport(BaseModel):
+    """A piece or path finder's plain-text report, stored as soon as it returns, and what convert made of it."""
+    key: str  # "piece@3" | "path@p7"
+    text: str
+    converted: bool = False
+    convert_error: str | None = None  # the last convert call failed; `resume` asks it again
+    items: list[ConvertedItem] = Field(default_factory=list)
+    findings: list[Finding] = Field(default_factory=list)
+
+
 class CoverageRecord(BaseModel):
     """What a stage could not cover, or covered only in part, and why (`checks.add_coverage`).
 
@@ -421,9 +440,8 @@ class ReviewState(BaseModel):
     # A tree review run with `--trim` (a change review reads `ReviewConfig.trim`
     # instead). Set when the review starts; `resume` keeps it.
     trim: bool = False
-    # Whether this run asks the extra finders (`extra@<i>`, one per chunk of the change): the
-    # option was given and the change has no earlier finished round. Set when the review starts;
-    # `resume` keeps it.
+    # The extra finders' switch, which nothing reads since the piece finders replaced them
+    # (multiplai-dev 0.82); kept so checkpoints that carry it still load.
     extra_finders: bool = False
     # The paths stage (`stages/paths.py`). `paths_enabled` is a tree review's `--paths` (a change
     # review always maps paths); `resume` keeps it. `paths_status` says what the stage did, and
@@ -436,6 +454,9 @@ class ReviewState(BaseModel):
     # A change review's pieces (`chunks.split_pieces`), computed once by `prepare` and reused by
     # `resume`; None for a tree review and in checkpoints written before pieces existed.
     pieces: list[Piece] | None = None
+    # The piece and path finders' reports by key (`stages/find.run_reported`). A fresh round
+    # starts empty; `resume` converts what is stored and asks only for what is missing.
+    finder_reports: dict[str, FinderReport] = Field(default_factory=dict)
     # What a stage could not cover (`checks.add_coverage`), exported as `checks.json`'s `coverage`.
     coverage: list[CoverageRecord] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
@@ -497,6 +518,22 @@ class ReviewState(BaseModel):
 class FinderOutput(_Model):
     findings: list[Finding] = Field(default_factory=list)
     needs: list[NeedAsk] = Field(default_factory=list)
+
+
+class ConvertItem(_Model):
+    kind: Literal["defect", "advice"] = "defect"
+    severity: Severity | None = None
+    file: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    claim: str
+    failure_scenario: str = ""
+    citations: list[Citation] = Field(default_factory=list)
+
+
+class ConvertOutput(_Model):
+    """The convert call's answer: one item per defect or advice in the report."""
+    items: list[ConvertItem] = Field(default_factory=list)
 
 
 class MergeOutput(_Model):

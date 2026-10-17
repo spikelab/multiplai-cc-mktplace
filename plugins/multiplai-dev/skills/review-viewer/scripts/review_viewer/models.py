@@ -237,6 +237,13 @@ class CheckedVerdict(_Strict):
     lowered: bool  # verdict_gate turned a confirmation into unverifiable
 
 
+class ConvertedItemEntry(_Strict):
+    """One item of a piece or path finder's converted report (review 0.82+): what kind it was."""
+    kind: Literal["defect", "advice"]
+    severity: Literal["HIGH", "MEDIUM", "LOW"]
+    finding_id: str | None = None  # None when the item had no location to stand a finding on
+
+
 class AgentEntry(_Strict):
     stage: str = Field(min_length=1)  # find, verify, merge
     subject: str  # the dimension, the finding id, or the merge group's ids
@@ -250,6 +257,7 @@ class AgentEntry(_Strict):
     error: str = ""
     findings: list[CheckedFinding] = Field(default_factory=list)
     verdict: CheckedVerdict | None = None
+    items: list[ConvertedItemEntry] | None = None  # a convert call's (`<key> convert`), review 0.82+
 
 
 class GateEntry(_Strict):

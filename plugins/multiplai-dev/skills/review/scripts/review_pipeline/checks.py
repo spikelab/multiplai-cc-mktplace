@@ -218,6 +218,22 @@ def add_coverage(state, record: CoverageRecord) -> None:
     """
     state.coverage.append(record)
     if record.level == "error":
-        form = ERROR_LINES.get((record.stage, record.reason), "{stage} {reason} {subject}: {detail}")
-        state.errors.append(form.format(stage=record.stage, reason=record.reason, subject=record.subject,
-                                        detail=record.detail))
+        state.errors.append(_error_line(record))
+
+
+def _error_line(record: CoverageRecord) -> str:
+    form = ERROR_LINES.get((record.stage, record.reason), "{stage} {reason} {subject}: {detail}")
+    return form.format(stage=record.stage, reason=record.reason, subject=record.subject, detail=record.detail)
+
+
+def drop_coverage(state, *, stage: str, subject: str, reason: str) -> None:
+    """Remove the records of a gap a later call closed (a resumed convert that now succeeded), and their lines."""
+    gone = [c for c in state.coverage if (c.stage, c.subject, c.reason) == (stage, subject, reason)]
+    if not gone:
+        return
+    state.coverage = [c for c in state.coverage if c not in gone]
+    for record in gone:
+        if record.level == "error":
+            line = _error_line(record)
+            if line in state.errors:
+                state.errors.remove(line)

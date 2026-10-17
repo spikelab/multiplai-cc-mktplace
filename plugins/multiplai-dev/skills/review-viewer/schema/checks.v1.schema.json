@@ -38,6 +38,21 @@
           "title": "Given",
           "type": "array"
         },
+        "items": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ConvertedItemEntry"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Items"
+        },
         "outcome": {
           "title": "Outcome",
           "type": "string"
@@ -199,6 +214,47 @@
         "lowered"
       ],
       "title": "CheckedVerdict",
+      "type": "object"
+    },
+    "ConvertedItemEntry": {
+      "additionalProperties": false,
+      "description": "One item of a piece or path finder's converted report (review 0.82+): what kind it was.",
+      "properties": {
+        "finding_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finding Id"
+        },
+        "kind": {
+          "enum": [
+            "defect",
+            "advice"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "HIGH",
+            "MEDIUM",
+            "LOW"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "severity"
+      ],
+      "title": "ConvertedItemEntry",
       "type": "object"
     },
     "CoverageEntry": {

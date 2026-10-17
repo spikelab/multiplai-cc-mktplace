@@ -402,19 +402,43 @@ def _cell(text: str) -> str:
     return _one_line(text).replace("|", "\\|")
 
 
+CONVERT_SUFFIX = " convert"
+
+
 def finder_rows(agents: list[dict]) -> list[dict]:
-    """One row per finder call: ran or failed, files read, findings returned and their fates."""
-    rows = []
+    """One row per finder: ran or failed, files read, findings returned and their fates.
+
+    A piece or path finder's convert call (`<key> convert`) is folded into its
+    finder's row: one row per key, with the convert's findings and the files
+    either call read.
+    """
+    rows: list[dict] = []
+    by_subject: dict[str, dict] = {}
     for a in agents:
         if a["stage"] != "find":
             continue
+        subject = a["subject"].removesuffix(CONVERT_SUFFIX)
         fates = [f["fate"] for f in a["findings"]]
-        rows.append({
-            "subject": a["subject"], "ran": "failed" if a["error"] else "ran",
-            "files_read": len({c["target"] for c in a["calls"] if c["tool"] == "Read"}),
-            "returned": len(fates), **{k: fates.count(k) for k in ("kept", "deduped", "merged", "rejected")},
-        })
-    return rows
+        read = {c["target"] for c in a["calls"] if c["tool"] == "Read"}
+        row = by_subject.get(subject)
+        if row is None or not a["subject"].endswith(CONVERT_SUFFIX):
+            row = {"subject": subject, "ran": "failed" if a["error"] else "ran", "_read": read,
+                   "returned": len(fates), **{k: fates.count(k) for k in ("kept", "deduped", "merged", "rejected")}}
+            if subject in by_subject:  # a resumed key's later report call replaces the earlier row
+                rows[rows.index(by_subject[subject])] = row
+            else:
+                rows.append(row)
+            by_subject[subject] = row
+            continue
+        # The convert call: its findings are the key's; its failure fails the row.
+        row["_read"] |= read
+        row["ran"] = "failed" if a["error"] else "ran"  # the last convert call decides
+        row["returned"] = len(fates)
+        row.update({k: fates.count(k) for k in ("kept", "deduped", "merged", "rejected")})
+    for row in rows:
+        row["files_read"] = len(row.pop("_read"))
+    return [{k: r[k] for k in ("subject", "ran", "files_read", "returned", "kept", "deduped", "merged", "rejected")}
+            for r in rows]
 
 
 def finding_rows(agents: list[dict]) -> list[dict]:
@@ -434,7 +458,8 @@ def finding_rows(agents: list[dict]) -> list[dict]:
                 gate = "lowered by verdict_gate"
             else:
                 gate = "passed"
-            rows.append({"id": f["id"], "finder": a["subject"], "severity": f["severity"], "claim": f["claim"],
+            rows.append({"id": f["id"], "finder": a["subject"].removesuffix(CONVERT_SUFFIX),
+                         "severity": f["severity"], "claim": f["claim"],
                          "verdict": verdict or "not verified", "gate": gate,
                          "fate": f["fate"] + (f" into {f['into']}" if f.get("into") else "")})
     return rows

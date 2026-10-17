@@ -23,9 +23,9 @@ review: it judges the tests and comments the change adds or edits, and its
 findings go to the advisory Trim section. A tree review runs it only with
 `--trim`, which the review's state keeps (`ReviewState.trim`).
 
-`extra_finders` (default false; also `review --extra-finders`) adds one finder per
-~600 changed lines (`chunks.finder_chunks`, at most 6) to a change review's first
-round, keyed `EXTRA_DIMENSION@<i>`.
+`extra_finders` is accepted and ignored, whatever its value: the piece finders
+that replaced the extra finders run on every change review. `ReviewConfig.extra_finders`
+says only that the key is there, so the review prints its one-line notice.
 
 `deps` (default true; `review --no-deps` turns it off for one run) extracts the
 source of the git dependencies a uv.lock at head pins into the snapshot
@@ -49,8 +49,6 @@ log = logging.getLogger(__name__)
 DIMENSIONS: tuple[str, ...] = ("diff-bugs", "callers", "history", "conventions", "tests")
 # Not one of DIMENSIONS: `finder_dimensions` adds it when the review runs it.
 TRIM_DIMENSION = "trim"
-# The extra finders' dimension (`extra_finders`), one per chunk of the change.
-EXTRA_DIMENSION = "extra"
 DEFAULT_CONCURRENCY = 4
 
 
@@ -67,7 +65,7 @@ class ReviewConfig:
     explain: bool = False
     find_with_facts: bool = False
     trim: bool = True
-    extra_finders: bool = False
+    extra_finders: bool = False  # the key is in review.yaml; its value is ignored
     deps: bool = True
     deps_max_mb: int = 50
 
@@ -141,7 +139,8 @@ def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MA
         if value is not None:
             setattr(cfg, key, value)
 
-    for key in ("explain", "find_with_facts", "trim", "extra_finders", "deps"):
+    cfg.extra_finders = "extra_finders" in data
+    for key in ("explain", "find_with_facts", "trim", "deps"):
         value = _flag(data.get(key), key, yaml_path)
         if value is not None:
             setattr(cfg, key, value)

@@ -12,10 +12,9 @@ paths through the change from each entry point (see "The paths stage" below).
 
 1. **find** — five finders, one per aspect (`diff-bugs`, `callers`, `history`,
    `conventions`, `tests`), plus the `trim` finder, which judges the tests and
-   comments the change adds or edits (see "Trim" below). With
-   `--extra-finders`, a change's first round also runs one extra finder per
-   ~600 changed lines (see "Extra finders" below). Every finding cites
-   lines with an exact quote.
+   comments the change adds or edits (see "Trim" below). A change review also
+   runs one finder per piece of its diff (see "The kinds of finder" below).
+   Every finding cites lines with an exact quote.
 2. **verify** — a fresh agent per finding re-reads the code and answers
    `confirmed`, `refuted` or `unverifiable`, citing what it read. Unless it
    refutes the finding, it also says in one sentence what correct behaviour
@@ -261,25 +260,47 @@ becomes a need with a read-only command, and the review goes on without it.
 turns it off. Registry (PyPI) packages, `path` and editable sources, and other
 ecosystems' lock files are not read; for those the agents have `WebFetch`.
 
-## Extra finders
+## The kinds of finder
 
-`--extra-finders` (or `extra_finders: true` in `review.yaml`) adds finders
-sized by the change to its first review round. The changed files are grouped
-in diff order into chunks of about 600 changed lines: a larger file is a
-chunk of its own, lockfiles are left out, and there are at most 6 chunks
-(past that, the chunk size grows and the smallest neighbouring chunks merge).
-Each chunk gets one extra finder, which reads only its chunk's hunks, each
-hunk's enclosing function and the direct callers and callees, never whole
-files, and lists every HIGH or MEDIUM correctness defect there. Its findings
-go through verify, merge and assess like every other finder's.
+The find stage runs two kinds of finder on a change review, and only the
+first on a `--tree` or `--dir` review.
 
-They run only when the review directory holds no earlier finished round of
-the change: a second `review` of the same PR, branch or range (a rerun on the
-same head included) runs none. A first review that stopped before it wrote
-its findings (a budget stop, or every finder failing) does not count, so the
-next `review` still runs them. `resume` keeps the choice and asks only the chunks whose
-finder had not returned. The option goes with `--branch`, `--pr` and
-`--range`; `--tree` and `--dir` refuse it.
+- **Dimension finders** (`diff-bugs`, `callers`, `history`, `conventions`,
+  `tests`, `trim`): each reads the whole change for one aspect and answers
+  with findings directly. They work as they always have.
+- **Piece finders**, keyed `piece@<id>`: one per piece of the diff, with no
+  cap on how many. The diff is split at file boundaries into pieces of
+  related files: the files of one package or skill directory (the nearest
+  directory holding a `pyproject.toml`, `package.json`, `Cargo.toml`,
+  `go.mod` or `SKILL.md`), a module beside its tests, at most 50,000
+  characters of diff each unless one file alone is larger. Release metadata
+  (changelogs, manifests, `.github/`) goes in pieces of its own, last;
+  lockfiles are left out. `--plan-only` lists the pieces. A piece finder is
+  given its piece's whole diff and owns the defects in or caused by those
+  changes, but may read any file of the snapshot; it reports every severity,
+  LOW included, and advice.
+
+A piece finder writes a plain-text report, which is saved in the run's state
+and as `report-piece-<id>.md` beside `findings.json` as soon as it returns.
+A second call then turns the report into findings: it opens the files the
+report names to copy exact quotes, keeps one finding per item, and judges
+none (an item without a stated severity, advice included, is LOW). Those
+findings go through the same gates, verification and merge as every other
+finding. Whether each item was a defect or advice is recorded only in
+`checks.json`, on the `piece@<id> convert` entry. Both calls have only
+`Read`, `Grep` and `Glob`, and both count towards `--max-cost-usd`. A report
+of `NO FINDINGS` needs no second call.
+
+A failed report or convert call is listed in the review's errors and its
+coverage, and the other finders go on. After a stop, `resume` asks only for
+what is missing: a stored report is never asked again, only its convert
+call. Every review round runs the piece finders again; a kept round keeps its
+reports.
+
+`--extra-finders` (with or without a number) and `extra_finders` in
+`review.yaml` are still accepted and do nothing: the review prints
+`review: --extra-finders has no effect; per-piece finders now run by default`
+once.
 
 ## Reviewing code that is not a change
 
@@ -319,8 +340,8 @@ has no PR.
 over the existing tests and comments, as a separate cleanup (see "Trim").
 
 `--plan-only` resolves the target, prints one line per group and a total line
-(`groups: <n>  finder calls: <n>  files skipped: <n>`; the calls include the
-extra finders a first round with `--extra-finders` would ask). A change
+(`groups: <n>  finder calls: <n>  files skipped: <n>`; the dimension finders'
+calls). A change
 review also prints one line per piece of its diff
 (`piece <n>: <k> files, <C> characters [<group>] <file>, ...`, `[.]` for files
 outside any package or skill directory, `[meta]` for release metadata, with the
@@ -393,7 +414,7 @@ One target:
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts \
   python -m review_pipeline --session-id "{session_id}" [--out /abs/out] \
   review --repo /abs/path/to/repo --range <base>..<head> --trust-repo \
-  [--mode critical] [--extra-finders] [--no-deps] [--ticket DB-2038] [--deployed-in staging]
+  [--mode critical] [--no-deps] [--ticket DB-2038] [--deployed-in staging]
 ```
 
 Use `--branch <name>` (reviewed against its merge-base with `origin/HEAD`) or
@@ -682,7 +703,7 @@ jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd:
 default's `INBOX/reviews/review.yaml` until a `review.yaml` exists in the new
 place, with a warning) sets `concurrency`, `finder_model`,
 `verifier_model`, `merger_model` (default: the verifier's), `effort`,
-`max_turns`, `explain`, `find_with_facts`, `trim` and `extra_finders`. `multiplai.conf` keys
+`max_turns`, `explain`, `find_with_facts` and `trim`. `multiplai.conf` keys
 `review_finder_model`, `review_verifier_model`, `review_effort` and
 `review_explain` apply when the file does not set them. By default every
 stage runs on the session's model.
@@ -705,8 +726,7 @@ stage runs on the session's model.
   off until real runs on real PRs are compared.
 - `trim` (default `true`): run the trim finder on a change review (see
   "Trim"). A tree review runs it only with `--trim`.
-- `extra_finders` (default `false`): what `--extra-finders` does, for every
-  change review written to this output directory (see "Extra finders").
+- `extra_finders`: accepted and ignored (see "The kinds of finder").
 - `deps` (default `true`): clone the git dependencies `uv.lock` pins into the
   snapshot (see "Dependency source"); `false` is what `--no-deps` does.
 - `deps_max_mb` (default `50`): skip a dependency whose source is larger.

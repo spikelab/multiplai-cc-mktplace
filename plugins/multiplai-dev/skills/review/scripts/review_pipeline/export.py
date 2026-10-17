@@ -295,12 +295,15 @@ def _agent(check: AgentCheck) -> dict:
         v = check.verdict
         verdict = {"status": v["status"], "reason": v["reason"],
                    "citations": [_marked(c) for c in v["citations"]], "lowered": bool(v["lowered"])}
+    # A convert call's items (kind, severity, finding id): the only place an item's kind is written.
+    items = {} if check.items is None else {"items": [
+        {"kind": i["kind"], "severity": i["severity"], "finding_id": i.get("finding_id")} for i in check.items]}
     return {
         "stage": check.stage, "subject": check.subject, "given": list(check.given),
         "calls": [{"tool": c["tool"], "target": c["target"], "detail": c.get("detail", "")} for c in check.calls],
         "outcome": check.outcome, "turns": check.turns, "cost_usd": round(check.cost_usd, 6),
         "started_at": check.started_at, "ended_at": check.ended_at, "error": check.error,
-        "findings": [_checked_finding(e) for e in check.findings], "verdict": verdict,
+        "findings": [_checked_finding(e) for e in check.findings], "verdict": verdict, **items,
     }
 
 

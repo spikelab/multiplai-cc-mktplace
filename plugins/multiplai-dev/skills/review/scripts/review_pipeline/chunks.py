@@ -7,10 +7,6 @@ diff each unless one file alone is larger, with release metadata in meta
 pieces placed last and lockfile text left out. There is no cap on the number
 of pieces.
 
-`finder_chunks` is the extra finders' older cut, ported from `finderChunks` in
-the run scripts (run-workflow-2026-10-15.js): about CHUNK_LINES changed lines
-each, at most MAX_FINDERS chunks.
-
 `head_changed_lines` gives the paths stage each file's added lines at head.
 """
 
@@ -19,13 +15,10 @@ from __future__ import annotations
 import posixpath
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .models import Piece
 from .target import LOCKFILES
-
-CHUNK_LINES = 600
-MAX_FINDERS = 6
 
 
 @dataclass
@@ -41,13 +34,6 @@ class FileChange:
     @property
     def lines(self) -> int:
         return self.added + self.deleted
-
-
-@dataclass
-class Chunk:
-    files: list[str] = field(default_factory=list)
-    lines: int = 0
-    text: str = ""  # the diff of its files, in diff order
 
 
 def _section_path(header: str, lines: list[str]) -> str:
@@ -176,41 +162,6 @@ def diff_files(diff: str) -> list[FileChange]:
                                 deleted=deleted, text="".join(section), head_path=head, base_path=base,
                                 status=status))
     return files
-
-
-def _chunk(files: list[FileChange], size: int) -> list[Chunk]:
-    chunks: list[Chunk] = []
-    cur = Chunk()
-    for f in files:
-        if f.lines >= size:
-            if cur.files:
-                chunks.append(cur)
-            chunks.append(Chunk(files=[f.path], lines=f.lines, text=f.text))
-            cur = Chunk()
-            continue
-        if cur.lines + f.lines > size and cur.files:
-            chunks.append(cur)
-            cur = Chunk()
-        cur.files.append(f.path)
-        cur.lines += f.lines
-        cur.text += f.text
-    if cur.files:
-        chunks.append(cur)
-    return chunks
-
-
-def finder_chunks(files: list[FileChange]) -> list[Chunk]:
-    """At most MAX_FINDERS chunks of about CHUNK_LINES changed lines; none when only lockfiles changed."""
-    kept = [f for f in files if f.path.rsplit("/", 1)[-1] not in LOCKFILES]
-    if not kept:
-        return []
-    total = sum(f.lines for f in kept)
-    chunks = _chunk(kept, max(CHUNK_LINES, -(-total // MAX_FINDERS)))
-    while len(chunks) > MAX_FINDERS:
-        best = min(range(len(chunks) - 1), key=lambda i: chunks[i].lines + chunks[i + 1].lines)
-        a, b = chunks[best], chunks[best + 1]
-        chunks[best:best + 2] = [Chunk(files=a.files + b.files, lines=a.lines + b.lines, text=a.text + b.text)]
-    return chunks
 
 
 _HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")

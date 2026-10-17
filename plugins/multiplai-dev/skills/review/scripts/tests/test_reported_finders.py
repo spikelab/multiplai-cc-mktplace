@@ -105,7 +105,7 @@ class Model:
     """Report calls answer one line per piece; convert calls answer `items[package]` (default one LOW defect).
 
     `stop_report` / `stop_convert`: raise a budget stop on that report call (1-based) or on the convert
-    of that piece key. `fail_report` / `fail_convert`: piece keys whose call raises *error*.
+    of that piece key; the ledger is then spent, so every later piece call stops too, until `resume`. `fail_report` / `fail_convert`: piece keys whose call raises *error*.
     """
 
     def __init__(self, *, reports: dict[str, str] | None = None,
@@ -120,8 +120,17 @@ class Model:
         self.convert_calls: list[dict] = []  # {key, prompt, allowed_tools, cwd, budget_label}
         self.other_calls: list[str] = []
 
+    @staticmethod
+    def _stop(message: str):
+        """A budget stop as a real ledger makes one: this call stops, and so does every later check."""
+        ledger = budget.get_budget()
+        ledger.max_usd = 0.01
+        ledger.record(SimpleNamespace(cost_usd=1.0), label="find:piece")
+        return budget.BudgetExceededError(message)
+
     async def text(self, prompt, *, allowed_tools, cwd, budget_label="", **kwargs):
         sdk.require_trusted_repo()
+        budget.check(stage=budget_label)
         packages = sorted(set(DIFF_OF.findall(prompt)))
         assert len(packages) == 1, packages
         package = packages[0]
@@ -129,7 +138,7 @@ class Model:
                                 "cwd": str(cwd), "budget_label": budget_label})
         if len(self.text_calls) == self.stop_report:
             self.stop_report = None
-            raise budget.BudgetExceededError("circuit breaker stopped the run during the piece finders")
+            raise self._stop("circuit breaker stopped the run during the piece finders")
         if package in self.fail_report:
             raise self.error
         return self.reports.get(package, f"{package}/m.py:2 Severity: LOW Kind: defect\n{package}_2 is wrong.")
@@ -137,6 +146,7 @@ class Model:
     async def structured(self, prompt, schema, *, budget_label="", allowed_tools=(), cwd=None, **kwargs):
         sdk.require_trusted_repo()
         if schema is new("models", "ConvertOutput"):
+            budget.check(stage=budget_label)
             keys = sorted(set(KEY_OF.findall(prompt)))
             assert len(keys) == 1, keys
             key = f"piece@{keys[0]}"
@@ -145,7 +155,7 @@ class Model:
                                        "cwd": str(cwd), "budget_label": budget_label})
             if key == self.stop_convert:
                 self.stop_convert = None
-                raise budget.BudgetExceededError(f"circuit breaker stopped the run during {key} convert")
+                raise self._stop(f"circuit breaker stopped the run during {key} convert")
             if key in self.fail_convert:
                 raise self.error
             return schema.model_validate({"items": self.items.get(package, [item(package)])})

@@ -2,8 +2,8 @@
 
   review  — one target (--branch, --pr or --range), or code that is not a change
             (--tree [COMMIT] [--path DIR], or --dir DIR for a directory not under git;
-            --trim also judges their existing tests and comments; --extra-finders adds
-            one finder per ~600 changed lines to a change's first round);
+            --trim also judges their existing tests and comments; --extra-finders is
+            accepted and ignored);
             --plan-only prints the file groups and finder calls and stops
   batch   — a YAML list of targets, then rollups
   rollup  — regenerate HIGH/MEDIUM/LOW-only.md and runs.jsonl from existing findings.json files
@@ -121,9 +121,9 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--trim", action="store_true",
                     help="With --tree or --dir: also run the trim finder over the existing tests and comments "
                          "(a change review runs it unless review.yaml sets trim: false)")
-    rv.add_argument("--extra-finders", action="store_true",
-                    help="A change review's first round also runs one finder per ~600 changed lines "
-                         "(at most 6), each reading only its part of the diff (review.yaml: extra_finders)")
+    rv.add_argument("--extra-finders", nargs="?", const="", default=None, metavar="N",
+                    help="Accepted and ignored: one finder per piece of the diff now runs on every change "
+                         "review (prints a notice)")
     rv.add_argument("--paths", action="store_true",
                     help="With --tree or --dir: also map the code paths from each entry point before the finders "
                          "and write paths.json (a change review always does)")
@@ -260,9 +260,6 @@ def main(argv: list[str] | None = None) -> int:
             print("ERROR: --paths goes with --tree or --dir; a change review always maps its paths",
                   file=sys.stderr)
             return 2
-        if args.extra_finders and (args.tree is not None or args.dir):
-            print("ERROR: --extra-finders goes with a change review (--branch, --pr or --range)", file=sys.stderr)
-            return 2
         if args.dir:
             try:
                 target.check_out_dir(args.dir, out)  # before anything creates --out
@@ -274,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
                                        base_branch=args.base_branch, fetch=args.fetch,
                                        tree=args.tree, path=args.path, dir=args.dir, mode=args.mode,
                                        restart=args.restart, trim=args.trim,
-                                       extra_finders=args.extra_finders, paths=args.paths)
+                                       extra_finders=args.extra_finders is not None, paths=args.paths)
         if args.plan_only:
             # Reads git only: nothing reaches a model, so no trust is needed and no ledger is kept.
             try:
