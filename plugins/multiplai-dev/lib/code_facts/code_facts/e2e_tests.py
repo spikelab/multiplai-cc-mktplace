@@ -48,9 +48,17 @@ called with literal arguments, is inlined up to two levels deep: a match form
 in its body whose argv uses a parameter (`p`, `[*prefix, *p]`, `["x", *p]`,
 `list(p)`) is matched with the literal substituted, at the test's call line.
 
+Patches (see `e2e_patches`). A test is not listed for a path when it patches
+the entry's handler, at its defining module or under the name a known-edge
+`from` line looks up, or the function holding a known-edge `from` line: the
+handler never runs. A listed test moves from `e2e` to `mocks_hop_2` when it
+patches the symbol at hop 2 of the retained hops, at its defining module or
+under a name hop 1's lines look up; a path with one retained hop has no hop 2.
+
 Records. One per test per path: its earliest invocation line, ties broken in
 the order `direct_call`, `cli_argv`, `cli_runner`, `subprocess`, `runpy`;
-sorted by `(file, line, node_id)`.
+sorted by `(file, line, node_id)`. A mocked record adds the earliest hop-2
+patch, which may be in a fixture or `conftest.py`.
 """
 
 from __future__ import annotations
@@ -69,9 +77,11 @@ from typing import get_args
 
 from .commands import (first_positional, hook_commands, parse_command_line, python_module, python_script,
                        shell_commands)
+from .e2e_patches import FUNCTION_DEFS, FunctionNode, Patch, PatchScan, Symbol, body_nodes, call_argument
 from .entries import ConsoleScript, Entry, cli_routes, console_scripts, main_module_handler
-from .paths import E2EListing, E2ETest, Handler, ListingSkip, Location, MatchKind, SkipReason, TracedPath
-from .pyindex import PyIndex, dotted_reference, snapshot_files
+from .paths import (E2EListing, E2ETest, Handler, ListingSkip, Location, MatchKind, MockedE2ETest, PathHop,
+                    SkipReason, TracedPath)
+from .pyindex import Def, PyIndex, dotted_reference, snapshot_files
 
 log = logging.getLogger(__name__)
 
@@ -84,13 +94,10 @@ _EXCLUDED_FLAGS = frozenset({"-h", "--help", "--version"})
 _PARSE_METHODS = frozenset({"parse_args", "parse_known_args"})
 _SUBPROCESS_CALLS = frozenset(f"subprocess.{name}" for name in ("run", "call", "check_call", "check_output", "Popen"))
 _RUN_MODULE = "runpy.run_module"
-_FUNCTION_DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
-_NESTED = (*_FUNCTION_DEFS, ast.ClassDef)
 # An element of a literal argv that is not a string literal.
 _UNKNOWN = ""
 
 Argv = tuple[str, ...]
-_FunctionDef = ast.FunctionDef | ast.AsyncFunctionDef
 # A literal argument: a list or tuple display's words, or a string.
 _Literal = Argv | str
 _Env = Mapping[str, _Literal]
@@ -113,11 +120,12 @@ class Invocation:
 
 @dataclass(frozen=True)
 class E2ECandidate:
-    """A test function and the invocations its body makes, helpers inlined."""
+    """A test function, the invocations its body makes (helpers inlined), and the patches applied to it."""
     node_id: str
     file: str
     line: int
     invocations: tuple[Invocation, ...]
+    patches: tuple[Patch, ...]
 
 
 class E2EIndex:
@@ -129,6 +137,7 @@ class E2EIndex:
         self.tests = tuple(tests)
         self.scripts = tuple(scripts)
         self._skips = tuple(sorted(skips, key=lambda s: s.file))
+        self._by_id = {t.node_id: t for t in self.tests}
 
     @classmethod
     def build(cls, root: Path, index: PyIndex) -> E2EIndex:
@@ -139,6 +148,7 @@ class E2EIndex:
         if unindexed:
             index = index.including(root, unindexed)
         functions = _Functions(index)
+        patch_scan = PatchScan(index)
         tests: list[E2ECandidate] = []
         skips: list[ListingSkip] = []
         for rel in filter(is_test_file, py_files):
@@ -146,13 +156,17 @@ class E2EIndex:
             if tree is None:
                 skips.append(ListingSkip(file=rel, reason=_unreadable_reason(root / rel)))
             else:
-                tests += _TestScan(index, functions, rel).candidates(tree)
+                tests += _TestScan(index, functions, patch_scan, rel).candidates(tree)
         log.debug("listed %d tests under %s (%d test files skipped)", len(tests), root, len(skips))
         return cls(index, tests, skips, console_scripts(root, index))
 
     def skips(self) -> list[ListingSkip]:
         """The test files that could not be decoded or parsed, in path order."""
         return list(self._skips)
+
+    def candidate(self, node_id: str) -> E2ECandidate:
+        """The test with `node_id`; KeyError when the snapshot has none."""
+        return self._by_id[node_id]
 
 
 def list_e2e_tests(root: Path, paths: Sequence[TracedPath], entries: Mapping[str, Entry], *,
@@ -161,22 +175,37 @@ def list_e2e_tests(root: Path, paths: Sequence[TracedPath], entries: Mapping[str
     entry the path was traced from.
     """
     e2e_index = E2EIndex.build(root, index)
-    listings = {path.id: E2EListing(e2e=match_invocations(e2e_index, entries[path.id], root=root), mocks_hop_2=[])
+    listings = {path.id: _split_on_hop_2(e2e_index, match_invocations(e2e_index, entries[path.id], root=root),
+                                         path.hops)
                 for path in paths}
     return listings, e2e_index.skips()
 
 
 def match_invocations(e2e_index: E2EIndex, entry: Entry, *, root: Path) -> list[E2ETest]:
-    """The tests that invoke `entry` or one of its invokers, one record each, sorted by (file, line, node_id)."""
-    targets = _Targets(Path(root), e2e_index.index, e2e_index.scripts).of(entry)
+    """The tests that invoke `entry` or one of its invokers and leave its handler in place, one record each,
+    sorted by (file, line, node_id).
+    """
+    index = e2e_index.index
+    targets = _Targets(Path(root), index, e2e_index.scripts).of(entry)
+    bypassed = _bypassed_by_patching(index, entry)
     records = []
     for test in e2e_index.tests:
+        if any(s.named_by(index, p.target) for p in test.patches for s in bypassed):
+            continue
         hits = [i for i in test.invocations if any(t.reached_by(i) for t in targets)]
         if hits:
             first = min(hits, key=lambda i: (i.line, MATCH_ORDER.index(i.match)))
             records.append(E2ETest(node_id=test.node_id, file=test.file, line=test.line, match=first.match,
                                    invocation_line=first.line))
     return sorted(records, key=lambda r: (r.file, r.line, r.node_id))
+
+
+def applied_patches(e2e_index: E2EIndex, node_id: str, *, root: Path) -> list[tuple[str, str, int]]:
+    """`(dotted target, file, line)` of each patch applied to the test `node_id`, by its decorators and body or
+    by the fixtures it uses, sorted by (file, line, target). `root` is the snapshot root `e2e_index` was built
+    from; every file is relative to it.
+    """
+    return [(p.target, p.file, p.line) for p in e2e_index.candidate(node_id).patches]
 
 
 def is_test_file(path: str) -> bool:
@@ -193,6 +222,61 @@ def _unreadable_reason(full: Path) -> SkipReason:
     except (OSError, SyntaxError, UnicodeDecodeError, LookupError):
         return "decode_error"
     return "syntax_error"
+
+
+# --- what patches move or drop ------------------------------------------------------------------
+
+
+def _split_on_hop_2(e2e_index: E2EIndex, records: Sequence[E2ETest], hops: Sequence[PathHop]) -> E2EListing:
+    """The records, those of tests that patch the symbol at hop 2 moved to `mocks_hop_2`."""
+    index = e2e_index.index
+    hop_2 = _hop_2_symbol(index, hops)
+    e2e: list[E2ETest] = []
+    mocked: list[MockedE2ETest] = []
+    for record in records:
+        patch = None if hop_2 is None else next(
+            (p for p in e2e_index.candidate(record.node_id).patches if hop_2.named_by(index, p.target)), None)
+        if patch is None:
+            e2e.append(record)
+        else:
+            mocked.append(MockedE2ETest(**record.model_dump(), patch_file=patch.file, patch_line=patch.line))
+    return E2EListing(e2e=e2e, mocks_hop_2=mocked)
+
+
+def _hop_2_symbol(index: PyIndex, hops: Sequence[PathHop]) -> Symbol | None:
+    """The function or class hop 2 cites, looked up under the names hop 1's lines see; None with no hop 2."""
+    if len(hops) < 2:
+        return None
+    first, second = hops[0], hops[1]
+    name = second.symbol_called.rpartition(".")[2]
+    cited = [d for d in index.defs(second.path) if d.name == name
+             and (second.line_start <= d.start <= second.line_end or d.start <= second.line_start <= d.end)]
+    if not cited:
+        return None
+    # Lines in one scope see the same names: one lookup per innermost definition.
+    lookups: dict[Def | None, int] = {}
+    for line in range(first.line_start, first.line_end + 1):
+        lookups.setdefault(index.enclosing_def(first.path, line), line)
+    return Symbol.of(cited[-1], second.path, ((first.path, line) for line in lookups.values()))
+
+
+def _bypassed_by_patching(index: PyIndex, entry: Entry) -> list[Symbol]:
+    """What a test must not patch for the entry's handler to run: the handler, under the names its known-edge
+    `from` lines look up too, and each function holding a known-edge `from` line.
+    """
+    edge_lines = [(edge.from_.path, edge.from_.line) for edge in entry.known_edges]
+    symbols = []
+    handler = entry.handler
+    if handler is not None and handler.symbol is not None:
+        definition = next((d for d in index.defs(handler.path) if d.start == handler.line
+                           and d.name == handler.symbol), None)
+        if definition is not None:
+            symbols.append(Symbol.of(definition, handler.path, edge_lines))
+    for path, line in edge_lines:
+        holder = index.enclosing_function(path, line)
+        if holder is not None:
+            symbols.append(Symbol.of(holder, path))
+    return symbols
 
 
 # --- what reaches an entry ----------------------------------------------------------------------
@@ -365,15 +449,15 @@ class _Functions:
 
     def __init__(self, index: PyIndex):
         self._index = index
-        self._defs: dict[tuple[str, int], _FunctionDef | None] = {}
+        self._defs: dict[tuple[str, int], FunctionNode | None] = {}
 
-    def of(self, handler: Handler) -> _FunctionDef | None:
+    def of(self, handler: Handler) -> FunctionNode | None:
         """The `def` of the handler, matched by line and name; None when it is not a function."""
         key = (handler.path, handler.line)
         if key not in self._defs:
             tree = self._index.tree(handler.path)
             nodes = ast.walk(tree) if tree is not None else ()
-            self._defs[key] = next((n for n in nodes if isinstance(n, _FUNCTION_DEFS)
+            self._defs[key] = next((n for n in nodes if isinstance(n, FUNCTION_DEFS)
                                     and n.lineno == handler.line and n.name == handler.symbol), None)
         return self._defs[key]
 
@@ -432,9 +516,10 @@ def _shell_words(value: _Literal) -> Argv | None:
 class _TestScan:
     """The test functions of one test file, and the invocations of each."""
 
-    def __init__(self, index: PyIndex, functions: _Functions, test_file: str):
+    def __init__(self, index: PyIndex, functions: _Functions, patch_scan: PatchScan, test_file: str):
         self._index = index
         self._functions = functions
+        self._patch_scan = patch_scan
         self._file = test_file
         self._tests_tree = _tests_tree(test_file)
         self._script_path = _ScriptPath(index.repo_root(test_file))
@@ -442,13 +527,14 @@ class _TestScan:
     def candidates(self, tree: ast.Module) -> list[E2ECandidate]:
         # A later `def` of the same name replaces the earlier one, as in Python.
         found: dict[str, E2ECandidate] = {}
-        for name, func in _test_functions(tree):
+        for name, func, owner in _test_functions(tree):
             invocations = tuple(self._body(func, self._file, {}, 0))
             found[name] = E2ECandidate(node_id=f"{self._file}::{name}", file=self._file, line=func.lineno,
-                                       invocations=invocations)
+                                       invocations=invocations,
+                                       patches=self._patch_scan.of_test(self._file, func, owner))
         return list(found.values())
 
-    def _body(self, func: _FunctionDef, path: str, env: _Env,
+    def _body(self, func: FunctionNode, path: str, env: _Env,
               depth: int) -> Iterator[Invocation]:
         """The invocations of a test body (depth 0) or of a helper inlined at `depth` with parameters `env`."""
         for call in _calls(func):
@@ -475,23 +561,23 @@ class _TestScan:
         """The match forms `call` has, whatever its argv turns out to be."""
         line = call.lineno
         if handler is not None and self._functions.parses_args(handler):
-            yield ("cli_argv", _argument(call, 0, self._functions.first_parameter(handler)),
+            yield ("cli_argv", call_argument(call, 0, self._functions.first_parameter(handler)),
                    partial(_argv_reaches, ("program", handler.path)))
         callee = call.func
         if isinstance(callee, ast.Attribute) and isinstance(callee.value, ast.Call):
             builder_ref = dotted_reference(callee.value.func) if callee.attr in _PARSE_METHODS else None
             builder = self._index.resolve_name(path, line, builder_ref) if builder_ref else None
             if builder is not None:
-                yield "cli_argv", _argument(call, 0, "args"), partial(_argv_reaches, ("program", builder.path))
+                yield "cli_argv", call_argument(call, 0, "args"), partial(_argv_reaches, ("program", builder.path))
         if isinstance(callee, ast.Attribute) and callee.attr == "invoke":
-            app = self._app(path, line, _argument(call, 0, "cli"))
+            app = self._app(path, line, call_argument(call, 0, "cli"))
             if app is not None:
-                yield "cli_runner", _argument(call, 1, "args"), partial(_args_reaches, app)
+                yield "cli_runner", call_argument(call, 1, "args"), partial(_args_reaches, app)
         qualified = self._index.qualified_name(path, line, reference) if reference else None
         if qualified in _SUBPROCESS_CALLS:
-            yield "subprocess", _argument(call, 0, "args"), partial(_command_reaches, self._script_path)
+            yield "subprocess", call_argument(call, 0, "args"), partial(_command_reaches, self._script_path)
         elif qualified == _RUN_MODULE:
-            yield "runpy", _argument(call, 0, "mod_name"), _module_reaches
+            yield "runpy", call_argument(call, 0, "mod_name"), _module_reaches
 
     def _app(self, path: str, line: int, expr: ast.expr | None) -> _Key | None:
         """The click or typer app `expr` names: a function, or a module-level name of the module it comes from."""
@@ -550,7 +636,7 @@ class _TestScan:
         for invocation in self._body(func, helper.path, bound, depth + 1):
             yield replace(invocation, line=call.lineno)
 
-    def _bind(self, func: _FunctionDef, call: ast.Call, path: str,
+    def _bind(self, func: FunctionNode, call: ast.Call, path: str,
               env: _Env) -> dict[str, _Literal]:
         """The helper's parameters that `call` passes a literal to."""
         positional = [a.arg for a in func.args.posonlyargs + func.args.args]
@@ -581,34 +667,22 @@ class _TestScan:
                 and not is_test_file(path))
 
 
-def _test_functions(tree: ast.Module) -> Iterator[tuple[str, _FunctionDef]]:
-    """`(qualified name, def)` of each module-level `test*` function and `test*` method of a `Test*` class."""
+def _test_functions(tree: ast.Module) -> Iterator[tuple[str, FunctionNode, ast.ClassDef | None]]:
+    """`(qualified name, def, class)` of each module-level `test*` function (class None) and `test*` method of
+    a `Test*` class.
+    """
     for node in tree.body:
-        if isinstance(node, _FUNCTION_DEFS) and node.name.startswith("test"):
-            yield node.name, node
+        if isinstance(node, FUNCTION_DEFS) and node.name.startswith("test"):
+            yield node.name, node, None
         elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
             for item in node.body:
-                if isinstance(item, _FUNCTION_DEFS) and item.name.startswith("test"):
-                    yield f"{node.name}::{item.name}", item
+                if isinstance(item, FUNCTION_DEFS) and item.name.startswith("test"):
+                    yield f"{node.name}::{item.name}", item, node
 
 
-def _calls(func: _FunctionDef) -> Iterator[ast.Call]:
+def _calls(func: FunctionNode) -> Iterator[ast.Call]:
     """The calls of a function body, outside the `def`s and classes nested in it."""
-    stack: list[ast.AST] = list(func.body)
-    while stack:
-        node = stack.pop()
-        if isinstance(node, _NESTED):
-            continue
-        if isinstance(node, ast.Call):
-            yield node
-        stack.extend(ast.iter_child_nodes(node))
-
-
-def _argument(call: ast.Call, position: int, keyword: str | None) -> ast.expr | None:
-    """The call's argument at `position`, else its `keyword=` argument."""
-    if position < len(call.args) and not any(isinstance(a, ast.Starred) for a in call.args[:position + 1]):
-        return call.args[position]
-    return next((k.value for k in call.keywords if keyword is not None and k.arg == keyword), None)
+    return (node for node in body_nodes(func) if isinstance(node, ast.Call))
 
 
 def _uses(expr: ast.expr | None, env: _Env) -> bool:

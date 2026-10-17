@@ -135,3 +135,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   Discovery puts the argparse known-edge `from` line on `set_defaults` in main(), not on `args.func(args)` in a separate dispatch() function as the design suggests, so the edge-function test now finds that function from discovery. The function-local-binding rule makes a patch of `pkg.cli.go` count as hop 2, although at runtime that patch would raise AttributeError. 3 negative-scenario tests already pass because the current listing puts every test in e2e.
+
+## Block 10 — Separate tests that mock hop 2, and drop tests that patch out the handler (implementer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  The spec says hop-2 names come from "hop 1's module", but function-local bindings depend on the line, so I resolve them at the lines hop 1 cites (one lookup per enclosing scope). The handler exclusion also covers the handler patched under the name a known-edge `from` line looks up (e.g. `pkg.__main__.handle_open`), which the spec does not state. I followed pytest's own rules for which parameters request fixtures (mock-filled, `self` and defaulted parameters don't), which the spec leaves open. Patches still count when the test starts the CLI in a separate process, where they could not take effect at runtime; static matching can't tell. `applied_patches`' `root` parameter is unused because the index already holds root-relative paths.
