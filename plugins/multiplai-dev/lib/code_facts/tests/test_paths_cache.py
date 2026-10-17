@@ -299,6 +299,23 @@ def test_a_failed_call_is_asked_again_on_the_next_run_but_not_within_its_run(tmp
     assert result.dropped == []
 
 
+def test_a_cached_answer_that_is_not_a_valid_answer_is_asked_again(tmp_path):
+    snap = snapshot(tmp_path, ["opal", "ruby"])
+    cache_dir = tmp_path / "cache"
+    first = FakeCall(trace=good(snap), fallback=lambda _: {"entries": []})
+    one = written(run_map(snap, first, cache_dir=cache_dir, fallback=True), tmp_path / "one.json")
+    assert sorted(c.stage for c in first.calls) == ["paths:fallback", "trace", "trace"]
+    # Valid JSON objects, with no error or malformed marker, that are neither a trace nor a fallback answer.
+    for name in answer_files(cache_dir):
+        (cache_dir / ANSWERS_DIR / name).write_text(json.dumps({"hops": "none", "entries": "none"}))
+
+    second = FakeCall(trace=good(snap), fallback=lambda _: {"entries": []})
+    two = written(run_map(snap, second, cache_dir=cache_dir, fallback=True), tmp_path / "two.json")
+    assert sorted((c.stage, c.entry) for c in second.calls) == [
+        ("paths:fallback", None), ("trace", "opal"), ("trace", "ruby")]
+    assert two == one
+
+
 def test_interrupted_run_resumes_with_only_the_missing_traces_and_the_same_output(tmp_path):
     class Interrupted(Exception):
         pass

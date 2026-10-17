@@ -73,10 +73,25 @@ class TraceContext:
         """The stored answer under `key`, asking for it first (one call, `prompt` built only then) when there is
         none.
         """
+        self.forget_invalid(key, schema)
         if key not in self.answers:
             await ask(key, prompt(), self.call, self.answers,
                       **self.ask_kwargs(budget_label=budget_label, schema=schema, encode=encode))
         return self.answers[key]
+
+    def forget_invalid(self, key: str, schema: type[BaseModel]) -> None:
+        """Drop the stored answer under `key` when it records no failure and is not a valid `schema`: a cached
+        file that does not read as its answer model is a miss, asked again.
+        """
+        stored = self.answers.get(key)
+        if stored is None or CALL_ERROR in stored or MALFORMED in stored:
+            return
+        try:
+            schema.model_validate(stored)
+        except ValidationError as e:
+            log.warning("cached answer %s is not a valid %s, asking again: %s", key, schema.__name__,
+                        e.errors()[0]["msg"])
+            del self.answers[key]
 
 
 def trace_key(entry: Entry, ctx: TraceContext) -> str:
@@ -136,6 +151,8 @@ async def trace_entries(entries: Sequence[Entry], *, ctx: TraceContext,
     gated, and re-asked at most once.
     """
     first = {trace_key(e, ctx): _trace_prompt(e, ctx) for e in entries}
+    for key in first:
+        ctx.forget_invalid(key, TraceAnswer)
     await run_tasks(list(first.items()), ctx.call, ctx.answers, concurrency=concurrency,
                     **ctx.ask_kwargs(**_trace_request("trace")))
     return await bounded(entries, lambda e: trace_entry(e, ctx=ctx), concurrency)
