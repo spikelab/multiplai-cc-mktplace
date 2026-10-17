@@ -268,7 +268,8 @@ def test_a_budget_stop_during_find_keeps_finished_finders_and_resume_runs_the_re
     assert before == ["find:diff-bugs", "find:callers"]
     # Which finders after the stopped one also finish depends on when the
     # task group cancels them; the stopped one never has a result.
-    assert saved.stage == "target" and saved.findings == []
+    # Saved before find completed: at `target`, or at `paths` once that stage runs before find.
+    assert not saved.past("find") and saved.findings == []
     assert "history" not in saved.finder_results
     assert [f.id for f in saved.finder_results["diff-bugs"].findings] == [high_finding().id]
     missing = [f"find:{d}" for d in DIMENSIONS if d not in saved.finder_results]

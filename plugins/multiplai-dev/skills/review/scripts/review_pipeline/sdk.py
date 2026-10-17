@@ -1,4 +1,4 @@
-"""The one way this pipeline calls a model: `agent_call_structured`.
+"""The ways this pipeline calls a model: `agent_call_structured`, and `agent_call_text` for a plain report.
 
 Copies the pattern of buildme's `sdk.py`, not the module: a repo trust gate,
 an explicit allow-list (run_agent denies its complement), a validated
@@ -12,6 +12,10 @@ no-tools, one-turn call that turns the text already paid for into the schema.
 Re-running the whole prompt would repeat the review (a finder re-ask took 68
 turns and cost as much as the first attempt). A run that failed returned no
 text, so its re-ask re-runs the prompt.
+
+`agent_call_text` is the piece and path finders' report call: the same trust
+gate, budget check and usage recording, and the answer returned as text, with
+no parsing and no re-ask (its convert call is an `agent_call_structured`).
 
 Every stage gets `Read`, `Grep` and `Glob`; finders and verifiers also get
 `WebFetch` and `WebSearch`, to look up how a dependency behaves at the version
@@ -148,6 +152,22 @@ async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effo
     budget.record(result.usage, label=budget_label)
     _note(result)
     return result.text
+
+
+async def agent_call_text(
+    prompt: str,
+    *,
+    allowed_tools: list[str],
+    model: str | None = None,
+    effort: str | None = None,
+    max_turns: int = DEFAULT_MAX_TURNS,
+    cwd: str | os.PathLike | None = None,
+    budget_label: str = "",
+    call_timeout: float = DEFAULT_CALL_TIMEOUT_S,
+) -> str:
+    """Run an agent and return its final message as it is. A failed run raises `AgentCallError`."""
+    return await _run(prompt, allowed_tools=allowed_tools, model=model, effort=effort, max_turns=max_turns,
+                      cwd=None if cwd is None else str(cwd), call_timeout=call_timeout, budget_label=budget_label)
 
 
 async def agent_call_structured(

@@ -7,14 +7,14 @@ when_to_use: 'Triggers: review this branch, review PR, deep review, /multiplai-d
 # Review
 
 Run a code review as a pipeline of separate agents, with gates written in
-Python between them:
+Python between them. Before the finders, the **paths** stage maps the code
+paths through the change from each entry point (see "The paths stage" below).
 
 1. **find** — five finders, one per aspect (`diff-bugs`, `callers`, `history`,
    `conventions`, `tests`), plus the `trim` finder, which judges the tests and
-   comments the change adds or edits (see "Trim" below). With
-   `--extra-finders`, a change's first round also runs one extra finder per
-   ~600 changed lines (see "Extra finders" below). Every finding cites
-   lines with an exact quote.
+   comments the change adds or edits (see "Trim" below). A change review also
+   runs one finder per piece of its diff (see "The kinds of finder" below).
+   Every finding cites lines with an exact quote.
 2. **verify** — a fresh agent per finding re-reads the code and answers
    `confirmed`, `refuted` or `unverifiable`, citing what it read. Unless it
    refutes the finding, it also says in one sentence what correct behaviour
@@ -147,6 +147,65 @@ so it does not sink below findings a person can already act on. Needs are in
 in a **Needs you** section of `summary-<slug>.md`, and on review-viewer's
 **Needs you** tab.
 
+## The paths stage
+
+Before find, every change review maps the **code paths** through the change:
+from each entry point (a CLI command, a `__main__`, a script, a hook, a skill
+command) through the functions it calls, as `code_facts` traces them in the
+head snapshot. The lines handed to it are the lines the change adds or
+modifies at head, under their head paths; a deleted file or a pure deletion
+gives none. At most 21 paths are kept, the ones covering the most changed lines
+first, from at most 30 traced entries. The result is written to
+`<out>/<repo>/<object>/paths.json` beside `findings.json`, in the `paths.v1`
+format (`lib/code_facts/code_facts/schema/paths.v1.schema.json`), even when no
+path was found, and a kept round keeps its copy.
+
+A `--tree` or `--dir` review maps paths only with `--paths`, over every line of
+every reviewed file. Without it the stage is skipped: no call, no cost, no
+`paths.json`. `--paths` with `--branch`, `--pr` or `--range` exits 2: a change
+review always maps its paths.
+
+The mapping agents read the snapshot with `Read`, `Grep` and `Glob` only, under
+the budget label `paths`, and count towards `--max-cost-usd`. Each answer is
+kept under `paths-cache/paths-answers/` as it returns, so a budget stop keeps
+what was paid for and `resume` asks only for the rest; a fresh `review` of the
+same target starts with an empty cache.
+
+What the mapping could not do goes to `checks.json`'s `coverage` list. Entries
+left out by scoping (not reaching the change, past the trace limit or the cap)
+are `info` only. An entry whose trace failed, a path whose trace stops partway,
+a failed model fallback, a mapping that raised and one that found no path are
+`error` records, and each also adds a `paths ...` line to the review's failures.
+None of them stops the review: find runs, with no paths when there are none. A
+repository not trusted (`--trust-repo`) or a budget stop ends the run, as in
+every stage.
+
+### Path ids on findings
+
+After merge, each finding in `findings.json` gets a `paths` list: the ids of
+the mapped paths it lies on, in `paths.json` order, each once. A finding lies
+on a path when one of its citations names the file of the path's entry, its
+handler or one of its hops, and the citation's lines (both ends included)
+contain that line. Citations into `.review-deps/` never count. A finding on
+no path has no `paths` key, and a review without paths (a tree review without
+`--paths`, or a mapping that failed or found none) writes none. Nothing else
+about a finding changes.
+
+### The report's Paths section
+
+`review-<slug>.md` has a `## Paths` section after the finding sections and
+before the appendix, read from `paths.json` and `findings.json` alone
+(rendering maps nothing, asks no model and runs no test). Each path, in
+`paths.json` order, shows its entry point and file:line, who invokes it (or
+`unknown invoker`), how many findings lie on it and their ids, and its e2e
+tests, each `counted` or `mocked (not counted)`, with `no e2e test` when none
+is counted; a broken trace adds `Trace stops at hop N.`. A failed or empty
+mapping shows the heading and `No paths were mapped: <reason>.`. A last line
+counts what the mapping left out: `Gaps: 3 entries dropped (2 over cap, 1 out
+of scope); 1 broken trace.` A review whose paths stage was skipped has no
+section. Every name, invoker and test id is shown as inline code, so none can
+add a heading, link or tag to the report.
+
 ## Rules the `conventions` finder reads
 
 The `conventions` finder reads every `coding-standards.md` and every
@@ -159,6 +218,25 @@ consequence; a `CLAUDE.md` rule only when breaking it has one. All
 `coding-standards.md` files go in first, so when the rules pass 40 000
 characters, `CLAUDE.md` text is what gets skipped. The filename must be
 lowercase.
+
+### Docs those files link
+
+The finder also reads the Markdown docs those files link, one level deep: an
+inline link `[text](docs/rules.md)` or a reference definition
+`[id]: docs/rules.md`, relative to the linking file (or to the repository root
+when it starts with `/`), with any `#fragment` or `?query` dropped. Links in
+fenced code, URLs and targets that are not `.md` or `.markdown` are ignored.
+A target outside the repository, or a symlink pointing outside it, is never
+read. Each doc is read once, from the reviewed commit (on a change review, a
+link the change removed is still followed, and a doc the change deleted is
+read at base), never from the working tree. A doc whose linking line says
+`bind`, `binding`, `must` or `required` goes first. Docs share what is left of
+the 40 000 characters and go in whole or not at all; one that does not fit,
+is missing, cannot be read or points outside the repository is listed in
+`checks.json`'s `coverage` (`info`) and the review goes on. The prompt tells
+the finder these docs are the repository's rules: a changed line that breaks
+one is a finding, citing the changed line and naming the doc. Each doc is
+fenced as untrusted text, since the change's author can edit it.
 
 The `tests` finder also reports tests the change adds or edits that cannot
 catch a change in behaviour: a test that asserts a value copied from the code,
@@ -227,25 +305,60 @@ becomes a need with a read-only command, and the review goes on without it.
 turns it off. Registry (PyPI) packages, `path` and editable sources, and other
 ecosystems' lock files are not read; for those the agents have `WebFetch`.
 
-## Extra finders
+## The kinds of finder
 
-`--extra-finders` (or `extra_finders: true` in `review.yaml`) adds finders
-sized by the change to its first review round. The changed files are grouped
-in diff order into chunks of about 600 changed lines: a larger file is a
-chunk of its own, lockfiles are left out, and there are at most 6 chunks
-(past that, the chunk size grows and the smallest neighbouring chunks merge).
-Each chunk gets one extra finder, which reads only its chunk's hunks, each
-hunk's enclosing function and the direct callers and callees, never whole
-files, and lists every HIGH or MEDIUM correctness defect there. Its findings
-go through verify, merge and assess like every other finder's.
+The find stage runs three kinds of finder on a change review. A `--tree` or
+`--dir` review runs the dimension finders, and the path finders only with
+`--paths`.
 
-They run only when the review directory holds no earlier finished round of
-the change: a second `review` of the same PR, branch or range (a rerun on the
-same head included) runs none. A first review that stopped before it wrote
-its findings (a budget stop, or every finder failing) does not count, so the
-next `review` still runs them. `resume` keeps the choice and asks only the chunks whose
-finder had not returned. The option goes with `--branch`, `--pr` and
-`--range`; `--tree` and `--dir` refuse it.
+- **Dimension finders** (`diff-bugs`, `callers`, `history`, `conventions`,
+  `tests`, `trim`): each reads the whole change for one aspect and answers
+  with findings directly. They work as they always have.
+- **Piece finders**, keyed `piece@<id>`: one per piece of the diff, with no
+  cap on how many. The diff is split at file boundaries into pieces of
+  related files: the files of one package or skill directory (the nearest
+  directory holding a `pyproject.toml`, `package.json`, `Cargo.toml`,
+  `go.mod` or `SKILL.md`), a module beside its tests, at most 50,000
+  characters of diff each unless one file alone is larger. Release metadata
+  (changelogs, manifests, `.github/`) goes in pieces of its own, last;
+  lockfiles are left out. `--plan-only` lists the pieces. A piece finder is
+  given its piece's whole diff and owns the defects in or caused by those
+  changes, but may read any file of the snapshot; it reports every severity,
+  LOW included, and advice.
+- **Path finders**, keyed `path@<id>`: one per path in `paths.json` (see "The
+  paths stage"), in its order, at most 21. Each is given its path (the entry
+  point and who invokes it, every hop with its file and line, the changed
+  lines on it, and its e2e tests or "No e2e test is listed for this path.")
+  and follows it from the entry through every hop to the last, reading every
+  function on it in every file. It reports defects on the path or in how the
+  path uses changed code, every severity and advice, and cites a changed
+  line first when the defect involves one. A cut trace says where it stops,
+  and the finder reads on from there. No path finder runs when the mapping
+  failed or found no path; the other finders run as usual.
+
+A piece or path finder writes a plain-text report, which is saved in the
+run's state and as `report-piece-<id>.md` or `report-path-<id>.md` beside
+`findings.json` as soon as it returns.
+A second call then turns the report into findings: it opens the files the
+report names to copy exact quotes, keeps one finding per item, and judges
+none (an item without a stated severity, advice included, is LOW). Those
+findings go through the same gates, verification and merge as every other
+finding. Whether each item was a defect or advice is recorded only in
+`checks.json`, on the `<key> convert` entry. Both calls have only
+`Read`, `Grep` and `Glob`, and both count towards `--max-cost-usd`. A report
+of `NO FINDINGS` needs no second call.
+
+A failed report or convert call is listed in the review's errors and its
+coverage, and the other finders go on. After a stop, `resume` asks only for
+what is missing: a stored report is never asked again, only its convert
+call, and the path finders are built from the stored `paths.json`. Every
+review round runs the piece and path finders again, under the same keys; a
+kept round keeps its reports.
+
+`--extra-finders` (with or without a number) and `extra_finders` in
+`review.yaml` are still accepted and do nothing: the review prints
+`review: --extra-finders has no effect; per-piece finders now run by default`
+once.
 
 ## Reviewing code that is not a change
 
@@ -285,8 +398,13 @@ has no PR.
 over the existing tests and comments, as a separate cleanup (see "Trim").
 
 `--plan-only` resolves the target, prints one line per group and a total line
-(`groups: <n>  finder calls: <n>  files skipped: <n>`; the calls include the
-extra finders a first round with `--extra-finders` would ask), writes
+(`groups: <n>  finder calls: <n>  files skipped: <n>`; the dimension finders'
+calls). A change
+review also prints one line per piece of its diff
+(`piece <n>: <k> files, <C> characters [<group>] <file>, ...`, `[.]` for files
+outside any package or skill directory, `[meta]` for release metadata, with the
+lockfiles whose text is left out after `omitted:`) and
+`piece and path finder calls: <P> pieces + up to 21 paths (each one report call and one convert call)`. It writes
 `<out>/<repo>/<object>/plan.txt`, and stops before any model call.
 
 ## What this skill does on the machine
@@ -354,7 +472,7 @@ One target:
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts \
   python -m review_pipeline --session-id "{session_id}" [--out /abs/out] \
   review --repo /abs/path/to/repo --range <base>..<head> --trust-repo \
-  [--mode critical] [--extra-finders] [--no-deps] [--ticket DB-2038] [--deployed-in staging]
+  [--mode critical] [--no-deps] [--ticket DB-2038] [--deployed-in staging]
 ```
 
 Use `--branch <name>` (reviewed against its merge-base with `origin/HEAD`) or
@@ -366,7 +484,9 @@ Use `--branch <name>` (reviewed against its merge-base with `origin/HEAD`) or
 `--plan-only` in the foreground and paste its total line to the user. When
 `finder calls` is over 20, ask the user to confirm the run and to choose
 `--max-cost-usd` before starting it. Say that the 50 USD default stops a large
-run part way, and that `resume` continues it with a higher ceiling. A batch is a YAML list of
+run part way, and that `resume` continues it with a higher ceiling. Every
+change review prints the piece and path finders' estimate when it starts
+(see Cost); pass any `WARNING:` or `NOTICE:` line on to the user. A batch is a YAML list of
 `{repo, branch|pr|range, tickets, deployed_in, mode}` (`batch --mode` sets
 the default for entries without one):
 
@@ -601,6 +721,29 @@ bodies and matching this regex (from `scripts/review_pipeline/pr_marker.py`):
 
 A change to the format changes `v`.
 
+## Cost
+
+On the reference change (PR #295, a 227 KB diff) the new finders cost about
+$14 for the piece finders and about $24 for the path finders (21 paths),
+about $38 together. That is before the dimension finders and verification
+(and the paths mapping), so a whole review of a change that size costs more.
+The piece figure scales with the characters of diff the pieces hold
+(lockfiles and binary files count for nothing), the path figure with the
+number of paths.
+
+`--plan-only`, the start of a review, and `resume` print the estimate on
+stderr as `cost (approximate): pieces $14 + paths $24 (up to 21 paths) =
+$38; ...` (a tree review with `--paths`: paths only; without it, nothing).
+When the estimate, with a third added for what it leaves out, reaches the
+budget left, a `WARNING:` line says the run will stop partway. A change
+review on the 50 USD default also prints a `NOTICE:`: the 50 USD default can
+stop a large change review partway, the reference change among them. A
+stopped review keeps every finder report it paid for; continue it with
+`python -m review_pipeline resume <out>/<repo>/<object> --trust-repo
+--max-cost-usd <higher>`, which asks only for what is missing. The review
+warns about cost but never refuses to start: the `--max-cost-usd` ledger is
+the only stop, and `--plan-only` exits the same either way.
+
 ## What a review cost: `run` and `runs.jsonl`
 
 Every `findings.json` holds a `run` object, filled from the review's final
@@ -643,7 +786,7 @@ jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd:
 default's `INBOX/reviews/review.yaml` until a `review.yaml` exists in the new
 place, with a warning) sets `concurrency`, `finder_model`,
 `verifier_model`, `merger_model` (default: the verifier's), `effort`,
-`max_turns`, `explain`, `find_with_facts`, `trim` and `extra_finders`. `multiplai.conf` keys
+`max_turns`, `explain`, `find_with_facts` and `trim`. `multiplai.conf` keys
 `review_finder_model`, `review_verifier_model`, `review_effort` and
 `review_explain` apply when the file does not set them. By default every
 stage runs on the session's model.
@@ -666,8 +809,7 @@ stage runs on the session's model.
   off until real runs on real PRs are compared.
 - `trim` (default `true`): run the trim finder on a change review (see
   "Trim"). A tree review runs it only with `--trim`.
-- `extra_finders` (default `false`): what `--extra-finders` does, for every
-  change review written to this output directory (see "Extra finders").
+- `extra_finders`: accepted and ignored (see "The kinds of finder").
 - `deps` (default `true`): clone the git dependencies `uv.lock` pins into the
   snapshot (see "Dependency source"); `false` is what `--no-deps` does.
 - `deps_max_mb` (default `50`): skip a dependency whose source is larger.

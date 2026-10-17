@@ -73,6 +73,8 @@ def _citation(c: Citation) -> dict:
 
 
 def _finding(f: Finding, status: str, reason: str | None, expected: str | None) -> dict:
+    # `paths` only when the finding lies on a mapped path: never null, never [].
+    on_paths = {"paths": list(f.paths)} if f.paths else {}
     return {
         "id": f.id,
         "severity": f.severity,
@@ -85,6 +87,7 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
         "citations": [_citation(c) for c in f.citations],
         "verdict_reason": reason,
         "expected_behaviour": expected or None,
+        **on_paths,
     }
 
 
@@ -295,12 +298,15 @@ def _agent(check: AgentCheck) -> dict:
         v = check.verdict
         verdict = {"status": v["status"], "reason": v["reason"],
                    "citations": [_marked(c) for c in v["citations"]], "lowered": bool(v["lowered"])}
+    # A convert call's items (kind, severity, finding id): the only place an item's kind is written.
+    items = {} if check.items is None else {"items": [
+        {"kind": i["kind"], "severity": i["severity"], "finding_id": i.get("finding_id")} for i in check.items]}
     return {
         "stage": check.stage, "subject": check.subject, "given": list(check.given),
         "calls": [{"tool": c["tool"], "target": c["target"], "detail": c.get("detail", "")} for c in check.calls],
         "outcome": check.outcome, "turns": check.turns, "cost_usd": round(check.cost_usd, 6),
         "started_at": check.started_at, "ended_at": check.ended_at, "error": check.error,
-        "findings": [_checked_finding(e) for e in check.findings], "verdict": verdict,
+        "findings": [_checked_finding(e) for e in check.findings], "verdict": verdict, **items,
     }
 
 
@@ -315,6 +321,8 @@ def to_checks_file(state: ReviewState, *, generated_at: datetime | None = None) 
         "agents": [_agent(c) for c in agents],
         "gates": [{"finding_id": g.finding_id, "gate": g.gate, "passed": g.passed, "rule": g.rule}
                   for g in state.gate_checks],
+        # What a stage could not cover (`checks.add_coverage`), in the order it was recorded.
+        "coverage": [c.model_dump(mode="json") for c in state.coverage],
     }
 
 

@@ -9,8 +9,8 @@ With `find_with_facts: true`, the explain stage's checked facts are listed too
 (`facts_block`), each with its id and its citations' ids, cut at
 FACTS_MAX_CHARS.
 
-An extra finder (`build_extra`, `--extra-finders`) gets one chunk of the diff
-instead of the whole of it and looks for every HIGH or MEDIUM defect there.
+The piece finders' prompt is `prompts/piece.py`, and their convert call's
+`prompts/convert.py`.
 """
 
 from __future__ import annotations
@@ -284,40 +284,3 @@ def _build_tree(target: TargetInfo, dimension: str, conventions: str, files: lis
     ]
     return "\n\n".join(p for p in parts if p)
 
-
-EXTRA_TASK = (
-    "Read every hunk of the diff below, each hunk's enclosing function, and the direct callers and callees "
-    "of the changed functions (use Grep to find them, and Read with an offset and a limit). Never read a "
-    "whole file.\n"
-    "List every correctness defect of HIGH or MEDIUM severity in your files: wrong behaviour, data loss, a "
-    "resume or stop path that breaks, a test that passes without testing what it claims, a contradiction "
-    "with what the change says it does. Do not sample and do not stop at the first few. No style, no LOW "
-    "findings, no fixes."
-)
-
-
-def build_extra(target: TargetInfo, files: list[str], lines: int, index: int, count: int, chunk_diff: str,
-                facts: list[Fact] | None = None) -> str:
-    """The prompt of extra finder *index* (0-based) of *count*: its *files* and their part of the diff only."""
-    parts = [
-        f"You are extra finder {index + 1} of {count} in the first review of this change. Your final "
-        f"message is one JSON object listing defects (schema at the end), read by a program; it is not a "
-        f"report.",
-        workspace_block(target, web=True),
-        deps_block(target),
-        f"Your files (about {lines} changed lines): {', '.join(files)}. Other finders cover the rest of "
-        f"the change.",
-        EXTRA_TASK,
-        commits_block(target),
-        description_block(target),
-        settings_block(target),
-        diff_block(target, chunk_diff),
-        facts_block(facts),
-        SEVERITY_GUIDE,
-        CITATION_RULES,
-        FILE_RULE,
-        NEEDS_RULES,
-        f"Schema:\n{SCHEMA}",
-        JSON_ONLY,
-    ]
-    return "\n\n".join(p for p in parts if p)

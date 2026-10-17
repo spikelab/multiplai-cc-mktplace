@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator
 
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "schema"
 SCHEMA_PATH = SCHEMA_DIR / "findings.v1.schema.json"
@@ -89,6 +89,10 @@ class Assessment(_Strict):
     earlier_note: str | None = None
 
 
+# `Finding.paths` as the schema states it: optional, but never null when present.
+PATH_IDS_SCHEMA = {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": True}
+
+
 class Finding(_Strict):
     id: str = Field(pattern=r"^[0-9a-f]{10}$")
     severity: Literal["HIGH", "MEDIUM", "LOW"]
@@ -122,6 +126,18 @@ class Finding(_Strict):
     # for what only the trim finder reported, else from the topic. Absent in
     # older files; readers then use the topic.
     section: Literal["code", "tests", "docs", "trim"] | None = None
+    # The ids of the mapped paths (review's `paths.json`) the finding lies on, in that file's
+    # order (multiplai-dev 0.82+). Absent when it lies on none; never null or empty.
+    paths: Annotated[list[str] | None, WithJsonSchema(PATH_IDS_SCHEMA)] = None
+
+    @field_validator("paths")
+    @classmethod
+    def _unique_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        if any(not v for v in value) or len(set(value)) != len(value):
+            raise ValueError("paths must be distinct, non-empty path ids")
+        return value
 
 
 class Target(_Strict):
@@ -237,6 +253,13 @@ class CheckedVerdict(_Strict):
     lowered: bool  # verdict_gate turned a confirmation into unverifiable
 
 
+class ConvertedItemEntry(_Strict):
+    """One item of a piece or path finder's converted report (review 0.82+): what kind it was."""
+    kind: Literal["defect", "advice"]
+    severity: Literal["HIGH", "MEDIUM", "LOW"]
+    finding_id: str | None = None  # None when the item had no location to stand a finding on
+
+
 class AgentEntry(_Strict):
     stage: str = Field(min_length=1)  # find, verify, merge
     subject: str  # the dimension, the finding id, or the merge group's ids
@@ -250,6 +273,7 @@ class AgentEntry(_Strict):
     error: str = ""
     findings: list[CheckedFinding] = Field(default_factory=list)
     verdict: CheckedVerdict | None = None
+    items: list[ConvertedItemEntry] | None = None  # a convert call's (`<key> convert`), review 0.82+
 
 
 class GateEntry(_Strict):
@@ -259,6 +283,15 @@ class GateEntry(_Strict):
     rule: str = ""
 
 
+class CoverageEntry(_Strict):
+    """What a review stage could not cover, and why (review's `checks.add_coverage`)."""
+    stage: Literal["paths", "find", "conventions"]
+    subject: str
+    level: Literal["info", "error"]
+    reason: str
+    detail: str = ""
+
+
 class ChecksFile(_Strict):
     schema_version: Literal[1]
     generated_at: datetime
@@ -266,6 +299,7 @@ class ChecksFile(_Strict):
     target: Target
     agents: list[AgentEntry]
     gates: list[GateEntry]
+    coverage: list[CoverageEntry] | None = None  # review 0.82+; absent in older files
 
 
 def load_checks(path: str | Path) -> ChecksFile:
