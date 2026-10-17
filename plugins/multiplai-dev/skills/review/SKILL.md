@@ -191,6 +191,21 @@ no path has no `paths` key, and a review without paths (a tree review without
 `--paths`, or a mapping that failed or found none) writes none. Nothing else
 about a finding changes.
 
+### The report's Paths section
+
+`review-<slug>.md` has a `## Paths` section after the finding sections and
+before the appendix, read from `paths.json` and `findings.json` alone
+(rendering maps nothing, asks no model and runs no test). Each path, in
+`paths.json` order, shows its entry point and file:line, who invokes it (or
+`unknown invoker`), how many findings lie on it and their ids, and its e2e
+tests, each `counted` or `mocked (not counted)`, with `no e2e test` when none
+is counted; a broken trace adds `Trace stops at hop N.`. A failed or empty
+mapping shows the heading and `No paths were mapped: <reason>.`. A last line
+counts what the mapping left out: `Gaps: 3 entries dropped (2 over cap, 1 out
+of scope); 1 broken trace.` A review whose paths stage was skipped has no
+section. Every name, invoker and test id is shown as inline code, so none can
+add a heading, link or tag to the report.
+
 ## Rules the `conventions` finder reads
 
 The `conventions` finder reads every `coding-standards.md` and every

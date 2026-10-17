@@ -3,7 +3,8 @@
 Both render from `findings.json` v1 dicts, so a rollup never scrapes markdown.
 The per-target review adds what only the pipeline state has: the severity a
 finding had before it was lowered, the finders that reported it, and the
-findings merged into it.
+findings merged into it. Its `## Paths` section (`render_paths_section`) is
+read from the run's `paths.json`: rendering maps nothing and asks no model.
 """
 
 from __future__ import annotations
@@ -11,11 +12,17 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .export import to_checks_file, to_findings_file
-from .models import CRITICAL_IMPACTS, DEPS_DIR, SECTIONS, SEVERITIES, ReviewState, section_of
+from .models import CRITICAL_IMPACTS, DEPS_DIR, SECTIONS, SEVERITIES, CoverageRecord, ReviewState, section_of
+from .paths_io import load_paths, views
 from .target import github_web_base, object_folders, review_children
+
+if TYPE_CHECKING:
+    from code_facts.paths import PathsResult
 
 log = logging.getLogger(__name__)
 
@@ -211,8 +218,84 @@ def cost_line(run: dict) -> str:
             f"{run['tokens']['total']:,} tokens, {duration(run['wall_seconds'])} wall time")
 
 
+# --- the Paths section ------------------------------------------------------------
+
+def inline_code(text: str) -> str:
+    """*text* as one inert code span: control characters and line breaks become spaces, and the
+    backtick run around it is one longer than the longest inside it, padded when it starts or ends
+    with a backtick, so no value can open a heading, link, tag or list item."""
+    flat = "".join(" " if unicodedata.category(c) in ("Cc", "Zl", "Zp") else c for c in text or "")
+    longest = max((len(run) for run in re.findall(r"`+", flat)), default=0)
+    fence = "`" * (longest + 1)
+    pad = " " if flat.startswith("`") or flat.endswith("`") or not flat else ""
+    return f"{fence}{pad}{flat}{pad}{fence}"
+
+
+# Which paths-stage coverage reasons the gap line counts, and as what.
+GAP_DROPPED = {"over-cap": "over cap", "out-of-scope": "out of scope"}
+GAP_BROKEN = ("trace-failed", "broken-trace", "fallback-failed")
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+def gap_line(records: list[CoverageRecord]) -> str:
+    """`Gaps: <n> entries dropped (<a> over cap, <b> out of scope); <c> broken traces.`, or "" for none."""
+    paths = [r for r in records if r.stage == "paths"]
+    dropped = {label: sum(r.reason == reason for r in paths) for reason, label in GAP_DROPPED.items()}
+    broken = sum(r.reason in GAP_BROKEN for r in paths)
+    clauses = []
+    total = sum(dropped.values())
+    if total:
+        parts = ", ".join(f"{n} {label}" for label, n in dropped.items() if n)
+        clauses.append(f"{_plural(total, 'entry', 'entries')} dropped ({parts})")
+    if broken:
+        clauses.append(_plural(broken, "broken trace", "broken traces"))
+    return f"Gaps: {'; '.join(clauses)}." if clauses else ""
+
+
+def render_paths_section(state: ReviewState, result: PathsResult | None, findings: list[dict]) -> str:
+    """The report's `## Paths` section, or "" when the paths stage was skipped or did not run.
+
+    One block per path of *result*, in `paths.json` order: its entry, who
+    invokes it, the *findings* (`findings.json` rows) whose `paths` list it,
+    and its e2e tests; then the gap line. A failed or empty mapping gives the
+    heading and the recorded reason. Every value from `paths.json` is shown as
+    `inline_code`.
+    """
+    if state.paths_status in ("skipped", "not-run"):
+        return ""
+    out = ["## Paths", ""]
+    shown = views(result) if result is not None and state.paths_status == "ok" else []
+    if not shown:
+        reason = state.paths_failure or ("the paths file could not be read" if state.paths_status == "ok"
+                                         else "the mapping found none")
+        out += [f"No paths were mapped: {_one_line(reason).rstrip('.')}.", ""]
+    for view in shown:
+        where = f"{view.file}:{view.line}" if view.line else view.file
+        out.append(f"### Path {view.id}: {inline_code(view.name)} at {inline_code(where)}")
+        invokers = [i for i in view.invokers if i]
+        out.append("- Invoked by: " + (", ".join(inline_code(i) for i in invokers) if invokers
+                                       else "unknown invoker"))
+        on = [fd["id"] for fd in findings if view.id in (fd.get("paths") or [])]
+        out.append(f"- Findings on this path: {len(on)}"
+                   + (f" ({', '.join(inline_code(i) for i in on)})" if on else ""))
+        out.append("- E2E tests:")
+        out += [f"  - {inline_code(t.id)} — {'mocked (not counted)' if t.mocked else 'counted'}" for t in view.e2e]
+        if not any(not t.mocked for t in view.e2e):
+            out.append("  - no e2e test")
+        if view.broken_at is not None:
+            out.append(f"- Trace stops at hop {view.broken_at}.")
+        out.append("")
+    gaps = gap_line(state.coverage)
+    if gaps:
+        out += [gaps, ""]
+    return "\n".join(out)
+
+
 def render_review(state: ReviewState, *, deployed: str | None = None,
-                  findings_file: dict | None = None) -> str:
+                  findings_file: dict | None = None, paths: PathsResult | None = None) -> str:
     data = findings_file or to_findings_file(state)
     t = state.target
     web = github_web_base(t.remote_url)
@@ -272,6 +355,9 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
                                        original_severity=state.original_severity.get(fd["id"]),
                                        finders=finders.get(fd["id"])))
 
+    paths_section = render_paths_section(state, paths, findings)
+    if paths_section:
+        out += [paths_section]
     out += ["## Appendix — not listed above", "",
             "The record of what the review left out: findings a gate rejected, the verifier refuted, the "
             "assess stage labelled low-value or a repeat of one you rejected, trim suggestions about an "
@@ -309,7 +395,7 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
 def write_review(state: ReviewState, target_dir: Path, *, deployed: str | None = None) -> Path:
     """Write the full review, its short summary and the checks record; return the full review's path."""
     path = target_dir / f"review-{state.target.slug}.md"
-    path.write_text(render_review(state, deployed=deployed), encoding="utf-8")
+    path.write_text(render_review(state, deployed=deployed, paths=load_paths(target_dir, state)), encoding="utf-8")
     summary_path(state, target_dir).write_text(render_summary(state), encoding="utf-8")
     (target_dir / f"checks-{state.target.slug}.md").write_text(render_checks(state), encoding="utf-8")
     return path
