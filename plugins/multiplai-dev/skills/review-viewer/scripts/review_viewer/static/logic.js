@@ -1545,6 +1545,25 @@
     };
   }
 
+  /* The line above the cards: "<n> path(s), <m> with findings, <k> with no
+   * e2e test", from the same findingsByPath that orders them. A path with
+   * only mocked tests has no e2e test. */
+  function pathsSummary(paths, byPath) {
+    const list = paths || [];
+    const withFindings = list.filter((p) => onPath(byPath, p.id)).length;
+    const noE2e = list.filter((p) => !hasCountedE2e(p)).length;
+    return list.length + (list.length === 1 ? " path, " : " paths, ") + withFindings + " with findings, " +
+      noE2e + " with no e2e test";
+  }
+
+  const UNLISTED_TESTS_NOTE = "Some test files could not be listed, so the e2e test results may be incomplete.";
+  const NO_PATHS_TEXT = "No entry points reach the changed code.";
+
+  /* paths.json records test files the e2e listing could not read. */
+  function hasUnlistedTests(doc) {
+    return !!(doc && doc.test_listing_skips && doc.test_listing_skips.length);
+  }
+
   /* The lines under a card's "E2E tests:": each counted test, "no e2e test"
    * when none counts (also when only mocked ones exist), then each mocked
    * test marked not counted. */
@@ -1625,7 +1644,8 @@
     resolveTab: resolveTab, isRefuted: isRefuted, KIND_LABELS: KIND_LABELS, kindLabel: kindLabel,
     BREAK_REASONS: BREAK_REASONS, breakReasonText: breakReasonText, countedFindings: countedFindings,
     findingsByPath: findingsByPath, sortPaths: sortPaths, hasCountedE2e: hasCountedE2e,
-    pathCardModel: pathCardModel, pathTestLines: pathTestLines,
+    pathCardModel: pathCardModel, pathTestLines: pathTestLines, pathsSummary: pathsSummary,
+    hasUnlistedTests: hasUnlistedTests, UNLISTED_TESTS_NOTE: UNLISTED_TESTS_NOTE, NO_PATHS_TEXT: NO_PATHS_TEXT,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;

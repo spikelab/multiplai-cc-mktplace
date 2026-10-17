@@ -929,3 +929,4 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 .path-broken { color: var(--high); font-size: var(--fs-sm); }
 .path-test-mocked { color: var(--muted); }
 .path-test-none { color: var(--high); }
+.paths-summary { font-weight: 600; margin: var(--s1) 0; }

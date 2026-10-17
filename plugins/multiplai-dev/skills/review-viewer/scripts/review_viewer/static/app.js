@@ -1388,6 +1388,12 @@
     if (!doc) return;
     const byPath = L.findingsByPath(L.countedFindings(state.shown));
     box.appendChild(sectionLabel("Paths through the change", "paths"));
+    box.appendChild(el("p", { class: "paths-summary", text: L.pathsSummary(doc.paths, byPath) }));
+    if (L.hasUnlistedTests(doc)) box.appendChild(el("p", { class: "muted small", text: L.UNLISTED_TESTS_NOTE }));
+    if (!doc.paths.length) {
+      box.appendChild(el("p", { class: "muted", text: L.NO_PATHS_TEXT }));
+      return;
+    }
     for (const p of L.sortPaths(doc.paths, byPath)) box.appendChild(pathCard(L.pathCardModel(p, byPath)));
   }
 
