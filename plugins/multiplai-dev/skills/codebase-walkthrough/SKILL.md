@@ -38,7 +38,10 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
    walkthrough is still written; a trust or budget stop still halts the run. The walkthrough's **Paths** section lists each path: its
    entry point, kind and who invokes it, its hops as `path:line` links with
    ids `p<n>h<k>`, where the trace stops if it broke and why, and the e2e
-   tests that run it (or "no e2e test").
+   tests that run it (or "no e2e test"). In human mode the same result is
+   written beside the walkthrough as `<name>-paths.json`, a `paths.v1`
+   document (schema: `lib/code_facts/code_facts/schema/paths.v1.schema.json`)
+   for other tools; `check` and buildme do not read it.
 6. **write** — one agent per section, with no tools, writes from the checked
    claims only and refers to code by citation id. Each path gets one or two
    paragraphs written from its checked hops, citing them by hop id. Code turns the ids into
@@ -150,7 +153,7 @@ every exit but a kill, `SPEND:<usd>:<tokens>`: what this run's model calls
 cost (a resume counts only its own calls). Read the
 `## Coverage` section of the Markdown file and paste its table into chat as it
 is, with the list of files that have no surviving fact. Then give the paths of
-the Markdown and `walkthrough.json` files.
+the Markdown, `walkthrough.json` and `<name>-paths.json` files.
 
 Then, in human mode, open the walkthrough in the review-viewer. Start it in
 the background (Bash tool, `run_in_background: true`):

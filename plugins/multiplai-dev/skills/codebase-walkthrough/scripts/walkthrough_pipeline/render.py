@@ -4,7 +4,9 @@ Code, not a model, turns `[[cN]]` into `path:line` links and `[[snippet:cN]]`
 into the cited lines read with `git show` at the commit. Each link carries its
 quote as the link title, so `check.py` can re-run `citation_gate` on a finished
 file. Every Mermaid diagram is drawn by code from boundary entries. The Paths
-section is rendered by code from the trace stage's `map_paths` result.
+section is rendered by code from the trace stage's `map_paths` result, which
+is also written, in human mode, as `<name>-paths.json` (paths.v1) by
+code_facts' `write_paths_file`.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote as url_quote
 
+import code_facts
 from code_facts.paths import PathHop, PathsResult, TracedPath
 
 from .check import LINK
@@ -585,6 +588,28 @@ def markdown_headings(md: str) -> list[str]:
     return [m.group(1).strip() for m in re.finditer(r"^## (.+)$", md, re.M)]
 
 
+def paths_file_for(md: Path) -> Path:
+    """`<name>-paths.json` beside `<name>-walkthrough.md`."""
+    return md.with_name(md.name.removesuffix("-walkthrough.md") + "-paths.json")
+
+
+def write_paths_output(state: WalkState, md: Path) -> Path | None:
+    """Write the trace stage's result beside the walkthrough with code_facts' writer; None when there is none.
+
+    A failed write is recorded in `state.errors` and leaves no file: the walkthrough is already written.
+    """
+    target = paths_file_for(md)
+    if state.paths is None:
+        target.unlink(missing_ok=True)       # a stale file from an earlier run would be taken for this one's
+        return None
+    try:
+        return code_facts.write_paths_file(state.paths, target)
+    except (OSError, ValueError) as e:
+        state.errors.append(f"paths file {target}: {type(e).__name__}: {e}")
+        target.unlink(missing_ok=True)
+        return None
+
+
 def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     name = state.target.name
@@ -600,4 +625,7 @@ def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
         json_path.write_text(json.dumps(render_walkthrough_json(state, md), indent=2, ensure_ascii=False) + "\n",
                              encoding="utf-8")
         paths.append(json_path)
+        written = write_paths_output(state, md_path)
+        if written is not None:
+            paths.append(written)
     return paths

@@ -44,6 +44,13 @@ time, not derived from a tag.
   Resuming a run saved by an earlier version, after its trace stage, traces
   again rather than reporting no paths.
 
+### Added
+- codebase-walkthrough: in human mode a run also writes `<name>-paths.json`
+  beside the walkthrough: the paths, the entries left out and their e2e
+  tests as a `paths.v1` document, written by code_facts' `write_paths_file`.
+  The run prints its path as another `walkthrough:` line. If it cannot be
+  written, the walkthrough is kept and the error is recorded.
+
 ## [0.80.0] - 2026-10-17
 
 ### Added
