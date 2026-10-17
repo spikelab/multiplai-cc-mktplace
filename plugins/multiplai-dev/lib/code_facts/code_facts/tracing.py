@@ -23,6 +23,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
+from .cache import CALL_ERROR, cache_key
 from .entries import Entry, to_path_entry
 from .explore import CallFn, Resolve, ask, bounded, canonical_digest, run_tasks
 from .paths import AGENT_TOOLS, HOP_LIMIT, DropReason, E2EListing, Location, PathDrop, TracedPath
@@ -34,9 +35,8 @@ log = logging.getLogger(__name__)
 
 Stage = Literal["trace", "reask"]
 
-# Stored-answer markers: `ask` stores a recoverable call failure under "error";
+# Stored-answer markers: `ask` stores a recoverable call failure under CALL_ERROR;
 # an answer that does not parse is stored under "malformed". A TraceAnswer has neither key.
-CALL_ERROR = "error"
 MALFORMED = "malformed"
 
 # A valid placeholder: `assign_ids` numbers kept paths once they are ordered.
@@ -70,7 +70,7 @@ class TraceContext:
 def trace_key(entry: Entry, ctx: TraceContext) -> str:
     """The content key of an entry's first trace; independent of the order of any input."""
     changed = ctx.changed_lines
-    return canonical_digest({
+    return cache_key("trace", {
         "version": PATHS_TRACE_PROMPT_VERSION,
         "commit": ctx.commit,
         "entry": [entry.kind, entry.location.path, entry.location.line,
@@ -84,7 +84,7 @@ def trace_key(entry: Entry, ctx: TraceContext) -> str:
 
 def reask_key(first_key: str, first_answer: dict, gated: GateResult) -> str:
     """The content key of the re-ask after the first answer (stored under `first_key`) broke as `gated` says."""
-    return canonical_digest({
+    return cache_key("reask", {
         "version": PATHS_REASK_PROMPT_VERSION, "trace": first_key, "answer": canonical_digest(first_answer),
         "broken_at": gated.broken_at, "break_reason": gated.break_reason,
     })

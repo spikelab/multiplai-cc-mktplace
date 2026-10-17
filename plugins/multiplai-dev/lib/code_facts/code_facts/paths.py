@@ -42,6 +42,8 @@ SCHEMA_RESOURCE = ("schema", "paths.v1.schema.json")
 # The same draft as review's facts.v1 schema.
 JSON_SCHEMA_DRAFT = "https://json-schema.org/draft/2020-12/schema"
 HOP_LIMIT = 20
+# The directory under `cache_dir` that holds the stored model answers.
+ANSWERS_DIR = "paths-answers"
 
 # Relative, no leading `/`, no `.` or `..` segment, no backslash. Compiled, so
 # pydantic matches it with Python's `re`, which supports the lookaheads.
@@ -391,9 +393,11 @@ async def map_paths(
     `resolve`, and every model call goes through `call`. Scoping (reachability,
     `trace_limit`, coverage, `cap`) applies only when `changed_lines` is not
     None. Arguments are checked before any model call. Nothing is written
-    outside `cache_dir`.
+    outside `cache_dir`: given one, every answer is kept under
+    `<cache_dir>/paths-answers/`, so a rerun asks only what it does not have.
     """
     # Deferred: these modules build on the models above.
+    from .cache import _DiskAnswers, purge_failed
     from .entries import discover_entries
     from .pyindex import PyIndex
     from .tracing import TraceContext, trace_entries
@@ -408,10 +412,12 @@ async def map_paths(
         _require_positive("trace_limit", trace_limit)
         changed = normalise_changed_lines(root, changed_lines)
     log.info("mapping paths at %s (%s)", commit, "scoped" if scoped else "unscoped")
+    answers = _DiskAnswers(cache_dir / ANSWERS_DIR if cache_dir is not None else None)
+    purge_failed(answers)
     index = PyIndex.build(root)
     discovery = discover_entries(root, seeds, index=index)
     ctx = TraceContext(root=root, commit=commit, resolve=resolve, call=call, index=index, changed_lines=changed,
-                       places=tuple(places), answers={}, recoverable=recoverable,
+                       places=tuple(places), answers=answers, recoverable=recoverable,
                        call_kwargs=dict(call_kwargs or {}), progress=progress)
     outcomes = await trace_entries(discovery.entries, ctx=ctx, concurrency=concurrency)
     traced = sorted((o for o in outcomes if isinstance(o, TracedPath)), key=path_order)
@@ -471,7 +477,7 @@ def write_paths_file(result: PathsResult, path: Path) -> Path:
     except ValidationError as exc:
         first = exc.errors()[0]
         raise _invalid(first["loc"], first["msg"]) from exc
-    _write_atomic(path, text.encode("utf-8"))
+    write_atomic(path, text.encode("utf-8"))
     return path
 
 
@@ -481,7 +487,7 @@ def _invalid(location: Iterable[str | int], message: str) -> ValueError:
     return ValueError(f"{SCHEMA_VERSION} document is invalid at {pointer}: {message}")
 
 
-def _write_atomic(path: Path, data: bytes) -> None:
+def write_atomic(path: Path, data: bytes) -> None:
     """Write via a temp file in the same directory, fsync'd, then renamed over `path`."""
     tmp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
     # os.open with 0o666 so the umask applies, as for a plain write.
