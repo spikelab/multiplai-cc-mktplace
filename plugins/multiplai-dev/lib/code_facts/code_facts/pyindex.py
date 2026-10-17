@@ -66,7 +66,6 @@ class _FromBinding:
 
 
 _Binding = _DefBinding | _ModuleBinding | _FromBinding
-_ImportBindings = (_ModuleBinding, _FromBinding)
 
 
 @dataclass(frozen=True)
@@ -208,15 +207,30 @@ class PyIndex:
     def resolve_name(self, path: str, line: int, name: str) -> Handler | None:
         """The `def` or `class` that `name` means at `line` of `path`: function scope first, then module scope.
 
-        Imports are followed, re-exports included, within the repository. None
-        when the name is unbound, bound to a module, or imported from outside
-        the repository.
+        `name` may be dotted, as in `commands.cmd_open`: its first part must
+        then be bound to a module, and the rest names a definition in that
+        module or one of its submodules. Imports are followed, re-exports
+        included, within the repository. None when the name is unbound, bound
+        to a module, or imported from outside the repository.
         """
-        return self._resolve_bindings(path, self._visible(path, line, name), set())
+        head, _, rest = name.partition(".")
+        bindings = self._visible(path, line, head)
+        if not rest:
+            return self._resolve_bindings(path, bindings, set())
+        submodule, _, attr = rest.rpartition(".")
+        for binding in bindings:
+            target = self._bound_module(path, binding, submodule)
+            if target is not None:
+                found = self._resolve_bindings(target, self._files[target].module_bindings.get(attr, []), set())
+                if found is not None:
+                    return found
+        return None
 
-    def is_imported(self, path: str, line: int, name: str) -> bool:
-        """Whether `name` at `line` of `path` is bound by an import statement."""
-        return any(isinstance(b, _ImportBindings) for b in self._visible(path, line, name))
+    def is_external(self, path: str, line: int, name: str) -> bool:
+        """Whether `name` (or the first part of a dotted name) at `line` of `path` is imported from outside the
+        repository, directly or through a same-repository re-export.
+        """
+        return self._external(path, self._visible(path, line, name.partition(".")[0]), set())
 
     def enclosing_def(self, path: str, line: int) -> Def | None:
         """The innermost `def` or `class` whose span holds `line`."""
@@ -278,6 +292,35 @@ class PyIndex:
                     if found is not None:
                         return found
         return None
+
+    def _bound_module(self, path: str, binding: _Binding, submodule: str) -> str | None:
+        """The same-repository file for `<module bound by binding>.<submodule>`, or None."""
+        match binding:
+            case _ModuleBinding(module=module):
+                level = 0
+            case _FromBinding(module=module, level=level, attr=attr):
+                module = f"{module}.{attr}" if module else attr
+            case _:
+                return None
+        return self.resolve_module(path, f"{module}.{submodule}" if submodule else module, level)
+
+    def _external(self, path: str, bindings: list[_Binding], seen: set[tuple[str, str]]) -> bool:
+        for binding in bindings:
+            match binding:
+                case _ModuleBinding(module=module):
+                    if self.resolve_module(path, module) is None:
+                        return True
+                case _FromBinding(module=module, level=level, attr=attr):
+                    target = self.resolve_module(path, module, level)
+                    if target is None:
+                        # A relative import never leaves the repository; `from ns import mod` may name a submodule.
+                        if level == 0 and self._bound_module(path, binding, "") is None:
+                            return True
+                    elif (target, attr) not in seen:
+                        seen.add((target, attr))
+                        if self._external(target, self._files[target].module_bindings.get(attr, []), seen):
+                            return True
+        return False
 
 
 def _inside(full: Path, real_root: Path) -> bool:

@@ -15,8 +15,10 @@ Seeds. A caller seed becomes a `seed` entry whose handler is the named symbol,
 or the innermost `def`/`class` enclosing the seed's line.
 
 Diagnostics. Every candidate examined but not emitted gets exactly one; an
-entry whose handler mechanism points outside the repository is emitted with a
-null handler and an `unresolved_handler` diagnostic.
+entry whose handler mechanism names a function imported from outside the
+repository is emitted with a null handler and an `unresolved_handler`
+diagnostic. Any other handler that does not resolve (a lambda, a local
+variable) leaves the handler null with no diagnostic.
 """
 
 from __future__ import annotations
@@ -44,7 +46,8 @@ Diagnostic = PathDiagnostic
 
 class KnownEdge(_Strict):
     """A call edge discovery proved statically: a dispatch line to the `def` it reaches."""
-    model_config = ConfigDict(validate_by_name=True, serialize_by_alias=True)
+    # `from` is a keyword; dump with `by_alias=True` to publish it under that name.
+    model_config = ConfigDict(populate_by_name=True)
 
     from_: Location = Field(alias="from")
     to: Location
@@ -229,10 +232,12 @@ def _set_defaults_handler(index: PyIndex, dispatch: _DispatchIndex, path: str,
                           func: tuple[ast.expr, int]) -> _Resolution:
     """The edge starts at the module's `args.func(...)` call, or at the `set_defaults` line when there is none."""
     expr, line = func
-    handler = index.resolve_name(path, line, expr.id) if isinstance(expr, ast.Name) else None
+    reference = _reference(expr)
+    if reference is None:
+        return None, None, None
+    handler = index.resolve_name(path, line, reference)
     if handler is None:
-        return None, None, (f"set_defaults(func={ast.unparse(expr)}) at line {line} is not a function "
-                            "defined in this repository")
+        return None, None, _external_problem(index, f"set_defaults at {path}:{line}", path, line, reference)
     return handler, _edge(path, dispatch.facts(path).func_call or line, handler), None
 
 
@@ -250,15 +255,33 @@ def _dispatch_dict_handler(index: PyIndex, dispatch: _DispatchIndex, path: str,
             if handler is not None:
                 start = facts.dict_calls.get(item.dict_name) if item.dict_name else None
                 return handler, _edge(module, start or item.key_line, handler), None
-            if unresolved is None and index.is_imported(module, item.value_line, item.value):
-                unresolved = (f"dispatch dict entry at {module}:{item.key_line} maps it to {item.value}, "
-                              "which is imported from outside this repository")
+            if unresolved is None:
+                unresolved = _external_problem(index, f"dispatch dict entry at {module}:{item.key_line}",
+                                               module, item.value_line, item.value)
     return None, None, unresolved
+
+
+def _reference(expr: ast.expr) -> str | None:
+    """`a` or `a.b.c` for a name or an attribute chain on a name; None for anything else, such as a lambda."""
+    parts: list[str] = []
+    while isinstance(expr, ast.Attribute):
+        parts.append(expr.attr)
+        expr = expr.value
+    if not isinstance(expr, ast.Name):
+        return None
+    return ".".join([expr.id, *reversed(parts)])
+
+
+def _external_problem(index: PyIndex, site: str, path: str, line: int, reference: str) -> str | None:
+    """The `unresolved_handler` detail when an unresolved handler reference comes from outside the repository."""
+    if not index.is_external(path, line, reference):
+        return None
+    return f"{site} maps it to {reference}, which is imported from outside this repository"
 
 
 @dataclass(frozen=True)
 class _DictItem:
-    """`"<key>": <value name>` in a dict literal; `dict_name` is the name the dict is assigned to, if any."""
+    """`"<key>": <value reference>` in a dict literal; `dict_name` is the name the dict is assigned to, if any."""
     key: str
     value: str
     key_line: int
@@ -319,9 +342,10 @@ def _dispatch_facts(tree: ast.Module) -> _DispatchFacts:
                 dict_calls[name] = min(dict_calls.get(name, node.lineno), node.lineno)
         elif isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values):
-                if isinstance(key, ast.Constant) and isinstance(key.value, str) and isinstance(value, ast.Name):
+                reference = _reference(value)
+                if isinstance(key, ast.Constant) and isinstance(key.value, str) and reference is not None:
                     items.setdefault(key.value, []).append(
-                        _DictItem(key.value, value.id, key.lineno, value.lineno, dict_names.get(id(node))))
+                        _DictItem(key.value, reference, key.lineno, value.lineno, dict_names.get(id(node))))
     for found in items.values():
         found.sort(key=lambda item: item.key_line)
     return _DispatchFacts(min(func_calls, default=None), items, dict_calls)

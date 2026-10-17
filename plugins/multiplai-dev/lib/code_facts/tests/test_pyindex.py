@@ -78,6 +78,8 @@ def snap(tmp_path):
         "bad.py": "def broken(:\n",
         "bin.py": b"x = '\xff\xfe'\n",
         "nul.py": b"x = 1\x00\n",
+        "bom.py": b"\xef\xbb\xbfdef with_bom():\n    pass\n",
+        "latin.py": "# -*- coding: latin-1 -*-\n\n\ndef caf\u00e9():\n    return '\u00e9'\n".encode("latin-1"),
     })
 
 
@@ -107,8 +109,7 @@ class TestRepoRoot:
 
     def test_falls_back_to_the_snapshot_root(self, snap):
         idx = build(snap)
-        # The snapshot root itself, however spelt; never a sub-repository.
-        assert idx.repo_root("pkg/cli.py") in ("", ".")
+        assert idx.repo_root("pkg/cli.py") == ""
         assert idx.repo_root("loose/run.py") == idx.repo_root("pkg/cli.py")
 
 
@@ -171,6 +172,34 @@ class TestResolveName:
         h = build(snap).resolve_name("pkg/cli.py", line_of(CLI, "def main"), "local_fn")
         assert (h.path, h.line, h.symbol) == ("pkg/cli.py", line_of(CLI, "def local_fn"), "local_fn")
 
+    def test_dotted_names_through_module_bindings(self, snap):
+        idx = build(snap)
+        assert idx.resolve_name("pkg/cli.py", 1, "pkg.cmds.handler") is None  # `pkg` is unbound in cli.py
+        src = "import pkg.cmds\nimport pkg.cmds as c\nfrom pkg import cmds\nfrom . import sub\n"
+        root = make_tree(snap, {"pkg/dotted.py": src})
+        idx = build(root)
+        for name in ("pkg.cmds.handler", "c.handler", "cmds.handler"):
+            h = idx.resolve_name("pkg/dotted.py", 4, name)
+            assert (h.path, h.line, h.symbol) == ("pkg/cmds.py", 1, "handler"), name
+        h = idx.resolve_name("pkg/dotted.py", 4, "sub.c.c")
+        assert (h.path, h.line) == ("pkg/sub/c.py", 1)
+        assert idx.resolve_name("pkg/dotted.py", 4, "c.missing") is None
+
+    def test_is_external_only_for_imports_leaving_the_repository(self, snap):
+        idx = build(snap)
+        line = line_of(CLI, "# module-scope handler")
+        assert idx.is_external("pkg/cli.py", line, "requests")
+        assert idx.is_external("pkg/cli.py", line, "requests.get")
+        assert not idx.is_external("pkg/cli.py", line, "handler")
+        assert not idx.is_external("pkg/cli.py", line, "local_fn")
+        assert not idx.is_external("pkg/cli.py", line, "nowhere")
+        assert not idx.is_external("repo_a/tool/__main__.py", 1, "main")
+        root = make_tree(snap, {"pkg/reexport.py": "from requests import get\n",
+                                "pkg/user.py": "from pkg.reexport import get\nfrom .sub import nothing\n"})
+        idx = build(root)
+        assert idx.is_external("pkg/user.py", 1, "get")
+        assert not idx.is_external("pkg/user.py", 2, "nothing")
+
     def test_unknown_and_third_party_names(self, snap):
         idx = build(snap)
         line = line_of(CLI, "# module-scope handler")
@@ -199,3 +228,9 @@ class TestParseErrors:
         assert {path for path, _ in idx.parse_errors()} == {"bad.py", "bin.py", "nul.py"}
         assert all(detail for _, detail in idx.parse_errors())
         assert idx.module_name("pkg/cli.py") == "pkg.cli"
+
+    def test_bom_and_coding_cookie_files_parse(self, snap):
+        idx = build(snap)
+        assert [(d.name, d.start) for d in idx.defs("bom.py")] == [("with_bom", 1)]
+        assert [(d.name, d.start) for d in idx.defs("latin.py")] == [("caf\u00e9", 4)]
+        assert idx.line_count("latin.py") == 5

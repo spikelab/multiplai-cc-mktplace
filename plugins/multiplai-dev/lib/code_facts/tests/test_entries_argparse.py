@@ -130,6 +130,66 @@ class TestSetDefaultsHandler:
         assert e.handler is None and e.known_edges == []
         assert [(d.path, d.reason) for d in disc.diagnostics] == [("cli.py", "unresolved_handler")]
 
+    def test_attribute_on_an_out_of_repository_module_is_diagnosed(self, tmp_path):
+        src = SET_DEFAULTS.replace("import argparse\n", "import argparse\nimport thirdparty.cli\n")
+        src = src.replace("func=cmd_open", "func=thirdparty.cli.ext")
+        root = make_tree(tmp_path / "snap", {"cli.py": src})
+        disc = discover(root)
+        assert by_name(argparse_entries(disc))["open"].handler is None
+        assert [(d.line, d.reason) for d in disc.diagnostics] == [(line_of(src, '"open"'), "unresolved_handler")]
+        assert "thirdparty.cli.ext" in disc.diagnostics[0].detail
+
+    @pytest.mark.parametrize("binding", ["from . import commands", "import pkg.commands as commands"])
+    def test_attribute_on_a_same_repository_module_resolves(self, tmp_path, binding):
+        src = SET_DEFAULTS.replace("import argparse\n", f"import argparse\n{binding}\n")
+        src = src.replace("func=cmd_open", "func=commands.cmd_open")
+        commands = "\n\ndef cmd_open(args):\n    return 0\n"
+        root = make_tree(tmp_path / "snap", {"pkg/__init__.py": "", "pkg/cli.py": src, "pkg/commands.py": commands})
+        disc = discover(root)
+        e = by_name(argparse_entries(disc))["open"]
+        assert (e.handler.path, e.handler.line, e.handler.symbol) == ("pkg/commands.py", 3, "cmd_open")
+        assert edges(e) == {("pkg/cli.py", line_of(src, "set_defaults"), "pkg/commands.py", 3)}
+        assert disc.diagnostics == []
+
+    @pytest.mark.parametrize("func", ["lambda args: 0", "handler", "commands.missing", "commands.NOT_A_FUNCTION"])
+    def test_unresolved_in_repository_handler_is_null_without_diagnostic(self, tmp_path, func):
+        src = SET_DEFAULTS.replace("import argparse\n", "import argparse\nfrom . import commands\n")
+        src = src.replace("    p_open.set_defaults(func=cmd_open)",
+                          f"    handler = cmd_open\n    p_open.set_defaults(func={func})")
+        root = make_tree(tmp_path / "snap", {
+            "pkg/__init__.py": "", "pkg/cli.py": src, "pkg/commands.py": "NOT_A_FUNCTION = 1\n"})
+        disc = discover(root)
+        e = by_name(argparse_entries(disc))["open"]
+        assert e.handler is None and e.known_edges == []
+        assert disc.diagnostics == []
+
+    def test_nested_subcommand_handlers(self, tmp_path):
+        src = """\
+import argparse
+
+
+def cmd_db(args):
+    return 0
+
+
+def cmd_migrate(args):
+    return 1
+
+
+def build():
+    sub = argparse.ArgumentParser().add_subparsers()
+    db = sub.add_parser("db")
+    db.set_defaults(func=cmd_db)
+    db_sub = db.add_subparsers()
+    db_sub.add_parser("migrate").set_defaults(func=cmd_migrate)
+"""
+        root = make_tree(tmp_path / "snap", {"cli.py": src})
+        found = by_name(argparse_entries(discover(root)))
+        assert {name: (e.location.line, e.handler.symbol, e.handler.line) for name, e in found.items()} == {
+            "db": (line_of(src, '"db"'), "cmd_db", line_of(src, "def cmd_db")),
+            "db migrate": (line_of(src, '"migrate"'), "cmd_migrate", line_of(src, "def cmd_migrate")),
+        }
+
 
 DICT_MAIN = """\
 import argparse
@@ -184,6 +244,27 @@ class TestDispatchDictHandler:
         e = by_name(argparse_entries(discover(root)))["show"]
         assert edges(e) == {("pkg/cli.py", line_of(DICT_MAIN, '"show": show_cmd'), "pkg/commands.py",
                              line_of(DICT_COMMANDS, "def show_cmd"))}
+
+    def test_attribute_values_resolve_through_the_module(self, tmp_path):
+        src = DICT_DISPATCH.replace("from .commands import render_cmd, show_cmd", "from . import commands")
+        src = src.replace(": render_cmd", ": commands.render_cmd").replace(": show_cmd", ": commands.show_cmd")
+        root = make_tree(tmp_path / "snap", {
+            "pkg/__init__.py": "", "pkg/cli.py": src, "pkg/commands.py": DICT_COMMANDS})
+        disc = discover(root)
+        e = by_name(argparse_entries(disc))["render"]
+        def_line = line_of(DICT_COMMANDS, "def render_cmd")
+        assert (e.handler.path, e.handler.line) == ("pkg/commands.py", def_line)
+        assert edges(e) == {("pkg/cli.py", line_of(src, "HANDLERS[args.command](args)"), "pkg/commands.py", def_line)}
+        assert disc.diagnostics == []
+
+    def test_out_of_repository_value_is_diagnosed(self, tmp_path):
+        src = DICT_MAIN.replace("from .commands import render_cmd, show_cmd", "from thirdparty import render_cmd")
+        src = src.replace('    "show": show_cmd,\n', "")
+        root = make_tree(tmp_path / "snap", {"pkg/__init__.py": "", "pkg/cli.py": src})
+        disc = discover(root)
+        found = by_name(argparse_entries(disc))
+        assert found["render"].handler is None and found["show"].handler is None
+        assert [(d.line, d.reason) for d in disc.diagnostics] == [(line_of(src, '"render")'), "unresolved_handler")]
 
 
 def comparison_main(prelude: str = "") -> str:
@@ -341,6 +422,15 @@ class TestWalk:
         (root / "linked.py").symlink_to(outside / "cli.py")
         disc = discover(root)
         assert disc.entries == [] and disc.diagnostics == []
+
+    def test_symlink_loops_terminate(self, tmp_path):
+        root = make_tree(tmp_path / "snap", {"pkg/cli.py": SET_DEFAULTS})
+        (root / "pkg/self").symlink_to(root / "pkg", target_is_directory=True)
+        (root / "loop_a.py").symlink_to(root / "loop_b.py")
+        (root / "loop_b.py").symlink_to(root / "loop_a.py")
+        disc = discover(root)
+        assert {(e.location.path, e.name) for e in disc.entries} == {("pkg/cli.py", "open")}
+        assert disc.diagnostics == []
 
     def test_unparseable_files_give_parse_error_and_others_still_found(self, tmp_path):
         root = make_tree(tmp_path / "snap", {
