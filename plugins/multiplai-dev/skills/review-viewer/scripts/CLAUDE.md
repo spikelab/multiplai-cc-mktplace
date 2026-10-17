@@ -177,7 +177,9 @@ Any failure → exit 2, every problem listed with its step id, nothing written.
 Otherwise the file is replaced atomically (0600). `GET
 /api/targets/<slug>/walkthrough` returns it (404 while absent); the page polls
 it, so a new walkthrough never restarts the server. `walkthrough status`
-prints the target's shas, what is not yet covered, the missing assessments,
+prints the target's shas, the `paths:` line (`server.paths_status_line` over
+`inspect_paths`: `accepted <N> (<file>)` followed by each path's id, entry
+name and kind, `stale <commit> (<file>)`, `invalid (<file>)` or `none`), what is not yet covered, the missing assessments,
 the `risk:` block (or `missing`), the `repo tiers:` that `.review-risk.toml`
 at the base commit sets (or why it was ignored), the measured badges and
 each commit's subject.
@@ -280,4 +282,5 @@ commit and a PR head under `refs/pull/7/head`, for target resolution;
 | `test_serve_targets.py` | review lookup (match, stale, none) and the `walkthrough:` stdout line |
 | `test_server.py` (also `serve` in a subprocess: `--share slack` reaching the page, a saved review's `review-state.json` turning GitHub on, a `repo_path` that no longer exists), `test_mailbox.py`, `test_models.py`, `test_logging.py`, `test_netinfo.py` | the server, mailbox, contracts, logs, container detection |
 | `test_checks.py` | the `checks.v1` contract, loading it beside findings (present, absent, invalid, other commits), `verifier_citations` |
+| `test_paths.py` | `paths.json` beside findings: every accept, stale and invalid case with the payload and the log, the fixture against `PathsResult`, the files and lines a path opens, the `walkthrough status` `paths:` line, the SKILL.md path guidance |
 | `logic.test.js` (via `test_logic_js.py`) | the page's pure functions, under node, and that the help dialog in `index.html` has every section a `?` opens and defines every value the schemas allow. No test loads `app.js` (there is no DOM here), so a few tests read its source to hold its call sites to the tested helpers: the unfiltered findings list, the badges, the share request |

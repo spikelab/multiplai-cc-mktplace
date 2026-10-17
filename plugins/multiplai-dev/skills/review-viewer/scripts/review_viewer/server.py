@@ -250,6 +250,19 @@ def paths_beside(review_dir: Path, head_sha: str | None) -> PathsResult | None:
     return result
 
 
+def paths_status_line(status: PathsStatus, path: Path) -> str:
+    """The `paths:` line of `walkthrough status`: the verdict the viewer loads
+    paths.json by, so the session's walkthrough uses the same file or none."""
+    if status.status == "accepted":
+        return f"paths: accepted {len(status.result.paths)} ({path})"
+    if status.status == "stale":
+        commit = status.detail.removeprefix("commit=").rsplit(" head_sha=", 1)[0]
+        return f"paths: stale {commit} ({path})"
+    if status.status == "invalid":
+        return f"paths: invalid ({path})"
+    return "paths: none"
+
+
 def _path_files(result: PathsResult) -> set[str]:
     """The files a page link on a path can open: each path's entry, handler
     (when it has one) and hop files. Not `also_invoked_by` locations, test
