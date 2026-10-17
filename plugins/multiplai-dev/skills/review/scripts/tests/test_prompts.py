@@ -132,8 +132,7 @@ def _with_deps(target_info):
 
 def test_finders_and_verifier_are_told_where_the_dependency_source_is(target_info):
     target = _with_deps(target_info)
-    prompts = [find.build(target, "diff-bugs", "diff"), find.build_extra(target, ["a.py"], 10, 0, 2, "diff"),
-               verify.build(target, high_finding())]
+    prompts = [find.build(target, "diff-bugs", "diff"), verify.build(target, high_finding())]
     for prompt in prompts:
         assert f".review-deps/multiplai-core@{'a' * 12}/" in prompt
         assert f".review-deps/other-lib@{'b' * 12}/" in prompt

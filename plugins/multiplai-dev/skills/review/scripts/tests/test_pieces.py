@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from review_pipeline import sdk
 from review_pipeline.__main__ import main
+from review_pipeline.chunks import diff_files
 from review_pipeline.models import (
     AssessOutput,
     FinderOutput,
@@ -430,3 +431,19 @@ def test_plan_only_on_a_tree_lists_no_pieces(change_repo, tmp_path, capsys):
     repo, _, _ = change_repo
     text = plan(repo, tmp_path / "out", "--tree", capsys=capsys)
     assert not any(line.startswith("piece") for line in text.splitlines())
+
+
+def test_diff_files_reads_each_files_changed_lines_in_diff_order():
+    diff = (
+        "diff --git a/b.py b/b.py\nindex 1..2 100644\n--- a/b.py\n+++ b/b.py\n@@ -1,2 +1,2 @@\n"
+        " keep\n-old\n+new\n"
+        "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n--- a/gone.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n"
+        "-x\n--- not a header\n"
+        "diff --git a/img.png b/img.png\nnew file mode 100644\nBinary files /dev/null and b/img.png differ\n"
+        "diff --git a/a.py b/a.py\nnew file mode 100644\n--- /dev/null\n+++ b/a.py\n@@ -0,0 +1,2 @@\n+one\n+++two\n"
+    )
+    files = diff_files(diff)
+    assert [(c.path, c.added, c.deleted) for c in files] == [
+        ("b.py", 1, 1), ("gone.py", 0, 2), ("img.png", 0, 0), ("a.py", 2, 0)]
+    assert files[0].text.startswith("diff --git a/b.py b/b.py\n") and "+new\n" in files[0].text
+    assert "gone.py" not in files[0].text and "a.py" not in files[2].text
