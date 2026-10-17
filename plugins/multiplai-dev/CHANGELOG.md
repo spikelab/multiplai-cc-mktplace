@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [Unreleased]
+## [0.80.0] - 2026-10-17
 
 ### Added
 - code_facts: `map_paths` maps the code paths of a snapshot, from each entry
@@ -30,6 +30,10 @@ time, not derived from a tag.
     any seeds the caller passes. Entries that run the same function become one
     entry, with the others listed as its invokers. A candidate that is examined
     but not emitted is reported as a diagnostic.
+  - Each entry says who invokes it, in `invoked_by`: an agent following a
+    `SKILL.md`, Claude Code on a hook's event, a person or a script running a
+    command, the caller of a seed, or, for an entry the agent found, another
+    program, skill or agent.
   - With `fallback=True` (the default), one read-only agent is asked for entry
     points the scan missed. An entry it lists is kept only when its citation
     re-reads at the commit and no discovered entry already holds that line or
