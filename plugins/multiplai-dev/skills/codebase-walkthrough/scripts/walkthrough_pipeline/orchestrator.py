@@ -30,7 +30,7 @@ from .render import write_outputs
 from .stages import RunContext
 from .stages.docs import run_docs
 from .stages.explore import run_explore
-from .stages.trace import rewind_legacy_trace, run_trace
+from .stages.trace import PATHS_CACHE, rewind_legacy_trace, run_trace
 from .stages.write import run_write
 from .state import STATE_FILE, load_state, save_state
 
@@ -99,6 +99,8 @@ def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
     run_dir.mkdir(parents=True, exist_ok=True)
     for stale in (STATE_FILE, "boundary.json"):
         (run_dir / stale).unlink(missing_ok=True)
+    # The stored trace answers belong to the state just deleted: a new run asks for its own.
+    shutil.rmtree(run_dir / PATHS_CACHE, ignore_errors=True)
     _keep_previous_progress(run_dir)
     try:
         info, repo = target_mod.build_target(opts.target, run_dir, name=opts.name, depth=opts.depth,

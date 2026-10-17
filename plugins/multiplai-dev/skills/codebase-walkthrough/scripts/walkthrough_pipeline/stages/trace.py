@@ -43,6 +43,8 @@ log = logging.getLogger(__name__)
 
 # The most entries traced; past it, code_facts drops them as `over_trace_limit`.
 TRACE_LIMIT = 30
+# `map_paths`' answer cache, under the run directory. Only `resume` reuses it; `run` starts it empty.
+PATHS_CACHE = "paths-cache"
 
 
 def module_lines(state: WalkState, root: Path) -> dict[str, set[int]]:
@@ -239,7 +241,7 @@ async def run_trace(state: WalkState, ctx: RunContext) -> WalkState:
             cap=int(state.options.get("scenarios") or 21),
             trace_limit=TRACE_LIMIT,
             concurrency=ctx.config.concurrency,
-            cache_dir=ctx.run_dir / "paths-cache",
+            cache_dir=ctx.run_dir / PATHS_CACHE,
             recoverable=(sdk.AgentCallError,),
             progress=ctx.progress.line if ctx.progress else None,
         )

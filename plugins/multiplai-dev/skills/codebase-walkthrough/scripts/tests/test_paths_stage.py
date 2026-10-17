@@ -303,6 +303,19 @@ def test_a_resume_after_trace_does_not_trace_again(tmp_path, monkeypatch, spy):
     assert _paths_body(md_path.read_text()) == before   # rendered from the saved result
 
 
+def test_a_new_run_on_the_same_commit_traces_again(tmp_path, monkeypatch, spy):
+    """Only `resume` reuses stored answers: `run` starts a fresh state, so its traces are fresh too."""
+    code, run_dir, _ = _click_run(tmp_path, monkeypatch, FakeAgents(trace_plan=path_fixtures.click_plan()))
+    assert code == 0 and _trace_answer_files(run_dir)
+
+    again = FakeAgents(trace_plan=path_fixtures.click_plan())
+    monkeypatch.setattr(sdk, "agent_call_structured", again)
+    module = tmp_path / "ws" / "shop" / "billing"
+    assert main(path_fixtures.run_args(module, tmp_path / "ws", tmp_path)) == 0
+    assert next((tmp_path / "runs").iterdir()) == run_dir           # the same run directory
+    assert any(c["schema"] == "TraceAnswer" for c in _trace_calls(again))
+
+
 # --- module_lines ----------------------------------------------------------------------------------
 
 
