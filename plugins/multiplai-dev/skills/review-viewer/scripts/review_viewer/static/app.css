@@ -925,7 +925,7 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 .path-card { border: 1px solid var(--border); border-radius: 6px; padding: var(--s2) var(--s3); margin-bottom: var(--s2); }
 .path-card.is-target { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .path-head { margin-bottom: var(--s1); }
-.path-hops, .path-list { margin: var(--s1) 0; padding-left: var(--s4); }
+.path-hops, .path-list { margin: var(--s1) 0; padding-left: var(--s4); overflow-wrap: anywhere; }
 .path-broken { color: var(--high); font-size: var(--fs-sm); }
 .path-test-mocked { color: var(--muted); }
 .path-test-none { color: var(--high); }
