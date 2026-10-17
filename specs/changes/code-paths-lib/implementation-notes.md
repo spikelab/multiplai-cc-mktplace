@@ -90,3 +90,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   A command that can't be tokenised (for example, an unclosed quote) is skipped with no diagnostic in a `SKILL.md`, but gets an `unresolved_target` diagnostic in a hooks file. The spec doesn't cover this case for either source.
+
+## Block 7 — Run a single read-only model fallback for entry points that static discovery missed (test_writer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  The capability spec drops a fallback entry that resolves to the same handler as a deterministic one; the block description and D8 compare only lines, so the tests follow the block. No location is defined for drops of entries with no citation, a `../` path or an absolute path, yet `PathEntry.location` is required and must be a valid relative path. The duplicate check is unclear on whether it compares path and line or the line alone; the tests use path and line. `check_quote` passes a range that runs past the end of the file, so a separate range check is needed. The `fallback=False` test already passes because today's stub always reports `skipped`.

@@ -24,7 +24,8 @@ DEPTH = 4  # cmd_<n> -> step1_<n> -> step2_<n> -> step3_<n>
 def lib(name: str) -> Any:
     """A code_facts name from whichever module defines it, looked up at call time."""
     for mod in ("code_facts", "code_facts.trace_gate", "code_facts.paths", "code_facts.prompts",
-                "code_facts.entries", "code_facts.pyindex", "code_facts.commands"):
+                "code_facts.entries", "code_facts.pyindex", "code_facts.commands", "code_facts.fallback",
+                "code_facts.tracing"):
         try:
             module = importlib.import_module(mod)
         except ModuleNotFoundError:
@@ -139,13 +140,14 @@ Responder = Callable[[str | None], Answer]
 class FakeCall:
     """A CallFn shaped like `agent_call_structured(prompt, schema, **kwargs)`.
 
-    It routes by the `budget_label` prefix (`paths:trace:` / `paths:reask:`),
+    It routes by the `budget_label` (`paths:trace:` / `paths:reask:` prefixes, `paths:fallback`),
     names the entry a prompt is about from the subcommand name in it, records
     every call and the most calls ever in flight, and returns (or raises) what
     the responder gives for that entry.
     """
     trace: Responder
     reask: Responder | None = None
+    fallback: Responder | None = None
     delay: Callable[[], float] | None = None
     names: list[str] = field(default_factory=lambda: list(NAMES))
     calls: list[Call] = field(default_factory=list)
@@ -170,6 +172,8 @@ class FakeCall:
                 out = self.trace(entry)
             elif stage == "reask" and self.reask is not None:
                 out = self.reask(entry)
+            elif stage == "paths:fallback" and self.fallback is not None:
+                out = self.fallback(entry)
             else:
                 raise AssertionError(f"unexpected call with budget_label {label!r}")
             if isinstance(out, BaseException):
