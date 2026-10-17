@@ -858,11 +858,21 @@ class TestBudgetConfig:
         config = _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n")
         assert config.budget_max_tokens is None
 class TestExplainerToggle:
-    """B1 explainers default ON; the CLI flag wins over specs/config.yaml."""
+    """B1 explainers default OFF until #375 is fixed; the CLI flag wins over specs/config.yaml."""
 
-    def test_default_is_on(self):
-        assert GateToggles().explainers_enabled
-        assert BuildConfig().explainers_active
+    def test_default_is_off(self):
+        assert not GateToggles().explainers_enabled
+        assert not BuildConfig().explainers_active
+
+    def test_config_yaml_without_explainers_key_keeps_them_off(self, tmp_path):
+        config = _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n")
+        assert not config.gates.explainers_enabled
+        assert not config.explainers_active
+
+    def test_config_yaml_can_enable(self, tmp_path):
+        config = _config_from_yaml(tmp_path, "explainers:\n  enabled: true\n")
+        assert config.gates.explainers_enabled
+        assert config.explainers_active
 
     def test_config_yaml_can_disable(self, tmp_path):
         import yaml

@@ -45,7 +45,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--spec-only` | Stop after spec generation, the design audit, the plan review and the prototype — everything up to the review checkpoint, no TDD build |
 | `--skip-research` | Skip the research phase |
 | `--lenient-review` | Accept-and-continue when a block exhausts its review iterations without passing, instead of failing the build. Unattended overnight runs only — the default is to fail, so low-scoring work is never silently marked done. |
-| `--skip-explainers` | Skip the unknowns/edge-case explainer pass for dependencies new to this project. `unknowns.md` is still written, recording the skip. Default: **on** — the explainers are the anti-slop mechanism, so skipping is a deliberate choice, not a default. |
+| `--skip-explainers` | Skip the unknowns/edge-case explainer pass for dependencies new to this project. `unknowns.md` is still written, recording the skip. The pass is **off by default**: its dependency scan flags spec words such as `assert` or `followed` as dependencies (#375), so the flag only matters when `explainers: {enabled: true}` turns it on. |
 | `--prototype` | Force the prototype stage on, whatever the change type. |
 | `--no-prototype` | Skip the prototype stage (the skip and its reason are logged). |
 | `--no-worktree` | Build in the project dir on the current branch instead of creating a worktree + branch. **Required when the calling session is already inside a worktree** — see [Git lifecycle](#git-lifecycle). Also disables push and PR (they only ever act on a branch the pipeline created). |
@@ -63,7 +63,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch, or the parent's commit that holds its `specs/registry` baseline (below); a build that re-binds to its worktree ignores it. When the commit is not on the default branch, the PR targets the branch that holds it (`--base`). Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
 | `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. An approved epic vouches for its own repo: it passes `--trust-repo` to each child build, review and fixer, and its merge step's one agent call (under `epic.merge: auto`) runs trusted for that call only. |
 
-`specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: true}`,
+`specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: false}` (the default; #375),
 `prototype: {enabled: auto|true|false}`, `respec: {halt_on_contradiction: false}`,
 `git: {worktree: true, push: true, pr: draft|ready|none}`,
 `mutation: {enabled: true, min_score: 0.8, timeout: 30, max_mutants: 300}`

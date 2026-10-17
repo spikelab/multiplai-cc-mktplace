@@ -100,6 +100,17 @@ time, not derived from a tag.
 - code_facts depends on `jsonschema`, which `write_paths_file` uses to
   validate the document before it writes it.
 
+## [0.79.2] - 2026-10-17
+
+### Changed
+- buildme no longer writes `unknowns.md` by default. Its dependency scan treats
+  every backtick-quoted word in the proposal and design as a new dependency,
+  so it ran one research call per word such as `assert`, `followed` or `hops`.
+  It then pasted the result, up to 1.1 million characters, into every test
+  writer's prompt. No build checked had a real new dependency among its entries.
+  `explainers: {enabled: true}` in `specs/config.yaml` turns it back on.
+  The fix is tracked in #375.
+
 ## [0.79.1] - 2026-10-16
 
 ### Security
