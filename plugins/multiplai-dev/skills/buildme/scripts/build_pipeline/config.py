@@ -370,8 +370,11 @@ class GateToggles:
     test_quality_enabled: bool = True
     e2e_test_entry_point_check: bool = True
     # B1 explainer gate: write unknowns.md before depending on anything new to
-    # this project. Default ON — reading the explainers is the anti-slop step.
-    explainers_enabled: bool = True
+    # this project. Default OFF because it is broken: dependencies.py flags
+    # every backtick-quoted word in the specs (`assert`, `followed`, `hops`)
+    # and no build has yet produced an entry for a real new dependency. See
+    # spikelab/multiplai-cc-mktplace#375 before turning it back on.
+    explainers_enabled: bool = False
     # Prototype-first stage: "auto" (run when gates.prototype_required says the
     # change has a UI or a user-visible output format), "true" (always), or
     # "false" (never). Tri-state rather than bool because the useful default is
@@ -1200,7 +1203,7 @@ class BuildConfig:
             code_review_per_block=code_review.get("per_block", True),
             test_quality_enabled=test_quality.get("enabled", True),
             e2e_test_entry_point_check=e2e_test.get("entry_point_check", True),
-            explainers_enabled=explainers.get("enabled", True),
+            explainers_enabled=explainers.get("enabled", False),  # off: #375
             prototype=_normalize_prototype_toggle(prototype.get("enabled", "auto")),
             respec_halt_on_contradiction=respec.get("halt_on_contradiction", False),
         )
