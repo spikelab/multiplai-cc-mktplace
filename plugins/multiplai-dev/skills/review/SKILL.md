@@ -219,6 +219,25 @@ consequence; a `CLAUDE.md` rule only when breaking it has one. All
 characters, `CLAUDE.md` text is what gets skipped. The filename must be
 lowercase.
 
+### Docs those files link
+
+The finder also reads the Markdown docs those files link, one level deep: an
+inline link `[text](docs/rules.md)` or a reference definition
+`[id]: docs/rules.md`, relative to the linking file (or to the repository root
+when it starts with `/`), with any `#fragment` or `?query` dropped. Links in
+fenced code, URLs and targets that are not `.md` or `.markdown` are ignored.
+A target outside the repository, or a symlink pointing outside it, is never
+read. Each doc is read once, from the reviewed commit (on a change review, a
+link the change removed is still followed, and a doc the change deleted is
+read at base), never from the working tree. A doc whose linking line says
+`bind`, `binding`, `must` or `required` goes first. Docs share what is left of
+the 40 000 characters and go in whole or not at all; one that does not fit,
+is missing, cannot be read or points outside the repository is listed in
+`checks.json`'s `coverage` (`info`) and the review goes on. The prompt tells
+the finder these docs are the repository's rules: a changed line that breaks
+one is a finding, citing the changed line and naming the doc. Each doc is
+fenced as untrusted text, since the change's author can edit it.
+
 The `tests` finder also reports tests the change adds or edits that cannot
 catch a change in behaviour: a test that asserts a value copied from the code,
 one that reads a source file as text instead of running it, and one that mocks

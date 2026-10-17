@@ -26,6 +26,8 @@ import re
 from pathlib import Path, PurePosixPath
 
 from code_facts import Fact
+from multiplai_core.citations import file_at
+from multiplai_core.untrusted import defang
 from pydantic import ValidationError
 
 from .. import budget, checks, sdk, timings
@@ -33,11 +35,12 @@ from ..checks import add_coverage, drop_coverage
 from ..chunks import piece_diff_text
 from ..config import TRIM_DIMENSION, ReviewConfig
 from ..gates import file_at_head, finding_gate, gated_need, reason_kind
+from ..linked_docs import LinkSource, linked_docs
 from ..models import (AgentCheck, ConvertedItem, ConvertOutput, CoverageRecord, Finding, FinderOutput,
                       FinderReport, FinderResult, GateCheck, Need, Rejected, ReviewState, TargetInfo)
+from ..paths_io import load_paths, views
 from ..prompts import DIFF_PROMPT_CHARS, commits_block, deps_block, description_block, settings_block, workspace_block
 from ..prompts import find as prompt
-from ..paths_io import load_paths, views
 from ..prompts.convert import build_convert
 from ..prompts.path import build_path
 from ..prompts.piece import build_piece
@@ -120,22 +123,44 @@ def _dir_chain(target: TargetInfo, files: list[str] | None) -> list[str]:
     return list(dict.fromkeys(dirs))
 
 
-def conventions_blocks(target: TargetInfo, files: list[str] | None = None) -> list[tuple[str, bool, str]]:
+BINDING_INSTRUCTION = (
+    "The documents below are rules of this repository. Report a finding for any changed line that breaks a "
+    "rule in one of them. Cite the changed line, and name the document whose rule it breaks in the finding text."
+)
+
+
+def binding_instruction(included: list[str]) -> str:
+    """The instruction before the first linked doc, listing every included one ("" for none)."""
+    if not included:
+        return ""
+    listed = "\n".join(f"- {' '.join(defang(p, markdown_fences=False).split())}" for p in included)
+    return f"{BINDING_INSTRUCTION}\n\n{listed}\n\n"
+
+
+def conventions_blocks(target: TargetInfo, files: list[str] | None = None, *,
+                       coverage: list[CoverageRecord] | None = None) -> list[tuple[str, bool, str]]:
     """(path, included, block) for every coding-standards.md, then every CLAUDE.md, from the repo
-    root down to each file's directory, at head.
+    root down to each file's directory, at head; then the Markdown docs they link (`linked_docs`).
 
     *files* defaults to every changed file; a tree review passes one group's.
     coding-standards.md holds rules written for the reviewer only, so its blocks
     come first: when the text passes CONVENTIONS_MAX_CHARS, CLAUDE.md is skipped first.
+    The linked docs share what is left of CONVENTIONS_MAX_CHARS; the first one
+    included carries `binding_instruction`, and one left out is a
+    (path, False, "") entry and a record appended to *coverage*.
     """
     chain = _dir_chain(target, files)
     blocks, total = [], 0
+    sources: list[LinkSource] = []
+    base = None if target.is_tree else target.base_sha
     for name in ("coding-standards.md", "CLAUDE.md"):
         for d in chain:
             path = f"{d}/{name}" if d else name
             text = file_at_head(target, path)
             if text is None:
                 continue
+            sources.append(LinkSource(path=path, head_text=text,
+                                      base_text=file_at(target.repo_path, base, path) if base else None))
             block = f"### {path}\n\n{text.strip()}\n"
             if total + len(block) > CONVENTIONS_MAX_CHARS:
                 blocks.append((path, False,
@@ -143,6 +168,14 @@ def conventions_blocks(target: TargetInfo, files: list[str] | None = None) -> li
                 continue
             blocks.append((path, True, block))
             total += len(block)
+    docs = linked_docs(sources, repo=Path(target.repo_path), head=target.head_sha, base=base,
+                       remaining=CONVENTIONS_MAX_CHARS - total)
+    lead = binding_instruction(docs.included)
+    for i, (path, block) in enumerate(zip(docs.included, docs.blocks)):
+        blocks.append((path, True, lead + block if i == 0 else block))
+    blocks += [(record.subject, False, "") for record in docs.skipped]
+    if coverage is not None:
+        coverage.extend(docs.skipped)
     return blocks
 
 
@@ -174,7 +207,7 @@ def critical_paths(target: TargetInfo, files: list[str] | None = None) -> list[t
 
 def conventions_chain(target: TargetInfo, files: list[str] | None = None) -> str:
     """The text of `conventions_blocks`, as the conventions finder's prompt holds it."""
-    return "\n".join(block for _, _, block in conventions_blocks(target, files))
+    return "\n".join(block for _, _, block in conventions_blocks(target, files) if block)
 
 
 def dedupe_key(finding: Finding) -> tuple[str, int, str]:
@@ -439,7 +472,11 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
     if "conventions" in dims:
         for i, group in enumerate(groups):
             if any(key not in state.finder_results for key, d, g in pairs if g == i and d == "conventions"):
-                rules[i] = conventions_blocks(target, group)
+                skipped_docs: list[CoverageRecord] = []
+                rules[i] = conventions_blocks(target, group, coverage=skipped_docs)
+                for record in skipped_docs:  # once, however many groups or resumed runs link it
+                    if record not in state.coverage:
+                        add_coverage(state, record)
     hunks = checks.diff_hunks(ctx.diff[:DIFF_PROMPT_CHARS])
     todo = [p for p in pairs if p[0] not in state.finder_results]
     facts = state.facts.facts if cfg.find_with_facts and state.facts else []
@@ -447,7 +484,7 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
     async def _one(key: str, dimension: str, index: int) -> tuple[FinderResult, AgentCheck]:
         shown = hunks
         group_rules = rules.get(index, [])
-        conventions = "\n".join(block for _, _, block in group_rules)
+        conventions = "\n".join(block for _, _, block in group_rules if block)
         extra = [f"files ({len(groups[index])}, group {index + 1} of {len(groups)})"] if target.is_tree else []
         given_facts = group_facts(facts, groups[index])
         if given_facts:
