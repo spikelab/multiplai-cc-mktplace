@@ -42,7 +42,11 @@
         }
       ],
       "verdict_reason": "The base commit summed prices only; nothing in the diff adds qty to older callers.",
-      "expected_behaviour": "Items without a qty are totalled as a quantity of one, as the base commit did."
+      "expected_behaviour": "Items without a qty are totalled as a quantity of one, as the base commit did.",
+      "paths": [
+        "p1",
+        "p4"
+      ]
     },
     {
       "id": "7ca6553fd7",
@@ -62,7 +66,10 @@
         }
       ],
       "verdict_reason": "The repository has no order constructor, so whether id is always set cannot be checked here.",
-      "expected_behaviour": "Refunding an order without an id logs the refund without raising."
+      "expected_behaviour": "Refunding an order without an id logs the refund without raising.",
+      "paths": [
+        "p1"
+      ]
     },
     {
       "id": "cebb020bdb",
@@ -82,6 +89,56 @@
         }
       ],
       "verdict_reason": "A negative discount as a surcharge is how the caller in the spec uses it; not a defect.",
+      "expected_behaviour": null,
+      "paths": [
+        "p6"
+      ]
+    },
+    {
+      "id": "6cd45b4314",
+      "severity": "LOW",
+      "status": "confirmed",
+      "claim": "points_for() rounds down partial points",
+      "file": "app/new_feature.py",
+      "line_start": 4,
+      "line_end": 5,
+      "failure_scenario": "An amount of 19 earns 1 point, not 1.9.",
+      "citations": [
+        {
+          "path": "app/new_feature.py",
+          "line_start": 4,
+          "line_end": 5,
+          "quote": "def points_for(amount):\n    return int(amount // 10)"
+        }
+      ],
+      "verdict_reason": "Whole points are what the loyalty spec asks for.",
+      "expected_behaviour": "Points are whole numbers.",
+      "assessment": {
+        "label": "low-value",
+        "reason": "Rounding down is the documented rule."
+      },
+      "paths": [
+        "p2"
+      ]
+    },
+    {
+      "id": "9f4ed54dc9",
+      "severity": "MEDIUM",
+      "status": "rejected",
+      "claim": "refund() changes the status before logging",
+      "file": "app/service.py",
+      "line_start": 19,
+      "line_end": 20,
+      "failure_scenario": "The log call fails after the status changed.",
+      "citations": [
+        {
+          "path": "app/service.py",
+          "line_start": 19,
+          "line_end": 20,
+          "quote": "order[\"status\"] = \"refunded\""
+        }
+      ],
+      "verdict_reason": null,
       "expected_behaviour": null
     }
   ]

@@ -1206,6 +1206,50 @@ test("a badge's tooltip comes from the help: every badge word has an entry in it
   assert.match(appJs, /document\.querySelectorAll\("#help-findings dt"\)/);
 });
 
+// --- paths: the review's paths.json (code_facts' paths.v1) --------------------------
+
+const FIXTURES = path.join(__dirname, "fixtures");
+const pathsDoc = JSON.parse(fs.readFileSync(path.join(FIXTURES, "paths.example.json"), "utf8"));
+const findingsDoc = JSON.parse(fs.readFileSync(path.join(FIXTURES, "findings.example.json"), "utf8"));
+
+test("a Checked or Paths tab without its file falls back to Summary; every other tab is kept", () => {
+  assert.equal(L.resolveTab("checked", { checks: null, paths: pathsDoc }), "summary");
+  assert.equal(L.resolveTab("paths", { checks: {}, paths: null }), "summary");
+  assert.equal(L.resolveTab("paths", { checks: {} }), "summary");
+  assert.equal(L.resolveTab("checked", { checks: {}, paths: null }), "checked");
+  assert.equal(L.resolveTab("paths", { checks: null, paths: pathsDoc }), "paths");
+  // A paths.json that lists no path is still a loaded file: its tab shows "No entry points…".
+  assert.equal(L.resolveTab("paths", { checks: null, paths: Object.assign({}, pathsDoc, { paths: [] }) }), "paths");
+  for (const tab of ["summary", "walk", "finding", "needs"]) {
+    assert.equal(L.resolveTab(tab, { checks: null, paths: null }), tab);
+  }
+});
+
+test("a finding's path ids never reach its markdown, its download name or a share request", () => {
+  const target = findingsDoc.target;
+  for (const f of findingsDoc.findings) {
+    const bare = Object.assign({}, f);
+    delete bare.paths;
+    assert.equal(L.findingMarkdown(f, target, "why"), L.findingMarkdown(bare, target, "why"));
+    assert.equal(L.findingFileName(f), L.findingFileName(bare));
+    const form = { choice: "pr", to: "#eng", note: "n", text: L.findingMarkdown(f, target, "") };
+    for (const to of ["github", "slack"]) {
+      assert.deepEqual(L.shareRequest("s", f.id, to, form), L.shareRequest("s", bare.id, to, form));
+    }
+  }
+  assert.ok(findingsDoc.findings.some((f) => (f.paths || []).length), "the fixture has findings on paths");
+});
+
+test("the Paths tab sits right after Checked, hidden until a paths.json is loaded", () => {
+  const tabs = [...pageHtml.matchAll(/<button id="(tab-[a-z]+)"[^>]*>/g)].map((m) => m[1]);
+  assert.equal(tabs[tabs.indexOf("tab-checked") + 1], "tab-paths");
+  assert.match(pageHtml, /<button id="tab-paths" role="tab" aria-controls="paths" hidden>Paths <span id="paths-count" class="count"><\/span><\/button>/);
+  assert.match(pageHtml, /<div id="paths" role="tabpanel" class="panel[^"]*" hidden><\/div>/);
+  assert.match(appJs, /L\.resolveTab\(state\.tab, \{ checks: checks, paths: paths \}\)/);
+  assert.doesNotMatch(appJs, /state\.tab === "checked" && !checks/, "the Checked fallback lives in L.resolveTab");
+  assert.match(appJs, /\$\("tab-paths"\)\.hidden = !paths;/);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

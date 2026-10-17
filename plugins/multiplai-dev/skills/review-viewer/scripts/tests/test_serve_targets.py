@@ -49,8 +49,8 @@ def test_exact_match_review_loads_its_findings(env, fixture_repo, findings_path,
                          "--reviews-dir", str(reviews))
     (ff, box), = loaded
     assert box == path.parent / "viewer"
-    assert len(ff.findings) == 3 and ff.target.repo_path == str(repo.resolve())
-    assert meta[ff.target.slug] == {"pr": None, "notice": None, "review": "findings: 3"}
+    assert len(ff.findings) == 5 and ff.target.repo_path == str(repo.resolve())
+    assert meta[ff.target.slug] == {"pr": None, "notice": None, "review": "findings: 5"}
 
 
 def test_stale_review_gives_a_notice_and_loads_nothing(env, fixture_repo, findings_path,
@@ -93,7 +93,7 @@ def test_default_reviews_dir_is_the_review_skills(env, fixture_repo, findings_pa
     repo, _, _ = fixture_repo
     _review(tmp_path / "data" / "reviews", findings_path)
     loaded, meta = _load("--target", "main~1..main", "--repo", str(repo))
-    assert meta[loaded[0][0].target.slug]["review"] == "findings: 3"
+    assert meta[loaded[0][0].target.slug]["review"] == "findings: 5"
 
 
 def test_a_review_not_in_the_data_dir_is_found_in_the_old_inbox_location(env, fixture_repo, findings_path,
@@ -106,7 +106,7 @@ def test_a_review_not_in_the_data_dir_is_found_in_the_old_inbox_location(env, fi
     loaded, meta = _load("--target", "main~1..main", "--repo", str(repo))
     (ff, box), = loaded
     m = meta[ff.target.slug]
-    assert m["review"] == "findings: 3" and box == path.parent / "viewer"
+    assert m["review"] == "findings: 5" and box == path.parent / "viewer"
     assert m["notice"] == f"This review was loaded from the old location {path.parent}, not from {tmp_path / 'data' / 'reviews'}."
 
 
@@ -141,7 +141,7 @@ def test_a_review_migrate_copied_into_the_data_dir_is_found(env, fixture_repo, f
     loaded, meta = _load("--target", "main~1..main", "--repo", str(repo))
     (ff, box), = loaded
     m = meta[ff.target.slug]
-    assert m["review"] == "findings: 3" and box == path.parent / "viewer"
+    assert m["review"] == "findings: 5" and box == path.parent / "viewer"
     assert m["notice"] == (f"This review was loaded from {path.parent}, a copy of a review written before "
                            f"multiplai-dev 0.46, not from {tmp_path / 'data' / 'reviews'}.")
 

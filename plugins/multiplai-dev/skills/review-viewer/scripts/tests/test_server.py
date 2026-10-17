@@ -58,9 +58,9 @@ def test_whoami_and_targets(start_live):
     status, who = live.request("GET", "/api/whoami")
     assert status == 200 and who["agent"] == "Claude Test" and who["session_id"] == "sess-A"
     status, t = live.request("GET", "/api/targets")
-    assert t["targets"][0]["counts"]["severity"] == {"HIGH": 1, "MEDIUM": 1, "LOW": 1}
+    assert t["targets"][0]["counts"]["severity"] == {"HIGH": 1, "MEDIUM": 2, "LOW": 2}
     status, detail = live.request("GET", f"/api/targets/{live.slug}")
-    assert status == 200 and len(detail["findings"]["findings"]) == 3
+    assert status == 200 and len(detail["findings"]["findings"]) == 5
 
 
 def test_file_route(start_live):
@@ -531,12 +531,17 @@ def test_findings_with_and_without_run_serve(start_live, findings_path, tmp_path
 
 def test_findings_with_and_without_assessment_both_serve(start_live, findings_path):
     """A findings.json from before the assess stage has no `assessment`; one after has it."""
-    plain = start_live()
+    data = json.loads(findings_path.read_text())
+    for f in data["findings"]:
+        f.pop("assessment", None)
+    unlabelled = findings_path.parent.parent / "unlabelled" / "findings.json"
+    unlabelled.parent.mkdir()
+    unlabelled.write_text(json.dumps(data))
+    plain = start_live(path=unlabelled)
     status, detail = plain.request("GET", f"/api/targets/{plain.slug}")
     assert status == 200 and all("assessment" not in f or f["assessment"] is None
                                  for f in detail["findings"]["findings"])
 
-    data = json.loads(findings_path.read_text())
     data["findings"][0]["assessment"] = {
         "label": "repeat", "reason": "the same defect as before", "earlier_id": "abcdef0123",
         "earlier_round": "1" * 40, "earlier_decision": "reject", "earlier_note": "by design"}
