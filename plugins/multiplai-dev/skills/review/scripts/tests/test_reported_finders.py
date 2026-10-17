@@ -194,7 +194,7 @@ class Model:
             self.dimension_prompts.append((budget_label, prompt))
             return FinderOutput()
         if stage == "verify":
-            package = re.search(r"(p\d\d)_2 = 2", prompt).group(1)
+            package = re.search(r"(p\d\d)/m\.py", prompt).group(1)
             return Verdict(status="confirmed", reason="the line says so", topic="code",
                            impact="correctness-only", expected_behaviour="It is 3.",
                            citations=[Citation(path=f"{package}/m.py", line_start=2, line_end=2,
