@@ -3,7 +3,7 @@
 `gate_hops` keeps the first 20 hops (recording `hop_limit` when it cut any),
 then checks each hop in this order and stops at the first that breaks:
 
-1. `path_outside_root`: the path is absolute, has a `..` or `\\`, or resolves outside the root.
+1. `path_outside_root`: the path is absolute, has a `\\`, or has a `..` that leaves the root.
 2. `missing_file`: no such file under the root.
 3. `line_out_of_range`: start below 1, end before start, or end past the end of the file.
 4. `text_mismatch`: the quote does not re-read at the cited lines at head, through `resolve`.

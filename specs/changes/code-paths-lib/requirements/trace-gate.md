@@ -230,7 +230,7 @@ When the first gate check reports a break, the tracing step SHALL issue one re-a
 ### Requirement: An unrepaired trace is cut at the break
 If the re-asked answer still breaks, the path SHALL keep only the re-asked answer's hops before its first broken hop. The result SHALL record:
 
-- `stops_at`: the 1-based index of the first broken hop;
+- `stops_at`: the 1-based index of the last hop kept (the first broken hop minus one);
 - `break_reason`: that hop's code.
 
 #### Scenario: Cut after re-ask
@@ -258,9 +258,9 @@ Re-asks SHALL go through the same `ask`/`run_tasks` cache as first asks. The re-
 - **THEN** the gated results for each entry are identical
 
 ### Requirement: CallFn failures during a re-ask propagate
-The gate SHALL NOT retry, swallow or budget a failing re-ask call. Any exception raised by the caller's `CallFn` during a re-ask SHALL propagate unchanged.
+The gate SHALL NOT retry, swallow or budget a failing re-ask call. An exception raised by the caller's `CallFn` during a re-ask SHALL propagate unchanged, unless its class is in the caller's `recoverable` tuple, in which case the entry is dropped with stage `trace` and reason `call_failed`. `recoverable` defaults to `()`.
 
 #### Scenario: Re-ask call raises
-- **WHEN** the `CallFn` raises `RuntimeError("budget")` on a re-ask
+- **WHEN** the `CallFn` raises `RuntimeError("budget")` on a re-ask, and `recoverable` is left at its default
 - **THEN** that same exception reaches the caller of `map_paths`
 - **AND** no further call is made for that entry

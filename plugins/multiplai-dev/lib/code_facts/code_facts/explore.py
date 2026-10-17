@@ -142,7 +142,7 @@ async def ask(key: str, prompt: str, call: CallFn, answers: dict[str, dict], *,
     except fatal:
         raise
     except recoverable as e:
-        log.error("%s failed", label, exc_info=True)
+        log.error("%s (%s) failed", label, key, exc_info=True)
         first = (str(e).splitlines() or [type(e).__name__])[0][:200]
         answers[key] = {"error": first}
         errors.append(f"explore {key}: {first}")

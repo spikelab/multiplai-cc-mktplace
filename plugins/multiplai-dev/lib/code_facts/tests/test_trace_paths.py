@@ -129,7 +129,7 @@ def test_unscoped_trace_prompt_carries_entry_commit_edge_places_and_limit(tmp_pa
     for line in (snap.line(CLI, "add_parser('opal')"), snap.line(CLI, "return args.func(args)"),
                  snap.line(CLI, "def cmd_opal(")):
         assert str(line) in prompt
-    assert "20" in prompt
+    assert "at most 20 hops" in prompt
 
 
 def test_trace_prompt_names_the_change_scope(tmp_path):
@@ -148,7 +148,7 @@ def test_reask_prompt_carries_index_reason_detail_and_accepted_prefix(tmp_path):
     accepted = [lib("PathHop")(**h) for h in chain_hops(snap, "opal", 3)]
     prompt = lib("paths_reask")(ent, commit="c0ffee", broken_at=4, break_reason="text_mismatch",
                                 detail="quote not at cited lines 31-31", accepted=accepted)
-    assert "4" in prompt and "text_mismatch" in prompt and "quote not at cited lines 31-31" in prompt
+    assert "at hop 4: text_mismatch" in prompt and "quote not at cited lines 31-31" in prompt
     assert all(h.quote in prompt for h in accepted)
 
 
@@ -176,7 +176,7 @@ def test_reask_repairs_a_broken_trace(tmp_path):
     assert [c.stage for c in call.of("opal")] == ["trace", "reask"]
     assert [c.stage for c in call.of("ruby")] == ["trace"]
     (reask,) = call.of("opal", "reask")
-    assert "4" in reask.prompt and "text_mismatch" in reask.prompt
+    assert "at hop 4: text_mismatch" in reask.prompt
     assert "def step2_opal(args):" in reask.prompt  # the accepted prefix
     assert reask.kwargs["allowed_tools"] == READ_ONLY and reask.kwargs["cwd"] == str(snap.root)
     label = reask.kwargs["budget_label"]
