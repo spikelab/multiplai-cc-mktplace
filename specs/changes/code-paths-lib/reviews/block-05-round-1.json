@@ -1,0 +1,163 @@
+{
+  "generated_at": "2026-10-17T07:24:00.499809+00:00",
+  "kind": "review",
+  "block": {
+    "number": 5,
+    "name": "Discover click, typer, `[project.scripts]` and `__main__` entries, and merge duplicate invokers"
+  },
+  "round": 1,
+  "head_sha": "8c6d4a57fadcacb0b264f164df5fd575ce615748",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Discovery stays synchronous and static, with no model call and no `walkthrough_pipeline` import. Shared helpers are reused rather than copied: `_function`, `_reference`, `_SCOPE_NODES`, `_shown`, `_static_entry`, `_in_source_order`. Kinds are typed through the `EntryKind` Literal, and `OUTPUT_KIND` and `KIND_RANK` are each defined once. Kind mapping happens in one place (`to_path_entry`). Possible Large Module / Divergent Change: entries.py is now about 1000 lines and holds five scanners plus merging, and SKILL.md and hooks are still to come. `_script_key_line` re-implements TOML line location with regexes.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "Tests assert exact values: names, decorator lines, handlers, edge tuples, invoker lists, and written paths.json `also_invoked_by`. They include byte-identical determinism under reordered seeds, a no-execution sentinel, and the three required map_paths scenarios. Several branches are untested: click/typer `dynamic_name`, the untraced-receiver `unresolved_target`, typer nameless-mount merging and the `Typer(name=...)` fallback, nested sub-app prefixes, key lines for `scripts.<k> =` and inline tables, and the several-callees diagnostic. One existing argparse test (test_entries_argparse.py:349-355) was rewritten to count invokers alongside entries, because two different subcommands now merge.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "Every Block 5 scenario is implemented and tested: click/typer naming, location and handler; sub-app prefixes; `[project.scripts]` with root/src resolution, `unresolved_target` and `parse_error`; `main_module` anchoring, wrappers, sole-callee rule and test-file exclusion; merge rank, tie-break, invoker ordering, edge union and the null/non-def rule; output kinds in paths.json. Small divergences: Click 8.2+ suffix stripping is not applied, typer `.callback(cls)` puts its first positional argument where the name is read, and the TOML key line silently falls back to 1 for root-level dotted keys.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 3,
+      "evidence": "Signatures match: `discover_entries` is unchanged, and `merge_entries` and `main_module_handler` are produced as specified. `PyIndex.__init__`'s new parameter has one caller, `build`. Merged edges reach the prompt and gate rule 7(b). However, the diff commits a new nested `plugins/multiplai-dev/lib/code_facts/uv.lock`. The repo's `lint_workspace.py` gate (`check_no_nested_locks`) rejects it, so CI fails and the seam to the workspace environment breaks.",
+      "confidence": 1.0
+    }
+  ],
+  "weighted_average": 3.75,
+  "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 3.8"
+  },
+  "missing": [],
+  "extra": [
+    "A `main_module` whose guard calls several same-repository functions also gets an `unresolved_handler` diagnostic (entries.py `_main_module_entries`). The Block 5 spec only asks for a null handler. The module docstring documents the diagnostic, and no test asserts it.",
+    "A click/typer-style decorator whose receiver is not traced to a group or app in the same module gets an `unresolved_target` diagnostic (entries.py:659-664). It is reasonable under the 'every candidate examined gets one diagnostic' rule, but the Block 5 spec does not ask for it and no test covers it.",
+    "`PyIndex` now records every walked file of every type (`all_files`, `files_named`). This is plumbing the `pyproject.toml` scanner needs, not a scenario in the spec."
+  ],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "The diff commits a nested uv.lock under plugins/, which the repo's lint_workspace gate (run in CI) rejects.",
+      "severity": "Critical",
+      "confidence": 0.95,
+      "evidence": "The diff has `new file mode 100644` for plugins/multiplai-dev/lib/code_facts/uv.lock. scripts/lint_workspace.py:129-155 `check_no_nested_locks`: \"One workspace, one uv.lock \u2014 at the repo root, and nowhere else.\" It globs `plugins/**/uv.lock` and reports \"nested lockfile ... Delete it.\" CLAUDE.md, under 'Gates before publishing', lists `uv run --no-project scripts/lint_workspace.py` and says CI runs it. CLAUDE.md also says of code_facts: '(not a workspace member: it runs in walkthrough-pipeline's environment, which installs it)'. Fix: delete the file and run tests with the CLAUDE.md command.",
+      "dimension": "conventions",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/uv.lock",
+      "line": 1,
+      "reviewers": []
+    },
+    {
+      "claim": "The comment in `_script_key_line` says the line-1 fallback is unreachable, but it is reachable. In those cases a `project_script` entry and its known edge silently point at pyproject.toml line 1.",
+      "severity": "Minor",
+      "confidence": 0.7,
+      "evidence": "entries.py:839 `# Unreachable for a key tomllib parsed from a table this scan recognises.` then `return 1`. The scan only matches keys while `table == \"project.scripts\"` or `table == \"project\"`. Valid TOML that tomllib parses into `project.scripts` reaches the fallback in two ways: a root-level dotted key with no header (`project.scripts.tool = \"pkg.cli:main\"`), and a root inline table (`project = {name = \"x\", scripts = {tool = \"...\"}}`). In both, `table` is None. No diagnostic is recorded, so the wrong location is invisible. Fix: handle root-level dotted keys (table None plus `project\\.scripts\\.<key>\\s*=`), or log/emit a diagnostic when the fallback is used, and correct the comment.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 839,
+      "reviewers": []
+    },
+    {
+      "claim": "Two identical seeds (same path/symbol/name) merge into an entry that lists itself in `also_invoked_by`.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "entries.py `_merged`: `kept, *others = sorted(group, ...)`, then `invokers.add(EntryInvoker(kind=other.kind, name=other.name, location=other.location))` for each other. When `other` equals `kept` field for field (the same Seed passed twice; map_paths does not deduplicate seeds, paths.py:416), the published path names itself as its own invoker. Fix: drop invokers equal to `(kept.kind, kept.name, kept.location)`, or deduplicate identical entries before grouping.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 990,
+      "reviewers": []
+    },
+    {
+      "claim": "For `@app.callback(...)`, `_call_name_argument` reads the first positional argument as the command name, but typer's `callback` takes `cls` as its first positional parameter. `@app.callback(MyGroup)` therefore produces a `dynamic_name` diagnostic and no entry.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "entries.py:739-741 `return call.args[0] if call.args else _keyword(call, \"name\")` is used for every method, including `callback` (via `_command_names`). typer's `Typer.callback(self, cls=None, *, ..., name=...)` and `Typer.command(self, name=None, *, cls=...)` take different first positional parameters. Fix: when the method is `callback`, read only the `name=` keyword.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 739,
+      "reviewers": []
+    },
+    {
+      "claim": "Several new branches have no test: click/typer `dynamic_name`, the untraced-receiver `unresolved_target`, typer nameless-mount merging and the `Typer(name=...)` fallback, nested sub-app prefixes, the `scripts.<k> =` and inline-table key-line forms, and the several-callees `unresolved_handler` diagnostic.",
+      "severity": "Minor",
+      "confidence": 0.75,
+      "evidence": "test_entries_cli_scripts.py has no assertion on `diags(disc, \"dynamic_name\")` or on a click/typer `unresolved_target`. The TYPER fixture has only a named mount (`app.add_typer(users_app, name=\"users\")`). Every pyproject fixture uses a `[project.scripts]` table (PYPROJECT_HEAD). `test_zero_or_several_resolved_callees_leave_the_handler_null` checks only `handler is None`, not the diagnostic. These are real branches in `_command_names`, `_typer_apps.prefix`, `_script_key_line` and `_main_module_entries`.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_entries_cli_scripts.py",
+      "line": 1,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "Default click command names do not apply Click 8.2+'s suffix stripping (`_command`, `_cmd`, `_group`, `_grp`), so `def build_cmd()` is published as `build-cmd` while click would expose `build`.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "entries.py:687 `leaf = func.name.replace(\"_\", \"-\")` is applied to click and typer alike. The rubric's Spec Compliance tier names 'Click 8.2 suffix stripping' as an expected nuance, although the Block 5 text states only the underscore rule. Fix: for `click_command`, strip those suffixes before replacing underscores.\nREJECTED: The Block 5 spec states the naming rule exactly: the explicit name argument, or the function name with `_` replaced by `-`. The reviewer concedes the spec says only this. Adding Click 8.2 suffix stripping would deviate from the recorded spec.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 687,
+      "reviewers": [],
+      "judge_reason": "The Block 5 spec states the naming rule exactly: the explicit name argument, or the function name with `_` replaced by `-`. The reviewer concedes the spec says only this. Adding Click 8.2 suffix stripping would deviate from the recorded spec."
+    },
+    {
+      "claim": "An existing argparse test was rewritten because two different subcommands (`users list`, `groups list`) declared on one helper `add_parser` line now merge into one entry, one becoming the other's invoker.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "test_entries_argparse.py:349-355 now asserts on `[(e.name, ...) for e in found] + [(i.name, ...) for e in found for i in e.also_invoked_by]`. The comment reads 'Both `list`s share one add_parser line and no handler, so they merge'. This follows the spec's '(kind, location)' rule for null handlers. The cost is that `groups list` stops being its own traced path; it survives only as an invoker of `users list`. The change is justified by the spec but worth an orchestrator decision.\nREJECTED: The spec explicitly says entries with a null handler merge with an identical `(kind, location)`. The two `list` subcommands share one add_parser line and both have null handlers, so merging them is the specified behaviour. The test update reflects that, so this finding restates the spec rather than identifying a deviation.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_entries_argparse.py",
+      "line": 349,
+      "reviewers": [],
+      "judge_reason": "The spec explicitly says entries with a null handler merge with an identical `(kind, location)`. The two `list` subcommands share one add_parser line and both have null handlers, so merging them is the specified behaviour. The test update reflects that, so this finding restates the spec rather than identifying a deviation."
+    },
+    {
+      "claim": "Bare-name click/typer decorators (`from click import command` then `@command()`) are dropped silently, with no entry and no diagnostic.",
+      "severity": "Minor",
+      "confidence": 0.45,
+      "evidence": "entries.py:730-736 `_decorator_site` returns None unless the decorator is `<Name>.<attr>`. The loop then does `if site is None: continue`, which records nothing. That conflicts with the module docstring: 'Every candidate examined but not emitted gets exactly one [diagnostic]'.\nREJECTED: The spec defines the candidates as `@click.command`, `@<group>.command`, `@click.group`, `@<group>.group`, `@<typer_app>.command` and `@<typer_app>.callback`, all of them attribute decorators. A bare `@command()` is not a candidate this block examines, so skipping it does not break the 'every candidate examined' diagnostic rule. Supporting it would be new scope.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 730,
+      "reviewers": [],
+      "judge_reason": "The spec defines the candidates as `@click.command`, `@<group>.command`, `@click.group`, `@<group>.group`, `@<typer_app>.command` and `@<typer_app>.callback`, all of them attribute decorators. A bare `@command()` is not a candidate this block examines, so skipping it does not break the 'every candidate examined' diagnostic rule. Supporting it would be new scope."
+    },
+    {
+      "claim": "The GREEN evidence is the bare line 'All tests pass', with no pytest output or counts, so the claim cannot be checked against the RED run (36 failed, 370 passed).",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "Implementer report, GREEN section: \"All tests pass\". The RED section includes full pytest output.\nREJECTED: This concerns the implementer's report, not the diff. The orchestrator settles it by running the given test command directly. There is no code defect in the block.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_entries_cli_scripts.py",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "This concerns the implementer's report, not the diff. The orchestrator settles it by running the given test command directly. There is no code defect in the block."
+    },
+    {
+      "claim": "Possible Large Module / Divergent Change: entries.py now holds argparse, click/typer, `[project.scripts]` TOML line scanning, `__main__`, seeds and merging (about 1000 lines), and SKILL.md and hook scanners are still to be added.",
+      "severity": "Note",
+      "confidence": 0.5,
+      "evidence": "The diff adds the sections '# --- click and typer', '# --- [project.scripts]', '# --- __main__' and '# --- merging' to entries.py, which already held argparse and seeds. The rubric names 'entries.py ... growing into a single large function/module' as a possible smell.\nREJECTED: This is a non-actionable structural note. The spec places all of these scanners behind `discover_entries`, and the module is divided into clearly delimited sections with small functions. Splitting the module is a style preference the block does not require.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 618,
+      "reviewers": [],
+      "judge_reason": "This is a non-actionable structural note. The spec places all of these scanners behind `discover_entries`, and the module is divided into clearly delimited sections with small functions. Splitting the module is a style preference the block does not require."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}
