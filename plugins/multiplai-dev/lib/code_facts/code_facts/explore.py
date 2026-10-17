@@ -36,6 +36,8 @@ CallFn = Callable[..., Awaitable[Any]]
 
 # The reason a citation fails when `resolve` cannot place its path.
 UNRESOLVED = "path names no known repo"
+# The key `ask` stores a recoverable call failure under: `{CALL_ERROR: <first line>}`.
+CALL_ERROR = "error"
 
 
 async def bounded(items: Iterable[T], fn: Callable[[T], Awaitable[R]], limit: int) -> list[R]:
@@ -144,7 +146,7 @@ async def ask(key: str, prompt: str, call: CallFn, answers: dict[str, dict], *,
     except recoverable as e:
         log.error("%s (%s) failed", label, key, exc_info=True)
         first = (str(e).splitlines() or [type(e).__name__])[0][:200]
-        answers[key] = {"error": first}
+        answers[key] = {CALL_ERROR: first}
         errors.append(f"explore {key}: {first}")
     else:
         answers[key] = answer
@@ -202,7 +204,7 @@ def gate_answers(answers: dict[str, dict], keep: Callable[[Citation | None], Cit
     dropped: list[Dropped] = []
 
     for key, raw in answers.items():
-        if "error" in raw:
+        if CALL_ERROR in raw:
             continue
         out = ExploreOutput.model_validate(raw)
         buckets = [("fact", out.facts), ("interface", out.interfaces), ("gotcha", out.gotchas)]

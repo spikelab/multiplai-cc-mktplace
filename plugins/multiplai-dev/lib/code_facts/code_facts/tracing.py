@@ -23,9 +23,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from .cache import CALL_ERROR, cache_key
+from .cache import cache_key
 from .entries import Entry, to_path_entry
-from .explore import CallFn, Resolve, ask, bounded, canonical_digest, run_tasks
+from .explore import CALL_ERROR, CallFn, Resolve, ask, bounded, canonical_digest, run_tasks
 from .paths import AGENT_TOOLS, HOP_LIMIT, DropReason, E2EListing, Location, PathDrop, TracedPath
 from .prompts import PATHS_REASK_PROMPT_VERSION, PATHS_TRACE_PROMPT_VERSION, paths_reask, paths_trace
 from .pyindex import PyIndex

@@ -42,8 +42,6 @@ SCHEMA_RESOURCE = ("schema", "paths.v1.schema.json")
 # The same draft as review's facts.v1 schema.
 JSON_SCHEMA_DRAFT = "https://json-schema.org/draft/2020-12/schema"
 HOP_LIMIT = 20
-# The directory under `cache_dir` that holds the stored model answers.
-ANSWERS_DIR = "paths-answers"
 
 # Relative, no leading `/`, no `.` or `..` segment, no backslash. Compiled, so
 # pydantic matches it with Python's `re`, which supports the lookaheads.
@@ -397,7 +395,7 @@ async def map_paths(
     `<cache_dir>/paths-answers/`, so a rerun asks only what it does not have.
     """
     # Deferred: these modules build on the models above.
-    from .cache import _DiskAnswers, purge_failed
+    from .cache import ANSWERS_DIR, _DiskAnswers, purge_failed
     from .entries import discover_entries
     from .pyindex import PyIndex
     from .tracing import TraceContext, trace_entries

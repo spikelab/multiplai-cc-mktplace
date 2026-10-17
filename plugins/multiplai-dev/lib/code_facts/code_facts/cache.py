@@ -22,13 +22,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from .explore import canonical_digest
+from .explore import CALL_ERROR, canonical_digest
 from .paths import write_atomic
 
 log = logging.getLogger(__name__)
 
-# The key `ask` stores a recoverable call failure under.
-CALL_ERROR = "error"
+# The directory under `map_paths`' `cache_dir` that holds the stored answers.
+ANSWERS_DIR = "paths-answers"
 
 # A key is a sha256 hex digest, so it is also a safe file name.
 KEY = re.compile(r"^[0-9a-f]{64}$")

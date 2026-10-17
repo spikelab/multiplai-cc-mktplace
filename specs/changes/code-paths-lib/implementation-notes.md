@@ -55,3 +55,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   The interface names no module for `_DiskAnswers`, `cache_key` or `purge_failed`; I added `code_facts/cache.py`, which D2's module table doesn't list. "Kind included" in `cache_key` doesn't say how; I hash `{"kind": kind, "payload": payload}` as canonical JSON. "`cache_dir=None` keeps a plain dict": I use the memory-only `_DiskAnswers(None)` so `purge_failed` gets its declared type. The spec doesn't cover unreadable cache files or the cache file format; I treat a bad file as missing and write files in the global serialisation format. Running `uv run --directory plugins/multiplai-dev/lib/code_facts …` created an untracked `code_facts/uv.lock`, which I deleted.
+
+## Block 4 — Persist answers on disk so reruns resume and stay byte-identical (refactorer)
+- SPEC_IMPACT: none
+- SURPRISES:
+  `cache_key` hashes through `canonical_digest`, which uses `ensure_ascii=False`; the interface text names only `sort_keys` and `separators`. This gives the same keys for ASCII inputs and differs only for non-ASCII paths, so I left it as is.
