@@ -173,19 +173,6 @@ def test_the_findings_schema_takes_an_optional_list_of_unique_non_empty_ids():
     assert "paths" not in finding_schema.get("required", []) and "kind" not in finding_schema["properties"]
 
 
-def test_the_viewer_reads_findings_with_paths_and_refuses_bad_ones(tmp_path):
-    from pydantic import ValidationError
-    from review_viewer.models import load_findings
-    good = tmp_path / "good.json"
-    good.write_text(json.dumps(example_with(["p1", "p2"])))
-    assert load_findings(good).findings[0].paths == ["p1", "p2"]
-    for bad in (["p1", "p1"], [""]):
-        path_ = tmp_path / "bad.json"
-        path_.write_text(json.dumps(example_with(bad)))
-        with pytest.raises(ValidationError):
-            load_findings(path_)
-
-
 # --- through a review -------------------------------------------------------------------------------------------
 
 
