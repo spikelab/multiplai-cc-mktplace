@@ -166,6 +166,13 @@ def _edge(from_path: str, from_line: int, to: Handler) -> KnownEdge:
     return KnownEdge(from_=Location(path=from_path, line=from_line), to=Location(path=to.path, line=to.line))
 
 
+def _static_entry(kind: EntryKind, name: str, path: str, line: int, handler: Handler | None,
+                  known_edges: Iterable[KnownEdge] = ()) -> Entry:
+    """An entry declared at `path:line` of the source: no invocation text, and no invokers until merged."""
+    return Entry(kind=kind, name=name, location=Location(path=path, line=line), handler=handler, invocation=None,
+                 known_edges=list(known_edges), also_invoked_by=[])
+
+
 # --- argparse ---------------------------------------------------------------------------------
 
 
@@ -219,8 +226,7 @@ class _ParserScan:
         return list(self._commands.values())
 
     def scan(self, tree: ast.Module) -> None:
-        defs = sorted((n for n in ast.walk(tree) if isinstance(n, _DEF_NODES)), key=lambda n: (n.lineno, n.col_offset))
-        self._scopes = [tree, *defs]
+        self._scopes = [tree, *_in_source_order(n for n in ast.walk(tree) if isinstance(n, _DEF_NODES))]
         self._helpers = _unique_functions(self._scopes)
         for position in _callers_first(self._scopes, self._helpers):
             # A function given parser values at its call sites is scanned once per distinct set of them.
@@ -374,9 +380,8 @@ def _argparse_entries(index: PyIndex, dispatch: _DispatchIndex, path: str, tree:
     for command in scan.commands:
         siblings = frozenset(c.names[-1] for c in scan.commands if c.names[:-1] == command.names[:-1])
         handler, edge, problem = _resolve_handler(index, dispatch, path, command, siblings)
-        entries.append(Entry(kind="argparse_subcommand", name=command.name,
-                             location=Location(path=path, line=command.line), handler=handler, invocation=None,
-                             known_edges=[edge] if edge else [], also_invoked_by=[]))
+        entries.append(_static_entry("argparse_subcommand", command.name, path, command.line, handler,
+                                     [edge] if edge else []))
         if problem is not None:
             diagnostics.append(Diagnostic(path=path, line=command.line, reason="unresolved_handler",
                                           detail=f"subcommand {command.name!r}: {problem}"))
@@ -660,29 +665,33 @@ def _decorated_command_entries(path: str, tree: ast.Module) -> _Found:
                 continue
             if method not in _COMMAND_METHODS[group.kind]:
                 continue
-            explicit = _call_name_argument(call) if call is not None else None
-            if _is_unset(explicit):
-                leaf = func.name.replace("_", "-")
-            elif (leaf := _literal_str(explicit)) is None:
-                diagnostics.append(Diagnostic(
-                    path=path, line=decorator.lineno, reason="dynamic_name",
-                    detail=f"@{receiver}.{method} on {func.name} is given {_shown(explicit)}, not a string "
-                           "literal; the command name is unknown"))
+            names = _command_names(group, receiver, method, call, func)
+            if isinstance(names, str):
+                diagnostics.append(Diagnostic(path=path, line=decorator.lineno, reason="dynamic_name", detail=names))
                 continue
-            if group.prefix is None:
-                diagnostics.append(Diagnostic(
-                    path=path, line=decorator.lineno, reason="dynamic_name",
-                    detail=f"@{receiver}.{method} on {func.name}: {receiver} is mounted by add_typer under a "
-                           "name that is not a string literal; the command name is unknown"))
-                continue
-            names = (*group.prefix, leaf)
             if group.kind == "click_command" and method == "group":
                 groups[func.name] = _CommandGroup("click_command", names)
             handler = Handler(path=path, line=func.lineno, symbol=func.name)
-            entries.append(Entry(kind=group.kind, name=" ".join(names),
-                                 location=Location(path=path, line=decorator.lineno), handler=handler,
-                                 invocation=None, known_edges=[], also_invoked_by=[]))
+            entries.append(_static_entry(group.kind, " ".join(names), path, decorator.lineno, handler))
     return entries, diagnostics
+
+
+def _command_names(group: _CommandGroup, receiver: str, method: str, call: ast.Call | None,
+                   func: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, ...] | str:
+    """The full name of a command declared by `@<receiver>.<method>(...)` on `group`: the group's prefix, then
+    the explicit name or the function name with `_` made `-`. `call` is None for a bare decorator. When a part
+    is not a literal, the `dynamic_name` diagnostic's detail instead.
+    """
+    explicit = _call_name_argument(call) if call is not None else None
+    if _is_unset(explicit):
+        leaf = func.name.replace("_", "-")
+    elif (leaf := _literal_str(explicit)) is None:
+        return (f"@{receiver}.{method} on {func.name} is given {_shown(explicit)}, not a string "
+                "literal; the command name is unknown")
+    if group.prefix is None:
+        return (f"@{receiver}.{method} on {func.name}: {receiver} is mounted by add_typer under a "
+                "name that is not a string literal; the command name is unknown")
+    return (*group.prefix, leaf)
 
 
 def _typer_apps(tree: ast.Module) -> dict[str, _CommandGroup]:
@@ -795,9 +804,7 @@ def _project_script_entries(root: Path, index: PyIndex, path: str) -> _Found:
                 path=path, line=line, reason="unresolved_target",
                 detail=f"[project.scripts] {name!r} = {target!r} does not name a function of this repository"))
             continue
-        entries.append(Entry(kind="project_script", name=name, location=Location(path=path, line=line),
-                             handler=handler, invocation=None, known_edges=[_edge(path, line, handler)],
-                             also_invoked_by=[]))
+        entries.append(_static_entry("project_script", name, path, line, handler, [_edge(path, line, handler)]))
     return entries, diagnostics
 
 
@@ -845,10 +852,9 @@ def _main_module_entries(index: PyIndex, path: str, tree: ast.Module) -> _Found:
         return [], []
     location, callees = _main_callees(index, path, tree)
     module = index.module_name(path) or path
-    handler = callees[0] if len(callees) == 1 else None
-    entry = Entry(kind="main_module", name=module.removesuffix(".__main__") if package_main else module,
-                  location=location, handler=handler, invocation=None,
-                  known_edges=[_edge(path, location.line, handler)] if handler else [], also_invoked_by=[])
+    handler = _sole(callees)
+    entry = _static_entry("main_module", module.removesuffix(".__main__") if package_main else module,
+                          path, location.line, handler, [_edge(path, location.line, handler)] if handler else [])
     if len(callees) < 2:
         return [entry], []
     called = ", ".join(f"{h.symbol} ({h.path}:{h.line})" for h in callees)
@@ -866,7 +872,12 @@ def main_module_handler(index: PyIndex, path: str) -> tuple[Location, Handler | 
     if tree is None:
         return Location(path=path, line=1), None
     location, callees = _main_callees(index, path, tree)
-    return location, callees[0] if len(callees) == 1 else None
+    return location, _sole(callees)
+
+
+def _sole(callees: list[Handler]) -> Handler | None:
+    """The handler of a `main_module`: its one same-repository callee, or None for none or several."""
+    return callees[0] if len(callees) == 1 else None
 
 
 def _main_callees(index: PyIndex, path: str, tree: ast.Module) -> tuple[Location, list[Handler]]:
@@ -949,8 +960,7 @@ def _seed_entry(index: PyIndex, seed: Seed, path: str) -> Entry | Diagnostic:
         found = index.enclosing_def(path, line)
     handler = Handler(path=path, line=found.start, symbol=found.name) if found else None
     default_name = f"{path}:{found.name}" if found else f"{path}:{line}"
-    return Entry(kind="seed", name=seed.name or default_name, location=Location(path=path, line=line),
-                 handler=handler, invocation=None, known_edges=[], also_invoked_by=[])
+    return _static_entry("seed", seed.name or default_name, path, line, handler)
 
 
 # --- merging ----------------------------------------------------------------------------------

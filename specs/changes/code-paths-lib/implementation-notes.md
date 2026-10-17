@@ -70,3 +70,8 @@ no spec file is edited from them automatically.
 - SPEC_IMPACT: clarify
 - SURPRISES:
   (1) D7's null-handler merge on identical (kind, location) contradicts the Block 2 test where one helper declares `list` under two parents on the same line; the Block 2 test was changed to accept the merged form. (2) The Block 2 interface types `Entry.also_invoked_by` as the paths.v1 `Invoker`, whose kinds are output kinds, while D5 and the tests need discovery kinds; I added an `EntryInvoker` model and `to_path_entry` converts it. (3) D6 asks for `unresolved_handler` on every null-handler entry; a `main_module` only gets one when it calls several functions, in line with Block 2's partial approach. (4) The spec has no naming rule for typer callbacks; the command rule is used. (5) click and typer groups and apps are resolved within one module only; click 8.2 suffix stripping and lowercasing are not done. (6) `tomllib` keeps no line numbers, so `[project.scripts]` key lines are found by scanning the text.
+
+## Block 5 — Discover click, typer, `[project.scripts]` and `__main__` entries, and merge duplicate invokers (refactorer)
+- SPEC_IMPACT: clarify
+- SURPRISES:
+  The block-5 implementation commit edited a Block 2 test (`tests/test_entries_argparse.py`) and added a lockfile at `plugins/multiplai-dev/lib/code_facts/uv.lock`, though the design says only the root `uv.lock` changes. `Entry.also_invoked_by` uses a new `EntryInvoker` model with discovery kinds, not the `Invoker` type the Block 2 interface states. My refactor changed none of this.
