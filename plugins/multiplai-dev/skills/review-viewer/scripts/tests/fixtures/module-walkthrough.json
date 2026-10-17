@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-10-12T04:22:32+00:00",
+  "generated_at": "2026-10-17T13:16:56+00:00",
   "base_sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
   "head_sha": "8fad5fdf1b69c48c9b215ec887f8d99e3ca0ab2e",
-  "overview_md": "# bookings — codebase walkthrough\n\n> Generated 2026-10-12 · depth standard · mode human · 7 files · spent $0.00 over 20 agent calls\n\n- Module directory: `../../ws0/ws/engine/bookings`\n- Depth: `standard`\n- Mode: `human`\n\nEvery `path:line` below was checked against the commit listed here. Re-check with `python -m walkthrough_pipeline check <this file>`.\n\n## Commits read\n\n| Repo | Path | Commit |\n|---|---|---|\n| engine | ../../ws0/ws/engine | `8fad5fdf1b69c48c9b215ec887f8d99e3ca0ab2e` |\n| front | ../../ws0/ws/front | `45ab50e45bca1db91f7c793b0b2fbedda90916d4` |\n| warehouse | ../../ws0/ws/warehouse | `f3c723ce7aaf4f871132ed8184281240923873f2` |\n\n## Vendor docs\n\nNothing passed the checks here.\n\nDocs: https://docs.acme.test — `llms.txt` lists 3 pages; 2 fetched. Local docs: acme-docs.\n\n| API path the code calls | Docs page | Collection request |\n|---|---|---|\n| `/bookings/{}/ack` | https://docs.acme.test/api/bookings-collection.md | `acme-api-collection/bookings/ack.yml` (POST) |\n| `/webhooks` | no doc page found | not in the collection |\n\nNo doc page found for: `/webhooks`\n\nNot in the collection `acme-api-collection`: `/webhooks`\n\nOpen a request file in Bruno and run it with your own API key; this pipeline never calls the API.\n\n## Coverage\n\n| Measure | Value |\n|---|---|\n| Files with a surviving fact | 6 of 7 (85.7%) |\n| Files over 30 lines with a surviving fact | 0 of 0 (0.0%) |\n| Migrations (counted, not read) | 2; latest `0002_ospite.py` |\n| Boundary entries not cited by any fact | 0 |\n| Facts kept | 26 |\n| Claims dropped by the docs checks | 2 |\n| Claims dropped by the explore checks | 2 |\n| Paragraphs cut by the write checks | 0 |\n| Scenarios cut short by the trace check | 0 of 2 |\n| pyright references | skipped (--lsp-timeout 0) |\n\nFiles with no surviving fact (1):\n\n- `engine/bookings/__init__.py` (1 lines, at or under 30: not required)\n",
+  "overview_md": "# bookings — codebase walkthrough\n\n> Generated 2026-10-17 · depth standard · mode human · 7 files · spent $0.00 over 17 agent calls\n\n- Module directory: `../../ws0/ws/engine/bookings`\n- Depth: `standard`\n- Mode: `human`\n\nEvery `path:line` below was checked against the commit listed here. Re-check with `python -m walkthrough_pipeline check <this file>`.\n\n## Commits read\n\n| Repo | Path | Commit |\n|---|---|---|\n| engine | ../../ws0/ws/engine | `8fad5fdf1b69c48c9b215ec887f8d99e3ca0ab2e` |\n| front | ../../ws0/ws/front | `45ab50e45bca1db91f7c793b0b2fbedda90916d4` |\n| warehouse | ../../ws0/ws/warehouse | `f3c723ce7aaf4f871132ed8184281240923873f2` |\n\n## Paths\n\nNo entry points reaching this module were found.\n\n## Vendor docs\n\nNothing passed the checks here.\n\nDocs: https://docs.acme.test — `llms.txt` lists 3 pages; 2 fetched. Local docs: acme-docs.\n\n| API path the code calls | Docs page | Collection request |\n|---|---|---|\n| `/bookings/{}/ack` | https://docs.acme.test/api/bookings-collection.md | `acme-api-collection/bookings/ack.yml` (POST) |\n| `/webhooks` | no doc page found | not in the collection |\n\nNo doc page found for: `/webhooks`\n\nNot in the collection `acme-api-collection`: `/webhooks`\n\nOpen a request file in Bruno and run it with your own API key; this pipeline never calls the API.\n\n## Coverage\n\n| Measure | Value |\n|---|---|\n| Files with a surviving fact | 6 of 7 (85.7%) |\n| Files over 30 lines with a surviving fact | 0 of 0 (0.0%) |\n| Migrations (counted, not read) | 2; latest `0002_ospite.py` |\n| Boundary entries not cited by any fact | 0 |\n| Facts kept | 26 |\n| Claims dropped by the docs checks | 2 |\n| Claims dropped by the explore checks | 2 |\n| Paragraphs cut by the write checks | 0 |\n| Paths traced | 0 |\n| Paths cut short | 0 |\n| pyright references | skipped (--lsp-timeout 0) |\n\nFiles with no surviving fact (1):\n\n- `engine/bookings/__init__.py` (1 lines, at or under 30: not required)\n",
   "steps": [
     {
       "id": "overview",
@@ -30,35 +30,6 @@
         }
       ],
       "body_md": "| Term | Meaning | Where |\n|---|---|---|\n| ospite | guest (Italian) | [`engine/bookings/models.py:6`](../../ws0/ws/engine/bookings/models.py#L6 \"ospite_count\") |"
-    },
-    {
-      "id": "end-to-end-scenarios",
-      "title": "End-to-end scenarios",
-      "anchors": [
-        {
-          "path": "bookings/urls.py",
-          "side": "head",
-          "line_start": 6,
-          "line_end": 6
-        },
-        {
-          "path": "bookings/views.py",
-          "side": "head",
-          "line_start": 5,
-          "line_end": 8
-        },
-        {
-          "path": "bookings/client.py",
-          "side": "head",
-          "line_start": 10,
-          "line_end": 12
-        }
-      ],
-      "diagram": {
-        "kind": "mermaid",
-        "source": "sequenceDiagram\n    participant n0 as urls.py\n    participant n1 as views.py\n    participant n2 as client.py\n    n0->>n1: views.webhook\n    n1->>n2: ack_booking"
-      },
-      "body_md": "### 1. A webhook arrives\n\nThis part is explained by [`engine/bookings/urls.py:6`](../../ws0/ws/engine/bookings/urls.py#L6 \"path('hooks/acme/', views.webhook, name='acme_webhook'),\") and `Reservation`.\n\n1. `entry` — entry [`engine/bookings/urls.py:6`](../../ws0/ws/engine/bookings/urls.py#L6 \"path('hooks/acme/', views.webhook, name='acme_webhook'),\")\n2. `views.webhook` — the view [`engine/bookings/views.py:5-8`](../../ws0/ws/engine/bookings/views.py#L5-L8 \"return ack_booking(booking_id)\")\n3. `ack_booking` — acknowledges the booking [`engine/bookings/client.py:10-12`](../../ws0/ws/engine/bookings/client.py#L10-L12 \"return httpx.post(\")\n\n### 2. A webhook arrives\n\nThis part is explained by [`engine/project/settings.py:9`](../../ws0/ws/engine/project/settings.py#L9 \"'task': 'bookings.poll',\") and `Reservation`.\n\n1. `entry` — entry [`engine/project/settings.py:9`](../../ws0/ws/engine/project/settings.py#L9 \"'task': 'bookings.poll',\")"
     },
     {
       "id": "module-tour",
@@ -160,6 +131,14 @@
     },
     {
       "path": "bookings/tasks.py",
+      "reason": "read, but no step of this walkthrough cites it"
+    },
+    {
+      "path": "bookings/urls.py",
+      "reason": "read, but no step of this walkthrough cites it"
+    },
+    {
+      "path": "bookings/views.py",
       "reason": "read, but no step of this walkthrough cites it"
     }
   ],

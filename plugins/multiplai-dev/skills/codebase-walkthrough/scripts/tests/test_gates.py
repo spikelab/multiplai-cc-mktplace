@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from walkthrough_pipeline import gates, target
-from walkthrough_pipeline.models import Citation, Fact, Hop, Reference, RepoInfo, SymbolEntry, Unit
+from walkthrough_pipeline.models import Citation, Fact, Reference, RepoInfo, SymbolEntry, Unit
 
 GATES_SRC = Path(gates.__file__).read_text()
 
@@ -90,55 +90,6 @@ def test_doc_quote_gate():
     assert gates.doc_quote_gate(texts, "https://d.test/a.md", "acknowledges a booking revision").passed
     assert gates.doc_quote_gate(texts, "https://d.test/a.md", "deletes a booking").reason == "doc quote not in the page"
     assert "not in llms.txt" in gates.doc_quote_gate(texts, "https://d.test/b.md", "acknowledges").reason
-
-
-def _webhook_hops(ws, *, second_symbol="ack_booking"):
-    views = (ws["engine"] / "bookings/views.py").read_text().split("\n")
-    client = (ws["engine"] / "bookings/client.py").read_text().split("\n")
-    vd = next(i for i, l in enumerate(views, 1) if "def webhook" in l)
-    vr = next(i for i, l in enumerate(views, 1) if "return ack_booking" in l)
-    cd = next(i for i, l in enumerate(client, 1) if "def ack_booking" in l)
-    cr = next(i for i, l in enumerate(client, 1) if "httpx.post" in l)
-    return [
-        Hop(symbol_called="hooks/acme/", path="engine/bookings/urls.py", line_start=6, line_end=6,
-            quote="path('hooks/acme/', views.webhook"),
-        Hop(symbol_called="views.webhook", path="engine/bookings/views.py", line_start=vd, line_end=vr,
-            quote="return ack_booking(booking_id)"),
-        Hop(symbol_called=second_symbol, path="engine/bookings/client.py", line_start=cd, line_end=cr,
-            quote="httpx.post("),
-    ]
-
-
-SEED = SymbolEntry(kind="url", name="hooks/acme/", path="engine/bookings/urls.py", line=6,
-                   quote="path('hooks/acme/', views.webhook, name='acme_webhook'),")
-
-
-def test_trace_gate_passes_a_chain(repos, ws):
-    assert gates.trace_gate(repos, SEED, _webhook_hops(ws), []) == (3, "")
-
-
-def test_trace_gate_stops_at_a_broken_hop(repos, ws):
-    good, reason = gates.trace_gate(repos, SEED, _webhook_hops(ws, second_symbol="send_mail"), [])
-    assert good == 2 and "does not contain" in reason
-
-
-def test_trace_gate_wants_hop_one_to_be_the_seed(repos, ws):
-    hops = _webhook_hops(ws)[1:]
-    assert gates.trace_gate(repos, SEED, hops, [])[0] == 0
-
-
-def test_trace_gate_accepts_a_cross_repo_edge(repos):
-    seed = Reference(repo="front", kind="http-route", symbol="hooks/acme/", path="front/src/api.ts", line=5,
-                     quote="return fetch(`${BASE}/hooks/acme/`", method="ast-grep")
-    hops = [Hop(symbol_called="notify", path="front/src/api.ts", line_start=5, line_end=5, quote="/hooks/acme/"),
-            Hop(symbol_called="hooks/acme/", path="engine/bookings/urls.py", line_start=6, line_end=6,
-                quote="views.webhook")]
-    assert gates.trace_gate(repos, seed, hops, [("engine/bookings/urls.py", 6)]) == (2, "")
-    # A hop that neither defines the name nor holds a boundary entry breaks the chain.
-    elsewhere = [hops[0], hops[1].model_copy(update={"path": "engine/bookings/views.py", "line_start": 5,
-                                                     "line_end": 5, "quote": "def webhook(request):"})]
-    assert gates.trace_gate(repos, seed, elsewhere, [])[0] == 1
-    assert gates.trace_gate(repos, seed, elsewhere, [("engine/bookings/views.py", 5)])[0] == 2
 
 
 def test_write_gate(ws, tmp_path):
