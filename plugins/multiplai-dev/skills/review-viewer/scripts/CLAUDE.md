@@ -98,6 +98,20 @@ it when the pipeline changes what a column, mark or label means.
 broken, or a `seen`, `gate`, fate, verdict, status or label value in the
 schemas has no entry in the help.
 
+## Protocol 1b: `paths.json` (code_facts' `paths.v1`, optional)
+
+The review writes it beside `findings.json` (multiplai-dev 0.82+): the entry
+points that reach the change, each path's hops, and the e2e tests that run it.
+review-viewer defines no schema of its own for it: `server.inspect_paths()`
+validates `<review_dir>/paths.json` with `code_facts.paths.PathsResult` (the
+only import from code_facts) and accepts it only when its `commit` is exactly
+the review's full `head_sha` (no prefix, case or `base_sha` match). It is
+looked for nowhere else, and `REVIEW_FILES` does not name it. A stale or
+invalid file logs one `paths.json ignored (<status>): <path> <detail>`
+warning; an absent one logs nothing. `/api/targets/<slug>` returns the
+accepted document as `paths` (null otherwise), in the same response as the
+findings; the page's Paths tab is shown only when it is set.
+
 ## Protocol 2: the mailbox (`<dir of findings.json>/viewer/`)
 
 | File | Writer | Row |

@@ -415,13 +415,16 @@
   }
 
   const TABS = { summary: ["tab-summary", "summary"], walk: ["tab-walk", "walkthrough"], finding: ["tab-finding", "finding"],
-    needs: ["tab-needs", "needs"], checked: ["tab-checked", "checked"] };
+    needs: ["tab-needs", "needs"], checked: ["tab-checked", "checked"], paths: ["tab-paths", "paths"] };
 
   function renderTabs() {
     if (state.view) renderFileNav();
     const checks = state.detail && state.detail.checks;
-    if (state.tab === "checked" && !checks) state.tab = "summary";
+    const paths = state.detail && state.detail.paths;
+    state.tab = L.resolveTab(state.tab, { checks: checks, paths: paths });
     $("tab-checked").hidden = !checks;
+    $("tab-paths").hidden = !paths;
+    $("paths-count").textContent = paths ? String(paths.paths.length) : "";
     const needs = state.detail ? L.needsItems(state.shownFile).length : 0;
     if (state.tab === "needs" && !needs) state.tab = "summary";
     $("tab-needs").hidden = !needs;
@@ -2816,6 +2819,7 @@
     $("tab-summary").addEventListener("click", () => setTab("summary"));
     $("tab-walk").addEventListener("click", () => setTab("walk"));
     $("tab-checked").addEventListener("click", () => setTab("checked"));
+    $("tab-paths").addEventListener("click", () => setTab("paths"));
     $("tab-needs").addEventListener("click", () => setTab("needs"));
     $("help-btn").addEventListener("click", () => openHelp("top"));
     $("keys-btn").addEventListener("click", () => openHelp("keys"));

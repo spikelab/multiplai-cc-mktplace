@@ -1418,6 +1418,18 @@
     return !!c && (c.gate === "fail" || c.seen === "not-seen");
   }
 
+  // --- paths: the review's paths.json (code_facts' paths.v1) ----------------------
+
+  /* The tab to show: Checked needs a checks.json and Paths a loaded paths.json
+   * (the server sends null for an absent, stale or invalid one); without its
+   * file either falls back to Summary. Every other tab is kept. */
+  function resolveTab(tab, files) {
+    const f = files || {};
+    if (tab === "checked" && !f.checks) return "summary";
+    if (tab === "paths" && !f.paths) return "summary";
+    return tab;
+  }
+
   // --- the help dialog ------------------------------------------------------------
 
   /* The id of the help dialog's section for each topic a "?" button names.
@@ -1481,6 +1493,7 @@
     findingParts: findingParts,
     citationWarning: citationWarning,
     HELP_SECTIONS: HELP_SECTIONS, helpSection: helpSection,
+    resolveTab: resolveTab,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;
