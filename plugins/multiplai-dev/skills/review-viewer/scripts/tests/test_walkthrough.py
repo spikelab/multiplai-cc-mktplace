@@ -333,3 +333,38 @@ def test_target_detail_carries_pr_and_notice(findings_path):
     finally:
         viewer.httpd.server_close()
         server.unpublish(viewer)
+
+
+# --- paths in the walkthrough: prose only (review-viewer reads paths.json, walkthrough.v1 is unchanged) ---
+
+
+def test_put_stores_a_walkthrough_that_names_paths_in_prose_and_follows_a_hop_order(start_live, complete, tmp_path):
+    live = start_live()
+    named = copy.deepcopy(complete)
+    named["overview_md"] = ("The change reaches six entry points: shop checkout, pre-commit discount check, "
+                            "/shop:refund, scripts/points_report.py, app/big.py and shop discount.")
+    # p1's hops, in hop order: total (app/service.py:8-9), then points_for (app/new_feature.py:4-5).
+    named["steps"] = [_step("p1-total", start=8, end=9, findings=[HIGH]),
+                      _step("p1-points", path="app/new_feature.py", start=4, end=5)] + named["steps"]
+    src = tmp_path / "wt.json"
+    src.write_text(json.dumps(named))
+    proc = _cli("walkthrough", "put", "--box", live.box, "--file", src)
+    assert proc.returncode == 0, proc.stderr
+    status, body = live.request("GET", f"/api/targets/{live.slug}/walkthrough")
+    assert status == 200 and body["overview_md"] == named["overview_md"]
+    assert [s["id"] for s in body["steps"]][:2] == ["p1-total", "p1-points"]
+
+
+def test_put_treats_a_path_ids_field_like_any_other_unknown_field(start_live, complete, tmp_path):
+    live = start_live()
+    outs = []
+    for field in ("path_ids", "some_unknown_field"):
+        data = copy.deepcopy(complete)
+        data[field] = ["p1"]
+        data["steps"][0][field] = ["p1"]
+        src = tmp_path / f"{field}.json"
+        src.write_text(json.dumps(data))
+        proc = _cli("walkthrough", "put", "--box", live.box, "--file", src)
+        outs.append((proc.returncode, proc.stderr.replace(field, "<field>").replace(str(src), "<file>")))
+    assert outs[0] == outs[1]
+    assert outs[0][0] == 2 and not walkthrough.walkthrough_path(live.box).exists()
