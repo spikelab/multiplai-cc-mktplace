@@ -1805,7 +1805,7 @@ class Coordinator:
             except (NotImplementedError, RuntimeError, ValueError):
                 pass
         try:
-            rc = await self._loop()
+            await self._loop()
         except (KeyboardInterrupt, asyncio.CancelledError):
             sig = self.signal_sent or signal.SIGINT
             await self._cancel_reviews()
