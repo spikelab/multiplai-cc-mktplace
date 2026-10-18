@@ -936,6 +936,16 @@ test("parts a finding lacks are left out", () => {
     ["scenario", "cited"]);
 });
 
+test("the findings merged into this one show under the verdict, in both contexts", () => {
+  const merged = Object.assign({}, FULL, { absorbed: [{ id: "dddddddddd", claim: "a root bug, merged away" }] });
+  assert.deepEqual(L.findingParts(merged, CHECKS_FIRST, "finding").parts,
+    ["scenario", "expected", "verdict", "absorbed", "needs"]);
+  assert.deepEqual(L.findingParts(merged, null, "step").parts,
+    ["scenario", "expected", "verdict", "absorbed", "cited", "needs", "verifier-cited"]);
+  // Older files have no `absorbed`; an empty list shows nothing either.
+  assert.ok(!L.findingParts(Object.assign({}, FULL, { absorbed: [] }), null, "finding").parts.includes("absorbed"));
+});
+
 // --- the help dialog ----------------------------------------------------------------
 
 const fs = require("node:fs");

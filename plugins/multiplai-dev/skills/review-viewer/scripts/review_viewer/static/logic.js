@@ -1400,7 +1400,9 @@
    * the entry shows what the verifier read and cited. Every other case
    * (no checks.json, no verifier entry, a walkthrough step) gets `checkedBy`
    * -1 and the lists: "cited" (the finding's citations) and, when there are
-   * any, "verifier-cited". `parts` names the blocks under the claim. */
+   * any, "verifier-cited". "absorbed" (the findings the review merged into
+   * this one) follows the verdict when there are any. `parts` names the
+   * blocks under the claim. */
   function findingParts(finding, checks, context) {
     const f = finding || {};
     const checkedBy = context === "finding" && checks ? verifierIndex(checks, f.id) : -1;
@@ -1408,6 +1410,7 @@
     const parts = ["scenario"];
     if (f.expected_behaviour) parts.push("expected");
     if (f.verdict_reason) parts.push("verdict");
+    if (f.absorbed && f.absorbed.length) parts.push("absorbed");
     if (lists) parts.push("cited");
     if (f.needs && f.needs.length) parts.push("needs");
     if (lists && f.verifier_citations && f.verifier_citations.length) parts.push("verifier-cited");
