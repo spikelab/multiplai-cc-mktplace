@@ -845,6 +845,7 @@ async def _enforce_test_quality(
         test_command=_block_agent_test_command(config, block),
         model=config.model_for("test_writer"),
         effort=config.effort_for("test_writer"),
+        max_turns=config.test_writer_max_turns,
         cwd=str(config.project_dir),
     )
     if not retry.success:
@@ -955,6 +956,7 @@ async def _enforce_red_gate(
                 test_command=_block_agent_test_command(config, block),
                 model=config.model_for("test_writer"),
                 effort=config.effort_for("test_writer"),
+                max_turns=config.test_writer_max_turns,
                 cwd=str(config.project_dir),
             )
             if not retry.success:
@@ -1135,6 +1137,7 @@ async def run_block_tdd(
         test_command=_block_agent_test_command(config, block),
         model=config.model_for("test_writer"),
         effort=config.effort_for("test_writer"),
+        max_turns=config.test_writer_max_turns,
         cwd=cwd,
     )
 
@@ -2708,6 +2711,7 @@ async def _run_mutation_round(
         test_command=config.test_command,
         model=config.model_for("mutation_test_writer"),
         effort=config.effort_for("mutation_test_writer"),
+        max_turns=config.mutation_test_writer_max_turns,
         cwd=str(config.project_dir),
     )
 

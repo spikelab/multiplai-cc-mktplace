@@ -58,6 +58,12 @@ For each test you wrote, confirm:
 ## Test Command
 {test_command}
 
+## Turns
+You have {max_turns} turns. A turn is one reply, however many tools it calls, so
+batch your reads. Write a first version of the test files by turn {half} and run
+the test command; spend what is left on fixing them. Your files on disk are
+kept if you run out of turns.
+
 ## When the block is not writable as specified
 
 It is always OK to stop and say this is too hard or under-specified — bad work
@@ -176,6 +182,12 @@ it is now, and the diff cosmic-ray applied.
 
 ## Test Command
 {test_command}
+
+## Turns
+You have {max_turns} turns. A turn is one reply, however many tools it calls, so
+batch your reads. Write a first version of the test files by turn {half} and run
+the test command; spend what is left on fixing them. Your files on disk are
+kept if you run out of turns.
 
 ## Output
 End your report with these REQUIRED slots, each on its own line:
