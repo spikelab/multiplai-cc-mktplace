@@ -274,6 +274,21 @@ def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
             assert Path(argv[i + 1]).is_absolute()
 
 
+def test_a_childs_saved_command_marks_it_an_epic_child(tmp_path, monkeypatch):
+    """#347: a child's command, run again by hand from its started record without
+    the coordinator's environment, is still an epic child (`--epic-child`), so it
+    skips spec-extract and opens its PR against the default branch."""
+    from build_pipeline.__main__ import build_parser
+
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
+    coord = coordinator.Coordinator(e.config, BuildState(change_name="e", mode="scratch", tier="advanced"),
+                                    None, e.dir, store.load_epic(e.dir))
+    argv = coord.new_argv("a", None)
+    assert BuildConfig.from_cli_args(build_parser().parse_args(argv[3:])).epic_child is True
+    plain = ["build", "--project-dir", str(e.project)]
+    assert BuildConfig.from_cli_args(build_parser().parse_args(plain)).epic_child is False
+
+
 def test_a_parent_that_skipped_research_skips_it_in_each_child(tmp_path, monkeypatch):
     """The parent ran with --skip-research, which writes no research.md: each
     child gets --skip-research, so none decides on research again and parks
