@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import functools
 import importlib.resources
+import itertools
 import json
 import logging
 import os
@@ -228,17 +229,35 @@ class MockedE2ETest(_TestRecord):
     patch_line: int = Field(ge=1)
 
 
+class DirectCallTest(_TestRecord):
+    """A test that calls the path's handler itself, without running the program: listed, never counted as e2e."""
+
+    match: Literal["direct_call"]
+
+
 class E2EListing(_Strict):
-    """Tests of a path, sorted by (file, line, node_id). A test is in at most one list."""
+    """Tests of a path, sorted by (file, line, node_id). A test is in at most one list. `direct_calls` was added
+    to paths.v1 later, so the schema does not require it.
+    """
+
+    model_config = ConfigDict(json_schema_serialization_defaults_required=False)
 
     e2e: list[E2ETest]
     mocks_hop_2: list[MockedE2ETest]
+    direct_calls: list[DirectCallTest] = []
 
     @model_validator(mode="after")
     def _disjoint(self) -> E2EListing:
-        both = {t.node_id for t in self.e2e} & {t.node_id for t in self.mocks_hop_2}
-        if both:
-            raise ValueError(f"listed in both e2e and mocks_hop_2: {sorted(both)}")
+        lists = {
+            "e2e": self.e2e,
+            "mocks_hop_2": self.mocks_hop_2,
+            "direct_calls": self.direct_calls,
+        }
+        ids = {name: {t.node_id for t in records} for name, records in lists.items()}
+        for first, second in itertools.combinations(ids, 2):
+            both = ids[first] & ids[second]
+            if both:
+                raise ValueError(f"listed in both {first} and {second}: {sorted(both)}")
         return self
 
 
@@ -336,7 +355,9 @@ class FallbackStatus(_Strict):
 
 
 class PathsResult(_Strict):
-    """The paths.v1 document. `scoped` is true exactly when changed lines were given; `cap` is null otherwise."""
+    """The paths.v1 document. `scoped` is true exactly when changed lines were given; `cap` is null otherwise.
+    Additive changes keep the version: a field added later is not required, so older documents still validate.
+    """
 
     model_config = ConfigDict(
         json_schema_extra=_one_of(

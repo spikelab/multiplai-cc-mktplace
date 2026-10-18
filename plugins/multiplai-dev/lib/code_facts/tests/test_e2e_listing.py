@@ -2,7 +2,8 @@
 
 Every snapshot is written into `tmp_path`; nothing in it is imported, collected
 or run. Each path here has a single retained hop, so no test can move to
-`mocks_hop_2` and every match lands in `tests.e2e`.
+`mocks_hop_2`: every match lands in `tests.e2e`, or in `tests.direct_calls`
+when the test only calls the handler.
 """
 
 from __future__ import annotations
@@ -199,6 +200,10 @@ def ids(listed: Any) -> list[str]:
     return [t.node_id for t in listed.e2e]
 
 
+def direct_ids(listed: Any) -> list[str]:
+    return [t.node_id for t in listed.direct_calls]
+
+
 def rec(listed: Any, node_id: str) -> Any:
     (record,) = [t for t in listed.e2e if t.node_id == node_id]
     return record
@@ -219,9 +224,11 @@ def test_module_level_and_class_based_tests_are_found(tmp_path):
         """)
     root = snapshot(tmp_path, {"tests/test_cli.py": body})
     out, _ = listing(root, "open", "render")
-    assert ids(out["open"]) == ["tests/test_cli.py::test_open"]
+    assert ids(out["open"]) == [] and direct_ids(out["open"]) == [
+        "tests/test_cli.py::test_open"
+    ]
     assert ids(out["render"]) == ["tests/test_cli.py::TestRender::test_basic"]
-    opened, rendered = out["open"].e2e[0], out["render"].e2e[0]
+    opened, rendered = out["open"].direct_calls[0], out["render"].e2e[0]
     assert (opened.file, opened.line, opened.match, opened.invocation_line) == (
         "tests/test_cli.py",
         line_of(body, "def test_open"),
@@ -266,7 +273,7 @@ def test_non_tests_nested_functions_and_excluded_directories_are_ignored(tmp_pat
         files[f"{d}/test_vendor.py"] = vendored
     files["tests/cli_test.py"] = vendored.replace("test_x", "test_suffix")
     out, _ = listing(snapshot(tmp_path, files), "open")
-    assert ids(out["open"]) == ["tests/cli_test.py::test_suffix"]
+    assert direct_ids(out["open"]) == ["tests/cli_test.py::test_suffix"]
 
 
 def test_build_and_dist_directories_are_still_searched(tmp_path):
@@ -280,7 +287,7 @@ def test_build_and_dist_directories_are_still_searched(tmp_path):
         ),
         "open",
     )
-    assert ids(out["open"]) == [
+    assert direct_ids(out["open"]) == [
         "build/test_built.py::test_x",
         "dist/test_dist.py::test_x",
     ]
@@ -295,7 +302,7 @@ def test_paths_are_relative_to_the_snapshot_root_in_multi_repo_snapshots(tmp_pat
     )
     root = make_tree(tmp_path / "snap", files)
     out, _ = listing(root, "open")
-    (record,) = out["open"].e2e
+    (record,) = out["open"].direct_calls
     assert record.file == "repo-b/tests/test_hook.py"
     assert record.node_id == "repo-b/tests/test_hook.py::test_x"
 
@@ -314,10 +321,11 @@ def test_paths_are_relative_to_the_snapshot_root_in_multi_repo_snapshots(tmp_pat
 )
 def test_call_resolving_to_the_handler_is_a_direct_call(tmp_path, body):
     out, _ = listing(snapshot(tmp_path, {"tests/test_x.py": body}), "open", "render")
-    assert [(t.node_id, t.match) for t in out["open"].e2e] == [
+    assert [(t.node_id, t.match) for t in out["open"].direct_calls] == [
         ("tests/test_x.py::test_x", "direct_call")
     ]
-    assert out["render"].e2e == []
+    assert out["open"].e2e == []
+    assert out["render"].e2e == [] and out["render"].direct_calls == []
 
 
 def test_same_name_from_another_module_does_not_match(tmp_path):
@@ -330,10 +338,103 @@ def test_same_name_from_another_module_does_not_match(tmp_path):
             main(["open"])
         """)
     out, _ = listing(snapshot(tmp_path, {"tests/test_other.py": body}), "open")
-    assert out["open"].e2e == []
+    assert out["open"].e2e == [] and out["open"].direct_calls == []
+
+
+def test_a_mocked_unit_test_calling_the_handler_is_a_direct_call_not_e2e(tmp_path):
+    body = IMPORTS + src("""
+        from unittest import mock
+
+
+        def test_unit():
+            with mock.patch("pkg.cli.tool_main"):
+                assert handle_open(None) == 0
+        """)
+    out, _ = listing(snapshot(tmp_path, {"tests/test_u.py": body}), "open")
+    assert out["open"].e2e == [] and out["open"].mocks_hop_2 == []
+    assert [
+        (t.node_id, t.match, t.invocation_line) for t in out["open"].direct_calls
+    ] == [
+        (
+            "tests/test_u.py::test_unit",
+            "direct_call",
+            line_of(body, "handle_open(None) == 0"),
+        )
+    ]
 
 
 # --- CLI subcommand argv -------------------------------------------------------------------
+
+
+# One parser module whose functions parse argv and then do different things with the result.
+PARSE_ONLY = src("""
+    import argparse
+
+
+    def handle_open(args):
+        return 0
+
+
+    COMMANDS = {"open": handle_open}
+
+
+    def build_parser():
+        parser = argparse.ArgumentParser(prog="pkg")
+        sub = parser.add_subparsers(dest="command", required=True)
+        sub.add_parser("open")
+        return parser
+
+
+    def dispatch(args):
+        return COMMANDS[args.command](args)
+
+
+    def by_dict(argv):
+        args = build_parser().parse_args(argv)
+        return COMMANDS[args.command](args)
+
+
+    def by_dispatcher(argv):
+        return dispatch(build_parser().parse_args(argv))
+
+
+    def by_name(argv):
+        args = build_parser().parse_args(argv)
+        return dispatch(args)
+
+
+    def parse(argv):
+        return build_parser().parse_args(argv)
+
+
+    def parse_and_print(argv):
+        args = build_parser().parse_args(argv)
+        print(args)
+        return args
+    """)
+
+
+@pytest.mark.parametrize(
+    ("function", "runs"),
+    [
+        ("by_dict", True),
+        ("by_dispatcher", True),
+        ("by_name", True),
+        ("parse", False),
+        ("parse_and_print", False),
+    ],
+)
+def test_a_function_that_parses_counts_only_when_the_result_reaches_a_handler(
+    tmp_path, function, runs
+):
+    body = f'from pkg.__main__ import {function}\n\n\ndef test_r():\n    {function}(["open"])\n'
+    root = make_tree(
+        tmp_path / "snap",
+        {"pkg/__init__.py": "", "pkg/__main__.py": PARSE_ONLY, "tests/test_r.py": body},
+    )
+    out, _ = listing(root, "open")
+    assert ids(out["open"]) == (["tests/test_r.py::test_r"] if runs else [])
+    assert out["open"].direct_calls == []
 
 
 @pytest.mark.parametrize(
@@ -650,14 +751,18 @@ def test_earliest_line_wins_over_match_kind_order(tmp_path):
     )
 
 
-def test_matches_on_one_line_prefer_direct_call(tmp_path):
-    body = IMPORTS + 'def test_tie():\n    assert main(["open"]) == handle_open(None)\n'
+def test_a_test_that_runs_the_program_and_calls_the_handler_is_e2e(tmp_path):
+    body = (
+        IMPORTS
+        + 'def test_tie():\n    handle_open(None)\n    assert main(["open"]) == handle_open(None)\n'
+    )
     out, _ = listing(snapshot(tmp_path, {"tests/test_t.py": body}), "open")
     (record,) = out["open"].e2e
     assert (record.match, record.invocation_line) == (
-        "direct_call",
+        "cli_argv",
         line_of(body, "assert main"),
     )
+    assert out["open"].direct_calls == []
 
 
 def test_one_test_appears_on_two_paths(tmp_path):
@@ -677,7 +782,7 @@ def test_records_are_sorted_by_file_line_and_node_id(tmp_path):
         {"tests/b/test_b.py": many, "tests/a/test_a.py": one, "tests/test_c.py": one},
     )
     out, _ = listing(root, "open")
-    assert [(t.file, t.line, t.node_id) for t in out["open"].e2e] == [
+    assert [(t.file, t.line, t.node_id) for t in out["open"].direct_calls] == [
         ("tests/a/test_a.py", 4, "tests/a/test_a.py::test_a"),
         (
             "tests/b/test_b.py",
@@ -781,7 +886,7 @@ def test_a_syntax_error_file_is_skipped_and_the_rest_still_listed(tmp_path):
         },
     )
     out, skips = listing(root, "open")
-    assert ids(out["open"]) == ["tests/test_ok.py::test_ok"]
+    assert direct_ids(out["open"]) == ["tests/test_ok.py::test_ok"]
     assert [s.model_dump() for s in skips] == [
         {"file": "tests/test_broken.py", "reason": "syntax_error"}
     ]
@@ -823,7 +928,7 @@ def test_listing_never_imports_runs_or_spawns_snapshot_code(tmp_path, monkeypatc
     monkeypatch.setattr(subprocess, "Popen", refuse)
     monkeypatch.setattr(os, "system", refuse)
     out, _ = listing(root, "open")
-    assert ids(out["open"]) == ["tests/test_side_effects.py::test_x"]
+    assert direct_ids(out["open"]) == ["tests/test_side_effects.py::test_x"]
     assert not marker.exists()
 
 
@@ -914,11 +1019,11 @@ def test_match_invocations_gives_the_records_list_e2e_tests_publishes(tmp_path):
     matched = lib("match_invocations")(index, entry, root=root)
     out, _ = listing(root, "open")
     assert [t.model_dump() for t in matched] == [
-        t.model_dump() for t in out["open"].e2e
+        t.model_dump() for t in [*out["open"].e2e, *out["open"].direct_calls]
     ]
-    assert [t.node_id for t in matched] == [
-        "tests/test_m.py::test_a",
-        "tests/test_m.py::test_b",
+    assert [(t.node_id, t.match) for t in matched] == [
+        ("tests/test_m.py::test_a", "cli_argv"),
+        ("tests/test_m.py::test_b", "direct_call"),
     ]
 
 

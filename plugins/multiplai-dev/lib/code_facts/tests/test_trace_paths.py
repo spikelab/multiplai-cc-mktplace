@@ -71,7 +71,7 @@ def test_argparse_cli_maps_to_a_written_document_whose_hops_reread(tmp_path):
     for p in doc["paths"]:
         assert (p["stops_at"], p["break_reason"]) == (None, None)
         assert p["changed_lines_covered"] == []
-        assert p["tests"] == {"e2e": [], "mocks_hop_2": []}
+        assert p["tests"] == {"e2e": [], "mocks_hop_2": [], "direct_calls": []}
         assert [h["symbol_called"] for h in p["hops"]] == [
             f"cmd_{p['entry']['name']}",
             f"step1_{p['entry']['name']}",

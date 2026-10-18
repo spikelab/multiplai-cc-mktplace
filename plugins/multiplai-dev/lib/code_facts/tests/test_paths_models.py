@@ -16,6 +16,7 @@ NEW_MODELS = [
     "PathHop",
     "E2ETest",
     "MockedE2ETest",
+    "DirectCallTest",
     "E2EListing",
     "TracedPath",
     "PathDrop",
@@ -79,7 +80,8 @@ FIELD_ORDER = {
         "patch_file",
         "patch_line",
     ],
-    "E2EListing": ["e2e", "mocks_hop_2"],
+    "DirectCallTest": ["node_id", "file", "line", "match", "invocation_line"],
+    "E2EListing": ["e2e", "mocks_hop_2", "direct_calls"],
     "PathDrop": ["stage", "reason", "detail", "entry"],
     "PathDiagnostic": ["path", "line", "reason", "detail"],
     "ListingSkip": ["file", "reason"],
@@ -225,6 +227,14 @@ def test_same_test_id_in_both_listings_is_rejected(full_paths_doc):
     tests = copy.deepcopy(full_paths_doc["paths"][0]["tests"])
     tests["mocks_hop_2"][0]["node_id"] = tests["e2e"][0]["node_id"]
     with pytest.raises(ValidationError):
+        paths_name("E2EListing").model_validate(tests)
+
+
+@pytest.mark.parametrize("other", ["e2e", "mocks_hop_2"])
+def test_a_direct_call_test_id_in_another_listing_is_rejected(full_paths_doc, other):
+    tests = copy.deepcopy(full_paths_doc["paths"][0]["tests"])
+    tests["direct_calls"][0]["node_id"] = tests[other][0]["node_id"]
+    with pytest.raises(ValidationError, match="direct_calls"):
         paths_name("E2EListing").model_validate(tests)
 
 
