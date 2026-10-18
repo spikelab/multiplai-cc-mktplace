@@ -253,6 +253,50 @@ def _snapshot_test_files(config: BuildConfig, block: BlockInfo) -> dict[str, str
     return snapshot
 
 
+# What the Claude CLI's error says when it stops an agent at its turn cap.
+TURN_LIMIT_ERROR = "Reached maximum number of turns"
+
+
+def _hit_turn_limit(result) -> bool:
+    return not result.success and not result.timed_out and TURN_LIMIT_ERROR in (result.error or "")
+
+
+def _uncommitted_test_files(config: BuildConfig) -> list[str] | None:
+    """Project-relative paths of the test files changed since HEAD or not yet
+    tracked, that are on disk. None when git could not be asked.
+
+    `_list_block_test_files` diffs tracked files only, so it misses the new
+    test files an agent wrote and never committed."""
+    # buildme's own files and the specs are never the agent's tests, even
+    # under a change named `test`.
+    pathspec = ["--", ".", *git_ops.BOOKKEEPING_EXCLUDES]
+    try:
+        pathspec.append(f":(exclude){config.specs_dir.resolve().relative_to(config.project_dir.resolve()).as_posix()}")
+    except ValueError:
+        pass
+    names: set[str] = set()
+    for argv in (["git", "diff", "--name-only", "--relative", "HEAD"],
+                 ["git", "ls-files", "--others", "--exclude-standard"]):
+        try:
+            proc = subprocess.run([*argv, *pathspec], cwd=str(config.project_dir),
+                                  capture_output=True, text=True, timeout=60)
+        except Exception as e:
+            log.warning("Could not list uncommitted test files: %s", e)
+            return None
+        if proc.returncode != 0:
+            log.warning("Could not list uncommitted test files: %s", proc.stderr.strip())
+            return None
+        names |= {n.strip() for n in proc.stdout.splitlines() if n.strip()}
+    return sorted(n for n in names if _TEST_PATH_RE.search(n) and (config.project_dir / n).is_file())
+
+
+def _unreported_tests(block: BlockInfo) -> str:
+    """What the implementer is given as the failing tests when the test writer
+    left no report: the RED gate's run of them."""
+    return ("The test writer stopped at the turn cap before it reported. Its tests are committed, "
+            f"and this is how they failed in the RED gate:\n{block.red_evidence}")
+
+
 def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
     """Capture everything the block changed: baseline commit → working tree.
 
@@ -1150,7 +1194,10 @@ async def run_block_tdd(
         cwd=cwd,
     )
 
-    if not test_result.success:
+    # An agent stopped at its turn cap may have finished its tests: the files
+    # on disk go to the quality and RED gates, which decide.
+    kept = _uncommitted_test_files(config) if _hit_turn_limit(test_result) else None
+    if not test_result.success and not kept:
         # agent_call degrades a timeout to a failed result (timed_out=True)
         # rather than raising — propagate that so the orchestrator returns
         # EXIT_AGENT_TIMEOUT instead of a generic build failure.
@@ -1163,23 +1210,29 @@ async def run_block_tdd(
         _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
-    # The agent's own STATUS slot: NEEDS_CONTEXT/BLOCKED is it saying the work
-    # was not doable as specified — stop the block, surface its reason.
-    status = agent_status_gate(test_result.output, "TestWriter")
-    if not status.passed:
-        log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=agent_status status=%s",
-                  block.number, block.name, status.metadata.get("status"))
-        progress.log_agent("TestWriter", block.name, str(status.metadata.get("status")))
-        progress.log_diagnosis(block.name, status.reason)
-        _mark_block(state, block_idx, BlockStatus.FAILED, config)
-        return False
+    if kept:
+        log.warning("WARN block=%d phase=TEST_WRITE reason=turn_limit kept_files=%d", block.number, len(kept))
+        progress.log_agent("TestWriter", block.name,
+                           f"ran out of turns — its {len(kept)} test file(s) go to the quality and RED gates")
+        report = ("SURPRISES: The test writer ran out of turns and did not report; its test files "
+                  f"({', '.join(kept)}) went to the quality and RED gates.\nSPEC_IMPACT: none")
+    else:
+        # The agent's own STATUS slot: NEEDS_CONTEXT/BLOCKED is it saying the work
+        # was not doable as specified — stop the block, surface its reason.
+        status = agent_status_gate(test_result.output, "TestWriter")
+        if not status.passed:
+            log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=agent_status status=%s",
+                      block.number, block.name, status.metadata.get("status"))
+            progress.log_agent("TestWriter", block.name, str(status.metadata.get("status")))
+            progress.log_diagnosis(block.name, status.reason)
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
+            return False
 
-    log.info("DONE block=%d name=%s phase=TEST_WRITE", block.number, block.name)
-    progress.log_agent("TestWriter", block.name, "COMPLETE")
+        log.info("DONE block=%d name=%s phase=TEST_WRITE", block.number, block.name)
+        progress.log_agent("TestWriter", block.name, "COMPLETE")
+        report = test_result.output
 
-    if not _record_implementation_note(
-        block, config, state, progress, "test_writer", test_result.output,
-    ):
+    if not _record_implementation_note(block, config, state, progress, "test_writer", report):
         _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
@@ -1203,6 +1256,7 @@ async def run_block_tdd(
     red_ok = await _enforce_red_gate(block, config, state, progress, specs, context, block_idx)
     if not red_ok:
         return False
+    failing_tests = _unreported_tests(block) if kept else test_result.output
 
     # --- Phase B: Implement ---
     log.info("START block=%d name=%s phase=IMPLEMENT", block.number, block.name)
@@ -1214,7 +1268,7 @@ async def run_block_tdd(
     impl_result = await run_implementer(
         block_name=block.name,
         block_description=block.description,
-        failing_tests=test_result.output,
+        failing_tests=failing_tests,
         context_bundle=impl_context,
         test_command=_block_agent_test_command(config, block),
         prompt_style=config.implementer_prompt_style,
