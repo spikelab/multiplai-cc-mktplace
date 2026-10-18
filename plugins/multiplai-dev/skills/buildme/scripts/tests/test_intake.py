@@ -8,6 +8,7 @@ as test_git_ops), so "committed on the build branch" is checked with
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -1240,7 +1241,16 @@ class TestFailedBuildRetry:
     async def _stop_in_interview(self, repo: Path) -> BuildState:
         """The same command, stopped by an exception in the interview: exit 1
         from the generic handler, the pointer left AT BOOTSTRAP, never FAILED
-        (a signal, or a self-interview stopped part way, leaves the same)."""
+        (a signal, or a self-interview stopped part way, leaves the same).
+
+        A re-run whose checkpoint holds a finished interview skips it
+        (`SKIP phase=INTERVIEW reason=interview-on-disk`), so an earlier
+        build's saved summary is emptied first: the interview then runs again,
+        as for one stopped before it saved."""
+        for path in (Path(os.environ["WORKSPACE"]) / ".worktrees").glob("*/specs/changes/csv/.build-state.json"):
+            earlier = BuildState.load(path)
+            earlier.interview_summary = None
+            earlier.checkpoint(path)
         config = _config(repo, "csv")
         with patch("build_pipeline.intake.run_interview_phase",
                    AsyncMock(side_effect=RuntimeError("stopped"))):
