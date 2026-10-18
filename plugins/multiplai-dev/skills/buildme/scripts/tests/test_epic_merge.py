@@ -821,6 +821,46 @@ def test_a_version_value_must_be_the_next_after_main_raising_the_child_s_part(tm
             assert s.beyond({"plugin.json": plugin(wrong)}) == ["plugin.json"], (main, wrong)
 
 
+def test_a_version_value_with_a_lowered_or_a_shorter_version(tmp_path):
+    """40.3, `_next` (finding 69b7b0329b): a child that lowered its version
+    has no version after main's, so any value is named. Versions with
+    different numbers of parts are padded with 0: base 1.0, child 1.1, main
+    1.0.1 gives 1.1.0; base 1.0, child 1.0.1, main 1.1 gives 1.1.1."""
+    s = Sides(tmp_path / "lowered", {"plugin.json": plugin("0.2.0")}, {"plugin.json": plugin("0.1.0")},
+              {"plugin.json": plugin("0.2.1")})
+    assert s.plan() == merge.Plan(["plugin.json"], [])
+    for value in ("0.1.0", "0.2.1", "0.2.2", "0.3.0"):
+        assert s.beyond({"plugin.json": plugin(value)}) == ["plugin.json"], value
+    for base, ours, main, want in (("1.0", "1.1", "1.0.1", "1.1.0"), ("1.0", "1.0.1", "1.1", "1.1.1")):
+        s = Sides(tmp_path / ours, {"plugin.json": plugin(base)}, {"plugin.json": plugin(ours)},
+                  {"plugin.json": plugin(main)})
+        assert s.beyond({"plugin.json": plugin(want)}) == [], (ours, want)
+        for wrong in {ours, main, "1.2"} - {want}:
+            assert s.beyond({"plugin.json": plugin(wrong)}) == ["plugin.json"], (ours, wrong)
+
+
+def test_a_version_in_each_package_table_is_the_package_s_own(tmp_path):
+    """40.3, `_PACKAGE_TABLES` (finding a586457d69): a version conflict under
+    Cargo's `[package]` or `[workspace.package]`, `[tool.poetry]` or
+    setup.cfg's `[metadata]` goes to the agent, which must write the next
+    version after main's there; the same field under `[dependencies]` is
+    refused."""
+    files = {"Cargo.toml": ("package", '"{}"'), "a/Cargo.toml": ("workspace.package", '"{}"'),
+             "pyproject.toml": ("tool.poetry", '"{}"'), "setup.cfg": ("metadata", "{}")}
+    for name, (table, value) in files.items():
+        def text(v: str, table: str = table) -> str:
+            return f'[{table}]\nname = "x"\nversion = {value.format(v)}\n'
+
+        s = Sides(tmp_path / name.replace("/", "-"), {name: text("0.1.0")}, {name: text("0.2.0")},
+                  {name: text("0.1.1")})
+        assert s.plan() == merge.Plan([name], []), name
+        assert s.beyond({name: text("0.2.0")}) == [], name
+        assert s.beyond({name: text("0.1.1")}) == [name], name
+        s = Sides(tmp_path / f"dep-{name.replace('/', '-')}", {name: text("0.1.0", "dependencies")},
+                  {name: text("0.2.0", "dependencies")}, {name: text("0.1.1", "dependencies")})
+        assert s.plan() == merge.Plan([], [name]), name
+
+
 def test_a_version_file_both_sides_added_and_a_lockfile_both_deleted(tmp_path):
     """A version file both sides added at different versions has no version
     after main's to write: any value is named (finding 890669a415). A
@@ -909,6 +949,26 @@ def test_a_changelog_takes_only_its_own_package_s_new_version(tmp_path):
     assert s.beyond(good) == []
     assert s.beyond({**good, "b/CHANGELOG.md": log("0.66.0:Child", "0.64.1:Main", "0.64.0:First")}) \
         == ["b/CHANGELOG.md"]
+
+
+def test_a_changelog_only_the_child_changed_is_given_when_its_entry_names_a_raised_version(tmp_path):
+    """40.3 (finding 54632ff87f): base 0.64.0, both sides at 0.65.0, and only
+    the child changed the CHANGELOG. The resolution writes 0.66.0, so the
+    child's entry must move from 0.65.0, main's release, to 0.66.0: the plan
+    gives the agent that CHANGELOG, and one left under 0.65.0 is named. A
+    child-only CHANGELOG whose added lines name no version the child raised
+    is not given."""
+    base = {"plugin.json": plugin("0.64.0"), "CHANGELOG.md": changelog(("0.64.0", "First."))}
+    ours = {"plugin.json": plugin("0.65.0"), "CHANGELOG.md": changelog(("0.65.0", "Child."), ("0.64.0", "First."))}
+    theirs = {"plugin.json": plugin("0.65.0"), "main.py": ""}
+    s = Sides(tmp_path / "named", base, ours, theirs)
+    assert s.plan() == merge.Plan(["plugin.json", "CHANGELOG.md"], [])
+    assert s.beyond({"plugin.json": plugin("0.66.0"), "main.py": ""}) == ["CHANGELOG.md"]
+    moved = changelog(("0.66.0", "Child."), ("0.64.0", "First."))
+    assert s.beyond({"plugin.json": plugin("0.66.0"), "CHANGELOG.md": moved, "main.py": ""}) == []
+    other = {**ours, "CHANGELOG.md": changelog(("0.64.0", "First."), ("0.63.0", "Older, fixed in 0.63.1."))}
+    s = Sides(tmp_path / "unnamed", base, other, theirs)
+    assert s.plan() == merge.Plan(["plugin.json"], [])
 
 
 def _uv(project: str, req: str, digest: str) -> str:
@@ -1022,13 +1082,22 @@ def _resolved(digest: str, *pins: tuple[str, str, str]) -> str:
          "state": {"revision": r * 40, "version": v}} for n, v, r in pins], "version": 2}, indent=2) + "\n"
 
 
+def _composer(digest: str, *pins: tuple[str, str, str]) -> str:
+    return json.dumps({"content-hash": digest, "packages": [
+        {"name": f"v/{n}", "version": v, "dist": {"type": "zip", "url": f"https://c/{n}.zip", "shasum": h * 40}}
+        for n, v, h in pins], "packages-dev": []}, indent=4) + "\n"
+
+
 def test_a_lockfile_package_is_one_side_s_entry_for_that_same_name(tmp_path):
-    """40.3, 'lockfiles (regenerate)' (finding f87b11faac): the child adds c,
-    main adds d. A regenerated lock (each manifest hash a new hex digest)
-    passes. One that files d's whole entry under c's name (package-lock.json's
-    `node_modules/c`, Pipfile.lock's `default.c`), or pairs c's version with
-    d's revision (Package.resolved, which pins by `revision`), is named."""
+    """40.3, 'lockfiles (regenerate)' (findings f87b11faac, 9817c93283): the
+    child adds c, main adds d. A regenerated lock (each manifest hash a new
+    hex digest) passes. One that files d's whole entry under c's name
+    (package-lock.json's `node_modules/c`, Pipfile.lock's `default.c`), pairs
+    c's version with d's revision (Package.resolved, which pins by
+    `revision`) or d's shasum (composer.lock), or holds a manifest hash that
+    is not one, is named."""
     h = {k: k * 64 for k in "0123"}
+    a, c, d = ("a", "1.0.0", "a"), ("c", "1.1.0", "c"), ("d", "1.2.0", "d")
     npm = json.loads(_npm("a", "c", "d"))
     npm["packages"]["node_modules/c"] = npm["packages"]["node_modules/d"]
     resolved = json.loads(_resolved(h["3"], ("a", "1.0.0", "a"), ("c", "1.1.0", "c"), ("d", "1.2.0", "d")))
@@ -1048,7 +1117,10 @@ def test_a_lockfile_package_is_one_side_s_entry_for_that_same_name(tmp_path):
                                   _resolved(h["3"], ("a", "1.0.0", "a"), ("c", "1.1.0", "c"), ("d", "1.2.0", "d")),
                                   [json.dumps(resolved, indent=2) + "\n", json.dumps(whole, indent=2) + "\n",
                                    _resolved("not a hash", ("a", "1.0.0", "a"), ("c", "1.1.0", "c"),
-                                             ("d", "1.2.0", "d"))])}
+                                             ("d", "1.2.0", "d"))]),
+             "composer.lock": (_composer(h["0"], a), _composer(h["1"], a, c), _composer(h["2"], a, d),
+                               _composer(h["3"], a, c, d),
+                               [_composer(h["3"], a, ("c", "1.1.0", "d"), d), _composer("not a hash", a, c, d)])}
     for name, (base, ours, theirs, good, bad) in cases.items():
         s = Sides(tmp_path / name, {name: base}, {name: ours}, {name: theirs})
         assert s.plan() == merge.Plan([name], []), name

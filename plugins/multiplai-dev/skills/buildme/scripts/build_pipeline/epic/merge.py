@@ -151,7 +151,8 @@ class Plan(NamedTuple):
     """What merging *second* into *first* leaves the merge step (item 40.3)."""
     files: list[str]          # what the merge agent resolves, in this order: conflicted files it may resolve;
     #                           version files both sides raised, which git merges cleanly when both wrote the
-    #                           same version; with those, the CHANGELOGs and lockfiles both sides changed
+    #                           same version; with those, the CHANGELOGs and lockfiles both sides changed and
+    #                           each CHANGELOG only *first* changed whose added lines name a version it raised
     refused: list[str]        # conflicted files it may not resolve
 
 
@@ -201,6 +202,12 @@ def _merge(w: Path, first: str, second: str) -> _Merge | None:
     raised = [p for p in both_changed if p not in refused and not _special(p)
               and (s := side(p)) is not None and _raised(p, *s)]
     extra = [p for p in both_changed if raised and _special(p) and p not in refused and side(p) is not None]
+    # The child's raised versions: a CHANGELOG only the child changed whose added lines name one must move to the
+    # version the agent writes (finding 54632ff87f).
+    mine = {v for p in raised for v in _normal(p, side(p)[1])[1].values()} - \
+        {v for p in raised for v in _normal(p, side(p)[0])[1].values()}
+    extra += [p for p in ours if p not in both and _is_changelog(p) and (s := side(p)) is not None
+              and any(v in mine for x in _added(s[0], s[1]) for v in _VERSION_TEXT.findall(x))]
     files = list(dict.fromkeys([*(p for p in conflicted if p not in refused), *raised, *extra]))
     return _Merge(tree.strip(), conflicted, raised, Plan(files, refused), {p: side(p) for p in files})
 
