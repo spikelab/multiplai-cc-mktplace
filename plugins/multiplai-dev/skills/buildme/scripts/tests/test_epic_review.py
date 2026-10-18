@@ -725,6 +725,54 @@ def test_a_reused_review_is_read_from_its_kept_round_once_a_later_run_moved_it(t
     assert r["reused_pipeline_run"] == {"target_dir": str(e.target()), "round": "01"}
 
 
+def _no_uv(monkeypatch) -> None:
+    """The review skill's commands start a binary that is not on PATH, as `uv` is when not installed."""
+    monkeypatch.setattr(review, "_skill", lambda *args: ["buildme-test-no-such-uv", "run", *args])
+
+
+def test_a_review_that_cannot_start_leaves_the_child_unknown_and_the_next_run_reviews_it(tmp_path, monkeypatch):
+    """`uv` is not on PATH, so no review can start: each record gets a result
+    (no exit code, not interrupted), each child is `unknown`, and the run
+    ends with exit 1 instead of an error. Once `uv` is there, the next run
+    reviews them."""
+    e = Epic(tmp_path, monkeypatch)
+    with monkeypatch.context() as m:
+        _no_uv(m)
+        assert e.run() == 1
+    assert e.child_status("b")["status"] == "unknown"
+    st = e.child_status("a")
+    assert st["status"] == "unknown" and st["reason"].startswith("its review could not start: ")
+    assert "buildme-test-no-such-uv" in st["reason"]
+    [a] = e.reviews("a")
+    assert (a.result["exit_code"], a.result["interrupted"]) == (None, False) and "parked" not in a.result
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+    assert [x.result["exit_code"] for x in e.reviews("a")] == [None, 0]
+
+
+def test_a_post_that_cannot_start_leaves_the_child_unknown_and_the_next_run_posts(tmp_path, monkeypatch):
+    """A reused review left a blocker, and `uv` is not on PATH, so its `post`
+    cannot start: the post's record gets a result, the child is `unknown`, no
+    fixer runs and the run exits 1 (b's review cannot start either). The next
+    run posts."""
+    e = Epic(tmp_path, monkeypatch)
+    e.target().mkdir(parents=True)
+    (e.target() / "findings.json").write_text(json.dumps({"mode": None, "findings": [high()]}))
+    e.add_ledger({"event": "finished", "slug": f"o-r--pr-{N}", "pr": N, "target_dir": str(e.target()),
+                  "head_sha": e.head(), "base_sha": "c" * 40, "round": "01", "stopped": None,
+                  "run": {"cost_usd": 2.0}})
+    with monkeypatch.context() as m:
+        _no_uv(m)
+        assert e.run() == 1
+    st = e.child_status("a")
+    assert st["status"] == "unknown" and st["reason"].startswith("its post could not start: ")
+    assert e.child_status("b")["reason"].startswith("its review could not start: ")
+    [post] = [a for a in records.attempts(e.dir) if a.child == "a" and a.kind == "post"]
+    assert (post.result["exit_code"], post.result["interrupted"]) == (None, False)
+    assert e.fakes.fix_launches() == [] and e.fakes.post_launches() == []
+    e.run()
+    assert len(e.fakes.post_launches()) == 1
+
+
 def test_a_review_alive_after_the_stop_wait_keeps_no_result(tmp_path, monkeypatch):
     """Ctrl-C, and the review this run started ignores it past STOP_WAIT: its
     record keeps no result, so the next run asks it again."""

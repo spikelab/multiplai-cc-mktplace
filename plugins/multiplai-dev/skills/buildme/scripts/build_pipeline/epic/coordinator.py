@@ -104,6 +104,11 @@ class ReadFailed(Exception):
     """A `git`, `gh` or `ps` read failed, so what it would have said is not known."""
 
 
+class StartFailed(Exception):
+    """A review step's process could not start (`uv` not on PATH): its record
+    has its result, and the child is `unknown` until a run starts it."""
+
+
 class Clock:
     """The one sleep-and-clock seam: every wait the coordinator makes."""
 
@@ -766,10 +771,15 @@ class Coordinator:
     async def _run_review(self, c: Child, kind: str, argv: list[str], head: str) -> tuple[int, str]:
         """Run one `review` or `resume` to its end, as a pair of records; its
         exit code and output. The process is in its own group with its output
-        in the attempt's log, so it outlives a killed coordinator (C.S2)."""
+        in the attempt's log, so it outlives a killed coordinator (C.S2).
+        Raises StartFailed when it cannot start."""
         c.rattempt = records.start(self.epic_dir, kind, c.id, argv, head_sha=head, pr_round=c.pr_round)
         self._save()
-        c.rproc = _spawn_review(argv, c.rattempt.log, self._worktree(c))
+        try:
+            c.rproc = _spawn_review(argv, c.rattempt.log, self._worktree(c))
+        except OSError as e:
+            records.finish(c.rattempt, None, interrupted=False)
+            raise StartFailed(f"its {kind} could not start: {e}") from None
         while c.rproc.poll() is None:
             await CLOCK.sleep(POLL)
         code, c.rproc = c.rproc.returncode, None
@@ -936,6 +946,9 @@ class Coordinator:
                 c.status, c.reason = "parked", why
                 log.warning("EPIC child %s: parked: %s", c.id, why)
                 return
+        except StartFailed as e:      # not the PR's fault: the next run starts it again
+            c.status, c.reason = "unknown", str(e)
+            log.warning("EPIC child %s: %s", c.id, c.reason)
         finally:
             if c.rproc is None:
                 c.rattempt = None
@@ -1093,7 +1106,13 @@ class Coordinator:
             records.finish(attempt, None, interrupted=False, extra={"parked": why})
             self._park(c, why)
             return False
-        code, out = await self._run_step(c, attempt, self._child_project(c))
+        try:
+            code, out = await self._run_step(c, attempt, self._child_project(c))
+        except OSError as e:          # it could not start (`uv` not on PATH): the next run posts again
+            records.finish(attempt, None, interrupted=False)
+            c.status, c.reason = "unknown", f"its post could not start: {e}"
+            log.warning("EPIC child %s: %s", c.id, c.reason)
+            return False
         if code == 0:
             records.finish(attempt, code, interrupted=False)
             return True
