@@ -634,6 +634,26 @@ class TestNarrowLoadsTheWholeRunsConfig:
         assert narrow_test_command("pytest -q", repo, base) == \
             "pytest -q packages/a/tests/test_mod.py"
 
+    def test_a_nested_pyproject_with_only_a_root_pyproject_falls_back(self, repo):
+        # No pytest settings anywhere: pytest takes the first pyproject.toml
+        # from the paths up as rootdir, which is packages/a's, not the root's.
+        (repo / "pyproject.toml").write_text("[project]\nname = 'root'\n")
+        (repo / "packages" / "a" / "pyproject.toml").write_text("[project]\nname = 'a'\n")
+        base = _repo(repo)
+        self._block(repo)
+        assert narrow_test_command("pytest -q", repo, base) == "pytest -q"
+
+    @pytest.mark.parametrize("name,text", [
+        ("pytest.ini", "[pytest\n"),
+        ("pytest.toml", "[pytest\n"),
+    ])
+    def test_an_unreadable_nested_config_falls_back(self, repo, name, text):
+        (repo / "pytest.ini").write_text("[pytest]\n")
+        (repo / "packages" / "a" / name).write_text(text)
+        base = _repo(repo)
+        self._block(repo)
+        assert narrow_test_command("pytest -q", repo, base) == "pytest -q"
+
     def test_no_config_anywhere_still_narrows(self, repo):
         base = _repo(repo)
         self._block(repo)
