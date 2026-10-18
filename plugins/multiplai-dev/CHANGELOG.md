@@ -25,6 +25,13 @@ time, not derived from a tag.
 - buildme: a block that says "no new code changes to the core" (a change
   scoped to another part of the code) is no longer flagged as a block that
   adds no behaviour, so it no longer costs a tasks.md rewrite.
+- buildme: a block of test steps such as "Update `tests/test_words.py` with
+  tab cases" or "Add a case for an empty string" is flagged again as a block
+  that adds no behaviour, and gets its tasks.md rewrite before the TDD RED
+  gate fails it. A test-first block whose code step ends "so the tests pass"
+  is no longer flagged.
+- buildme: the README and SKILL.md now give the right number of tasks.md
+  rewrites the plan review can cause.
 - buildme: the plan review and the tasks audit now rate a block that adds no
   behaviour from their severity scale, as every other finding, instead of
   being told it is critical. The tasks prompt now says where criteria that
