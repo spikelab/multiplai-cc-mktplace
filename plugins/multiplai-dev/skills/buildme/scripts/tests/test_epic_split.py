@@ -132,6 +132,27 @@ class TestSlug:
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         assert store.epic_dir_for(repo, "e") == data / "buildme" / "epics" / "plain--e"
 
+    def test_its_git_calls_go_through_git_ops_run_with_its_timeout(self, tmp_path, monkeypatch):
+        """The coordinator reads every child's slug and checkout with these
+        while it runs; a bare `subprocess.run` with no timeout could hang it
+        (#332, 6314d19ce3). `git_ops._run` gives each call `_GIT_TIMEOUT`."""
+        from build_pipeline import git_ops
+
+        repo = tmp_path / "plain"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "remote", "add", "origin", "git@github.com:o/r.git"], cwd=repo, check=True)
+        real, seen = git_ops._run, []
+
+        def run(argv, cwd=None, **kw):
+            seen.append(argv[:3])
+            return real(argv, cwd=cwd, **kw)
+
+        monkeypatch.setattr(git_ops, "_run", run)
+        assert store.slug_repo_name(repo) == "o-r"
+        assert store.checkout_root(repo) is not None
+        assert seen == [["git", "remote", "get-url"], ["git", "rev-parse", "--show-toplevel"]]
+
 
 # --- item 10: the behaviour ----------------------------------------------------
 
