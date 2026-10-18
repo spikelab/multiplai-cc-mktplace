@@ -955,9 +955,10 @@ def parse_test_change_claims(report: str) -> list[str]:
     fence. So pass one agent's report at a time: in two reports joined, a bare
     marker at the end of the first would take the second's first line.
     An echo of the prompt's template (`<reason>`) and an empty answer
-    (`none`, `tbd`, `no` or any other `_EMPTY_SLOT_VALUES` entry, also with a
-    trailing parenthesis or full stop, as in `None (no test files modified)`)
-    declare nothing.
+    (an `_EMPTY_SLOT_VALUES` entry such as `none` or `tbd`, or `no`, also with
+    a trailing parenthesis after it or a full stop, as in
+    `None (no test files modified)`) declare nothing. A reason written wholly
+    in parentheses is not an empty answer.
     """
     lines = (report or "").splitlines()
     claims = []
@@ -974,7 +975,7 @@ def parse_test_change_claims(report: str) -> list[str]:
                 reason = re.sub(r"^" + _LIST_PREFIX, "", following).strip()
         if reason.startswith("<") and reason.endswith(">"):
             continue
-        bare = re.sub(r"\s*\(.*\)$", "", reason).rstrip(" .").lower()
+        bare = re.sub(r"(?<=\S)\s*\(.*\)$", "", reason).rstrip(" .").lower()
         if bare in _EMPTY_SLOT_VALUES or bare == "no":
             continue
         claims.append(reason)
