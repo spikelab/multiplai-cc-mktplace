@@ -1728,6 +1728,15 @@ class TestScanNoBehaviourBlocks:
         "\n- [ ] 2.2 Change nothing else\n\n",
         # An "add" step whose test file has no standalone test word.
         "## 2. Tabs\n\n- [ ] 2.1 Add `__tests__/words.js` covering tabs\n\n",
+        # ... named after the first few words of the step.
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Add coverage of tabs and spaces "
+        "to `__tests__/words.js`\n\n",
+        # A step whose verb changes code, and whose object is a test, named
+        # with no file.
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Cover tabs in `tests/test_words.py`"
+        "\n- [ ] 2.2 Update the fixtures for tabs\n\n",
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Cover tabs in `tests/test_words.py`"
+        "\n- [ ] 2.2 Fix the flaky test\n\n",
     ])
     def test_a_test_block_whose_steps_write_no_code_is_flagged(
         self, tmp_path, block,
@@ -1781,6 +1790,10 @@ class TestScanNoBehaviourBlocks:
         "with no code change to the core.\n\n",
         "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
         "with no new code changes to the core.\n\n",
+        "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
+        "with no new code needed in the core.\n\n",
+        "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
+        "with no production code required outside the module.\n\n",
         # Test-first leaf blocks that name only their test file: the tests
         # come first, and a later step writes the code.
         "## 2. Webhook signatures\n\n- [ ] 2.1 Write failing tests in "
@@ -1801,6 +1814,16 @@ class TestScanNoBehaviourBlocks:
         "## 2. Empty input\n\n- [ ] 2.1 Write failing tests in "
         "`tests/test_words.py`\n- [ ] 2.2 Handle the empty-string case in "
         "`count`\n\n",
+        # The code step is to make the failing tests pass.
+        "## 2. Tab splitting\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_words.py`\n- [ ] 2.2 Make the failing tests pass\n\n",
+        "## 2. Tab splitting\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_words.py`\n- [ ] 2.2 Fix the failing tests\n\n",
+        # An "add" step whose object only starts with the word "case".
+        "## 2. Case-insensitive search\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_search.py`\n- [ ] 2.2 Add case-insensitive matching\n\n",
+        "## 2. Snake case\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_names.py`\n- [ ] 2.2 Add snake case conversion\n\n",
         # A feature whose heading opens with a test word.
         "## 2. Coverage report subcommand\n\nAdd a `report` subcommand that "
         "prints line coverage. Tests in `tests/test_cli.py`.\n\n",
