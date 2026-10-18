@@ -1167,6 +1167,40 @@ def test_a_lockfile_package_pinned_by_a_git_revision_is_one_side_s_whole(tmp_pat
     assert s.beyond({"Package.resolved": json.dumps({"pins": pins, "version": 2}, indent=2) + "\n"}) == []
 
 
+def _poetry_git(*pins: tuple[str, str, str]) -> str:
+    return "".join(f'[[package]]\nname = "{n}"\nversion = "{v}"\npython-versions = "*"\nfiles = []\n\n'
+                   f'[package.source]\ntype = "git"\nurl = "https://g/{n}"\nreference = "main"\n'
+                   f'resolved_reference = "{r * 40}"\n\n' for n, v, r in pins) \
+        + '[metadata]\nlock-version = "2.0"\ncontent-hash = "' + "0" * 64 + '"\n'
+
+
+def _resolved_v1(*pins: tuple[str, str, str]) -> str:
+    return json.dumps({"object": {"pins": [
+        {"package": n, "repositoryURL": f"https://g/{n}", "state": {"branch": None, "revision": r * 40, "version": v}}
+        for n, v, r in pins]}, "version": 1}, indent=2) + "\n"
+
+
+def test_a_poetry_git_package_and_a_version_1_package_resolved_pin_are_one_side_s_whole(tmp_path):
+    """40.3 (owed review of 5c8a5602..8165ed8a, findings cf3a1d5b0a and
+    95e5f9702a): a poetry.lock git package has no file hashes and is pinned
+    only by `[package.source] resolved_reference`; a version-1
+    Package.resolved nests its pins under `object`. The child adds c, main
+    adds d. A regenerated lock passes; c's version with d's source, or pin c
+    holding d's whole `state`, is named."""
+    a, c, d = ("a", "1.0.0", "a"), ("c", "1.1.0", "c"), ("d", "1.2.0", "d")
+    v1 = json.loads(_resolved_v1(a, c, d))
+    v1["object"]["pins"][1]["state"] = v1["object"]["pins"][2]["state"]
+    cases = {"poetry.lock": (_poetry_git(a), _poetry_git(a, c), _poetry_git(a, d), _poetry_git(a, c, d),
+                             _poetry_git(a, ("c", "1.1.0", "d"), d).replace("https://g/c", "https://g/d")),
+             "Package.resolved": (_resolved_v1(a), _resolved_v1(a, c), _resolved_v1(a, d), _resolved_v1(a, c, d),
+                                  json.dumps(v1, indent=2) + "\n")}
+    for name, (base, ours, theirs, good, bad) in cases.items():
+        s = Sides(tmp_path / name, {name: base}, {name: ours}, {name: theirs})
+        assert s.plan() == merge.Plan([name], []), name
+        assert s.beyond({name: good}) == [], name
+        assert s.beyond({name: bad}) == [name], name
+
+
 def _uv_requested(project: str, *deps: str) -> str:
     """uv.lock with the project's editable entry asking for a git dependency in
     `[package.metadata] requires-dist`, as this repository's own uv.lock does,
@@ -1247,6 +1281,29 @@ def test_the_prompt_asks_for_the_new_version_only_where_the_check_accepts_it(tmp
     assert s.plan() == merge.Plan(["m.json"], [])
     assert s.beyond({"m.json": market("0.66.0", "0.65.0"), "main.py": ""}) == []
     assert s.beyond({"m.json": market("0.66.0", "0.66.0"), "main.py": ""}) == ["m.json"]
+
+
+def test_the_prompt_leaves_a_version_both_sides_raised_that_is_not_the_package_s_own(tmp_path):
+    """40.3 (owed review of 5c8a5602..8165ed8a, finding 4991ad04ec): both
+    sides raise `[project]` and `[tool.commitizen]` alike. The check accepts
+    the new version only in the package's own field, so the prompt limits
+    the rule to it and names a dependency's or a tool's version as one to
+    leave as the merge left it."""
+    from build_pipeline.prompts.epic_merge import MERGE_PROMPT
+
+    text = " ".join(MERGE_PROMPT.split())
+    assert "The package's own version field" in text
+    assert "`[tool.commitizen]`" in text
+
+    def pyproject(own: str, tool: str) -> str:
+        return f'[project]\nname = "app"\nversion = "{own}"\n\n[tool.commitizen]\nversion = "{tool}"\n'
+
+    s = Sides(tmp_path, {"pyproject.toml": pyproject("0.64.0", "0.64.0")},
+              {"pyproject.toml": pyproject("0.65.0", "0.65.0")},
+              {"pyproject.toml": pyproject("0.65.0", "0.65.0"), "main.py": ""})
+    assert s.plan() == merge.Plan(["pyproject.toml"], [])
+    assert s.beyond({"pyproject.toml": pyproject("0.66.0", "0.65.0"), "main.py": ""}) == []
+    assert s.beyond({"pyproject.toml": pyproject("0.66.0", "0.66.0"), "main.py": ""}) == ["pyproject.toml"]
 
 
 def test_a_conflict_without_markers_is_never_the_step_s_resolution(tmp_path):
