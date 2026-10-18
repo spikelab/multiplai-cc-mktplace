@@ -1717,6 +1717,17 @@ class TestScanNoBehaviourBlocks:
         # Only its heading names a file, and that file is a test file.
         "## 2. Tab cases in `tests/test_words.py`\n\nCover tabs and runs "
         "of spaces.\n\n",
+        # A step whose verb changes code, and whose object is a test file.
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Update `tests/test_words.py` with "
+        "tab cases\n\n",
+        # An "add" step whose object is a case, with no test word.
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Cover tabs in `tests/test_words.py`"
+        "\n- [ ] 2.2 Add a case for an empty string\n\n",
+        # "Change nothing" is not a change.
+        "## 2. Tabs\n\n- [ ] 2.1 Write failing tests in `tests/test_words.py`"
+        "\n- [ ] 2.2 Change nothing else\n\n",
+        # An "add" step whose test file has no standalone test word.
+        "## 2. Tabs\n\n- [ ] 2.1 Add `__tests__/words.js` covering tabs\n\n",
     ])
     def test_a_test_block_whose_steps_write_no_code_is_flagged(
         self, tmp_path, block,
@@ -1782,6 +1793,14 @@ class TestScanNoBehaviourBlocks:
         "## 2. Tab splitting\n\n- [ ] 2.1 Write failing tests for tab "
         "splitting in `tests/test_words.py`\n- [ ] 2.2 Make count split on "
         "tabs\n\n",
+        # The code step names the tests only as its purpose.
+        "## 2. Webhook signatures\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_webhook.py`\n- [ ] 2.2 Add HMAC verification to the "
+        "upload handler so the tests pass\n\n",
+        # A code step whose object is a case of the behaviour, not a test.
+        "## 2. Empty input\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_words.py`\n- [ ] 2.2 Handle the empty-string case in "
+        "`count`\n\n",
         # A feature whose heading opens with a test word.
         "## 2. Coverage report subcommand\n\nAdd a `report` subcommand that "
         "prints line coverage. Tests in `tests/test_cli.py`.\n\n",
