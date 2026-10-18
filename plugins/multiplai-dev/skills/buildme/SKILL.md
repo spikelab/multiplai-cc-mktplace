@@ -764,7 +764,9 @@ and merges in different repositories never wait on each other. A child that
 depends on a child in another repository waits for that PR to merge. A
 checkout that is gone when a run starts, or before its child launches, parks
 that child with `repo <path> not found`, and it stays parked on later runs;
-the reviews its PR already had still count toward `epic.max_usd`.
+the reviews its PR already had still count toward `epic.max_usd`. When `git`
+times out or does not start there, nothing parks: the child is `unknown` for
+that run, and the next run asks again.
 
 **Running the children.** The approved build runs each child as its own
 `build --mode brief --change <epic>-<id> --plan-file <epic dir>/plans/<id>.md`

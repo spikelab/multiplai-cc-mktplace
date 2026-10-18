@@ -26,7 +26,9 @@ time, not derived from a tag.
   incomplete for good.
 - buildme epic: reading a child's repository slug and checkout root runs git
   with buildme's git timeout, so a hung `git` no longer stalls the
-  coordinator.
+  coordinator. A `git` that times out or does not start there leaves the
+  child `unknown` for that run instead of parking it as "not a git checkout",
+  and approval names it as a git error.
 - buildme findings: `--max-usd` no longer allows one more paid round when the
   spend equals the ceiling. Adding the run's own spend and its reviews' costs
   as floats could come out a hair under the ceiling ($0.10 + $0.70 gave

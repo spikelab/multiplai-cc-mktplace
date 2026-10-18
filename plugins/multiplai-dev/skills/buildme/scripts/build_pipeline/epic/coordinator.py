@@ -439,15 +439,23 @@ class Coordinator:
 
     def _park_missing(self, c: Child) -> bool:
         """F.S5: a child whose checkout is gone, or is no longer the top of a
-        checkout, parks, and stays parked (`repo_park`). True when it parked."""
+        checkout, parks, and stays parked (`repo_park`). True when it parked,
+        or when git could not answer (`store.GitUnreadable`): then the child is
+        `unknown` for this run."""
         if not c.repo:
             return False
-        if not c.project.is_dir():
-            c.repo_park = f"repo {c.project} not found"
-        elif store.checkout_root(c.project) is None:
-            c.repo_park = f"repo {c.project} is not a git checkout"
-        else:
-            return False
+        try:
+            if not c.project.is_dir():
+                c.repo_park = f"repo {c.project} not found"
+            elif store.checkout_root(c.project) is None:
+                c.repo_park = f"repo {c.project} is not a git checkout"
+            else:
+                return False
+        except store.GitUnreadable as e:      # not an answer: the next run asks again
+            c.status, c.reason = "unknown", f"cannot tell whether its repo is a git checkout: {e}"
+            log.warning("EPIC child %s: %s", c.id, c.reason)
+            self._save()
+            return True
         self._park(c, c.repo_park)
         self._save()
         return True
