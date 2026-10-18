@@ -971,6 +971,22 @@ def test_a_changelog_only_the_child_changed_is_given_when_its_entry_names_a_rais
     assert s.plan() == merge.Plan(["plugin.json"], [])
 
 
+def test_a_child_only_changelog_of_another_package_is_not_given(tmp_path):
+    """40.3 (PR #387 review, finding 9149e1b300): in a monorepo, both sides
+    raise a/ to 0.65.0, and only the child raises b/ to 0.65.0 with an entry
+    in b/CHANGELOG.md. The resolution writes 0.66.0 in a/ only, so b/'s
+    entry stays under 0.65.0: the plan does not give the agent b/'s
+    CHANGELOG, and a merge that leaves it as the child wrote it passes."""
+    base = {"a/plugin.json": plugin("0.64.0"), "b/plugin.json": plugin("0.64.0"),
+            "b/CHANGELOG.md": changelog(("0.64.0", "First."))}
+    ours = {"a/plugin.json": plugin("0.65.0"), "b/plugin.json": plugin("0.65.0"),
+            "b/CHANGELOG.md": changelog(("0.65.0", "Child b."), ("0.64.0", "First."))}
+    theirs = {"a/plugin.json": plugin("0.65.0"), "main.py": ""}
+    s = Sides(tmp_path, base, ours, theirs)
+    assert s.plan() == merge.Plan(["a/plugin.json"], [])
+    assert s.beyond({"a/plugin.json": plugin("0.66.0"), "main.py": ""}) == []
+
+
 def _uv(project: str, req: str, digest: str) -> str:
     return (f'version = 1\n\n[[package]]\nname = "app"\nversion = "{project}"\nsource = {{ editable = "." }}\n\n'
             f'[[package]]\nname = "req"\nversion = "{req}"\nsource = {{ registry = "https://pypi.org/simple" }}\n'
