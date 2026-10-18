@@ -618,6 +618,15 @@ def assemble_context(
         if facts:
             parts.append("\n" + facts)
 
+    # Signatures of the existing Python code the block names, read from the
+    # working tree now. The test writer calls that code; without them it spent
+    # most of its turns opening the files.
+    if role == "test_writer":
+        from .signatures import signatures_section
+        sigs = signatures_section(block, config.project_dir)
+        if sigs:
+            parts.append("\n" + sigs)
+
     # Rubric (for reviewers — include for all so agents know quality bar)
     if config.rubric_path.exists():
         parts.append(f"\n## Evaluation Rubric\n{config.rubric_path.read_text()}")

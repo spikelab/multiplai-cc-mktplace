@@ -194,6 +194,16 @@ class TestModules:
         section = signatures.signatures_section(_block("Call `helper_used_by_consumes`."), project)
         assert section == ""
 
+    def test_a_one_word_lowercase_name_or_an_attribute_adds_no_module(self, project):
+        (project / "pkg" / "words.py").write_text("def value():\n    pass\n\n\ndef path():\n    pass\n")
+        section = signatures.signatures_section(_block("Set `value` from `entry.path`."), project)
+        assert section == ""
+
+    def test_modules_named_by_path_come_before_those_found_by_name(self, project):
+        block = _block("Edit `pkg/stages/trace.py`; call `helper_used_by_consumes`.")
+        section = signatures.signatures_section(block, project)
+        assert section.index("### `pkg/stages/trace.py`") < section.index("### `pkg/other.py`")
+
     def test_files_are_read_from_the_working_tree_not_from_head(self, project):
         (project / "pkg" / "stages" / "trace.py").write_text(TRACE + "\n\ndef added_since(n: int) -> None:\n    pass\n")
         section = signatures.signatures_section(_block(), project)
