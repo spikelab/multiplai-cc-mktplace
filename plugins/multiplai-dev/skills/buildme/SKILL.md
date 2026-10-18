@@ -720,7 +720,7 @@ folds every critical/major gap back into one regeneration pass of `design.md`
 and `tasks.md` before re-auditing once, report-only — the plan review, which
 reads `tasks.md` against the rubric, the constraints and the use cases and
 regenerates `tasks.md` at most once from its findings and at most once from
-the no-behaviour scan, the
+the no-behaviour scan, each followed by at most one shape-audit rewrite, the
 prototype stage, TDD implementation (test-writer + implementer agents per block),
 integration gates, scored quality reviews, entry point verification, the
 documentation update, the respec proposal, and publishing (push + draft PR).

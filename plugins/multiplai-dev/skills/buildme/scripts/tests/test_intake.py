@@ -1337,7 +1337,7 @@ class TestFailedBuildRetry:
     async def test_an_interview_written_before_its_checkpoint_stops_the_resume(
         self, tmp_path, monkeypatch, capsys,
     ):
-        """Row R17b: the re-run stops between writing `interview.md` and its
+        """The re-run stops between writing `interview.md` and its
         INTERVIEW_DONE checkpoint, so the file is outside the tree its
         bootstrap recorded. The resume refuses it, naming the file, and keeps
         it."""

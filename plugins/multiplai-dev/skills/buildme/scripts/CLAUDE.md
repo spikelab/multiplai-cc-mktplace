@@ -307,7 +307,7 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   `plan_review_scan_regen_done`; the review's flags stay false, so a resume
   asks the model again, and the review rewrites `tasks.md` at most twice per
   build; the shape audit that runs on each of those rewrites may rewrite it
-  once more. `oversized-plan` is excluded from the regenerable categories
+  once more after each. `oversized-plan` is excluded from the regenerable categories
   on purpose: its output is a proposed cut across several tickets, and handing
   it to a rewriter would have the rewriter perform the split silently inside
   one plan, which is the opposite of what the finding asks for. This phase
