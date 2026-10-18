@@ -98,6 +98,30 @@ it when the pipeline changes what a column, mark or label means.
 broken, or a `seen`, `gate`, fate, verdict, status or label value in the
 schemas has no entry in the help.
 
+## Protocol 1b: `paths.json` (code_facts' `paths.v1`, optional)
+
+The review writes it beside `findings.json` (multiplai-dev 0.82+): the entry
+points that reach the change, each path's hops, and the e2e tests that run it.
+review-viewer defines no schema of its own for it: `server.inspect_paths()`
+validates `<review_dir>/paths.json` with `code_facts.paths.PathsResult` (the
+only import from code_facts) and accepts it only when its `commit` is exactly
+the review's full `head_sha` (no prefix, case or `base_sha` match). It is
+looked for nowhere else, and `REVIEW_FILES` does not name it. A stale or
+invalid file logs one `paths.json ignored (<status>): <path> <detail>`
+warning; an absent one logs nothing. `/api/targets/<slug>` returns the
+accepted document as `paths` (null otherwise), in the same response as the
+findings; the page's Paths tab is shown only when it is set. An accepted
+file adds each path's entry, handler and hop files to `allowed_paths()`
+(`server._path_files`; never `also_invoked_by`, test or patch files), and the
+file route passes the lines they point at (`server._path_ranges`) to
+`file_view(extra_ranges=…)`, which keeps them in view in a file over 4000
+lines. The cards come from `logic.js` (`countedFindings`, `findingsByPath`,
+`sortPaths`, `pathCardModel`, `pathTestLines`, `pathsSummary`, `hasUnlistedTests`);
+`app.js` only renders them. A finding's page lists the paths it lies on
+(`findingPathsSection`, from `resolvePathRefs`; refuted findings too, an id
+the file lacks marked `not in paths.json`); each link opens the Paths tab at
+the card `path-card-<id>` and marks it `is-target`.
+
 ## Protocol 2: the mailbox (`<dir of findings.json>/viewer/`)
 
 | File | Writer | Row |
@@ -153,7 +177,9 @@ Any failure → exit 2, every problem listed with its step id, nothing written.
 Otherwise the file is replaced atomically (0600). `GET
 /api/targets/<slug>/walkthrough` returns it (404 while absent); the page polls
 it, so a new walkthrough never restarts the server. `walkthrough status`
-prints the target's shas, what is not yet covered, the missing assessments,
+prints the target's shas, the `paths:` line (`server.paths_status_line` over
+`inspect_paths`: `accepted <N> (<file>)` followed by each path's id, entry
+name and kind, `stale <commit> (<file>)`, `invalid (<file>)` or `none`), what is not yet covered, the missing assessments,
 the `risk:` block (or `missing`), the `repo tiers:` that `.review-risk.toml`
 at the base commit sets (or why it was ignored), the measured badges and
 each commit's subject.
@@ -256,4 +282,5 @@ commit and a PR head under `refs/pull/7/head`, for target resolution;
 | `test_serve_targets.py` | review lookup (match, stale, none) and the `walkthrough:` stdout line |
 | `test_server.py` (also `serve` in a subprocess: `--share slack` reaching the page, a saved review's `review-state.json` turning GitHub on, a `repo_path` that no longer exists), `test_mailbox.py`, `test_models.py`, `test_logging.py`, `test_netinfo.py` | the server, mailbox, contracts, logs, container detection |
 | `test_checks.py` | the `checks.v1` contract, loading it beside findings (present, absent, invalid, other commits), `verifier_citations` |
+| `test_paths.py` | `paths.json` beside findings: every accept, stale and invalid case with the payload and the log, the fixture against `PathsResult`, the files and lines a path opens, the `walkthrough status` `paths:` line, the SKILL.md path guidance |
 | `logic.test.js` (via `test_logic_js.py`) | the page's pure functions, under node, and that the help dialog in `index.html` has every section a `?` opens and defines every value the schemas allow. No test loads `app.js` (there is no DOM here), so a few tests read its source to hold its call sites to the tested helpers: the unfiltered findings list, the badges, the share request |

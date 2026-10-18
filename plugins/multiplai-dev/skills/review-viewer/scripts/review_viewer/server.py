@@ -25,8 +25,10 @@ from dataclasses import dataclass, field
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Literal, NamedTuple
 from urllib.parse import parse_qs, urlparse
 
+from code_facts.paths import PathsResult
 from multiplai_core.log_utils import log_event
 from pydantic import ValidationError
 
@@ -84,6 +86,10 @@ class TargetState:
     # The review's checks.json, when one sits beside its findings.json and
     # describes the same commits; None hides the page's Checked tab.
     checks: ChecksFile | None = None
+    # The review's paths.json (code_facts' paths.v1), when one sits beside its
+    # findings.json, names the review's exact head sha and validates; None
+    # hides the page's Paths tab.
+    paths: PathsResult | None = None
     # The PR this review is of: `pr["number"]` when serve resolved a PR, else
     # the `target.pr` the review recorded in review-state.json. None: not a PR.
     pr_number: int | None = None
@@ -194,6 +200,93 @@ def checks_beside(ff: FindingsFile, review_dir: Path) -> ChecksFile | None:
                     c.base_sha[:10], c.head_sha[:10])
         return None
     return checks
+
+
+class PathsStatus(NamedTuple):
+    """What `inspect_paths` made of `<review_dir>/paths.json`. `result` is set
+    only when `status` is accepted; `detail` says why a file was not."""
+    status: Literal["accepted", "stale", "invalid", "absent"]
+    result: PathsResult | None
+    detail: str
+
+
+def inspect_paths(review_dir: Path, head_sha: str | None) -> PathsStatus:
+    """Judge `<review_dir>/paths.json`, stopping at the first failure: absent;
+    unreadable, not JSON, or no string `commit` (invalid); a `commit` that is
+    not exactly the review's full `head_sha` (stale: no prefix, case or
+    base_sha match); not paths.v1 (invalid, with the first error only)."""
+    path = review_dir / "paths.json"
+    if not path.is_file():
+        return PathsStatus("absent", None, "")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return PathsStatus("invalid", None, str(exc))
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return PathsStatus("invalid", None, f"parse failure: {exc}")
+    commit = data.get("commit") if isinstance(data, dict) else None
+    if not isinstance(commit, str):
+        return PathsStatus("invalid", None, "no commit")
+    if not head_sha or commit != head_sha:
+        return PathsStatus("stale", None, f"commit={commit} head_sha={head_sha}")
+    try:
+        result = PathsResult.model_validate(data)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        where = ".".join(str(part) for part in first["loc"]) or "(top level)"
+        return PathsStatus("invalid", None, f"{where}: {first['msg']}")
+    return PathsStatus("accepted", result, "")
+
+
+def paths_beside(review_dir: Path, head_sha: str | None) -> PathsResult | None:
+    """The accepted `<review_dir>/paths.json`, else None. A stale or invalid
+    file logs one warning; an absent one (an older review, or a tree review
+    without --paths) logs nothing. Never raises for a bad file."""
+    status, result, detail = inspect_paths(review_dir, head_sha)
+    if status in ("stale", "invalid"):
+        log.warning("paths.json ignored (%s): %s %s", status, review_dir / "paths.json", detail)
+    return result
+
+
+def paths_status_line(status: PathsStatus, path: Path) -> str:
+    """The `paths:` line of `walkthrough status`: the verdict the viewer loads
+    paths.json by, so the session's walkthrough uses the same file or none."""
+    if status.status == "accepted":
+        return f"paths: accepted {len(status.result.paths)} ({path})"
+    if status.status == "stale":
+        commit = status.detail.removeprefix("commit=").rsplit(" head_sha=", 1)[0]
+        return f"paths: stale {commit} ({path})"
+    if status.status == "invalid":
+        return f"paths: invalid ({path})"
+    return "paths: none"
+
+
+def _path_files(result: PathsResult) -> set[str]:
+    """The files a page link on a path can open: each path's entry, handler
+    (when it has one) and hop files. Not `also_invoked_by` locations, test
+    files or patch sites, which the page shows as text."""
+    files: set[str] = set()
+    for p in result.paths:
+        files.add(p.entry.location.path)
+        if p.entry.handler is not None:
+            files.add(p.entry.handler.path)
+        files.update(h.path for h in p.hops)
+    return files
+
+
+def _path_ranges(result: PathsResult, path: str) -> list[tuple[int, int]]:
+    """The lines of *path* a path's links point at (entry, handler, hops),
+    sorted, for `file_view` to keep in view in a large file."""
+    ranges: set[tuple[int, int]] = set()
+    for p in result.paths:
+        if p.entry.location.path == path:
+            ranges.add((p.entry.location.line, p.entry.location.line))
+        if p.entry.handler is not None and p.entry.handler.path == path:
+            ranges.add((p.entry.handler.line, p.entry.handler.line))
+        ranges.update((h.line_start, h.line_end) for h in p.hops if h.path == path)
+    return sorted(ranges)
 
 
 def summarise(state: TargetState) -> dict:
@@ -377,6 +470,7 @@ def make_handler(viewer: Viewer):
                         "notice": state.notice,
                         "stats": state.stats,
                         "checks": state.checks.model_dump(mode="json") if state.checks else None,
+                        "paths": state.paths.model_dump(mode="json") if state.paths is not None else None,
                     })
             if method == "POST":
                 if route == "/api/ask":
@@ -400,7 +494,8 @@ def make_handler(viewer: Viewer):
 
         def _file(self, state: TargetState, path: str) -> None:
             try:
-                view = file_view(state.findings.target, path, state.findings, state.allowed)
+                hops = _path_ranges(state.paths, path) if state.paths is not None else []
+                view = file_view(state.findings.target, path, state.findings, state.allowed, extra_ranges=hops)
             except PathNotInReview:
                 raise _Reject(404, "path is not part of this review")
             except GitError as exc:
@@ -541,10 +636,13 @@ def build_viewer(findings: list[tuple[FindingsFile, Path]], *, agent: str, sessi
         except GitError as exc:
             log.warning("cannot list the files at %s: %s", ff.target.head_sha[:12], exc)
             listed = []
-        targets[ff.target.slug] = TargetState(ff, mailbox, allowed_paths(ff.target, ff, listed),
+        paths = paths_beside(Path(box).parent, ff.target.head_sha)
+        allowed = allowed_paths(ff.target, ff, listed, extra=_path_files(paths) if paths is not None else ())
+        targets[ff.target.slug] = TargetState(ff, mailbox, allowed,
                                               pr=extra.get("pr"), notice=extra.get("notice"),
                                               stats=extra.get("stats"),
                                               checks=checks_beside(ff, Path(box).parent),
+                                              paths=paths,
                                               repo_files=listed,
                                               pr_number=pr_number_of(extra, Path(box).parent))
     return Viewer(targets=targets, token=secrets.token_urlsafe(32), agent=agent,

@@ -18,8 +18,8 @@ def fixture_data() -> dict:
 
 def test_fixture_validates():
     ff = load_findings(FIXTURE)
-    assert [f.severity for f in ff.findings] == ["HIGH", "MEDIUM", "LOW"]
-    assert [f.status for f in ff.findings] == ["confirmed", "unverifiable", "refuted"]
+    assert [f.severity for f in ff.findings] == ["HIGH", "MEDIUM", "LOW", "LOW", "MEDIUM"]
+    assert [f.status for f in ff.findings] == ["confirmed", "unverifiable", "refuted", "confirmed", "rejected"]
     assert ff.findings[0].expected_behaviour.startswith("Items without a qty")
     assert ff.findings[2].expected_behaviour is None  # refuted: nothing to expect
 
@@ -100,7 +100,7 @@ def _validate_cli(*paths) -> subprocess.CompletedProcess:
 def test_validate_cli_ok_and_broken(tmp_path):
     ok = _validate_cli(FIXTURE)
     assert ok.returncode == 0, ok.stderr
-    assert ok.stdout.startswith(f"OK {FIXTURE} (3 findings)")
+    assert ok.stdout.startswith(f"OK {FIXTURE} (5 findings)")
     broken = tmp_path / "broken.json"
     data = fixture_data()
     data["findings"][0]["citations"] = []

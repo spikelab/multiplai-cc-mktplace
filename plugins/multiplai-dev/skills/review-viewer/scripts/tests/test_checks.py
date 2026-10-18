@@ -76,7 +76,7 @@ def test_the_server_serves_checks_found_beside_findings(start_live, findings_pat
     status, detail = live.request("GET", f"/api/targets/{live.slug}")
     assert status == 200
     assert [a["stage"] for a in detail["checks"]["agents"]] == ["find", "verify"]
-    assert len(detail["findings"]["findings"]) == 3  # findings are served as before
+    assert len(detail["findings"]["findings"]) == 5  # findings are served as before
 
 
 def test_no_checks_file_still_serves(start_live):

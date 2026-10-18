@@ -8,6 +8,10 @@ dependencies = [
     # messages between the page and JSONL files the session watches.
     "multiplai-core",
     "pydantic>=2",
+    # Validates paths.json with code_facts.PathsResult, so the viewer reads
+    # exactly the paths.v1 contract the review writes. Only that model is
+    # imported; nothing here reaches code_facts' model calls.
+    "code-facts",
 ]
 
 [project.optional-dependencies]
@@ -31,3 +35,4 @@ packages = ["review_viewer"]
 # the workspace root and the single uv.lock.
 [tool.uv.sources]
 multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }
+code-facts = { path = "../../../lib/code_facts", editable = true }

@@ -630,6 +630,11 @@ def cmd_walkthrough_status(args) -> int:
           f"{len(ff.findings)} findings")
     print(f"base_sha: {t.base_sha}")
     print(f"head_sha: {t.head_sha}")
+    review_dir = box.parent
+    paths = server.inspect_paths(review_dir, t.head_sha)
+    print(server.paths_status_line(paths, review_dir / "paths.json"))
+    for p in paths.result.paths if paths.result is not None else []:
+        print(f"  {p.id} {p.entry.name} ({p.entry.kind})")
     print(f"changed files not covered ({len(uncovered)}):")
     for path in uncovered:
         print(f"  {path}")
