@@ -71,7 +71,7 @@ from .narrow_tests import agent_test_command, narrow_test_command
 from .progress import ProgressWriter
 from .prompts.implementation import REVIEW_FIX_SELF_CHECK
 from .prompts.review import FINDING_ADJUDICATION_PROMPT
-from .prompts.test_writing import TEST_QUALITY_PROMPT
+from .prompts.test_writing import DRAFTS_SECTION, TEST_QUALITY_PROMPT
 from .sdk import llm_call_structured
 from .state import BuildState, TDDState
 
@@ -251,6 +251,83 @@ def _snapshot_test_files(config: BuildConfig, block: BlockInfo) -> dict[str, str
         except OSError as e:
             log.debug("Could not hash test file %s: %s", name, e)
     return snapshot
+
+
+# What the Claude CLI's error says when it stops an agent at its turn cap.
+TURN_LIMIT_ERROR = "Reached maximum number of turns"
+
+
+def _hit_turn_limit(result) -> bool:
+    return not result.success and not result.timed_out and TURN_LIMIT_ERROR in (result.error or "")
+
+
+def _uncommitted_test_files(config: BuildConfig) -> list[str] | None:
+    """Project-relative paths of the test files changed since HEAD or not yet
+    tracked, that are on disk. None when git could not be asked.
+
+    `_list_block_test_files` diffs tracked files only, so it misses the new
+    test files an agent wrote and never committed."""
+    # buildme's own files and the specs are never the agent's tests, even
+    # under a change named `test`.
+    pathspec = ["--", ".", *git_ops.BOOKKEEPING_EXCLUDES]
+    try:
+        pathspec.append(f":(exclude){config.specs_dir.resolve().relative_to(config.project_dir.resolve()).as_posix()}")
+    except ValueError:
+        pass
+    names: set[str] = set()
+    for argv in (["git", "diff", "--name-only", "--relative", "HEAD"],
+                 ["git", "ls-files", "--others", "--exclude-standard"]):
+        try:
+            proc = subprocess.run([*argv, *pathspec], cwd=str(config.project_dir),
+                                  capture_output=True, text=True, timeout=60)
+        except Exception as e:
+            log.warning("Could not list uncommitted test files: %s", e)
+            return None
+        if proc.returncode != 0:
+            log.warning("Could not list uncommitted test files: %s", proc.stderr.strip())
+            return None
+        names |= {n.strip() for n in proc.stdout.splitlines() if n.strip()}
+    return sorted(n for n in names if _TEST_PATH_RE.search(n) and (config.project_dir / n).is_file())
+
+
+def _kept_after_turn_limit(config: BuildConfig, block: BlockInfo, result, progress: ProgressWriter) -> list[str]:
+    """The test files a test-writer *result* that stopped at the turn cap left
+    on disk, which then go on to the gates as if it had finished; [] for any
+    other result."""
+    kept = (_uncommitted_test_files(config) or []) if _hit_turn_limit(result) else []
+    if kept:
+        log.warning("WARN block=%d phase=TEST_WRITE reason=turn_limit kept_files=%d", block.number, len(kept))
+        progress.log_agent("TestWriter", block.name,
+                           f"ran out of turns — its {len(kept)} test file(s) go to the quality and RED gates")
+    return kept
+
+
+def _drafts_section(config: BuildConfig, files: list[str]) -> str:
+    """DRAFTS_SECTION and one line per file: new and its line count, or the
+    lines `git diff --numstat` counts added and removed since HEAD."""
+    lines = []
+    for name in files:
+        proc = subprocess.run(["git", "diff", "--numstat", "--relative", "HEAD", "--", name],
+                              cwd=str(config.project_dir), capture_output=True, text=True, timeout=60)
+        counts = proc.stdout.split()[:2] if proc.returncode == 0 else []
+        if len(counts) == 2:
+            lines.append(f"- `{name}` (+{counts[0]} -{counts[1]})")
+        else:
+            try:
+                n = len((config.project_dir / name).read_text(errors="replace").splitlines())
+                lines.append(f"- `{name}` (new file, {n} lines)")
+            except OSError:
+                lines.append(f"- `{name}`")
+    return DRAFTS_SECTION + "\n".join(lines)
+
+
+def _unreported_tests(block: BlockInfo) -> str:
+    """What the implementer is given as the failing tests when there is no
+    test-writer report (it stopped at the turn cap, or an earlier run wrote the
+    tests): the RED gate's run of them."""
+    return ("No test-writer report is available: the test writer stopped at the turn cap before it "
+            "reported, or an earlier run wrote these tests. They are committed, and this is how they "
+            f"failed in the RED gate:\n{block.red_evidence}")
 
 
 def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
@@ -618,6 +695,15 @@ def assemble_context(
         if facts:
             parts.append("\n" + facts)
 
+    # Signatures of the existing Python code the block names, read from the
+    # working tree now. The test writer calls that code; without them it spent
+    # most of its turns opening the files.
+    if role == "test_writer":
+        from .signatures import signatures_section
+        sigs = signatures_section(block, config.project_dir)
+        if sigs:
+            parts.append("\n" + sigs)
+
     # Rubric (for reviewers — include for all so agents know quality bar)
     if config.rubric_path.exists():
         parts.append(f"\n## Evaluation Rubric\n{config.rubric_path.read_text()}")
@@ -845,9 +931,10 @@ async def _enforce_test_quality(
         test_command=_block_agent_test_command(config, block),
         model=config.model_for("test_writer"),
         effort=config.effort_for("test_writer"),
+        max_turns=config.test_writer_max_turns,
         cwd=str(config.project_dir),
     )
-    if not retry.success:
+    if not retry.success and not _kept_after_turn_limit(config, block, retry, progress):
         block.timed_out = retry.timed_out
         block.resumable = True
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_RETRY error=%s",
@@ -955,9 +1042,10 @@ async def _enforce_red_gate(
                 test_command=_block_agent_test_command(config, block),
                 model=config.model_for("test_writer"),
                 effort=config.effort_for("test_writer"),
+                max_turns=config.test_writer_max_turns,
                 cwd=str(config.project_dir),
             )
-            if not retry.success:
+            if not retry.success and not _kept_after_turn_limit(config, block, retry, progress):
                 block.timed_out = retry.timed_out
                 block.resumable = True
                 log.error("FAIL block=%d name=%s phase=RED_GATE_RETRY error=%s",
@@ -1059,6 +1147,99 @@ def _record_implementation_note(
     return False
 
 
+def _tests_done(config: BuildConfig, block: BlockInfo) -> str | None:
+    """How much of Phase A an earlier run of *block* finished: "red" when its
+    test commit is on HEAD, the RED gate passed and the test files are as the
+    gate left them; "committed" when the test commit is on HEAD but the RED
+    gate has not passed on these files; None otherwise."""
+    if not block.test_commit or not git_ops.is_ancestor_of_head(config.project_dir, block.test_commit):
+        return None
+    if block.red_evidence and _snapshot_test_files(config, block) == block.test_file_hashes:
+        return "red"
+    return "committed"
+
+
+async def _write_block_tests(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    specs: str,
+    context: str,
+    block_idx: int,
+    cwd: str,
+) -> tuple[bool, str | None]:
+    """Phase A: run the test writer and commit its tests. Returns whether the
+    block goes on, and the agent's report (None when it ran out of turns and
+    left none)."""
+    # Test files an earlier attempt left uncommitted are the agent's own
+    # drafts: say so, or it re-reads the code and audits them from scratch.
+    description = block.description
+    drafts = _uncommitted_test_files(config)
+    if drafts:
+        log.info("block=%d phase=TEST_WRITE drafts=%d", block.number, len(drafts))
+        description += "\n\n" + _drafts_section(config, drafts)
+
+    progress.log_agent("TestWriter", block.name, "STARTED")
+    test_result = await run_test_writer(
+        block_name=block.name,
+        block_description=description,
+        specs=specs,
+        context_bundle=context,
+        test_command=_block_agent_test_command(config, block),
+        model=config.model_for("test_writer"),
+        effort=config.effort_for("test_writer"),
+        max_turns=config.test_writer_max_turns,
+        cwd=cwd,
+    )
+
+    # An agent stopped at its turn cap may have finished its tests: the files
+    # on disk go to the quality and RED gates, which decide.
+    kept = _kept_after_turn_limit(config, block, test_result, progress)
+    if not test_result.success and not kept:
+        # agent_call degrades a timeout to a failed result (timed_out=True)
+        # rather than raising — propagate that so the orchestrator returns
+        # EXIT_AGENT_TIMEOUT instead of a generic build failure.
+        block.timed_out = test_result.timed_out
+        block.resumable = True
+        reason = "timeout" if test_result.timed_out else "error"
+        log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=%s error=%s",
+                  block.number, block.name, reason, test_result.error)
+        progress.log_agent("TestWriter", block.name, "TIMEOUT" if test_result.timed_out else "FAILED")
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
+        return False, None
+
+    if kept:
+        report = ("SURPRISES: The test writer ran out of turns and did not report; its test files "
+                  f"({', '.join(kept)}) went to the quality and RED gates.\nSPEC_IMPACT: none")
+    else:
+        # The agent's own STATUS slot: NEEDS_CONTEXT/BLOCKED is it saying the work
+        # was not doable as specified — stop the block, surface its reason.
+        status = agent_status_gate(test_result.output, "TestWriter")
+        if not status.passed:
+            log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=agent_status status=%s",
+                      block.number, block.name, status.metadata.get("status"))
+            progress.log_agent("TestWriter", block.name, str(status.metadata.get("status")))
+            progress.log_diagnosis(block.name, status.reason)
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
+            return False, None
+
+        log.info("DONE block=%d name=%s phase=TEST_WRITE", block.number, block.name)
+        progress.log_agent("TestWriter", block.name, "COMPLETE")
+        report = test_result.output
+
+    if not _record_implementation_note(block, config, state, progress, "test_writer", report):
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
+        return False, None
+
+    test_sha = _git_commit_block_phase(config, "test", block)
+    if test_sha:
+        block.test_commit = test_sha
+        state.checkpoint(config.state_file_path())
+
+    return True, None if kept else test_result.output
+
+
 async def run_block_tdd(
     block: BlockInfo,
     config: BuildConfig,
@@ -1124,73 +1305,39 @@ async def run_block_tdd(
         for req_file in sorted(req_dir.glob("*.md")):
             specs += f"\n### {req_file.name}\n{req_file.read_text()}"
 
-    context = assemble_context(block, config, "test_writer", blocks=state.tdd.blocks if state.tdd else None)
+    # A resumed block whose tests an earlier run committed does not write them
+    # again: "red" skips to the implementer, "committed" re-runs the gates.
+    done = _tests_done(config, block)
+    context = "" if done == "red" else assemble_context(
+        block, config, "test_writer", blocks=state.tdd.blocks if state.tdd else None)
+    if done:
+        log.info("SKIP block=%d phase=TEST_WRITE reason=tests-committed%s",
+                 block.number, "" if done == "red" else " gates=rerun")
+        progress.log_agent("TestWriter", block.name, f"SKIPPED — tests committed at {block.test_commit[:8]}"
+                           + ("" if done == "red" else "; re-running the quality and RED gates"))
+        test_report = None
+    else:
+        ok, test_report = await _write_block_tests(block, config, state, progress, specs, context, block_idx, cwd)
+        if not ok:
+            return False
 
-    progress.log_agent("TestWriter", block.name, "STARTED")
-    test_result = await run_test_writer(
-        block_name=block.name,
-        block_description=block.description,
-        specs=specs,
-        context_bundle=context,
-        test_command=_block_agent_test_command(config, block),
-        model=config.model_for("test_writer"),
-        effort=config.effort_for("test_writer"),
-        cwd=cwd,
-    )
+    if done != "red":
+        # --- Phase A.5: Test quality enforcement (static scan + LLM adjudication) ---
+        # Scan the test source the agent actually wrote — its report is prose and
+        # contains no test functions. Fall back to the report only when git can't
+        # tell us what changed (non-git project).
+        test_source = _read_block_test_files(config, block) or test_report or ""
+        quality_ok = await _enforce_test_quality(
+            block, config, state, progress, specs, context, block_idx, test_source,
+        )
+        if not quality_ok:
+            return False
 
-    if not test_result.success:
-        # agent_call degrades a timeout to a failed result (timed_out=True)
-        # rather than raising — propagate that so the orchestrator returns
-        # EXIT_AGENT_TIMEOUT instead of a generic build failure.
-        block.timed_out = test_result.timed_out
-        block.resumable = True
-        reason = "timeout" if test_result.timed_out else "error"
-        log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=%s error=%s",
-                  block.number, block.name, reason, test_result.error)
-        progress.log_agent("TestWriter", block.name, "TIMEOUT" if test_result.timed_out else "FAILED")
-        _mark_block(state, block_idx, BlockStatus.FAILED, config)
-        return False
-
-    # The agent's own STATUS slot: NEEDS_CONTEXT/BLOCKED is it saying the work
-    # was not doable as specified — stop the block, surface its reason.
-    status = agent_status_gate(test_result.output, "TestWriter")
-    if not status.passed:
-        log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=agent_status status=%s",
-                  block.number, block.name, status.metadata.get("status"))
-        progress.log_agent("TestWriter", block.name, str(status.metadata.get("status")))
-        progress.log_diagnosis(block.name, status.reason)
-        _mark_block(state, block_idx, BlockStatus.FAILED, config)
-        return False
-
-    log.info("DONE block=%d name=%s phase=TEST_WRITE", block.number, block.name)
-    progress.log_agent("TestWriter", block.name, "COMPLETE")
-
-    if not _record_implementation_note(
-        block, config, state, progress, "test_writer", test_result.output,
-    ):
-        _mark_block(state, block_idx, BlockStatus.FAILED, config)
-        return False
-
-    test_sha = _git_commit_block_phase(config, "test", block)
-    if test_sha:
-        block.test_commit = test_sha
-        state.checkpoint(config.state_file_path())
-
-    # --- Phase A.5: Test quality enforcement (static scan + LLM adjudication) ---
-    # Scan the test source the agent actually wrote — its report is prose and
-    # contains no test functions. Fall back to the report only when git can't
-    # tell us what changed (non-git project).
-    test_source = _read_block_test_files(config, block) or test_result.output
-    quality_ok = await _enforce_test_quality(
-        block, config, state, progress, specs, context, block_idx, test_source,
-    )
-    if not quality_ok:
-        return False
-
-    # --- Phase A.6: RED gate — prove tests fail before implementing ---
-    red_ok = await _enforce_red_gate(block, config, state, progress, specs, context, block_idx)
-    if not red_ok:
-        return False
+        # --- Phase A.6: RED gate — prove tests fail before implementing ---
+        red_ok = await _enforce_red_gate(block, config, state, progress, specs, context, block_idx)
+        if not red_ok:
+            return False
+    failing_tests = test_report if test_report is not None else _unreported_tests(block)
 
     # --- Phase B: Implement ---
     log.info("START block=%d name=%s phase=IMPLEMENT", block.number, block.name)
@@ -1202,7 +1349,7 @@ async def run_block_tdd(
     impl_result = await run_implementer(
         block_name=block.name,
         block_description=block.description,
-        failing_tests=test_result.output,
+        failing_tests=failing_tests,
         context_bundle=impl_context,
         test_command=_block_agent_test_command(config, block),
         prompt_style=config.implementer_prompt_style,
@@ -2690,8 +2837,10 @@ async def _run_mutation_round(
 
     `source_edited` means the agent changed a non-test file — the round is
     discarded and the caller fails the step. A red suite or a failed agent
-    discards the round and keeps the first-run result (sha None). Any discard
-    that git refuses sets `discard_failed`.
+    discards the round and keeps the first-run result (sha None); an agent
+    stopped at its turn cap is not a failed one, and goes through the same
+    checks as a finished round. Any discard that git refuses sets
+    `discard_failed`.
     """
     def _discard(note_ok: str, note_failed: str, *, source_edited: bool = False) -> _RoundOutcome:
         if git_ops.discard_to(config.project_dir, rewind_to, "mutation survivor round"):
@@ -2708,6 +2857,7 @@ async def _run_mutation_round(
         test_command=config.test_command,
         model=config.model_for("mutation_test_writer"),
         effort=config.effort_for("mutation_test_writer"),
+        max_turns=config.mutation_test_writer_max_turns,
         cwd=str(config.project_dir),
     )
 
@@ -2732,7 +2882,9 @@ async def _run_mutation_round(
             f"The test writer moved HEAD from {rewind_to[:8]} {where}, and it could not be "
             "brought back, so nothing was committed — inspect the tree.",
             discard_failed=True)
-    if not result.success:
+    # An agent stopped at its turn cap gets the same checks as a finished one.
+    capped = _hit_turn_limit(result)
+    if not result.success and not capped:
         reason = "timeout" if result.timed_out else (result.error or "agent failed")
         return _discard(
             f"The test writer failed ({reason}); its edits were discarded and the "
@@ -2772,6 +2924,10 @@ async def _run_mutation_round(
         return _discard("The round's tests could not be committed and were discarded; "
                         "the first-run score stands.",
                         "The round's tests could not be committed.")
+    if capped:
+        return _RoundOutcome("The test writer ran out of turns; its tests passed the round's checks "
+                             f"and were kept, committed as {sha[:8]} "
+                             "(`test(mutation): kill surviving mutants`).", sha=sha)
     return _RoundOutcome(f"The test writer added or edited tests, committed as {sha[:8]} "
                          "(`test(mutation): kill surviving mutants`).", sha=sha)
 

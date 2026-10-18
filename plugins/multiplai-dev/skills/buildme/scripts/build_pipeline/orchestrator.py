@@ -135,7 +135,16 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # we receive its summary. `self`: questioner + answerer, no human.
         # `ticket`: questions go on the ticket and the build waits (exit 3).
         # Every mode saves interview.md in the change dir.
-        if not state.is_phase_complete(BuildPhase.INTERVIEW_DONE) and config.mode != "only":
+        # A FAILED build counts no phase as complete, but its interview is on
+        # disk and in the state: running it again rewrites interview.md and,
+        # under `self`, pays for two agent calls. A ticket still waiting for
+        # replies goes through the phase, which owns that wait.
+        if (not state.is_phase_complete(BuildPhase.INTERVIEW_DONE) and config.mode != "only"
+                and (config.change_dir / "interview.md").is_file() and state.interview_summary
+                and not state.interview_waiting):
+            log.info("SKIP phase=INTERVIEW reason=interview-on-disk")
+            print("PHASE:INTERVIEW:COMPLETE", flush=True)
+        elif not state.is_phase_complete(BuildPhase.INTERVIEW_DONE) and config.mode != "only":
             from .intake import run_interview_phase
             rc = await run_interview_phase(config, state, args, state_path, progress)
             if rc is not None:

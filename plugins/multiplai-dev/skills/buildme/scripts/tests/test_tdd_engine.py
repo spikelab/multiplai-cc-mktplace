@@ -813,6 +813,7 @@ class TestPromptTemplates:
         result = TEST_WRITER_PROMPT.format(
             block_name="Test", block_description="desc",
             specs="specs", context_bundle="ctx", test_command="pytest",
+            max_turns=30, half=15,
         )
         assert "Test" in result
 
@@ -828,6 +829,35 @@ class TestPromptTemplates:
             block_name="Test", block_description="desc",
             context_bundle="ctx", test_command="pytest",
         )
+
+
+class TestTurnBudget:
+    """Each test writer's prompt states its turn cap, and the cap is the one
+    the caller passes, which the engine takes from the config."""
+
+    @pytest.mark.parametrize("name", ["TEST_WRITER_PROMPT", "MUTATION_TEST_WRITER_PROMPT"])
+    def test_the_prompt_states_the_cap_and_the_turn_to_have_a_draft_by(self, name):
+        from build_pipeline.prompts import test_writing
+        text = getattr(test_writing, name).format(
+            block_name="b", block_description="d", specs="s", context_bundle="c",
+            survivors="m", test_command="pytest", max_turns=25, half=12)
+        assert "You have 25 turns" in text
+        assert "by turn 12" in text
+        assert "kept if you run out of turns" in text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("step", ["run_test_writer", "run_mutation_test_writer"])
+    async def test_the_step_hands_its_cap_to_the_agent_and_the_prompt(self, step):
+        from build_pipeline.llm_steps import tdd_steps
+        call = AsyncMock(return_value=AgentResult(success=True, output="STATUS: DONE"))
+        args = (("b", "d", "specs", "ctx", "pytest") if step == "run_test_writer" else ("m", "pytest"))
+        with patch.object(tdd_steps, "agent_call", call):
+            await getattr(tdd_steps, step)(*args, max_turns=25)
+        assert call.await_args.kwargs["max_turns"] == 25
+        assert "You have 25 turns" in call.await_args.args[0]
+        with patch.object(tdd_steps, "agent_call", call):
+            await getattr(tdd_steps, step)(*args)
+        assert call.await_args.kwargs["max_turns"] == tdd_steps.TEST_WRITER_MAX_TURNS
 
 
 class TestTDDStepToolAllowlists:
@@ -952,6 +982,19 @@ class TestRunBlockTDD:
 
         assert result is True
         assert block.status == BlockStatus.IMPLEMENTING
+
+    @pytest.mark.asyncio
+    async def test_the_test_writer_gets_the_configured_turn_cap(self, setup):
+        config, state, progress, block = setup
+        config.test_writer_max_turns = 17
+        ok_result = AgentResult(success=True, output="Tests written", files_changed=["test_x.py"])
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
+                   return_value=ok_result) as tw, \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok_result):
+            await run_block_tdd(block, config, state, progress)
+
+        assert tw.await_args.kwargs["max_turns"] == 17
 
     @pytest.mark.asyncio
     async def test_test_writer_failure(self, setup):
