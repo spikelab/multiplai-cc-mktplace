@@ -100,7 +100,8 @@ def render_tasks(round_n: int, records: list[TriageRecord],
             f"Why it is a defect: {_line(t.reason)} Code involved: {where}",
             f"- [ ] {i}.3 Search the same function, its other branches, its callers and the "
             "rest of the PR's diff for the same mistake, and fix each one you find; change "
-            "nothing else. End your report with a `SEARCHED:` section: one line per finding "
+            "nothing else. Close your report with a `SEARCHED:` section, after the other "
+            "slots and before any test-change declaration: one line per finding "
             "saying where you looked and what you found.",
             "",
         ]
