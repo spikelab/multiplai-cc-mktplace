@@ -259,6 +259,8 @@ def test_an_empty_answer_is_not_a_declaration(value):
 @pytest.mark.parametrize("reason", [
     "None of the old assertions could pass: tests/test_a.py asserted the wrong default",
     "no longer valid: tests/test_a.py asserted the wrong default",
+    "(tests/test_a.py asserted the wrong default)",
+    "(tests/test_a.py asserted the wrong default) (see the spec)",
 ])
 def test_a_reason_that_starts_like_an_empty_answer_still_counts(reason):
     assert parse_test_change_claims(f"STATUS: DONE\n{TEST_CHANGE_MARKER} {reason}\n") == [
