@@ -71,7 +71,7 @@ from .narrow_tests import agent_test_command, narrow_test_command
 from .progress import ProgressWriter
 from .prompts.implementation import REVIEW_FIX_SELF_CHECK
 from .prompts.review import FINDING_ADJUDICATION_PROMPT
-from .prompts.test_writing import TEST_QUALITY_PROMPT
+from .prompts.test_writing import DRAFTS_SECTION, TEST_QUALITY_PROMPT
 from .sdk import llm_call_structured
 from .state import BuildState, TDDState
 
@@ -288,6 +288,25 @@ def _uncommitted_test_files(config: BuildConfig) -> list[str] | None:
             return None
         names |= {n.strip() for n in proc.stdout.splitlines() if n.strip()}
     return sorted(n for n in names if _TEST_PATH_RE.search(n) and (config.project_dir / n).is_file())
+
+
+def _drafts_section(config: BuildConfig, files: list[str]) -> str:
+    """DRAFTS_SECTION and one line per file: new and its line count, or the
+    lines `git diff --numstat` counts added and removed since HEAD."""
+    lines = []
+    for name in files:
+        proc = subprocess.run(["git", "diff", "--numstat", "--relative", "HEAD", "--", name],
+                              cwd=str(config.project_dir), capture_output=True, text=True, timeout=60)
+        counts = proc.stdout.split()[:2] if proc.returncode == 0 else []
+        if len(counts) == 2:
+            lines.append(f"- `{name}` (+{counts[0]} -{counts[1]})")
+        else:
+            try:
+                n = len((config.project_dir / name).read_text(errors="replace").splitlines())
+                lines.append(f"- `{name}` (new file, {n} lines)")
+            except OSError:
+                lines.append(f"- `{name}`")
+    return DRAFTS_SECTION + "\n".join(lines)
 
 
 def _unreported_tests(block: BlockInfo) -> str:
@@ -1181,10 +1200,18 @@ async def run_block_tdd(
 
     context = assemble_context(block, config, "test_writer", blocks=state.tdd.blocks if state.tdd else None)
 
+    # Test files an earlier attempt left uncommitted are the agent's own
+    # drafts: say so, or it re-reads the code and audits them from scratch.
+    description = block.description
+    drafts = _uncommitted_test_files(config)
+    if drafts:
+        log.info("block=%d phase=TEST_WRITE drafts=%d", block.number, len(drafts))
+        description += "\n\n" + _drafts_section(config, drafts)
+
     progress.log_agent("TestWriter", block.name, "STARTED")
     test_result = await run_test_writer(
         block_name=block.name,
-        block_description=block.description,
+        block_description=description,
         specs=specs,
         context_bundle=context,
         test_command=_block_agent_test_command(config, block),
