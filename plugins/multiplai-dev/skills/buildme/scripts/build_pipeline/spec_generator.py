@@ -676,14 +676,15 @@ _SATISFIED_EARLIER_RE = re.compile(
 )
 # A block that says it writes no code. Not "no code change to the core": a
 # "no code" scoped to anything but this block is about another part of it.
-# The short form ("no new code") leaves "no new code changes" to the first,
-# so its scope is checked there.
+# The short form ("no new code") leaves "no new code changes/needed/…" to
+# the first, so its scope is checked there.
 _NO_CODE_RE = re.compile(
     r"(?:\b(?:no|without)\s+(?:new\s+|production\s+|source\s+|further\s+)?"
     r"(?:code|implementation)\s+(?:changes?|is\s+(?:needed|required)|needed"
     r"|required|work)\b"
     r"|\b(?:needs|requires)\s+no\s+(?:new\s+)?(?:code|implementation)\b"
-    r"|\bno\s+(?:new|production|source)\s+code\b(?!\s+changes?\b))"
+    r"|\bno\s+(?:new|production|source)\s+code\b"
+    r"(?!\s+(?:changes?|is\s+(?:needed|required)|needed|required|work)\b))"
     r"(?!\s+(?:to|in|for|on|outside|beyond)\s+(?!this\b|these\b|here\b))",
     re.IGNORECASE,
 )
@@ -814,7 +815,20 @@ _TEST_OBJECT_RE = re.compile(
     re.IGNORECASE,
 )
 # "Add a case for an empty string": a case an add/write step adds is a test.
-_CASE_OBJECT_RE = re.compile(r"^\w+\s+(?:[\w-]+\s+){0,3}?cases?\b", re.IGNORECASE)
+# Not "Add case-insensitive matching" or "Add snake case conversion": there
+# "case" describes the code.
+_CASE_OBJECT_RE = re.compile(
+    r"^\w+\s+(?:[\w-]+\s+){0,3}?cases?"
+    r"(?=\s+(?:for|where|when|that|with|covering|to|in|of)\b|\s*[,.;:]|\s*$)",
+    re.IGNORECASE,
+)
+# "Make the failing tests pass", "Fix the failing tests": the code a
+# test-first block writes, named by the tests it makes pass.
+_PASS_TESTS_RE = re.compile(
+    r"^(?:make|fix)\b.*\b(?:failing\s+(?:tests?|test\s+cases?|assertions?)"
+    r"|(?:tests?|test\s+cases?|assertions?)\s+pass)\b",
+    re.IGNORECASE,
+)
 # Steps: sentences, clauses after ";", and "…, then …".
 _STEP_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+|,?\s+(?:and\s+)?then\s+", re.IGNORECASE)
 _STEP_LEAD_RE = re.compile(
@@ -827,14 +841,17 @@ _STEP_LEAD_RE = re.compile(
 def _has_code_step(body: str) -> bool:
     """Some step of the block, prose or checkbox, writes code: it opens with
     a verb that changes code, that verb does not act on a test or a test
-    file, and an "add"/"write" step adds something that is not a test."""
+    file (making failing tests pass is code), and an "add"/"write" step adds
+    something that is not a test."""
     for line in body.splitlines():
         for step in _STEP_SPLIT_RE.split(line):
             step = _PURPOSE_RE.sub("", _STEP_LEAD_RE.sub("", step).strip())
             if not _CODE_VERB_RE.match(step):
                 continue
             target = _TEST_OBJECT_RE.match(step)
-            if target and (target.group(1) is None or _TEST_PATH_RE.search(target.group(1))):
+            if target and not _PASS_TESTS_RE.match(step) and (
+                target.group(1) is None or _TEST_PATH_RE.search(target.group(1))
+            ):
                 continue
             if _WRITE_VERB_RE.match(step) and (
                 _TEST_WORD_RE.search(step)
@@ -942,7 +959,7 @@ def tasks_findings_text(findings: list[dict]) -> str:
 
 
 def report_no_behaviour_blocks_left(tasks_path: Path) -> list[dict]:
-    """After a rewrite, name any block the scan still flags.
+    """After a rewrite, or one that failed, name any block the scan flags.
 
     Every audit here rewrites once and lets the plan stand, so this only
     reports: a block named here will most likely fail the TDD RED gate.
@@ -951,7 +968,7 @@ def report_no_behaviour_blocks_left(tasks_path: Path) -> list[dict]:
     if left:
         names = ", ".join(f"Block {f['block']}" for f in left)
         log.warning(
-            "No-behaviour blocks remain after the rewrite (the TDD RED gate "
+            "No-behaviour blocks remain in tasks.md (the TDD RED gate "
             "will likely fail them): %s", names,
         )
         print(f"PHASE: no_behaviour_blocks_remain — {names}", flush=True)
