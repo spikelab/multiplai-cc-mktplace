@@ -523,9 +523,12 @@ elif a[:2] in (["pr", "checks"], ["pr", "merge"]):
         print("error connecting to api.github.com", file=sys.stderr)
         sys.exit(1)
     print(f"Merged pull request #{{number(url.rsplit('/', 1)[1])}}")
-elif a[:2] == ["pr", "list"]:
+elif a[:2] == ["pr", "list"]:      # the PRs of the repo it runs in, which gh reads from the cwd's origin
     head = a[a.index("--head") + 1]
-    print(json.dumps([{{"url": u}} for u, p in prs.items() if p["branch"] == head]))
+    here = subprocess.run(["{git}", "remote", "get-url", "origin"], capture_output=True, text=True).stdout.strip()
+    repo = pathlib.Path(here).stem if here else None
+    print(json.dumps([{{"url": u}} for u, p in prs.items()
+                      if p["branch"] == head and repo in (None, u.split("/")[-3])]))
 elif a[:2] in (["issue", "list"], ["issue", "create"]):     # the final fix's issue, in `<root>/issues.json`
     store = root / "issues.json"
     issues = json.loads(store.read_text()) if store.exists() else []
@@ -614,6 +617,9 @@ k = len(list(counts.glob(key + ".*"))) + 1
 (counts / f"{{key}}.{{k}}").write_text("")
 steps = fx.get("resume" if cmd == "resume" else str(n), [])
 step = steps[k - 1] if k <= len(steps) else (steps[-1] if steps else {{}})
+if step.get("ignore_signals"):      # before its lock names its pid, which is when a test signals it
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 if step.get("exit"):
     print(step.get("stderr", "fake review: failed"), file=sys.stderr, flush=True)
     sys.exit(step["exit"])
@@ -830,7 +836,8 @@ class Fakes:
     `<root>/calls.log`. `<root>/gh-fails` makes every `gh` call fail; `ps_fails`
     puts a `ps` that exits 1 first on PATH. The fake review (`uv`, PR C)
     answers from `<root>/reviews.json` (per PR number, one step per `review`
-    launch: `block`, `die`, `exit` with `stderr`, `busy` (exit 2, another review
+    launch: `block`, `die`, `ignore_signals` (SIGINT and SIGTERM), `exit` with
+    `stderr`, `busy` (exit 2, another review
     runs now, its `started` line left), `findings`, `cost`, `stopped`
     (the `finished` line's value); `resume`
     has its own key) and logs its launches to `<root>/reviews.log`; by
