@@ -199,6 +199,7 @@ async def _stop_after_red(config, state, progress, block):
 class TestResume:
     @pytest.mark.asyncio
     async def test_s4_tests_committed_before_the_quality_gate_skip_only_the_test_writer(self, setup, caplog):
+        caplog.set_level("INFO", logger="build_pipeline.tdd_engine")
         config, state, progress, block = setup
         writer = _writes(config.project_dir, {"tests/test_new.py": NEW_TEST}, OK)
         with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=writer), \
@@ -220,6 +221,7 @@ class TestResume:
 
     @pytest.mark.asyncio
     async def test_s5_resume_after_red_skips_test_writer(self, setup, caplog):
+        caplog.set_level("INFO", logger="build_pipeline.tdd_engine")
         config, state, progress, block = setup
         state, block = await _stop_after_red(config, state, progress, block)
         assert block.test_commit and block.red_evidence and block.test_file_hashes
