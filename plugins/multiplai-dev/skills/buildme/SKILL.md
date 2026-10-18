@@ -312,9 +312,13 @@ The whole command runs instead when:
 - the project sets pytest's `python_files`, or its pytest config cannot be read;
 - a selected pytest file sits below another pytest config file or `setup.py`
   than the one the whole run uses, because pytest finds its config from the
-  paths it is given; or under a `conftest.py` that sets `collect_ignore`,
-  `collect_ignore_glob` or `pytest_ignore_collect`, because pytest skips those
-  for paths it is given;
+  paths it is given; or under a `conftest.py` pytest loads (none above the
+  directory of the whole run's config) whose `collect_ignore` or
+  `collect_ignore_glob` could name it or a directory above it, or that has a
+  `pytest_ignore_collect` hook, because pytest does not apply them to a path
+  named on its command line. A list that is not written out as strings, or a
+  conftest that does not parse, counts as one that names it; a mention in a
+  comment or a string does not;
 - the selection would make the command longer than 20,000 characters.
 
 So RED never passes on a run that left out the block's own tests. The agents'
