@@ -146,6 +146,21 @@ def test_an_unresolved_hop_citation_fails_alongside_a_resolved_one(tmp_path, cap
     assert re.search(r"^check: \d+ checked, 1 failed$", out, re.M)
 
 
+def test_a_dangling_backticked_hop_id_outside_the_paths_section_fails(tmp_path, capsys):
+    md = _three_hop_doc(tmp_path)
+    md.write_text(md.read_text() + "\n## Gotchas\n\nThe break is at `p4h1`, after `p1h2`; see also [p4h1](#p4h1)"
+                  " and `p5h2`.\n")
+    assert check.unresolved_hop_citations(md.read_text()) == ["p4h1", "p5h2"]
+    code, fails, _, _ = _check(md, capsys)
+    assert code == 1 and fails == ["FAIL unresolved hop citation p4h1", "FAIL unresolved hop citation p5h2"]
+
+
+def test_a_hop_id_inside_a_snippet_or_a_link_quote_is_not_a_citation(tmp_path):
+    text = ('<!-- snippet shop/cli/main.py:1-1 -->\n[`shop/cli/main.py:1`](x "q = `p9h9`")\n\n'
+            "```python\nname = `p8h8`\n```\n")
+    assert check.unresolved_hop_citations(text) == []
+
+
 # --- what check does not need -----------------------------------------------------------------------------
 
 
