@@ -15,6 +15,21 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.84.1] - 2026-10-18
+
+### Fixed
+- buildme: when the tasks.md rewrite after the shape audit fails, the first
+  pass stands as before, and the log now names any block in it that adds no
+  behaviour (`PHASE: no_behaviour_blocks_remain`), so a TDD RED-gate failure
+  on that block is no longer a surprise.
+- buildme: a block that says "no new code changes to the core" (a change
+  scoped to another part of the code) is no longer flagged as a block that
+  adds no behaviour, so it no longer costs a tasks.md rewrite.
+- buildme: the plan review and the tasks audit now rate a block that adds no
+  behaviour from their severity scale, as every other finding, instead of
+  being told it is critical. The tasks prompt now says where criteria that
+  only confirm earlier behaviour belong, instead of forbidding such blocks.
+
 ## [0.84.0] - 2026-10-18
 
 ### Added
