@@ -388,6 +388,26 @@ class TestInboundImports:
                           "web/my-mod.js": 1, "web/app.js": 0}
 
 
+class TestNamedIn:
+    RENDERS = ["plugins/dev/skills/walk/scripts/walkthrough_pipeline/render.py",
+               "plugins/dev/skills/review/scripts/review_pipeline/render.py",
+               "lib/render.py"]
+
+    def test_a_partial_path_names_the_one_file_ending_with_it(self):
+        trace = "plugins/dev/skills/review/scripts/review_pipeline/stages/trace.py"
+        assert code_analysis._named_in("edit `stages/trace.py`", [trace, "lib/other.py"]) == {trace}
+
+    def test_a_partial_path_picks_one_of_several_files_with_the_same_name(self):
+        assert code_analysis._named_in("change walkthrough_pipeline/render.py.", self.RENDERS) == {self.RENDERS[0]}
+
+    def test_a_file_name_three_files_share_names_nothing(self):
+        assert code_analysis._named_in("edit `render.py`", self.RENDERS) == set()
+
+    def test_a_partial_path_two_files_end_with_names_neither(self):
+        paths = ["a/stages/trace.py", "b/stages/trace.py"]
+        assert code_analysis._named_in("edit stages/trace.py", paths) == set()
+
+
 def _section(md: str, heading: str) -> str:
     for s in re.split(r"^## ", md, flags=re.M)[1:]:
         if s.split("\n", 1)[0] == heading:
