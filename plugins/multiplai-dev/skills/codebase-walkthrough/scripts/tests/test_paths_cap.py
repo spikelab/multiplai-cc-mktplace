@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -12,9 +13,11 @@ from code_facts.paths import ListingSkip, PathDiagnostic
 from fakes import FakeAgents
 from test_paths_render import _entry, _render, _result, _state
 from test_paths_stage import _click_run, _paths_body
+from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.orchestrator import RunOptions
 from walkthrough_pipeline.render import coverage_lines, section_texts
+from walkthrough_pipeline.state import STATE_FILE
 
 TWENTY_FIVE = [f"c{n:02d}" for n in range(1, 26)]
 LEFT_OUT_HEAD = "| Entry | Stage | Reason | Detail |"
@@ -164,3 +167,40 @@ def test_coverage_has_the_entries_left_out_row_and_the_table(tmp_path):
     assert re.search(r"^\| Entries left out \| 3 \|", table, re.M)
     assert "### Left out" in table and LEFT_OUT_HEAD in table
 
+
+
+# --- the cap on resume (plan row S7) -----------------------------------------------------------------
+
+
+def _saved(run_dir) -> dict:
+    return json.loads((run_dir / STATE_FILE).read_text())
+
+
+@pytest.mark.parametrize("extra, cap, given", [((), 21, False), (("--scenarios", "3"), 3, True)])
+def test_a_run_saves_whether_scenarios_was_passed(tmp_path, monkeypatch, spy, extra, cap, given):
+    code, run_dir, _ = _click_run(tmp_path, monkeypatch, FakeAgents(trace_plan=path_fixtures.click_plan()), *extra)
+    assert code == 0
+    options = _saved(run_dir)["options"]
+    assert (options["scenarios"], options["scenarios_given"]) == (cap, given)
+
+
+@pytest.mark.parametrize("saved, cap", [
+    ({"scenarios": 6}, 21),                                  # saved before PR 6 with the old default
+    ({"scenarios": 3}, 3),                                   # saved before PR 6; 3 was never a default
+    ({"scenarios": 6, "scenarios_given": True}, 6),          # the user passed --scenarios 6
+    ({"scenarios": 6, "scenarios_given": False}, 21),        # not passed: the default of today
+])
+def test_a_resume_before_trace_uses_the_saved_cap_only_when_scenarios_was_passed(tmp_path, monkeypatch, spy,
+                                                                                saved, cap):
+    code, run_dir, md_path = _click_run(tmp_path, monkeypatch, FakeAgents(trace_plan=path_fixtures.click_plan()))
+    assert code == 0
+    state = _saved(run_dir)
+    state["options"].pop("scenarios_given", None)
+    state["options"].update(saved)
+    state.update(stage="docs", paths=None, paths_error=None)   # stopped before trace
+    (run_dir / STATE_FILE).write_text(json.dumps(state))
+
+    monkeypatch.setattr(sdk, "agent_call_structured", FakeAgents(trace_plan=path_fixtures.click_plan()))
+    assert main(["resume", str(run_dir), "--trust-repo"]) == 0
+    assert len(spy.calls) == 2 and spy.calls[1]["cap"] == cap
+    assert _saved(run_dir)["options"] == state["options"]     # resume rewrites no saved option

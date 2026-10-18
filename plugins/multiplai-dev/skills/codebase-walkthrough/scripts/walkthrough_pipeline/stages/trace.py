@@ -45,6 +45,22 @@ log = logging.getLogger(__name__)
 TRACE_LIMIT = 30
 # `map_paths`' answer cache, under the run directory. Only `resume` reuses it; `run` starts it empty.
 PATHS_CACHE = "paths-cache"
+# The path cap when `--scenarios` was not passed, and that default before it became 21.
+DEFAULT_CAP = 21
+OLD_DEFAULT_CAP = 6
+
+
+def path_cap(options: dict) -> int:
+    """The saved `--scenarios` cap when the user passed it, else DEFAULT_CAP.
+
+    A state saved before `scenarios_given` existed does not say whether the flag was passed: its cap counts
+    as passed unless it is the old default.
+    """
+    saved = options.get("scenarios")
+    given = options.get("scenarios_given")
+    if given is None:
+        given = saved is not None and saved != OLD_DEFAULT_CAP
+    return int(saved) if given and saved else DEFAULT_CAP
 
 
 def module_lines(state: WalkState, root: Path) -> dict[str, set[int]]:
@@ -239,7 +255,7 @@ async def run_trace(state: WalkState, ctx: RunContext) -> WalkState:
             changed_lines=module_lines(state, root),
             seeds=web_seeds(state),
             places=known_places(state),
-            cap=int(state.options.get("scenarios") or 21),
+            cap=path_cap(state.options),
             trace_limit=TRACE_LIMIT,
             concurrency=ctx.config.concurrency,
             cache_dir=ctx.run_dir / PATHS_CACHE,
