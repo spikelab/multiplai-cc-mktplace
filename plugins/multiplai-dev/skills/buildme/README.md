@@ -255,6 +255,21 @@ For each block in `tasks.md`:
 
 If review scores are too low, the implementer retries with feedback (up to 3 iterations). If integration fails, a fix agent repairs the damage (up to 2 attempts).
 
+The test writer's context lists, for each Python module the block names (by
+path, `stages/trace.py` included, or as the one module defining a name the
+block consumes or puts in backticks), its public classes, fields, methods,
+functions and constants with their signatures, read from the working tree with
+`ast`; the fixtures and helpers of the module's nearest `tests/` directory; the
+tests there that already call it; and the shortest test file importing it, all
+in at most 40,000 characters. Its prompt states its turn cap
+(`tdd.test_writer_max_turns`, default 30). When it runs out of turns with test
+files on disk, those files go to the quality and RED gates instead of failing
+the block; a retry is told which files are its drafts. A resumed block whose
+tests are committed and passed the RED gate goes straight to the implementer,
+and one whose tests are committed but did not pass it re-runs only the gates.
+A FAILED build's resume does not run the interview again when `interview.md`
+and the saved summary are there.
+
 Each agent report also carries two REQUIRED slots that close the loop back to the
 spec:
 
@@ -1090,6 +1105,7 @@ Cancelled.
 | `orchestrator.py` | Phase sequencing state machine | Delegates |
 | `spec_generator.py` | Artifact pipeline (proposal → rubric) | Via llm_steps |
 | `tdd_engine.py` | Block-by-block TDD with agent spawning | Via llm_steps |
+| `signatures.py` | The test writer's signatures section: the existing Python code a block names, read with `ast` | No |
 | `review_rounds.py` | The per-block review round records (`reviews/`) and `unfixed-findings.md` | No |
 | `apply.py` | Manual single-agent implementation | Via sdk |
 | `change_manager.py` | Directory ops, artifact DAG, archiving | No |
