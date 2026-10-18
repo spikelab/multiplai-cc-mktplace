@@ -234,8 +234,12 @@ def line_count(text: str) -> int:
     return len(text.split("\n")) - (1 if text.endswith("\n") else 0)
 
 
+_PATH_TOKEN = re.compile(r"[\w./-]+")
+
+
 def _named_in(text: str, paths: list[str]) -> set[str]:
-    """The paths *text* names: the whole path, or a file name only one of *paths* has."""
+    """The paths *text* names: the whole path, a file name only one of *paths* has,
+    or a partial path (`stages/trace.py`) only one of *paths* ends with."""
     names: dict[str, list[str]] = {}
     for p in paths:
         names.setdefault(PurePosixPath(p).name, []).append(p)
@@ -246,6 +250,11 @@ def _named_in(text: str, paths: list[str]) -> set[str]:
     for name, owners in names.items():
         if len(owners) == 1 and "." in name and re.search(rf"(?<![\w./-]){re.escape(name)}(?![\w/-])", text):
             found.add(owners[0])
+    for token in {t.rstrip(".").removeprefix("./") for t in _PATH_TOKEN.findall(text)}:
+        if "/" in token and re.search(r"\.\w+$", token):
+            owners = [p for p in names.get(PurePosixPath(token).name, []) if p == token or p.endswith("/" + token)]
+            if len(owners) == 1:
+                found.add(owners[0])
     return found
 
 

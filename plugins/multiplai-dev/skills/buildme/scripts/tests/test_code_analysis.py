@@ -389,13 +389,14 @@ class TestInboundImports:
 
 
 class TestNamedIn:
-    RENDERS = ["plugins/dev/skills/walk/scripts/walkthrough_pipeline/render.py",
-               "plugins/dev/skills/review/scripts/review_pipeline/render.py",
-               "lib/render.py"]
+    # This repo's own paths: one stages/trace.py, three render.py.
+    TRACE = "plugins/multiplai-dev/skills/codebase-walkthrough/scripts/walkthrough_pipeline/stages/trace.py"
+    RENDERS = ["plugins/multiplai-dev/skills/codebase-walkthrough/scripts/walkthrough_pipeline/render.py",
+               "plugins/multiplai-dev/skills/review/scripts/review_pipeline/render.py",
+               "plugins/multiplai-dev/skills/spec-extract/scripts/spec_extract_pipeline/render.py"]
 
     def test_a_partial_path_names_the_one_file_ending_with_it(self):
-        trace = "plugins/dev/skills/review/scripts/review_pipeline/stages/trace.py"
-        assert code_analysis._named_in("edit `stages/trace.py`", [trace, "lib/other.py"]) == {trace}
+        assert code_analysis._named_in("edit `stages/trace.py`", [self.TRACE, *self.RENDERS]) == {self.TRACE}
 
     def test_a_partial_path_picks_one_of_several_files_with_the_same_name(self):
         assert code_analysis._named_in("change walkthrough_pipeline/render.py.", self.RENDERS) == {self.RENDERS[0]}
