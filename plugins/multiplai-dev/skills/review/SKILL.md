@@ -64,7 +64,9 @@ paths through the change from each entry point (see "The paths stage" below).
    user's notes, and labels each `useful`, `still-open` (the same defect as an
    earlier finding that was accepted, deferred or not decided, so not fixed yet) or
    `low-value` (true but not worth acting on, for one named rule: context,
-   covered or speculative). It may name more duplicates, merged as in step 3.
+   covered or speculative). It may name more duplicates; only those whose
+   lines overlap or come within two lines in one file are merged as in
+   step 3, and the rest stay separate findings.
    Python checks every label; a bad one becomes `useful`. Skipped when fewer
    than two findings remain and there are no earlier rounds.
 
@@ -605,7 +607,8 @@ head commit, or `web`) and `seen` (`read`, `searched`, `diff`, `prompt`, `fetche
 or `not-seen` when the agent cites lines it never read, searched or was shown).
 `checks-<slug>.md` beside it is the same record as markdown, and review-viewer
 shows it on its Checked tab. `findings.json` also carries each finding's
-`verifier_citations`.
+`verifier_citations`, and, on a finding others were merged into, their ids
+and claims (`absorbed`).
 
 Then, when the summary has a **Needs you** section, ask the user about each
 need explicitly, one by one:

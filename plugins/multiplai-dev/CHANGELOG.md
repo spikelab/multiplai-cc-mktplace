@@ -15,6 +15,28 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.86.0] - 2026-10-18
+
+### Fixed
+- review: the assess stage no longer merges a finding into one anchored in
+  another file, or more than two lines away in the same file. The assess
+  agent reads every finding at once and could fold a root bug into a weaker
+  finding elsewhere, whose claim then hid it (on PR #295 it lost the
+  template slug collision and `--head` reaching `git push`). The members of
+  a duplicate set it names are merged only where their lines overlap or
+  come within two lines in one file; the rest stay separate findings, and
+  each dropped set is logged with its ids. Duplicates across files are left
+  to the merge stage, which already groups findings that cite the same lines.
+
+### Added
+- review: in `findings.json`, a finding that others were merged into lists
+  their ids and claims under the new optional `absorbed` field
+  (`findings.v1`, `schema_version` still 1; the schema now says additive
+  changes keep the version). Reviews whose assess stage finished before this
+  version keep their merges and get the field when they are exported.
+- review-viewer: a finding's page shows the findings merged into it, by id
+  and claim, under "Merged into this finding" after the verdict.
+
 ## [0.84.0] - 2026-10-18
 
 ### Added

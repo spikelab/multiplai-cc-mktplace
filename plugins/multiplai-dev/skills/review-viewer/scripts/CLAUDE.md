@@ -76,6 +76,10 @@ entry) keeps the lists. `logic.findingParts(finding, checks, context)` makes
 that choice and the order of the blocks under the claim; `app.js` renders
 what it returns.
 
+`findings.json` may carry `absorbed` per finding (multiplai-dev 0.86+): the id
+and claim of each finding the review merged into it. `findingParts` adds an
+`absorbed` block after the verdict when the list is not empty.
+
 ## Protocol 1a: `checks.json` v1 (optional)
 
 The review writes it beside `findings.json`: `agents` (each agent call's
