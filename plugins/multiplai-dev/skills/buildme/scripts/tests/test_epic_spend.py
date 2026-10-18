@@ -207,8 +207,13 @@ def _ledger(path: Path, *lines: dict) -> Path:
     return path
 
 
-def _started(slug, head, target="/r/pr-1"):
-    return {"event": "started", "slug": slug, "target_dir": target, "head_sha": head}
+def _started(slug, head, target="/r/pr-1", at=None):
+    """A `started` line; *at* is its `generated_at`, which the review skill
+    writes to the second."""
+    line = {"event": "started", "slug": slug, "target_dir": target, "head_sha": head}
+    if at is not None:
+        line["generated_at"] = at
+    return line
 
 
 def _finished(slug, head, cost, target="/r/pr-1", stopped=None, started_at="2026-10-13T10:00:00.000Z"):
@@ -272,6 +277,54 @@ class TestReviewSpend:
         ledger = _ledger(tmp_path / "ledger.jsonl", _finished("o-r--pr-1", "h1", 1.0),
                          _started("o-r--pr-1", "h2"))
         assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(1.0), False)
+
+    def test_a_killed_review_then_a_fresh_review_is_not_complete(self, tmp_path):
+        """A review killed at 10:00 (no `finished`), then a fresh `review` of
+        the same head (`--restart`) that began at 10:05 and finished: the
+        killed run's spend is not in any line, so the total is incomplete."""
+        ledger = _ledger(tmp_path / "ledger.jsonl",
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:00:00Z"),
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:05:00Z"),
+                         _finished("o-r--pr-1", "h1", 2.0, started_at="2026-10-13T10:05:00.300Z"))
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(2.0), False)
+
+    def test_a_killed_review_that_was_resumed_is_complete(self, tmp_path):
+        """The `resume` keeps the killed run's first start, which is before
+        the resume's own `started` line: its last line holds the whole run."""
+        ledger = _ledger(tmp_path / "ledger.jsonl",
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:00:00Z"),
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:05:00Z"),
+                         _finished("o-r--pr-1", "h1", 5.0, started_at="2026-10-13T10:00:00.200Z"))
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(5.0), True)
+
+    def test_a_killed_review_a_killed_rerun_and_the_reruns_resume_is_not_complete(self, tmp_path):
+        """The first killed run is never resumed: a fresh run replaced it."""
+        ledger = _ledger(tmp_path / "ledger.jsonl",
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:00:00Z"),
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:05:00Z"),
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:09:00Z"),
+                         _finished("o-r--pr-1", "h1", 3.0, started_at="2026-10-13T10:05:00.100Z"))
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(3.0), False)
+
+    def test_a_run_with_no_run_record_then_its_resume_is_complete(self, tmp_path):
+        """A `finished` line whose run record could not be built (`run: null`),
+        then a `resume` of that run: the resume's line holds the whole run."""
+        ledger = _ledger(tmp_path / "ledger.jsonl",
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:00:00Z"),
+                         {"event": "finished", "slug": "o-r--pr-1", "target_dir": "/r/pr-1", "head_sha": "h1",
+                          "round": "01", "stopped": "budget", "run": None},
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:05:00Z"),
+                         _finished("o-r--pr-1", "h1", 4.0, started_at="2026-10-13T10:00:00.200Z"))
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(4.0), True)
+
+    def test_a_run_with_no_run_record_then_a_fresh_review_is_not_complete(self, tmp_path):
+        ledger = _ledger(tmp_path / "ledger.jsonl",
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:00:00Z"),
+                         {"event": "finished", "slug": "o-r--pr-1", "target_dir": "/r/pr-1", "head_sha": "h1",
+                          "round": "01", "stopped": "budget", "run": None},
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:05:00Z"),
+                         _finished("o-r--pr-1", "h1", 2.0, started_at="2026-10-13T10:05:00.300Z"))
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(2.0), False)
 
     def test_no_ledger_is_nothing_spent(self, tmp_path):
         assert spend.review_spend(tmp_path / "missing.jsonl", self.SLUGS) == (0.0, True)
