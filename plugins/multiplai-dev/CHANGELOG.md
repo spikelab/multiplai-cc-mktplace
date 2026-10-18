@@ -23,6 +23,15 @@ time, not derived from a tag.
   or with the whole line in inline code. Before, the block failed although the
   change was declared. A sentence that only mentions the marker in inline code
   and goes on after it still declares nothing.
+- buildme: a `TEST CHANGE REQUIRED:` reason written wholly in parentheses
+  now counts as a declaration. Before, it was read as an empty answer and the
+  block failed.
+- buildme: a `conftest.py` no longer turns test narrowing off just by
+  mentioning `collect_ignore` or `pytest_ignore_collect` in a comment or a
+  string, by ignoring files no block selected (`collect_ignore =
+  ["setup.py"]`), or by sitting above the directory of the whole run's pytest
+  config, where pytest never loads it. A `pytest_ignore_collect` hook, or an
+  ignore list buildme cannot read, still runs the whole test command.
 - buildme-findings: when the check of a round's fixes finds a problem, the
   PR description's round section now quotes it and says whether the extra
   block fixed it (with the commit) or why not. Before, the problem appeared
