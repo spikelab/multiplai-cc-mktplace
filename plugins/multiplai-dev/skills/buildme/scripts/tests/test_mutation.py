@@ -838,6 +838,61 @@ class TestRunMutationStep:
             await _run_mutation(config, state, progress)
         assert writer.await_args.kwargs["max_turns"] == 11
 
+    TURN_LIMIT = AgentResult(success=False, output="still working",
+                             error="Reached maximum number of turns (30)\nCLI stderr:\n")
+
+    @pytest.mark.asyncio
+    async def test_s10_a_capped_round_with_a_green_suite_is_kept(self, project):
+        config, state, progress = _setup(project)
+        repo = project[0]
+
+        async def _agent(**_kw):
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            return self.TURN_LIMIT
+
+        with patch("build_pipeline.tdd_engine.run_mutation",
+                   side_effect=[_result(7, 3), _result(10, 0)]) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is True
+        assert run.call_count == 2
+        assert "kill surviving mutants" in _git(repo, "log", "--format=%s")
+        assert "ran out of turns; its tests passed the round's checks and were kept" in \
+            (config.change_dir / "mutation.md").read_text()
+
+    @pytest.mark.asyncio
+    async def test_s11_a_capped_round_that_edited_a_source_file_is_discarded(self, project):
+        config, state, progress = _setup(project)
+        repo = project[0]
+
+        async def _agent(**_kw):
+            (repo / "src" / "calc.py").write_text("def add(a, b):\n    return 0\n")
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 1\n")
+            return self.TURN_LIMIT
+
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(9, 1)), \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is False
+        assert "return a + b" in (repo / "src" / "calc.py").read_text()
+        assert not (repo / "tests" / "test_more.py").exists()
+        assert "src/calc.py" in (config.change_dir / "mutation.md").read_text()
+
+    @pytest.mark.asyncio
+    async def test_s11_a_capped_round_with_a_red_suite_is_discarded(self, project):
+        config, state, progress = _setup(project, test_command="false")
+        repo = project[0]
+
+        async def _agent(**_kw):
+            (repo / "tests" / "test_more.py").write_text("def test_x():\n    assert 1 == 2\n")
+            return self.TURN_LIMIT
+
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(9, 1)) as run, \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent):
+            assert await _run_mutation(config, state, progress) is True
+        assert run.call_count == 1
+        assert not (repo / "tests" / "test_more.py").exists()
+        assert "kill surviving mutants" not in _git(repo, "log", "--format=%s")
+        assert "left the suite red" in (config.change_dir / "mutation.md").read_text()
+
     @pytest.mark.asyncio
     async def test_survivor_round_that_adds_a_non_test_file_fails_the_step(self, project):
         """A new untracked non-test file of any extension (a source module, a
