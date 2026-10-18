@@ -676,12 +676,14 @@ _SATISFIED_EARLIER_RE = re.compile(
 )
 # A block that says it writes no code. Not "no code change to the core": a
 # "no code" scoped to anything but this block is about another part of it.
+# The short form ("no new code") leaves "no new code changes" to the first,
+# so its scope is checked there.
 _NO_CODE_RE = re.compile(
     r"(?:\b(?:no|without)\s+(?:new\s+|production\s+|source\s+|further\s+)?"
     r"(?:code|implementation)\s+(?:changes?|is\s+(?:needed|required)|needed"
     r"|required|work)\b"
     r"|\b(?:needs|requires)\s+no\s+(?:new\s+)?(?:code|implementation)\b"
-    r"|\bno\s+(?:new|production|source)\s+code\b)"
+    r"|\bno\s+(?:new|production|source)\s+code\b(?!\s+changes?\b))"
     r"(?!\s+(?:to|in|for|on|outside|beyond)\s+(?!this\b|these\b|here\b))",
     re.IGNORECASE,
 )
@@ -996,6 +998,7 @@ async def _audit_tasks_shape(
             "Tasks regeneration failed (non-fatal, first pass stands): %s", regen_err
         )
         print(f"PHASE: tasks_regeneration_failed — {regen_err}")
+        report_no_behaviour_blocks_left(output_path)
         return
     output_path.write_text(content)
     log.info("Rewrote artifact after shape audit: %s", output_path)

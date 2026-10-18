@@ -82,8 +82,8 @@ document was available.
 A block that adds nothing the code lacks before it is built: it only confirms,
 verifies or pins what an earlier block delivers, adds tests and no code, or
 says an earlier block satisfies it. The TDD build runs each block's tests
-before implementing it and fails the build when they already pass, so this is
-**critical**. Name the earlier block its criteria belong in.
+before implementing it and fails the build when they already pass.
+Name the earlier block its criteria belong in.
 
 ### `oversized-plan`
 The ticket is too big for one branch. Three checks, in this order:
