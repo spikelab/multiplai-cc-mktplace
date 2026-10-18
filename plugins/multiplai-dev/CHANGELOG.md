@@ -15,6 +15,16 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.84.1] - 2026-10-18
+
+### Changed
+- review: a test now checks that a `## Critical paths` list kept in a
+  subdirectory's `coding-standards.md` (for example `billing/coding-standards.md`)
+  still marks a trim suggestion on that path's tests as important. Review
+  behaves as before; a change that made it read only the root
+  `coding-standards.md` would now fail the test suite instead of quietly
+  suggesting the removal of tests on a critical path.
+
 ## [0.84.0] - 2026-10-18
 
 ### Added
