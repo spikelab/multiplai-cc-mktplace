@@ -406,7 +406,7 @@ CALL_SITES = {
         ("config.model_for('test_writer')", ("test_writer",)),
     ("tdd_engine.py", "_enforce_red_gate", "run_test_writer"):
         ("config.model_for('test_writer')", ("test_writer",)),
-    ("tdd_engine.py", "run_block_tdd", "run_test_writer"):
+    ("tdd_engine.py", "_write_block_tests", "run_test_writer"):
         ("config.model_for('test_writer')", ("test_writer",)),
     ("tdd_engine.py", "run_block_tdd", "run_implementer"):
         ("config.model_for('implementer')", ("implementer",)),

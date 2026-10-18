@@ -53,6 +53,7 @@ async def run_test_writer(
     model: str | None = None,
     effort: str | None = None,
     cwd: str | None = None,
+    max_turns: int = TEST_WRITER_MAX_TURNS,
 ) -> AgentResult:
     """Spawn a test-writing agent for a block.
 
@@ -64,6 +65,8 @@ async def run_test_writer(
         specs=specs,
         context_bundle=context_bundle,
         test_command=test_command,
+        max_turns=max_turns,
+        half=max_turns // 2,
     )
     log.info("Spawning test writer for block: %s", block_name)
     return await agent_call(
@@ -71,7 +74,7 @@ async def run_test_writer(
         allowed_tools=TEST_WRITER_TOOLS,
         model=model,
         effort=effort,
-        max_turns=TEST_WRITER_MAX_TURNS,
+        max_turns=max_turns,
         cwd=cwd,
         call_timeout=TEST_WRITER_TIMEOUT,
         budget_label="test_writer",
@@ -85,6 +88,7 @@ async def run_mutation_test_writer(
     model: str | None = None,
     effort: str | None = None,
     cwd: str | None = None,
+    max_turns: int = TEST_WRITER_MAX_TURNS,
 ) -> AgentResult:
     """Spawn a fresh test writer for the MUTATION step's one survivor round.
 
@@ -95,6 +99,8 @@ async def run_mutation_test_writer(
     prompt = MUTATION_TEST_WRITER_PROMPT.format(
         survivors=survivors,
         test_command=test_command,
+        max_turns=max_turns,
+        half=max_turns // 2,
     )
     log.info("Spawning mutation test writer")
     return await agent_call(
@@ -102,7 +108,7 @@ async def run_mutation_test_writer(
         allowed_tools=TEST_WRITER_TOOLS,
         model=model,
         effort=effort,
-        max_turns=TEST_WRITER_MAX_TURNS,
+        max_turns=max_turns,
         cwd=cwd,
         call_timeout=TEST_WRITER_TIMEOUT,
         budget_label="mutation_test_writer",
