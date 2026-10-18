@@ -305,8 +305,9 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   review runs, so file existence proves nothing. When the review's model call
   fails, the scan's blocks get their own single pass, recorded in
   `plan_review_scan_regen_done`; the review's flags stay false, so a resume
-  asks the model again, and the stage rewrites `tasks.md` at most twice per
-  build. `oversized-plan` is excluded from the regenerable categories
+  asks the model again, and the review rewrites `tasks.md` at most twice per
+  build; the shape audit that runs on each of those rewrites may rewrite it
+  once more. `oversized-plan` is excluded from the regenerable categories
   on purpose: its output is a proposed cut across several tickets, and handing
   it to a rewriter would have the rewriter perform the split silently inside
   one plan, which is the opposite of what the finding asks for. This phase
