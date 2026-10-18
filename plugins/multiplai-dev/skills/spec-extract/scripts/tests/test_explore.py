@@ -58,6 +58,7 @@ def test_explore_writes_facts_and_report(tmp_path, capsys, fake_call):
     (kw,) = fake_call.kwargs
     assert kw["allowed_tools"] == ["Read", "Glob", "Grep"]
     assert kw["cwd"] == str(folder / "snapshot")
+    assert kw["read_roots"] == [str(folder / "snapshot")]
     assert (
         not (folder / "facts.json.tmp").exists()
         and not (folder / "report.md.tmp").exists()

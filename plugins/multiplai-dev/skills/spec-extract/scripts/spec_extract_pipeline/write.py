@@ -149,6 +149,7 @@ async def run(
             allowed_tools=list(sdk.READ_ONLY_TOOLS),
             max_turns=sdk.EXPLORE_MAX_TURNS,
             cwd=str(run_dir / SNAPSHOT_DIR),
+            read_roots=[str(run_dir / SNAPSHOT_DIR)],
             model=model,
         ),
     )
