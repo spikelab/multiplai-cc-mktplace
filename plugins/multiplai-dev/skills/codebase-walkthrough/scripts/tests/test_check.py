@@ -24,25 +24,25 @@ def test_check_exits_1_on_a_moved_line(fresh_ws, tmp_path, monkeypatch, fake_fet
     assert main(["check", str(md)]) == 0
     # A link that now points one line off: its quote is no longer at that line.
     text = md.read_text()
-    moved = text.replace("`engine/bookings/urls.py:6`](", "`engine/bookings/urls.py:5`](", 1)
+    moved = text.replace("`engine/bookings/client.py:16`](", "`engine/bookings/client.py:15`](", 1)
     assert moved != text
     md.write_text(moved)
     capsys.readouterr()
     assert main(["check", str(md)]) == 1
     out = capsys.readouterr().out
-    assert "FAIL engine/bookings/urls.py:5-5: quote not at cited lines" in out
+    assert "FAIL engine/bookings/client.py:15-15: quote not at cited lines" in out
     assert re.search(r"check: \d+ checked, 1 failed", out)
 
 
 def test_check_at_head_says_the_code_moved(fresh_ws, tmp_path, monkeypatch, fake_fetch, capsys):
     md = _walkthrough(fresh_ws, tmp_path, monkeypatch, fake_fetch)
-    urls = fresh_ws["engine"] / "bookings" / "urls.py"
-    urls.write_text("# a new first line\n" + urls.read_text())
-    fixture_repo.commit(fresh_ws["engine"], "move the route down")
+    client = fresh_ws["engine"] / "bookings" / "client.py"
+    client.write_text("# a new first line\n" + client.read_text())
+    fixture_repo.commit(fresh_ws["engine"], "move the client down")
     assert main(["check", str(md)]) == 0                 # the commits in the header did not change
     capsys.readouterr()
     assert main(["check", str(md), "--at-head"]) == 1    # HEAD has moved on
-    assert "engine/bookings/urls.py:6" in capsys.readouterr().out
+    assert "engine/bookings/client.py:16" in capsys.readouterr().out
 
 
 def test_check_catches_an_edited_snippet(tmp_path, ws):

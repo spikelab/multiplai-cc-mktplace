@@ -23,10 +23,28 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
 4. **docs** — code fetches the vendor's `llms.txt` and the pages it lists that
    name a resource the code calls, and maps each API path to a request in the
    API collection. One agent per resource links the docs to the code.
-5. **trace** — one agent per entry point (webhooks first, then routes called
-   from other repositories) follows the code to its last effect, hop by hop.
+5. **trace** — `code_facts.map_paths` finds the entry points of the module's
+   repository (argparse, click and typer commands, `[project.scripts]`,
+   `__main__` modules, `python -m` commands in a `SKILL.md`, hooks). The web
+   entries the boundary stage found are added as caller seeds, each at its
+   handler: webhook routes, routes called from other repositories, Celery
+   beat entries, then the other routes. One agent per entry follows the code
+   hop by hop. The whole module is the
+   scope: every entry whose path reaches one of its lines is kept, up to
+   `--scenarios` paths (default 21), and code gates every hop. Every entry
+   left out (over the cap, unreachable, a trace that failed) is listed with
+   its stage and reason in the **Left out** table under Coverage. If path
+   finding itself fails, the Paths section says why and the rest of the
+   walkthrough is still written; a trust or budget stop still halts the run. The walkthrough's **Paths** section lists each path: its
+   entry point, kind and who invokes it, its hops as `path:line` links with
+   ids `p<n>h<k>`, where the trace stops if it broke and why, and the e2e
+   tests that run it (or "no e2e test"). In human mode the same result is
+   written beside the walkthrough as `<name>-paths.json`, a `paths.v1`
+   document (schema: `lib/code_facts/code_facts/schema/paths.v1.schema.json`)
+   for other tools; `check` and buildme do not read it.
 6. **write** — one agent per section, with no tools, writes from the checked
-   claims only and refers to code by citation id. Code turns the ids into
+   claims only and refers to code by citation id. Each path gets one or two
+   paragraphs written from its checked hops, citing them by hop id. Code turns the ids into
    `path:line` links and inserts the code snippets from the commit.
 
 Between the stages, gates written in Python re-read every cited line range
@@ -83,7 +101,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 |-----|---------|---------|
 | target | Directory of the module, inside a git repository | required |
 | `--depth` | `overview` (skips test files), `standard`, `deep` | `standard` |
-| `--mode` | `human` (Markdown and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or scenarios) | `human` |
+| `--mode` | `human` (Markdown and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or paths) | `human` |
 | `--name` | Base file name | the module directory, lower-cased |
 | `--output` | Directory for the walkthrough files | `INBOX/` if it exists, else the current directory |
 | `--search-root` / `--repos` | Where to look for references | the nearest ancestor holding several repositories |
@@ -91,6 +109,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 | `--docs` | Vendor docs base URL with an `llms.txt` | none |
 | `--docs-dir` | Local docs directory (repeatable) | a directory next to the repos named after the vendor |
 | `--api-collection` | Bruno/OpenCollection directory | a directory next to the repos holding `opencollection.yml` |
+| `--scenarios` | Cap on the number of paths traced (the flag keeps its old name) | 21 |
 | `--max-usd` | Budget circuit breaker | 50 |
 
 ## Steps
@@ -134,7 +153,7 @@ every exit but a kill, `SPEND:<usd>:<tokens>`: what this run's model calls
 cost (a resume counts only its own calls). Read the
 `## Coverage` section of the Markdown file and paste its table into chat as it
 is, with the list of files that have no surviving fact. Then give the paths of
-the Markdown and `walkthrough.json` files.
+the Markdown, `walkthrough.json` and `<name>-paths.json` files.
 
 Then, in human mode, open the walkthrough in the review-viewer. Start it in
 the background (Bash tool, `run_in_background: true`):
@@ -174,7 +193,11 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
 It re-checks every `path:line` link and snippet against the commits in the
 file's header and prints `N checked, M failed`; it exits 1 on any failure.
 With `--at-head` it checks against each repository's current HEAD, which says
-whether the code has moved since.
+whether the code has moved since. A failing path hop is named by its id (`FAIL p2h3 …`),
+a hop cited in prose whose anchor is missing fails as `unresolved hop
+citation p4h1`, and when the file has path hops `check: N hops checked` is
+printed on stderr. It reads only the Markdown; walkthroughs with the older
+"End-to-end scenarios" section are checked as before.
 
 ## Configuration
 

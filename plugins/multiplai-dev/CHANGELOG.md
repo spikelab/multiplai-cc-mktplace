@@ -15,6 +15,51 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.82.0] - 2026-10-18
+
+### Changed
+- codebase-walkthrough: the trace stage now finds its entry points with
+  code_facts' `map_paths`, so a walkthrough of a CLI or skill repository
+  traces its argparse, click and typer commands, scripts, `__main__` modules,
+  skill commands and hooks, not only web routes. The whole module is the
+  scope: every entry point whose path reaches it is traced. Web routes,
+  routes called from other repositories and Celery beat entries are still
+  traced, now starting at their handler function.
+- codebase-walkthrough: the "End-to-end scenarios" section is replaced by a
+  **Paths** section, rendered by code. For each path it gives the entry
+  point, its kind and who invokes it, the hops as `path:line` links with ids
+  (`p2h3`), where the trace stops and why, and the e2e tests that run it, or
+  "no e2e test". The coverage table's "Scenarios cut short" row becomes
+  "Paths traced" and "Paths cut short". Each path still opens with one or two
+  paragraphs written from its checked hops; a hop cited in prose links to
+  its line and to the hop in the Paths section.
+- codebase-walkthrough: `--scenarios` now caps the number of paths, and its
+  default rises from 6 to 21; a value below 1 is rejected. Every entry point
+  left out, over the cap or for another reason, is listed with its stage and
+  reason in a new **Left out** table under Coverage, and counted in the
+  "Entries left out" row.
+- codebase-walkthrough: a trace that fails for one entry point no longer
+  costs the others; it is listed under **Left out**. If path finding fails as
+  a whole, the Paths section says why and the walkthrough is still written.
+  Resuming a run saved by an earlier version, after its trace stage, traces
+  again rather than reporting no paths.
+- codebase-walkthrough: trace agents can now read only the target repository's
+  snapshot (`read_roots`), not any absolute path. Before, the working directory
+  set where relative paths started but did not limit reads.
+
+### Added
+- codebase-walkthrough: in human mode a run also writes `<name>-paths.json`
+  beside the walkthrough: the paths, the entries left out and their e2e
+  tests as a `paths.v1` document, written by code_facts' `write_paths_file`.
+  The run prints its path as another `walkthrough:` line. If it cannot be
+  written, the walkthrough is kept and the error is recorded.
+- codebase-walkthrough: `check` (and `check --at-head`, which buildme uses to
+  find stale walkthroughs) names a failing path hop by its id, as in
+  `FAIL p2h3 <repo>/<path>:<lines>: …`, fails a hop cited in prose whose
+  anchor is missing, and prints `check: N hops checked` on stderr. Its stdout
+  summary line is unchanged, and walkthroughs with the older "End-to-end
+  scenarios" section are checked as before.
+
 ## [0.81.0] - 2026-10-18
 
 ### Added

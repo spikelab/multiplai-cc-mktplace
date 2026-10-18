@@ -5,7 +5,8 @@
   check   — re-check every `path:line` and snippet in a finished walkthrough
 
 stdout contract: one summary line per stage, then `walkthrough: <path>` for
-each file written, or `check: N checked, M failed`. `run` and `resume` print
+each file written, or `check: N checked, M failed` (and, when the file has path
+hops, `check: N hops checked` on stderr). `run` and `resume` print
 `SPEND:<usd>:<tokens>` last, on every exit but a kill: what this process's
 model calls cost.
 
@@ -81,6 +82,17 @@ def _repo_key(text: str) -> str:
     return text
 
 
+def _positive_int(value: str) -> int:
+    """A whole number of at least 1 (`--scenarios`: the path cap)."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a whole number") from None
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {n}")
+    return n
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="walkthrough_pipeline",
@@ -108,7 +120,8 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--docs-pages", type=int, default=30, help="Most doc pages fetched (default 30)")
     rn.add_argument("--api-collection", help="A Bruno/OpenCollection directory of API requests")
     rn.add_argument("--unit-lines", type=int, default=6000, help="Most lines per explore unit (default 6000)")
-    rn.add_argument("--scenarios", type=int, default=6, help="Most end-to-end scenarios traced (default 6)")
+    rn.add_argument("--scenarios", type=_positive_int, default=21,
+                    help="Cap on the number of paths traced (default: 21).")
     rn.add_argument("--lsp-timeout", type=float, default=300.0,
                     help="Seconds pyright-langserver gets for references (default 300; 0 = skip LSP)")
     _run_flags(rn)
@@ -153,12 +166,16 @@ def _main(args: argparse.Namespace) -> int:
              os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found")
 
     if args.command == "check":
-        from .check import check_file
+        from .check import check_file, hop_count
         overrides = dict(x.split("=", 1) for x in args.repo if "=" in x)
         checked, failures = check_file(Path(args.walkthrough), at_head=args.at_head, repo_paths=overrides)
         for f in failures:
             print(f"FAIL {f}")
         print(f"check: {checked} checked, {len(failures)} failed")
+        hops = hop_count(Path(args.walkthrough).expanduser().read_text(encoding="utf-8"))
+        if hops:
+            # On stderr, so the stdout line above stays byte for byte what parsers expect.
+            print(f"check: {hops} hops checked", file=sys.stderr)
         return 1 if failures or checked == 0 else 0
 
     if getattr(args, "trust_repo", False):

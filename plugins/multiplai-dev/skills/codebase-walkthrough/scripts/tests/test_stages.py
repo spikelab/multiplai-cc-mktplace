@@ -51,20 +51,11 @@ def test_write_gate_cuts_a_paragraph_with_an_invented_path_line(ws, tmp_path, mo
     assert all(c["allowed_tools"] == [] for c in agents.calls if c["schema"] == "SectionOutput")
 
 
-def test_trace_gate_cuts_a_broken_chain(ws, tmp_path, monkeypatch, fake_fetch):
-    agents = FakeAgents(broken_trace=True)
-    md, state = _run(ws, tmp_path, monkeypatch, agents)
-    webhook = next(s for s in state["scenarios"] if s["seed"]["path"].endswith("bookings/urls.py"))
-    assert webhook["stops_at"] == 2 and len(webhook["hops"]) == 2
-    assert "> trace stops at hop 2:" in md
-    assert any(c["schema"] == "TraceOutput" and "rejected by a program" in c["prompt"] for c in agents.calls)
-
-
 def test_agents_get_read_only_tools_and_run_in_the_snapshot(ws, tmp_path, monkeypatch, fake_fetch):
     agents = FakeAgents()
     _run(ws, tmp_path, monkeypatch, agents)
     for c in agents.calls:
-        if c["schema"] in ("ExploreOutput", "TraceOutput", "DocsOutput"):
+        if c["schema"] in ("ExploreOutput", "DocsOutput"):
             assert c["allowed_tools"] == ["Read", "Grep", "Glob"]
             assert c["cwd"].endswith(("/snap", "/docs-cache"))
 

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 
+import code_facts
+import code_facts.paths
 import pytest
 
 TESTS = Path(__file__).resolve().parent
@@ -71,3 +74,31 @@ def _no_session_defaults(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr("multiplai_core.session.load_multiplai_conf",
                         lambda: {"_sections": {}})
+
+
+class MapPathsSpy:
+    """The real `map_paths`, recording each call's arguments and the result it hands back."""
+
+    def __init__(self, reorder=None):
+        self.real = code_facts.map_paths
+        self.reorder = reorder
+        self.calls: list[dict] = []
+        self.results: list[code_facts.PathsResult] = []
+
+    async def __call__(self, **kw):
+        self.calls.append({**kw, "changed_lines": copy.deepcopy(kw.get("changed_lines"))})
+        result = await self.real(**kw)
+        if self.reorder:
+            result = self.reorder(result)
+        self.results.append(result)
+        return result
+
+
+@pytest.fixture
+def spy(monkeypatch):
+    """The real `map_paths`, spied on, under every name the trace stage could call it by."""
+    from walkthrough_pipeline.stages import trace
+    s = MapPathsSpy()
+    for owner in (code_facts, code_facts.paths, trace):
+        monkeypatch.setattr(owner, "map_paths", s, raising=False)
+    return s

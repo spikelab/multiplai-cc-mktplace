@@ -78,7 +78,7 @@ def require_trusted_repo() -> None:
 
 async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effort: str | None,
                max_turns: int, cwd: str | None, call_timeout: float, budget_label: str,
-               run_label: str = "") -> str:
+               run_label: str = "", read_roots: list[str] | None = None) -> str:
     require_trusted_repo()
     budget.check(stage=budget_label)
     try:
@@ -92,6 +92,8 @@ async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effo
             timeout_s=call_timeout,
             label=run_label or budget_label or "walkthrough",
             component="walkthrough",
+            # None installs no hook; a list makes run_agent deny reads outside those folders.
+            read_roots=read_roots,
         )
     except AgentRunError as e:
         partial = getattr(e, "partial", None)
@@ -114,6 +116,7 @@ async def agent_call_structured(
     cwd: str | None = None,
     budget_label: str = "",
     call_timeout: float = DEFAULT_CALL_TIMEOUT_S,
+    read_roots: list[str] | None = None,
 ) -> T:
     """Run an agent and parse its final message into *schema*.
 
@@ -123,7 +126,8 @@ async def agent_call_structured(
     error appended.
     """
     name = budget_label or "agent"
-    common = dict(model=model, effort=effort, cwd=cwd, call_timeout=call_timeout, budget_label=budget_label)
+    common = dict(model=model, effort=effort, cwd=cwd, call_timeout=call_timeout, budget_label=budget_label,
+                  read_roots=read_roots)
     text: str | None = None
     try:
         text = await _run(prompt, allowed_tools=allowed_tools, max_turns=max_turns, **common)

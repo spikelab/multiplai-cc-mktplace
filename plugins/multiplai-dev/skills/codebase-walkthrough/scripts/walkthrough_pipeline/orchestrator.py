@@ -30,7 +30,7 @@ from .render import write_outputs
 from .stages import RunContext
 from .stages.docs import run_docs
 from .stages.explore import run_explore
-from .stages.trace import run_trace
+from .stages.trace import PATHS_CACHE, rewind_legacy_trace, run_trace
 from .stages.write import run_write
 from .state import STATE_FILE, load_state, save_state
 
@@ -65,7 +65,7 @@ class RunOptions:
     docs_pages: int = 30
     api_collection: str | None = None
     unit_lines: int = 6000
-    scenarios: int = 6
+    scenarios: int = 21          # the path cap
     lsp_timeout: float = 300.0
 
 
@@ -99,6 +99,8 @@ def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
     run_dir.mkdir(parents=True, exist_ok=True)
     for stale in (STATE_FILE, "boundary.json"):
         (run_dir / stale).unlink(missing_ok=True)
+    # The stored trace answers belong to the state just deleted: a new run asks for its own.
+    shutil.rmtree(run_dir / PATHS_CACHE, ignore_errors=True)
     _keep_previous_progress(run_dir)
     try:
         info, repo = target_mod.build_target(opts.target, run_dir, name=opts.name, depth=opts.depth,
@@ -272,7 +274,7 @@ async def run_state(state: WalkState, run_dir: Path, config: WalkConfig, *, sess
     covered = len(t.files) - len([f for f in target_files_ws(t) if f not in {c.path for x in state.facts
                                                                             for c in x.citations}])
     message = (f"walkthrough finished: {len(state.facts)} facts, {covered}/{len(t.files)} files with facts, "
-               f"{len(state.scenarios)} scenarios")
+               f"{len(state.paths.paths) if state.paths else 0} paths")
     progress.done(f"{message} (${ledger.cost_usd:.2f})")
     print(f"{slug}: {message}; run dir {run_dir}", flush=True)
     log_event("walkthrough", "done", message, session_id=session_id, target=slug, facts=len(state.facts),
@@ -294,4 +296,5 @@ async def resume(run_dir: Path, config: WalkConfig, *, session_id: str = "",
             raise WalkError("the docs stage of this run is already done; --docs/--no-docs can no longer change it")
         state.options["docs"] = docs
         state.docs = {}
+    rewind_legacy_trace(state)
     return await run_state(state, run_dir, config, session_id=session_id)
