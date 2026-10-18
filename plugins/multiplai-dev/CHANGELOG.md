@@ -15,7 +15,48 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [Unreleased]
+## [0.81.0] - 2026-10-18
+
+### Added
+- code_facts: `map_paths` maps the code paths of a snapshot, from each entry
+  point to the code it reaches, and `write_paths_file` writes the result as a
+  `paths.v1` document (contract: `lib/code_facts/code_facts/schema/paths.v1.schema.json`).
+  No skill uses it yet.
+  - Entry points are found statically, without importing or running the code.
+    They are argparse subcommands, click and typer commands,
+    `[project.scripts]` keys, `__main__.py` files and `if __name__ ==
+    "__main__":` guards, `python -m` commands in a `SKILL.md`'s shell fences,
+    `"type": "command"` hooks in `hooks.json` or `.claude/settings*.json`, and
+    any seeds the caller passes. Entries that run the same function become one
+    entry, with the others listed as its invokers. A candidate that is examined
+    but not emitted is reported as a diagnostic.
+  - Each entry says who invokes it, in `invoked_by`: an agent following a
+    `SKILL.md`, Claude Code on a hook's event, a person or a script running a
+    command, the caller of a seed, or, for an entry the agent found, another
+    program, skill or agent.
+  - With `fallback=True` (the default), one read-only agent is asked for entry
+    points the scan missed. An entry it lists is kept only when its citation
+    re-reads at the commit and no discovered entry already holds that line or
+    that function.
+  - Each entry is traced into a linear path of up to 20 hops. Every hop's
+    citation is checked, and the agent is asked again once when a hop fails.
+  - Given `changed_lines`, the run is scoped to the change. Entries whose
+    imports cannot reach a changed file are dropped. At most `trace_limit`
+    entries (default 30) are traced, and at most `cap` paths (default 10) that
+    cover a changed line are kept. Every dropped entry is listed with its
+    stage and reason.
+  - Each kept path lists the tests that invoke its entry, found by reading
+    them and not by running them: a direct call, an argparse argv, a click or
+    typer runner, `subprocess` or `runpy`. Tests that patch the symbol at hop 2
+    are listed separately. Tests that patch out the entry's handler are not
+    listed.
+  - With `cache_dir`, every model answer is kept under
+    `<cache_dir>/paths-answers/`, so a rerun asks only the questions it has no
+    answer for. A failed call is asked again on the next run.
+
+### Changed
+- code_facts depends on `jsonschema`, which `write_paths_file` uses to
+  validate the document before it writes it.
 
 ## [0.80.0] - 2026-10-18
 

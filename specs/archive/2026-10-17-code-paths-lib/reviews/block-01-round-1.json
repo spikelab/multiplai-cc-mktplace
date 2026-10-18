@@ -1,0 +1,178 @@
+{
+  "generated_at": "2026-10-17T05:25:07.516925+00:00",
+  "kind": "review",
+  "block": {
+    "number": 1,
+    "name": "Write an empty but valid `paths.v1` document through `map_paths` and `write_paths_file`"
+  },
+  "round": 1,
+  "head_sha": "3dd3390dae5059501592992e6ed2876dc4be10e8",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "paths.py holds only the contract: Literal aliases for kinds, stages, reasons, match kinds and fallback states; strict models; schema generation; argument normalisation; the `map_paths` stub; and the atomic writer. Domain concepts are typed with `Literal` aliases and `Location`/`Handler` models, with no tuples or dicts. Nothing imports walkthrough_pipeline. Possible smells: `MockedE2ETest(E2ETest)` inheritance departs from the stated interface and lets a mocked record be accepted where an `E2ETest` is expected. Frozen models still expose mutable `list` fields, so `result.paths.append(...)` bypasses `_consistent`. `map_paths` computes `normalise_changed_lines(...)` and throws the result away, which is acceptable for a stub.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "The tests assert observable outcomes: exact dumps, bytes, JSON pointers in error messages, and filesystem snapshots. They include a 29-case schema reject list, an accept list for path-regex edge cases (`a/.hidden/b.py`, `a..b/c.py`), the 21\u219220 hop boundary, interrupted fsync/replace with and without an existing target, and an AST parity check. Gaps: no model-level StrictBool or strict-int test (only the schema is tested against `scoped: \"false\"`). conftest `paths_name()` looks names up in three modules, so the tests never pin where the contract lives. The conftest adds mid-file imports with `# noqa: E402`.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "Every block-1 bullet is implemented: `$schema` and `$id` equal facts.v1's with `facts.v1` replaced (`https://json-schema.org/draft/2020-12/schema`, `paths.v1.schema.json`), `additionalProperties: false` throughout, the location and id patterns, 1..20 hops, the closed enums for kinds, stages, diagnostics, skips, match and status, the four write steps, the argument checks, `./` normalisation, a null cap when unscoped, and fallback recorded as skipped. Divergences: drop and break reasons are not closed codes (D1#6/D4). `$defs` use class names, not D16's lowercase names (reported by the implementer). The schema leaves `note`/`side` optional and gives `stops_at` no `minimum`.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The `map_paths` signature matches the interface exactly, and a test pins it. Exports are additive, the dependency is declared and locked, and the committed schema is generated from the models. Loose seams: models in lax mode accept inputs the schema rejects (`\"scoped\": \"false\"`, `\"line\": \"3\"`), so a downstream reader using `PathsResult.model_validate_json` is more permissive than the published contract. Through the `E2ETest` annotation, a `MockedE2ETest` instance placed in `tests.e2e` would serialise without `patch_file`/`patch_line`.",
+      "confidence": 1.0
+    }
+  ],
+  "weighted_average": 4.0,
+  "gate": {
+    "passed": false,
+    "reason": "Spec-compliance verdict failed \u2014 missing: ['Drop `reason` (and `TracedPath.break_reason`) are not closed codes. design.md D1#6 says \"`stage` and `reason` are closed codes (D4)\", and the block asks for \"closed enums for kinds, stages and reasons\". In paths.py, `PathDrop.reason: str = Field(min_length=1)` and the schema\\'s `PathDrop.reason` is `{\"minLength\": 1, \"type\": \"string\"}`, so `{\"stage\": \"cap\", \"reason\": \"anything\"}` validates under both the model and the schema. The interface line `reason: str` conflicts with this, and the implementer reported it as SURPRISE (3). It still needs a decision rather than being silently left open.']"
+  },
+  "missing": [
+    "Drop `reason` (and `TracedPath.break_reason`) are not closed codes. design.md D1#6 says \"`stage` and `reason` are closed codes (D4)\", and the block asks for \"closed enums for kinds, stages and reasons\". In paths.py, `PathDrop.reason: str = Field(min_length=1)` and the schema's `PathDrop.reason` is `{\"minLength\": 1, \"type\": \"string\"}`, so `{\"stage\": \"cap\", \"reason\": \"anything\"}` validates under both the model and the schema. The interface line `reason: str` conflicts with this, and the implementer reported it as SURPRISE (3). It still needs a decision rather than being silently left open."
+  ],
+  "extra": [
+    "specs/config.yaml is a new file (`context: \"Project: \\n\"`, `tdd.test_command: pytest -xvs`) that no part of the block spec asks for. It looks like build-tool scaffolding committed with the block.",
+    "`MockedE2ETest` subclasses `E2ETest` instead of `_Strict` as the interface states (`class MockedE2ETest(_Strict): ...`).",
+    "`normalise_changed_lines` raises `TypeError` for a non-int or bool line, which the spec does not list. D17 allows \"`ValueError` or `TypeError`\" for bad arguments, so this is defensible."
+  ],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "`MockedE2ETest` inherits from `E2ETest` rather than `_Strict` as the interface states. An instance placed in `E2EListing.e2e` would be accepted and serialised without `patch_file`/`patch_line`.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "paths.py `class MockedE2ETest(E2ETest):`. The interface reads `class MockedE2ETest(_Strict): node_id ...; patch_file: str; patch_line: int`. `e2e: list[E2ETest]` accepts subclass instances unchanged, and pydantic v2 serialises them by the annotated type's fields. Declaring both models on `_Strict`, with a shared field mixin if needed, would close this.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 117,
+      "reviewers": []
+    },
+    {
+      "claim": "The committed schema is weaker than the model in places it could express: `stops_at` has no `minimum: 1`, and `note`/`side` are not in the hop's `required` list, though every written file contains them.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "The schema's `TracedPath.stops_at` is `anyOf [{\"type\": \"integer\"}, {\"type\": \"null\"}]` with no minimum. `PathHop.required` lists only `symbol_called, path, line_start, line_end, quote`. A schema-only consumer accepts `stops_at: 0` or a hop missing `side`. Using `stops_at: int | None = Field(ge=1)` would put the minimum in the generated schema.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/schema/paths.v1.schema.json",
+      "line": 520,
+      "reviewers": []
+    },
+    {
+      "claim": "Frozen output models still expose mutable list fields, so the cross-field invariants checked at construction (contiguous ids, no unscoped coverage, disjoint listings) can be broken after construction.",
+      "severity": "Minor",
+      "confidence": 0.4,
+      "evidence": "`_Strict` sets `frozen=True`, which only blocks attribute assignment. `PathsResult.paths: list[TracedPath]` and `E2EListing.e2e: list[E2ETest]` are plain lists, so `result.paths.append(...)` skips `_consistent`. `write_paths_file` validates only against the schema, which cannot express id contiguity or the scope/cap rules. Using `tuple[...]` fields, or running `PathsResult.model_validate(json.loads(text))` inside `write_paths_file` as the rubric's dump \u2192 jsonschema \u2192 model_validate order describes, would restore the check.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 336,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "The strict output models still parse in pydantic's lax mode, so they accept documents the committed schema rejects. Model and schema disagree on input.",
+      "severity": "Minor",
+      "confidence": 0.75,
+      "evidence": "paths.py `class _Strict(_Model): model_config = ConfigDict(extra=\"forbid\", frozen=True)` sets no `strict=True`. `PathsResult.scoped: bool` and the `int` line fields therefore coerce `\"false\"`/`\"3\"`, while the schema declares `\"type\": \"boolean\"`/`\"integer\"`. test_paths_schema.py rejects `((\"scoped\",), \"false\")` only through the schema, with no model-level counterpart. The rubric lists `StrictBool` as an edge case to pin.\nREJECTED: The interface specifies `_Strict` exactly as `model_config = ConfigDict(extra=\"forbid\", frozen=True)`, with fields typed `bool` and `int`, and the diff matches it. Adding `strict=True` or `StrictBool` would depart from that interface. These are output models built by code. `write_paths_file` checks the serialised document against the schema, which rejects non-boolean and non-integer values, so a coerced input cannot reach a written file in the wrong type.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 65,
+      "reviewers": [],
+      "judge_reason": "The interface specifies `_Strict` exactly as `model_config = ConfigDict(extra=\"forbid\", frozen=True)`, with fields typed `bool` and `int`, and the diff matches it. Adding `strict=True` or `StrictBool` would depart from that interface. These are output models built by code. `write_paths_file` checks the serialised document against the schema, which rejects non-boolean and non-integer values, so a coerced input cannot reach a written file in the wrong type."
+    },
+    {
+      "claim": "Drop reason and break_reason are open strings in both the model and the schema, although D1#6/D4 say they are closed codes and the block asks for closed enums for reasons.",
+      "severity": "Minor",
+      "confidence": 0.65,
+      "evidence": "paths.py `class PathDrop`: `reason: str = Field(min_length=1)`; `class TracedPath`: `break_reason: str | None = Field(min_length=1)`. In the schema, `PathDrop.reason` is `{\"minLength\": 1, \"type\": \"string\"}`. design.md:45 says \"`stage` and `reason` are closed codes (D4)\". The block's interface says `reason: str` and the implementer noted the conflict (SURPRISE 3). A Literal union of the drop reasons and break codes, plus a per-stage check, would close it.\nREJECTED: The interface says `PathDrop.reason: str` and `TracedPath.break_reason: str | None`, and the diff follows it. The block's 'closed enums for kinds, stages and reasons' is satisfied by the `PathDiagnostic.reason` and `ListingSkip.reason` Literals. The `trace` stage also allows 'any break code', so its reason set is open-ended by design. The implementer recorded this as a clarify item for respec. Changing it here would contradict the stated interface.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 157,
+      "reviewers": [],
+      "judge_reason": "The interface says `PathDrop.reason: str` and `TracedPath.break_reason: str | None`, and the diff follows it. The block's 'closed enums for kinds, stages and reasons' is satisfied by the `PathDiagnostic.reason` and `ListingSkip.reason` Literals. The `trace` stage also allows 'any break code', so its reason set is open-ended by design. The implementer recorded this as a clarify item for respec. Changing it here would contradict the stated interface."
+    },
+    {
+      "claim": "The `$defs` keys are pydantic class names, not the lowercase names D16 lists.",
+      "severity": "Note",
+      "confidence": 0.7,
+      "evidence": "design.md:448: \"`$defs` cover `location`, `handler`, `entry`, `invoker`, `hop`, `path`, `e2eTest`, `mockedE2eTest`, `drop`, `diagnostic` and `skip`.\" The committed schema has `E2EListing`, `E2ETest`, `FallbackStatus`, `Handler`, `Invoker`, `ListingSkip`, `Location`, `MockedE2ETest`, `PathDiagnostic`, `PathDrop`, `PathEntry`, `PathHop`, `TracedPath`. The implementer reported this (SURPRISE 1), and no test or consumer depends on the names.\nREJECTED: The block asks only for `$defs` plus `additionalProperties: false`. The schema is generated from the models in the same way as facts.v1, so the def names follow the class names. The implementer recorded the naming difference from D16 as a clarify item for respec, and nothing depends on the def keys. This is a deliberate, recorded decision, not a defect in the block.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/schema/paths.v1.schema.json",
+      "line": 4,
+      "reviewers": [],
+      "judge_reason": "The block asks only for `$defs` plus `additionalProperties: false`. The schema is generated from the models in the same way as facts.v1, so the def names follow the class names. The implementer recorded the naming difference from D16 as a clarify item for respec, and nothing depends on the def keys. This is a deliberate, recorded decision, not a defect in the block."
+    },
+    {
+      "claim": "The diff changes the multiplai-dev plugin without a version bump or a CHANGELOG entry, which CLAUDE.md says the changelog gate enforces. This may be deferred to a later block of the build.",
+      "severity": "Note",
+      "confidence": 0.45,
+      "evidence": "CLAUDE.md, Release convention: \"Steps 1 and 2 are enforced: the **`changelog-gate`** CI job fails a pull request that changes a plugin without both.\" The diff touches plugins/multiplai-dev/lib/code_facts/** but neither plugins/multiplai-dev/CHANGELOG.md nor a version field. It also changes code, so the lockfile-only exemption does not apply.\nREJECTED: The version bump and CHANGELOG entry are a pull-request-level release step that the changelog gate enforces on the PR. They are not part of this block's scope, and the block spec does not list them. In a multi-block build they belong at the end of the build, not in block 1.",
+      "dimension": "conventions",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "The version bump and CHANGELOG entry are a pull-request-level release step that the changelog gate enforces on the PR. They are not part of this block's scope, and the block spec does not list them. In a multi-block build they belong at the end of the build, not in block 1."
+    },
+    {
+      "claim": "specs/config.yaml is an unrequested new file that looks like tooling scaffolding.",
+      "severity": "Note",
+      "confidence": 0.6,
+      "evidence": "+context: \"Project: \\n\"\n+schema: spec-driven\n+tdd:\n+  enabled: true\n+  test_command: pytest -xvs. The block spec lists no such file.\nREJECTED: `specs/config.yaml` is configuration for the spec-driven or TDD harness, produced next to `implementation-notes.md` by the build tooling. It is not block code, and removing it from within the block could break the harness. It is outside what this block's review should adjudicate.",
+      "dimension": "Spec Compliance",
+      "file_path": "specs/config.yaml",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "`specs/config.yaml` is configuration for the spec-driven or TDD harness, produced next to `implementation-notes.md` by the build tooling. It is not block code, and removing it from within the block could break the harness. It is outside what this block's review should adjudicate."
+    },
+    {
+      "claim": "The implementer's GREEN evidence is the bare assertion \"All tests pass\" with no test output, so it cannot be checked against the diff.",
+      "severity": "Note",
+      "confidence": 0.5,
+      "evidence": "The GREEN evidence block contains only `All tests pass`. The RED block shows `119 failed, 21 passed`. Nothing in the diff contradicts a passing run, and static reading suggests the tests are consistent with the implementation.\nREJECTED: This is about the agent's reported evidence, not the diff. The reviewer says nothing in the diff contradicts a passing run, and the tests read as consistent with the implementation. There is nothing to fix in the block.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_map_paths_contract.py",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "This is about the agent's reported evidence, not the diff. The reviewer says nothing in the diff contradicts a passing run, and the tests read as consistent with the implementation. There is nothing to fix in the block."
+    },
+    {
+      "claim": "The conftest helper `paths_name()` looks up contract names in three possible modules, so the tests never pin where the paths.v1 names live. Non-exported names such as `_Strict` and `normalise_changed_lines` could move without any test noticing.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "conftest.py: `for mod in (\"code_facts\", \"code_facts.paths\", \"code_facts.models\"): ... if hasattr(module, name): return getattr(module, name)`. Its docstring reads \"A paths.v1 name from wherever block 1 put it\". Now that the location is known (`code_facts.paths`), the tests could import from it directly.\nREJECTED: The interfaces do not name the module that holds the non-exported names, as the test writer noted, so the flexible lookup reflects a gap in the spec rather than a deviation from it. The public names are pinned by `test_new_names_are_exported_and_old_ones_kept`, and `test_paths_schema_committed.py` already imports from `code_facts.paths` directly. Pinning the module would be a style preference, not a correctness fix.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/conftest.py",
+      "line": 59,
+      "reviewers": [],
+      "judge_reason": "The interfaces do not name the module that holds the non-exported names, as the test writer noted, so the flexible lookup reflects a gap in the spec rather than a deviation from it. The public names are pinned by `test_new_names_are_exported_and_old_ones_kept`, and `test_paths_schema_committed.py` already imports from `code_facts.paths` directly. Pinning the module would be a style preference, not a correctness fix."
+    }
+  ],
+  "fix_brief": "Fix review issues: Spec-compliance verdict failed \u2014 missing: ['Drop `reason` (and `TracedPath.break_reason`) are not closed codes. design.md D1#6 says \"`stage` and `reason` are closed codes (D4)\", and the block asks for \"closed enums for kinds, stages and reasons\". In paths.py, `PathDrop.reason: str = Field(min_length=1)` and the schema\\'s `PathDrop.reason` is `{\"minLength\": 1, \"type\": \"string\"}`, so `{\"stage\": \"cap\", \"reason\": \"anything\"}` validates under both the model and the schema. The interface line `reason: str` conflicts with this, and the implementer reported it as SURPRISE (3). It still needs a decision rather than being silently left open.']\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Minor] `MockedE2ETest` inherits from `E2ETest` rather than `_Strict` as the interface states. An instance placed in `E2EListing.e2e` would be accepted and serialised without `patch_file`/`patch_line`. (plugins/multiplai-dev/lib/code_facts/code_facts/paths.py:117)\n  evidence: paths.py `class MockedE2ETest(E2ETest):`. The interface reads `class MockedE2ETest(_Strict): node_id ...; patch_file: str; patch_line: int`. `e2e: list[E2ETest]` accepts subclass instances unchanged, and pydantic v2 serialises them by the annotated type's fields. Declaring both models on `_Strict`, with a shared field mixin if needed, would close this.\n- [Minor] The committed schema is weaker than the model in places it could express: `stops_at` has no `minimum: 1`, and `note`/`side` are not in the hop's `required` list, though every written file contains them. (plugins/multiplai-dev/lib/code_facts/code_facts/schema/paths.v1.schema.json:520)\n  evidence: The schema's `TracedPath.stops_at` is `anyOf [{\"type\": \"integer\"}, {\"type\": \"null\"}]` with no minimum. `PathHop.required` lists only `symbol_called, path, line_start, line_end, quote`. A schema-only consumer accepts `stops_at: 0` or a hop missing `side`. Using `stops_at: int | None = Field(ge=1)` would put the minimum in the generated schema.\n- [Minor] Frozen output models still expose mutable list fields, so the cross-field invariants checked at construction (contiguous ids, no unscoped coverage, disjoint listings) can be broken after construction. (plugins/multiplai-dev/lib/code_facts/code_facts/paths.py:336)\n  evidence: `_Strict` sets `frozen=True`, which only blocks attribute assignment. `PathsResult.paths: list[TracedPath]` and `E2EListing.e2e: list[E2ETest]` are plain lists, so `result.paths.append(...)` skips `_consistent`. `write_paths_file` validates only against the schema, which cannot express id contiguity or the scope/cap rules. Using `tuple[...]` fields, or running `PathsResult.model_validate(json.loads(text))` inside `write_paths_file` as the rubric's dump \u2192 jsonschema \u2192 model_validate order describes, would restore the check.\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
+  "fix": {
+    "report": "Now I'll run the suite and a set of probes for the new rules.All rules hold in both the model and the schema. Next I'll check the generated schema fragments.I fixed the spec-compliance failure and all three review findings. The suite passes (141 tests), and the committed schema was regenerated from the models.\n\n**Drop and break reasons are now closed codes.**\n- `PathDrop.reason` only accepts the codes from design.md's table.\n- A single `DROP_REASONS` table records which reasons go with each stage. Both the model (a new validator) and the schema (generated from the same table) check it, so `{\"stage\": \"cap\", \"reason\": \"anything\"}` and `{\"stage\": \"cap\", \"reason\": \"duplicate\"}` are now rejected by both.\n- `TracedPath.break_reason` only accepts the break codes that can occur at hop 2 or later. `malformed_answer`, `empty_trace` and `entry_mismatch` can only happen at hop 1. A break at hop 1 leaves no hops, so the entry is dropped (design D12), and those three codes are only valid as drop reasons.\n\n**`MockedE2ETest`** now derives from `_Strict` through a shared fields-only base, `_TestRecord`, instead of from `E2ETest`. Putting a mocked record in the `e2e` list now fails validation.\n\n**The schema is now as strict as the model wherever JSON Schema can say it.**\n- `stops_at` has `minimum: 1`.\n- Every hop field, including `note` and `side`, is required. The schema is now generated in serialisation mode with defaulted fields marked required.\n- The cross-field rules are now in the schema too:\n  - `stops_at` and `break_reason` are either both null or both set.\n  - The fallback has a reason exactly when its status is `failed`.\n  - `scoped` matches whether `cap` is set.\n  - An unscoped run has no coverage and no scope-stage drops.\n\n  These were the same gap as the finding and could also be stated in the schema.\n\n**Lists changed after construction are now caught.** `write_paths_file` now runs the steps in the order the rubric gives: dump, schema check, then `PathsResult.model_validate`, then the atomic write. Appending to or reordering `result.paths` is now rejected at write time with a pointer, and nothing is written. I kept plain lists instead of tuples, because the existing tests compare `result.paths == []`.\n\nWhen choosing which error to report, `write_paths_file` now prefers a value that is invalid by itself over a broken cross-field rule. Without that, `cap: \"ten\"` pointed at `/dropped/2/stage` instead of `/cap`.\n\n**Decision for you:** the interface lines `reason: str`, `break_reason: str | None` and `Invoker.kind: str` are now narrower types. I also limited `Invoker.kind` to the eight discovered output kinds. A model-found entry never merges with another, so `model` can't be an invoker. The spec text should be updated to match this.\n\nSTATUS: DONE\nTESTS_RUN: uv run --package walkthrough-pipeline --extra dev python -m pytest plugins/multiplai-dev/lib/code_facts/tests -q\nGREEN: 141 passed, 1 warning in 0.41s\nFILES: plugins/multiplai-dev/lib/code_facts/code_facts/paths.py, plugins/multiplai-dev/lib/code_facts/code_facts/schema/paths.v1.schema.json\nSURPRISES:\n1. The interface says `PathDrop.reason: str`, `TracedPath.break_reason: str | None` and `Invoker.kind: str`. D1#6 and the block require closed codes, so these are now narrower types. `break_reason` is limited to break codes reachable at hop 2 or later, and `Invoker.kind` excludes `model`.\n2. The schema-test check that every object has `additionalProperties: false` also applies to the cross-field `oneOf` parts. Each part therefore lists every property, with only the pinned ones constrained.\n3. jsonschema's `best_match` goes into a failing `oneOf` and can report a misleading pointer, so errors from the `oneOf` rules are reported only when nothing else is wrong.\nSPEC_IMPACT: clarify\n\nSEARCHED:\n- Open reason codes: every `str` field in the output models. `PathDrop.reason`, `TracedPath.break_reason` and `Invoker.kind` are now closed. `FallbackStatus.reason`, `PathDrop.detail`, `PathDiagnostic.detail` and `Handler.symbol` stay free text, as D4 and D8 define them. `PathDiagnostic.reason`, `ListingSkip.reason`, `match`, `stage` and `status` were already closed.\n- `MockedE2ETest` inheritance: every model in paths.py. No other output model derives from another concrete output model.\n- Schema weaker than the model: every field constraint and every model validator in paths.py (`stops_at`, the hop defaults, `FallbackStatus`, `TracedPath`, `PathsResult`, `PathDrop`). Each one is now in the schema, apart from id contiguity and disjoint test lists, which JSON Schema can't state. I checked both directions with a probe script that runs the model and the schema on 19 changed documents.\n- Mutable lists bypassing validators: every list field (`paths`, `dropped`, `diagnostics`, `test_listing_skips`, `hops`, `changed_lines_covered`, `also_invoked_by`, `e2e`, `mocks_hop_2`). All are now re-checked by `model_validate` inside `write_paths_file`. I confirmed that appending or reversing `paths` is rejected before anything is written.",
+    "success": true,
+    "timed_out": false,
+    "commit": "b2e22879fbf97e761e308e8395de3543d8baaac2",
+    "searched": [
+      "Open reason codes: every `str` field in the output models. `PathDrop.reason`, `TracedPath.break_reason` and `Invoker.kind` are now closed. `FallbackStatus.reason`, `PathDrop.detail`, `PathDiagnostic.detail` and `Handler.symbol` stay free text, as D4 and D8 define them. `PathDiagnostic.reason`, `ListingSkip.reason`, `match`, `stage` and `status` were already closed.",
+      "`MockedE2ETest` inheritance: every model in paths.py. No other output model derives from another concrete output model.",
+      "Schema weaker than the model: every field constraint and every model validator in paths.py (`stops_at`, the hop defaults, `FallbackStatus`, `TracedPath`, `PathsResult`, `PathDrop`). Each one is now in the schema, apart from id contiguity and disjoint test lists, which JSON Schema can't state. I checked both directions with a probe script that runs the model and the schema on 19 changed documents.",
+      "Mutable lists bypassing validators: every list field (`paths`, `dropped`, `diagnostics`, `test_listing_skips`, `hops`, `changed_lines_covered`, `also_invoked_by`, `e2e`, `mocks_hop_2`). All are now re-checked by `model_validate` inside `write_paths_file`. I confirmed that appending or reversing `paths` is rejected before anything is written."
+    ]
+  }
+}

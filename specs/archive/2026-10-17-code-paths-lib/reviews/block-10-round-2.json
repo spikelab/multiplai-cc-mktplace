@@ -1,0 +1,121 @@
+{
+  "generated_at": "2026-10-17T09:41:27.921430+00:00",
+  "kind": "fix_on_pass_review",
+  "block": {
+    "number": 10,
+    "name": "Separate tests that mock hop 2, and drop tests that patch out the handler"
+  },
+  "round": 2,
+  "head_sha": "79aaf713dd54da1b2c0c6552d4a60e77817abf14",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Patch scanning is cleanly separated from listing policy, and duplication was removed: _FUNCTION_DEFS, _NESTED, _argument and _calls were folded into shared helpers, and the def lookup moved into PyIndex.handler_def, which both entries.py and e2e_tests.py use. There is no model call and no walkthrough_pipeline import. Possible Misplaced Responsibility: generic AST helpers (FUNCTION_DEFS, FunctionNode, body_nodes, call_argument) now live in e2e_patches.py, and e2e_tests.py imports them from there (`from .e2e_patches import FUNCTION_DEFS, FunctionNode, Patch, PatchScan, Symbol, body_nodes, call_argument`). The interface requires `applied_patches` to take `root`, but it is unused (declared in the notes).",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "test_e2e_mocks_hop_2.py builds every snapshot in tmp_path and asserts exact tuples (node_id, patch_file, patch_line) and full model_dump values, including negative controls (test_unrequested, test_by_function_name, test_mock_passed). Two map_paths tests go through the real gate. Not covered: async-with patches, `patch.object` keyword arguments, and an unparseable conftest.py. The six scenarios added after the RED gate never had a RED run of their own, but each would fail against the pre-implementation listing, which put every test in e2e.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "Every block-10 scenario is implemented and tested: all recognised forms (decorator, with, .start(), patch.object, monkeypatch dotted and object), requested, autouse and transitive conftest fixtures, both ways of naming hop 2, the three leave-in-e2e cases, the line-9/10/12 record, the D15 handler and edge-function exclusions, and applied_patches with the required signature. Lists stay disjoint because each record goes to exactly one of them in _split_on_hop_2. One fragility: hop 2 is found only by matching symbol_called exactly against a def name (_cited_def), so a hop the gate accepts through an edge or place, with no name match, has no hop-2 symbol, and its tests stay in e2e without any log.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "list_e2e_tests keeps its signature and is still keyed by path.id. It uses path.hops, i.e. only the retained hops, so a cut path has no hop 2. MockedE2ETest is built from `record.model_dump()` plus patch_file and patch_line, matching the Block 1 model. E2ECandidate's new required field `patches` has a single construction site (e2e_tests.py:538). The Block 9 contract of match_invocations changes in behaviour: it now drops tests that patch out the handler. The docstring was updated, and the only callers are list_e2e_tests and tests. _cited_def does not strip symbol_called, while the gate does (`hop.symbol_called.strip().rsplit('.', 1)[-1]`).",
+      "confidence": 1.0
+    }
+  ],
+  "weighted_average": 4.0,
+  "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 4.0"
+  },
+  "missing": [],
+  "extra": [
+    "_bypassed_by_patching also excludes a test that patches the handler under a name that a known-edge `from` line looks up (e.g. `pkg.__main__.handle_open`). The spec names only the handler and the function holding the edge. The implementer declared this in implementation-notes.md.",
+    "Pytest parameter rules that the spec leaves open are implemented: parameters filled by a mock decorator, `self`, and defaulted parameters request no fixture. Patch decorators on a `Test*` class also apply to its methods. Declared in the notes."
+  ],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "_cited_def finds hop 2's symbol only when the last part of symbol_called equals a def name exactly, and does not strip it. The gate strips it (`.strip()`) and also accepts a hop connected only by a known edge or place. Such a hop can pass the gate with no def name match, so _hop_2_symbol returns None and a test that patches that function silently stays in `e2e`. Fix: in _cited_def, apply the same `.strip().rsplit('.', 1)[-1]` normalisation as the gate. When no def matches by name, fall back to the def enclosing or starting at hop.line_start, e.g. index.enclosing_def(hop.path, hop.line_start). Add a debug log when hop 2 cannot be resolved.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "e2e_tests.py _cited_def: `name = hop.symbol_called.rpartition(\".\")[2]`; `cited = [d for d in index.defs(hop.path) if d.name == name and ...]`. trace_gate.py:192: `named = self._is_named(prev, hop.symbol_called.strip().rsplit(\".\", 1)[-1], start, end)` and line 195: `return named or by_edge or any(_holds(hop, place) for place in self._places)`.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 264,
+      "reviewers": []
+    },
+    {
+      "claim": "If a conftest.py or test module does not parse, its fixtures and their patches are silently ignored. _fixtures_of treats `tree is None` as 'no fixtures' and logs nothing, even though e2e_patches.py defines `log`. A test that requests a fixture from a broken conftest then stays in `e2e`, with no record of why. Fix: emit `log.debug` naming the conftest path when `self._index.tree(path)` is None for a path that exists (`index.has_file(path)`).",
+      "severity": "Minor",
+      "confidence": 0.35,
+      "evidence": "e2e_patches.py _fixtures_of: `tree = self._index.tree(path)` / `for node in tree.body if tree is not None else ():` \u2014 no log statement. `log = logging.getLogger(__name__)` is defined but never used in the module.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py",
+      "line": 119,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "Possible Misplaced Responsibility: generic AST helpers that test-invocation scanning relies on (FUNCTION_DEFS, FunctionNode, body_nodes, call_argument) now live in the patch-specific module e2e_patches.py. e2e_tests.py imports them from there, so changes to patch scanning and to invocation scanning share one module. Fix: move them to a small shared AST-helper location, next to dotted_reference in pyindex.py or in a dedicated module, and import them from both.",
+      "severity": "Minor",
+      "confidence": 0.4,
+      "evidence": "e2e_tests.py: `from .e2e_patches import FUNCTION_DEFS, FunctionNode, Patch, PatchScan, Symbol, body_nodes, call_argument`; `_calls` is `return (node for node in body_nodes(func) if isinstance(node, ast.Call))`; `_TestScan._matches` uses call_argument for cli_argv, cli_runner, subprocess and runpy.\nREJECTED: This is a module-placement preference. `e2e_tests` importing small AST helpers from `e2e_patches` creates no cycle and breaks no stated project standard. Block 10 is the block that extracted `body_nodes` and `call_argument` for reuse, and the project standards do not ask for a dedicated helper module.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py",
+      "line": 210,
+      "reviewers": [],
+      "judge_reason": "This is a module-placement preference. `e2e_tests` importing small AST helpers from `e2e_patches` creates no cycle and breaks no stated project standard. Block 10 is the block that extracted `body_nodes` and `call_argument` for reuse, and the project standards do not ask for a dedicated helper module."
+    },
+    {
+      "claim": "Patches are matched with no regard to order or process boundary. A `with mock.patch(...)` that comes after the invocation in the test body still moves the test, and a patch in a test that starts the CLI with subprocess still moves or drops it, even though it cannot take effect at runtime. Patches inside helper functions the test calls are not followed, although invocations in those helpers are inlined. The spec does not require ordering, and the implementer declared the subprocess case. Recorded as an observation.",
+      "severity": "Note",
+      "confidence": 0.5,
+      "evidence": "e2e_patches.py _patches iterates `body_nodes(func)` with no line comparison against invocations. Implementation notes: 'Patches still count when the test starts the CLI in a separate process, where they could not take effect at runtime; static matching can't tell.'\nREJECTED: The spec counts patches in the test or its fixtures. It does not ask for ordering or process-boundary analysis, and it does not ask for patches in helper functions to be followed. The implementer recorded the subprocess limitation as a deliberate static-analysis choice. The reviewer itself files this as an observation, not a deviation.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py",
+      "line": 145,
+      "reviewers": [],
+      "judge_reason": "The spec counts patches in the test or its fixtures. It does not ask for ordering or process-boundary analysis, and it does not ask for patches in helper functions to be followed. The implementer recorded the subprocess limitation as a deliberate static-analysis choice. The reviewer itself files this as an observation, not a deviation."
+    },
+    {
+      "claim": "The declared test change ('added six new scenarios... No existing test was changed') is consistent with the evidence. test_e2e_mocks_hop_2.py is a new file in this diff, and none of the six added scenario names appear in the RED failure list. Each added test would fail against the pre-implementation listing, which put every test in e2e, so none of them lowers the bar. The diff cannot independently confirm that the earlier tests were left unedited, because the whole file shows as added.",
+      "severity": "Note",
+      "confidence": 0.6,
+      "evidence": "The RED list contains test_requested_conftest_fixture_..., test_record_fields_for_a_decorated_test, etc., but not test_a_plain_module_fixture_hides_..., test_a_fixture_requesting_its_own_name_..., test_a_mock_decorator_given_a_replacement_fills_no_parameter, or test_test_class_methods_skip_self_and_apply_class_decorators. The diff header for the file is `new file mode 100644`.\nREJECTED: This finding confirms the test changes are consistent and reports no defect, so there is nothing to fix.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_e2e_mocks_hop_2.py",
+      "line": 380,
+      "reviewers": [],
+      "judge_reason": "This finding confirms the test changes are consistent and reports no defect, so there is nothing to fix."
+    },
+    {
+      "claim": "This diff changes the multiplai-dev plugin but bumps no version and adds no CHANGELOG entry. CLAUDE.md, 'Release convention', says: 'the **`changelog-gate`** CI job fails a pull request that changes a plugin without both.' The gate applies per pull request, not per block, so the bump may land in another block of this change.",
+      "severity": "Note",
+      "confidence": 0.3,
+      "evidence": "The diff touches only plugins/multiplai-dev/lib/code_facts/... and specs/changes/...; there is no change to plugins/multiplai-dev/CHANGELOG.md or .claude-plugin/marketplace.json.\nREJECTED: The changelog gate applies per pull request, not per block. The version bump and CHANGELOG entry belong to the change's release step, outside this block's diff.",
+      "dimension": "conventions",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_patches.py",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "The changelog gate applies per pull request, not per block. The version bump and CHANGELOG entry belong to the change's release step, outside this block's diff."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}

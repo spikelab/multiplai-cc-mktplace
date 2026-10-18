@@ -1,0 +1,157 @@
+{
+  "generated_at": "2026-10-17T09:17:55.022506+00:00",
+  "kind": "fix_on_pass_review",
+  "block": {
+    "number": 9,
+    "name": "List end-to-end tests that statically invoke each kept path's entry"
+  },
+  "round": 3,
+  "head_sha": "f7e53ca064fda303bc2bec4c205d9e1ba1efd065",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Boundaries hold. e2e_tests.py is synchronous, takes no CallFn and imports no walkthrough_pipeline. Discovery-side CLI knowledge stays in entries.py (`cli_routes`, `console_scripts`) and is shared through `_decorated_commands`. `dotted_reference` and `_walk` are de-duplicated. Possible smells: (1) Duplicated Code: subprocess commands from tests are tokenised with bare `shlex.split` plus a separate `_ScriptPath`, while hook/skill commands go through `parse_command_line`/`CommandLine.snapshot_path`, so the two sides are processed differently. (2) `match` on kind strings in `_Targets._declared` is one more kind switch alongside discovery's. (3) map_paths rebuilds the Entry for each path from a `(output_kind, location, name)` tuple lookup instead of carrying it. (4) A private `_Functions` type appears in the public `E2EIndex.__init__` signature.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "Tests assert observable record fields (node_id, file, line, match, invocation_line) and exact lists rather than membership. Determinism under reversed scandir/listdir is checked byte for byte, including skips. No-execution is proven with patched Popen/os.system and a sentinel marker. Encoding edges (BOM, latin-1 cookie, non-UTF-8) and the syntax_error/decode_error skips are pinned, and there are negative cases (same-named symbol from another module, non-literal argv, help flags, unrelated typer app). Gaps: no test pins that a parse-only `build_parser().parse_args([...])` test is excluded (in fact it is listed). No test covers relative imports or re-exported apps in `_app`. The implementer added tests (launcher file) that are not shown in the RED evidence, and the GREEN evidence is just 'All tests pass' with no output.",
+      "confidence": 0.7
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "All five matchers are present (`_forms` in e2e_tests.py). also_invoked_by invokers are included (`_Targets.of`). Skip dirs, test patterns, scope (module-level `test*` and `Test*` methods, nested defs excluded via `_calls`), help/version exclusion, D15 inlining, dedup and tie order, sorting and skips all match. The D1#13 amendment was made in requirements/e2e-test-listing.md. Deviations: a test-level builder().parse_args form is listed even though it cannot reach a handler, contrary to D1#13's intent. The subprocess requirement scenario was edited outside the asked-for section. mocks_hop_2 is always [], which looks like a later block's job.",
+      "confidence": 0.7
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 3,
+      "evidence": "The produced signatures match exactly: `E2EIndex.build(cls, root, index)`, `E2EIndex.skips()`, `match_invocations(e2e_index, entry, *, root)`, `list_e2e_tests(root, paths, entries, *, index)` keyed by path id. map_paths fills `tests` and `test_listing_skips` after `assign_ids`. Loose seams: (1) The test side does not run subprocess commands through `parse_command_line` (no launcher stripping or variable expansion), while invoker targets do, so `uv run python -m pkg render` written in a test would not reach what the same text in a SKILL.md reaches. (2) Module launchers are matched by dotted-name string (`index.module_name`), while discovery resolves `python -m` through `module_search_roots`/`resolve_python_m`. (3) The `_app` fallback in `qualified_name` handles only absolute, non-re-exported imports. (4) map_paths depends on `(kind, location, name)` being unique across to_trace, and a collision would silently attach the wrong entry's invokers.",
+      "confidence": 0.65
+    }
+  ],
+  "weighted_average": 3.6875,
+  "gate": {
+    "passed": false,
+    "reason": "Spec-compliance verdict failed \u2014 missing: ['The interface lists `Consumes: Block 8: PyIndex.import_edges` and `Consumes: Block 6: command_tokens`. Neither is used: subprocess matching tokenises with `shlex.split` and the hook/skill side uses `parse_command_line`. No behaviour depends on import_edges in this block, but the consumed interface is not exercised.']; misunderstood: ['D1#13 says tests that cannot reach the handler SHALL NOT be listed. But a bare `build_parser().parse_args([...])` in a test body only parses; no handler runs. e2e_tests.py:492-497 still yields `cli_argv` for it. In the live pr suite, test_open_draft_and_ready_together_are_refused (`with pytest.raises(SystemExit): build_parser().parse_args([\"open\", ..., \"--draft\", \"--ready\"])`, tests/test_commands.py:78-80) will be listed as an e2e test of the `open` path. The D15 scenario only needs the builder form inside a helper whose result goes to a dispatcher.']"
+  },
+  "missing": [
+    "The interface lists `Consumes: Block 8: PyIndex.import_edges` and `Consumes: Block 6: command_tokens`. Neither is used: subprocess matching tokenises with `shlex.split` and the hook/skill side uses `parse_command_line`. No behaviour depends on import_edges in this block, but the consumed interface is not exercised."
+  ],
+  "extra": [
+    "The spec edit goes beyond the requested 'CLI subcommand invocation' amendment. The Subprocess requirement's 'Console script name' scenario was also rewritten (`--help` \u2192 `build`). The change is defensible, since it resolves a conflict with D1#13, but it was outside the scope the block named.",
+    "Launcher reach is added beyond the spec's match kinds. A console script or `python -m` that runs an argparse parser module reaches its subcommands (`_program_modules`, `_scripts_running_program`). Typer mounted-app, callback and single-command routing (`cli_routes`, `_typer_routes`) is also new. All of it is covered by test_e2e_launchers.py and was declared in the implementer's notes (3) and (4).",
+    "`<f>().parse_args(argv)` at test level counts as `cli_argv` even when nothing dispatches the parsed args. The block spec lists only 'a call to the subcommand module's function whose body calls .parse_args('. The implementer added the builder form to the spec text themselves."
+  ],
+  "misunderstood": [
+    "D1#13 says tests that cannot reach the handler SHALL NOT be listed. But a bare `build_parser().parse_args([...])` in a test body only parses; no handler runs. e2e_tests.py:492-497 still yields `cli_argv` for it. In the live pr suite, test_open_draft_and_ready_together_are_refused (`with pytest.raises(SystemExit): build_parser().parse_args([\"open\", ..., \"--draft\", \"--ready\"])`, tests/test_commands.py:78-80) will be listed as an e2e test of the `open` path. The D15 scenario only needs the builder form inside a helper whose result goes to a dispatcher."
+  ],
+  "accepted": [
+    {
+      "claim": "A test that only parses argv with a parser builder, and never dispatches to a handler, is listed as a cli_argv e2e test. This includes tests that expect SystemExit. It contradicts D1#13 ('Tests that cannot reach the handler SHALL NOT be listed').",
+      "severity": "Major",
+      "confidence": 0.72,
+      "evidence": "e2e_tests.py `_forms`: `if isinstance(callee, ast.Attribute) and isinstance(callee.value, ast.Call): builder_ref = dotted_reference(callee.value.func) if callee.attr in _PARSE_METHODS else None ... yield \"cli_argv\", _argument(call, 0, \"args\"), partial(_argv_reaches, (\"program\", builder.path))`. This fires at depth 0. In the live pr suite, skills/pr/scripts/tests/test_commands.py:78-80 `def test_open_draft_and_ready_together_are_refused(): with pytest.raises(SystemExit): build_parser().parse_args([\"open\", ...])` will therefore be listed for the `open` path. Fix: accept the builder form only inside an inlined helper (depth>0), or only when its result is passed to another call. Add a negative test for the bare test-level form.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 492,
+      "reviewers": []
+    },
+    {
+      "claim": "Subprocess commands in tests are tokenised with bare `shlex.split` plus `_ScriptPath`, while hook/skill invoker targets go through `parse_command_line` (launchers stripped, variables expanded, cwd-relative paths). The same command text can therefore reduce to different keys on the two sides.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "e2e_tests.py `_command_reaches` \u2192 `_shell_words(value)` \u2192 `tuple(shlex.split(value))` \u2192 `_reached_command(words, script_path)`. By contrast, `_Targets._command_target` calls `parse_command_line(command, source_file=..., root=..., index=...)` and uses `line.tokens`/`line.snapshot_path`. commands.py:66-70 documents that parse_command_line strips launchers and applies `cd`/`--directory`. The rubric asks that `parse_command_line ... serve SKILL.md, hooks and e2e subprocess matching`. Fix: run string and list commands from tests through the same launcher stripping, for example a tokens-level entry point in commands.py shared by both sides.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 418,
+      "reviewers": []
+    },
+    {
+      "claim": "`_TestScan._app` resolves a module-level app only through absolute, non-re-exported imports. `from .cli import app`, or an app re-exported through a package `__init__`, yields the wrong key or none, and the CliRunner invocation is missed. Console-script targets have the same limit (`(script.module_file, script.attribute)`).",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "pyindex.py qualified_name: `case _FromBinding(module=module, level=0, attr=attr) if module:` (relative imports return None). e2e_tests.py `_app`: `module, _, name = (self._index.qualified_name(...) or \"\").rpartition(\".\"); module_file = self._index.resolve_module(path, module)`, with no re-export following. resolve_name's docstring says 'Imports are followed, re-exports included', but this fallback does not. Fix: resolve the module-level binding through the same re-export chain resolve_name uses, and handle `level>0`.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 508,
+      "reviewers": []
+    },
+    {
+      "claim": "`_decorated_command_entries` now runs `_typer_apps(tree)` (a full `ast.walk` plus source-order sort) on every module before the `_imports_any(tree, {\"click\", \"typer\"})` guard. Previously that work was skipped for modules that import neither.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "entries.py: `commands, diagnostics = _decorated_commands(path, tree, dict(_typer_apps(tree)))`, while the guard `if not _imports_any(tree, {\"click\", \"typer\"}): return [], []` sits inside `_decorated_commands`. Before the change, `groups = dict(_typer_apps(tree))` came after the guard. Fix: check `_imports_any` in `_decorated_command_entries` first, or pass a lazy value.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 695,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "`python -m` launchers of an argparse program or click/typer app are matched by comparing dotted-name strings from `index.module_name`, not by resolving the test's module to a file the way discovery does with `resolve_python_m`. A package that is not at its repo root (run with `cd sub && python -m pkg`) gets module name `sub.pkg` and never matches.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "e2e_tests.py `_program_modules`: `own = self._index.module_name(program) ...; own_modules = [own.removesuffix(\".__main__\")]`. `_reached_command` returns `(\"module\", module[0])` straight from the test's tokens. Discovery instead uses `module_search_roots(command, source_file, index.repo_root(source_file))` + `resolve_python_m` (entries.py:1253-1254). Fix: key module launchers by the resolved module file instead of the dotted name.\nREJECTED: The failure is speculative. The test side has no cwd information either: there is no `cd` handling in a list argv, and `cwd=` is not read. Keying by resolved file would need module search roots on the test side as well, which is the same problem as finding 1. No concrete mismatch is shown for the layouts the build targets, and the dotted names come from the same `index.module_name` that discovery uses for `main_module` entries.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 252,
+      "reviewers": [],
+      "judge_reason": "The failure is speculative. The test side has no cwd information either: there is no `cd` handling in a list argv, and `cwd=` is not read. Keying by resolved file would need module search roots on the test side as well, which is the same problem as finding 1. No concrete mismatch is shown for the layouts the build targets, and the dotted names come from the same `index.module_name` that discovery uses for `main_module` entries."
+    },
+    {
+      "claim": "In map_paths, each path's Entry is recovered by a dict lookup keyed on `(output_kind(e), e.location, e.name)` over to_trace. If two traced entries share that triple, a later one overwrites an earlier one, so a path can silently be listed against the wrong entry's handler or invokers.",
+      "severity": "Minor",
+      "confidence": 0.45,
+      "evidence": "paths.py:442-444: `traced_from = {(output_kind(e), e.location, e.name): e for e in to_trace}` then `traced_from[(p.entry.kind, p.entry.location, p.entry.name)]`. Fix: have trace_entries/TracedPath keep a reference or index to its source Entry, or assert that the keys are unique.\nREJECTED: Discovery merges entries that share location and name into one `Entry` with `also_invoked_by`. The `(output kind, location, name)` triple is therefore unique among traced entries by construction. The reviewer shows no case where two distinct traced entries collide.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 442,
+      "reviewers": [],
+      "judge_reason": "Discovery merges entries that share location and name into one `Entry` with `also_invoked_by`. The `(output kind, location, name)` triple is therefore unique among traced entries by construction. The reviewer shows no case where two distinct traced entries collide."
+    },
+    {
+      "claim": "The tests the implementer says they added after the RED gate (the launcher tests, plus new tests in test_e2e_listing.py) have no RED evidence. The GREEN evidence is the bare claim 'All tests pass' with no pytest output, so the suite result cannot be checked.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "Implementer report: 'I only added new tests to that file and to test_e2e_listing.py'. GREEN evidence: 'All tests pass'. The RED list shows only test_e2e_listing.py failures. The refactorer's notes in implementation-notes.md say the implementation commit 'also changed tests/test_e2e_listing.py by 7 lines'. The `_ReversedScandir` `__iter__`/`__next__` fix is consistent with that and keeps the reversed-order intent.\nREJECTED: This is about process reports (RED/GREEN evidence), not a defect in the diff. The diff itself contains the tests, and `implementation-notes.md` openly records the test-file edit. No code problem is identified.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_e2e_launchers.py",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "This is about process reports (RED/GREEN evidence), not a defect in the diff. The diff itself contains the tests, and `implementation-notes.md` openly records the test-file edit. No code problem is identified."
+    },
+    {
+      "claim": "Failures to re-read or tokenise an invoker command line are swallowed with only a debug log. An also_invoked_by hook or skill command whose text cannot be found again silently contributes no targets.",
+      "severity": "Minor",
+      "confidence": 0.4,
+      "evidence": "e2e_tests.py `_commands_at`: `except (OSError, ValueError) as e: log.debug(\"cannot re-read the command at %s:%d: %s\", ...); return []`. `_command_target`: `except ValueError: return None` with no log at all. Discovery already succeeded on these files, so the risk is low, but the empty `except ValueError` gives no trace. Fix: log at debug in `_command_target` too, with the command and source file.\nREJECTED: These files were already parsed successfully during discovery, so these paths are defensive. `_commands_at` already logs at debug. Adding a debug line to `_command_target` is an observability preference that the project standards do not ask for.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/e2e_tests.py",
+      "line": 334,
+      "reviewers": [],
+      "judge_reason": "These files were already parsed successfully during discovery, so these paths are defensive. `_commands_at` already logs at debug. Adding a debug line to `_command_target` is an observability preference that the project standards do not ask for."
+    },
+    {
+      "claim": "The spec amendment edits a scenario outside the requested 'CLI subcommand invocation' requirement: the Subprocess requirement's 'Console script name' scenario.",
+      "severity": "Note",
+      "confidence": 0.8,
+      "evidence": "requirements/e2e-test-listing.md: `- **WHEN** \\`[project.scripts]\\` maps \\`mytool\\` ... \\`subprocess.run([\"mytool\", \"build\"])\\`` replaces the `--help` version. The block asked only to 'Amend e2e-test-listing \"CLI subcommand invocation\" per D1#13'.\nREJECTED: The original 'Console script name' scenario used `--help`. The D1#13/D15 exclusion added in this same amendment forbids that, so the spec would contradict itself if the scenario were left alone. The test_writer flagged this, and the edit is a necessary consistency fix that follows from the requested amendment.",
+      "dimension": "Spec Compliance",
+      "file_path": "specs/changes/code-paths-lib/requirements/e2e-test-listing.md",
+      "line": 115,
+      "reviewers": [],
+      "judge_reason": "The original 'Console script name' scenario used `--help`. The D1#13/D15 exclusion added in this same amendment forbids that, so the spec would contradict itself if the scenario were left alone. The test_writer flagged this, and the edit is a necessary consistency fix that follows from the requested amendment."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}

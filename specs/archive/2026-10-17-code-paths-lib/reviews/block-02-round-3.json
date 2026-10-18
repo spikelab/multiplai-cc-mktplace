@@ -1,0 +1,130 @@
+{
+  "generated_at": "2026-10-17T06:21:10.580434+00:00",
+  "kind": "fix_on_pass_review",
+  "block": {
+    "number": 2,
+    "name": "Discover argparse subcommands and caller seeds from a static `PyIndex`"
+  },
+  "round": 3,
+  "head_sha": "5cbc277976d284f1eaeaf9cb780c9088b8317bc0",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The module boundaries match the plan: pyindex.py does the walk, parse, resolution and import graph, and entries.py does the scanners and diagnostics. Discovery is synchronous and takes no CallFn. The diagnostic model is reused from block 1 (`Diagnostic = PathDiagnostic`) and so is path normalisation (`normalise_rel_path`). Three things keep it from a 5. First, there is a possible naming collision: entries.py defines `EntryKind` with the discovery kinds while paths.py:53 already exports an `EntryKind` with the output kinds. Second, entries.py imports the private `_Strict` from paths.py. Third, `_ParserScan` is an intricate, stateful mini-interpreter (`_values` reset per body, `_seeds` popped during the scan) that is cohesive but hard to reason about.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "The tests assert exact outcomes: entry names, locations, handler (path, line, symbol), known-edge tuples, and diagnostic (path, line, reason). Determinism is covered by byte-identical JSON under reversed scandir and reordered seeds, and safety by patched Popen/os.system and sentinel modules. Symlink loops, BOM and cookie files, and the multi-repo collision are all covered. Gaps: no test for a dynamic-name or untraced add_parser inside a helper that is reached under two parents (which would expose the duplicate diagnostic below), and the live-copy test checks membership (`in edges(e)`) where it could check equality.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "All the block's scenarios are implemented and tested: index contents, the repo-root rule, same-repo resolution under <repo>/, <repo>/src/ and the importing file's directory, pruned directories, the symlink rule, parse_error with line null, argparse names, locations and dynamic_name, handlers through set_defaults and dispatch dicts (including function-local imports), edges from args.func and <DICT>[...]() with the set_defaults/dict-line fallbacks, comparison dispatch giving null with no diagnostic, out-of-repo unresolved_handler, seeds and seed_not_found, and sort order. One deviation: the module docstring promises 'exactly one' diagnostic per candidate, but a helper scanned under two parents emits duplicate dynamic_name/unresolved_target diagnostics.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The signatures of PyIndex.build/module_name/repo_root/resolve_module/resolve_name/enclosing_scope/parse_errors, KnownEdge, Entry, Discovery and discover_entries match the stated interfaces. `discover_entries` is exported and every old export is kept. One seam is loose: `Entry.also_invoked_by: list[Invoker]` uses block 1's `Invoker.kind: DiscoveredKind` (paths.py:120, output kinds 'argparse'\u2026). The block interface says `kind: str`, so the merge block cannot store discovery kinds such as 'argparse_subcommand' there without a mapping. The implementer flagged this but did not resolve it.",
+      "confidence": 1.0
+    }
+  ],
+  "weighted_average": 4.0,
+  "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 4.0"
+  },
+  "missing": [],
+  "extra": [
+    "entries.py `_ParserScan` follows parser values into the parameters of same-module helper functions (`_pass_to_helper`, `_callers_first`). It also emits `unresolved_target` for any `.add_parser` on a receiver it cannot trace, including non-argparse receivers such as `Registry().add_parser(...)` in the FLAT fixture. The spec only asks for `add_parser(<str literal>)` on a value bound from `add_subparsers(...)`. The extension is reasonable and tested, but it goes beyond the block text."
+  ],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "A helper function scanned under two distinct parser seeds emits duplicate dynamic_name / unresolved_target diagnostics for the same add_parser line, violating the module's own 'exactly one diagnostic per candidate' rule.",
+      "severity": "Minor",
+      "confidence": 0.85,
+      "evidence": "entries.py: `for env in self._seeds.pop(position, None) or [{}]: self._scan_body(...)`; `_scan_body` starts with `self._values = {}`; `_add_parser` unconditionally does `self.diagnostics.append(Diagnostic(... reason=\"dynamic_name\" ...))`; `discover_entries` does `diagnostics += problems` with no dedupe. Only `_commands` is deduplicated (`self._commands.setdefault(key, ...)`).",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 216,
+      "reviewers": []
+    },
+    {
+      "claim": "Parser values are not followed through closures or module globals into function bodies. A `sub = parser.add_subparsers()` bound at module level, or in an enclosing function, and used by `sub.add_parser(\"x\")` inside a nested or other function gives `unresolved_target` and no entry, even though the receiver is a value bound from add_subparsers.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "entries.py `scan`: each scope is scanned with `dict(env)` taken from `_seeds` or `{}` only; `_walk_scope` excludes nested scopes, and no outer-scope env is passed down. `_call` then hits `if method == \"add_parser\" and receiver is None: self._untraced_add_parser(...)`.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 157,
+      "reviewers": []
+    },
+    {
+      "claim": "When a symbol seed is given as a qualname such as 'Runner.go', its default name uses the unqualified def name ('<path>:go'), not the seed's symbol. The spec's default '<path>:<symbol>' may intend the given symbol.",
+      "severity": "Note",
+      "confidence": 0.4,
+      "evidence": "entries.py `_seed_entry`: `found = next((d for d in defs if d.qualname == seed.symbol), None) or ...`; `default_name = f\"{path}:{found.name}\" if found else ...`.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 577,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "Entry.also_invoked_by is typed `list[Invoker]`, and block 1's Invoker.kind is the output-kind Literal (`DiscoveredKind = Literal[\"argparse\", \"click\", ...]`). The block interface states `Invoker.kind: str`, and discovery kinds like 'argparse_subcommand' cannot be stored there.",
+      "severity": "Minor",
+      "confidence": 0.7,
+      "evidence": "paths.py:52 `DiscoveredKind = Literal[\"argparse\", \"click\", \"typer\", \"main\", \"script\", \"skill_command\", \"hook\", \"seed\"]`; paths.py:120 `kind: DiscoveredKind`; entries.py `also_invoked_by: list[Invoker]`. The implementer notes flag this as surprise (4) and leave it unresolved.\nREJECTED: `Invoker` and its `kind` type belong to block 1 and are not in this diff. Invoker is published in paths.v1 with output kinds, so an output-kind Literal fits the published schema. Mapping discovery kinds to output kinds is the later merge block's job, as the implementer notes record. This block always emits `also_invoked_by=[]`, so nothing here breaks.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 69,
+      "reviewers": [],
+      "judge_reason": "`Invoker` and its `kind` type belong to block 1 and are not in this diff. Invoker is published in paths.v1 with output kinds, so an output-kind Literal fits the published schema. Mapping discovery kinds to output kinds is the later merge block's job, as the implementer notes record. This block always emits `also_invoked_by=[]`, so nothing here breaks."
+    },
+    {
+      "claim": "Possible naming collision: entries.py defines `EntryKind` with the discovery kinds while paths.py already defines `EntryKind` with the output kinds plus 'model'. The package now has two different types under one name.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "entries.py: `EntryKind = Literal[\"argparse_subcommand\", \"click_command\", ..., \"seed\"]`; paths.py:53 `EntryKind = Literal[DiscoveredKind, \"model\"]`.\nREJECTED: This is a naming preference, not a defect. `entries.EntryKind` is module-local and not exported from `code_facts/__init__.py`. The two Literals describe different vocabularies (discovery kinds versus output kinds) on purpose. Nothing breaks, and the project's standards do not forbid it.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 44,
+      "reviewers": [],
+      "judge_reason": "This is a naming preference, not a defect. `entries.EntryKind` is module-local and not exported from `code_facts/__init__.py`. The two Literals describe different vocabularies (discovery kinds versus output kinds) on purpose. Nothing breaks, and the project's standards do not forbid it."
+    },
+    {
+      "claim": "`_DispatchIndex.func_call` takes the first `args.func(...)` found in any module that imports or is imported by the parser module. If several CLIs share helper modules, an unrelated parser's dispatch call can become the edge start.",
+      "severity": "Note",
+      "confidence": 0.4,
+      "evidence": "entries.py `call_modules`: `found = [path, *self._index.importing_files(path), *self._index.imported_files(path)]`; `func_call` returns the first module whose `facts(module).func_call` is not None.\nREJECTED: This is speculative. The search order is the parser module first, then its direct importers, then the modules it imports. That matches the realistic layouts: a `__main__.py` that calls `build_parser()`, or a commands module that holds the dispatch. The spec does not say where the dispatch call must live. A wrong pick needs an unrelated CLI's `parse_args`/`args.func` in a module that directly imports, or is imported by, this parser module, and the reviewer gives no such case. Even then the edge still ends at the correct handler.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 444,
+      "reviewers": [],
+      "judge_reason": "This is speculative. The search order is the parser module first, then its direct importers, then the modules it imports. That matches the realistic layouts: a `__main__.py` that calls `build_parser()`, or a commands module that holds the dispatch. The spec does not say where the dispatch call must live. A wrong pick needs an unrelated CLI's `parse_args`/`args.func` in a module that directly imports, or is imported by, this parser module, and the reviewer gives no such case. Even then the edge still ends at the correct handler."
+    },
+    {
+      "claim": "The declared test changes are consistent with the diff. `_ReversedScandir` gains `__iter__` returning self and `__next__`, the reversed-order assertion is unchanged, `repo_root` fallback is tightened to `== \"\"`, and the other changes only add tests.",
+      "severity": "Note",
+      "confidence": 0.85,
+      "evidence": "test_entries_argparse.py `_ReversedScandir.__next__` returns `next(self._entries)`; test_pyindex.py `assert idx.repo_root(\"pkg/cli.py\") == \"\"`; TestSubparsersPassedToHelpers, TestNamespacePackageHandlers, TestDispatchDictSelection, TestArgsFuncDispatchCall and TestSeedPathValidation are new classes.\nREJECTED: This is a confirming observation, not a defect. The reviewer reports the test changes are consistent with the diff, so there is nothing to fix.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_entries_argparse.py",
+      "line": 617,
+      "reviewers": [],
+      "judge_reason": "This is a confirming observation, not a defect. The reviewer reports the test changes are consistent with the diff, so there is nothing to fix."
+    }
+  ],
+  "fix_brief": null,
+  "fix": null
+}

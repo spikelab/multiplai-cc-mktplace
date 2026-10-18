@@ -1,0 +1,141 @@
+{
+  "generated_at": "2026-10-17T06:08:39.650419+00:00",
+  "kind": "review",
+  "block": {
+    "number": 2,
+    "name": "Discover argparse subcommands and caller seeds from a static `PyIndex`"
+  },
+  "round": 2,
+  "head_sha": "6c776df6d8851600521497abcaf4c56acefea409",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Boundaries are clean. pyindex.py holds the walk, the parse cache, and module and import resolution. entries.py holds the scanners and diagnostics. Neither takes a CallFn, makes a model call, or imports `walkthrough_pipeline`. Concepts are typed: `Def`, `_Binding` union types, `_Subcommand`, `_DictItem`, `KnownEdge`, and `Location` and `Handler` from paths.py; no bare tuples cross module boundaries. Some possible smells: entries.py:40 defines an `EntryKind` Literal whose name collides with `paths.EntryKind` but whose values differ ('argparse_subcommand' against 'argparse'), which invites confusion at the merge seam. `Diagnostic = PathDiagnostic` is an alias rather than a separate type. `_DispatchFacts.func_call` recognises any `<Name>.func(...)`, so it encodes a loose heuristic.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "Tests assert observable outcomes: exact (path, line) pairs, handler triples, edge sets, and diagnostic reason and line lists. They use `line_of` instead of magic numbers. Safety is proven by patching Popen and os.system and planting sentinel modules. Determinism is checked with byte-identical JSON under reversed scandir order and reordered seeds. Edge cases with concrete inputs include BOM and cookie files, NUL bytes, symlinks escaping the root, symlink loops, and excluded directories. Gaps: no test for ValueError on an absolute seed path; no test for two subparser sets declaring the same name, or a nested leaf sharing a name with a top-level command (relevant to dict matching on `names[-1]`); no test for parser values passed into helper functions; the live test checks edge membership (`in edges(e)`) rather than equality.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "Every scenario in this block has an implementation and a test. That covers the PyIndex records (module names, repo roots with `.git` or `pyproject.toml`, the src layout, the importer-directory fallback), import collection at every nesting level excluding TYPE_CHECKING, and the walk rules (`os.walk(followlinks=False)`, skip-dirs exactly as specified, the `_inside` symlink check, `parse_error` with a null line). On the argparse side it covers literal and nested space-joined names at the add_parser line, `dynamic_name`, both handler mechanisms, function-local imports, known edges with their fallback start lines, comparison dispatch left null with no diagnostic, and `unresolved_handler` for out-of-repository targets. Seeds cover symbol, line, enclosing def and the default name, plus `seed_not_found` for a missing file, an out-of-range line or an unknown symbol. Ordering and the live-copy test are covered. Weaknesses: `add_parser` calls on parser values the flow-insensitive per-scope scan cannot follow (function parameters, attribute targets) are dropped silently, with no entry and no diagnostic. For set_defaults, the `args.func(...)` edge origin is searched only in the parser's own module.",
+      "confidence": 0.7
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The produced interfaces match the stated signatures: `PyIndex.build`, `module_name`, `repo_root`, `resolve_module(importer, dotted, level=0)`, `resolve_name`, `enclosing_scope`, `parse_errors`, `KnownEdge` with its `from` alias, `Entry` fields in the specified order, `Discovery`, and `discover_entries(root, seeds=(), *, index=None)`. `discover_entries` is exported in `__all__` and the old exports are unchanged. The `by_alias` round-trip is tested. Loose seams, both disclosed by the implementer: `Invoker.kind` is `DiscoveredKind` (paths.py:52, 120: 'argparse', 'click', ...), so `Entry.also_invoked_by` cannot hold discovery kinds like 'argparse_subcommand' without a mapping. entries.py imports paths.py, so a later `map_paths` in paths.py must import entries lazily or the code must be restructured to avoid a cycle.",
+      "confidence": 0.65
+    }
+  ],
+  "weighted_average": 3.8531250000000004,
+  "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 3.9"
+  },
+  "missing": [],
+  "extra": [
+    "`discover_entries` raises ValueError (via `normalise_rel_path`, entries.py:78) for a seed path that is absolute or escapes the root, instead of returning `seed_not_found`. That is defensible, since the paths.v1 path pattern cannot hold such a path, but the spec does not ask for it, the docstring is the only place it is stated, and no test covers it."
+  ],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "An `add_parser(\"x\")` call whose receiver the per-scope scan cannot follow is dropped silently: no entry and no diagnostic. Examples are a subparsers object passed as a function parameter (`def add_open(sub): sub.add_parser(\"open\")`) or stored on an attribute (`self.sub = parser.add_subparsers()`).",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "entries.py:141-153: `scan` keeps a fresh `env` per def body and records only `ast.Name` targets (`for target in (t for t in targets if isinstance(t, ast.Name))`). entries.py:171 emits an entry only when `isinstance(receiver, _Subparsers)`; any other receiver falls through to `return None` with nothing recorded. The module docstring says \"Every candidate examined but not emitted gets exactly one\" diagnostic. Registering subcommands in per-command helper functions is a common argparse pattern, and with this code those entries vanish without any trace. Suggested fix: when a `.add_parser(<str literal>)` call's receiver cannot be evaluated, emit a diagnostic such as `dynamic_name` or `unresolved_target`, with a detail like 'receiver not traced to add_subparsers'. Better still, track parameters that are passed a tracked `_Subparsers` value at a same-module call site.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 171,
+      "reviewers": []
+    },
+    {
+      "claim": "`is_external` reports a plain `import ns.mod` of a same-repository namespace package (one with no `__init__.py`) as external. An unresolvable attribute on it then gets an `unresolved_handler` diagnostic saying the target \"is imported from outside this repository\", which is false.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "pyindex.py:310-312: `case _ModuleBinding(module=module): if self.resolve_module(path, module) is None: return True`. `import tools.cli` binds `_ModuleBinding(\"tools\")`, and `resolve_module(path, \"tools\")` finds neither `tools.py` nor `tools/__init__.py` in a namespace package, so it returns None and the name counts as external. The `_FromBinding` branch right below already handles namespace packages with `_bound_module(path, binding, \"\")`; the `_ModuleBinding` branch has no such check. Example: `set_defaults(func=tools.cli.not_a_def)` would produce a wrong diagnostic. Suggested fix: treat a `_ModuleBinding` as external only when no indexed file in the importer's repository lives under that dotted prefix, for example when `resolve_module(path, module)` is None and no file path starts with the module's directory under any of the search bases.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/pyindex.py",
+      "line": 311,
+      "reviewers": []
+    },
+    {
+      "claim": "The dispatch-dict lookup matches any dict literal anywhere in the parser module or any module it imports whose string key equals the subcommand's leaf name. Unrelated dicts can therefore become handlers, and a nested subcommand (`db migrate`) and a top-level `migrate` share one key.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "entries.py:253: `for item in facts.dict_items.get(command.names[-1], []):`. `_dispatch_facts` collects every `ast.Dict` item with a constant str key and a Name or Attribute value, whatever its scope and whether or not the dict is ever subscripted and called. `resolve_name` also accepts a `class` binding, while the spec says \"naming a function\". The implementer disclosed the leaf-name choice (note 6), but no test covers the collision. Suggested fix: when any `<DICT>[...](...)` call exists, prefer items whose `dict_name` appears in `dict_calls`. Also add a test for two subcommands with the same leaf name at different depths.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 253,
+      "reviewers": []
+    },
+    {
+      "claim": "The set_defaults known edge starts at the first `<Name>.func(...)` call in the parser module. That matches unrelated calls such as `self.func()` or `obj.func(x)`, and a dispatch `args.func(args)` in another module (for example a `__main__.py` that imports `build_parser`) is never found.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "entries.py:338: `if isinstance(callee, ast.Attribute) and callee.attr == \"func\" and isinstance(callee.value, ast.Name): func_calls.append(node.lineno)`. `_set_defaults_handler` uses `dispatch.facts(path).func_call or line`, searching only `path`. The dict mechanism, by contrast, searches `[path, *index.imported_files(path)]`. Suggested fix: search the parser module and the modules that import it (or that it imports) for the dispatch call, the same way the dict search does. Optionally, require the receiver name to be bound from a `.parse_args(...)` result.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 338,
+      "reviewers": []
+    },
+    {
+      "claim": "The ValueError raised for an absolute or root-escaping seed path is documented only in the `discover_entries` docstring and has no test.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "entries.py:78 `seed_paths = [normalise_rel_path(root, seed.path) for seed in seeds]` raises before any discovery runs (paths.py:322-330). Neither test_entries_seeds.py nor test_entries_argparse.py has a `pytest.raises(ValueError)` case. The spec lists only missing file, out-of-range line and unknown symbol as `seed_not_found`, so this is an implementer-chosen contract and should be pinned by a test. Suggested fix: add a parametrised test for `Seed(path=\"/abs.py\")` and `Seed(path=\"../x.py\")` that expects ValueError.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 78,
+      "reviewers": []
+    },
+    {
+      "claim": "Directories `os.walk` cannot read are skipped with nothing recorded, because no `onerror` callback is passed. Their Python files disappear from discovery without a diagnostic or a log line.",
+      "severity": "Note",
+      "confidence": 0.4,
+      "evidence": "pyindex.py:123 `for dirpath, dirnames, filenames in os.walk(root, followlinks=False):` has no `onerror`, so `os.walk` silently ignores the OSError from `scandir`. Unreadable files are reported as `parse_error` ('unreadable: ...') by `_index_file`, but unreadable directories are not. Suggested fix: pass `onerror=lambda e: log.warning(\"cannot read %s: %s\", e.filename, e)`.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/pyindex.py",
+      "line": 123,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "`entries.EntryKind` reuses the name `paths.EntryKind` for a different set of values, and block 1's `Invoker.kind` is typed `DiscoveredKind`, so `Entry.also_invoked_by: list[Invoker]` cannot hold a discovery kind.",
+      "severity": "Minor",
+      "confidence": 0.7,
+      "evidence": "entries.py:40 `EntryKind = Literal[\"argparse_subcommand\", \"click_command\", ...]` against paths.py:53 `EntryKind = Literal[DiscoveredKind, \"model\"]` and paths.py:120 `Invoker.kind: DiscoveredKind` (paths.py:52: 'argparse', 'click', 'typer', 'main', 'script', 'skill_command', 'hook', 'seed'). The spec interface says `Invoker.kind: str`. The implementer disclosed this (note 4). The merge block will need either one explicit discovery-kind to output-kind mapping or a widened `Invoker.kind`. Renaming one of the two aliases, for example to `DiscoveryKind`, would prevent the wrong one being imported.\nREJECTED: `Invoker.kind`'s Literal type is block 1's definition, not part of this diff. The implementer disclosed the mismatch (note 4) and handed it to the merge block. `also_invoked_by` is always `[]` in this block, so nothing here breaks. Renaming the alias is a style preference.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 40,
+      "reviewers": [],
+      "judge_reason": "`Invoker.kind`'s Literal type is block 1's definition, not part of this diff. The implementer disclosed the mismatch (note 4) and handed it to the merge block. `also_invoked_by` is always `[]` in this block, so nothing here breaks. Renaming the alias is a style preference."
+    }
+  ],
+  "fix_brief": "Fix review issues: The block passed review. The judge accepted these findings and they are still open: fix them, and change nothing else.\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Minor] An `add_parser(\"x\")` call whose receiver the per-scope scan cannot follow is dropped silently: no entry and no diagnostic. Examples are a subparsers object passed as a function parameter (`def add_open(sub): sub.add_parser(\"open\")`) or stored on an attribute (`self.sub = parser.add_subparsers()`). (plugins/multiplai-dev/lib/code_facts/code_facts/entries.py:171)\n  evidence: entries.py:141-153: `scan` keeps a fresh `env` per def body and records only `ast.Name` targets (`for target in (t for t in targets if isinstance(t, ast.Name))`). entries.py:171 emits an entry only when `isinstance(receiver, _Subparsers)`; any other receiver falls through to `return None` with nothing recorded. The module docstring says \"Every candidate examined but not emitted gets exactly one\" diagnostic. Registering subcommands in per-command helper functions is a common argparse pattern, and with this code those entries vanish without any trace. Suggested fix: when a `.add_parser(<str literal>)` call's receiver cannot be evaluated, emit a diagnostic such as `dynamic_name` or `unresolved_target`, with a detail like 'receiver not traced to add_subparsers'. Better still, track parameters that are passed a tracked `_Subparsers` value at a same-module call site.\n- [Minor] `is_external` reports a plain `import ns.mod` of a same-repository namespace package (one with no `__init__.py`) as external. An unresolvable attribute on it then gets an `unresolved_handler` diagnostic saying the target \"is imported from outside this repository\", which is false. (plugins/multiplai-dev/lib/code_facts/code_facts/pyindex.py:311)\n  evidence: pyindex.py:310-312: `case _ModuleBinding(module=module): if self.resolve_module(path, module) is None: return True`. `import tools.cli` binds `_ModuleBinding(\"tools\")`, and `resolve_module(path, \"tools\")` finds neither `tools.py` nor `tools/__init__.py` in a namespace package, so it returns None and the name counts as external. The `_FromBinding` branch right below already handles namespace packages with `_bound_module(path, binding, \"\")`; the `_ModuleBinding` branch has no such check. Example: `set_defaults(func=tools.cli.not_a_def)` would produce a wrong diagnostic. Suggested fix: treat a `_ModuleBinding` as external only when no indexed file in the importer's repository lives under that dotted prefix, for example when `resolve_module(path, module)` is None and no file path starts with the module's directory under any of the search bases.\n- [Minor] The dispatch-dict lookup matches any dict literal anywhere in the parser module or any module it imports whose string key equals the subcommand's leaf name. Unrelated dicts can therefore become handlers, and a nested subcommand (`db migrate`) and a top-level `migrate` share one key. (plugins/multiplai-dev/lib/code_facts/code_facts/entries.py:253)\n  evidence: entries.py:253: `for item in facts.dict_items.get(command.names[-1], []):`. `_dispatch_facts` collects every `ast.Dict` item with a constant str key and a Name or Attribute value, whatever its scope and whether or not the dict is ever subscripted and called. `resolve_name` also accepts a `class` binding, while the spec says \"naming a function\". The implementer disclosed the leaf-name choice (note 6), but no test covers the collision. Suggested fix: when any `<DICT>[...](...)` call exists, prefer items whose `dict_name` appears in `dict_calls`. Also add a test for two subcommands with the same leaf name at different depths.\n- [Minor] The set_defaults known edge starts at the first `<Name>.func(...)` call in the parser module. That matches unrelated calls such as `self.func()` or `obj.func(x)`, and a dispatch `args.func(args)` in another module (for example a `__main__.py` that imports `build_parser`) is never found. (plugins/multiplai-dev/lib/code_facts/code_facts/entries.py:338)\n  evidence: entries.py:338: `if isinstance(callee, ast.Attribute) and callee.attr == \"func\" and isinstance(callee.value, ast.Name): func_calls.append(node.lineno)`. `_set_defaults_handler` uses `dispatch.facts(path).func_call or line`, searching only `path`. The dict mechanism, by contrast, searches `[path, *index.imported_files(path)]`. Suggested fix: search the parser module and the modules that import it (or that it imports) for the dispatch call, the same way the dict search does. Optionally, require the receiver name to be bound from a `.parse_args(...)` result.\n- [Minor] The ValueError raised for an absolute or root-escaping seed path is documented only in the `discover_entries` docstring and has no test. (plugins/multiplai-dev/lib/code_facts/code_facts/entries.py:78)\n  evidence: entries.py:78 `seed_paths = [normalise_rel_path(root, seed.path) for seed in seeds]` raises before any discovery runs (paths.py:322-330). Neither test_entries_seeds.py nor test_entries_argparse.py has a `pytest.raises(ValueError)` case. The spec lists only missing file, out-of-range line and unknown symbol as `seed_not_found`, so this is an implementer-chosen contract and should be pinned by a test. Suggested fix: add a parametrised test for `Seed(path=\"/abs.py\")` and `Seed(path=\"../x.py\")` that expects ValueError.\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
+  "fix": {
+    "report": "I'll start by reading the relevant files.Reviewed the code and tests; now checking the seeds tests, the `Seed` model, and the live pr scripts before editing.pyindex is done. Now I'm rewriting the argparse section of entries.py.All 255 existing tests pass. Next I'm writing tests for each fix, then running ruff.Now the tests. First a look at how test_pyindex structures its `is_external` test:Now adding the pyindex test and the seeds test:Now the argparse tests, written to a file and spliced in so the escapes stay intact:One fix before splicing: a helper scanned under two different parents must not emit the same `(names, line)` command twice. I'm adding dedupe in `_add_parser`:279 pass. Next I'm checking that the new tests actually fail on the pre-fix code, by temporarily swapping in the HEAD versions of the two modules:The diff reads correctly. Now checking whether any of the ruff errors are in lines I touched:The remaining ruff errors were already there before my change. One test line I added is 121 characters, so I'm wrapping it and running the suite one last time:I fixed all five findings, and the suite passes: 279 tests, up from 255. The live `pr_pipeline` copy test ran rather than skipping. 18 of the new tests fail when run against the code before my changes, which shows they really cover the fixes. The seed `ValueError` test passes on both versions, as expected, because it pins behaviour that already existed.\n\n**1. `add_parser` calls dropped silently** (`entries.py`)\n- The scan now follows a subparsers value into same-module helper functions it is passed to by name, positionally or by keyword. Callers are scanned before the functions they call, so `def add_open(sub): sub.add_parser(\"open\")` now gives an `open` entry with its handler.\n- A helper used under two parents gives one entry per parent. Repeated `(name, line)` pairs are de-duplicated.\n- An `add_parser` whose receiver still can't be traced, such as `self.sub` set in another method, now gets one `unresolved_target` diagnostic naming the receiver.\n- Modules are now scanned when they contain `add_parser`, not only `add_subparsers`, so a helper module that only registers subcommands gets that diagnostic too.\n\n**2. Namespace packages reported as external** (`pyindex.py`)\n- A new `_in_repository` check treats a module as internal if it resolves, or if any same-repository file lives under its directory (a namespace package).\n- I applied it to the plain `import` branch and also to the `from tools import nothing` branch. That branch had the same mistake: the old code reported it as external.\n\n**3. Dispatch-dict lookup** (`entries.py`)\n- If any candidate dict is called as `NAME[...](...)` or `mod.NAME[...](...)`, only those dicts count.\n- The remaining dicts are ranked by how well their keys match the command's sibling names. That way `db migrate` and a top-level `migrate` each find their own dict.\n- A class value no longer counts as a handler. The same check applies to `set_defaults(func=SomeClass)`.\n- The dispatch call for a dict is now also looked for in the modules where the parser's dispatch call may be. This covers `commands.COMMANDS[...]()` called from `__main__.py`.\n\n**4. Where the `set_defaults` edge starts** (`entries.py`)\n- A `<name>.func(...)` call only counts when `<name>` is bound from a `parse_args`-style call in the same scope (`parse_known_args` with a tuple target included). `self.func()` and `obj.func(x)` no longer match.\n- The search covers the parser module, then the modules that import it, then the modules it imports.\n\n**5. Seed path `ValueError` test**: a parametrised test now covers `/abs.py`, `../x.py` and `lib/../../x.py`, and checks the error is raised before the index is built.\n\nBehaviour changes you might not expect:\n- `PyIndex.Def` has a new required field, `is_class`.\n- `PyIndex` has a new public method, `importing_files(path)`, which `entries.py` uses.\n- If a dict literal repeats a key, the last value now wins, as it does in Python. Before, the first one won.\n- The existing `FLAT` fixture line `Registry().add_parser(\"not-a-subcommand\")` now gets an `unresolved_target` diagnostic. No existing test checks that file's full diagnostics list, so nothing breaks.\n- The ruff import-sorting warnings in the three test files were already there before my change.\n\nSTATUS: DONE_WITH_CONCERNS\nTESTS_RUN: uv run --package walkthrough-pipeline --extra dev python -m pytest plugins/multiplai-dev/lib/code_facts/tests -q\nGREEN: 279 passed, 1 warning in 1.69s\nFILES: plugins/multiplai-dev/lib/code_facts/code_facts/entries.py, plugins/multiplai-dev/lib/code_facts/code_facts/pyindex.py, plugins/multiplai-dev/lib/code_facts/tests/test_entries_argparse.py, plugins/multiplai-dev/lib/code_facts/tests/test_entries_seeds.py, plugins/multiplai-dev/lib/code_facts/tests/test_pyindex.py\nSURPRISES: The spec doesn't say which dict a nested subcommand dispatches through, so I chose to match dict keys against sibling subcommand names. The spec also has no reason code for an untraced `add_parser` receiver, so I used `unresolved_target`. The concern: any untraced `.add_parser(...)` call is now diagnosed, including ones that aren't argparse (like `Registry()` in FLAT), which may count as noise.\nSPEC_IMPACT: clarify\n\nSEARCHED:\n- Untraced add_parser: `_ParserScan._call` (add_subparsers, add_parser and set_defaults branches), `_add_parser` with a dynamic name on an untraced receiver (one diagnostic, not two), and the file gate in `_argparse_entries`, which skipped helper-only modules without `add_subparsers` (fixed).\n- Namespace `is_external`: `PyIndex._external` (`_ModuleBinding` and the level-0 `_FromBinding` branch, which had the same bug; fixed), and `resolve_name`/`_bound_module`, which already resolve namespace submodules.\n- Dispatch-dict lookup: `_dispatch_dict_handler`, `_dispatch_facts` (dict and subscript-call collection, now also `mod.NAME[...]()`), `DispatchIndex.dict_call` (it only searched the dict's own module, the same kind of gap as finding 4; fixed), and the class-handler check in both `_dispatch_dict_handler` and `_set_defaults_handler`.\n- set_defaults edge start: `_DispatchFacts.func_call` collection, `_set_defaults_handler`, and the dict dispatch-call search, which had the same module-only gap (fixed through `call_modules`).\n- Seed ValueError: `discover_entries` seed normalisation and `paths.normalise_rel_path` (absolute paths, `..` that escapes the root, and paths that resolve outside it); the new test pins this.\n\nTEST CHANGE REQUIRED: test_entries_argparse.py \u2014 added TestSubparsersPassedToHelpers, TestNamespacePackageHandlers, TestDispatchDictSelection and TestArgsFuncDispatchCall for findings 1\u20134; no existing test was changed.\nTEST CHANGE REQUIRED: test_entries_seeds.py \u2014 added TestSeedPathValidation, the ValueError test finding 5 asks for; no existing test was changed.\nTEST CHANGE REQUIRED: test_pyindex.py \u2014 added test_namespace_package_in_the_repository_is_not_external for finding 2; no existing test was changed.",
+    "success": true,
+    "timed_out": false,
+    "commit": "44fd265e8a2bb285ab3f8568a810b4efe2887f13",
+    "searched": [
+      "Untraced add_parser: `_ParserScan._call` (add_subparsers, add_parser and set_defaults branches), `_add_parser` with a dynamic name on an untraced receiver (one diagnostic, not two), and the file gate in `_argparse_entries`, which skipped helper-only modules without `add_subparsers` (fixed).",
+      "Namespace `is_external`: `PyIndex._external` (`_ModuleBinding` and the level-0 `_FromBinding` branch, which had the same bug; fixed), and `resolve_name`/`_bound_module`, which already resolve namespace submodules.",
+      "Dispatch-dict lookup: `_dispatch_dict_handler`, `_dispatch_facts` (dict and subscript-call collection, now also `mod.NAME[...]()`), `DispatchIndex.dict_call` (it only searched the dict's own module, the same kind of gap as finding 4; fixed), and the class-handler check in both `_dispatch_dict_handler` and `_set_defaults_handler`.",
+      "set_defaults edge start: `_DispatchFacts.func_call` collection, `_set_defaults_handler`, and the dict dispatch-call search, which had the same module-only gap (fixed through `call_modules`).",
+      "Seed ValueError: `discover_entries` seed normalisation and `paths.normalise_rel_path` (absolute paths, `..` that escapes the root, and paths that resolve outside it); the new test pins this."
+    ],
+    "pass_kind": "fix_on_pass",
+    "kept": true
+  }
+}

@@ -1,0 +1,175 @@
+{
+  "generated_at": "2026-10-17T06:42:21.489436+00:00",
+  "kind": "review",
+  "block": {
+    "number": 3,
+    "name": "Trace each discovered entry into a gated, linear path with one re-ask"
+  },
+  "round": 1,
+  "head_sha": "bba0b29aced315af952c03c7f1bbf1fe93227e3f",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Clear module split. trace_gate.py holds the pure gate with no CallFn. tracing.py holds orchestration, keys and re-ask. prompts.py holds the prompt text. paths.py keeps map_paths as a short orchestration (discover \u2192 trace \u2192 sort \u2192 assign_ids). Concepts are typed: BreakCode/CutReason/DropReason Literals, a KIND_RANK dict, OUTPUT_KIND typed `dict[EntryKind, DiscoveredKind]`. canonical_digest is defined once in explore.py, and normalise_rel_path is reused by gate rule 1. Possible smells: (a) the shared explore prompt module prompts.py now imports `.trace_gate` (and through it entries, paths, pyindex) at module load, which couples the generic explore prompts that walkthrough and spec-extract import to the paths stack (possible Divergent Change); (b) the function-local imports in map_paths (paths.py:396-399) work around a cycle rather than fix it; (c) the `ask` log line now uses the label, not the key, so explore failures lose their unit id.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "Tests assert observable outcomes: written paths.json bytes, entry dicts, stops_at/break_reason, drop (stage, reason), ids. Call accounting via FakeCall.calls/max_in_flight is always paired with a result assertion. Concrete edge cases are pinned: rule-order control (unconnected vs out-of-range on the same hop), A\u2192B\u2192A repeated hop, 20 vs 21/25 hops, hops past 20 never checked, the worse re-answer replacing the first, comment/string names, non-Python whole-word matching, a nested repo path. Delays are random and only perturb completion order. Weaknesses: several prompt assertions are substring checks that a hex SHA or line numbers can satisfy by accident (`assert \"20\" in prompt`, `assert \"4\" in prompt`); explore's new `schema`/`encode`/label-override parameters have no direct test in test_explore.py; the GREEN evidence is the bare sentence 'All tests pass' with no output.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "Every block-3 behaviour is implemented and tested. One request per entry goes through run_tasks with concurrency. Overrides: tools, cwd, label `paths:trace:{key[:12]}` / `paths:reask:{key[:12]}`. The prompt carries kind, location, handler, commit, scope or 'no change scope; trace to the last effect', edges, places and 20. extra=forbid on TraceHop/TraceAnswer. Gate rules 1\u20138 run in order. hop_limit keeps 20 and triggers no re-ask. There is exactly one re-ask, and its answer replaces the first. A break at k gives stops_at=k\u22121. Zero hops gives PathDrop(stage='trace', reason=code). recoverable gives call_failed; anything else propagates unwrapped via `bounded`. The paths sort is correct, and tests are empty. The four D1 scenario amendments are in place. Deductions: the requirement prose at trace-gate.md:233 now contradicts its amended scenario, and trace-gate.md:260-266 ('Any exception ... during a re-ask SHALL propagate unchanged') still reads as forbidding the recoverable\u2192call_failed path that the block spec and test_recoverable_failure_on_the_reask_drops_as_call_failed require.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The produced interfaces match the stated signatures: gate_hops, GateResult, TraceHop/TraceAnswer, to_path_entry, trace_entry(entry, *, ctx), assign_ids, paths_trace/paths_reask, the prompt-version constants, OUTPUT_KIND, KIND_RANK, BREAK_CODES. Entry.known_edges and ctx.places reach both the prompt (`_trace_prompt`) and gate rule 7 (`_gate` passes `known_edges=entry.known_edges, places=ctx.places`). One PyIndex is built in map_paths and shared by discovery and the gate. Every call goes through the caller's CallFn via the extended `ask`. Discovery diagnostics flow into the result. Loose seams: `ask` still appends `explore {key}: ...` to the discarded `errors` list and logs `%s failed` with the label, so trace failures are attributed through explore wording; prompts.py has a hard import dependency on trace_gate just to get `TraceAnswer` for `schema_json`.",
+      "confidence": 1.0
+    }
+  ],
+  "weighted_average": 4.0,
+  "gate": {
+    "passed": false,
+    "reason": "Spec-compliance verdict failed \u2014 misunderstood: ['specs/changes/code-paths-lib/requirements/trace-gate.md:233: the block amended the \\'Cut after re-ask\\' scenario to `stops_at = 2` (the last kept hop) but left the requirement prose just above it, which still says \"`stops_at`: the 1-based index of the first broken hop\". The spec file now contradicts itself within one requirement. The code follows the amended scenario (tracing.py `_cut`: `stops_at=len(gated.accepted)`).']"
+  },
+  "missing": [],
+  "extra": [
+    "explore.py `ask`: `budget_label` now silently replaces a caller-supplied `budget_label` in `call_kwargs` for every caller, explore included. Before, that combination raised a duplicate-kwarg TypeError. The trace path needs this, but the change also alters behaviour for existing explore callers. The implementer disclosed it in implementation-notes.md (1)."
+  ],
+  "misunderstood": [
+    "specs/changes/code-paths-lib/requirements/trace-gate.md:233: the block amended the 'Cut after re-ask' scenario to `stops_at = 2` (the last kept hop) but left the requirement prose just above it, which still says \"`stops_at`: the 1-based index of the first broken hop\". The spec file now contradicts itself within one requirement. The code follows the amended scenario (tracing.py `_cut`: `stops_at=len(gated.accepted)`)."
+  ],
+  "accepted": [
+    {
+      "claim": "The `ask` failure log no longer names the failing task key for explore callers: it logs the budget label (`explore:unit`) where it used to log the key (`unit:u7`).",
+      "severity": "Minor",
+      "confidence": 0.85,
+      "evidence": "Removed: `log.error(\"explore %s failed\", key, exc_info=True)`. Added: `label = budget_label(key)` \u2026 `log.error(\"%s failed\", label, exc_info=True)`, and the default `explore_budget_label(key)` returns `f\"explore:{key.split(':')[0]}\"`, which drops the unit id. Hidden error: when several units fail, their log lines cannot be told apart. Fix: `log.error(\"%s (%s) failed\", label, key, exc_info=True)`.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/explore.py",
+      "line": 145,
+      "reviewers": []
+    },
+    {
+      "claim": "The amended trace-gate.md now contradicts itself: the requirement prose defines `stops_at` as the index of the first broken hop, while the amended scenario directly below sets it to the last kept hop.",
+      "severity": "Minor",
+      "confidence": 0.85,
+      "evidence": "trace-gate.md:233 `- `stops_at`: the 1-based index of the first broken hop;` versus the diff-amended line 238 `the path holds hops 1\u20132 of the re-asked answer, `stops_at` = 2`. paths.py TracedPath docstring: '`stops_at` (the 1-based index of the last hop kept)'. Fix: amend line 233 to 'the 1-based index of the last hop kept (the first broken hop minus one)'.",
+      "dimension": "Spec Compliance",
+      "file_path": "specs/changes/code-paths-lib/requirements/trace-gate.md",
+      "line": 233,
+      "reviewers": []
+    },
+    {
+      "claim": "The trace-gate requirement 'CallFn failures during a re-ask propagate' (any exception, never swallowed) was left unamended, although the block makes a recoverable re-ask failure a `call_failed` drop.",
+      "severity": "Note",
+      "confidence": 0.6,
+      "evidence": "trace-gate.md:261 'The gate SHALL NOT retry, swallow or budget a failing re-ask call. Any exception raised by the caller's `CallFn` during a re-ask SHALL propagate unchanged.' versus tracing.py `_call_failed` on the second answer and test `test_recoverable_failure_on_the_reask_drops_as_call_failed` (recoverable=(RuntimeError,) \u2192 drop). With the default `recoverable=()` the scenario still holds, so this is a wording gap in the spec, not a code bug.",
+      "dimension": "Spec Compliance",
+      "file_path": "specs/changes/code-paths-lib/requirements/trace-gate.md",
+      "line": 261,
+      "reviewers": []
+    },
+    {
+      "claim": "The trace_gate module docstring says rule 1 rejects a path that 'has a `..`', but the gate accepts `pkg/../pkg/cli.py` after normalising it.",
+      "severity": "Note",
+      "confidence": 0.7,
+      "evidence": "trace_gate.py docstring: '1. `path_outside_root`: the path is absolute, has a `..` or `\\\\`, or resolves outside the root.' `_cite` calls `normalise_rel_path`, which does `posixpath.normpath(path)` and only rejects results that are `..` or start with `../`. The spec (trace-gate.md:61) only requires rejecting paths that normalise outside the root, so the behaviour is fine and only the docstring is wrong. Fix the docstring: '... or has a `..` that leaves the root'.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/trace_gate.py",
+      "line": 4,
+      "reviewers": []
+    },
+    {
+      "claim": "Some prompt tests use bare-digit substring checks that the commit SHA or line numbers in the prompt can satisfy by accident, so they would not catch the hop limit or broken index going missing.",
+      "severity": "Minor",
+      "confidence": 0.7,
+      "evidence": "test_trace_paths.py: `assert \"20\" in prompt` (the prompt also contains a 40-hex SHA and line numbers); `assert \"4\" in prompt and \"text_mismatch\" in prompt` in test_reask_prompt_carries_index_reason_detail_and_accepted_prefix and test_reask_repairs_a_broken_trace. Stronger: `\"at most 20 hops\" in prompt` and `\"at hop 4:\" in prompt`, matching the text `_trace_task` and `paths_reask` produce.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_trace_paths.py",
+      "line": 130,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "Encoding the answer moved out of the `try`, so an exception raised while encoding is no longer turned into a recoverable `{\"error\": ...}` answer; it propagates.",
+      "severity": "Note",
+      "confidence": 0.45,
+      "evidence": "Before: `answers[key] = out.model_dump()` sat inside `try:` and was covered by `except recoverable` (default `(Exception,)`). After: `else: answers[key] = encode(out)`. For existing callers the `call` returns a validated schema instance, so `model_dump` effectively cannot fail. For tracing, `encode_trace_answer` catches ValidationError itself. The guarantee has narrowed but no live caller is affected today.\nREJECTED: Moving `encode` into `else:` is a reasonable choice: a call failure is recoverable, an encoding bug is not. No live caller is affected. `model_dump` on a validated instance cannot realistically fail, and `encode_trace_answer` catches ValidationError itself. Nothing needs fixing.",
+      "dimension": "removed-behavior",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/explore.py",
+      "line": 149,
+      "reviewers": [],
+      "judge_reason": "Moving `encode` into `else:` is a reasonable choice: a call failure is recoverable, an encoding bug is not. No live caller is affected. `model_dump` on a validated instance cannot realistically fail, and `encode_trace_answer` catches ValidationError itself. Nothing needs fixing."
+    },
+    {
+      "claim": "prompts.py now imports `.trace_gate` (and through it `.entries`, `.paths`/jsonschema and `.pyindex`) at module load, which couples the shared explore prompt module to the paths stack.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "prompts.py: `from .paths import HOP_LIMIT` and `from .trace_gate import TraceAnswer` at top level. walkthrough_pipeline/prompts.py imports `code_facts.prompts` for `UNTRUSTED_RULES, citation_rules, explore_unit`. A change to trace_gate's imports can now break the explore prompts (possible Divergent Change). Alternative: put the paths prompts in their own module, or import TraceAnswer lazily inside `_trace_task`.\nREJECTED: This is a module-layout preference. code_facts already depends on jsonschema, the imports work (no cycle, since `map_paths` defers its imports), and the build sets no rule that the explore prompts module stay independent of the paths stack. Nothing is broken.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/prompts.py",
+      "line": 11,
+      "reviewers": [],
+      "judge_reason": "This is a module-layout preference. code_facts already depends on jsonschema, the imports work (no cycle, since `map_paths` defers its imports), and the build sets no rule that the explore prompts module stay independent of the paths stack. Nothing is broken."
+    },
+    {
+      "claim": "The GREEN evidence has no test output, only the sentence 'All tests pass'.",
+      "severity": "Note",
+      "confidence": 0.6,
+      "evidence": "Implementer report GREEN section: 'All tests pass'. The RED section shows '73 failed, 279 passed'. Nothing in the diff contradicts a passing run, but the claim cannot be checked from the report.\nREJECTED: This concerns the implementer's report, not the diff. Nothing in the diff shows a defect, and adjudication is about the code and spec changes.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_trace_paths.py",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "This concerns the implementer's report, not the diff. Nothing in the diff shows a defect, and adjudication is about the code and spec changes."
+    },
+    {
+      "claim": "The new `ask` parameters (`schema`, `budget_label` callable, `encode`, and the replacement of a caller's `budget_label`) have no unit test in test_explore.py; they are covered only indirectly through map_paths.",
+      "severity": "Note",
+      "confidence": 0.5,
+      "evidence": "test_explore.py is unchanged by the diff. test_trace_paths.py `test_trace_requests_are_read_only_and_overwrite_caller_tools_cwd_and_label` covers the label override through map_paths. No test calls `ask` with a caller `budget_label` in `call_kwargs` and the default explore label to confirm the old explore behaviour still holds.\nREJECTED: test_explore.py is unchanged and still exercises `ask` with its defaults, so the old explore behaviour stays covered. The new `schema`, `budget_label` and `encode` parameters and the label override are tested through map_paths, including a caller-supplied `budget_label` being replaced. Missing direct unit tests is not a defect here.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/explore.py",
+      "line": 123,
+      "reviewers": [],
+      "judge_reason": "test_explore.py is unchanged and still exercises `ask` with its defaults, so the old explore behaviour stays covered. The new `schema`, `budget_label` and `encode` parameters and the label override are tested through map_paths, including a caller-supplied `budget_label` being replaced. Missing direct unit tests is not a defect here."
+    },
+    {
+      "claim": "The implementer's claims (1)\u2013(8) in implementation-notes.md are borne out by the diff.",
+      "severity": "Note",
+      "confidence": 0.9,
+      "evidence": "(1) explore.py `ask` gained `schema`/`budget_label`/`encode` with defaults. (2) paths.py:396-399 deferred imports. (3) tracing.py `UNNUMBERED = \"p1\"`. (4) TraceHop `line_start: int`/`line_end: int` without ge=1. (5) `encode_trace_answer` returns `{MALFORMED: ...}`. (6) `drop_order` ends with `entry.kind`. (7) the `_DATA_NOT_INSTRUCTIONS` refactor keeps UNTRUSTED_RULES byte-identical. (8) `broken_at=HOP_LIMIT + 1` for hop_limit.\nREJECTED: This confirms the implementer's notes rather than identifying a problem, so there is nothing to fix.",
+      "dimension": "Spec Compliance",
+      "file_path": "specs/changes/code-paths-lib/implementation-notes.md",
+      "line": 43,
+      "reviewers": [],
+      "judge_reason": "This confirms the implementer's notes rather than identifying a problem, so there is nothing to fix."
+    }
+  ],
+  "fix_brief": "Fix review issues: Spec-compliance verdict failed \u2014 misunderstood: ['specs/changes/code-paths-lib/requirements/trace-gate.md:233: the block amended the \\'Cut after re-ask\\' scenario to `stops_at = 2` (the last kept hop) but left the requirement prose just above it, which still says \"`stops_at`: the 1-based index of the first broken hop\". The spec file now contradicts itself within one requirement. The code follows the amended scenario (tracing.py `_cut`: `stops_at=len(gated.accepted)`).']\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Minor] The `ask` failure log no longer names the failing task key for explore callers: it logs the budget label (`explore:unit`) where it used to log the key (`unit:u7`). (plugins/multiplai-dev/lib/code_facts/code_facts/explore.py:145)\n  evidence: Removed: `log.error(\"explore %s failed\", key, exc_info=True)`. Added: `label = budget_label(key)` \u2026 `log.error(\"%s failed\", label, exc_info=True)`, and the default `explore_budget_label(key)` returns `f\"explore:{key.split(':')[0]}\"`, which drops the unit id. Hidden error: when several units fail, their log lines cannot be told apart. Fix: `log.error(\"%s (%s) failed\", label, key, exc_info=True)`.\n- [Minor] The amended trace-gate.md now contradicts itself: the requirement prose defines `stops_at` as the index of the first broken hop, while the amended scenario directly below sets it to the last kept hop. (specs/changes/code-paths-lib/requirements/trace-gate.md:233)\n  evidence: trace-gate.md:233 `- `stops_at`: the 1-based index of the first broken hop;` versus the diff-amended line 238 `the path holds hops 1\u20132 of the re-asked answer, `stops_at` = 2`. paths.py TracedPath docstring: '`stops_at` (the 1-based index of the last hop kept)'. Fix: amend line 233 to 'the 1-based index of the last hop kept (the first broken hop minus one)'.\n- [Note] The trace-gate requirement 'CallFn failures during a re-ask propagate' (any exception, never swallowed) was left unamended, although the block makes a recoverable re-ask failure a `call_failed` drop. (specs/changes/code-paths-lib/requirements/trace-gate.md:261)\n  evidence: trace-gate.md:261 'The gate SHALL NOT retry, swallow or budget a failing re-ask call. Any exception raised by the caller's `CallFn` during a re-ask SHALL propagate unchanged.' versus tracing.py `_call_failed` on the second answer and test `test_recoverable_failure_on_the_reask_drops_as_call_failed` (recoverable=(RuntimeError,) \u2192 drop). With the default `recoverable=()` the scenario still holds, so this is a wording gap in the spec, not a code bug.\n- [Note] The trace_gate module docstring says rule 1 rejects a path that 'has a `..`', but the gate accepts `pkg/../pkg/cli.py` after normalising it. (plugins/multiplai-dev/lib/code_facts/code_facts/trace_gate.py:4)\n  evidence: trace_gate.py docstring: '1. `path_outside_root`: the path is absolute, has a `..` or `\\\\`, or resolves outside the root.' `_cite` calls `normalise_rel_path`, which does `posixpath.normpath(path)` and only rejects results that are `..` or start with `../`. The spec (trace-gate.md:61) only requires rejecting paths that normalise outside the root, so the behaviour is fine and only the docstring is wrong. Fix the docstring: '... or has a `..` that leaves the root'.\n- [Minor] Some prompt tests use bare-digit substring checks that the commit SHA or line numbers in the prompt can satisfy by accident, so they would not catch the hop limit or broken index going missing. (plugins/multiplai-dev/lib/code_facts/tests/test_trace_paths.py:130)\n  evidence: test_trace_paths.py: `assert \"20\" in prompt` (the prompt also contains a 40-hex SHA and line numbers); `assert \"4\" in prompt and \"text_mismatch\" in prompt` in test_reask_prompt_carries_index_reason_detail_and_accepted_prefix and test_reask_repairs_a_broken_trace. Stronger: `\"at most 20 hops\" in prompt` and `\"at hop 4:\" in prompt`, matching the text `_trace_task` and `paths_reask` produce.\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
+  "fix": {
+    "report": "Now the edits.I fixed all five findings. The full suite passes: 352 passed.\n\n**What I changed:**\n- **Spec, cut after re-ask** (`trace-gate.md:233`): `stops_at` is now defined as \"the 1-based index of the last hop kept (the first broken hop minus one)\". The prose now agrees with the amended scenario (`stops_at = 2`) and with the code (`stops_at=len(gated.accepted)`).\n- **Spec, re-ask failures** (`trace-gate.md:261`): the requirement now says an exception whose class is in `recoverable` drops the entry with stage `trace` and reason `call_failed`. Any other exception still propagates unchanged, and `recoverable` defaults to `()`. The \"Re-ask call raises\" scenario now says it runs with the default `recoverable`, so it still holds exactly as before.\n- **Failure log** (`explore.py:145`): the log line is now `log.error(\"%s (%s) failed\", label, key, exc_info=True)`, so it names the failing key again (`unit:u7`) as well as the budget label.\n- **Gate docstring** (`trace_gate.py:6`): rule 1 now reads \"the path is absolute, has a `\\\\`, or has a `..` that leaves the root\", which matches what `normalise_rel_path` does.\n- **Prompt tests** (`test_trace_paths.py`): the bare-digit checks now match the exact text the prompts produce. `\"20\" in prompt` became `\"at most 20 hops\" in prompt`. Both `\"4\" in \u2026 and \"text_mismatch\" in \u2026` checks became `\"at hop 4: text_mismatch\" in \u2026`, at lines 151 and 179.\n\n**Left alone, but worth a look:**\n- Three `trace-gate.md` scenarios still use `stops_at` to mean the broken hop, not the last kept hop: lines 47 and 51 (malformed or empty answer, `stops_at = 1`) and line 204 (`stops_at = 3`). They describe what the gate reports, which is `GateResult.broken_at`, not a written path, and D1 doesn't list them for amendment.\n- The fallback requirement in `entry-point-model-fallback.md:60` still says every `CallFn` exception propagates. That doesn't match D1#5's `recoverable` rule, but the fallback is not this block's work.\n\nSTATUS: DONE_WITH_CONCERNS\nTESTS_RUN: uv run --package walkthrough-pipeline --extra dev python -m pytest plugins/multiplai-dev/lib/code_facts/tests -q\nGREEN: 352 passed, 1 warning in 3.19s\nFILES: plugins/multiplai-dev/lib/code_facts/code_facts/explore.py, plugins/multiplai-dev/lib/code_facts/code_facts/trace_gate.py, plugins/multiplai-dev/lib/code_facts/tests/test_trace_paths.py, specs/changes/code-paths-lib/requirements/trace-gate.md\nSURPRISES: The trace-gate spec uses `stops_at` in two senses. At the gate level it means the broken hop (lines 47, 51, 204); for a written path it means the last kept hop. I left the gate-level scenarios unchanged because D1 doesn't cover them.\nSPEC_IMPACT: clarify\n\nSEARCHED:\n- explore ask log drops key: every `log.error` and `log.warning` call under `code_facts/code_facts/` (the only one is explore.py:145), plus the `errors.append` line in the same `except` branch, which already includes the key.\n- trace-gate.md stops_at contradiction: every `stops_at` mention in all seven requirement files. Lines 183 and 238 and paths-output-contract 156/167 already use last-kept; path-scope-and-cap 135 is consistent with it; trace-gate 47/51/204 are gate-level reports, left unchanged and listed above.\n- re-ask propagate wording: every \"propagate\" mention in the requirement files. The only other conflicting one is the fallback requirement (entry-point-model-fallback.md:60), which belongs to a later block and is listed above.\n- trace_gate docstring `..`: every mention of `..` in `code_facts/*.py` docstrings and comments. The two in paths.py describe the output path pattern, which really does reject any `..` segment, so they are correct.\n- bare-digit prompt asserts: every `\"<digits>\" in prompt` or `in \u2026.prompt` assert in `tests/*.py`. Lines 132, 151 and 179 are fixed. Lines 131 and 141 check line numbers by design.\n\nTEST CHANGE REQUIRED: test_trace_paths.py prompt tests (around lines 132, 151, 179) asserted bare digits (\"20\", \"4\") that the commit SHA or line numbers in the prompt could match by accident. Per the adjudicated finding, they now assert \"at most 20 hops\" and \"at hop 4: text_mismatch\", the exact text `paths_trace` and `paths_reask` produce.",
+    "success": true,
+    "timed_out": false,
+    "commit": "52aebbb4797bfe9373db48f4d24cf2472737e173",
+    "searched": [
+      "explore ask log drops key: every `log.error` and `log.warning` call under `code_facts/code_facts/` (the only one is explore.py:145), plus the `errors.append` line in the same `except` branch, which already includes the key.",
+      "trace-gate.md stops_at contradiction: every `stops_at` mention in all seven requirement files. Lines 183 and 238 and paths-output-contract 156/167 already use last-kept; path-scope-and-cap 135 is consistent with it; trace-gate 47/51/204 are gate-level reports, left unchanged and listed above.",
+      "re-ask propagate wording: every \"propagate\" mention in the requirement files. The only other conflicting one is the fallback requirement (entry-point-model-fallback.md:60), which belongs to a later block and is listed above.",
+      "trace_gate docstring `..`: every mention of `..` in `code_facts/*.py` docstrings and comments. The two in paths.py describe the output path pattern, which really does reject any `..` segment, so they are correct.",
+      "bare-digit prompt asserts: every `\"<digits>\" in prompt` or `in \u2026.prompt` assert in `tests/*.py`. Lines 132, 151 and 179 are fixed. Lines 131 and 141 check line numbers by design."
+    ]
+  }
+}

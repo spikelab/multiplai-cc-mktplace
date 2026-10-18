@@ -1,0 +1,379 @@
+{
+  "schema_version": "paths.v1",
+  "commit": "9c41e07b2d5f8a3e6b1c0d47f2a9e8b35c6d1f04",
+  "scoped": true,
+  "cap": 2,
+  "paths": [
+    {
+      "id": "p1",
+      "entry": {
+        "kind": "argparse_subcommand",
+        "name": "open",
+        "source": "discovery",
+        "location": {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/__main__.py",
+          "line": 38
+        },
+        "handler": {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line": 180,
+          "symbol": "cmd_open"
+        },
+        "invocation": null,
+        "also_invoked_by": []
+      },
+      "hops": [
+        {
+          "symbol_called": "open",
+          "citation": {
+            "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/__main__.py",
+            "line_start": 38,
+            "line_end": 38,
+            "quote": "    op = sub.add_parser(\"open\", help=\"push the branch and open a PR from the template\")",
+            "id": "",
+            "side": "head"
+          },
+          "note": "argparse registers `open`; COMMANDS in commands.py:400 maps it to cmd_open (known edge)."
+        },
+        {
+          "symbol_called": "cmd_open",
+          "citation": {
+            "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+            "line_start": 180,
+            "line_end": 213,
+            "quote": "def cmd_open(args) -> int:\n    repo, config = _resolve_repo(args.repo)\n    change_dir = _change_dir(args.change_dir)\n    head = args.head or github.current_branch(repo)\n    if not head or head == \"HEAD\":\n        raise Refused(\"no branch to open the PR from: pass --head, or check out a branch\")\n    if not github.valid_branch(repo, head):\n        raise Refused(f\"`{head}` is not a valid branch name\")\n    draft = args.draft or (not args.ready and config.draft)\n    base = args.base or github.gh_default_branch(repo) or github.git_default_branch(repo)\n    r = render_body(repo, change_dir, base=base, head=head, ticket_url=args.ticket_url,\n                    section_files=[Path(p) for p in args.section], config=config)\n    title = args.title or f\"buildme: {r.sources.change_name}\"\n    if r.sources.size:\n        print(r.sources.size.line(), flush=True)\n    _diagnose(r.diagnoses)\n\n    body_file = Path(\"<body-file>\") if args.dry_run else _body_file(r.body)\n    create = github.create_argv(title, body_file, head, args.base, draft)\n    if args.dry_run:\n        if not args.no_push:\n            print(\"DRY_RUN:\" + github.Result(github.push_argv(head), 0, \"\", \"\").command, flush=True)\n        print(\"DRY_RUN:\" + github.Result(create, 0, \"\", \"\").command, flush=True)\n        print(\"DRY_RUN_BODY:\", flush=True)\n        sys.stdout.write(r.body)\n        return 0\n\n    try:\n        if not args.no_push:\n            res = github.push(repo, head)\n            if not res.ok:\n                raise Refused(f\"`{res.command}` failed: {res.why()}\")\n            print(f\"PUSHED:{head}\", flush=True)\n        res = github.run_write(repo, create)",
+            "id": "",
+            "side": "head"
+          },
+          "note": "Decides draft and title, builds the `gh pr create` argv, then hands it to run_write."
+        },
+        {
+          "symbol_called": "run_write",
+          "citation": {
+            "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+            "line_start": 268,
+            "line_end": 270,
+            "quote": "def run_write(repo: Path, argv: list[str]) -> Result:\n    \"\"\"Run one of the `gh` write argvs built above.\"\"\"\n    return _run_gh(argv, cwd=repo)",
+            "id": "",
+            "side": "head"
+          },
+          "note": ""
+        },
+        {
+          "symbol_called": "_run_gh",
+          "citation": {
+            "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+            "line_start": 69,
+            "line_end": 71,
+            "quote": "def _run_gh(argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_TIMEOUT) -> Result:\n    \"\"\"Separate seam for `gh` so tests can stub it without stubbing git.\"\"\"\n    return _run(argv, cwd=cwd, timeout=timeout)",
+            "id": "",
+            "side": "head"
+          },
+          "note": ""
+        },
+        {
+          "symbol_called": "_run",
+          "citation": {
+            "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+            "line_start": 58,
+            "line_end": 61,
+            "quote": "def _run(argv: list[str], cwd: Path | str | None = None, timeout: int = _GIT_TIMEOUT) -> Result:\n    try:\n        proc = subprocess.run(argv, cwd=str(cwd) if cwd else None, capture_output=True, text=True,\n                              timeout=timeout, shell=False, check=False)",
+            "id": "",
+            "side": "head"
+          },
+          "note": "Last effect: `gh pr create` runs as a subprocess."
+        }
+      ],
+      "stops_at": null,
+      "break_reason": null,
+      "changed_lines_covered": [
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line": 188
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line": 192
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line": 270
+        }
+      ],
+      "tests": {
+        "e2e": [
+          {
+            "node_id": "plugins/multiplai-dev/skills/pr/scripts/tests/test_spend.py::test_open_prints_spend_when_it_cannot_start",
+            "file": "plugins/multiplai-dev/skills/pr/scripts/tests/test_spend.py",
+            "line": 111,
+            "match": "cli_argv",
+            "invocation_line": 118
+          }
+        ],
+        "mocks_hop_2": []
+      }
+    },
+    {
+      "id": "p2",
+      "entry": {
+        "kind": "other",
+        "name": "pr_pipeline.commands.run (subcommand dispatcher)",
+        "source": "model",
+        "location": {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line": 403
+        },
+        "handler": {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line": 403,
+          "symbol": "run"
+        },
+        "invocation": null,
+        "also_invoked_by": []
+      },
+      "hops": [
+        {
+          "symbol_called": "run",
+          "citation": {
+            "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+            "line_start": 403,
+            "line_end": 409,
+            "quote": "def run(args) -> int:\n    \"\"\"Run one subcommand; map its outcome onto the exit codes and the log.\"\"\"\n    args._log_fields = {}\n    pr_arg = getattr(args, \"pr\", \"\") or \"\"\n    log_event(\"pr\", \"start\", f\"pr {args.command} started\", subcommand=args.command, pr=pr_arg)\n    try:\n        code = COMMANDS[args.command](args)",
+            "id": "",
+            "side": "head"
+          },
+          "note": "Dispatches on args.command through COMMANDS; this trace follows the `open` branch."
+        },
+        {
+          "symbol_called": "cmd_open",
+          "citation": {
+            "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+            "line_start": 180,
+            "line_end": 213,
+            "quote": "def cmd_open(args) -> int:\n    repo, config = _resolve_repo(args.repo)\n    change_dir = _change_dir(args.change_dir)\n    head = args.head or github.current_branch(repo)\n    if not head or head == \"HEAD\":\n        raise Refused(\"no branch to open the PR from: pass --head, or check out a branch\")\n    if not github.valid_branch(repo, head):\n        raise Refused(f\"`{head}` is not a valid branch name\")\n    draft = args.draft or (not args.ready and config.draft)\n    base = args.base or github.gh_default_branch(repo) or github.git_default_branch(repo)\n    r = render_body(repo, change_dir, base=base, head=head, ticket_url=args.ticket_url,\n                    section_files=[Path(p) for p in args.section], config=config)\n    title = args.title or f\"buildme: {r.sources.change_name}\"\n    if r.sources.size:\n        print(r.sources.size.line(), flush=True)\n    _diagnose(r.diagnoses)\n\n    body_file = Path(\"<body-file>\") if args.dry_run else _body_file(r.body)\n    create = github.create_argv(title, body_file, head, args.base, draft)\n    if args.dry_run:\n        if not args.no_push:\n            print(\"DRY_RUN:\" + github.Result(github.push_argv(head), 0, \"\", \"\").command, flush=True)\n        print(\"DRY_RUN:\" + github.Result(create, 0, \"\", \"\").command, flush=True)\n        print(\"DRY_RUN_BODY:\", flush=True)\n        sys.stdout.write(r.body)\n        return 0\n\n    try:\n        if not args.no_push:\n            res = github.push(repo, head)\n            if not res.ok:\n                raise Refused(f\"`{res.command}` failed: {res.why()}\")\n            print(f\"PUSHED:{head}\", flush=True)\n        res = github.run_write(repo, create)",
+            "id": "",
+            "side": "head"
+          },
+          "note": ""
+        },
+        {
+          "symbol_called": "run_write",
+          "citation": {
+            "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+            "line_start": 268,
+            "line_end": 270,
+            "quote": "def run_write(repo: Path, argv: list[str]) -> Result:\n    \"\"\"Run one of the `gh` write argvs built above.\"\"\"\n    return _run_gh(argv, cwd=repo)",
+            "id": "",
+            "side": "head"
+          },
+          "note": ""
+        },
+        {
+          "symbol_called": "_run_gh",
+          "citation": {
+            "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+            "line_start": 69,
+            "line_end": 71,
+            "quote": "def _run_gh(argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_TIMEOUT) -> Result:\n    \"\"\"Separate seam for `gh` so tests can stub it without stubbing git.\"\"\"\n    return _run(argv, cwd=cwd, timeout=timeout)",
+            "id": "",
+            "side": "head"
+          },
+          "note": ""
+        },
+        {
+          "symbol_called": "_run",
+          "citation": {
+            "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+            "line_start": 58,
+            "line_end": 61,
+            "quote": "def _run(argv: list[str], cwd: Path | str | None = None, timeout: int = _GIT_TIMEOUT) -> Result:\n    try:\n        proc = subprocess.run(argv, cwd=str(cwd) if cwd else None, capture_output=True, text=True,\n                              timeout=timeout, shell=False, check=False)",
+            "id": "",
+            "side": "head"
+          },
+          "note": "Last effect: `gh pr create` runs as a subprocess."
+        }
+      ],
+      "stops_at": null,
+      "break_reason": null,
+      "changed_lines_covered": [
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line": 188
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line": 192
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line": 270
+        }
+      ],
+      "tests": {
+        "e2e": [],
+        "mocks_hop_2": []
+      }
+    }
+  ],
+  "dropped": [
+    {
+      "stage": "model_fallback_citation",
+      "reason": "citation_unverified",
+      "detail": "plugins/multiplai-dev/hooks/run.sh does not exist at 9c41e07b",
+      "entry": {
+        "kind": "other",
+        "name": "hooks/run.sh",
+        "source": "model",
+        "location": {
+          "path": "plugins/multiplai-dev/hooks/run.sh",
+          "line": 1
+        }
+      }
+    },
+    {
+      "stage": "model_fallback_citation",
+      "reason": "duplicate",
+      "detail": "same line as discovery entry argparse_subcommand `render`",
+      "entry": {
+        "kind": "argparse_subcommand",
+        "name": "render",
+        "source": "model",
+        "location": {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/__main__.py",
+          "line": 60
+        }
+      }
+    },
+    {
+      "stage": "import_reachability",
+      "reason": "unreachable",
+      "detail": "merged 8 hook commands (Setup, SessionStart, UserPromptSubmit x2, Notification, Stop, SessionEnd, PreCompact), all resolve to plugins/multiplai-context/hooks/run.sh:1; no import path to a changed file",
+      "entry": {
+        "kind": "hook_command",
+        "name": "Setup",
+        "source": "discovery",
+        "location": {
+          "path": "plugins/multiplai-context/hooks/hooks.json",
+          "line": 8
+        }
+      }
+    },
+    {
+      "stage": "import_reachability",
+      "reason": "unreachable",
+      "detail": "no import path from review_pipeline to a changed file",
+      "entry": {
+        "kind": "argparse_subcommand",
+        "name": "review",
+        "source": "discovery",
+        "location": {
+          "path": "plugins/multiplai-dev/skills/review/scripts/review_pipeline/__main__.py",
+          "line": 108
+        }
+      }
+    },
+    {
+      "stage": "import_reachability",
+      "reason": "unreachable",
+      "detail": "no import path from review_pipeline to a changed file",
+      "entry": {
+        "kind": "argparse_subcommand",
+        "name": "batch",
+        "source": "discovery",
+        "location": {
+          "path": "plugins/multiplai-dev/skills/review/scripts/review_pipeline/__main__.py",
+          "line": 142
+        }
+      }
+    },
+    {
+      "stage": "import_reachability",
+      "reason": "unreachable",
+      "detail": "no import path from review_pipeline to a changed file",
+      "entry": {
+        "kind": "argparse_subcommand",
+        "name": "rollup",
+        "source": "discovery",
+        "location": {
+          "path": "plugins/multiplai-dev/skills/review/scripts/review_pipeline/__main__.py",
+          "line": 149
+        }
+      }
+    },
+    {
+      "stage": "no_changed_line",
+      "reason": "no_changed_line_covered",
+      "detail": "1 hop kept (stops_at 1, unconnected_hop): __main__.py:1 is a docstring line and nothing connects it to main() at line 70; first answer anchored at line 104 and was re-asked for entry_mismatch",
+      "entry": {
+        "kind": "main_module",
+        "name": "pr_pipeline",
+        "source": "discovery",
+        "location": {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/__main__.py",
+          "line": 1
+        }
+      }
+    },
+    {
+      "stage": "no_changed_line",
+      "reason": "no_changed_line_covered",
+      "detail": "2 hops kept (stops_at 2, unconnected_hop): hop 2 cited commands.py:266-269, which does not name run_write (called at 383); the re-ask broke the same way",
+      "entry": {
+        "kind": "argparse_subcommand",
+        "name": "edit",
+        "source": "discovery",
+        "location": {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/__main__.py",
+          "line": 53
+        }
+      }
+    },
+    {
+      "stage": "no_changed_line",
+      "reason": "no_changed_line_covered",
+      "detail": "6 hops via render_body -> fill._run_model; no hop covers commands.py:188, :192 or github.py:270",
+      "entry": {
+        "kind": "argparse_subcommand",
+        "name": "render",
+        "source": "discovery",
+        "location": {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/__main__.py",
+          "line": 60
+        }
+      }
+    },
+    {
+      "stage": "cap",
+      "reason": "over_cap",
+      "detail": "ranked 3 of 3 (1 changed line covered, 3 hops); cap is 2",
+      "entry": {
+        "kind": "seed",
+        "name": "github.run_write",
+        "source": "seed",
+        "location": {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line": 268
+        }
+      }
+    }
+  ],
+  "fallback": {
+    "status": "ok",
+    "reason": null
+  },
+  "diagnostics": [
+    {
+      "path": "plugins/multiplai-dev/skills/pr/SKILL.md",
+      "line": 18,
+      "reason": "unresolved_target",
+      "detail": "subcommand argument `<command>` matches no add_parser name in pr_pipeline; target fell back to pr_pipeline/__main__.py:1"
+    },
+    {
+      "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/__main__.py",
+      "line": 104,
+      "reason": "unresolved_handler",
+      "detail": "the __main__ block calls 2 functions (pin_session_settings, main); a handler needs exactly one"
+    }
+  ],
+  "test_listing_skips": []
+}

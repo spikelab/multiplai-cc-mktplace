@@ -1,0 +1,153 @@
+{
+  "generated_at": "2026-10-17T06:01:15.932056+00:00",
+  "kind": "review",
+  "block": {
+    "number": 2,
+    "name": "Discover argparse subcommands and caller seeds from a static `PyIndex`"
+  },
+  "round": 1,
+  "head_sha": "28feb175e67fbde3c7e62c8151b1a0397ae6005c",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "Clean split: pyindex.py holds the walk, parse cache, scopes and import resolution; entries.py holds the scanners, resolution and sorting. No walkthrough_pipeline import. Every new module has `from __future__ import annotations` and `log = logging.getLogger(__name__)`. Handlers resolve through a single `_Resolution` path. Possible smells: two different Literals both named `EntryKind` (paths.py:53 output kinds vs entries.py:38 discovery kinds), which invites mixing them up when kinds are mapped later; the set_defaults and dict paths decide 'unresolved' by different rules. Kinds are Literals, not the StrEnum the rubric names.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "Tests assert exact locations, handlers, edges and diagnostic tuples computed with line_of. They cover determinism (reversed scandir, seed order, prebuilt index), no-execution with sentinels plus patched Popen/os.system, symlinks escaping the root, excluded dirs, BOM-less binary and NUL-byte parse errors, the live copy, and multi-repo. Gaps: no BOM/PEP 263 cookie case, no symlink loop, no attribute-form `set_defaults(func=mod.fn)`, no nested-subparser handler resolution, no handler passed via a helper-function parameter. `repo_root(...) in (\"\", \".\")` is a loose assertion. The declared `_ReversedScandir` change (adding `__next__`) is in a new file and keeps the reversed-order intent.",
+      "confidence": 0.7
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "This block's scenarios are all present: argparse literal/nested names at the add_parser line, dynamic_name, set_defaults and dict handlers (including function-local sibling imports), edges from args.func / DICT[...]() with set_defaults-line and dict-entry-line fallbacks, comparison dispatch giving a null handler and no diagnostic, an out-of-repo unresolved_handler, seeds by symbol, by line and with a given name, seed_not_found cases, pruned dirs, symlinks, parse_error with line null, and sort orders. One deviation: the set_defaults path emits unresolved_handler for in-repo attribute handlers and local names, not only for out-of-repo targets.",
+      "confidence": 0.75
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 3,
+      "evidence": "Produced signatures match the interface list (PyIndex.build/module_name/repo_root/resolve_module/resolve_name/enclosing_scope/parse_errors, KnownEdge, Entry, Discovery, discover_entries). `discover_entries` is exported and no existing export is removed. But a nested uv.lock was committed under lib/code_facts, which the repo's single-lock rule forbids and which scripts/lint_workspace.py `check_no_nested_locks` will fail on. The interface says `Invoker.kind: str`, while paths.py constrains it to output kinds ('argparse', ...) and Entry.kind uses discovery kinds ('argparse_subcommand'). A later merge block must map between them, and nothing does that yet.",
+      "confidence": 0.7
+    }
+  ],
+  "weighted_average": 3.690625,
+  "gate": {
+    "passed": false,
+    "reason": "Spec-compliance verdict failed \u2014 misunderstood: [\"entries.py `_set_defaults_handler`: any `set_defaults(func=...)` value that does not resolve gets an `unresolved_handler` diagnostic saying it is 'not a function defined in this repository'. That includes in-repo attribute references such as `func=commands.cmd_open`, local variables and lambdas. The spec reserves unresolved_handler for out-of-repository targets, and the dispatch-dict path does apply that rule (it checks `index.is_imported`). The set_defaults path does not, so the two handler mechanisms emit diagnostics differently and the message text can be false.\"]"
+  },
+  "missing": [],
+  "extra": [
+    "plugins/multiplai-dev/lib/code_facts/uv.lock: a new 1015-line nested lockfile. No spec scenario asks for it, and the repo's conventions forbid it (see issues)."
+  ],
+  "misunderstood": [
+    "entries.py `_set_defaults_handler`: any `set_defaults(func=...)` value that does not resolve gets an `unresolved_handler` diagnostic saying it is 'not a function defined in this repository'. That includes in-repo attribute references such as `func=commands.cmd_open`, local variables and lambdas. The spec reserves unresolved_handler for out-of-repository targets, and the dispatch-dict path does apply that rule (it checks `index.is_imported`). The set_defaults path does not, so the two handler mechanisms emit diagnostics differently and the message text can be false."
+  ],
+  "accepted": [
+    {
+      "claim": "The diff commits a nested uv.lock under plugins/multiplai-dev/lib/code_facts. This breaks the CLAUDE.md rule \"No `uv.lock` anywhere but the repo root\" and fails scripts/lint_workspace.py check_no_nested_locks.",
+      "severity": "Major",
+      "confidence": 0.95,
+      "evidence": "diff: `new file mode 100644 ... plugins/multiplai-dev/lib/code_facts/uv.lock` starting `version = 1 / revision = 3`. lint_workspace.py:153 `for p in sorted(REPO_ROOT.glob(\"plugins/**/uv.lock\"))` yields a 'nested lockfile' error. CLAUDE.md:175 states the rule verbatim.",
+      "dimension": "conventions",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/uv.lock",
+      "line": 1,
+      "reviewers": []
+    },
+    {
+      "claim": "_set_defaults_handler emits an unresolved_handler diagnostic claiming 'not a function defined in this repository' for any func= value that is not a resolvable bare Name. That includes in-repo attribute handlers like `func=commands.cmd_open`, so the diagnostic is false for in-repo code and differs from the dict path, which only diagnoses imported names.",
+      "severity": "Minor",
+      "confidence": 0.75,
+      "evidence": "entries.py `handler = index.resolve_name(path, line, expr.id) if isinstance(expr, ast.Name) else None` / `if handler is None: return None, None, (f\"set_defaults(func={ast.unparse(expr)}) at line {line} is not a function defined in this repository\")`. By contrast, _dispatch_dict_handler sets `unresolved` only when `index.is_imported(module, item.value_line, item.value)`. Spec: 'An out-of-repository target produces an unresolved_handler diagnostic.' Fix: when the expr is a Name, emit the diagnostic only if `index.is_imported(...)` is true (and the import does not resolve in-repo). For an `ast.Attribute` whose base is a same-repo module binding, either resolve it or leave the handler null without a misleading detail.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 236,
+      "reviewers": []
+    },
+    {
+      "claim": "KnownEdge uses ConfigDict(validate_by_name=True, serialize_by_alias=True). These config keys arrived in pydantic 2.11, but pyproject declares only `pydantic>=2`.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "entries.py `model_config = ConfigDict(validate_by_name=True, serialize_by_alias=True)`. pyproject.toml:10 `\"pydantic>=2\"`. On an older pydantic 2.x the edge would not serialise as `from`. The global constraint says existing floors are unchanged, so either use `populate_by_name` plus an explicit `by_alias=True` at dump sites, or flag the floor issue for the spec owner.",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 47,
+      "reviewers": []
+    },
+    {
+      "claim": "Edge cases from the rubric are untested: a BOM or PEP 263 cookie file, a symlink loop, and an attribute-form or nested-subparser handler resolution. TestRepoRoot.test_falls_back_to_the_snapshot_root accepts either '' or '.', which is looser than the implementation, which always returns ''.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "test_pyindex.py fixture contains `bin.py` (\\xff\\xfe) and `nul.py` (\\x00) but no `\\xef\\xbb\\xbf` or `# -*- coding:` file. test_entries_argparse.py TestWalk has symlinks escaping the root but no self-referential link. `assert idx.repo_root(\"pkg/cli.py\") in (\"\", \".\")`.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_pyindex.py",
+      "line": 112,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "There are now two module-level Literals named EntryKind with disjoint members: paths.EntryKind (output kinds 'argparse', ..., 'model') and entries.EntryKind (discovery kinds 'argparse_subcommand', ...). Invoker.kind uses the output kinds while Entry.kind uses the discovery kinds, so populating also_invoked_by will need a mapping that does not exist yet.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "paths.py:52-53 `DiscoveredKind = Literal[\"argparse\", \"click\", ...]`, `EntryKind = Literal[DiscoveredKind, \"model\"]`. paths.py:120 `kind: DiscoveredKind` on Invoker. entries.py:38 `EntryKind = Literal[\"argparse_subcommand\", \"click_command\", ...]`. Spec interface: `class Invoker(_Strict): kind: str`. Fix: rename entries' Literal (e.g. DiscoveryKind) and add one central discovery-to-output kind map next to KIND_RANK.\nREJECTED: The build context deliberately defines two separate vocabularies: discovery kinds (argparse_subcommand, ...) and output kinds (argparse, ...). entries.py does not import paths.EntryKind, so there is no shadowing. The discovery-to-output mapping belongs to later blocks that populate also_invoked_by and the output. The name overlap is a style preference.",
+      "dimension": "Code Architecture",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 38,
+      "reviewers": [],
+      "judge_reason": "The build context deliberately defines two separate vocabularies: discovery kinds (argparse_subcommand, ...) and output kinds (argparse, ...). entries.py does not import paths.EntryKind, so there is no shadowing. The discovery-to-output mapping belongs to later blocks that populate also_invoked_by and the output. The name overlap is a style preference."
+    },
+    {
+      "claim": "Subparsers that reach a helper function as a parameter, or that are stored on an attribute (`self.sub = parser.add_subparsers()`), are not discovered, and no diagnostic is emitted for them. Each scope's env is seeded empty and `_eval` returns None for an `ast.Attribute` receiver.",
+      "severity": "Minor",
+      "confidence": 0.55,
+      "evidence": "entries.py _ParserScan.scan: `env: dict[str, _Parser | _Subparsers] = {}` per body. _eval: `if isinstance(expr, ast.Name): return env.get(expr.id)`. A non-call, non-Name expr returns None. `def add_db(sub): sub.add_parser(\"x\")` therefore yields nothing. The spec text ('a value bound from add_subparsers') arguably allows this, but it silently misses a common CLI layout. Fix: at least document the limitation in the module docstring, or follow parameters bound at same-module call sites.\nREJECTED: The spec limits discovery to add_parser on 'a value bound from add_subparsers(...)'. The reviewer concedes the spec allows this behaviour. Following subparsers through parameters or attributes is a scope extension, not a deviation from the spec.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 137,
+      "reviewers": [],
+      "judge_reason": "The spec limits discovery to add_parser on 'a value bound from add_subparsers(...)'. The reviewer concedes the spec allows this behaviour. Following subparsers through parameters or attributes is a scope extension, not a deviation from the spec."
+    },
+    {
+      "claim": "Dispatch-dict resolution matches any dict literal anywhere in the parser module or its direct imports whose string key equals the subcommand's last name. Unrelated dicts (e.g. `{\"open\": open_icon}`) can become a subcommand's handler.",
+      "severity": "Note",
+      "confidence": 0.45,
+      "evidence": "entries.py _dispatch_facts collects every `ast.Dict` key/value pair. _dispatch_dict_handler: `for item in facts.dict_items.get(command.names[-1], [])` takes the first resolving one. This follows the spec's heuristic, but prefering dicts that have a `<DICT>[...](...)` call site (item.dict_name in dict_calls) would cut false positives.\nREJECTED: The spec explicitly resolves handlers via 'a dict literal mapping the literal subcommand name to a function' in the parser module or modules it imports. The implementation follows that heuristic. Narrowing it to dicts with a call site would contradict the spec, which also requires an edge from the dict-entry line when no dispatch call exists.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/entries.py",
+      "line": 250,
+      "reviewers": [],
+      "judge_reason": "The spec explicitly resolves handlers via 'a dict literal mapping the literal subcommand name to a function' in the parser module or modules it imports. The implementation follows that heuristic. Narrowing it to dicts with a call site would contradict the spec, which also requires an edge from the dict-entry line when no dispatch call exists."
+    },
+    {
+      "claim": "The declared test change to _ReversedScandir (adding __next__ and making __iter__ return self) keeps the reversed-filesystem-order assertion intact. The class is in a new file and the test still compares discover output before and after reversal.",
+      "severity": "Note",
+      "confidence": 0.8,
+      "evidence": "test_entries_argparse.py `_ReversedScandir.__init__` sorts entries by name with reverse=True. test_output_is_independent_of_filesystem_order asserts `discover(root).model_dump_json(by_alias=True) == first` after `monkeypatch.setattr(os, \"scandir\", ...)`.\nREJECTED: This is an observation that the test is correct, not a defect. No problem is claimed.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_entries_argparse.py",
+      "line": 345,
+      "reviewers": [],
+      "judge_reason": "This is an observation that the test is correct, not a defect. No problem is claimed."
+    }
+  ],
+  "fix_brief": "Fix review issues: Spec-compliance verdict failed \u2014 misunderstood: [\"entries.py `_set_defaults_handler`: any `set_defaults(func=...)` value that does not resolve gets an `unresolved_handler` diagnostic saying it is 'not a function defined in this repository'. That includes in-repo attribute references such as `func=commands.cmd_open`, local variables and lambdas. The spec reserves unresolved_handler for out-of-repository targets, and the dispatch-dict path does apply that rule (it checks `index.is_imported`). The set_defaults path does not, so the two handler mechanisms emit diagnostics differently and the message text can be false.\"]\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Major] The diff commits a nested uv.lock under plugins/multiplai-dev/lib/code_facts. This breaks the CLAUDE.md rule \"No `uv.lock` anywhere but the repo root\" and fails scripts/lint_workspace.py check_no_nested_locks. (plugins/multiplai-dev/lib/code_facts/uv.lock:1)\n  evidence: diff: `new file mode 100644 ... plugins/multiplai-dev/lib/code_facts/uv.lock` starting `version = 1 / revision = 3`. lint_workspace.py:153 `for p in sorted(REPO_ROOT.glob(\"plugins/**/uv.lock\"))` yields a 'nested lockfile' error. CLAUDE.md:175 states the rule verbatim.\n- [Minor] _set_defaults_handler emits an unresolved_handler diagnostic claiming 'not a function defined in this repository' for any func= value that is not a resolvable bare Name. That includes in-repo attribute handlers like `func=commands.cmd_open`, so the diagnostic is false for in-repo code and differs from the dict path, which only diagnoses imported names. (plugins/multiplai-dev/lib/code_facts/code_facts/entries.py:236)\n  evidence: entries.py `handler = index.resolve_name(path, line, expr.id) if isinstance(expr, ast.Name) else None` / `if handler is None: return None, None, (f\"set_defaults(func={ast.unparse(expr)}) at line {line} is not a function defined in this repository\")`. By contrast, _dispatch_dict_handler sets `unresolved` only when `index.is_imported(module, item.value_line, item.value)`. Spec: 'An out-of-repository target produces an unresolved_handler diagnostic.' Fix: when the expr is a Name, emit the diagnostic only if `index.is_imported(...)` is true (and the import does not resolve in-repo). For an `ast.Attribute` whose base is a same-repo module binding, either resolve it or leave the handler null without a misleading detail.\n- [Minor] KnownEdge uses ConfigDict(validate_by_name=True, serialize_by_alias=True). These config keys arrived in pydantic 2.11, but pyproject declares only `pydantic>=2`. (plugins/multiplai-dev/lib/code_facts/code_facts/entries.py:47)\n  evidence: entries.py `model_config = ConfigDict(validate_by_name=True, serialize_by_alias=True)`. pyproject.toml:10 `\"pydantic>=2\"`. On an older pydantic 2.x the edge would not serialise as `from`. The global constraint says existing floors are unchanged, so either use `populate_by_name` plus an explicit `by_alias=True` at dump sites, or flag the floor issue for the spec owner.\n- [Minor] Edge cases from the rubric are untested: a BOM or PEP 263 cookie file, a symlink loop, and an attribute-form or nested-subparser handler resolution. TestRepoRoot.test_falls_back_to_the_snapshot_root accepts either '' or '.', which is looser than the implementation, which always returns ''. (plugins/multiplai-dev/lib/code_facts/tests/test_pyindex.py:112)\n  evidence: test_pyindex.py fixture contains `bin.py` (\\xff\\xfe) and `nul.py` (\\x00) but no `\\xef\\xbb\\xbf` or `# -*- coding:` file. test_entries_argparse.py TestWalk has symlinks escaping the root but no self-referential link. `assert idx.repo_root(\"pkg/cli.py\") in (\"\", \".\")`.\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
+  "fix": {
+    "report": "I removed the nested `uv.lock`; the root lock already covers `jsonschema`. Next I'm fixing the `KnownEdge` pydantic config and the `set_defaults` diagnostic.Now let me look at the pyindex tests and conftest before editing.Now the pyindex changes: dotted-reference resolution and an `is_external` check replacing `is_imported`.Now entries.py: one shared reference resolver for both handler mechanisms, plus the pydantic config.Now the tests: attribute and lambda handlers, nested subparsers, symlink loops, BOM and cookie files, and a tighter repo_root check.All 255 pass. Let me check the new tests actually fail against the previous code.The new behaviour tests fail on the old code and pass now. Next: the workspace lint and ruff, then a review of the diff.Two things to check: whether the ruff errors come from my files, and whether the stray `.venv` and the nested lock are side effects of the spec's `--directory` test command.These ruff findings were already there before my change (import sort only). Next I'll check line lengths in the new lines.No long lines. One test comment is wrong (`pkg` is simply unbound in `pkg/cli.py`), so I'll fix it.I've fixed all four findings. The full suite passes (255 tests), and the nine new behaviour tests fail when run against the previous `entries.py`/`pyindex.py`.\n\n**1. Nested `uv.lock` (Major):** I removed it with `git rm`; the deletion is staged. The root `uv.lock` already lists `jsonschema>=4` for `code-facts`, so nothing else needed changing. `scripts/lint_workspace.py` now passes the nested-lockfiles check. It still flags a stray `.venv` in that directory: it is gitignored, but I left it on disk because it wasn't in the findings.\n\n**2. `set_defaults(func=...)` diagnostics:** both handler mechanisms now use the same rule.\n- A `func=` value or dispatch-dict value may be a plain name or a dotted reference such as `commands.cmd_open`. `PyIndex.resolve_name` now accepts dotted names: the first part must be bound to a module (`import x as y`, `from . import commands`, `import pkg.commands`), and the last part is looked up in that module.\n- `unresolved_handler` is now raised only when `PyIndex.is_external(...)` is true. That means an import that leaves the repository, directly or through a same-repository re-export. This replaces `is_imported`, which also fired for in-repo imports.\n- Lambdas, local variables and broken in-repo references now leave the handler null with no diagnostic. The detail text says the target \"is imported from outside this repository\", which is now accurate.\n\n**3. pydantic floor:** `KnownEdge` now uses `ConfigDict(populate_by_name=True)`, which works on any pydantic 2.x. That was the only use of the 2.11-only config keys. Nothing in the library dumps `KnownEdge` today, and the tests that dump it already pass `by_alias=True`.\n\n**4. Tests added** for the untested edge cases:\n- **set_defaults:** handlers on an in-repo module attribute, for both import styles; lambda, local variable and broken in-repo references getting no diagnostic; an attribute on an out-of-repository module getting one.\n- **Dispatch dict:** handlers written as module attributes, and an out-of-repository value.\n- **Nested subcommands:** `db` and `db migrate` handlers via `set_defaults`.\n- **Walk:** a directory symlink loop and a file symlink loop.\n- **PyIndex:** a BOM file and a PEP 263 `latin-1` cookie file both parse; dotted `resolve_name`; `is_external`.\n- **Tightened:** `repo_root` must now equal `\"\"` exactly.\n\nSTATUS: DONE_WITH_CONCERNS\nTESTS_RUN: uv run --package walkthrough-pipeline --extra dev python -m pytest plugins/multiplai-dev/lib/code_facts/tests -q\nGREEN: 255 passed, 1 warning in 1.32s\nFILES: plugins/multiplai-dev/lib/code_facts/uv.lock (deleted), plugins/multiplai-dev/lib/code_facts/code_facts/entries.py, plugins/multiplai-dev/lib/code_facts/code_facts/pyindex.py, plugins/multiplai-dev/lib/code_facts/tests/test_entries_argparse.py, plugins/multiplai-dev/lib/code_facts/tests/test_pyindex.py\nSURPRISES: (1) Design D6 says \"an emitted entry with a null handler gets one unresolved_handler diagnostic\". The adjudicated reading, which I followed, gives the diagnostic only to out-of-repository targets, so a null handler from a lambda or local variable gets none. (2) The global test command `uv run --directory plugins/multiplai-dev/lib/code_facts ...` makes uv create a nested `uv.lock` and `.venv`, because code_facts is not a workspace member. That is probably how the lock got committed. Running the spec's own command will recreate both files, which breaks the CLAUDE.md lockfile rule. (3) ruff reports I001 import-sort warnings in entries.py and the two test files; these were there before my change.\nSPEC_IMPACT: clarify\n\nSEARCHED:\n- Nested uv.lock: searched `plugins/**/uv.lock` with the lint_workspace check (passes); confirmed the root `uv.lock` has `jsonschema` for code-facts; the `.venv` in code_facts/ is gitignored and not committed.\n- set_defaults diagnostic: checked `_set_defaults_handler` (Name, Attribute, lambda and local branches), `_dispatch_dict_handler` (unresolved branch; also made it accept attribute values so the two paths match), `_dispatch_facts` dict-item collection, `_seed_entry` (raises no unresolved_handler), and `PyIndex.is_imported` (replaced by `is_external`, with relative imports, re-exports and `from ns import submodule` handled).\n- pydantic 2.11 config: searched code_facts/ and tests/ for `validate_by_name`, `serialize_by_alias`, `validate_by_alias` and `by_alias`. KnownEdge was the only model using them, and its dump sites in the tests already pass `by_alias=True`.\n- Untested edges: test_pyindex.py fixture (added BOM and cookie files), TestWalk (added directory and file symlink loops), TestSetDefaultsHandler and TestDispatchDictHandler (attribute form and nested subparser), TestRepoRoot (exact `\"\"`).\n\nTEST CHANGE REQUIRED: tests/test_pyindex.py TestRepoRoot.test_falls_back_to_the_snapshot_root \u2014 accepted `\"\"` or `\".\"`, looser than the implementation; tightened to `== \"\"` per the adjudicated finding.\nTEST CHANGE REQUIRED: tests/test_pyindex.py \u2014 added `bom.py` and `latin.py` (PEP 263) to the `snap` fixture, plus new tests for dotted `resolve_name`, `is_external`, and BOM/cookie parsing, per the adjudicated untested-edge-cases finding.\nTEST CHANGE REQUIRED: tests/test_entries_argparse.py \u2014 added tests for attribute-form, lambda and local `set_defaults` handlers, nested-subparser handlers, attribute and out-of-repository dispatch-dict values, and symlink loops, per the adjudicated findings.",
+    "success": true,
+    "timed_out": false,
+    "commit": "6c776df6d8851600521497abcaf4c56acefea409",
+    "searched": [
+      "Nested uv.lock: searched `plugins/**/uv.lock` with the lint_workspace check (passes); confirmed the root `uv.lock` has `jsonschema` for code-facts; the `.venv` in code_facts/ is gitignored and not committed.",
+      "set_defaults diagnostic: checked `_set_defaults_handler` (Name, Attribute, lambda and local branches), `_dispatch_dict_handler` (unresolved branch; also made it accept attribute values so the two paths match), `_dispatch_facts` dict-item collection, `_seed_entry` (raises no unresolved_handler), and `PyIndex.is_imported` (replaced by `is_external`, with relative imports, re-exports and `from ns import submodule` handled).",
+      "pydantic 2.11 config: searched code_facts/ and tests/ for `validate_by_name`, `serialize_by_alias`, `validate_by_alias` and `by_alias`. KnownEdge was the only model using them, and its dump sites in the tests already pass `by_alias=True`.",
+      "Untested edges: test_pyindex.py fixture (added BOM and cookie files), TestWalk (added directory and file symlink loops), TestSetDefaultsHandler and TestDispatchDictHandler (attribute form and nested subparser), TestRepoRoot (exact `\"\"`)."
+    ]
+  }
+}

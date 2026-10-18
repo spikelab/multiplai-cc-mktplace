@@ -1,0 +1,145 @@
+{
+  "generated_at": "2026-10-17T05:38:26.384379+00:00",
+  "kind": "review",
+  "block": {
+    "number": 1,
+    "name": "Write an empty but valid `paths.v1` document through `map_paths` and `write_paths_file`"
+  },
+  "round": 3,
+  "head_sha": "f4aa1b1ab4e58eb375858bf223dcc8a6876f9e7c",
+  "scores": [
+    {
+      "dimension": "Code Architecture",
+      "weight": 2,
+      "score": 4,
+      "evidence": "paths.py contains only the contract: models, schema generation, argument normalisation, the `map_paths` stub and the writer. Nothing imports walkthrough_pipeline, and the test at test_map_paths_contract.py:204-214 enforces that. Drop stages and reasons, cut reasons, kinds and match kinds are all closed Literals, and `DROP_REASONS` is the single source for both the model and the schema. Smaller smells: the name `DiscoveredKind` (paths.py:51) holds the *output* kind names, while Global Constraints define 'Discovery kinds' as `argparse_subcommand`\u2026 (possible Mysterious Name). `normalise_changed_lines` is computed and then discarded in `map_paths` (paths.py:384). conftest uses mid-file imports under `noqa: E402`.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Test Quality",
+      "weight": 1,
+      "score": 4,
+      "evidence": "The tests check observable outcomes: exact `model_dump` of the empty result, written bytes, key order, the trailing newline, byte-identical round-trips, pointer text in the ValueError, directory listings after failed or interrupted writes, and accept/reject lists for the path regex in both schema and model. `RecordingCall` checks that no call is made, together with assertions on the result. Weaker spots: `test_missing_changed_file_is_tolerated`, `test_equivalent_spellings_write_identical_files` and `test_writes_nothing_outside_the_cache_dir` pass trivially against a stub that ignores `changed_lines` and `cache_dir`. Lax-mode coercion (`\"scoped\": \"false\"`) is tested only against the schema. `paths_name()` searches three modules, so nothing pins where the non-exported names live.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Spec Compliance",
+      "weight": 3,
+      "score": 4,
+      "evidence": "The block's scenarios are all implemented and tested:\n- schema header and strictness;\n- location and id patterns;\n- 1\u201320 hops;\n- closed enums;\n- the three required model rejections (paths.py:181-186, :163-168);\n- `write_paths_file`'s four steps;\n- the argument checks before any call (paths.py:378-384);\n- `./` normalisation;\n- null cap when unscoped;\n- fallback recorded as skipped;\n- exports and the dependency plus lock;\n- the D1 rows 6/7/9/10 spec amendments.\n\nGaps:\n- The pydantic models still parse in lax mode, so `PathsResult.model_validate` accepts documents the schema rejects (e.g. `scoped: \"false\"`, `line: \"3\"`). This is safe on the write path but looser than the contract on the read path.\n- The amended 'Test-listing shape' text says each array is sorted by `(file, line, node_id)` and each `node_id` appears at most once in it, but neither the model nor the schema enforces this. It is left to later producers.",
+      "confidence": 1.0
+    },
+    {
+      "dimension": "Integration Coherence",
+      "weight": 2,
+      "score": 4,
+      "evidence": "The `map_paths` signature and defaults match the interface exactly, and test_map_paths_contract.py:180-189 checks them. Exports are kept and extended. `jsonschema>=4` is in pyproject.toml and in uv.lock (both `dependencies` and `requires-dist`). Model, schema and file round-trip byte-identically. Loose seam: `Invoker.kind` is narrowed to output kinds (`DiscoveredKind`). Block 2's `Entry` (tasks.md:129) holds `also_invoked_by: list[Invoker]` alongside discovery-kind entries, and tasks.md:293 says kinds are converted to output kinds when written. If block 2 builds `Invoker(kind=\"argparse_subcommand\")` as the stated `kind: str` interface allows, construction will fail. The same narrowing applies to `break_reason`/`reason` against the `str` interfaces that blocks 2 and 3 consume (tasks.md:196-197).",
+      "confidence": 1.0
+    }
+  ],
+  "weighted_average": 4.0,
+  "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 4.0"
+  },
+  "missing": [],
+  "extra": [
+    "`_Strict.model_config` adds `json_schema_serialization_defaults_required=True` (paths.py:97), beyond the interface's `ConfigDict(extra=\"forbid\", frozen=True)`. It is harmless: the schema describes the written documents, which always contain `note` and `side`.",
+    "Model validators and schema arms the block does not list: contiguous `p1..pN` ids, `cap` set exactly when scoped, no scope-stage drops or coverage when unscoped, fallback reason iff failed, and per-stage reason codes. All are taken from D4/D6/D14 and declared in the implementation notes.",
+    "`normalise_changed_lines` raises `TypeError` for a non-int or bool line (paths.py:333-334), which the spec does not ask for. This is declared in the notes."
+  ],
+  "misunderstood": [],
+  "accepted": [
+    {
+      "claim": "`Invoker.kind` is narrowed to the output-kind Literal `DiscoveredKind` (`argparse`, `click`, \u2026). The block 1 interface that later blocks consume says `kind: str`, and block 2's internal `Entry` keeps `also_invoked_by: list[Invoker]` next to discovery kinds (`argparse_subcommand`, \u2026). Block 2 must convert to output kinds *when it builds* each Invoker, not when it writes paths.json as tasks.md:293 suggests, or construction raises ValidationError. Fix: record in the interface/implementation notes that `Invoker.kind` holds output kinds. Alternatively, rename `DiscoveredKind` to something like `OutputDiscoveredKind`/`InvokerKind`, since Global Constraints use 'Discovery kinds' for the other vocabulary.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "paths.py:51 `DiscoveredKind = Literal[\"argparse\", \"click\", \"typer\", \"main\", \"script\", \"skill_command\", \"hook\", \"seed\"]`; paths.py:118-122 `class Invoker(_Strict): kind: DiscoveredKind`; tasks.md:118 `Consumes: Block 1: class Invoker(_Strict): kind: str`; tasks.md:129 `class Entry(_Strict): kind: Literal[\"argparse_subcommand\",...]; ... also_invoked_by: list[Invoker]`; tasks.md:293 'paths.json writes also_invoked_by kinds as output kinds.'",
+      "dimension": "Integration Coherence",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 51,
+      "reviewers": []
+    }
+  ],
+  "rejected": [
+    {
+      "claim": "The output models parse in pydantic lax mode, so `PathsResult.model_validate(_json)` accepts documents the committed schema rejects, for example `\"scoped\": \"false\"` or `\"line\": \"3\"`. Writing is protected, because `write_paths_file` checks the schema first, but any consumer that loads paths.json through the model is more permissive than the contract. Fix: set `strict=True` on `_Strict.model_config`, or use `StrictBool`/`StrictInt` on the affected fields, and add a model-side case alongside the schema-only `(\"scoped\",), \"false\"` in test_paths_schema.py.",
+      "severity": "Minor",
+      "confidence": 0.6,
+      "evidence": "paths.py:94-97 `model_config = ConfigDict(extra=\"forbid\", frozen=True, json_schema_serialization_defaults_required=True)` with no `strict`; test_paths_schema.py `test_schema_rejects` includes `((\"scoped\",), \"false\")`, which is checked only through `_errors(...)` (the schema), never through the model.\nREJECTED: The model is more permissive, but this is not a contract deviation. The amended 'Schema and models agree' requirement asks only that model output validates against the schema, and that schema-valid documents which meet the stated cross-field rules parse into the model. It does not ask the model to reject everything the schema rejects. `write_paths_file` already validates against the schema before writing. Lax coercion such as \"3\" to 3 re-serialises to a schema-valid document. Turning on `strict=True` is a hardening preference that the spec does not ask for.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 97,
+      "reviewers": [],
+      "judge_reason": "The model is more permissive, but this is not a contract deviation. The amended 'Schema and models agree' requirement asks only that model output validates against the schema, and that schema-valid documents which meet the stated cross-field rules parse into the model. It does not ask the model to reject everything the schema rejects. `write_paths_file` already validates against the schema before writing. Lax coercion such as \"3\" to 3 re-serialises to a schema-valid document. Turning on `strict=True` is a hardening preference that the spec does not ask for."
+    },
+    {
+      "claim": "The amended spec text added in this diff ('Each array is sorted by `(file, line, node_id)`, and each `node_id` appears at most once in it') is enforced by neither `E2EListing` nor the schema. Only overlap between the two arrays is rejected. A later producer that emits unsorted or duplicate records will pass `write_paths_file`. Fix: either extend `E2EListing._disjoint` to check that each list is sorted by `(file, line, node_id)` with unique node_ids, or state in the spec that this is a producer obligation only.",
+      "severity": "Minor",
+      "confidence": 0.5,
+      "evidence": "paths-output-contract.md (amended) '- Each array is sorted by `(file, line, node_id)`, and each `node_id` appears at most once in it.'; paths.py:163-168 `_disjoint` only checks `{t.node_id for t in self.e2e} & {t.node_id for t in self.mocks_hop_2}`.\nREJECTED: This is deliberate. The amended spec lists exactly which cross-field rules the model enforces and `write_paths_file` checks: contiguous ids, stops_at \u2264 len(hops), and disjoint node_ids. Ordering within an array is a producer obligation, as is drop-record ordering, which also is not model-enforced. The sorting and uniqueness rule belongs to the block that builds test listings, not to the block-1 contract models.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 163,
+      "reviewers": [],
+      "judge_reason": "This is deliberate. The amended spec lists exactly which cross-field rules the model enforces and `write_paths_file` checks: contiguous ids, stops_at \u2264 len(hops), and disjoint node_ids. Ordering within an array is a producer obligation, as is drop-record ordering, which also is not model-enforced. The sorting and uniqueness rule belongs to the block that builds test listings, not to the block-1 contract models."
+    },
+    {
+      "claim": "Three tests pass trivially against the block-1 stub, because `map_paths` discards the normalised changed lines and never touches `cache_dir`. `test_missing_changed_file_is_tolerated`, `test_equivalent_spellings_write_identical_files` and `test_writes_nothing_outside_the_cache_dir` therefore do not yet show the behaviour their names describe. Fix: none needed now, but later blocks must keep these tests meaningful once changed lines and the cache actually reach the result.",
+      "severity": "Note",
+      "confidence": 0.7,
+      "evidence": "paths.py:384 `normalise_changed_lines(root, changed_lines)` (return value unused); paths.py:387-391 returns a constant empty `PathsResult`; `cache_dir` is never referenced in the body.\nREJECTED: The reviewer itself says no fix is needed. Block 1 is specified as a stub that returns an empty `PathsResult`. These tests pin argument handling and the 'writes nothing outside cache_dir' guarantee for the current behaviour, and later blocks inherit them. There is nothing to change in this block.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 384,
+      "reviewers": [],
+      "judge_reason": "The reviewer itself says no fix is needed. Block 1 is specified as a stub that returns an empty `PathsResult`. These tests pin argument handling and the 'writes nothing outside cache_dir' guarantee for the current behaviour, and later blocks inherit them. There is nothing to change in this block."
+    },
+    {
+      "claim": "In `_write_atomic`, the raw fd from `os.open` leaks if `os.fdopen(fd, \"wb\")` itself raises, because only the temp path is cleaned up, not the descriptor. Fix: wrap it as `try: fh = os.fdopen(fd, \"wb\") except BaseException: os.close(fd); raise`, or close `fd` in the except branch when the file object was never created.",
+      "severity": "Note",
+      "confidence": 0.35,
+      "evidence": "paths.py:446-457 `fd = os.open(tmp, ...)` then `with os.fdopen(fd, \"wb\") as fh:` inside a `try` whose `except BaseException:` only does `tmp.unlink(missing_ok=True); raise`.\nREJECTED: The leak is theoretical. `os.fdopen(fd, \"wb\")` on a freshly opened valid fd fails only in pathological cases such as MemoryError. The temp-file cleanup the spec requires is present and tested for both the fsync and replace failure paths. The suggested change is a micro-hardening with no realistic failure mode.",
+      "dimension": "Spec Compliance",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/code_facts/paths.py",
+      "line": 446,
+      "reviewers": [],
+      "judge_reason": "The leak is theoretical. `os.fdopen(fd, \"wb\")` on a freshly opened valid fd fails only in pathological cases such as MemoryError. The temp-file cleanup the spec requires is present and tested for both the fsync and replace failure paths. The suggested change is a micro-hardening with no realistic failure mode."
+    },
+    {
+      "claim": "The diff changes the multiplai-dev plugin without a version bump in marketplace.json/plugin.json and with no CHANGELOG entry. CLAUDE.md says: 'Steps 1 and 2 are enforced: the **`changelog-gate`** CI job fails a pull request that changes a plugin without both.' plugins/multiplai-dev/CHANGELOG.md has no mention of paths.v1 or map_paths. This may be deferred to a later block of the build.",
+      "severity": "Minor",
+      "confidence": 0.4,
+      "evidence": "The diff touches plugins/multiplai-dev/lib/code_facts/** but not .claude-plugin/marketplace.json, plugins/multiplai-dev/.claude-plugin/plugin.json or plugins/multiplai-dev/CHANGELOG.md. A Grep of CHANGELOG.md for `paths\\.v1|map_paths` finds 0 matches.\nREJECTED: The plugin version bump and CHANGELOG entry are outside this block's scope. The block lists its supporting changes exactly (jsonschema dependency, uv lock, exports, spec amendments), and a release bump is not among them. In a multi-block build, the bump and changelog belong to the PR as a whole, not to each block. A per-block bump would be wrong. The reviewer also says this may be deferred.",
+      "dimension": "conventions",
+      "file_path": "plugins/multiplai-dev/CHANGELOG.md",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "The plugin version bump and CHANGELOG entry are outside this block's scope. The block lists its supporting changes exactly (jsonschema dependency, uv lock, exports, spec amendments), and a release bump is not among them. In a multi-block build, the bump and changelog belong to the PR as a whole, not to each block. A per-block bump would be wrong. The reviewer also says this may be deferred."
+    },
+    {
+      "claim": "The implementer's GREEN evidence is only the sentence 'All tests pass', with no pytest output, so the claim cannot be checked from the report. The diff's tests are consistent with the implementation as far as I could trace them by reading: the FIELD_ORDER, the Hop AST parity against walkthrough models.py:122-128, the facts.v1 header values and the uv.lock entries all match.",
+      "severity": "Note",
+      "confidence": 0.6,
+      "evidence": "Implementer Report: '### GREEN evidence ... All tests pass'. RED evidence shows '119 failed, 21 passed'.\nREJECTED: This is not a defect in the diff. It criticises the implementer's report format. The reviewer's own trace finds the tests consistent with the implementation. The test suite in the diff is the ground truth, and running it is the orchestrator's verification step.",
+      "dimension": "Test Quality",
+      "file_path": "plugins/multiplai-dev/lib/code_facts/tests/test_paths_schema.py",
+      "line": 1,
+      "reviewers": [],
+      "judge_reason": "This is not a defect in the diff. It criticises the implementer's report format. The reviewer's own trace finds the tests consistent with the implementation. The test suite in the diff is the ground truth, and running it is the orchestrator's verification step."
+    }
+  ],
+  "fix_brief": "Fix review issues: The block passed review. The judge accepted these findings and they are still open: fix them, and change nothing else.\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Minor] `Invoker.kind` is narrowed to the output-kind Literal `DiscoveredKind` (`argparse`, `click`, \u2026). The block 1 interface that later blocks consume says `kind: str`, and block 2's internal `Entry` keeps `also_invoked_by: list[Invoker]` next to discovery kinds (`argparse_subcommand`, \u2026). Block 2 must convert to output kinds *when it builds* each Invoker, not when it writes paths.json as tasks.md:293 suggests, or construction raises ValidationError. Fix: record in the interface/implementation notes that `Invoker.kind` holds output kinds. Alternatively, rename `DiscoveredKind` to something like `OutputDiscoveredKind`/`InvokerKind`, since Global Constraints use 'Discovery kinds' for the other vocabulary. (plugins/multiplai-dev/lib/code_facts/code_facts/paths.py:51)\n  evidence: paths.py:51 `DiscoveredKind = Literal[\"argparse\", \"click\", \"typer\", \"main\", \"script\", \"skill_command\", \"hook\", \"seed\"]`; paths.py:118-122 `class Invoker(_Strict): kind: DiscoveredKind`; tasks.md:118 `Consumes: Block 1: class Invoker(_Strict): kind: str`; tasks.md:129 `class Entry(_Strict): kind: Literal[\"argparse_subcommand\",...]; ... also_invoked_by: list[Invoker]`; tasks.md:293 'paths.json writes also_invoked_by kinds as output kinds.'\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
+  "fix": {
+    "report": "I've renamed the kind type. One check fails because the committed schema includes the docstring text, so I'm looking at that now.I'll move the note out of the docstring and into a comment, so the committed schema stays unchanged.I fixed the finding by renaming `DiscoveredKind` to `InvokerKind` and noting in two places that `Invoker.kind` holds output kinds. All 190 tests pass.\n\n- **`code_facts/paths.py`:** `InvokerKind` is the closed list of output kinds (`argparse`, `click`, \u2026, `seed`), and `EntryKind` is now `InvokerKind` plus `\"model\"`. The values are the same, so the schema and serialised output don't change. One comment over the type and one on `Invoker.kind` say that discovery kinds (`argparse_subcommand`, \u2026) must be mapped to output kinds before an `Invoker` is built.\n- **`implementation-notes.md`:** the existing block 1 note still used the old name `DiscoveredKind`, so I updated it. It now records that block 2 must convert kinds when it builds each `Invoker`, not when it writes `paths.json` as tasks.md:293 suggests. Otherwise building the `Invoker` raises a validation error.\n\nI first put the note in the `Invoker` docstring. That broke the test that checks the committed schema is generated from the models, because docstrings become schema descriptions. I moved it to a comment instead of regenerating the schema, which keeps the change to what the finding asked for.\n\nI didn't change the `kind: str` interface line in tasks.md, because that's a plan file; the implementation note now carries the correction.\n\nSTATUS: DONE\nTESTS_RUN: uv run --package walkthrough-pipeline --extra dev python -m pytest plugins/multiplai-dev/lib/code_facts/tests -q\nGREEN: 190 passed, 1 warning in 0.98s\nFILES: plugins/multiplai-dev/lib/code_facts/code_facts/paths.py, specs/changes/code-paths-lib/implementation-notes.md\nSURPRISES: The schema is generated from the models, so model docstrings end up as schema descriptions. Putting the output-kind note in the `Invoker` docstring made the committed schema stale, so the note is a code comment instead. `Invoker.kind` holds output kinds (`InvokerKind`), so block 2 must map discovery kinds when it builds each `Invoker`, not when it writes `paths.json` (tasks.md:293 suggests the latter).\nSPEC_IMPACT: clarify\n\nSEARCHED:\n- `Invoker.kind` narrowed to an output-kind Literal whose name clashes with \"Discovery kinds\": every other use of the old name in `code_facts/*.py` (only the `EntryKind` alias and `Invoker.kind`; none are left); every `*Kind` alias and kind field in paths.py (`EntryKind` on `PathEntry.kind` and `MatchKind` on the E2E records, both already named for their own vocabulary); the committed `schema/paths.v1.schema.json` (no change, confirmed by the schema-committed test); and implementation-notes.md (the one stale `DiscoveredKind` mention, now updated).",
+    "success": true,
+    "timed_out": false,
+    "commit": null,
+    "searched": [
+      "`Invoker.kind` narrowed to an output-kind Literal whose name clashes with \"Discovery kinds\": every other use of the old name in `code_facts/*.py` (only the `EntryKind` alias and `Invoker.kind`; none are left); every `*Kind` alias and kind field in paths.py (`EntryKind` on `PathEntry.kind` and `MatchKind` on the E2E records, both already named for their own vocabulary); the committed `schema/paths.v1.schema.json` (no change, confirmed by the schema-committed test); and implementation-notes.md (the one stale `DiscoveredKind` mention, now updated)."
+    ],
+    "pass_kind": "fix_on_pass",
+    "kept": false,
+    "not_kept_reason": "the block no longer passes review: Spec-compliance verdict failed \u2014 missing: [\"Spec 'Test-listing shape' (paths-output-contract.md, as amended) says each `node_id` appears at most once in each array and each array is sorted by (file, line, node_id). E2EListing._disjoint only checks overlap between the two lists. The block's required model rejections list only the overlap, so this is low impact, but the amended requirement is not enforced anywhere in the contract layer.\"]; misunderstood: [\"design.md D16 ('Structure') says '`$defs` cover `location`, `handler`, `entry`, `invoker`, `hop`, `path`, `e2eTest`, `mockedE2eTest`, `drop`, `diagnostic` and `skip`'. The committed schema uses pydantic class names instead (`Location`, `PathEntry`, `PathHop`, `TracedPath`, `PathDrop`, `PathDiagnostic`, `ListingSkip`, `E2ETest`, `MockedE2ETest`, \u2026). The implementer declared this in implementation-notes.md, but it departs from the design's named $defs, which external consumers might reference by `$ref`.\"]"
+  }
+}
