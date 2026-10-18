@@ -81,6 +81,26 @@ def test_agents_get_read_only_tools_and_run_in_the_snapshot(
             assert c["cwd"].endswith(("/snap", "/docs-cache"))
 
 
+def test_explore_reads_stop_at_the_snapshot(ws, tmp_path, monkeypatch, fake_fetch):
+    agents = FakeAgents()
+    _run(ws, tmp_path, monkeypatch, agents)
+    snap = next((tmp_path / "runs").iterdir()) / "snap"
+    calls = [c for c in agents.calls if c["schema"] == "ExploreOutput"]
+    assert calls
+    for c in calls:
+        assert c["read_roots"] == [str(snap)] == [c["cwd"]]
+
+
+def test_docs_reads_stop_at_the_docs_cache(ws, tmp_path, monkeypatch, fake_fetch):
+    agents = FakeAgents()
+    _run(ws, tmp_path, monkeypatch, agents)
+    cache = next((tmp_path / "runs").iterdir()) / "docs-cache"
+    calls = [c for c in agents.calls if c["schema"] == "DocsOutput"]
+    assert calls
+    for c in calls:
+        assert c["read_roots"] == [str(cache)] == [c["cwd"]]
+
+
 def test_docs_pages_are_fenced_and_the_injection_is_data(
     ws, tmp_path, monkeypatch, fake_fetch
 ):

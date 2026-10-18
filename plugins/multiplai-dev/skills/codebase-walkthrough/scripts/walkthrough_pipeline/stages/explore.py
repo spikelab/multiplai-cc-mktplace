@@ -130,6 +130,7 @@ def _ask_kwargs(state: WalkState, ctx: RunContext) -> dict:
             effort=cfg.effort,
             max_turns=cfg.max_turns,
             cwd=str(ctx.snap_root),
+            read_roots=[str(ctx.snap_root)],
         ),
         errors=state.errors,
         recoverable=(sdk.AgentCallError,),

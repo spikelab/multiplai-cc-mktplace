@@ -277,6 +277,7 @@ async def run_docs(state: WalkState, ctx: RunContext) -> WalkState:
                 max_turns=cfg.max_turns,
                 cwd=str(cache),
                 budget_label="docs",
+                read_roots=[str(cache)],
             )
             state.docs_answers[res] = out.model_dump()
         except sdk.RepoTrustError:
