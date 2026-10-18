@@ -712,8 +712,9 @@ async def _run_findings(run: FindingsRun) -> int:
                 return EXIT_OK
             # After the fetch, which calls no model: a PR left with nothing to
             # act on ends DONE even past the ceiling, so it is not taken for
-            # a budget stop.
-            usd = spent() if spent is not None else 0.0
+            # a budget stop. Rounded to the 6 decimals `--max-usd` is passed
+            # with, so adding ledger costs leaves no float noise under it.
+            usd = round(spent(), 6) if spent is not None else 0.0
             if run.max_usd is not None and usd >= run.max_usd:
                 log.warning("findings: $%.2f spent has reached --max-usd $%.2f: no round %d",
                             usd, run.max_usd, done + 1)
