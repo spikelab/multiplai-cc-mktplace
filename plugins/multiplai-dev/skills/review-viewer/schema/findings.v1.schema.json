@@ -1,5 +1,26 @@
 {
   "$defs": {
+    "Absorbed": {
+      "additionalProperties": false,
+      "description": "A finding the review merged into this one, at its merge or assess stage: its id and claim.",
+      "properties": {
+        "claim": {
+          "title": "Claim",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{10}$",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "claim"
+      ],
+      "title": "Absorbed",
+      "type": "object"
+    },
     "Assessment": {
       "additionalProperties": false,
       "description": "The review's own judgement of a finding against the rest of the review\nand earlier rounds (multiplai-dev 0.27+). Older files have none.\n\n`repeat`: the same defect as a finding the person rejected in an earlier\nround (`earlier_*` say which, with the decision and note). `still-open`:\nthe same defect as an earlier finding that was accepted or not decided.\n`low-value`: true, but not worth acting on, for the reason given.\n`important` (multiplai-dev 0.71+): a trim suggestion about a test that must\nstay, given by the verify stage, not the assess agent.\n`useful`: everything else. A label never removes a finding.",
@@ -114,6 +135,13 @@
     "Finding": {
       "additionalProperties": false,
       "properties": {
+        "absorbed": {
+          "items": {
+            "$ref": "#/$defs/Absorbed"
+          },
+          "title": "Absorbed",
+          "type": "array"
+        },
         "assessment": {
           "anyOf": [
             {
@@ -754,6 +782,7 @@
   "$id": "findings.v1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "description": "One review's findings, for review-viewer and the other readers of `findings.json`.\n\nAdditive changes keep the version: a new optional field is added under\n`schema_version` 1, and a file written before it still validates.",
   "properties": {
     "findings": {
       "items": {

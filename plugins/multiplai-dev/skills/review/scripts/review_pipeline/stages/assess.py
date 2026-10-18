@@ -19,7 +19,10 @@ reason naming a rule. A finding left out, or a label that fails, becomes
 
 The agent may also name duplicates; they are merged with the merge stage's
 `usable_sets` and `merge_set`, so a duplicate keeps every citation and
-finder. The stage never deletes a finding and never changes a verdict or a
+finder. Only members whose anchors `anchors_near` chains together are merged
+(`anchored_sets`): the agent sees every finding at once and can set a root
+bug with a weaker finding in another file, and the survivor's claim would
+hide it. The stage never deletes a finding and never changes a verdict or a
 severity. It is skipped when fewer than two findings are shown and there are
 no earlier rounds.
 
@@ -34,10 +37,10 @@ import logging
 import re
 
 from .. import checks, rounds, sdk
-from ..models import AgentCheck, AssessItem, AssessOutput, Assessment, Finding, ReviewState, is_trim
+from ..models import AgentCheck, AssessItem, AssessOutput, Assessment, DuplicateSet, Finding, ReviewState, is_trim
 from ..prompts import assess as prompt
 from . import RunContext
-from .merge import apply_duplicate_sets, mark_merged
+from .merge import MERGE_LINE_GAP, anchors_near, apply_duplicate_sets, link_groups, mark_merged
 from .repeats import earlier_findings, shown_findings
 from .verify import important_assessments
 
@@ -89,6 +92,26 @@ def gate_assessments(items: list[AssessItem], candidates: list[Finding],
         for fid in missing:
             out[fid] = Assessment(label="useful")
     return out, errors
+
+
+def anchored_sets(sets: list[DuplicateSet], candidates: list[Finding]) -> list[DuplicateSet]:
+    """Each set split into the runs of members `anchors_near` chains together; members in no run are dropped.
+
+    Logs one line per set that loses a member, with the ids kept and dropped.
+    """
+    by_id = {f.id: f for f in candidates}
+    out: list[DuplicateSet] = []
+    for s in sets:
+        members = [by_id[i] for i in dict.fromkeys(s.finding_ids) if i in by_id]
+        groups = link_groups(members, anchors_near)
+        kept = [f.id for g in groups for f in g]
+        dropped = [f.id for f in members if f.id not in kept]
+        if dropped:
+            log.info("assess: duplicate set %s: dropped %s, anchored more than %d lines from every other "
+                     "member's anchor in its file%s", ", ".join(f.id for f in members), ", ".join(dropped),
+                     MERGE_LINE_GAP, f"; kept {', '.join(kept)}" if kept else "; set dropped")
+        out.extend(DuplicateSet(finding_ids=[f.id for f in g], reason=s.reason) for g in groups)
+    return out
 
 
 def _repeat_assessments(state: ReviewState) -> dict[str, Assessment]:
@@ -154,7 +177,8 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
         labels, errors = gate_assessments(answer.assessments, candidates, prior)
         state.errors.extend(f"assess: {line}" for line in errors)
 
-    removed = apply_duplicate_sets(state, [(candidates, answer.duplicate_sets)], by="assess")
+    sets = anchored_sets(answer.duplicate_sets, candidates)
+    removed = apply_duplicate_sets(state, [(candidates, sets)], by="assess")
     state.assessments = {**{k: v for k, v in labels.items() if k not in removed}, **repeats, **important}
     mark_merged(state)
     if check is not None and not check.error:

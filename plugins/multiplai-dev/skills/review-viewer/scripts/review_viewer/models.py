@@ -89,6 +89,12 @@ class Assessment(_Strict):
     earlier_note: str | None = None
 
 
+class Absorbed(_Strict):
+    """A finding the review merged into this one, at its merge or assess stage: its id and claim."""
+    id: str = Field(pattern=r"^[0-9a-f]{10}$")
+    claim: str
+
+
 # `Finding.paths` as the schema states it: optional, but never null when present.
 PATH_IDS_SCHEMA = {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": True}
 
@@ -129,6 +135,9 @@ class Finding(_Strict):
     # The ids of the mapped paths (review's `paths.json`) the finding lies on, in that file's
     # order (multiplai-dev 0.82+). Absent when it lies on none; never null or empty.
     paths: Annotated[list[str] | None, WithJsonSchema(PATH_IDS_SCHEMA)] = None
+    # The findings merged into this one, also through a finding merged into it in
+    # turn (multiplai-dev 0.86+). Absent when there are none, and in older files.
+    absorbed: list[Absorbed] = Field(default_factory=list)
 
     @field_validator("paths")
     @classmethod
@@ -201,6 +210,11 @@ class Run(_Strict):
 
 
 class FindingsFile(_Strict):
+    """One review's findings, for review-viewer and the other readers of `findings.json`.
+
+    Additive changes keep the version: a new optional field is added under
+    `schema_version` 1, and a file written before it still validates.
+    """
     schema_version: Literal[1]
     generated_at: datetime
     producer: str

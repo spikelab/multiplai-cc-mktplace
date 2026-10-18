@@ -1,0 +1,227 @@
+{
+  "source": "INBOX/review-benchmark-pr295-2026-10-16/paths-review-r2 review-state.json",
+  "findings": [
+    {
+      "id": "e05f278fd4",
+      "claim": "Branch, ref and PR values go to git/gh as bare positionals with no `--end-of-options` or leading-dash check, so a value starting with `-` would be read as an option. This is defence in depth, not an exploitable bug.",
+      "severity": "LOW",
+      "dimension": "piece",
+      "file": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+      "line_start": 157,
+      "line_end": 224,
+      "failure_scenario": "A `--base`, `--head` or PR argument starting with `-`, e.g. a base of `--output=/some/file`, would turn `git diff` into a file write. The values come from the caller or from GitHub, which forbids such branch names.",
+      "citations": [
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 158,
+          "line_end": 158,
+          "quote": "    res = _run([\"git\", \"diff\", \"--shortstat\", f\"{base_ref}...{head_ref}\"], cwd=repo)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 170,
+          "line_end": 170,
+          "quote": "    res = _run([\"git\", \"diff\", \"--name-status\", f\"{base_ref}...{head_ref}\"], cwd=repo)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 212,
+          "line_end": 212,
+          "quote": "    return [\"git\", \"push\", \"-u\", \"origin\", branch]"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 230,
+          "line_end": 230,
+          "quote": "    return [\"gh\", \"pr\", \"edit\", pr, \"--body-file\", str(body_file)]"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 127,
+          "line_end": 127,
+          "quote": "    \"\"\"A full SHA-1 or SHA-256 commit id, safe to put in a git argv.\"\"\""
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line_start": 183,
+          "line_end": 185,
+          "quote": "    head = args.head or github.current_branch(repo)\n    if not head or head == \"HEAD\":\n        raise Refused(\"no branch to open the PR from: pass --head, or check out a branch\")"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 211,
+          "line_end": 212,
+          "quote": "def push_argv(branch: str) -> list[str]:\n    return [\"git\", \"push\", \"-u\", \"origin\", branch]"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/SKILL.md",
+          "line_start": 49,
+          "line_end": 49,
+          "quote": "`edit`. It never merges, closes a PR, deletes a branch, or force-pushes."
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 221,
+          "line_end": 221,
+          "quote": "    argv = [\"gh\", \"pr\", \"create\", \"--title\", title, \"--body-file\", str(body_file), \"--head\", head]"
+        }
+      ],
+      "finder": "piece",
+      "finders": [
+        "piece",
+        "path"
+      ]
+    },
+    {
+      "id": "312895fb3f",
+      "claim": "A `--head` value that starts with `-` is not rejected and reaches `git push` as an option, which breaks the promise that the skill never force-pushes.",
+      "severity": "LOW",
+      "dimension": "path",
+      "file": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+      "line_start": 183,
+      "line_end": 185,
+      "failure_scenario": "`open --head=--force` without `--no-push` runs `git push -u origin --force`, which force-pushes the current branch under push.default; `--head=--mirror` would be even worse. It needs an explicit `--head=...`, and buildme always passes its own branch name with `--no-push`.",
+      "citations": [
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line_start": 183,
+          "line_end": 185,
+          "quote": "    head = args.head or github.current_branch(repo)\n    if not head or head == \"HEAD\":\n        raise Refused(\"no branch to open the PR from: pass --head, or check out a branch\")"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 211,
+          "line_end": 212,
+          "quote": "def push_argv(branch: str) -> list[str]:\n    return [\"git\", \"push\", \"-u\", \"origin\", branch]"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/SKILL.md",
+          "line_start": 49,
+          "line_end": 49,
+          "quote": "`edit`. It never merges, closes a PR, deletes a branch, or force-pushes."
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 212,
+          "line_end": 212,
+          "quote": "    return [\"git\", \"push\", \"-u\", \"origin\", branch]"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 221,
+          "line_end": 221,
+          "quote": "    argv = [\"gh\", \"pr\", \"create\", \"--title\", title, \"--body-file\", str(body_file), \"--head\", head]"
+        }
+      ],
+      "finder": "path",
+      "finders": [
+        "path"
+      ]
+    }
+  ],
+  "verdicts": {
+    "e05f278fd4": {
+      "finding_id": "e05f278fd4",
+      "status": "confirmed",
+      "reason": "In `open`, `--base` goes through unchanged: commands.py:187 sets `base = args.base or ...`, fill.py:185 passes it to `github.shortstat`, and diff_refs (github.py:109) falls back to the bare `base` when `origin/<base>` does not exist. github.py:158 then builds the argv element `f\"{base_ref}...{head_ref}\"` with no `--end-of-options` and no check for a leading dash. So `open --base=--output=/some/file` makes git see `--output=/some/file...<head>` as an option and write the diff to a file. `--head` is also unchecked: commands.py:183 only rejects an empty value or `HEAD`, and the value reaches `git push -u origin <branch>` at github.py:212, so a head of `--force` would become a push flag. The only gate is the caller. Values that come from GitHub (`baseRefName`, `headRefName`, `number`) cannot start with `-`, because git ref-format rules forbid branch names that begin with a dash, and argparse rejects a dash-led positional `pr` unless it follows `--`. The path exists in the code, but only the person or agent running the CLI can reach it, with arguments they already control. It crosses no trust boundary, which matches the claim's own 'defence in depth' framing.",
+      "citations": [
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line_start": 187,
+          "line_end": 187,
+          "quote": "    base = args.base or github.gh_default_branch(repo) or github.git_default_branch(repo)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/fill.py",
+          "line_start": 185,
+          "line_end": 185,
+          "quote": "        src.size, src.size_note = github.shortstat(repo, base, head)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 109,
+          "line_end": 109,
+          "quote": "    base_ref = f\"origin/{base}\" if _ref_exists(repo, f\"origin/{base}\") else base"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 158,
+          "line_end": 158,
+          "quote": "    res = _run([\"git\", \"diff\", \"--shortstat\", f\"{base_ref}...{head_ref}\"], cwd=repo)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line_start": 183,
+          "line_end": 185,
+          "quote": "    head = args.head or github.current_branch(repo)\n    if not head or head == \"HEAD\":\n        raise Refused(\"no branch to open the PR from: pass --head, or check out a branch\")"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 212,
+          "line_end": 212,
+          "quote": "    return [\"git\", \"push\", \"-u\", \"origin\", branch]"
+        }
+      ],
+      "expected_behaviour": "A branch, ref or PR value that starts with `-` is refused or passed to git/gh only as a revision or branch name, never read as an option.",
+      "needs": [],
+      "topic": "security",
+      "impact": "correctness-only"
+    },
+    "312895fb3f": {
+      "finding_id": "312895fb3f",
+      "status": "confirmed",
+      "reason": "In `cmd_open`, `head` is whatever `--head` holds (commands.py:183). The only check is for an empty value or the literal `HEAD` (184-185), so a value starting with `-` gets through. `render_body` does not stop it: in `diff_refs`/`shortstat`, a head that does not exist only produces a 'diff size not measured' diagnosis (github.py:153-157, commands.py:71-72), not a refusal. Unless `--no-push` is given, `github.push(repo, head)` runs (commands.py:206-207). `push_argv` puts the value straight into the argument list as `git push -u origin <branch>` with no `--` separator (github.py:211-212). argparse accepts `--head=--force` because the value is attached with `=`. The command becomes `git push -u origin --force`, which force-pushes the configured or current branch. The module docstring and SKILL.md both promise 'never `--force`'. So the scenario can happen. It only happens if a caller passes an explicit `--head` value starting with a dash. buildme passes its own branch name together with `--no-push`, so no normal path reaches it.",
+      "citations": [
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line_start": 183,
+          "line_end": 185,
+          "quote": "    head = args.head or github.current_branch(repo)\n    if not head or head == \"HEAD\":\n        raise Refused(\"no branch to open the PR from: pass --head, or check out a branch\")"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line_start": 206,
+          "line_end": 207,
+          "quote": "        if not args.no_push:\n            res = github.push(repo, head)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 211,
+          "line_end": 217,
+          "quote": "def push_argv(branch: str) -> list[str]:\n    return [\"git\", \"push\", \"-u\", \"origin\", branch]\n\n\ndef push(repo: Path, branch: str) -> Result:\n    \"\"\"`git push -u origin <branch>`. Never forces.\"\"\"\n    return _run(push_argv(branch), cwd=repo, timeout=_PUSH_TIMEOUT)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/github.py",
+          "line_start": 153,
+          "line_end": 157,
+          "quote": "def shortstat(repo: Path, base: str, head: str) -> tuple[DiffSize | None, str]:\n    \"\"\"`git diff --shortstat <base>...<head>`, parsed; (None, why) when git fails.\"\"\"\n    base_ref, head_ref = diff_refs(repo, base, head)\n    if head_ref is None:\n        return None, _head_missing(head)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/__main__.py",
+          "line_start": 38,
+          "line_end": 38,
+          "quote": "    op.add_argument(\"--head\", help=\"the branch to open the PR from (default: the current branch)\")"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/SKILL.md",
+          "line_start": 49,
+          "line_end": 49,
+          "quote": "`edit`. It never merges, closes a PR, deletes a branch, or force-pushes."
+        }
+      ],
+      "expected_behaviour": "A `--head` value that git would read as an option is refused before any `git push` runs, so `open` can never force-push.",
+      "needs": [],
+      "topic": "security",
+      "impact": "correctness-only"
+    }
+  },
+  "duplicate_sets": [
+    {
+      "finding_ids": [
+        "e05f278fd4",
+        "312895fb3f"
+      ],
+      "reason": "Both are unguarded positional values starting with a dash being read as git options, including --head reaching git push."
+    }
+  ]
+}

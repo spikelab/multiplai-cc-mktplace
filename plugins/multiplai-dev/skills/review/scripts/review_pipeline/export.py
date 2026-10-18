@@ -11,8 +11,11 @@ and the pipeline's models carry more than it allows.
 | refuted                              | `refuted`      |
 | gate-rejected                        | `rejected`     |
 
-A finding merged into another by the merge stage is not exported: it is gone
-from `state.findings`, and the finding it went into carries its citations.
+A finding merged into another by the merge or assess stage is not exported:
+it is gone from `state.findings`, and the finding it went into carries its
+citations. That finding's `absorbed` (optional, 0.86+) lists the id and claim
+of every finding merged into it, also through a finding merged into it in
+turn, in `state.merged` order; it is written only when there are some.
 `expected_behaviour` comes from the verifier and is written for confirmed and
 unverifiable findings only; a refuted or rejected finding has none. The same
 goes for `assessment`, the assess stage's label (`useful`, `still-open`,
@@ -89,6 +92,18 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
         "expected_behaviour": expected or None,
         **on_paths,
     }
+
+
+def absorbed(state: ReviewState) -> dict[str, list[dict]]:
+    """The id and claim of every finding merged away, by the id of the finding it ended up in."""
+    into = {m.finding.id: m.into for m in state.merged}
+    out: dict[str, list[dict]] = {}
+    for m in state.merged:
+        top = m.into
+        while top in into:
+            top = into[top]
+        out.setdefault(top, []).append({"id": m.finding.id, "claim": m.finding.claim})
+    return out
 
 
 def _need(n: Need) -> dict:
@@ -216,6 +231,7 @@ def _timestamp(generated_at: datetime | None) -> str:
 
 def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None) -> dict:
     rows: list[dict] = []
+    merged_into = absorbed(state)
     for f in state.findings:
         verdict = state.verdicts.get(f.id)
         status = verdict.status if verdict else "unverifiable"
@@ -229,6 +245,8 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
             if verdict.impact and status in ("confirmed", "unverifiable"):
                 row["impact"] = verdict.impact
         row["section"] = section_of(verdict.topic if verdict else None, f.finders)
+        if f.id in merged_into:
+            row["absorbed"] = merged_into[f.id]
         assessment = state.assessments.get(f.id)
         if assessment is not None and status in ("confirmed", "unverifiable"):
             row["assessment"] = _assessment(assessment)
