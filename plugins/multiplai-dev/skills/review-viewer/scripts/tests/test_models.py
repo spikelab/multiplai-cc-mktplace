@@ -170,3 +170,19 @@ def test_inbox_row_carries_an_optional_step_id():
     assert InboxRow(id="q-1", ts="t", target="t", kind="question", text="x").step_id is None
     with pytest.raises(ValidationError):
         InboxRow(id="q-1", ts="t", target="t", kind="question", text="x", step_id="Bad Id")
+
+
+def test_findings_with_path_ids_load_and_bad_ids_are_refused(tmp_path):
+    def with_paths(paths) -> dict:
+        data = fixture_data()
+        data["findings"][0]["paths"] = paths
+        return data
+
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps(with_paths(["p1", "p2"])))
+    assert load_findings(good).findings[0].paths == ["p1", "p2"]
+    for bad in (["p1", "p1"], [""]):
+        path_ = tmp_path / "bad.json"
+        path_.write_text(json.dumps(with_paths(bad)))
+        with pytest.raises(ValidationError):
+            load_findings(path_)

@@ -208,6 +208,16 @@
           "title": "Needs",
           "type": "array"
         },
+        "paths": {
+          "default": null,
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Paths",
+          "type": "array",
+          "uniqueItems": true
+        },
         "section": {
           "anyOf": [
             {

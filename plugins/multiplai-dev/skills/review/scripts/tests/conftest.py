@@ -15,6 +15,8 @@ from fixture_repo import (  # noqa: E402
     KEYWORD_LINE, KEYWORD_USE_LINE, SETTINGS_DEF_LINE,
 )
 
+import paths_stub  # noqa: E402
+
 from review_pipeline import budget, deps, ledger, target  # noqa: E402
 from review_pipeline.models import Citation, Finding, Rejected, ReviewState, Verdict  # noqa: E402
 
@@ -35,6 +37,12 @@ REAL_LEGACY_REVIEWS_ROOT = ledger.legacy_reviews_root
 @pytest.fixture(autouse=True)
 def no_gh_branch_rules(monkeypatch):
     monkeypatch.setattr(target, "branch_rules", lambda repo, branch, needs=None: None)
+
+
+@pytest.fixture(autouse=True)
+def no_path_mapping(monkeypatch):
+    """Every change review maps its paths before find; outside `test_paths_stage.py` that asks no model."""
+    paths_stub.install(monkeypatch.setattr)
 
 CLAIM_HIGH = "Rate-plan eligibility depends on the hardcoded keyword 'dolcebot'"
 CLAIM_MEDIUM = "eligible_rate_plans lower-cases the title but not the keyword"

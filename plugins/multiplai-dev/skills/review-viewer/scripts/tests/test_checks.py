@@ -49,6 +49,20 @@ def test_a_checks_file_validates_against_the_model_and_the_schema(findings_path)
     jsonschema.validate(data, schema)
 
 
+def test_a_checks_file_with_coverage_validates_and_one_without_it_still_does(findings_path):
+    """review's paths stage writes a top-level `coverage` list; files written before it have none."""
+    coverage = [
+        {"stage": "paths", "subject": "entry capped", "level": "info", "reason": "over-cap", "detail": "cap 21"},
+        {"stage": "paths", "subject": "p2", "level": "error", "reason": "broken-trace", "detail": "stops at hop 2"}]
+    schema = json.loads(CHECKS_SCHEMA_PATH.read_text(encoding="utf-8"))
+    data = dict(checks_for(findings_path), coverage=coverage)
+    assert ChecksFile.model_validate(data).model_dump(mode="json")["coverage"] == coverage
+    jsonschema.validate(data, schema)
+    old = checks_for(findings_path)
+    ChecksFile.model_validate(old)
+    jsonschema.validate(old, schema)
+
+
 def test_findings_with_verifier_citations_validate(findings_path):
     data = json.loads(findings_path.read_text(encoding="utf-8"))
     data["findings"][0]["verifier_citations"] = [

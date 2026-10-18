@@ -27,7 +27,7 @@ SEVERITIES: tuple[str, ...] = ("HIGH", "MEDIUM", "LOW")
 
 # Stage names in run order. `ReviewState.stage` holds the last one completed.
 STAGES: tuple[str, ...] = (
-    "target", "explain", "find", "verify", "merge", "repeats", "assess", "export", "render", "done",
+    "target", "explain", "paths", "find", "verify", "merge", "repeats", "assess", "export", "render", "done",
 )
 # Stages a checkpoint written before 0.22 can name. Both ran after verify, so
 # a resumed review of that age continues with merge.
@@ -95,6 +95,9 @@ class Finding(_Model):
     # Every finder that reported this defect: the first one, then any whose
     # finding was dropped as a word-for-word copy or merged into this one.
     finders: list[str] = Field(default_factory=list)
+    # The ids of the mapped paths the finding lies on (`paths_io.assign_paths`, after merge), in
+    # `paths.json` order; None when it lies on none or the review mapped no path.
+    paths: list[str] | None = None
 
     @model_validator(mode="after")
     def _compute_id(self) -> "Finding":
@@ -335,6 +338,8 @@ class AgentCheck(BaseModel):
     findings: list[dict] = Field(default_factory=list)
     # Verifiers: status, reason, citations (marked), and whether verdict_gate lowered it.
     verdict: dict | None = None
+    # A convert call (`<key> convert`): each item's kind, severity and finding id (`ConvertedItem`).
+    items: list[dict] | None = None
 
 
 class GateCheck(BaseModel):
@@ -383,6 +388,52 @@ class ExplainedFacts(BaseModel):
     dropped: list[FactDropped] = Field(default_factory=list)
 
 
+class Piece(BaseModel):
+    """One piece of a change review's diff, for one piece finder (`chunks.split_pieces`).
+
+    Files only, in piece order (head paths; a deleted file's base path); the
+    finder's diff is rebuilt from the stored `diff.patch` when its prompt is
+    built (`chunks.piece_diff_text`), which keeps the state small.
+    """
+    id: int  # 1-based, contiguous
+    group: str  # the package or skill directory, "" for the root, "meta" for a meta piece
+    meta: bool = False
+    files: list[str] = Field(default_factory=list)
+    omitted: list[str] = Field(default_factory=list)  # lockfiles, whose text no piece holds (meta only)
+    binary: list[str] = Field(default_factory=list)  # files in `files` whose change is binary
+    chars: int = 0  # characters of diff, headers included; binary files count 0
+
+
+class ConvertedItem(BaseModel):
+    """One item of a converted report, as `checks.json` records it: its kind is recorded nowhere else."""
+    kind: Literal["defect", "advice"]
+    severity: Severity
+    finding_id: str | None = None  # None when the item named no location a finding could stand on
+
+
+class FinderReport(BaseModel):
+    """A piece or path finder's plain-text report, stored as soon as it returns, and what convert made of it."""
+    key: str  # "piece@3" | "path@p7"
+    text: str
+    converted: bool = False
+    convert_error: str | None = None  # the last convert call failed; `resume` asks it again
+    items: list[ConvertedItem] = Field(default_factory=list)
+    findings: list[Finding] = Field(default_factory=list)
+
+
+class CoverageRecord(BaseModel):
+    """What a stage could not cover, or covered only in part, and why (`checks.add_coverage`).
+
+    `error` records also go to `state.errors`; `info` records (normal scoping, a
+    doc left out for the budget) only to `checks.json` and the report's gap line.
+    """
+    stage: Literal["paths", "find", "conventions"]
+    subject: str  # "p3", "review_cmd at a.py:2", "piece@2", "docs/gone.md"
+    level: Literal["info", "error"]
+    reason: str  # a closed vocabulary per stage: see checks.ERROR_LINES
+    detail: str = ""
+
+
 class ReviewState(BaseModel):
     target: TargetInfo
     stage: str = "target"  # last stage completed
@@ -392,10 +443,25 @@ class ReviewState(BaseModel):
     # A tree review run with `--trim` (a change review reads `ReviewConfig.trim`
     # instead). Set when the review starts; `resume` keeps it.
     trim: bool = False
-    # Whether this run asks the extra finders (`extra@<i>`, one per chunk of the change): the
-    # option was given and the change has no earlier finished round. Set when the review starts;
-    # `resume` keeps it.
+    # The extra finders' switch, which nothing reads since the piece finders replaced them
+    # (multiplai-dev 0.82); kept so checkpoints that carry it still load.
     extra_finders: bool = False
+    # The paths stage (`stages/paths.py`). `paths_enabled` is a tree review's `--paths` (a change
+    # review always maps paths); `resume` keeps it. `paths_status` says what the stage did, and
+    # `path_ids` are the ids in `paths.json`, in file order. A checkpoint saved at or past find
+    # before the stage existed keeps "not-run", which every reader of paths takes as no paths.
+    paths_enabled: bool = False
+    paths_status: Literal["not-run", "skipped", "ok", "empty", "failed"] = "not-run"
+    paths_failure: str | None = None  # why a failed or empty mapping has no paths
+    path_ids: list[str] = Field(default_factory=list)
+    # A change review's pieces (`chunks.split_pieces`), computed once by `prepare` and reused by
+    # `resume`; None for a tree review and in checkpoints written before pieces existed.
+    pieces: list[Piece] | None = None
+    # The piece and path finders' reports by key (`stages/find.run_reported`). A fresh round
+    # starts empty; `resume` converts what is stored and asks only for what is missing.
+    finder_reports: dict[str, FinderReport] = Field(default_factory=dict)
+    # What a stage could not cover (`checks.add_coverage`), exported as `checks.json`'s `coverage`.
+    coverage: list[CoverageRecord] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
     verdicts: dict[str, Verdict] = Field(default_factory=dict)  # by finding id
     rejected: list[Rejected] = Field(default_factory=list)
@@ -455,6 +521,22 @@ class ReviewState(BaseModel):
 class FinderOutput(_Model):
     findings: list[Finding] = Field(default_factory=list)
     needs: list[NeedAsk] = Field(default_factory=list)
+
+
+class ConvertItem(_Model):
+    kind: Literal["defect", "advice"] = "defect"
+    severity: Severity | None = None
+    file: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    claim: str
+    failure_scenario: str = ""
+    citations: list[Citation] = Field(default_factory=list)
+
+
+class ConvertOutput(_Model):
+    """The convert call's answer: one item per defect or advice in the report."""
+    items: list[ConvertItem] = Field(default_factory=list)
 
 
 class MergeOutput(_Model):

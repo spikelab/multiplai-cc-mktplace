@@ -1,4 +1,4 @@
-"""target → [explain] → find → verify → merge → repeats → assess → export → render.
+"""target → [explain] → paths → find → verify → merge → repeats → assess → export → render.
 
 `review-state.json` is written after every stage; `resume` reloads it and
 continues from the first stage not yet done.
@@ -12,8 +12,9 @@ import hashlib
 import logging
 import os
 import shutil
+import sys
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,8 +23,9 @@ import yaml
 from multiplai_core.log_utils import log_event
 
 from . import budget, deps, ledger as review_ledger, rounds, runlock, target as target_mod, timings
-from .chunks import diff_files, finder_chunks
+from .chunks import split_pieces
 from .config import ReviewConfig, run_config
+from .costs import cost_lines, kept_line
 from .export import producer, run_record, to_findings_file, write_checks_file, write_findings_file
 from .facts import FACTS_FILE
 from .gates import gated_need, reason_kind
@@ -33,6 +35,7 @@ from .render import count_line, listed, summary_path, write_review, write_rollup
 from .stages import RunContext
 from .stages.assess import run_assess
 from .stages.explain import run_explain
+from .stages.paths import PATH_CAP, run_paths
 from .stages.find import file_chars, file_groups, finder_dimensions, run_find
 from .stages.merge import run_merge
 from .stages.repeats import run_repeats
@@ -43,6 +46,7 @@ log = logging.getLogger(__name__)
 
 STAGE_FUNCTIONS = (
     ("explain", run_explain),  # only with `explain: true`
+    ("paths", run_paths),  # every change review; a tree review only with `--paths`
     ("find", run_find),
     ("verify", run_verify),
     ("merge", run_merge),
@@ -95,7 +99,8 @@ class TargetSpec:
     mode: str = "full"  # `full` or `critical` (models.MODES)
     restart: bool = False  # start over even when the ledger shows an interrupted run
     trim: bool = False  # a tree review also runs the trim finder (`--trim`)
-    extra_finders: bool = False  # a change review's first round adds the extra finders
+    extra_finders: bool = False  # `--extra-finders` was given: accepted, ignored, noticed once
+    paths: bool = False  # a tree review also maps its paths (`--paths`); a change review always does
 
 
 def _count_line(counts: dict[str, int]) -> str:
@@ -222,6 +227,7 @@ async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig
             progress.failed(str(e))
             log_event("review", "budget_stop", str(e), session_id=session_id, level="WARNING",
                       target=t.slug, cost_usd=round(e.cost_usd, 4), stage=name)
+            e.kept = kept_line(state)  # the STOPPED message's last line
             raise
         except VerifyIncomplete as e:
             # The verdicts that came back are kept; `resume` asks only for the rest.
@@ -350,10 +356,16 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
     if kept is not None:
         log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
-    # The extra finders run on a change's first complete round only: no finished round kept
-    # before this one. A run that stopped before export is kept as a round but not counted.
-    extra = spec.extra_finders and not info.is_tree and rounds.finished_rounds(target_dir) == 0
-    return (ReviewState(target=info, mode=spec.mode, trim=spec.trim, extra_finders=extra,
+    # A change review's pieces, once: `resume` reuses the stored ones, so piece ids stay stable.
+    pieces = None
+    if not info.is_tree:
+        try:
+            pieces = split_pieces(diff or "", head_tree=target_mod.tree_paths(info.repo_path, info.head_sha),
+                                  base_tree=target_mod.tree_paths(info.repo_path, info.base_sha))
+        except target_mod.TargetError as e:
+            raise ReviewError(str(e)) from e
+    return (ReviewState(target=info, mode=spec.mode, trim=spec.trim,
+                        paths_enabled=spec.paths and info.is_tree, pieces=pieces,
                         needs=[gated_need(n) for n in needs]), target_dir)
 
 
@@ -470,31 +482,61 @@ def plan_text(state: ReviewState, config: ReviewConfig) -> str:
         where = f" ({group[0]} .. {group[-1]})" if len(group) > 1 else (f" ({group[0]})" if group else "")
         lines.append(f"group {i}: {len(group)} files, {chars} characters{where}")
     calls = len(groups) * len(dims)
-    if state.extra_finders:  # the same chunks `run_find` asks, one call each
-        diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
-        calls += len(finder_chunks(diff_files(diff)))
     total = f"groups: {len(groups)}  finder calls: {calls}  files skipped: {len(t.skipped)}"
     found = deps.locked_git_deps(t) if config.deps else []  # read from git only; nothing is fetched
     if found:
         total += f"  git dependencies: {len(found)}"
     lines.append(total)
+    lines.extend(piece_plan_lines(state))
     return "\n".join(lines) + "\n"
+
+
+def piece_plan_lines(state: ReviewState) -> list[str]:
+    """One line per piece, then the piece and path finder calls (a tree review: path finders with --paths)."""
+    lines = []
+    for p in state.pieces or []:
+        label = "meta" if p.meta else (p.group or ".")
+        noun = "file" if len(p.files) == 1 else "files"
+        parts = [f"piece {p.id}: {len(p.files)} {noun}, {p.chars} characters [{label}]"]
+        if p.files:
+            parts.append(", ".join(p.files))
+        if p.omitted:
+            parts.append("omitted: " + ", ".join(p.omitted))
+        lines.append(" ".join(parts))
+    each = "(each one report call and one convert call)"
+    if not state.target.is_tree:
+        lines.append(f"piece and path finder calls: {len(state.pieces or [])} pieces + up to {PATH_CAP} paths {each}")
+    elif state.paths_enabled:
+        lines.append(f"path finder calls: up to {PATH_CAP} paths {each}")
+    return lines
 
 
 def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[str, Path]:
     """Resolve the target and write `plan.txt` beside `skipped.txt`; no model call, no ledger."""
-    spec = _extra_finders_from(config, spec)
+    extra_finders_notice(config, spec)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, lock=lock)
+        print_cost_lines(state, config, resuming=False)
         text = plan_text(state, config)
         path = target_dir / "plan.txt"
         path.write_text(text, encoding="utf-8")
     return text, path
 
 
-def _extra_finders_from(config: ReviewConfig, spec: TargetSpec) -> TargetSpec:
-    """`review.yaml`'s `extra_finders: true` turns them on as `--extra-finders` does."""
-    return replace(spec, extra_finders=True) if config.extra_finders and not spec.extra_finders else spec
+def print_cost_lines(state: ReviewState, config: ReviewConfig, *, resuming: bool) -> None:
+    """The piece and path finders' estimate, WARNING and NOTICE (`costs.cost_lines`) on stderr. Advisory only."""
+    for line in cost_lines(state, budget=config.max_cost_usd or 0.0,
+                           budget_is_default=config.max_cost_source == "default", resuming=resuming):
+        print(line, file=sys.stderr, flush=True)
+
+
+EXTRA_FINDERS_NOTICE = "review: --extra-finders has no effect; per-piece finders now run by default"
+
+
+def extra_finders_notice(config: ReviewConfig, spec: TargetSpec | None = None) -> None:
+    """One line on stderr when `--extra-finders` or `review.yaml`'s `extra_finders` was given; both are ignored."""
+    if config.extra_finders or (spec is not None and spec.extra_finders):
+        print(EXTRA_FINDERS_NOTICE, file=sys.stderr, flush=True)
 
 
 def _set_aside_progress(target_dir: Path) -> None:
@@ -525,14 +567,18 @@ def _set_aside_progress(target_dir: Path) -> None:
 
 
 async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:
-    spec = _extra_finders_from(config, spec)
+    extra_finders_notice(config, spec)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, check_interrupted=True, lock=lock)
+        print_cost_lines(state, config, resuming=False)  # after the pieces, before the paths stage
         # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.
         _set_aside_progress(target_dir)
         # The last round's facts.json is kept in rounds/ by prepare; the explain stage writes
         # this run's one, and a run with explain off must not leave the old one beside its findings.
         (target_dir / FACTS_FILE).unlink(missing_ok=True)
+        # The same for the last run's finder reports, paths.json and the paths answer cache:
+        # this run maps again from an empty cache; `resume` keeps them.
+        rounds.clear_stale_outputs(target_dir)
         return await run_state(state, target_dir, config, session_id=session_id)
 
 
@@ -543,6 +589,9 @@ async def resume(target_dir: Path, config: ReviewConfig, *, session_id: str = ""
         state = load_state(target_dir / "review-state.json")
         if state is None:
             raise ReviewError(f"no readable review-state.json in {target_dir}")
+        extra_finders_notice(config)
+        if not state.past("find"):
+            print_cost_lines(state, config, resuming=True)
         return await run_state(state, target_dir, config, session_id=session_id)
 
 

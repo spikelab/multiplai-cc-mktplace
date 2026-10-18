@@ -41,9 +41,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from .paths_io import PATHS_FILE
+
 log = logging.getLogger(__name__)
 
 ROUNDS_DIR = "rounds"
+PATHS_CACHE = "paths-cache"  # the paths stage's answer cache (`stages/paths.py`)
 SHOWN_STATUSES = ("confirmed", "unverifiable")
 
 
@@ -61,11 +64,16 @@ def _read_json(path: Path) -> dict | None:
 # persists across rounds where it is), head/base snapshots git rebuilds, and a
 # `--dir` review's imported checkout `source/` (its git keeps every commit an
 # earlier round names, and by the time a round is kept it holds the next import).
+# The paths stage's answer cache `paths-cache/` is not kept either: its answers are
+# for one run, and the round's `paths.json` holds what came of them.
 # These are every directory the pipeline writes at the top of a target folder.
 # `keep_round` skips every other top-level directory too (a review an older
 # version nested inside this folder, with its own rounds), and the rollups such a
 # version wrote beside it (`ROLLUP_FILES`): a kept round holds this run's files only.
-NOT_KEPT = frozenset({ROUNDS_DIR, "viewer", "tree", "base-tree", "assess-tree", "source"})
+NOT_KEPT = frozenset({ROUNDS_DIR, "viewer", "tree", "base-tree", "assess-tree", "source", PATHS_CACHE})
+# Written by one run and read by the next only through a kept round: `clear_stale_outputs`
+# deletes them, and `PATHS_FILE`, when a fresh run starts.
+STALE_REPORTS = ("report-piece-*.md", "report-path-*.md")
 ROLLUP_FILES = frozenset({"HIGH-only.md", "MEDIUM-only.md", "LOW-only.md", "runs.jsonl"})
 # Progress logs `review` moved aside because no kept round held them: they stay
 # beside the rounds, and are not copied into the next one.
@@ -461,3 +469,18 @@ def accepted_or_open(earlier: list[EarlierFinding]) -> list[EarlierFinding]:
     """Earlier shown findings the person accepted or has not decided (deferred counts as not decided)."""
     return [e for e in earlier
             if e.decision != "reject" and e.finding.get("status") in SHOWN_STATUSES]
+
+
+def clear_stale_outputs(target_dir: Path) -> None:
+    """Delete the last run's finder reports, `paths.json` and the paths answer cache.
+
+    Called once by a fresh `review` after `prepare`, which has already kept the
+    last round with these files in it; never by `resume` (the cache is what
+    lets it ask only the missing answers) or `--plan-only`.
+    """
+    for pattern in STALE_REPORTS:
+        for path in target_dir.glob(pattern):
+            if path.is_file():
+                path.unlink(missing_ok=True)
+    (target_dir / PATHS_FILE).unlink(missing_ok=True)
+    shutil.rmtree(target_dir / PATHS_CACHE, ignore_errors=True)
