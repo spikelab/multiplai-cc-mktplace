@@ -668,6 +668,18 @@ def test_a_pr_head_no_review_finished_on_never_ends_the_run_with_0(tmp_path, mon
                 f"the next run reviews it") in err
 
 
+def test_a_pr_head_with_a_finished_review_is_never_named_as_unreviewed(tmp_path, monkeypatch, capsys):
+    """Each PR's review at its head left a blocker, and its fixer exited 0
+    without a new head: the PRs have not passed review, yet their heads have a
+    finished review, so the run names neither as having none."""
+    from .test_epic_review import Epic, high
+
+    e = Epic(tmp_path, monkeypatch, reviews={str(pr_number(ch)): [{"findings": [high()]}] for ch in ("e-a", "e-b")})
+    assert e.run() == 0 and merge_waiting() is None
+    assert "has no finished review" not in capsys.readouterr().err
+    assert e.child_status("a")["status"] == e.child_status("b")["status"] == "built"
+
+
 def test_40_1_parks_a_worktree_behind_the_reviewed_head_naming_what_to_run(tmp_path, monkeypatch):
     """40.1 (E.S25): the review passed at a head pushed from another clone,
     which <W> lacks; its HEAD, older, is on `origin/<branch>`. Parks, nothing
