@@ -290,6 +290,18 @@ def _uncommitted_test_files(config: BuildConfig) -> list[str] | None:
     return sorted(n for n in names if _TEST_PATH_RE.search(n) and (config.project_dir / n).is_file())
 
 
+def _kept_after_turn_limit(config: BuildConfig, block: BlockInfo, result, progress: ProgressWriter) -> list[str]:
+    """The test files a test-writer *result* that stopped at the turn cap left
+    on disk, which then go on to the gates as if it had finished; [] for any
+    other result."""
+    kept = (_uncommitted_test_files(config) or []) if _hit_turn_limit(result) else []
+    if kept:
+        log.warning("WARN block=%d phase=TEST_WRITE reason=turn_limit kept_files=%d", block.number, len(kept))
+        progress.log_agent("TestWriter", block.name,
+                           f"ran out of turns — its {len(kept)} test file(s) go to the quality and RED gates")
+    return kept
+
+
 def _drafts_section(config: BuildConfig, files: list[str]) -> str:
     """DRAFTS_SECTION and one line per file: new and its line count, or the
     lines `git diff --numstat` counts added and removed since HEAD."""
@@ -922,7 +934,7 @@ async def _enforce_test_quality(
         max_turns=config.test_writer_max_turns,
         cwd=str(config.project_dir),
     )
-    if not retry.success:
+    if not retry.success and not _kept_after_turn_limit(config, block, retry, progress):
         block.timed_out = retry.timed_out
         block.resumable = True
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_RETRY error=%s",
@@ -1033,7 +1045,7 @@ async def _enforce_red_gate(
                 max_turns=config.test_writer_max_turns,
                 cwd=str(config.project_dir),
             )
-            if not retry.success:
+            if not retry.success and not _kept_after_turn_limit(config, block, retry, progress):
                 block.timed_out = retry.timed_out
                 block.resumable = True
                 log.error("FAIL block=%d name=%s phase=RED_GATE_RETRY error=%s",
@@ -1183,7 +1195,7 @@ async def _write_block_tests(
 
     # An agent stopped at its turn cap may have finished its tests: the files
     # on disk go to the quality and RED gates, which decide.
-    kept = _uncommitted_test_files(config) if _hit_turn_limit(test_result) else None
+    kept = _kept_after_turn_limit(config, block, test_result, progress)
     if not test_result.success and not kept:
         # agent_call degrades a timeout to a failed result (timed_out=True)
         # rather than raising — propagate that so the orchestrator returns
@@ -1198,9 +1210,6 @@ async def _write_block_tests(
         return False, None
 
     if kept:
-        log.warning("WARN block=%d phase=TEST_WRITE reason=turn_limit kept_files=%d", block.number, len(kept))
-        progress.log_agent("TestWriter", block.name,
-                           f"ran out of turns — its {len(kept)} test file(s) go to the quality and RED gates")
         report = ("SURPRISES: The test writer ran out of turns and did not report; its test files "
                   f"({', '.join(kept)}) went to the quality and RED gates.\nSPEC_IMPACT: none")
     else:
