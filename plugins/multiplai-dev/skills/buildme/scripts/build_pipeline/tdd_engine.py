@@ -2837,8 +2837,10 @@ async def _run_mutation_round(
 
     `source_edited` means the agent changed a non-test file — the round is
     discarded and the caller fails the step. A red suite or a failed agent
-    discards the round and keeps the first-run result (sha None). Any discard
-    that git refuses sets `discard_failed`.
+    discards the round and keeps the first-run result (sha None); an agent
+    stopped at its turn cap is not a failed one, and goes through the same
+    checks as a finished round. Any discard that git refuses sets
+    `discard_failed`.
     """
     def _discard(note_ok: str, note_failed: str, *, source_edited: bool = False) -> _RoundOutcome:
         if git_ops.discard_to(config.project_dir, rewind_to, "mutation survivor round"):
@@ -2880,7 +2882,9 @@ async def _run_mutation_round(
             f"The test writer moved HEAD from {rewind_to[:8]} {where}, and it could not be "
             "brought back, so nothing was committed — inspect the tree.",
             discard_failed=True)
-    if not result.success:
+    # An agent stopped at its turn cap gets the same checks as a finished one.
+    capped = _hit_turn_limit(result)
+    if not result.success and not capped:
         reason = "timeout" if result.timed_out else (result.error or "agent failed")
         return _discard(
             f"The test writer failed ({reason}); its edits were discarded and the "
@@ -2920,6 +2924,10 @@ async def _run_mutation_round(
         return _discard("The round's tests could not be committed and were discarded; "
                         "the first-run score stands.",
                         "The round's tests could not be committed.")
+    if capped:
+        return _RoundOutcome("The test writer ran out of turns; its tests passed the round's checks "
+                             f"and were kept, committed as {sha[:8]} "
+                             "(`test(mutation): kill surviving mutants`).", sha=sha)
     return _RoundOutcome(f"The test writer added or edited tests, committed as {sha[:8]} "
                          "(`test(mutation): kill surviving mutants`).", sha=sha)
 
