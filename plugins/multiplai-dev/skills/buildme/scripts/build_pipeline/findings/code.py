@@ -269,8 +269,9 @@ _CHECK_MARKER = re.compile(
     r"^(?:#+[ \t]*)?[*_`]*(?:(?P<none>no problems?\b)|problems[*_`]*[ \t]*:)",
     re.IGNORECASE | re.MULTILINE)
 
-# A list that says only "none" or "nothing", with punctuation at most.
-_NONE = re.compile(r"[^\w\n]*(?:none|nothing)[^\w\n]*", re.IGNORECASE)
+# A list that says only "none" or "nothing", optionally "found", with
+# punctuation at most.
+_NONE = re.compile(r"[^\w\n]*(?:none|nothing)(?:[ \t]+found)?[^\w\n]*", re.IGNORECASE)
 
 _LIST_ITEM = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\S", re.MULTILINE)
 
