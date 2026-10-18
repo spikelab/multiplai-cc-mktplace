@@ -28,6 +28,11 @@ time, not derived from a tag.
   `pyproject.toml`. It read the `git` URL in the project's own lock entry as a
   pin and wanted that entry unchanged, so the version the merge wrote, or a
   dependency list merged from both sides, failed the check.
+- buildme epic mode: the merge agent is now told to raise only the package's
+  own version, the one the merge step checks. Before, when main and a child
+  both raised a tool's or a dependency's version alike (such as
+  `[tool.commitizen]`), the agent raised that one too, the check refused it,
+  and the child parked.
 
 ### Changed
 - buildme docs: SKILL.md and the scripts' notes now say that an epic's spend
