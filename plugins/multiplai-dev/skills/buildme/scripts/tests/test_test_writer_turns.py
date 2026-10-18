@@ -174,3 +174,114 @@ class TestDrafts:
                    return_value=AgentResult(success=False, error="crash")) as tw:
             await run_block_tdd(block, config, state, progress)
         assert tw.await_args.kwargs["block_description"] == block.description
+
+
+class Stop(Exception):
+    """Stands in for the process being killed at that point."""
+
+
+def _skipped_gates():
+    return (patch("build_pipeline.tdd_engine._enforce_test_quality", new_callable=AsyncMock, return_value=True),
+            patch("build_pipeline.tdd_engine._enforce_red_gate", new_callable=AsyncMock, return_value=True))
+
+
+async def _stop_after_red(config, state, progress, block):
+    """Run the block until its RED gate passed, then stop as the implementer starts."""
+    writer = _writes(config.project_dir, {"tests/test_new.py": NEW_TEST}, OK)
+    with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=writer), \
+         patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED), \
+         patch("build_pipeline.tdd_engine.run_implementer", side_effect=Stop):
+        with pytest.raises(Stop):
+            await run_block_tdd(block, config, state, progress)
+    return _reload(config, state)
+
+
+class TestResume:
+    @pytest.mark.asyncio
+    async def test_s4_tests_committed_before_the_quality_gate_skip_only_the_test_writer(self, setup, caplog):
+        config, state, progress, block = setup
+        writer = _writes(config.project_dir, {"tests/test_new.py": NEW_TEST}, OK)
+        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=writer), \
+             patch("build_pipeline.tdd_engine._enforce_test_quality", side_effect=Stop):
+            with pytest.raises(Stop):
+                await run_block_tdd(block, config, state, progress)
+        state, block = _reload(config, state)
+        assert block.test_commit and not block.red_evidence
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=OK) as tw, \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED) as suite, \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=OK) as impl:
+            assert await run_block_tdd(block, config, state, progress) is True
+        tw.assert_not_awaited()
+        assert suite.called and block.red_evidence
+        assert "tests/test_new.py" in block.test_file_hashes
+        impl.assert_awaited_once()
+        assert "SKIP block=1 phase=TEST_WRITE reason=tests-committed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_s5_resume_after_red_skips_test_writer(self, setup, caplog):
+        config, state, progress, block = setup
+        state, block = await _stop_after_red(config, state, progress, block)
+        assert block.test_commit and block.red_evidence and block.test_file_hashes
+        quality, red = _skipped_gates()
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=OK) as tw, \
+             quality as q, red as r, \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=OK) as impl:
+            assert await run_block_tdd(block, config, state, progress) is True
+        tw.assert_not_awaited()
+        q.assert_not_awaited()
+        r.assert_not_awaited()
+        assert "AssertionError: not implemented" in impl.await_args.kwargs["failing_tests"]
+        assert "SKIP block=1 phase=TEST_WRITE reason=tests-committed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_s6_a_failed_implementer_is_run_again_without_the_test_writer(self, setup):
+        config, state, progress, block = setup
+        writer = _writes(config.project_dir, {"tests/test_new.py": NEW_TEST}, OK)
+        broke = _writes(config.project_dir, {"module.py": "def add(a, b):\n    return 0\n"},
+                        AgentResult(success=False, error="CLI exited 1"))
+        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=writer), \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED), \
+             patch("build_pipeline.tdd_engine.run_implementer", side_effect=broke):
+            assert await run_block_tdd(block, config, state, progress) is False
+        state, block = _reload(config, state)
+        assert block.status == BlockStatus.FAILED
+
+        quality, red = _skipped_gates()
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=OK) as tw, \
+             quality as q, red as r, \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=OK) as impl:
+            assert await run_block_tdd(block, config, state, progress) is True
+        tw.assert_not_awaited()
+        q.assert_not_awaited()
+        r.assert_not_awaited()
+        impl.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_s7_a_test_file_edited_before_the_resume_re_runs_the_gates(self, setup):
+        config, state, progress, block = setup
+        state, block = await _stop_after_red(config, state, progress, block)
+        before = dict(block.test_file_hashes)
+        with (config.project_dir / "tests" / "test_new.py").open("a") as f:
+            f.write("\n\ndef test_add_zero():\n    from module import add\n    assert add(0, 0) == 0\n")
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=OK) as tw, \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED) as suite, \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=OK):
+            assert await run_block_tdd(block, config, state, progress) is True
+        tw.assert_not_awaited()
+        assert suite.called
+        assert block.test_file_hashes != before
+
+    @pytest.mark.asyncio
+    async def test_s8_a_test_commit_no_longer_on_head_runs_the_test_writer_with_drafts(self, setup):
+        config, state, progress, block = setup
+        state, block = await _stop_after_red(config, state, progress, block)
+        _git(config.project_dir, "reset", "-q", "--mixed", block.baseline_commit)
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=OK) as tw, \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=OK):
+            assert await run_block_tdd(block, config, state, progress) is True
+        tw.assert_awaited()
+        assert "`tests/test_new.py` (new file" in tw.await_args_list[0].kwargs["block_description"]
