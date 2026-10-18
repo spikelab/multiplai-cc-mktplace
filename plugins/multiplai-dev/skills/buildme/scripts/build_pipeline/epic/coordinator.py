@@ -815,7 +815,7 @@ class Coordinator:
         writes nothing."""
         tries = [a for a in records.attempts(self.epic_dir) if a.child == c.id and a.kind in REVIEW_KINDS
                  and a.started.get("head_sha") == head]
-        fields = self._fields(c, line, str(line.get("target_dir")), number, reused=True)
+        fields = self._fields(c, line, review.review_folder(line), number, reused=True)
         open_ = [a for a in tries if a.result is None]
         for a in open_[:-1]:
             records.finish(a, None, interrupted=True)

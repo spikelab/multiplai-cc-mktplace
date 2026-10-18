@@ -704,6 +704,27 @@ def test_a_reused_review_closes_every_open_record_of_its_head(tmp_path, monkeypa
     assert (got[last.n]["interrupted"], got[last.n]["reused"], got[last.n]["blocking"]) == (True, True, [])
 
 
+def test_a_reused_review_is_read_from_its_kept_round_once_a_later_run_moved_it(tmp_path, monkeypatch):
+    """The ledger's finished review of this head is round 01; a later run in
+    the same folder (another head) moved round 01 to `rounds/01-<head12>/`
+    and left its own findings.json on top. The blockers, and the folder the
+    record names, are round 01's."""
+    e = Epic(tmp_path, monkeypatch)
+    kept = e.target() / "rounds" / f"01-{e.head()[:12]}"
+    kept.mkdir(parents=True)
+    (kept / "findings.json").write_text(json.dumps({"mode": None, "findings": [high()]}))
+    (e.target() / "findings.json").write_text(json.dumps({"mode": None, "findings": []}))
+    for head, rnd in ((e.head(), "01"), ("d" * 40, "02")):
+        e.add_ledger({"event": "finished", "slug": f"o-r--pr-{N}", "pr": N, "target_dir": str(e.target()),
+                      "head_sha": head, "base_sha": "c" * 40, "round": rnd, "stopped": None,
+                      "run": {"cost_usd": 2.0}})
+    e.run()
+    r = e.reviews("a")[0].result
+    assert r["reused"] is True and r["review_dir"] == str(kept)
+    assert [b.split()[:2] for b in r["blocking"]] == [["HIGH", "f1"]]
+    assert r["reused_pipeline_run"] == {"target_dir": str(e.target()), "round": "01"}
+
+
 def test_a_review_alive_after_the_stop_wait_keeps_no_result(tmp_path, monkeypatch):
     """Ctrl-C, and the review this run started ignores it past STOP_WAIT: its
     record keeps no result, so the next run asks it again."""
