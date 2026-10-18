@@ -382,6 +382,17 @@ def test_the_budget_stop_fires(tmp_path, monkeypatch, capsys):
     assert summary["spent_usd"] == pytest.approx(8.0) and summary["spend_complete"] is True
 
 
+def test_the_budget_stop_fires_when_the_spend_equals_the_cap(tmp_path, monkeypatch, capsys):
+    """`epic.max_usd` is reached at the cap itself, not only past it: $2.50
+    and $2.50 make exactly $5, so c is not launched."""
+    each = [{"spend": 2.5}]
+    e = Epic(tmp_path, monkeypatch, {"a": each, "b": each, "c": each}, max_usd=5.0)
+    assert run_coordinator(e.config) == 3
+    assert e.launches() == ["a", "b"]           # 2.5 < 5 before b; 5 >= 5 before c
+    assert "EPIC:BUDGET:5.00" in capsys.readouterr().out.splitlines()
+    assert e.epic_json()["child_status"]["c"]["status"] == "pending"
+
+
 def test_the_budget_stop_waits_for_running_children(tmp_path, monkeypatch, capsys):
     e = Epic(tmp_path, monkeypatch, {"a": [{"spend": 6.0}], "b": [{"spend": 6.0, "block": True}],
                                       "c": [{"spend": 6.0}]}, max_usd=5.0, parallel=2)
@@ -554,6 +565,49 @@ def test_a_sigterm_during_a_skill_wait_still_kills_the_skill(tmp_path, workspace
             pass
 
 
+@pytest.mark.parametrize("command", ["build", "findings"])
+def test_spend_is_printed_when_ctrl_c_stops_a_skill_wait(tmp_path, workspace, command):
+    """Ctrl-C (SIGINT) while `build` or `findings` waits on a skill: the
+    wait raises KeyboardInterrupt, kills the skill's group, and `main` still
+    prints `SPEND:` last."""
+    import signal
+
+    from .test_git_ops import _gone
+
+    argv = (["build", "--change", "x"] if command == "build" else ["findings", "--pr", "7"])
+    code, out, skill = _signalled(tmp_path, workspace, [*argv, "--project-dir", str(workspace)],
+                                  signal.SIGINT, skill=True)
+    try:
+        assert code == -signal.SIGINT          # Python ends on an uncaught KeyboardInterrupt by SIGINT
+        assert out.splitlines()[-1] == "SPEND:2.500000:100"
+        assert _gone(skill)
+    finally:
+        try:
+            import os
+            os.kill(skill, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def test_build_leaves_ctrl_c_to_asyncio_run(workspace, monkeypatch, capsys):
+    """`main` holds SIGTERM and SIGHUP for the whole build, but not SIGINT
+    (`_exit_on_termination(interrupt=False)`): `asyncio.run` installs its
+    own SIGINT handler only over Python's default one, so the build keeps
+    asyncio's Ctrl-C handling (the first cancels the main task)."""
+    import signal
+
+    seen = []
+
+    def body():
+        seen.append(signal.getsignal(signal.SIGINT))
+        return 0
+
+    _patch_build(monkeypatch, body)
+    assert cli.main(["build", "--change", "x", "--project-dir", str(workspace)]) == 0
+    [handler] = seen
+    assert getattr(getattr(handler, "func", None), "__name__", None) == "_on_sigint", handler
+
+
 @pytest.mark.parametrize("signame", ["SIGINT", "SIGTERM"])
 def test_children_stopped_with_the_epic_keep_their_spend(tmp_path, monkeypatch, signame):
     """B2.S11 end to end: the epic is stopped while a and b run; each
@@ -610,6 +664,20 @@ class TestSkillSpend:
         budget.record(_usage(1.0, 10))
         self._run(*argv, out="", code=-9 % 256)
         assert budget.spend_marker() == "SPEND:1.000000:10:incomplete"
+
+    def test_a_spend_line_it_cannot_read_makes_the_total_incomplete(self):
+        """Only the last `SPEND:` line is read: when it does not parse, an
+        earlier one is not taken instead, and what the skill spent is unknown."""
+        budget.record(_usage(1.0, 10))
+        self._run("pr_pipeline", "open", out="SPEND:0.250000:40\nSPEND:abc:40\n")
+        assert budget.spend_marker() == "SPEND:1.000000:10:incomplete"
+
+    def test_a_spend_line_marked_incomplete_is_added_and_makes_the_total_incomplete(self):
+        """A skill whose own spend is incomplete (`:incomplete`): its USD and
+        tokens count, and so does the gap."""
+        budget.record(_usage(1.0, 10))
+        self._run("walkthrough_pipeline", "run", "/m", out="SPEND:0.250000:40:incomplete\n")
+        assert budget.spend_marker() == "SPEND:1.250000:50:incomplete"
 
     def test_a_skill_that_times_out_makes_the_total_incomplete(self):
         """Row B2.S12, the timeout: the group is killed before its `SPEND:`."""
