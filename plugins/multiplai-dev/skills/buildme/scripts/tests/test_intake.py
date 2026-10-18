@@ -8,6 +8,7 @@ as test_git_ops), so "committed on the build branch" is checked with
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -1240,7 +1241,16 @@ class TestFailedBuildRetry:
     async def _stop_in_interview(self, repo: Path) -> BuildState:
         """The same command, stopped by an exception in the interview: exit 1
         from the generic handler, the pointer left AT BOOTSTRAP, never FAILED
-        (a signal, or a self-interview stopped part way, leaves the same)."""
+        (a signal, or a self-interview stopped part way, leaves the same).
+
+        A re-run whose checkpoint holds a finished interview skips it
+        (`SKIP phase=INTERVIEW reason=interview-on-disk`), so an earlier
+        build's saved summary is emptied first: the interview then runs again,
+        as for one stopped before it saved."""
+        for path in (Path(os.environ["WORKSPACE"]) / ".worktrees").glob("*/specs/changes/csv/.build-state.json"):
+            earlier = BuildState.load(path)
+            earlier.interview_summary = None
+            earlier.checkpoint(path)
         config = _config(repo, "csv")
         with patch("build_pipeline.intake.run_interview_phase",
                    AsyncMock(side_effect=RuntimeError("stopped"))):
@@ -1516,3 +1526,53 @@ class TestExitCodes:
         assert EXIT_AGENT_TIMEOUT == 4
         assert len({EXIT_SUCCESS, EXIT_BUILD_FAILURE, 2, WAITING_EXIT,
                     EXIT_AGENT_TIMEOUT}) == 5
+
+
+# --- a FAILED build's resume does not run the interview again (S12) -----------
+
+class TestInterviewOnResume:
+    async def _failed_self_build(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        config = _config(repo, "csv", interview_mode="self")
+        args = _args(repo, "csv", interview_summary="Add a CSV export.")
+        with patch("build_pipeline.llm_steps.interview_steps.agent_call_structured",
+                   FakeCall(QUESTIONS, ANSWERS)), \
+             patch("build_pipeline.spec_generator.run_spec_generator", AsyncMock(return_value=1)):
+            assert await run_orchestrator(config, args) == 1
+        assert BuildState.load(config.state_file_path()).phase == BuildPhase.FAILED
+        return repo, config, args
+
+    async def _retry(self, repo, args):
+        call = FakeCall(QUESTIONS, ANSWERS)
+        config = _config(repo, "csv", interview_mode="self")
+        mocks = _spec_stage_mocks()
+        with mocks[0], mocks[1], mocks[2], \
+                patch("build_pipeline.llm_steps.interview_steps.agent_call_structured", call):
+            rc = await run_orchestrator(config, args)
+        return rc, call, config
+
+    @pytest.mark.asyncio
+    async def test_s12_a_failed_build_with_its_interview_on_disk_skips_the_self_interview(
+            self, tmp_path, monkeypatch, capsys, caplog):
+        caplog.set_level("INFO", logger="build_pipeline.orchestrator")
+        repo, config, args = await self._failed_self_build(tmp_path, monkeypatch)
+        before = (config.change_dir / "interview.md").read_text()
+        capsys.readouterr()
+
+        rc, call, config = await self._retry(repo, args)
+        assert rc == 0
+        assert call.prompts == [], "neither the questioner nor the answerer was called"
+        assert "PHASE:INTERVIEW:COMPLETE" in capsys.readouterr().out
+        assert "SKIP phase=INTERVIEW reason=interview-on-disk" in caplog.text
+        assert (config.change_dir / "interview.md").read_text() == before
+
+    @pytest.mark.asyncio
+    async def test_s12_a_failed_build_without_interview_md_runs_it(self, tmp_path, monkeypatch):
+        repo, config, args = await self._failed_self_build(tmp_path, monkeypatch)
+        (config.change_dir / "interview.md").unlink()
+
+        rc, call, config = await self._retry(repo, args)
+        assert rc == 0
+        assert len(call.prompts) == 2
+        assert (config.change_dir / "interview.md").is_file()

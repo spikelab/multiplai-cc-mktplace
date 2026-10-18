@@ -28,7 +28,7 @@ CASES = {
     "test writer": (
         TEST_WRITER_PROMPT,
         dict(block_name="Block", block_description="desc", specs="specs",
-             context_bundle="ctx", test_command="pytest"),
+             context_bundle="ctx", test_command="pytest", max_turns=30, half=15),
         (TEST_VALUE_RULE, COMMENT_RULE),
     ),
     "implementer clean": (IMPLEMENTER_PROMPT_CLEAN, _IMPLEMENTER_FIELDS, (COMMENT_RULE,)),

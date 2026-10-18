@@ -746,6 +746,10 @@ class BuildConfig:
     # command runs pytest and pytest-xdist imports in its environment
     # (`gates.parallel_command`); "off" never does.
     parallel_tests: str = "auto"
+    # tdd.test_writer_max_turns / tdd.mutation_test_writer_max_turns: the turn
+    # cap of the block test writer and of the mutation round's test writer.
+    test_writer_max_turns: int = 30
+    mutation_test_writer_max_turns: int = 30
 
     # Memory files
     core_memory_files: list[str] = field(default_factory=lambda: ["technical-pref.md"])
@@ -1173,6 +1177,9 @@ class BuildConfig:
         elif text not in ("yes", "on", "1", "true"):
             log.warning("Unrecognized tdd.narrow_tests value %r in config.yaml — using true", narrow)
         self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
+        for key in ("test_writer_max_turns", "mutation_test_writer_max_turns"):
+            if key in tdd:
+                setattr(self, key, _cfg_int(tdd[key], f"tdd.{key}", getattr(self, key)))
 
         # Reviewer context: coding standards + optional stronger review model
         self.standards_files = data.get("standards_files") or []
