@@ -842,7 +842,11 @@ runs several rounds in one launch, so it is given what is left of
 less what the other fixers still running were given and have not yet spent
 on their PRs' reviews. While running fixers hold all that is left, another
 fixer waits for them, and no build, review, review resume or merge agent
-starts; once they end, their real spend decides. A fixer stops before a
+starts; once they end, their real spend decides. A fixer still running from
+an earlier run (one killed outright, or a fixer that outlived its stop) holds
+nothing in this run: this run waits for it only before that child's next fix,
+so the epic can spend past `epic.max_usd` by up to that fixer's own
+`--max-usd`, and `spend_complete` is false. A fixer stops before a
 round with something to act on once its own spend and its reviews' reach
 its share. If the epic's spend is still under the cap, other fixers held the
 rest: it runs again with its share recomputed once they end. Once the spend

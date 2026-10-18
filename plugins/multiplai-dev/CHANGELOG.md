@@ -33,6 +33,12 @@ time, not derived from a tag.
   0.7999999999999999 under $0.80); the spend is now rounded to 6 decimals
   first, as the epic rounds its own.
 
+### Changed
+- buildme epic: the skill's instructions now say that a fixer still running
+  from an earlier run that was killed holds no share of `epic.max_usd` in the
+  new run, so the epic can spend past the cap by up to that fixer's own
+  `--max-usd`.
+
 ## [0.84.0] - 2026-10-18
 
 ### Added
