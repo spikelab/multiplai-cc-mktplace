@@ -560,6 +560,11 @@ class TestNarrowStaysInsideTheWholeRun:
         'collect_ignore_glob = ["integration/*"]\n',
         "def pytest_ignore_collect(collection_path, config):\n"
         "    return 'integration' in str(collection_path)\n",
+        'collect_ignore = ["integration"]\n',
+        'collect_ignore = []\ncollect_ignore.append("integration/test_db.py")\n',
+        "collect_ignore = [p for p in IGNORED]\n",
+        "from plugin import pytest_ignore_collect\n",
+        'collect_ignore = ["integration/\n',
     ])
     def test_a_conftest_that_ignores_files_falls_back(self, project, conftest):
         # pytest skips collect_ignore and pytest_ignore_collect for a path
@@ -579,6 +584,37 @@ class TestNarrowStaysInsideTheWholeRun:
         self._block(project)
         assert narrow_test_command("pytest -q", project, base) == \
             "pytest -q tests/integration/test_db.py tests/unit/test_new.py"
+
+    @pytest.mark.parametrize("conftest", [
+        "# collect_ignore is not needed here\nimport pytest\n",
+        '"""No pytest_ignore_collect hook here."""\n',
+        'collect_ignore = ["setup.py"]\n',
+        'collect_ignore_glob = ["*/helpers/*", "unit/test_old.py"]\n',
+        'collect_ignore = ("integration/test_other.py",)\n',
+    ])
+    def test_a_conftest_that_ignores_no_selected_file_still_narrows(self, project, conftest):
+        # A mention in a comment or a string ignores nothing, and a list of
+        # paths written out ignores only the paths it names.
+        (project / "tests" / "conftest.py").write_text(conftest)
+        base = _repo(project)
+        self._block(project)
+        assert narrow_test_command("pytest -q", project, base) == \
+            "pytest -q tests/integration/test_db.py tests/unit/test_new.py"
+
+    def test_a_conftest_above_the_whole_runs_config_still_narrows(self, tmp_path):
+        # pytest loads no conftest.py above the directory of its config file.
+        repo = tmp_path / "repo"
+        app = repo / "app"
+        (app / "tests").mkdir(parents=True)
+        (app / "pytest.ini").write_text("[pytest]\n")
+        (app / "mod.py").write_text("x = 1\n")
+        (app / "tests" / "test_mod.py").write_text("def test_m(): pass\n")
+        (repo / "conftest.py").write_text('collect_ignore = ["app/tests"]\n')
+        base = _repo(repo)
+        (app / "mod.py").write_text("x = 2\n")
+        assert narrow_test_command("pytest -q", app, base) == "pytest -q tests/test_mod.py"
+        (app / "conftest.py").write_text('collect_ignore = ["tests"]\n')
+        assert narrow_test_command("pytest -q", app, base) == "pytest -q"
 
 
 class TestNarrowLoadsTheWholeRunsConfig:
