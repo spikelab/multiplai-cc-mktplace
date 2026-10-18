@@ -877,7 +877,7 @@ launches. When the review cannot read git or GitHub before reviewing anything
 not in the clone after its fetch), nothing parks: the child is `unknown`, as
 when the coordinator's own read fails, and the next run asks again. So is a
 child whose review, or whose post of the review's findings, cannot start
-(`uv` is not on PATH). When another child depends on it, the same run reads
+(`uv` is not on PATH, or its worktree was removed as it starts). When another child depends on it, the same run reads
 its PR again and waits on it as an open PR, so the run ends with
 `EPIC:MERGE_WAITING` (exit 3) rather than naming it `unknown`; the next run
 still reviews it. A child whose worktree was removed is reviewed from the
@@ -971,9 +971,11 @@ Ctrl-C or SIGTERM stops a fixer this run started.
 **Merging the children's PRs.** A PR whose review at its current head left
 no blockers is waited on as a dependency's PR is. A PR whose current head no
 review finished on (its review was stopped, or it got a new head after a
-clean review) is not: the run names it on stderr (`EPIC: child <id> built:
-its PR's head <sha> has no finished review; the next run reviews it`) and
-exits `1` unless it exits `3` with `EPIC:MERGE_WAITING`. Under `epic.merge: manual` (the default)
+clean review) is waited on only when another child depends on it. The run
+names it on stderr (`EPIC: child <id> built: its PR's head <first 12
+characters of the sha> has no finished review; the next run reviews it`)
+and exits `1`, unless it exits `3` with `EPIC:MERGE_WAITING` or
+`EPIC:BUDGET`. Under `epic.merge: manual` (the default)
 nothing more happens: the run exits `3` with `EPIC:MERGE_WAITING:<urls>`
 naming every such PR still open, and a re-run once a person merged them goes
 on. Under `auto`, the default branch is first merged into each such PR, in its
@@ -1157,7 +1159,7 @@ Parse pipeline stdout for progress lines:
   them, or set `spec_extract: false`, and re-run
 - `RESULT:SUCCESS` — build complete
 - `EPIC:APPROVED:<epic.json>` — the epic split is approved; the children build next
-- `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown`, or a child's PR head has no finished review (`3` while a child waits on a dependency's open PR); `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
+- `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown` (`3` while a child waits on a dependency's open PR), and when a child's PR head has no finished review and neither `EPIC:MERGE_WAITING` nor `EPIC:BUDGET` is printed; `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
 - `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent, the pr skill, a walkthrough run and spec-extract included (`:incomplete` follows when one of them printed no spend)
 - `ERROR:<message>` — failure
 

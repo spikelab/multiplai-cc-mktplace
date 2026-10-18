@@ -1940,7 +1940,8 @@ def _new_run_dir(epic_dir: Path) -> Path:
 
 async def run_epic(config, state, args, epic_dir: Path, epic: store.Epic) -> int:
     """Build an approved epic's children (item 11). Returns 0 when nothing is
-    left to do, 1 when a child failed or its state is unknown, 3 with `EPIC:MERGE_WAITING:<urls>` while a
+    left to do, 1 when a child failed or its state is unknown, or a child's PR
+    head has no finished review (`Coordinator._unreviewed`), 3 with `EPIC:MERGE_WAITING:<urls>` while a
     child waits on an open PR or with `EPIC:BUDGET:<spent>` once `epic.max_usd` is reached,
     128 + the signal when stopped."""
     from . import lock as epic_lock
