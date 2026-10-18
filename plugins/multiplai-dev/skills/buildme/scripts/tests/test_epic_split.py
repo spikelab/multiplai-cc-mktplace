@@ -153,6 +153,25 @@ class TestSlug:
         assert store.checkout_root(repo) is not None
         assert seen == [["git", "remote", "get-url"], ["git", "rev-parse", "--show-toplevel"]]
 
+    @pytest.mark.parametrize("code", [124, 127])
+    def test_a_git_that_timed_out_or_did_not_start_is_not_read_as_no_checkout(self, tmp_path, monkeypatch,
+                                                                                code):
+        """`git_ops._run` gives 124 for a timeout and 127 for a git that did
+        not start. Neither says the path is not a checkout or has no origin,
+        so the store raises instead of answering None."""
+        from build_pipeline import git_ops
+
+        repo = tmp_path / "plain"
+        repo.mkdir()
+        monkeypatch.setattr(git_ops, "_run", lambda argv, cwd=None, **kw: git_ops.GitResult(argv, code, "", "x"))
+        with pytest.raises(store.GitUnreadable):
+            store.checkout_root(repo)
+        with pytest.raises(store.GitUnreadable):
+            store.slug_repo_name(repo)
+        errors = store.repo_errors([EpicChild(id="a", title="A", depends_on=[], plan="p", repo=str(repo))],
+                                   tmp_path)
+        assert len(errors) == 1 and "cannot read" in errors[0] and "not a git checkout" not in errors[0]
+
 
 # --- item 10: the behaviour ----------------------------------------------------
 
