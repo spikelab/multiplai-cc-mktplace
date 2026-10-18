@@ -25,6 +25,8 @@ import logging
 import re
 from dataclasses import dataclass
 
+from multiplai_core.untrusted import fence, markdown_notice
+
 from .. import sdk
 from ..gates import (Corpus, cite_id, config_gate, explainer_text_gate, flow_gate, glossary_gate, output_gate,
                      usecase_gate, write_gate)
@@ -101,15 +103,25 @@ def _facts(state: WalkState, prefixes: tuple[str, ...]) -> list[Fact]:
 
 
 def hop_prompt_block(result: PathsResult, repo_key: str) -> str:
-    """The "Path hops" material: every hop id with its called symbol, `path:start-end` and quote."""
-    out = ["Path hops (checked by a program; cite a hop as [[<id>]], e.g. "
-           f"[[{hop_id(result.paths[0].id, 1)}]]):" if result.paths else "Path hops: none."]
+    """The "Path hops" material: every hop id with its called symbol, `path:start-end` and quote.
+
+    The hop lines quote the repository and carry the tracing agent's notes, so they go to the writer inside
+    one `<untrusted-content>` fence (docs/untrusted-content.md), after the notice that says it is data.
+    """
+    if not result.paths:
+        return "Path hops: none."
+    hops = []
     for path in result.paths:
         for k, hop in enumerate(path.hops, start=1):
             note = f" — {hop.note}" if hop.note else ""
-            out.append(f"- [{hop_id(path.id, k)}] `{hop.symbol_called}` {repo_key}/{hop.path}:{hop.line_start}-"
-                       f"{hop.line_end} {json.dumps(' '.join(hop.quote.split())[:200], ensure_ascii=False)}{note}")
-    return "\n".join(out)
+            hops.append(f"- [{hop_id(path.id, k)}] `{hop.symbol_called}` {repo_key}/{hop.path}:{hop.line_start}-"
+                        f"{hop.line_end} {json.dumps(' '.join(hop.quote.split())[:200], ensure_ascii=False)}{note}")
+    return "\n".join([
+        "Path hops (checked by a program; cite a hop as [[<id>]], e.g. "
+        f"[[{hop_id(result.paths[0].id, 1)}]]):",
+        markdown_notice("code quoted from the repository and the tracing agent's notes on it", "Repository text"),
+        *fence("\n".join(hops), f"{repo_key} path hops"),
+    ])
 
 
 def write_specs(state: WalkState) -> list[Spec]:
