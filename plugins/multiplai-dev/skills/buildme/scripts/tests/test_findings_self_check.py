@@ -753,6 +753,29 @@ class TestDecisions:
             "c1": {"decision": "accept"}, "c2": {"decision": "accept"},
             "t1": {"decision": "accept"}}
 
+    def test_the_copied_listing_rule_matches_the_review_skill(self):
+        """buildme does not import review_pipeline, so it copies what
+        `render.listed` shows; this reads the review skill's source and fails
+        when the copy drifts."""
+        import ast
+        review = Path(__file__).resolve().parents[3] / "review" / "scripts" / "review_pipeline"
+
+        def constants(path: Path) -> dict:
+            out = {}
+            for node in ast.parse(path.read_text()).body:
+                target = getattr(node, "target", None) or (getattr(node, "targets", None) or [None])[0]
+                if isinstance(target, ast.Name) and getattr(node, "value", None) is not None:
+                    try:
+                        out[target.id] = ast.literal_eval(node.value)
+                    except ValueError:
+                        pass
+            return out
+
+        render, models = constants(review / "render.py"), constants(review / "models.py")
+        assert decisions._SHOWN_STATUSES == render["SHOWN_STATUSES"]
+        assert decisions._HIDDEN_LABELS == render["HIDDEN_LABELS"]
+        assert decisions._CRITICAL_IMPACTS == models["CRITICAL_IMPACTS"]
+
     @pytest.mark.parametrize("mode", [None, "full", "critical"])
     def test_what_the_review_hides_is_never_accepted(self, tmp_path, mode):
         """`review_pipeline.render.listed`: a repeat of a finding the person
