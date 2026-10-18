@@ -1588,6 +1588,24 @@ class TestScanNoBehaviourBlocks:
 
         assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
 
+    @pytest.mark.parametrize("says", ["Covered", "Satisfied", "Delivered"])
+    def test_a_sentence_that_opens_with_covered_by_block_n_is_flagged(
+        self, tmp_path, says,
+    ):
+        """The rule's second form on its own: no pronoun names the block, and
+        the block names no file."""
+        path = _tasks_file(tmp_path, (
+            "## 1. Count words\n\nAdd `count(s: str) -> int`.\n\n"
+            "Interfaces:\n- Produces: `count(s: str) -> int`\n\n"
+            f"## 2. Tabs\n\nAdd tests for tabs. {says} by Block 1.\n\n"
+            "Interfaces:\n- Produces: (none)\n"
+        ))
+
+        findings = scan_no_behaviour_blocks(path)
+
+        assert [f["block"] for f in findings] == [2]
+        assert "an earlier block already satisfies it" in findings[0]["description"]
+
     def test_a_behaviour_block_with_no_produces_is_not_flagged(self, tmp_path):
         """`Produces: (none)` alone is legitimate: a last slice nobody calls."""
         path = _tasks_file(tmp_path, (
@@ -1641,6 +1659,7 @@ class TestScanNoBehaviourBlocks:
 
     @pytest.mark.parametrize("says", [
         "no code change is needed", "there is no code change in this block",
+        "there are no new code changes",
     ])
     def test_a_block_that_says_it_needs_no_code_is_flagged(self, tmp_path, says):
         """The no-code rule on its own: no earlier block is named, and no file."""
@@ -1695,6 +1714,9 @@ class TestScanNoBehaviourBlocks:
         "- [ ] 2.4 Make sure the suite passes\n\n",
         # Only its heading says it is test work.
         "## 2. Tests for tabs\n\nCover tabs in `tests/test_words.py`.\n\n",
+        # Only its heading names a file, and that file is a test file.
+        "## 2. Tab cases in `tests/test_words.py`\n\nCover tabs and runs "
+        "of spaces.\n\n",
     ])
     def test_a_test_block_whose_steps_write_no_code_is_flagged(
         self, tmp_path, block,
@@ -1746,6 +1768,8 @@ class TestScanNoBehaviourBlocks:
         "`src/api/limits.py`, with no code change to the core.\n\n",
         "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
         "with no code change to the core.\n\n",
+        "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
+        "with no new code changes to the core.\n\n",
         # Test-first leaf blocks that name only their test file: the tests
         # come first, and a later step writes the code.
         "## 2. Webhook signatures\n\n- [ ] 2.1 Write failing tests in "
@@ -1900,3 +1924,45 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
 
         assert mock_gen.call_count == 2
         assert "PHASE: no_behaviour_blocks_remain — Block 2, Block 3" in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_a_block_left_by_a_failed_rewrite_is_named_in_the_log(
+        self, tmp_path, capsys,
+    ):
+        """The rewrite raises, so the first pass stands with the blocks the
+        scan flagged: they are named, as after a rewrite that kept them."""
+        cm, change_dir, config, state = self._setup(tmp_path)
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.side_effect = [_E2E_TASKS.read_text(), RuntimeError("model down")]
+            mock_audit.return_value = []
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        out = capsys.readouterr().out
+        assert mock_gen.call_count == 2
+        assert (change_dir / "tasks.md").read_text() == _E2E_TASKS.read_text()
+        assert "PHASE: tasks_regeneration_failed" in out
+        assert "PHASE: no_behaviour_blocks_remain — Block 2, Block 3" in out
+
+    @pytest.mark.asyncio
+    async def test_a_failed_model_audit_still_rewrites_for_a_no_behaviour_block(
+        self, tmp_path,
+    ):
+        """The scan needs no model: when the model audit raises, its findings
+        still drive the one rewrite."""
+        cm, change_dir, config, state = self._setup(tmp_path)
+        rewritten = "## 1. Summarize\n\nBuilds it, edge cases included.\n"
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.side_effect = [_E2E_TASKS.read_text(), rewritten]
+            mock_audit.side_effect = RuntimeError("audit down")
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        assert mock_gen.call_count == 2
+        regen_findings = mock_gen.call_args_list[1].kwargs["audit_findings"]
+        assert "Block 2" in regen_findings and "Block 3" in regen_findings
+        assert (change_dir / "tasks.md").read_text() == rewritten
