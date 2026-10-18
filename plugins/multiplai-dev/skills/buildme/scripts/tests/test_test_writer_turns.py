@@ -130,3 +130,47 @@ class TestTurnLimit:
             assert await run_block_tdd(block, config, state, progress) is False
         implementer.assert_not_awaited()
         assert block.status == BlockStatus.FAILED
+
+
+def _reload(config, state):
+    """The state a resumed run reads back from the checkpoint."""
+    state = BuildState.load(config.state_file_path())
+    return state, state.tdd.blocks[state.tdd.current_block]
+
+
+class TestDrafts:
+    @pytest.mark.asyncio
+    async def test_s3_a_killed_test_writer_s_files_are_named_to_the_retry_as_drafts(self, setup):
+        config, state, progress, block = setup
+        timed_out = AgentResult(success=False, error="Agent timed out after 1200s", timed_out=True)
+        writer = _writes(config.project_dir, {"tests/test_new.py": NEW_TEST}, timed_out)
+        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=writer):
+            assert await run_block_tdd(block, config, state, progress) is False
+        assert block.status == BlockStatus.FAILED and block.test_commit is None
+
+        state, block = _reload(config, state)
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=OK) as tw, \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=OK):
+            assert await run_block_tdd(block, config, state, progress) is True
+        description = tw.await_args_list[0].kwargs["block_description"]
+        drafts = description.split("## Drafts from an earlier attempt", 1)[1]
+        assert "They are your own drafts" in drafts
+        assert "`tests/test_new.py` (new file, 3 lines)" in drafts
+
+    @pytest.mark.asyncio
+    async def test_a_changed_tracked_test_file_is_listed_with_its_line_counts(self, setup):
+        config, state, progress, block = setup
+        (config.project_dir / "tests" / "test_old.py").write_text(NEW_TEST)
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
+                   return_value=AgentResult(success=False, error="crash")) as tw:
+            await run_block_tdd(block, config, state, progress)
+        assert "`tests/test_old.py` (+3 -2)" in tw.await_args.kwargs["block_description"]
+
+    @pytest.mark.asyncio
+    async def test_no_drafts_section_without_uncommitted_test_files(self, setup):
+        config, state, progress, block = setup
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
+                   return_value=AgentResult(success=False, error="crash")) as tw:
+            await run_block_tdd(block, config, state, progress)
+        assert tw.await_args.kwargs["block_description"] == block.description
