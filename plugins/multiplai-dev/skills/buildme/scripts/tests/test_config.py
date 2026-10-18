@@ -818,6 +818,29 @@ class TestNarrowTestsConfig:
         assert _config_from_yaml(tmp_path, 'tdd:\n  narrow_tests: "true"\n').narrow_tests is True
 
 
+class TestTestWriterTurnsConfig:
+    """`tdd.test_writer_max_turns` and `tdd.mutation_test_writer_max_turns`:
+    the turn cap of each test writer, 30 unless set."""
+
+    def test_both_default_to_30(self, tmp_path):
+        assert (BuildConfig().test_writer_max_turns, BuildConfig().mutation_test_writer_max_turns) == (30, 30)
+        config = _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n")
+        assert (config.test_writer_max_turns, config.mutation_test_writer_max_turns) == (30, 30)
+
+    def test_values_come_from_the_tdd_section(self, tmp_path):
+        config = _config_from_yaml(
+            tmp_path, "tdd:\n  test_writer_max_turns: 45\n  mutation_test_writer_max_turns: 12\n")
+        assert (config.test_writer_max_turns, config.mutation_test_writer_max_turns) == (45, 12)
+
+    @pytest.mark.parametrize("value", ["0", "-3", "'40'", "true", "2.5", "lots"])
+    def test_a_value_that_is_not_a_positive_integer_is_ignored_with_a_warning(self, tmp_path, caplog, value):
+        config = _config_from_yaml(
+            tmp_path, f"tdd:\n  test_writer_max_turns: {value}\n  mutation_test_writer_max_turns: {value}\n")
+        assert (config.test_writer_max_turns, config.mutation_test_writer_max_turns) == (30, 30)
+        assert "tdd.test_writer_max_turns" in caplog.text
+        assert "tdd.mutation_test_writer_max_turns" in caplog.text
+
+
 class TestParallelTestsConfig:
     """`tdd.parallel`: `auto` (default) lets the full-suite runs use
     pytest-xdist; `off` never does. YAML reads a bare `off` as false."""

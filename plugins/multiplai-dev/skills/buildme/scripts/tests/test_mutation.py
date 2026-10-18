@@ -829,6 +829,16 @@ class TestRunMutationStep:
         assert "did not produce a score" in log_text and "PASSED" not in log_text
 
     @pytest.mark.asyncio
+    async def test_survivor_round_gets_the_configured_turn_cap(self, project):
+        config, state, progress = _setup(project)
+        config.mutation_test_writer_max_turns = 11
+        with patch("build_pipeline.tdd_engine.run_mutation", return_value=_result(9, 1)), \
+             patch("build_pipeline.tdd_engine.run_mutation_test_writer", new_callable=AsyncMock,
+                   return_value=AgentResult(success=True, output="nothing to add")) as writer:
+            await _run_mutation(config, state, progress)
+        assert writer.await_args.kwargs["max_turns"] == 11
+
+    @pytest.mark.asyncio
     async def test_survivor_round_that_adds_a_non_test_file_fails_the_step(self, project):
         """A new untracked non-test file of any extension (a source module, a
         root pytest.ini that changes how the second run is scored) is a
