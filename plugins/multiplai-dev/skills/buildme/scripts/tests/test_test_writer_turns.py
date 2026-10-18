@@ -287,3 +287,27 @@ class TestResume:
             assert await run_block_tdd(block, config, state, progress) is True
         tw.assert_awaited()
         assert "`tests/test_new.py` (new file" in tw.await_args_list[0].kwargs["block_description"]
+
+
+class TestTwiceAtTheCap:
+    @pytest.mark.asyncio
+    async def test_s9_a_red_retry_that_runs_out_of_turns_also_keeps_its_files(self, setup):
+        config, state, progress, block = setup
+        project = config.project_dir
+        calls = []
+
+        async def writer(**kw):
+            calls.append(kw["block_description"])
+            (project / "tests" / "test_new.py").write_text(NEW_TEST + f"\n\ndef test_more_{len(calls)}():\n"
+                                                            "    from module import add\n    assert add(1, 1) == 2\n")
+            return TURN_LIMIT
+
+        green_then_red = [(0, "1 passed"), RED]
+        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=writer), \
+             patch("build_pipeline.tdd_engine.run_test_suite", side_effect=green_then_red), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=OK) as impl:
+            assert await run_block_tdd(block, config, state, progress) is True
+        assert len(calls) == 2 and "RED Gate Failure" in calls[1]
+        impl.assert_awaited_once()
+        assert "test_more_2" in (project / "tests" / "test_new.py").read_text()
+        assert "test_more_2" in _git(project, "show", f"{block.test_commit}:tests/test_new.py")
