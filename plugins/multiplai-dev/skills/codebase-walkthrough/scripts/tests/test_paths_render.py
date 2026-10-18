@@ -209,3 +209,44 @@ def test_every_link_in_the_paths_body_re_reads_at_the_commit(tmp_path, capsys):
     capsys.readouterr()
     assert main(["check", str(md)]) == 0
     assert "check: 6 checked, 0 failed" in capsys.readouterr().out
+
+
+def test_every_hop_id_in_the_paths_body_comes_from_hop_id(tmp_path, monkeypatch):
+    from walkthrough_pipeline import render
+    monkeypatch.setattr(render, "hop_id", lambda path_id, k: f"{path_id}x{k}")
+    body = _render(_state(tmp_path, _result()), tmp_path / "out")
+    assert not HOP_ID.search(body)
+    assert re.findall(r'<a id="(p\d+x\d+)"></a>`\1`', body) == ["p1x1", "p1x2", "p2x1", "p2x2", "p3x1"]
+    blocks = _blocks(body)
+    assert any(line.endswith("at `p1x1`") for line in blocks["p1"])
+    assert "- Ends at `p1x2` (trace complete)." in blocks["p1"]
+    assert "- Stops after `p2x2`: `unconnected_hop`" in blocks["p2"]
+    assert any("(mocks `p2x2`, not counted)" in line for line in blocks["p2"])
+
+
+FALLBACK_FAILED = " Entry discovery was incomplete: the model fallback failed."
+
+
+@pytest.mark.parametrize("paths, dropped, lead", [
+    (None, False, "3 paths reach this module."),
+    ([], False, "No entry points reaching this module were found."),
+    ([], True, "No paths were traced. 1 entry was left out; see **Left out** under Coverage."),
+])
+def test_a_failed_fallback_is_said_after_the_lead(tmp_path, paths, dropped, lead):
+    from code_facts import PathDrop
+    result = _result()
+    update = {"fallback": FallbackStatus(status="failed", reason="the fallback call failed")}
+    if paths is not None:
+        update["paths"] = paths
+    if dropped:
+        update["dropped"] = [PathDrop(entry=result.paths[2].entry, stage="trace_limit",
+                                      reason="over_trace_limit", detail="past the trace limit")]
+    body = _render(_state(tmp_path, result.model_copy(update=update)), tmp_path / "out")
+    assert _lines(body)[0] == lead + FALLBACK_FAILED
+
+
+def test_an_ok_or_skipped_fallback_adds_nothing(tmp_path):
+    for status in ("ok", "skipped"):
+        result = _result().model_copy(update={"fallback": FallbackStatus(status=status, reason=None)})
+        body = _render(_state(tmp_path / status, result), tmp_path / status / "out")
+        assert "Entry discovery" not in body
