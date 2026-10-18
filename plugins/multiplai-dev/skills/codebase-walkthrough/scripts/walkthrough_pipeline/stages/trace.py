@@ -168,22 +168,26 @@ def web_seeds(state: WalkState) -> list[Seed]:
 def known_places(state: WalkState) -> list[Location]:
     """The boundary edges under the target repo's root: the target side of each cross-repository
     reference, then every route, then every task and beat entry. First-seen order, no duplicates."""
-    found: list[SymbolEntry | Reference] = []
+    found: list[tuple[str, SymbolEntry | Reference | None]] = []
     for r in state.references:
         if r.repo == state.target.repo_key:
             continue
         if r.kind == "http-route":
-            found.append(_matching_route(state, r.symbol))
+            found.append((r.kind, _matching_route(state, r.symbol)))
         elif r.kind == "celery-name":
-            found.append(_task(state, r.symbol))
-    found += [e for e in state.symbols if e.kind == "url"]
-    found += [e for e in state.symbols if e.kind == "celery-task"]
-    found += [r for r in state.references if r.kind == "celery-name" and r.repo == state.target.repo_key]
+            found.append((r.kind, _task(state, r.symbol)))
+    found += [(e.kind, e) for e in state.symbols if e.kind == "url"]
+    found += [(e.kind, e) for e in state.symbols if e.kind == "celery-task"]
+    found += [(r.kind, r) for r in state.references if r.kind == "celery-name" and r.repo == state.target.repo_key]
     out: list[Location] = []
-    for e in found:
+    for kind, e in found:
         rel = _rel(state, e.path) if e is not None else None
-        place = Location(path=rel, line=e.line) if rel else None
-        if place is not None and place not in out:
+        if not rel:
+            # Only the type: the edge's text is the repository's.
+            log.info("known places: left out a %s edge with no location in the target repo", kind)
+            continue
+        place = Location(path=rel, line=e.line)
+        if place not in out:
             out.append(place)
     return out
 
