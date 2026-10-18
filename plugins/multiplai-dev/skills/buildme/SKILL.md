@@ -828,12 +828,14 @@ walkthrough regeneration included (the pr skill and the walkthrough print
 their own `SPEND:` line, which the build adds), so a resumed build reports only
 its own spend and a several-round `findings` reports every round. When one of
 those skills printed none (killed or timed out), the line ends `:incomplete`.
-The epic's spend is each child attempt's `SPEND:` plus the reviews of the
+The epic's spend is each child attempt's `SPEND:`, plus what each merge
+agent call spent, plus the reviews of the
 children's PRs in the review ledger (`<data_dir>/reviews/ledger.jsonl`: each
 review run once, its resumes in it, a fresh review of the same head added);
 `epic.json` and each summary hold it as `spent_usd`, with
 `spend_complete: false` when an attempt was killed before it printed `SPEND:`,
-its `SPEND:` ends `:incomplete`, or a review has not finished. Before each launch, once
+its `SPEND:` ends `:incomplete`, a merge agent call was interrupted, or a
+review has not finished. Before each launch, once
 `epic.max_usd` is reached, nothing more is launched: the run waits for the
 children already running and exits `3` with `EPIC:BUDGET:<spent>`. A fixer
 runs several rounds in one launch, so it is given what is left of
