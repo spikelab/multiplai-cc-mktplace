@@ -345,6 +345,8 @@ so Node commands are unchanged.
 |---|---|---|
 | `tdd.narrow_tests` | `true` / `false` | `true`; `false` runs the whole command in the loop too |
 | `tdd.parallel` | `auto` / `off` | `auto`; `off` runs the full suite serially |
+| `tdd.test_writer_max_turns` | positive integer | `30`; the block test writer's turn cap, stated in its prompt |
+| `tdd.mutation_test_writer_max_turns` | positive integer | `30`; the mutation round's test writer's turn cap |
 
 ## Mutation testing
 
