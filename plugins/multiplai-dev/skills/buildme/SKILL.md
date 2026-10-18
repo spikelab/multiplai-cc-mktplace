@@ -833,7 +833,8 @@ children's PRs in the review ledger (`<data_dir>/reviews/ledger.jsonl`: each
 review run once, its resumes in it, a fresh review of the same head added);
 `epic.json` and each summary hold it as `spent_usd`, with
 `spend_complete: false` when an attempt was killed before it printed `SPEND:`,
-its `SPEND:` ends `:incomplete`, or a review has not finished. Before each launch, once
+its `SPEND:` ends `:incomplete`, a review has not finished, or a review was
+killed and then run again fresh instead of resumed. Before each launch, once
 `epic.max_usd` is reached, nothing more is launched: the run waits for the
 children already running and exits `3` with `EPIC:BUDGET:<spent>`. A fixer
 runs several rounds in one launch, so it is given what is left of
