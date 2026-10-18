@@ -803,6 +803,18 @@ _WRITE_VERB_RE = re.compile(r"^(?:add|write|create|extend|expand)\b", re.IGNOREC
 _TEST_WORD_RE = re.compile(
     r"\b(?:tests?|assert\w*|fixtures?|parametri[sz]\w*)\b", re.IGNORECASE,
 )
+# What a step is for ("… so the tests pass", "… until they pass") says nothing
+# about what the step changes, so it is left out of the step.
+_PURPOSE_RE = re.compile(r"\s+(?:so(?:\s+that)?|until|to\s+make)\b.*$", re.IGNORECASE)
+# A step whose verb acts on a test, a test case or a file (in its first few
+# words): "Update `tests/test_words.py` with tab cases", "Fix the flaky test".
+_TEST_OBJECT_RE = re.compile(
+    r"^\w+\s+(?:[\w-]+\s+){0,3}?(?:(?:tests?|test\s+cases?|assertions?"
+    r"|fixtures?)\b|`([^`]+)`)",
+    re.IGNORECASE,
+)
+# "Add a case for an empty string": a case an add/write step adds is a test.
+_CASE_OBJECT_RE = re.compile(r"^\w+\s+(?:[\w-]+\s+){0,3}?cases?\b", re.IGNORECASE)
 # Steps: sentences, clauses after ";", and "…, then …".
 _STEP_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+|,?\s+(?:and\s+)?then\s+", re.IGNORECASE)
 _STEP_LEAD_RE = re.compile(
@@ -814,15 +826,19 @@ _STEP_LEAD_RE = re.compile(
 
 def _has_code_step(body: str) -> bool:
     """Some step of the block, prose or checkbox, writes code: it opens with
-    a verb that changes code, and an "add"/"write" step adds something that
-    is not a test."""
+    a verb that changes code, that verb does not act on a test or a test
+    file, and an "add"/"write" step adds something that is not a test."""
     for line in body.splitlines():
         for step in _STEP_SPLIT_RE.split(line):
-            step = _STEP_LEAD_RE.sub("", step).strip()
+            step = _PURPOSE_RE.sub("", _STEP_LEAD_RE.sub("", step).strip())
             if not _CODE_VERB_RE.match(step):
+                continue
+            target = _TEST_OBJECT_RE.match(step)
+            if target and (target.group(1) is None or _TEST_PATH_RE.search(target.group(1))):
                 continue
             if _WRITE_VERB_RE.match(step) and (
                 _TEST_WORD_RE.search(step)
+                or _CASE_OBJECT_RE.match(step)
                 or any(_TEST_PATH_RE.search(p) for p in _named_paths(step))
             ):
                 continue
@@ -849,8 +865,10 @@ def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
       step of it writes code.
     A step writes code when it opens with a verb that changes code
     ("Implement …", "Make count split on tabs", "then reject …", "Add a
-    `--summary` flag"), so a test-first block (tests, then the code) is
-    never flagged on its test file.
+    `--summary` flag") and that verb does not act on a test or a test file
+    ("Update `tests/test_words.py`", "Add a case for …"; a closing "so the
+    tests pass" is not what it acts on), so a test-first block (tests, then
+    the code) is never flagged on its test file.
     `Produces: (none)` alone only says no later block calls it, and "Verify" or
     "Confirm" is an ordinary verb for new behaviour (verify a signature), so
     neither is ever enough. A block that names no file is never flagged on
