@@ -20,7 +20,6 @@ import hashlib
 import logging
 import os
 import re
-import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +29,7 @@ from multiplai_core import checkpoint
 from multiplai_core.paths import get_paths
 from pydantic import BaseModel, Field
 
+from .. import git_ops
 from ..stop_record import StepStop
 from .split import EpicChild, check_children, waves
 
@@ -103,8 +103,7 @@ def origin_owner_repo(url: str | None) -> tuple[str, str] | None:
 
 
 def _remote_url(repo: Path) -> str | None:
-    proc = subprocess.run(["git", "remote", "get-url", "origin"], cwd=repo,
-                          capture_output=True, text=True, check=False)
+    proc = git_ops._run(["git", "remote", "get-url", "origin"], cwd=repo)
     url = proc.stdout.strip()
     return url if proc.returncode == 0 and url else None
 
@@ -145,8 +144,7 @@ def checkout_root(path: Path) -> Path | None:
     find the repository above it)."""
     if not Path(path).is_dir():
         return None
-    proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=path,
-                          capture_output=True, text=True, check=False)
+    proc = git_ops._run(["git", "rev-parse", "--show-toplevel"], cwd=path)
     top = Path(proc.stdout.strip()) if proc.returncode == 0 and proc.stdout.strip() else None
     return top if top is not None and top.resolve() == Path(path).resolve() else None
 
