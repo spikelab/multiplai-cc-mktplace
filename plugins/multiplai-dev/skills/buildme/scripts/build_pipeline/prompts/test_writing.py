@@ -58,6 +58,12 @@ For each test you wrote, confirm:
 ## Test Command
 {test_command}
 
+## Turns
+You have {max_turns} turns. A turn is one reply, however many tools it calls, so
+batch your reads. Write a first version of the test files by turn {half} and run
+the test command; spend what is left on fixing them. Your files on disk are
+kept if you run out of turns.
+
 ## When the block is not writable as specified
 
 It is always OK to stop and say this is too hard or under-specified — bad work
@@ -177,6 +183,12 @@ it is now, and the diff cosmic-ray applied.
 ## Test Command
 {test_command}
 
+## Turns
+You have {max_turns} turns. A turn is one reply, however many tools it calls, so
+batch your reads. Write a first version of the test files by turn {half} and run
+the test command; spend what is left on fixing them. Your files on disk are
+kept if you run out of turns.
+
 ## Output
 End your report with these REQUIRED slots, each on its own line:
 
@@ -187,4 +199,15 @@ FILES: <test files you created or modified, comma-separated>
 TEST_COUNT: <how many tests you added or changed>
 EQUIVALENT: <mutants you judged equivalent, as file:line, or "none">
 ```
+"""
+
+
+# Appended to the block description when Phase A starts with uncommitted test
+# files on disk (`tdd_engine.run_block_tdd`), followed by one line per file.
+DRAFTS_SECTION = """\
+## Drafts from an earlier attempt
+An earlier run of this block's test writer ran out of turns or failed after writing
+these files. They are your own drafts. Finish them: run the test command first,
+fix what fails for a wrong reason, add what the specs still need. Do not re-derive
+what they already establish.
 """

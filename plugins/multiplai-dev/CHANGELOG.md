@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.81.0] - 2026-10-17
+## [0.82.0] - 2026-10-18
 
 ### Changed
 - codebase-walkthrough: the trace stage now finds its entry points with
@@ -60,7 +60,7 @@ time, not derived from a tag.
   summary line is unchanged, and walkthroughs with the older "End-to-end
   scenarios" section are checked as before.
 
-## [0.80.0] - 2026-10-17
+## [0.81.0] - 2026-10-18
 
 ### Added
 - code_facts: `map_paths` maps the code paths of a snapshot, from each entry
@@ -102,6 +102,29 @@ time, not derived from a tag.
 ### Changed
 - code_facts depends on `jsonschema`, which `write_paths_file` uses to
   validate the document before it writes it.
+
+## [0.80.0] - 2026-10-18
+
+### Added
+- `tdd.test_writer_max_turns` and `tdd.mutation_test_writer_max_turns` in
+  `specs/config.yaml` set each test writer's turn cap (default 30), and each
+  prompt now says how many turns the agent has.
+- The test writer's context lists the signatures of the existing Python code
+  its block names: classes, fields, methods, functions and constants, the
+  fixtures and helpers of the nearest `tests/` directory, the tests that
+  already call that code, and one short test file, in at most 40,000
+  characters. A block that names `stages/trace.py` now also matches that
+  file in the codebase analysis and the block facts.
+
+### Changed
+- A test writer that runs out of turns with test files on disk no longer
+  fails its block: the files go to the quality and RED gates. A retry is told
+  which files are its drafts. A mutation round that runs out of turns keeps
+  tests that pass the round's checks.
+- A resumed block whose tests are committed and passed the RED gate goes
+  straight to the implementer instead of writing its tests again.
+- A FAILED build's resume no longer runs the interview again when
+  `interview.md` and its summary are saved.
 
 ## [0.79.2] - 2026-10-17
 
