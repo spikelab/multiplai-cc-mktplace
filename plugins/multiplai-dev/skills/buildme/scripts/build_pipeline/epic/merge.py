@@ -579,12 +579,14 @@ def _pinned(data) -> list[tuple[tuple, dict]]:
     it (a hash key, or Cargo.lock's `git+` source) that no mapping below it
     with a `version` claims: one locked package, with the keys of the
     mappings above it (a list adds none: regenerating reorders it). The top
-    one's `version` is the lockfile format's."""
+    one's `version` is the lockfile format's. A package's `metadata` is not
+    searched: uv.lock keeps there what the project asks for (`requires-dist`,
+    whose `git` is a request, not a revision), not what it locked."""
     found: list[tuple[tuple, dict]] = []
 
     def walk(x, at: tuple) -> bool:              # True: x holds a pin no package below claims
         if isinstance(x, dict):
-            held = [walk(v, (*at, k)) for k, v in x.items()]
+            held = [walk(v, (*at, k)) for k, v in x.items() if not (k == "metadata" and "version" in x)]
             pins = any(k in _HASH_KEYS for k in x) or str(x.get("source", "")).startswith("git+")   # Cargo.lock
             if (any(held) or pins) and "version" in x and at:
                 found.append((at, x))

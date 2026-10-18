@@ -1167,6 +1167,36 @@ def test_a_lockfile_package_pinned_by_a_git_revision_is_one_side_s_whole(tmp_pat
     assert s.beyond({"Package.resolved": json.dumps({"pins": pins, "version": 2}, indent=2) + "\n"}) == []
 
 
+def _uv_requested(project: str, *deps: str) -> str:
+    """uv.lock with the project's editable entry asking for a git dependency in
+    `[package.metadata] requires-dist`, as this repository's own uv.lock does,
+    and each of *deps* a registry package with a hash."""
+    names = ["core", *deps]
+    return ('version = 1\n\n[[package]]\nname = "app"\nversion = "' + project + '"\nsource = { editable = "." }\n'
+            'dependencies = [\n' + "".join(f'    {{ name = "{n}" }},\n' for n in names) + ']\n\n'
+            '[package.metadata]\nrequires-dist = [\n    { name = "core", git = "https://g/core?branch=main" },\n'
+            + "".join(f'    {{ name = "{n}" }},\n' for n in deps) + ']\n'
+            + "".join(f'\n[[package]]\nname = "{n}"\nversion = "1.0"\nsource = {{ registry = "https://pypi.org/simple" }}\n'
+                      f'sdist = {{ url = "https://x/{n}-1.0.tar.gz", hash = "sha256:{n * 8}" }}\n' for n in deps))
+
+
+def test_a_git_dependency_a_project_asks_for_does_not_pin_the_project(tmp_path):
+    """40.3 (owed review of 5c8a5602..8165ed8a, finding 99f5110ddf): a `git`
+    key in uv.lock's `[package.metadata] requires-dist` is what the project
+    asks for, not a lock. Both sides raise the project 0.64.0 to 0.65.0, the
+    child adds dependency c and main adds d; the resolution writes 0.66.0. A
+    regenerated uv.lock, the editable entry at 0.66.0 with both dependencies,
+    passes."""
+    def project(v: str) -> str:
+        return f'[project]\nname = "app"\nversion = "{v}"\n'
+
+    s = Sides(tmp_path, {"pyproject.toml": project("0.64.0"), "uv.lock": _uv_requested("0.64.0")},
+              {"pyproject.toml": project("0.65.0"), "uv.lock": _uv_requested("0.65.0", "c")},
+              {"pyproject.toml": project("0.65.0"), "uv.lock": _uv_requested("0.65.0", "d")})
+    assert s.plan() == merge.Plan(["uv.lock", "pyproject.toml"], [])
+    assert s.beyond({"pyproject.toml": project("0.66.0"), "uv.lock": _uv_requested("0.66.0", "c", "d")}) == []
+
+
 def devcontainer(node: str) -> str:
     return json.dumps({"name": "dev", "features": {"ghcr.io/devcontainers/features/node:1": {"version": node}}},
                       indent=2) + "\n"
