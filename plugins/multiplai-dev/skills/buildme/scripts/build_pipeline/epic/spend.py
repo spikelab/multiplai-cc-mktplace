@@ -16,7 +16,10 @@ Two sources, each read from disk on every look:
   from no spend, so its last line is added. A `started` line with no later
   `finished` for the same target and head (a review killed, or still
   running), or a `finished` line with no readable cost, makes the total
-  incomplete.
+  incomplete. So does a run killed, or ended with no run record
+  (`run: null`), when the next run of that target and head to finish is a
+  fresh one: only a `resume`, whose `run.started_at` is before its own
+  `started` line, holds that run's spend.
 
 A `SPEND:` line ending `:incomplete` (`budget.spend_marker`: a skill the
 process ran printed no spend) counts its USD and makes the total incomplete.
@@ -27,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 
 from . import records
@@ -78,6 +82,7 @@ def review_spend(ledger: Path, slugs: set[str]) -> tuple[float, bool]:
         return 0.0, False
     last_event: dict[tuple, str] = {}
     cost: dict[tuple, float | None] = {}
+    runs: dict[tuple, _Unaccounted] = {}
     for raw in text.splitlines():
         try:
             entry = json.loads(raw) if raw.strip() else None
@@ -87,16 +92,66 @@ def review_spend(ledger: Path, slugs: set[str]) -> tuple[float, bool]:
             continue
         key = (entry.get("target_dir"), entry.get("head_sha"))
         event = entry.get("event")
+        seen = runs.setdefault(key, _Unaccounted())
         if event == "started":
+            seen.started(last_event.get(key) == "started", entry.get("generated_at"))
             last_event[key] = event
         elif event == "finished":
             last_event[key] = event
-            run = entry.get("run") if isinstance(entry.get("run"), dict) else {}
+            if not isinstance(entry.get("run"), dict):
+                seen.no_record()
+                continue
+            run = entry["run"]
+            seen.finished(run.get("started_at"))
             # One review run and its resumes share `run.started_at`; without
             # it, the run's round number (which a resume keeps) tells them apart.
             run_key = (*key, run.get("started_at") or entry.get("round"))
             value = run.get("cost_usd")
             ok = isinstance(value, (int, float)) and not isinstance(value, bool)
             cost[run_key] = float(value) if ok else None
-    complete = all(e == "finished" for e in last_event.values()) and None not in cost.values()
+    complete = (all(e == "finished" for e in last_event.values()) and None not in cost.values()
+                and all(s.accounted() for s in runs.values()))
     return sum(v for v in cost.values() if v is not None), complete
+
+
+class _Unaccounted:
+    """The review runs of one target and head whose spend no `finished` line
+    holds yet: a run killed (its `started` line followed by another
+    `started`), or one that finished with no run record. The next run to
+    finish holds their spend only when it is a `resume` of them: its
+    `run.started_at` is before the `started` line that followed the first
+    of them. A fresh run's `run.started_at` is after its own `started`
+    line, which the review skill writes to the second, before the run's
+    clock starts."""
+
+    def __init__(self) -> None:
+        self.waiting = False          # one is unaccounted; no later run has started yet
+        self.before: str | None = None  # the `started` line after the first unaccounted run
+        self.lost = False
+
+    def started(self, after_a_kill: bool, at: object) -> None:
+        if after_a_kill and self.before is None and not self.waiting:
+            self.waiting = True
+        if self.waiting:
+            self.waiting, self.before = False, at if isinstance(at, str) else ""
+
+    def no_record(self) -> None:
+        if self.before is None:
+            self.waiting = True
+
+    def finished(self, started_at: object) -> None:
+        if self.waiting or (self.before is not None and not _earlier(started_at, self.before)):
+            self.lost = True
+        self.waiting, self.before = False, None
+
+    def accounted(self) -> bool:
+        return not (self.lost or self.waiting or self.before is not None)
+
+
+def _earlier(a: object, b: object) -> bool:
+    """True when ISO time *a* is before *b*; False when either does not parse."""
+    try:
+        return datetime.fromisoformat(str(a).replace("Z", "+00:00")) < datetime.fromisoformat(
+            str(b).replace("Z", "+00:00"))
+    except ValueError:
+        return False
