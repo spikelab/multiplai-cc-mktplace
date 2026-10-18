@@ -28,6 +28,11 @@ time, not derived from a tag.
 - buildme epic mode: a child whose earlier review is reused is judged on that
   review's own findings, read from its kept round, rather than on the latest
   run in the same review folder, which may be for another head.
+- buildme epic mode: a run no longer exits `0` while a child's PR is at a head
+  no review finished on (its review was stopped, or the PR got a new head
+  after a clean review). The run names that child on stderr and exits `1`,
+  or `3` when it also prints `EPIC:MERGE_WAITING`; the next run reviews the
+  new head.
 
 ### Changed
 - buildme: SKILL.md says what happens when another child depends on a child

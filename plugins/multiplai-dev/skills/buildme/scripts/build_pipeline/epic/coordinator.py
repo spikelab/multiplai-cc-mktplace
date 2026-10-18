@@ -1854,6 +1854,10 @@ class Coordinator:
         bad = [c for c in self.children.values() if c.status in ("failed", "unknown")]
         for c in bad:       # beside EPIC:MERGE_WAITING too, not only in the summary
             print(f"EPIC: child {c.id} {c.status}: {c.reason}", file=sys.stderr, flush=True)
+        unreviewed = [c for c in self.children.values() if self._unreviewed(c)]
+        for c in unreviewed:
+            print(f"EPIC: child {c.id} built: its PR's head {(c.head or '')[:12]} has no finished review; "
+                  f"the next run reviews it", file=sys.stderr, flush=True)
         if self.budget_stop is not None:      # the spend at exit, the running children's included
             print(f"{MARKER_BUDGET}:{self.spent()[0]:.2f}", flush=True)
             return 3
@@ -1862,7 +1866,16 @@ class Coordinator:
         if waited and (not bad or any(c.id in deps for c in waited)):     # a human merge (41) hides no failure
             print(f"{MARKER_MERGE_WAITING}:{','.join(c.pr for c in waited)}", flush=True)
             return 3
-        return 1 if bad else 0
+        return 1 if bad or unreviewed else 0
+
+    def _unreviewed(self, c: Child) -> bool:
+        """*c*'s review step ran in this invocation, yet its PR's head, last
+        read, has no finished review: its review was stopped (C.S3), or the
+        PR got a new head after a clean review. It is not waited on, as it
+        has not passed review (`_passed`), and the next run reviews it."""
+        last = self._last_review(c)
+        return (c.status == "built" and c.reviewed and c.head is not None and not self._passed(c)
+                and (last is None or last.started.get("head_sha") != c.head))
 
     async def _loop(self) -> int:
         last_read = CLOCK.now()

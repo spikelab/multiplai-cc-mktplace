@@ -132,8 +132,10 @@ stopped by SIGKILL, SIGTERM or SIGHUP (a negative exit, or 137, 143 or 129,
 `fix.stopped`); one whose log holds `FINDINGS:FAILED` parks instead. A post
 or review stopped the same way (`uv run` reports 128 + signal) gets an
 `interrupted` result, and the next run posts or reviews again. `FINDINGS:FAILED`, another failing exit, or a failed post parks the
-child. A PR whose last review left no blockers is waited on as a
-dependency's is (`Coordinator._waited_on`), so every run with one open exits
+child. A PR whose review at its current head left no blockers is waited on
+as a dependency's is (`Coordinator._waited_on`, `_passed`); one whose current
+head no review finished on is not, and makes the run exit 1 unless it exits
+3 (`_unreviewed`), so every run with one open exits
 3 with `EPIC:MERGE_WAITING` (1 beside a failed or `unknown` child when no child waits on a dependency's PR). Under `epic.merge: auto` the merge step runs
 first (PRs E1 and E2, `epic/merge.py`, `Coordinator._merge`), under one
 `asyncio.Lock` per repository and on the worktree root: a merge commit made
