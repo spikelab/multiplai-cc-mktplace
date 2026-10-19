@@ -14,7 +14,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from . import budget
 from .findings.models import PRComment, SpecChange, Triage
@@ -29,6 +29,7 @@ class StepOutcome(BaseModel):
     revision: str
     outcome: Literal["passed", "blocked", "advisory", "skipped"]
     reason: str = ""
+    repair_attempts: int = 0
 
 
 class SpecGenState(BaseModel):
@@ -47,10 +48,33 @@ class SpecGenState(BaseModel):
     # resume reaches the same spec-extract run folder (the plan's rows S1, S5)
     # and runs even when the registry now holds the files that run applied (S3).
     spec_extract_sha: str | None = None
-    # Repair admission is durable across interruption; outcomes remain revision-bound.
-    tasks_audit_regen_done: bool = False
-    design_audit_regen_done: bool = False
-    plan_review_regen_done: bool = False
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_repair_admission(cls, value):
+        # Legacy done booleans cannot prove a revision passed. A spent repair
+        # allowance, however, must survive upgrading or interruption.
+        if isinstance(value, dict):
+            value = dict(value)
+            steps = dict(value.get("steps", {}))
+            for name in ("tasks_audit", "design_audit", "plan_review"):
+                if value.pop(name + "_regen_done", False):
+                    existing = steps.get(name)
+                    step = existing.model_dump() if isinstance(existing, StepOutcome) else dict(existing or {})
+                    steps[name] = {"revision": "", "outcome": "blocked",
+                                   "reason": "Legacy repair already admitted; validation required",
+                                   **step, "repair_attempts": max(1, step.get("repair_attempts", 0))}
+            value["steps"] = steps
+        return value
+
+    def repair_attempts(self, name: str) -> int:
+        step = self.steps.get(name)
+        return step.repair_attempts if step else 0
+
+    def admit_repair(self, name: str) -> None:
+        if self.repair_attempts(name):
+            raise RuntimeError(f"{name} repair already attempted; resolve blocking findings before resuming")
+        self.record_step(name, "blocked", "Repair admitted; validation pending")
+        self.steps[name].repair_attempts = 1
 
     def step_revision(self, name: str) -> str:
         keys = {
@@ -70,47 +94,9 @@ class SpecGenState(BaseModel):
         return bool(step and step.revision == self.step_revision(name) and step.outcome in accepted)
 
     def record_step(self, name: str, outcome: Literal["passed", "blocked", "advisory", "skipped"] = "passed", reason: str = "") -> None:
-        self.steps[name] = StepOutcome(revision=self.step_revision(name), outcome=outcome, reason=reason)
+        self.steps[name] = StepOutcome(revision=self.step_revision(name), outcome=outcome, reason=reason,
+                                       repair_attempts=self.repair_attempts(name))
 
-    @property
-    def tasks_audit_done(self) -> bool:
-        return self.step_passed("tasks_audit")
-
-    @tasks_audit_done.setter
-    def tasks_audit_done(self, value: bool) -> None:
-        self.record_step("tasks_audit", "passed" if value else "blocked")
-
-    @property
-    def explainers_done(self) -> bool:
-        return self.step_passed("explainers")
-
-    @explainers_done.setter
-    def explainers_done(self, value: bool) -> None:
-        self.record_step("explainers", "passed" if value else "blocked")
-
-    @property
-    def prototype_done(self) -> bool:
-        return self.step_passed("prototype")
-
-    @prototype_done.setter
-    def prototype_done(self, value: bool) -> None:
-        self.record_step("prototype", "passed" if value else "blocked")
-
-    @property
-    def design_audit_done(self) -> bool:
-        return self.step_passed("design_audit")
-
-    @design_audit_done.setter
-    def design_audit_done(self, value: bool) -> None:
-        self.record_step("design_audit", "passed" if value else "blocked")
-
-    @property
-    def plan_review_done(self) -> bool:
-        return self.step_passed("plan_review")
-
-    @plan_review_done.setter
-    def plan_review_done(self, value: bool) -> None:
-        self.record_step("plan_review", "passed" if value else "blocked")
 
 
 class TDDState(BaseModel):

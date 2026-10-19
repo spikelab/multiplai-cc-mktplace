@@ -25,8 +25,8 @@ def _plan_fixture(config, state):
         if not path.exists():
             path.write_text(text)
     reconcile_plan(config, state, regenerated=set(ARTIFACT_DAG))
-    state.spec_gen.tasks_audit_done = True
-    state.spec_gen.explainers_done = True
+    state.spec_gen.record_step("tasks_audit", "passed")
+    state.spec_gen.record_step("explainers", "passed")
     state.checkpoint(config.state_file_path())
 
 

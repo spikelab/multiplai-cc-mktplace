@@ -293,8 +293,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
         # Phase: Prototype — a cheap artifact that proves the shape before the
         # expensive TDD build. A failed writer leaves a resumable failure.
-        if state.phase != BuildPhase.PUBLISH and not state.tdd and (
-                not state.spec_gen or "prototype" not in state.spec_gen.steps):
+        if state.phase != BuildPhase.PUBLISH and not _prototype_finished(state):
             await _run_prototype_phase(config, state, progress, state_path)
             state.checkpoint(state_path)
             print("PHASE:PROTOTYPE:COMPLETE", flush=True)
@@ -545,8 +544,6 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         _record_interrupt(progress if progress_started else None, state_path, e,
                           completed=build_succeeded)
         raise
-    except BudgetExceededError:
-        raise
     except Exception as e:
         log.error("FAIL pipeline change=%s error=%s", config.change_name, e, exc_info=True)
         print(f"ERROR:{e}", file=sys.stderr, flush=True)
@@ -588,8 +585,6 @@ def _record_interrupt(progress, state_path: Path, exc: BaseException, *, complet
         return
     try:
         BuildState.load(state_path).checkpoint(state_path)
-    except BudgetExceededError:
-        raise
     except Exception as e:  # noqa: BLE001 — a stop must not turn into a crash
         log.warning("Could not save the checkpoint on %s: %s", sig, e)
 
@@ -616,6 +611,12 @@ def prototype_decision(config) -> tuple[bool, str]:
     return False, "auto: no UI and no user-visible output format in proposal/design"
 
 
+def _prototype_finished(state: BuildState) -> bool:
+    """A completed optional prototype is not repeated after downstream repairs."""
+    step = state.spec_gen.steps.get("prototype") if state.spec_gen else None
+    return state.tdd is not None or bool(step and step.outcome in {"passed", "advisory", "skipped"})
+
+
 async def _run_prototype_phase(
     config: BuildConfig, state: BuildState, progress: ProgressWriter, state_path: Path,
 ) -> None:
@@ -631,7 +632,7 @@ async def _run_prototype_phase(
     # skip the feedback pass — discarding whatever the fresh run disproved.
     # The artifact already exists on disk and its findings were applied; skip
     # the whole re-run.
-    if state.tdd or (state.spec_gen and "prototype" in state.spec_gen.steps):
+    if _prototype_finished(state):
         log.info("SKIP phase=PROTOTYPE reason=recorded-complete-in-state")
         return
 
@@ -645,6 +646,10 @@ async def _run_prototype_phase(
         state.checkpoint(state_path)
         return
 
+    if state.spec_gen is None:
+        state.spec_gen = SpecGenState()
+    state.spec_gen.record_step("prototype", "blocked", "Prototype and feedback have not completed")
+    state.checkpoint(state_path)
     log.info("START phase=PROTOTYPE reason=%s", reason)
     from .llm_steps.prototype_steps import apply_prototype_findings, run_prototype
 
@@ -678,7 +683,7 @@ async def _run_prototype_phase(
         log.warning("Prototype feedback pass failed: %s", feedback_err)
         _log_prototype_diagnosis(progress, config, str(feedback_err))
         raise
-    state.spec_gen.prototype_done = True
+    state.spec_gen.record_step("prototype", "passed")
     state.checkpoint(state_path)
 
 
@@ -687,8 +692,7 @@ async def _run_docs_update_phase(
 ) -> None:
     """Run the docs agent, commit what it wrote, and surface the freshness warning.
 
-    Never raises: the build's code is already on disk when this runs, so a
-    documentation failure is the phase's failure and never the build's.
+    Failed writers stop completion because they may leave partial edits.
     """
     from .llm_steps.docs_steps import run_docs_update
 
@@ -696,8 +700,8 @@ async def _run_docs_update_phase(
         files, gate = await run_docs_update(config, state)
     except BudgetExceededError:
         raise
-    except Exception as docs_err:  # non-fatal by design
-        log.warning("Docs update failed (non-fatal): %s", docs_err)
+    except Exception as docs_err:
+        log.warning("Docs update failed: %s", docs_err)
         print(f"PHASE:DOCS_UPDATE:FAILED:{docs_err}", flush=True)
         _progress_note(progress, "DOCS_UPDATE", f"FAILED: {docs_err}")
         raise
@@ -1393,8 +1397,6 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
         if not config.pipeline_branch:
             try:
                 here = BuildState.load(config.state_file_path())
-            except BudgetExceededError:
-                raise
             except Exception as e:  # corrupt checkpoint — run_orchestrator reports it
                 log.warning("Ignoring unreadable state at %s: %s", config.state_file_path(), e)
                 return
@@ -1426,8 +1428,6 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
             continue
         try:
             prior = BuildState.load(probe_state)
-        except BudgetExceededError:
-            raise
         except Exception as e:  # corrupt checkpoint — leave it for a fresh run
             log.warning("Ignoring unreadable state at %s: %s", probe_state, e)
             continue

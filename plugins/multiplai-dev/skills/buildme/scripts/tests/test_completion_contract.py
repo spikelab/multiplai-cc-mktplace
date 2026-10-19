@@ -54,8 +54,8 @@ def accepted_build(tmp_path, monkeypatch):
                        tdd=TDDState(blocks=[BlockInfo(number=1, name="Value", description="Return one", status=BlockStatus.DONE)],
                                     current_block=1, baseline_tests_pass=True, refactor_all_done=True, mutation_done=True, e2e_done=True))
     reconcile_plan(config, state)
-    state.spec_gen.design_audit_done = True
-    state.spec_gen.plan_review_done = True
+    state.spec_gen.record_step("design_audit", "passed")
+    state.spec_gen.record_step("plan_review", "passed")
     state.checkpoint(config.state_file_path())
     args = argparse.Namespace(mode="only", change="contract", project_dir=str(tmp_path), auto=False,
                               spec_only=False, skip_research=True, interview_summary="", research_path="", context_files=[], session_id="", block=None)
@@ -233,3 +233,109 @@ async def test_implementation_resume_does_not_repeat_superseded_prototype(accept
     monkeypatch.setattr(orchestrator, "_run_prototype_phase", prototype)
     assert await orchestrator.run_orchestrator(config, args) == 0
     prototype.assert_not_awaited()
+
+@pytest.mark.parametrize("output", ["report.json", "results/test.db", ".coverage"])
+def test_declared_untracked_test_outputs_do_not_block_verification_or_commit(accepted_build, output):
+    config, _, _, _ = accepted_build
+    (config.specs_dir / "config.yaml").write_text("test_outputs:\n  - " + output + "\n")
+    git(config.project_dir, "add", "specs/config.yaml")
+    git(config.project_dir, "commit", "-qm", "declare test outputs")
+    command = (f'''{sys.executable} -c "from pathlib import Path; p=Path('{output}'); '''
+               '''p.parent.mkdir(parents=True, exist_ok=True); p.write_text(p.read_text()+'x' if p.exists() else 'x')"''')
+    for _ in range(2):
+        assert final_verification(command, config.project_dir).passed
+        assert git_ops.tree_is_clean(config.project_dir)
+        assert git_ops.commit_tree(config.project_dir, "test output only") is None
+    assert not git(config.project_dir, "ls-files", "--", output)
+
+
+@pytest.mark.parametrize("tracked,declared", [(True, True), (False, False)])
+def test_test_output_contract_protects_inputs(accepted_build, tracked, declared):
+    config, _, _, _ = accepted_build
+    root = config.project_dir
+    (root / "input.txt").write_text("before")
+    (config.specs_dir / "config.yaml").write_text("test_outputs: [input.txt]\n" if declared else "{}\n")
+    git(root, "add", "specs/config.yaml")
+    if tracked:
+        git(root, "add", "input.txt")
+    git(root, "commit", "-qm", "configuration")
+    command = f'''{sys.executable} -c "from pathlib import Path; Path('input.txt').write_text('after')"'''
+    result = final_verification(command, root)
+    assert not result.passed
+    assert "Inputs changed" in result.reason
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('fixture', [
+    'build-state-pre-prototype-tdd.json', 'build-state-pre-docs-update.json',
+    'build-state-pre-refactor-all.json', 'build-state-pre-mutation.json',
+    'build-state-pre-findings.json',
+])
+async def test_legacy_implementation_resume_refuses_without_rewriting_code(accepted_build, monkeypatch, fixture):
+    import json
+    from build_pipeline import sdk
+    config, _, args, push = accepted_build
+    raw = json.loads((Path(__file__).parent / 'fixtures' / fixture).read_text())
+    raw.update(change_name=config.change_name, mode='only', branch=config.pipeline_branch,
+               worktree_path=str(config.project_dir), state_file=str(config.state_file_path()))
+    config.state_file_path().write_text(json.dumps(raw))
+    head = git(config.project_dir, 'rev-parse', 'HEAD')
+    before = (config.project_dir / 'app.py').read_bytes()
+    provider = AsyncMock(side_effect=AssertionError('Legacy implementation must not be rewritten'))
+    monkeypatch.setattr(sdk, 'run_agent', provider)
+    assert await orchestrator.run_orchestrator(config, args) == 1
+    provider.assert_not_awaited()
+    push.assert_not_called()
+    assert git(config.project_dir, 'rev-parse', 'HEAD') == head
+    assert (config.project_dir / 'app.py').read_bytes() == before
+    saved = BuildState.load(config.state_file_path())
+    assert saved.tdd.model_dump() == BuildState.model_validate(raw).tdd.model_dump()
+
+@pytest.mark.asyncio
+async def test_mid_block_budget_stop_resumes_at_implementer_with_original_red_tests(accepted_build, monkeypatch):
+    from types import SimpleNamespace
+    from build_pipeline import budget, sdk, tdd_engine
+    from build_pipeline.models import AgentResult
+    config, state, args, _ = accepted_build
+    config.test_command = f'{sys.executable} -m pytest -q'
+    config.budget_max_usd = .1
+    config.git.push = False
+    state.phase = BuildPhase.TDD_BUILD
+    state.tdd = TDDState(blocks=[BlockInfo(number=1, name='Value', description='Return two')],
+                         refactor_all_done=True, mutation_done=True, e2e_done=True,
+                         baseline_tests_pass=True)
+    state.checkpoint(config.state_file_path())
+    calls = []
+    async def provider(prompt, **kwargs):
+        calls.append(prompt)
+        if prompt == 'write tests':
+            (config.project_dir / 'test_value.py').write_text(
+                'from app import value\ndef test_value():\n    assert value == 2\n')
+        else:
+            assert prompt == 'implement'
+            (config.project_dir / 'app.py').write_text('value = 2\n')
+        return SimpleNamespace(text='STATUS: DONE\n', turns=1, files_changed=[],
+                               usage=SimpleNamespace(cost_usd=.2, input_tokens=10))
+    monkeypatch.setattr(sdk, 'run_agent', provider)
+    async def writer(**kwargs):
+        return await sdk.agent_call('write tests', allowed_tools=['Write'], cwd=str(config.project_dir))
+    async def implementer(**kwargs):
+        return await sdk.agent_call('implement', allowed_tools=['Write'], cwd=str(config.project_dir))
+    monkeypatch.setattr(tdd_engine, 'run_test_writer', writer)
+    monkeypatch.setattr(tdd_engine, 'run_implementer', implementer)
+    monkeypatch.setattr(tdd_engine, 'run_refactorer', AsyncMock(return_value=AgentResult(success=True, output='STATUS: DONE')))
+    monkeypatch.setattr(tdd_engine, '_run_integration_and_review', AsyncMock(return_value=True))
+    with pytest.raises(budget.BudgetExceededError):
+        await run_tdd_engine(config, args)
+    saved = BuildState.load(config.state_file_path())
+    assert saved.tdd.blocks[0].status == BlockStatus.IMPLEMENTING
+    assert saved.tdd.blocks[0].red_evidence
+    assert saved.tdd.blocks[0].test_commit
+    assert saved.budget['cost_usd'] == .2
+    tests_before = (config.project_dir / 'test_value.py').read_bytes()
+    config.budget_max_usd = 1
+    assert await run_tdd_engine(config, args) == 0
+    assert calls == ['write tests', 'implement']
+    assert (config.project_dir / 'test_value.py').read_bytes() == tests_before
+    completed = BuildState.load(config.state_file_path().with_name('.build-state.complete.json'))
+    assert completed.verification['passed']
+    assert completed.budget['cost_usd'] == .4

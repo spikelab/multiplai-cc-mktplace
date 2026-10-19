@@ -458,8 +458,8 @@ async def run_plan_review_stage(
         result = await run_plan_review(change_dir, config, split_context=_split_context(config, change_dir))
         findings = list(result.findings) + _no_behaviour_findings(change_dir)
         text = plan_review_findings_text(findings)
-        if text and not sg.plan_review_regen_done:
-            sg.plan_review_regen_done = True
+        if text and not sg.repair_attempts("plan_review"):
+            sg.admit_repair("plan_review")
             state.checkpoint(state_path)
             await rewrite_plan(config, state, text)
             result = await run_plan_review(change_dir, config, split_context=_split_context(config, change_dir))

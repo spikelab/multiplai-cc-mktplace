@@ -319,8 +319,8 @@ class TestTasksAuditResumeDurability:
         )
         from build_pipeline.spec_generator import reconcile_plan
         reconcile_plan(config, state)
-        state.spec_gen.tasks_audit_done = audit_done
-        state.spec_gen.explainers_done = True
+        state.spec_gen.record_step("tasks_audit", "passed" if audit_done else "blocked")
+        state.spec_gen.record_step("explainers", "passed")
         return cm, change_dir, config, state
 
     @pytest.mark.asyncio
@@ -335,12 +335,12 @@ class TestTasksAuditResumeDurability:
             await _generate_all_artifacts(cm, change_dir, config, state)
 
         assert mock_audit.await_count == 1
-        assert state.spec_gen.tasks_audit_done is True
+        assert state.spec_gen.step_passed("tasks_audit") is True
         # Completion is checkpointed so the NEXT resume skips it.
         saved = BuildState.model_validate_json(
             (change_dir / ".build-state.json").read_text()
         )
-        assert saved.spec_gen.tasks_audit_done is True
+        assert saved.spec_gen.step_passed("tasks_audit") is True
 
     @pytest.mark.asyncio
     async def test_resume_skips_audit_when_recorded_complete(self, tmp_path):
@@ -361,7 +361,7 @@ class TestTasksAuditResumeDurability:
         raw = state.model_dump()
         raw["spec_gen"].pop("tasks_audit_done", None)
         old_state = BuildState.model_validate(raw)
-        assert old_state.spec_gen.tasks_audit_done is False
+        assert old_state.spec_gen.step_passed("tasks_audit") is False
 
     @pytest.mark.asyncio
     async def test_fresh_generation_records_audit_done(self, tmp_path):
@@ -405,7 +405,7 @@ class TestTasksAuditResumeDurability:
             mock_audit.return_value = []
             await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
-        assert state.spec_gen.tasks_audit_done is True
+        assert state.spec_gen.step_passed("tasks_audit") is True
 
 
 # --- Tasks shape audit (B4: vertical slices) ---
@@ -461,7 +461,12 @@ class TestTasksShapeAudit:
     async def test_regenerates_tasks_once_when_audit_reports_layering(self, tasks_setup):
         cm, change_dir, config, state = tasks_setup
 
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements/cap-a.md").write_text(
+            "### Requirement: Slice\n#### Scenario: Works\nWHEN used\nTHEN returns a result\n")
+        config.pipeline_branch = None
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
             mock_gen.side_effect = ["## 1. Schema layer", "## 1. Vertical slice A"]
             mock_audit.side_effect = [[_LAYERING_FINDING], []]
@@ -511,7 +516,7 @@ class TestTasksShapeAudit:
         assert mock_gen.call_count == 1
         assert (change_dir / "tasks.md").read_text() == "## 1. Vertical slice A"
         assert "tasks" not in state.spec_gen.completed_artifacts
-        assert not state.spec_gen.tasks_audit_done
+        assert not state.spec_gen.step_passed("tasks_audit")
 
     @pytest.mark.asyncio
     async def test_regeneration_failure_blocks_completion(self, tasks_setup):
@@ -530,7 +535,7 @@ class TestTasksShapeAudit:
         # The first draft is preserved for recovery, without completion evidence
         assert (change_dir / "tasks.md").read_text() == "## 1. Schema layer"
         assert "tasks" not in state.spec_gen.completed_artifacts
-        assert not state.spec_gen.tasks_audit_done
+        assert not state.spec_gen.step_passed("tasks_audit")
 
     @pytest.mark.asyncio
     async def test_non_tasks_artifacts_are_not_audited(self, tasks_setup):
@@ -600,7 +605,12 @@ class TestScanPlaceholders:
             spec_gen=SpecGenState(),
         )
 
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements/cap-a.md").write_text(
+            "### Requirement: Slice\n#### Scenario: Works\nWHEN used\nTHEN returns a result\n")
+        config.pipeline_branch = None
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
             mock_gen.side_effect = ["## 1. Block\nError handling: TBD\n", "## 1. Block\nConcrete.\n"]
             mock_audit.return_value = []
@@ -718,11 +728,11 @@ class TestDesignAuditFeedback:
         assert gaps == []  # the accepted revision has no blocking gaps
 
         # The pass is recorded AND checkpointed, so a resume never repeats it.
-        assert state.spec_gen.design_audit_regen_done is True
+        assert state.spec_gen.repair_attempts("design_audit") == 1
         saved = BuildState.model_validate_json(
             (change_dir / ".build-state.json").read_text()
         )
-        assert saved.spec_gen.design_audit_regen_done is True
+        assert saved.spec_gen.repair_attempts("design_audit") == 1
 
     @pytest.mark.asyncio
     async def test_major_gaps_also_regenerate(self, audit_setup):
@@ -759,7 +769,7 @@ class TestDesignAuditFeedback:
         assert mock_audit.await_count == 1
         mock_commit.assert_not_called()
         assert (change_dir / "design.md").read_text() == "# Design v1"
-        assert state.spec_gen.design_audit_regen_done is False
+        assert state.spec_gen.repair_attempts("design_audit") == 0
 
     @pytest.mark.asyncio
     async def test_minor_gaps_alone_do_not_regenerate(self, audit_setup):
@@ -783,7 +793,7 @@ class TestDesignAuditFeedback:
         documents already absorbed the critique, so the resume audits and
         reports but never regenerates a second time."""
         change_dir, config, state = audit_setup
-        state.spec_gen.design_audit_regen_done = True
+        state.spec_gen.admit_repair("design_audit")
 
         with patch("build_pipeline.llm_steps.spec_steps.run_design_audit", new_callable=AsyncMock) as mock_audit, \
              patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
@@ -795,7 +805,7 @@ class TestDesignAuditFeedback:
                     change_dir, config, state, config.state_file_path(),
                 )
 
-        assert not state.spec_gen.design_audit_done
+        assert not state.spec_gen.step_passed("design_audit")
         mock_gen.assert_not_awaited()
         assert mock_audit.await_count == 1  # report only, no re-check either
         mock_commit.assert_not_called()
@@ -806,11 +816,11 @@ class TestDesignAuditFeedback:
         """A pre-upgrade checkpoint has no design_audit_regen_done key — it
         must still validate, and default to False (the pass has not run)."""
         _, _, state = audit_setup
-        assert SpecGenState().design_audit_regen_done is False
+        assert SpecGenState().repair_attempts("design_audit") == 0
         raw = state.model_dump()
-        del raw["spec_gen"]["design_audit_regen_done"]
+        raw["spec_gen"].pop("design_audit_regen_done", None)
         old_state = BuildState.model_validate(raw)
-        assert old_state.spec_gen.design_audit_regen_done is False
+        assert old_state.spec_gen.repair_attempts("design_audit") == 0
 
     @pytest.mark.asyncio
     async def test_audit_failure_is_non_fatal(self, audit_setup):
@@ -825,9 +835,9 @@ class TestDesignAuditFeedback:
                     change_dir, config, state, config.state_file_path(),
                 )
 
-        assert not state.spec_gen.design_audit_done
+        assert not state.spec_gen.step_passed("design_audit")
         mock_gen.assert_not_awaited()
-        assert state.spec_gen.design_audit_regen_done is False
+        assert state.spec_gen.repair_attempts("design_audit") == 0
 
     @pytest.mark.asyncio
     async def test_regeneration_failure_is_non_fatal_and_spends_the_pass(self, audit_setup):
@@ -851,7 +861,7 @@ class TestDesignAuditFeedback:
         assert (change_dir / "tasks.md").read_text() == "## 1. Block v1"
         mock_commit.assert_not_called()
         assert mock_audit.await_count == 1  # nothing changed → nothing to re-check
-        assert state.spec_gen.design_audit_regen_done is True
+        assert state.spec_gen.repair_attempts("design_audit") == 1
 
     @pytest.mark.asyncio
     async def test_recheck_reports_remaining_gaps_without_a_second_pass(self, audit_setup):
@@ -916,7 +926,7 @@ class TestDesignAuditFeedback:
             await run_design_audit_stage(
                 change_dir, config, state, config.state_file_path(),
             )
-            assert state.spec_gen.design_audit_done is True
+            assert state.spec_gen.step_passed("design_audit") is True
             gaps = await run_design_audit_stage(
                 change_dir, config, state, config.state_file_path(),
             )
@@ -924,7 +934,7 @@ class TestDesignAuditFeedback:
         assert gaps == []
         assert mock_audit.await_count == 1  # not two
         mock_gen.assert_not_awaited()
-        assert state.spec_gen.design_audit_regen_done is False
+        assert state.spec_gen.repair_attempts("design_audit") == 0
 
     @pytest.mark.asyncio
     async def test_completion_survives_a_reload(self, audit_setup):
@@ -939,7 +949,7 @@ class TestDesignAuditFeedback:
             await run_design_audit_stage(change_dir, config, state, state_path)
 
             reloaded = BuildState.load(state_path)
-            assert reloaded.spec_gen.design_audit_done is True
+            assert reloaded.spec_gen.step_passed("design_audit") is True
             await run_design_audit_stage(change_dir, config, reloaded, state_path)
 
         assert mock_audit.await_count == 1
@@ -957,20 +967,20 @@ class TestDesignAuditFeedback:
                 await run_design_audit_stage(
                     change_dir, config, state, config.state_file_path(),
                 )
-            assert state.spec_gen.design_audit_done is False
+            assert state.spec_gen.step_passed("design_audit") is False
             await run_design_audit_stage(
                 change_dir, config, state, config.state_file_path(),
             )
 
         assert mock_audit.await_count == 2  # the retry really happened
-        assert state.spec_gen.design_audit_done is True
+        assert state.spec_gen.step_passed("design_audit") is True
 
     def test_old_checkpoint_without_done_flag_defaults_to_not_done(self, audit_setup):
         _, _, state = audit_setup
-        assert SpecGenState().design_audit_done is False
+        assert SpecGenState().step_passed("design_audit") is False
         raw = state.model_dump()
         raw["spec_gen"].pop("design_audit_done", None)
-        assert BuildState.model_validate(raw).spec_gen.design_audit_done is False
+        assert BuildState.model_validate(raw).spec_gen.step_passed("design_audit") is False
 
     def test_findings_text_carries_severity_category_and_fix(self):
         text = design_audit_findings_text([_CRITICAL_GAP, _MINOR_GAP])
@@ -1090,7 +1100,7 @@ class TestGenerateUnknowns:
             with pytest.raises(BudgetExceededError):
                 await _generate_unknowns(cm, change_dir, config, state)
         generate.assert_not_awaited()
-        assert not state.spec_gen.explainers_done
+        assert not state.spec_gen.step_passed("explainers")
 
     @pytest.mark.asyncio
     async def test_one_explainer_call_per_detected_dependency(self, tmp_path):
@@ -1116,7 +1126,7 @@ class TestGenerateUnknowns:
         assert mock_gen.await_count == 0
         text = (change_dir / "unknowns.md").read_text()
         assert "## duckdb" in text and "## polars" in text
-        assert state.spec_gen.explainers_done is True
+        assert state.spec_gen.step_passed("explainers") is True
 
     @pytest.mark.asyncio
     async def test_explainer_receives_design_decisions(self, tmp_path):
@@ -1161,7 +1171,7 @@ class TestGenerateUnknowns:
 
         assert mock_explain.await_count == 0
         assert NO_NEW_DEPENDENCIES_LINE in (change_dir / "unknowns.md").read_text()
-        assert state.spec_gen.explainers_done is True
+        assert state.spec_gen.step_passed("explainers") is True
 
     @pytest.mark.asyncio
     async def test_skip_explainers_still_writes_the_artifact(self, tmp_path):
@@ -1252,8 +1262,8 @@ class TestUnknownsGateResumeDurability:
         )
         from build_pipeline.spec_generator import reconcile_plan
         reconcile_plan(config, state)
-        state.spec_gen.tasks_audit_done = True
-        state.spec_gen.explainers_done = explainers_done
+        state.spec_gen.record_step("tasks_audit", "passed")
+        state.spec_gen.record_step("explainers", "passed" if explainers_done else "blocked")
         return cm, change_dir, config, state
 
     @pytest.mark.asyncio
@@ -1265,11 +1275,11 @@ class TestUnknownsGateResumeDurability:
             await _generate_all_artifacts(cm, change_dir, config, state)
 
         assert mock_audit.await_count == 1
-        assert state.spec_gen.explainers_done is True
+        assert state.spec_gen.step_passed("explainers") is True
         saved = BuildState.model_validate_json(
             (change_dir / ".build-state.json").read_text()
         )
-        assert saved.spec_gen.explainers_done is True
+        assert saved.spec_gen.step_passed("explainers") is True
 
     @pytest.mark.asyncio
     async def test_resume_skips_gate_when_recorded_complete(self, tmp_path):
@@ -1296,7 +1306,7 @@ class TestUnknownsGateResumeDurability:
 
         assert mock_audit.await_count == 0
         mock_detect.assert_not_called()
-        assert state.spec_gen.explainers_done is True
+        assert state.spec_gen.step_passed("explainers") is True
 
     @pytest.mark.asyncio
     async def test_resume_with_skip_explainers_writes_the_marker_when_missing(
@@ -1319,13 +1329,13 @@ class TestUnknownsGateResumeDurability:
 
         assert mock_audit.await_count == 0
         assert EXPLAINERS_SKIPPED_LINE in (change_dir / "unknowns.md").read_text()
-        assert state.spec_gen.explainers_done is True
+        assert state.spec_gen.step_passed("explainers") is True
 
     def test_old_checkpoint_without_flag_defaults_to_rerun(self, tmp_path):
         cm, change_dir, config, state = self._setup(tmp_path, explainers_done=False)
         raw = state.model_dump()
         raw["spec_gen"].pop("explainers_done", None)
-        assert BuildState.model_validate(raw).spec_gen.explainers_done is False
+        assert BuildState.model_validate(raw).spec_gen.step_passed("explainers") is False
 
 
 class TestUnknownsThreadedIntoTasks:
@@ -1950,7 +1960,12 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
         cm, change_dir, config, state = self._setup(tmp_path)
         rewritten = "## 1. Summarize\n\nBuilds it, edge cases included.\n"
 
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements/cap-a.md").write_text(
+            "### Requirement: Slice\n#### Scenario: Works\nWHEN used\nTHEN returns a result\n")
+        config.pipeline_branch = None
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
             mock_gen.side_effect = [_E2E_TASKS.read_text(), rewritten]
             mock_audit.return_value = []
@@ -1962,7 +1977,7 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
         regen_findings = mock_gen.call_args_list[1].kwargs["audit_findings"]
         assert "Block 2" in regen_findings
         assert "Block 3" in regen_findings
-        assert state.spec_gen.tasks_audit_done is True
+        assert state.spec_gen.step_passed("tasks_audit") is True
 
     @pytest.mark.asyncio
     async def test_the_model_audits_no_new_behaviour_finding_reaches_the_regeneration(
@@ -1984,7 +1999,12 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
             "suggestion": "Move its criteria into Block 1",
         }
 
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements/cap-a.md").write_text(
+            "### Requirement: Slice\n#### Scenario: Works\nWHEN used\nTHEN returns a result\n")
+        config.pipeline_branch = None
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
             mock_gen.side_effect = [first, rewritten]
             mock_audit.side_effect = [[model_finding], []]
@@ -2010,12 +2030,12 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
             mock_gen.side_effect = [_E2E_TASKS.read_text(), _E2E_TASKS.read_text()]
             mock_audit.return_value = []
 
-            with pytest.raises(RuntimeError, match="blocking findings"):
+            with pytest.raises(ValueError, match="no behavior"):
                 await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
         assert mock_gen.call_count == 2
-        assert not state.spec_gen.tasks_audit_done
-        assert state.spec_gen.tasks_audit_regen_done
+        assert not state.spec_gen.step_passed("tasks_audit")
+        assert state.spec_gen.repair_attempts("tasks_audit")
 
 
 def test_plan_rewrite_invalidates_review_and_rubric(tmp_path):

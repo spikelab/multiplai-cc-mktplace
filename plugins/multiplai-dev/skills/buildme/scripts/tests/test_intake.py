@@ -1153,8 +1153,8 @@ class TestFailedBuildRetry:
         async def stage(config, args, **kwargs):
             saved = BuildState.load(config.state_file_path())
             saved.spec_gen = SpecGenState(completed_artifacts=["proposal"])
-            saved.spec_gen.explainers_done = True
-            saved.spec_gen.tasks_audit_done = True
+            saved.spec_gen.record_step("explainers", "passed")
+            saved.spec_gen.record_step("tasks_audit", "passed")
             saved.checkpoint(config.state_file_path())
             return 1
 
@@ -1168,7 +1168,7 @@ class TestFailedBuildRetry:
         assert state.failed_stop is not None
         assert state.spec_gen is not None
         assert state.spec_gen.completed_artifacts == ["proposal"]
-        assert state.spec_gen.explainers_done and state.spec_gen.tasks_audit_done
+        assert state.spec_gen.step_passed("explainers") and state.spec_gen.step_passed("tasks_audit")
 
     @pytest.mark.asyncio
     async def test_a_rerun_keeps_the_codebase_analysis_it_already_wrote(

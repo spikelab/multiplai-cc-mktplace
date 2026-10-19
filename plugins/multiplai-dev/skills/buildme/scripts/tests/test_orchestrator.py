@@ -67,8 +67,8 @@ def _phase_wiring_prerequisites(monkeypatch):
             state = BuildState.load(path)
             if state.phase == BuildPhase.PUBLISH and not (state.spec_gen and state.spec_gen.revision):
                 _plan_fixture(config, state)
-                state.spec_gen.design_audit_done = True
-                state.spec_gen.plan_review_done = True
+                state.spec_gen.record_step("design_audit", "passed")
+                state.spec_gen.record_step("plan_review", "passed")
                 state.checkpoint(path)
                 git_ops.commit_tree(config.project_dir, "test: accepted plan")
         if not git_ops.rev_parse_head(config.project_dir):
@@ -588,7 +588,7 @@ class TestPrototypePhase:
         config = self._config(tmp_path, "resume-proto", "true", self.FRONTEND_PROPOSAL)
         state = BuildState.load(config.state_file_path())
         _plan_fixture(config, state)
-        state.spec_gen.prototype_done = True
+        state.spec_gen.record_step("prototype", "passed")
         state.checkpoint(config.state_file_path())
 
         mock_prototype = AsyncMock()
@@ -780,7 +780,7 @@ class TestSpecGenerationReloadOnlyMovesForward:
             DESIGN_AUDIT, and the audit stage recorded as spent."""
             s = BuildState.load(state_path)
             _plan_fixture(cfg, s)
-            s.spec_gen.design_audit_done = True
+            s.spec_gen.record_step("design_audit", "passed")
             s.advance_to(BuildPhase.DESIGN_AUDIT, state_path)
             return 0
 
@@ -2110,7 +2110,7 @@ class TestPlanReviewPhase:
         config = self._config(tmp_path, "resume-plan")
         state = BuildState.load(config.state_file_path())
         _plan_fixture(config, state)
-        state.spec_gen.plan_review_done = True
+        state.spec_gen.record_step("plan_review", "passed")
         state.checkpoint(config.state_file_path())
 
         mock_review = AsyncMock()
@@ -2158,7 +2158,7 @@ class TestPlanReviewPhase:
         # The build died after the failed review. Nothing recorded the phase.
         resumed = BuildState.load(config.state_file_path())
         assert not resumed.is_phase_complete(BuildPhase.PLAN_REVIEW)
-        assert not (resumed.spec_gen and resumed.spec_gen.plan_review_done)
+        assert not (resumed.spec_gen and resumed.spec_gen.step_passed("plan_review"))
 
         # The resume runs it again.
         from build_pipeline.models import PlanReviewResult

@@ -30,6 +30,7 @@ from . import budget
 from .change_manager import ChangeManager, ARTIFACT_DAG, expected_capabilities, valid_requirement, valid_requirement_text
 from .dependencies import NewDependency, design_decisions_text, detect_new_dependencies
 from .gates import unknowns_gate
+from .io_utils import atomic_write
 from .models import ArtifactStatus, BuildPhase
 from .rubric import detect_change_type, generate_rubric
 from .state import BuildState, SpecGenState
@@ -135,7 +136,7 @@ async def _generate_all_artifacts(
     # the gate runs after unknowns.md is written, so a crash mid-gate leaves
     # the artifact DONE and the DAG loop never re-enters it. The checkpoint,
     # not file existence, is the record that the gate ran.
-    if state.spec_gen and not state.spec_gen.explainers_done:
+    if state.spec_gen and not state.spec_gen.step_passed("explainers"):
         unknowns_path = change_dir / "unknowns.md"
         if not getattr(config, "explainers_active", True):
             # --skip-explainers on a resumed build: never run detection or the
@@ -174,7 +175,7 @@ async def _generate_all_artifacts(
     # and the DAG loop above never re-enters it. The checkpoint state — not
     # file existence — is the record of audit completion; re-run it here
     # when the artifact exists but the audit isn't recorded complete.
-    if state.spec_gen and not state.spec_gen.tasks_audit_done:
+    if state.spec_gen and not state.spec_gen.step_passed("tasks_audit"):
         context = cm.artifact_context(change_dir, "tasks")
         tasks_path = change_dir / context["output_path"]
         if tasks_path.exists():
@@ -183,7 +184,7 @@ async def _generate_all_artifacts(
                 "(resume durability)"
             )
             await _audit_tasks_shape(change_dir, context, config, tasks_path, state)
-            state.spec_gen.tasks_audit_done = True
+            state.spec_gen.record_step("tasks_audit", "passed")
             state.checkpoint(config.state_file_path())
     elif state.spec_gen:
         log.info("SKIP phase=TASKS_SHAPE_AUDIT reason=recorded-complete-in-state")
@@ -254,11 +255,11 @@ async def _generate_single_artifact(
         if artifact_id == "tasks":
             await _audit_tasks_shape(change_dir, context, config, output_path, state)
             if state.spec_gen:
-                state.spec_gen.tasks_audit_done = True
+                state.spec_gen.record_step("tasks_audit", "passed")
 
     reconcile_plan(config, state, regenerated={artifact_id})
     if state.spec_gen and artifact_id == "tasks":
-        state.spec_gen.tasks_audit_done = True
+        state.spec_gen.record_step("tasks_audit", "passed")
     if state.spec_gen and artifact_id == "unknowns":
         _record_explainer_outcome(config, state)
 
@@ -969,7 +970,7 @@ async def _audit_tasks_shape(
     followed by a required recheck. Missing audit evidence and unresolved
     blocking findings stop planning. Repair admission survives interruption.
     """
-    from .llm_steps.spec_steps import generate_artifact, run_tasks_audit
+    from .llm_steps.spec_steps import run_tasks_audit
 
     log.info("START phase=TASKS_SHAPE_AUDIT")
     print("PHASE: tasks_shape_audit")
@@ -995,29 +996,15 @@ async def _audit_tasks_shape(
             finding.get("description", "?"),
         )
 
-    if state and state.spec_gen:
-        if state.spec_gen.tasks_audit_regen_done:
-            raise RuntimeError("Tasks audit repair already attempted; resolve blocking findings before resuming")
-        state.spec_gen.tasks_audit_regen_done = True
+    assert state is not None and state.spec_gen is not None
+    state.spec_gen.admit_repair("tasks_audit")
+    state.checkpoint(config.state_file_path())
+    try:
+        await rewrite_plan(config, state, tasks_findings_text(findings))
+    except BaseException:
+        state.spec_gen.record_step("tasks_audit", "blocked", "Task repair did not complete")
         state.checkpoint(config.state_file_path())
-
-    findings_text = tasks_findings_text(findings)
-    content = await generate_artifact(
-        "tasks", context, config, reference_docs=config.reference_docs_text(),
-        audit_findings=findings_text,
-    )
-    atomic_write(output_path, content)
-    log.info("Rewrote artifact after shape audit: %s", output_path)
-    # One commit per regeneration pass, so the branch history shows the audit
-    # actually changed something. No-op unless the pipeline owns a branch.
-    _commit_change_dir(
-        config, change_dir, "docs(specs): regenerate tasks.md after shape audit",
-    )
-    print(f"PHASE: tasks_regenerated_after_shape_audit — {len(findings)} findings")
-    remaining = scan_placeholders(output_path.read_text()) + scan_no_behaviour_blocks(output_path)
-    remaining += await run_tasks_audit(change_dir, config)
-    if any(f.get("severity", "major") in {"critical", "major"} for f in remaining):
-        raise RuntimeError("Tasks audit still has blocking findings after bounded repair")
+        raise
 
 
 def _commit_change_dir(config, change_dir: Path, message: str) -> None:
@@ -1099,8 +1086,8 @@ async def run_design_audit_stage(
     try:
         gaps = await _run_audit(change_dir, config)
         text = design_audit_findings_text(gaps)
-        if text and not sg.design_audit_regen_done:
-            sg.design_audit_regen_done = True
+        if text and not sg.repair_attempts("design_audit"):
+            sg.admit_repair("design_audit")
             state.checkpoint(state_path)
             await rewrite_plan(config, state, text, design=True)
             gaps = await _run_audit(change_dir, config)
@@ -1203,20 +1190,6 @@ def _load_or_create_state(config) -> BuildState:
     return state
 
 
-def atomic_write(path: Path, content: str) -> None:
-    """Publish a complete document; interruption leaves the previous file intact."""
-    if not content.strip():
-        raise ValueError(f"Empty planning document: {path.name}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(dir=path.parent, prefix=".plan-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(name, path)
-    finally:
-        Path(name).unlink(missing_ok=True)
 
 
 def _plan_hashes(config) -> dict[str, str]:
@@ -1373,7 +1346,7 @@ async def rewrite_plan(config, state: BuildState, findings_text: str, *, design:
     # regenerate them before final validation, through the normal artifact DAG.
     state.checkpoint(config.state_file_path())
     assert state.spec_gen is not None
-    state.spec_gen.tasks_audit_done = True
+    state.spec_gen.record_step("tasks_audit", "passed")
     state.checkpoint(config.state_file_path())
     _commit_change_dir(config, config.change_dir,
                        "docs(specs): publish " + ("design audit" if design else "plan review") + " repair")
@@ -1391,7 +1364,7 @@ def assert_plan_current(config, state: BuildState, *, archived: bool = False) ->
         raise RuntimeError("Planning revision evidence is missing; validate the plan before implementation")
     if (config.change_dir / ".plan-publication.json").exists():
         raise RuntimeError("Planning publication is incomplete")
-    if not state.spec_gen.design_audit_done or not state.spec_gen.plan_review_done:
+    if not state.spec_gen.step_passed("design_audit") or not state.spec_gen.step_passed("plan_review"):
         raise RuntimeError("Required planning review evidence is missing or stale")
     current = _plan_hashes(config)
     expected = state.spec_gen.artifact_hashes

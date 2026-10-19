@@ -69,11 +69,11 @@ async def test_capability_revision_invalidates_tasks_and_reviews(plan, monkeypat
     monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.generate_artifact", generate)
     await owner._generate_requirements(cm, config.change_dir, config, state)
     owner.reconcile_plan(config, state)
-    state.spec_gen.plan_review_done = True
+    state.spec_gen.record_step("plan_review", "passed")
     (config.change_dir / "proposal.md").write_text("## Capabilities\n- `one`\n- `three`\n")
     owner.reconcile_plan(config, state)
     assert "tasks" in state.spec_gen.stale_artifacts
-    assert not state.spec_gen.plan_review_done
+    assert not state.spec_gen.step_passed("plan_review")
     await owner._generate_requirements(cm, config.change_dir, config, state)
     assert state.spec_gen.expected_capabilities == ["one", "three"]
     assert (config.change_dir / "requirements/three.md").is_file()
@@ -86,7 +86,7 @@ async def test_interrupted_publication_recovers_one_complete_revision(plan, monk
     for cap in ("one", "two"):
         (config.change_dir / f"requirements/{cap}.md").write_text(REQ)
     owner.reconcile_plan(config, state)
-    state.spec_gen.plan_review_done = True
+    state.spec_gen.record_step("plan_review", "passed")
     old_revision = state.spec_gen.revision
     monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.generate_artifact", AsyncMock(side_effect=["# New design", "## 1. New values\nReturn two"]))
     monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.run_tasks_audit", AsyncMock(return_value=[]))
@@ -106,7 +106,7 @@ async def test_interrupted_publication_recovers_one_complete_revision(plan, monk
     assert (config.change_dir / "tasks.md").read_text() == "## 1. New values\nReturn two"
     assert (config.change_dir / "rubric.md").read_text() == "# New rubric"
     assert state.spec_gen.revision != old_revision
-    assert not state.spec_gen.plan_review_done
+    assert not state.spec_gen.step_passed("plan_review")
     assert not state.spec_gen.stale_artifacts
 
 
@@ -176,3 +176,60 @@ def test_new_plan_revision_invalidates_size_acceptance(plan):
     (config.change_dir / "tasks.md").write_text("## 1. Larger plan\nMore work")
     owner.reconcile_plan(config, state)
     assert not state.size_accepted
+
+
+def test_repair_admission_and_outcome_share_one_ledger():
+    sg = SpecGenState.model_validate({'tasks_audit_regen_done': True, 'tasks_audit_done': True})
+    assert sg.repair_attempts('tasks_audit') == 1
+    assert not sg.step_passed('tasks_audit')
+    sg.record_step('tasks_audit')
+    saved = sg.model_dump()
+    assert saved['steps']['tasks_audit']['repair_attempts'] == 1
+    assert not any(key.endswith('_done') for key in saved)
+
+
+@pytest.mark.asyncio
+async def test_tasks_shape_repair_failure_keeps_published_plan_intact(plan, monkeypatch):
+    config, cm, state = plan
+    before = (config.change_dir / 'tasks.md').read_bytes()
+    monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.run_tasks_audit', AsyncMock(return_value=[
+        {'severity': 'major', 'description': 'horizontal breakdown'}]))
+    monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.generate_artifact', AsyncMock(return_value='## 1. Replacement\nReturn two'))
+    # The fixture deliberately lacks complete requirements, so publication must fail.
+    with pytest.raises(ValueError, match='incomplete capability'):
+        await owner._audit_tasks_shape(config.change_dir, cm.artifact_context(config.change_dir, 'tasks'),
+                                      config, config.change_dir / 'tasks.md', state)
+    assert (config.change_dir / 'tasks.md').read_bytes() == before
+    assert state.spec_gen.repair_attempts('tasks_audit') == 1
+    assert not state.spec_gen.step_passed('tasks_audit')
+
+@pytest.mark.parametrize('repair', [False, True])
+def test_tasks_prompt_includes_proposal_and_use_cases_from_artifact_context(plan, repair):
+    from build_pipeline.llm_steps.spec_steps import _build_prompt
+    config, cm, _ = plan
+    (config.change_dir / 'proposal.md').write_text('PROPOSAL_SENTINEL_631f\n## Capabilities\n- `one`\n')
+    (config.change_dir / 'use-cases.md').write_text('USE_CASE_SENTINEL_952d')
+    context = cm.artifact_context(config.change_dir, 'tasks')
+    prompt = _build_prompt('tasks', context, config, audit_findings='repair this' if repair else '')
+    assert 'PROPOSAL_SENTINEL_631f' in prompt
+    assert 'USE_CASE_SENTINEL_952d' in prompt
+
+
+def test_requirements_change_invalidates_design(plan):
+    config, _, state = plan
+    req = config.change_dir / 'requirements/one.md'
+    req.parent.mkdir(exist_ok=True)
+    req.write_text(REQ)
+    owner.reconcile_plan(config, state)
+    req.write_text(REQ.replace('one', 'two'))
+    owner.reconcile_plan(config, state)
+    assert 'design' in state.spec_gen.stale_artifacts
+
+
+def test_legacy_repair_flag_cannot_be_lost_when_step_evidence_already_exists():
+    sg = SpecGenState.model_validate({'design_audit_regen_done': True, 'steps': {
+        'design_audit': {'revision': 'accepted', 'outcome': 'passed'}}})
+    assert sg.repair_attempts('design_audit') == 1
+    assert sg.steps['design_audit'].revision == 'accepted'
+    with pytest.raises(RuntimeError, match='already attempted'):
+        sg.admit_repair('design_audit')

@@ -555,8 +555,8 @@ class TestPlanReviewStage:
                 config.change_dir, config, state, state_path)
 
         assert findings == []
-        assert state.spec_gen.plan_review_done is True
-        assert state.spec_gen.plan_review_regen_done is False
+        assert state.spec_gen.step_passed("plan_review") is True
+        assert state.spec_gen.repair_attempts("plan_review") == 0
         regen.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -580,8 +580,8 @@ class TestPlanReviewStage:
         assert "do it properly" in (config.change_dir / "tasks.md").read_text()
         # One regeneration, then ONE report-only re-check. No loop.
         assert review.await_count == 2
-        assert state.spec_gen.plan_review_regen_done is True
-        assert state.spec_gen.plan_review_done is True
+        assert state.spec_gen.repair_attempts("plan_review") == 1
+        assert state.spec_gen.step_passed("plan_review") is True
 
     @pytest.mark.asyncio
     async def test_the_rewritten_plan_is_re_audited_for_shape(self, tmp_path):
@@ -651,7 +651,7 @@ class TestPlanReviewStage:
                     config.change_dir, config, state, state_path)
 
         assert "do it properly" not in (config.change_dir / "tasks.md").read_text()
-        assert state.spec_gen.plan_review_done is False
+        assert state.spec_gen.step_passed("plan_review") is False
 
     @pytest.mark.asyncio
     async def test_a_recorded_regeneration_is_report_only_on_resume(self, tmp_path):
@@ -668,12 +668,12 @@ class TestPlanReviewStage:
 
         regen.assert_not_awaited()
         assert review.await_count == 1
-        assert state.spec_gen.plan_review_done is False
+        assert state.spec_gen.step_passed("plan_review") is False
 
     @pytest.mark.asyncio
     async def test_a_spent_stage_is_checked_before_the_model_call(self, tmp_path):
         config, state, state_path = _stage_setup(tmp_path)
-        state.spec_gen.plan_review_done = True
+        state.spec_gen.record_step("plan_review", "passed")
         review = AsyncMock()
         with patch.object(plan_review_steps, "run_plan_review", review):
             findings = await run_plan_review_stage(
@@ -693,7 +693,7 @@ class TestPlanReviewStage:
                 await run_plan_review_stage(
                     config.change_dir, config, state, state_path)
 
-        assert state.spec_gen.plan_review_done is False
+        assert state.spec_gen.step_passed("plan_review") is False
 
     @pytest.mark.asyncio
     async def test_a_failed_regeneration_leaves_the_reviewed_plan_standing(
@@ -713,8 +713,8 @@ class TestPlanReviewStage:
         assert (config.change_dir / "tasks.md").read_text() == before
         # The pass has been spent — a failed regeneration is not a reason to
         # try again later.
-        assert state.spec_gen.plan_review_regen_done is True
-        assert state.spec_gen.plan_review_done is False
+        assert state.spec_gen.repair_attempts("plan_review") == 1
+        assert state.spec_gen.step_passed("plan_review") is False
 
     @pytest.mark.asyncio
     async def test_an_oversized_plan_finding_changes_nothing_on_disk(self, tmp_path):
@@ -751,7 +751,7 @@ class TestPlanReviewStage:
 
         written = json.loads(state_path.read_text())["spec_gen"]
         assert written["steps"]["plan_review"]["outcome"] == "passed"
-        assert written["plan_review_regen_done"] is False
+        assert "plan_review_regen_done" not in written
 
 
 # --- 6. Blocks that add no behaviour (epic e2e attempt 1, Defect 1) -------
@@ -788,8 +788,8 @@ class TestNoBehaviourBlocks:
         assert findings == []
         assert regen.await_count == 1
         assert "no-new-behaviour" in regen.await_args.kwargs["audit_findings"]
-        assert state.spec_gen.plan_review_regen_done is True
-        assert state.spec_gen.plan_review_done is True
+        assert state.spec_gen.repair_attempts("plan_review") == 1
+        assert state.spec_gen.step_passed("plan_review") is True
 
     def test_the_prompt_section_makes_it_critical_and_names_the_home(self):
         section = PLAN_REVIEW_PROMPT[
@@ -833,7 +833,7 @@ async def test_review_unavailable_blocks_and_resume_checks_again(tmp_path, tasks
             with pytest.raises(RuntimeError, match="review unavailable"):
                 await run_plan_review_stage(config.change_dir, config, state, state_path)
             state = BuildState.load(state_path)
-            assert not state.spec_gen.plan_review_done
+            assert not state.spec_gen.step_passed("plan_review")
             assert state.spec_gen.steps["plan_review"].outcome == "blocked"
     assert review.await_count == 2
     regen.assert_not_awaited()

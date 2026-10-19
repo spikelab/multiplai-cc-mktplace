@@ -222,8 +222,8 @@ class TestLegacyCheckpointResume:
         assert s.phase == BuildPhase.DESIGN_AUDIT
         assert s.change_name == "legacy-change"
         # Fields added after the checkpoint was written take their defaults.
-        assert s.spec_gen.prototype_done is False
-        assert s.spec_gen.tasks_audit_done is False  # legacy booleans are not revision evidence
+        assert s.spec_gen.step_passed("prototype") is False
+        assert s.spec_gen.step_passed("tasks_audit") is False  # legacy booleans are not revision evidence
 
         # Everything before the design audit stays complete...
         assert s.is_phase_complete(BuildPhase.BOOTSTRAP)
@@ -656,10 +656,10 @@ class TestPrePlanReviewCheckpointResume:
         assert s.change_name == "legacy-plan"
         # The two flags the new phase writes take their defaults on an old
         # checkpoint, so the phase runs once rather than being skipped.
-        assert s.spec_gen.plan_review_done is False
-        assert s.spec_gen.plan_review_regen_done is False
+        assert s.spec_gen.step_passed("plan_review") is False
+        assert s.spec_gen.repair_attempts("plan_review") == 0
         # A field that predates it keeps the value it was written with.
-        assert s.spec_gen.tasks_audit_done is False  # legacy booleans are not revision evidence
+        assert s.spec_gen.step_passed("tasks_audit") is False  # legacy booleans are not revision evidence
 
         assert s.is_phase_complete(BuildPhase.SPEC_GENERATION)
         # The resume point is the design audit, with the new phase after it
@@ -691,7 +691,7 @@ class TestPrePlanReviewCheckpointResume:
         assert reloaded.spec_gen.completed_artifacts == s.spec_gen.completed_artifacts
         written = json.loads(out.read_text())["spec_gen"]
         assert "plan_review" not in written["steps"]
-        assert written["plan_review_regen_done"] is False
+        assert "plan_review_regen_done" not in written
 
 
 class TestPreFindingsCheckpoint:
