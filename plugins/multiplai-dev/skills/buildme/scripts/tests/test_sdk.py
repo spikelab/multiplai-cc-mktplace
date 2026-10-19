@@ -378,3 +378,27 @@ class TestAgentCallStructured:
                     "review it", self.Answer, allowed_tools=["Read"],
                 )
         run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_queued_calls_and_parse_retries_obey_budget(monkeypatch):
+    import asyncio
+    from build_pipeline import sdk
+    budget_mod.reset()
+    budget_mod.configure(max_usd=1)
+    monkeypatch.setattr(sdk, "_sdk_semaphore", asyncio.Semaphore(1))
+    async def provider(*args, **kwargs):
+        await asyncio.sleep(0)
+        return SimpleNamespace(text="invalid json", usage=SimpleNamespace(cost_usd=2), turns=1, files_changed=[])
+    run = AsyncMock(side_effect=provider)
+    monkeypatch.setattr(sdk, "run_agent", run)
+    try:
+        outcomes = await asyncio.gather(llm_call("one"), llm_call("two"), return_exceptions=True)
+        assert run.await_count == 1
+        assert sum(isinstance(x, budget_mod.BudgetExceededError) for x in outcomes) == 1
+        with pytest.raises(budget_mod.BudgetExceededError):
+            await llm_call_structured("retry", BaseModel)
+        assert run.await_count == 1
+        assert budget_mod.get_budget().cost_usd == 2
+    finally:
+        budget_mod.reset()

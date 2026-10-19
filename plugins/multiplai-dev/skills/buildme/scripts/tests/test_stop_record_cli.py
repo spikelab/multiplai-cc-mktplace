@@ -53,7 +53,7 @@ def _check(payload: dict) -> str | None:
 
 
 def _fingerprint(path: Path) -> str:
-    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    return f"mode:{path.stat().st_mode & 0o111}:sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def test_stop_record_cli_no_record_clean_tree_passes(repo):
@@ -74,14 +74,16 @@ def test_stop_record_cli_no_record_uncommitted_file_is_refused(repo):
 
 def test_stop_record_cli_record_matching_the_file_passes(repo):
     (repo / "app.py").write_text("x = 2\n")
-    stop = {"head": None, "edits": {"app.py": _fingerprint(repo / "app.py")}}
+    from build_pipeline.git_ops import index_entries
+    stop = {"index": index_entries(repo), "head": None, "edits": {"app.py": _fingerprint(repo / "app.py")}}
     assert _check({"project_dir": str(repo), "stop": stop, "ignore": None,
                    "head": None, "origin_ref": None}) is None
 
 
 def test_stop_record_cli_record_with_another_fingerprint_is_refused(repo):
     (repo / "app.py").write_text("x = 2\n")
-    stop = {"head": None, "edits": {"app.py": "sha256:" + "0" * 64}}
+    from build_pipeline.git_ops import index_entries
+    stop = {"index": index_entries(repo), "head": None, "edits": {"app.py": "sha256:" + "0" * 64}}
     reason = _check({"project_dir": str(repo), "stop": stop, "ignore": None,
                      "head": None, "origin_ref": None})
     assert reason is not None

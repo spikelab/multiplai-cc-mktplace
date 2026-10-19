@@ -10,6 +10,7 @@ import asyncio
 import logging
 import math
 
+from ..budget import BudgetExceededError
 from ..models import AgentResult, ReviewFinding, ReviewResult, ReviewScore
 from ..prompts.review import CODE_REVIEW_PROMPT
 from ..sdk import agent_call, agent_call_structured, LLMCallError
@@ -223,6 +224,8 @@ async def run_code_review(
     results: list[ReviewResult] = []
     survivors: list[str] = []
     for model_name, outcome in zip(models, settled):
+        if isinstance(outcome, BudgetExceededError) or (isinstance(outcome, BaseException) and not isinstance(outcome, Exception)):
+            raise outcome
         if isinstance(outcome, BaseException):
             log.warning("Review panel member %s failed, dropping it from the merge: %s",
                         model_name, outcome)

@@ -7,11 +7,13 @@ Serialized to JSON after every significant transition.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 from pydantic import BaseModel, Field
 
 from . import budget
@@ -23,8 +25,21 @@ from .stop_record import record as record_stop
 log = logging.getLogger(__name__)
 
 
+class StepOutcome(BaseModel):
+    revision: str
+    outcome: Literal["passed", "blocked", "advisory", "skipped"]
+    reason: str = ""
+
+
 class SpecGenState(BaseModel):
     """State for the spec generator sub-pipeline."""
+    revision: str = ""
+    artifact_hashes: dict[str, str] = Field(default_factory=dict)
+    stale_artifacts: list[str] = Field(default_factory=list)
+    steps: dict[str, StepOutcome] = Field(default_factory=dict)
+    expected_capabilities: list[str] = Field(default_factory=list)
+    requirements_source: str = ""
+    requirements_members: dict[str, str] = Field(default_factory=dict)
     completed_artifacts: list[str] = Field(default_factory=list)
     research_path: str | None = None
     codebase_analysis_path: str | None = None
@@ -32,56 +47,70 @@ class SpecGenState(BaseModel):
     # resume reaches the same spec-extract run folder (the plan's rows S1, S5)
     # and runs even when the registry now holds the files that run applied (S3).
     spec_extract_sha: str | None = None
-    # The tasks-shape audit runs AFTER tasks.md is written, so its completion
-    # can't be inferred from file existence (a crash mid-audit leaves the
-    # artifact DONE and the DAG loop never re-enters it). Recorded here so a
-    # resume re-runs the audit; old checkpoints default to False (idempotent
-    # re-audit, safe).
-    tasks_audit_done: bool = False
-    # Same durability problem for the unknowns/explainer gate: the gate and its
-    # single regeneration pass run AFTER unknowns.md is written, so file
-    # existence would mark the artifact DONE and skip the gate on resume.
-    # Old checkpoints default to False (re-running the gate is idempotent).
-    explainers_done: bool = False
-    # Same durability argument for the prototype feedback pass: design.md and
-    # tasks.md already exist when the prototype notes are folded back in, so
-    # file existence proves nothing. Old checkpoints default to False.
-    prototype_done: bool = False
-    # The design audit's single regeneration pass rewrites design.md and
-    # tasks.md, both of which already exist — so, again, file existence proves
-    # nothing and the checkpoint is the only record. It also guards the
-    # one-pass discipline across the TWO call sites that run the audit
-    # (spec_generator and orchestrator): without it a resumed build would
-    # regenerate a second time. Old checkpoints default to False (the pass has
-    # not run, so running it once is correct).
+    # Repair admission is durable across interruption; outcomes remain revision-bound.
+    tasks_audit_regen_done: bool = False
     design_audit_regen_done: bool = False
-    # The audit stage as a whole (audit → optional regeneration → optional
-    # re-check) has run to completion. Distinct from the flag above, which only
-    # records the regeneration: an audit that finds nothing actionable never
-    # regenerates, so without this the second call site would re-run a
-    # four-artifact audit purely to rediscover that there is nothing to do.
-    # Old checkpoints default to False (the stage has not run).
-    design_audit_done: bool = False
-    # The PLAN_REVIEW phase's single regeneration pass rewrote tasks.md. Same
-    # durability argument as design_audit_regen_done: tasks.md already exists
-    # when the plan review runs, so file existence proves nothing and the
-    # checkpoint is the only record that the one pass has been spent. Old
-    # checkpoints default to False (the pass has not run, so running it once is
-    # correct).
     plan_review_regen_done: bool = False
-    # The plan-review stage as a whole (review -> optional regeneration ->
-    # optional report-only re-check) has run to completion. Distinct from the
-    # flag above, which only records the regeneration: a review that finds
-    # nothing actionable never regenerates, so without this a resume would
-    # re-run a five-artifact review purely to rediscover there is nothing to
-    # do. Checked BEFORE the model call. Old checkpoints default to False.
-    plan_review_done: bool = False
-    # When the plan-review model call fails, the no-behaviour scan's blocks
-    # still get a rewrite of tasks.md. This records that rewrite, apart from
-    # plan_review_regen_done, so a resume whose model answers still gives the
-    # review's findings their one rewrite, and a resume whose call fails again
-    # pays for no second scan rewrite. Old checkpoints default to False.
-    plan_review_scan_regen_done: bool = False
+
+    def step_revision(self, name: str) -> str:
+        keys = {
+            "explainers": {"proposal.md", "design.md", "config.yaml", "references"},
+            "tasks_audit": {"tasks.md", "design.md", "proposal.md", "use-cases.md", "unknowns.md", "config.yaml", "references", "granularity"},
+            "prototype": {"proposal.md", "design.md"},
+            "design_audit": {"proposal.md", "design.md", "tasks.md", "config.yaml", "references"},
+        }.get(name)
+        if keys is None:
+            return self.revision
+        inputs = {k: v for k, v in self.artifact_hashes.items() if k in keys or k.startswith("requirements/")}
+        return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+
+    def step_passed(self, name: str) -> bool:
+        step = self.steps.get(name)
+        accepted = {"passed", "skipped", "advisory"} if name in {"prototype", "explainers"} else {"passed"}
+        return bool(step and step.revision == self.step_revision(name) and step.outcome in accepted)
+
+    def record_step(self, name: str, outcome: Literal["passed", "blocked", "advisory", "skipped"] = "passed", reason: str = "") -> None:
+        self.steps[name] = StepOutcome(revision=self.step_revision(name), outcome=outcome, reason=reason)
+
+    @property
+    def tasks_audit_done(self) -> bool:
+        return self.step_passed("tasks_audit")
+
+    @tasks_audit_done.setter
+    def tasks_audit_done(self, value: bool) -> None:
+        self.record_step("tasks_audit", "passed" if value else "blocked")
+
+    @property
+    def explainers_done(self) -> bool:
+        return self.step_passed("explainers")
+
+    @explainers_done.setter
+    def explainers_done(self, value: bool) -> None:
+        self.record_step("explainers", "passed" if value else "blocked")
+
+    @property
+    def prototype_done(self) -> bool:
+        return self.step_passed("prototype")
+
+    @prototype_done.setter
+    def prototype_done(self, value: bool) -> None:
+        self.record_step("prototype", "passed" if value else "blocked")
+
+    @property
+    def design_audit_done(self) -> bool:
+        return self.step_passed("design_audit")
+
+    @design_audit_done.setter
+    def design_audit_done(self, value: bool) -> None:
+        self.record_step("design_audit", "passed" if value else "blocked")
+
+    @property
+    def plan_review_done(self) -> bool:
+        return self.step_passed("plan_review")
+
+    @plan_review_done.setter
+    def plan_review_done(self, value: bool) -> None:
+        self.record_step("plan_review", "passed" if value else "blocked")
 
 
 class TDDState(BaseModel):
@@ -183,8 +212,28 @@ def completed_state_path(state_path: Path) -> Path:
     return state_path.with_name(stem + COMPLETED_SUFFIX)
 
 
+class BuildResult(BaseModel):
+    kind: Literal["pending", "spec-only", "verified-code", "historical"]
+    verification: dict | None
+    publication: str
+
+
 class BuildState(BaseModel):
     """Root state for the entire build pipeline."""
+
+    schema_version: int = 1
+    verification: dict | None = None
+    publication: str = "pending"
+    completion_kind: Literal["pending", "spec-only", "verified-code"] = "pending"
+    publish_sections: list[str] = Field(default_factory=list)
+
+    @property
+    def result(self) -> BuildResult:
+        verified = bool(self.verification and self.verification.get("passed"))
+        kind = "verified-code" if verified else (
+            "spec-only" if self.completion_kind == "spec-only"
+            else "historical" if self.phase == BuildPhase.COMPLETE else "pending")
+        return BuildResult(kind=kind, verification=self.verification, publication=self.publication)
 
     # Identity
     change_name: str
@@ -319,6 +368,8 @@ class BuildState(BaseModel):
     def load(cls, path: Path) -> BuildState:
         """Load state from a JSON file."""
         data = json.loads(path.read_text())
+        if data.get("schema_version", 0) > 1:
+            raise ValueError("Checkpoint version is newer than this Buildme; upgrade before resuming")
         state = cls.model_validate(data)
         if "epic_single" not in data and state.epic_dir is None and (
                 state.phase == BuildPhase.FAILED or state.is_phase_complete(BuildPhase.EPIC_SPLIT)):

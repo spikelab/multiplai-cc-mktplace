@@ -203,6 +203,7 @@ def _build_prompt(
             proposal_content=proposal_content,
             specs_content=specs_content,
             design_content=design_content,
+            use_cases_content=_read_dep(context, "use-cases", config),
             granularity=config.task_granularity,
             unknowns_content=context.get("unknowns_content") or "(none detected)",
             reference_docs=reference_docs or "(none available)",

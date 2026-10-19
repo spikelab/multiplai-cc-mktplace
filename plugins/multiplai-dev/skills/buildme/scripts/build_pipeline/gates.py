@@ -236,16 +236,7 @@ def integration_gate(test_command: str, project_dir: Path, *, parallel: str = "o
 # under test is missing or incomplete, not that the test files themselves are
 # broken.
 _RED_RIGHT_REASON = re.compile(
-    r"(AssertionError|NotImplementedError|"
-    r"has no attribute|is not defined|"
-    r"^FAILED\b|\bFAILED\b|"
-    # Runner-agnostic signatures: Jest/Vitest print a per-file `FAIL src/…`
-    # marker (uppercase only — lowercase "fail" appears in ordinary prose);
-    # terse runners (pytest -q --tb=no, Jest's "Tests: 1 failed") may emit
-    # only a summary count. Zero-count summaries ("0 failed") are not proof.
-    r"^FAIL\b|"
-    r"(?i:\b[1-9]\d*\s+failed\b))",
-    re.MULTILINE,
+    r"AssertionError|NotImplementedError|AttributeError:.*has no attribute|^E\s+assert\b", re.MULTILINE,
 )
 
 # Signatures of broken test files: pytest could not even collect/parse them.
@@ -253,12 +244,14 @@ _RED_BROKEN_TESTS = re.compile(
     r"(SyntaxError|IndentationError|"
     r"error(s)? during collection|collection error|"
     r"errors during collection|ERROR collecting|"
-    r"INTERNALERROR)",
+    r"INTERNALERROR|ERROR at (?:setup|teardown)|fixture .* not found|"
+    r"FileNotFoundError|ModuleNotFoundError|ImportError|PermissionError)",
     re.IGNORECASE,
 )
 
 
-def red_gate(test_output: str, exit_code: int | None) -> GateResult:
+def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "pytest",
+             expected_tests: list[str] | None = None) -> GateResult:
     """RED-phase gate: prove the freshly written tests fail for the right reason.
 
     Pass iff the suite exits non-zero AND the failure signature is a genuine
@@ -287,6 +280,14 @@ def red_gate(test_output: str, exit_code: int | None) -> GateResult:
             action="rewrite_tests",
             metadata={"exit_code": 0},
         )
+    if runner != "pytest":
+        return GateResult(passed=True, reason="RED exit observed; failure classification unverified for this runner",
+                          metadata={"exit_code": exit_code, "classification": "unverified"})
+    if expected_tests is not None:
+        failed_paths = set(re.findall(r"^FAILED\s+(.+?)::", test_output, re.M))
+        if not expected_tests or not failed_paths or not failed_paths <= set(expected_tests):
+            return GateResult(passed=False, reason="RED cannot attribute the failure to the changed tests",
+                              action="fix_tests", metadata={"classification": "unverified"})
     if _RED_BROKEN_TESTS.search(test_output):
         return GateResult(
             passed=False,
@@ -295,11 +296,11 @@ def red_gate(test_output: str, exit_code: int | None) -> GateResult:
             action="fix_tests",
             metadata={"exit_code": exit_code},
         )
-    if _RED_RIGHT_REASON.search(test_output):
+    if exit_code == 1 and _RED_RIGHT_REASON.search(test_output):
         return GateResult(
             passed=True,
             reason=f"RED confirmed: tests fail for the right reason (exit {exit_code})",
-            metadata={"exit_code": exit_code},
+            metadata={"exit_code": exit_code, "classification": "behavioral"},
         )
     return GateResult(
         passed=False,
@@ -1175,3 +1176,58 @@ def review_iteration_gate(iteration: int, max_iterations: int = 3) -> GateResult
         reason=f"Review loop exhausted after {max_iterations} iterations",
         action="halt_build",
     )
+
+
+def verification_inputs(test_command: str, project_dir: Path, *, parallel: str = "off",
+                        plan_revision: str = "") -> dict:
+    """Exact inputs to the final check; unavailable Git/file evidence raises.
+
+    Paths are project-relative. Bookkeeping and untracked interpreter/test caches
+    are not build inputs; tracked generated files always are.
+    """
+    import hashlib
+    import json
+    import os
+    from . import git_ops
+
+    head = git_ops.rev_parse_head(project_dir)
+    index = git_ops.index_entries(project_dir)
+    if not head or index is None:
+        raise RuntimeError("Cannot identify the Git revision/index for final verification")
+    result = git_ops._run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z",
+                           "--", ".", *git_ops.BOOKKEEPING_EXCLUDES], cwd=project_dir)
+    if not result.ok:
+        raise RuntimeError("Cannot read final verification inputs: " + result.stderr)
+    files = {}
+    for name in sorted(set(filter(None, result.stdout.split("\0")))):
+        if name not in index and any(part in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+                                     for part in Path(name).parts):
+            continue
+        path = project_dir / name
+        if path.is_symlink():
+            files[name] = "link:" + os.readlink(path)
+        elif path.exists():
+            files[name] = f"{path.stat().st_mode & 0o111}:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            files[name] = "deleted"
+    content = json.dumps({"files": files, "index": index}, sort_keys=True).encode()
+    return {"head": head, "content": hashlib.sha256(content).hexdigest(),
+            "command": test_command, "parallel": parallel, "plan_revision": plan_revision}
+
+
+def final_verification(test_command: str, project_dir: Path, *, parallel: str = "off",
+                       plan_revision: str = "") -> GateResult:
+    """The shared completion gate, after the last writer and before publication."""
+    if not test_command.strip():
+        return GateResult(passed=False, reason="Final verification requires a configured test command")
+    try:
+        before = verification_inputs(test_command, project_dir, parallel=parallel, plan_revision=plan_revision)
+        gate = integration_gate(test_command, project_dir, parallel=parallel)
+        after = verification_inputs(test_command, project_dir, parallel=parallel, plan_revision=plan_revision)
+    except (OSError, RuntimeError, ValueError) as error:
+        return GateResult(passed=False, reason=f"Final verification unavailable: {error}")
+    gate.metadata["inputs"] = before
+    if before != after:
+        return GateResult(passed=False, reason="Inputs changed during final verification; verify the new revision",
+                          metadata=gate.metadata)
+    return gate

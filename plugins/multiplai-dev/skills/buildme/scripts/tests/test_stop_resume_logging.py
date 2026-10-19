@@ -109,6 +109,7 @@ def _kept_lines(text: str, root: Path) -> list[str]:
     lines, keep = [], False
     for raw in text.replace(str(root), "<root>").splitlines():
         line = _TS.sub("", raw).rstrip()
+        line = re.sub(r"spec-extract at [0-9a-f]{12}", "spec-extract at <revision>", line)
         if line.startswith("## "):
             keep = not line[3:].startswith(_RUN_SECTIONS)
         if keep and line:
@@ -246,7 +247,8 @@ def test_S6_spec_only_keeps_its_checkpoint_and_the_mode_only_handoff_runs(box):
     _ok(proc)
     assert "RESULT:SUCCESS:spec-only" in proc.stdout
     done = BuildState.load(box.worktree() / "specs" / "changes" / "feat" / COMPLETED)
-    assert done.phase == BuildPhase.PROTOTYPE
+    assert done.phase == BuildPhase.PLAN_REVIEW
+    assert done.result.kind == "spec-only"
     specs_progress = box.progress()
 
     proc = box.run(project=box.worktree(), mode="only")
@@ -281,7 +283,9 @@ def test_S8_files_edited_between_stop_and_resume(box, full):
 
     proc = box.run()
     proceeded = proc.returncode == 0
-    assert ("] RESUMED\n" in box.progress()) == proceeded
+    assert not proceeded
+    assert "Uncommitted build inputs remain" in proc.stderr
+    assert "RESULT:SUCCESS" not in proc.stdout
     assert (box.worktree() / "notes.txt").read_text() == "the user's own file\n"
     if proceeded:
         assert_same_progress(box, full)

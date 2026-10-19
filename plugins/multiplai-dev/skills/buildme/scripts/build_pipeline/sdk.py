@@ -117,7 +117,7 @@ def _require_trusted_repo() -> None:
         )
 
 
-def _record_partial(error: AgentRunError, label: str) -> None:
+def _record_partial(error: BaseException, label: str) -> None:
     """Charge the budget for tokens a *failed* call already burned.
 
     The runaway spend this ledger guards against is made of exactly these:
@@ -160,6 +160,7 @@ async def llm_call(
     log.info("START sdk_call=llm prompt_bytes=%d model=%s timeout=%.0fs",
              len(prompt.encode("utf-8")), model or "default", call_timeout)
     async with _get_semaphore():
+        budget.check(phase=budget_label or "sdk")
         try:
             result = await run_agent(
                 prompt,
@@ -172,6 +173,9 @@ async def llm_call(
                 label="llm",
                 component="buildme",
             )
+        except asyncio.CancelledError as e:
+            _record_partial(e, budget_label or "llm")
+            raise
         except AgentRunTimeout as e:
             # A call that dies after burning a 150k-char review prompt is
             # exactly the spend the budget exists to catch, so account for the
@@ -190,7 +194,7 @@ async def llm_call(
                 f"SDK query failed: {e.reason}\n--- CLI stderr ---\n{e.stderr_tail}"
             ) from e
 
-    budget.record(result.usage, label=budget_label or "llm")
+        budget.record(result.usage, label=budget_label or "llm")
     log.info("DONE sdk_call=llm result_chars=%d", len(result.text))
     return result.text
 
@@ -220,6 +224,7 @@ async def agent_call(
     start = time.monotonic()
 
     async with _get_semaphore():
+        budget.check(phase=budget_label or "sdk")
         try:
             result = await run_agent(
                 prompt,
@@ -232,6 +237,9 @@ async def agent_call(
                 label="agent",
                 component="buildme",
             )
+        except asyncio.CancelledError as e:
+            _record_partial(e, budget_label or "agent")
+            raise
         except AgentRunError as e:
             # Degrade to partial output instead of raising — the TDD engine
             # decides whether a failed agent aborts the block or retries.
@@ -258,8 +266,9 @@ async def agent_call(
                 files_changed=partial.files_changed if partial else [],
             )
 
+        budget.record(result.usage, label=budget_label or "agent")
+
     elapsed = time.monotonic() - start
-    budget.record(result.usage, label=budget_label or "agent")
     log.info("DONE sdk_call=agent turns=%d elapsed=%.0fs files_changed=%d",
              result.turns, elapsed, len(result.files_changed))
     return AgentResult(

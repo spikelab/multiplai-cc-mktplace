@@ -274,6 +274,15 @@ class TestPanelResilience:
             with pytest.raises(LLMCallError, match="every member"):
                 await run_code_review("diff", "rubric", config)
 
+    @pytest.mark.asyncio
+    async def test_budget_denial_cannot_be_dropped_as_a_degraded_panel(self):
+        from build_pipeline.budget import BudgetExceededError
+        config = self._panel_config("model-a", "model-b")
+        with patch("build_pipeline.llm_steps.review_steps.agent_call_structured",
+                   new_callable=AsyncMock, side_effect=[BudgetExceededError("cap"), REVIEW_OK]):
+            with pytest.raises(BudgetExceededError):
+                await run_code_review("diff", "rubric", config)
+
 
 class TestPanelDispatch:
     @pytest.mark.asyncio

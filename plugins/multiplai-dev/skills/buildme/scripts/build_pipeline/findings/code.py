@@ -221,15 +221,6 @@ async def run_code_step(config: BuildConfig, change_dir: Path, round_n: int,
     if engine is None:
         from ..tdd_engine import run_tdd_engine as engine
     rc = round_config(config, change_dir, round_n)
-    # The budget is one module-level counter, and `--auto` runs several rounds
-    # in one process. Each engine run is held to the ceiling on this round's
-    # own engine spend: clear the counter here, and the engine restores the
-    # spend the round's checkpoint holds when there is one (a resumed round),
-    # or starts from zero (a new round). Triage's and spec's agent calls are
-    # not counted against it: no checkpoint records them, so a round resumed
-    # in a new process could not count them either, and the ceiling would
-    # again depend on how many rounds ran in the process.
-    budget.reset()
     log.info("START findings_code round=%d blocks=%d tasks=%s state=%s",
              round_n, len(blocks), rc.tasks_path, rc.state_file_path())
     code = await engine(rc, SimpleNamespace(block=None), standalone=False)

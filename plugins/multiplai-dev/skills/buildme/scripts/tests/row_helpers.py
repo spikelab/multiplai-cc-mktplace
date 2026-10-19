@@ -80,7 +80,19 @@ def _content(rel: str, data: bytes, root: Path, tok: dict[str, str]) -> Any:
     if _match(rel, NOT_COMPARED):
         return "<not compared>"
     if _match(rel, JSON_NORMALIZED):
-        return _norm_json(json.loads(data), root, tok)
+        value = json.loads(data)
+        verification = value.get("verification") if isinstance(value, dict) else None
+        if verification and verification.get("passed"):
+            from build_pipeline.gates import verification_inputs
+            inputs = verification["metadata"]["inputs"]
+            project = root / rel.split("specs/", 1)[0]
+            # The opaque digest includes fixture-specific absolute paths. Verify
+            # it against this checkout before normalizing it for row comparison.
+            actual = verification_inputs(inputs["command"], project,
+                parallel=inputs["parallel"], plan_revision=inputs["plan_revision"])
+            assert inputs == actual, "saved verification must describe this checkout"
+            inputs["content"] = "<verified checkout content>"
+        return _norm_json(value, root, tok)
     try:
         return _norm_text(data.decode(), root, tok)
     except UnicodeDecodeError:

@@ -7,17 +7,52 @@ when_to_use: 'Triggers: build me, buildme, bootstrap, full build, /buildme'
 # BuildMe
 
 Orchestrate the complete journey from idea to working code via a deterministic
-Python pipeline. Interview → Research → Codebase Analysis → Specs →
-Design Audit → Prototype → Review → TDD Build → Respec → Publish (branch
-pushed + draft PR).
+Python pipeline: understand the request → generate a complete plan → optional
+prototype → audit and review the final plan → implement/test and review fixes →
+prepare docs and archive → verify the final revision → publish.
 
 Before any spec is written, the pipeline reads the repo it is about to change
 (architecture, patterns, integration points) and resolves the reference docs
 for the detected stack and framework, so `design.md` extends the code that
 exists and follows the conventions the project already builds to.
 
-Every build runs **inside its own git worktree on its own branch** and ends by
-pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycle).
+Builds use an isolated worktree and branch by default. `--no-worktree` and
+`--no-push` remain supported — see [Git lifecycle](#git-lifecycle). Publication
+consumes the revision that passed final checks.
+
+
+## Completion and recovery contract
+
+- `RESULT:SUCCESS` means the configured test command passed after the last
+  content writer. The checkpoint records the command, parallel-test setting,
+  planning revision, Git HEAD, index and content fingerprint. Missing commands,
+  unavailable evidence, timeouts, or tests that change tracked inputs fail the build.
+- `RESULT:SUCCESS:spec-only` means planning completed; it says nothing about code
+  verification. `VERIFICATION:passed` and `PUBLICATION:published|skipped|failed`
+  distinguish verified code from push/PR delivery. A publication failure keeps a
+  resumable checkpoint and does not repeat paid implementation when inputs agree.
+- A completed historical checkpoint never republishes. Old in-progress plans
+  revalidate their documents and reviews; a phase ordinal or old completion flag
+  alone cannot prove review. Future checkpoint versions require an upgrade.
+- Recovery compares staged blobs/modes and working files separately. An old stop
+  record without index evidence cannot authorize discard. Preserve both versions
+  in a stash or backup, inspect them, then restart in a clean checkout. WIP refs
+  keep working files in their own tree and the index in their second parent;
+  saving one leaves the caller's HEAD and index intact.
+- Every proposal capability needs a valid Requirement/Scenario/WHEN/THEN document.
+  Interrupted planning retries missing members. Rewrites invalidate dependent
+  tasks, rubric, sizing and reviews; unresolved blocking findings stop the build.
+- For pytest, RED requires a behavioral failure attributable to changed tests,
+  after a healthy baseline. Collection/import/setup/environment errors do not
+  count. Other runners remain usable and report RED classification as unverified.
+- Budget limits apply before every provider attempt, including planning and
+  retries, inside the concurrency slot. Resumes retain incurred usage. Already
+  admitted calls can finish above the cap; no further calls are admitted once it
+  is exhausted. Child-skill and epic aggregate spend remain separately accounted.
+
+Optional-stage defaults are unchanged. The paired evaluation harness and its
+pending live decision are in [evals/README.md](scripts/evals/README.md); deterministic
+fixture runs establish harness behavior, not model quality.
 
 ## Prerequisites
 
@@ -268,271 +303,12 @@ deliberately, plus the PR URL (or, on `PUBLISH_DIAGNOSIS:<reason>`, the manual
 push/PR commands from `build-progress.md`). The PR's description comes from the
 pr skill and follows the repo's PR template; these lines are unchanged by it.
 
-## Which tests a block runs
+## Test and model settings
 
-Inside each block's TDD loop, buildme runs a **narrow test command** instead of
-the project's whole test command. The RED check, and the block's test writer,
-implementer and refactorer, run:
-
-1. the test files the block added or changed (its git diff since the block
-   started, untracked files included);
-2. for each source file the block changed, the test file named after it:
-   `test_<module>.py` or `<module>_test.py` for pytest, `<name>.test.<ext>` or
-   `<name>.spec.<ext>` for jest and vitest. When several packages have a test
-   file of that name, the one nearest the source file is taken.
-
-Only files the whole command collects are taken: never one under `.venv`,
-`venv`, `node_modules` or another tool directory, and for pytest only one under
-the config's `testpaths` (when pytest runs in the config's own directory) and
-outside its `norecursedirs` and any `--ignore` / `--ignore-glob`, because pytest
-runs any file named on its command line even when the whole run skips it.
-
-Tests are never picked by what they import. The paths are appended to the test
-command (`tdd.test_command`, else the discovered one) only when its runner
-accepts them: pytest, or jest or vitest run directly or through an `npm test`
-script that is a single jest or vitest command (the paths go after `--`).
-The whole command runs instead when:
-
-- the command is anything else, including a task runner such as tox or nox,
-  even behind `uv run` or `python -m`, or a chain (`pytest && ruff check .`);
-- the block selects no test file;
-- the block changed a file in tests that this naming cannot pick out (Django's
-  `tests.py`, a file under `__tests__/`, a helper module under `tests/`), so its
-  own tests are never left out;
-- the run collects coverage (`--cov` in the command, `PYTEST_ADDOPTS` or the
-  pytest config; for Node, `coverage` in the command, the `npm test` script,
-  package.json's `jest` key or a jest, vitest or vite config), because a narrow
-  run can miss a coverage floor the whole suite meets;
-- a Node test path holds a character jest reads as a regex (`[id]`, `(auth)`);
-- the command already names what to run: a path in the command, in pytest's
-  `addopts` or in `PYTEST_ADDOPTS`, a jest or vitest filter (`jest src/unit`,
-  `vitest run unit`, `--testPathPattern`, `--findRelatedTests`), or a pytest
-  option that points at another config or root (`-c`, `--rootdir`,
-  `--config-file`, `--pyargs`), because appended paths would only add to it;
-- the project sets pytest's `python_files`, or its pytest config cannot be read;
-- a selected pytest file sits below another pytest config file or `setup.py`
-  than the one the whole run uses, because pytest finds its config from the
-  paths it is given; or under a `conftest.py` that sets `collect_ignore`,
-  `collect_ignore_glob` or `pytest_ignore_collect`, because pytest skips those
-  for paths it is given;
-- the selection would make the command longer than 20,000 characters.
-
-So RED never passes on a run that left out the block's own tests. The agents'
-command is fixed before they change anything, so each agent is also told to
-add the test files it writes and the test file named after each module it
-changes.
-
-The checks that decide whether work is done still run the **whole** command:
-the baseline gate, the integration gate after each block (which also checks a
-block's refactor), the whole-change refactor, mutation testing and epic mode's
-merge step.
-
-The baseline gate, the integration gate and epic mode's merge tests run a
-pytest command with `-n auto` (pytest-xdist, one worker per CPU) when
-`python -c "import xdist"` succeeds in the environment pytest runs in: the
-Python beside the `pytest` script, the one before `-m pytest`, or `python`
-under the same `uv run` / `poetry run` / `pdm run` / `hatch run` /
-`pipenv run` / `rye run`. A command buildme cannot place in an environment
-(`env X=1 pytest`, a task runner) runs as written, and so does one that
-already chooses its workers (`-n`, `--numprocesses`, `--dist`, `-p no:xdist`,
-`--pdb`, in the command, `addopts` or `PYTEST_ADDOPTS`), or where pytest will
-not load xdist (`PYTEST_DISABLE_PLUGIN_AUTOLOAD` or `--disable-plugin-autoload`
-with no `-p xdist` or `PYTEST_PLUGINS=xdist.plugin`). The narrow runs in
-the loop never add it. jest and vitest already run test files in parallel,
-so Node commands are unchanged.
-
-| Key | Values | Default |
-|---|---|---|
-| `tdd.narrow_tests` | `true` / `false` | `true`; `false` runs the whole command in the loop too |
-| `tdd.parallel` | `auto` / `off` | `auto`; `off` runs the full suite serially |
-| `tdd.test_writer_max_turns` | positive integer | `30`; the block test writer's turn cap, stated in its prompt |
-| `tdd.mutation_test_writer_max_turns` | positive integer | `30`; the mutation round's test writer's turn cap |
-
-## Mutation testing
-
-Python projects only: one of `pyproject.toml`, `setup.py`, `setup.cfg`,
-`pytest.ini`, `tox.ini` or `requirements.txt` sits at the project root. A
-Python project whose manifest lives in a subdirectory is not detected and
-skips the step. The test command must run Python too: a `tdd.test_command` in
-`specs/config.yaml` is used as given, and a discovered one must be the pytest
-command found from `pytest.ini`, `pyproject.toml` or `setup.py`. A Node project
-with a helper `requirements.txt` discovers `npm test` and skips the step.
-Right after the whole-change refactor, buildme runs
-[cosmic-ray](https://pypi.org/project/cosmic-ray/) 8.7.0 over the **non-test
-`.py` lines the build added or modified** since its first block, using the
-project's own test command. Files the test suite runs but never imports are
-left out: `setup.py`, `noxfile.py`, `fabfile.py` and `manage.py` at any depth,
-`docs/` and `doc/` at the project root, and anything under a `migrations/` or
-`alembic/` directory. Every mutant on them would survive, and the survivor
-round may only edit tests. cosmic-ray runs as a pinned tool
-(`uvx --from cosmic-ray==8.7.0`), so `uv` must be installed; it is not added
-to the project or to buildme's dependencies. The first run downloads it.
-
-If any mutant survives, one fresh test-writer agent gets the survivors (file,
-line, operator, the line as it is now, and the mutation's diff) and may add or
-edit **tests only**. The implementer is not called. buildme then checks the
-round:
-
-- a changed non-test file discards the round and **fails the build**. Files
-  the suite writes when it runs (caches, reports, a test database, a golden
-  file it writes back to the same bytes) do not count, and Django's
-  `<app>/tests.py` is a test;
-- a red suite discards the round, and the first score stands;
-- a green round is committed as `test(mutation): kill surviving mutants` and
-  cosmic-ray runs again for the final score. If the agent committed its own
-  tests, buildme moves the branch back to where the round started, keeping the
-  files, and checks and commits them the same way.
-
-`specs/config.yaml` keys (all optional):
-
-| Key | Default | Meaning |
-|---|---|---|
-| `mutation.enabled` | `true` | Turn the step off for this project. |
-| `mutation.min_score` | `0.8` | Minimum killed / (killed + survived). Timed-out test runs count as killed. **The default is a starting point:** nobody has measured mutation scores on buildme output yet, so it will be adjusted from measured runs. |
-| `mutation.timeout` | `30` | Seconds allowed per test-suite run under one mutant. When the unmutated suite takes longer than a third of this, each mutant gets three times its measured run instead. The unmutated (baseline) run itself is allowed 15 minutes. |
-| `mutation.max_mutants` | `300` | Cap on mutants run. Above it, a deterministic sample runs, and `mutation.md` says so. |
-
-What fails a build (`EXIT_BUILD_FAILURE`, step not marked done, so a resume
-runs it again): a final score below `min_score`, a survivor round that edited
-or added a non-test file (any extension, so a new `pytest.ini` counts; caches
-such as `__pycache__` or `.pytest_cache`, coverage and junit reports such as
-`coverage.xml`, `htmlcov/` or `junit.xml`, and `*.egg-info` do not), cosmic-ray
-failing to produce a score (`uv` not installed, cosmic-ray not fetchable
-offline or from a private index, red baseline, crash, timeout, or every mutant
-on the changed lines erroring; the error says to set `mutation.enabled: false`
-to build without the step), uncommitted changes in the tree when the step
-starts, or a discard git refused — a survivor round or a
-mutated file that could not be thrown away. In that last case buildme commits
-nothing more, `mutation.md` included, and the tree is left as it is for you to
-inspect. A bad config value keeps its default and logs a
-warning. When no mutant lands on a changed line, there is no score and the step
-passes. A non-Python project, `enabled: false` or a build that changed no
-Python source the test suite imports logs one `SKIP phase=MUTATION` line and
-moves on.
-
-Every run that scores writes `specs/changes/<name>/mutation.md`: the score
-before and after the survivor round, the threshold and verdict, the files
-mutated, what the survivor round did, and every surviving mutant (file, line,
-operator). It is committed onto the build branch.
-
-cosmic-ray edits source files in place while it runs, so the tree must be
-committed when the step starts. Every verified path leaves it committed, so
-uncommitted changes at that point are edits nothing checked: a whole-change
-refactor whose verification failed and could not be undone, one skipped on a
-red suite or a failed checkpoint, a refactor agent that stopped mid-edit, or a
-survivor round that could not be discarded. buildme then fails the step
-without committing or resetting anything; review the changes, commit or
-discard them, and resume. If a mutated file is still in the tree after a run,
-buildme discards back to the starting commit; if that discard fails, the build
-stops.
-
-## Tuning model and effort (multiplai.conf)
-
-Model and effort are two axes of one decision. With nothing configured, every
-step runs on `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT` (environment, then
-`multiplai.conf`), and otherwise on the model and effort of the Claude Code
-session that started the build. With none of those, the CLI picks. Each
-step's model and effort can be set in `specs/config.yaml` under `models:` and
-`efforts:`; `multiplai.conf` sets per-stage models and efforts without a code
-edit. Nothing caps a configured model or effort.
-
-### `models:` in specs/config.yaml
-
-```yaml
-models:
-  default: opus            # any spec: haiku | sonnet | opus | fable | claude:<x> | pi:<model>@<provider>
-  spec: sonnet             # stage defaults
-  agent: opus
-  review: fable
-  test_writer: opus        # step keys
-  implementer: pi:deepseek/deepseek-v4-flash@fireworks
-```
-
-A value is a model spec:
-
-- a Claude model: `haiku`, `sonnet`, `opus`, `fable`, a `claude-…` ID, or
-  either one prefixed `claude:` (or `anthropic:`). A family name runs on its
-  current model.
-- a Pi model: `pi:<model-id>@<provider>`. It runs through
-  `multiplai-core`'s Pi backend, so it **needs Pi installed and configured;
-  not covered here**. A missing `pi` binary fails that step; it does not fall
-  back to Claude.
-
-An unknown key, or a value that is neither, is dropped with a warning.
-
-Each step resolves its model through this chain, and the first one set wins:
-
-1. `models.<step>`
-2. `models.<stage>` (the step's stage, below)
-3. the stage's `multiplai.conf` model: `[buildme.spec]`, `[buildme.agent]`
-   or `[buildme.review] MODEL=` (`review_model`, which `code_review.model` and
-   `BUILDME_REVIEW_MODEL` also set); `[buildme.plan_review] MODEL=` for
-   `plan_review`, and none for `adjudication`
-4. `models.default`
-5. `[buildme] MODEL=` (the whole pipeline's model)
-6. `MULTIPLAI_MODEL` (environment, then `multiplai.conf`)
-7. the session's model
-
-A stage model reaches every step of its stage.
-
-### `efforts:` in specs/config.yaml
-
-```yaml
-efforts:
-  default: medium          # low | medium | high | xhigh | max
-  review: high             # stage
-  implementer: max         # step
-```
-
-The keys are the same as `models:`. Each step resolves its effort through this
-chain, and the first one set wins:
-
-1. `efforts.<step>`
-2. `efforts.<stage>`
-3. the stage's `multiplai.conf` effort: `[buildme.spec]`, `[buildme.agent]` or
-   `[buildme.review] EFFORT=`; `[buildme.plan_review]`, then
-   `[buildme.review]`, for `plan_review`
-4. `efforts.default`
-5. `[buildme] EFFORT=`
-6. `MULTIPLAI_EFFORT` (environment, then `multiplai.conf`)
-7. the session's effort
-
-An unknown key or effort name is dropped with a warning.
-
-| Stage | Steps |
-|---|---|
-| `spec` | `spec_artifact` (every spec artifact, use-cases included), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `interview`, `research`, `findings_spec` (the findings stage's spec delta) |
-| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `prototype`, `merge` |
-| `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt), `findings_triage` (the findings stage's one read-only agent per PR comment), `findings_self_check` (the findings stage's one read-only check of a round's fix commits) |
-
-The tier (advanced or standard) comes from the default model: `models.default`,
-then `[buildme] MODEL=`, then `MULTIPLAI_MODEL`, then the session's model.
-Fable, or Opus 4.5 and later, is advanced; a bare `opus` or `fable` counts as
-its current model. With no model anywhere the tier is standard. A Pi model's version says nothing about the tier,
-so when `models.default` is a `pi:` spec the tier comes from `BUILDME_TIER`
-(env) or `tier:` in specs/config.yaml, and is `standard` when neither is set.
-
-### multiplai.conf
-
-| Section | Tunes |
-|---|---|
-| `[buildme]` | `MODEL=` and `EFFORT=` for the whole pipeline |
-| `[buildme.spec]` | `MODEL=` and `EFFORT=` for spec generation, audits, rubric |
-| `[buildme.review]` | `MODEL=` and `EFFORT=` for code review, test-quality audit |
-| `[buildme.agent]` | `MODEL=` and `EFFORT=` for the agent stage (test writer, implementer, refactorers, fixers, docs update, prototype, merge) |
-
-```ini
-[buildme]
-MODEL=opus
-EFFORT=medium
-
-[buildme.review]
-EFFORT=high
-```
-
-A stage section's `MODEL=` takes a Claude model or a `pi:` spec. A stage
-section falls back to `models.default` / `efforts.default`, then `[buildme]`,
-then `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT`, then the session.
+The normal path uses the configured suite, block TDD, independent review and a
+final verification after all writers. See the [test, mutation and model reference](scripts/README.md#test-and-model-reference)
+for `tdd.narrow_tests`, `tdd.parallel`, mutation settings, `models:`, `efforts:`
+and multiplai.conf examples. These defaults have not changed in this repair.
 
 ## Scale Assessment (MANDATORY)
 
@@ -717,10 +493,10 @@ generation (via change_manager) including the unknowns/explainer pass, the
 design audit — which critiques the specs for consistency *and* plan quality
 (over-engineering, task granularity, testability, uncovered edge cases) and
 folds every critical/major gap back into one regeneration pass of `design.md`
-and `tasks.md` before re-auditing once, report-only — the plan review, which
+and `tasks.md` before re-auditing once; unresolved blockers stop the run. The plan review
 reads `tasks.md` against the rubric, the constraints and the use cases and
-regenerates `tasks.md` at most once, the
-prototype stage, TDD implementation (test-writer + implementer agents per block),
+regenerates `tasks.md` at most once. Prototype feedback precedes these final
+checks. TDD implementation (test-writer + implementer agents per block),
 integration gates, scored quality reviews, entry point verification, the
 documentation update, the respec proposal, and publishing (push + draft PR).
 
@@ -1036,8 +812,8 @@ documentation lands **in the same PR as the code it describes** instead of being
 left for the reviewer to write.
 
 There is no flag and no config toggle: a build that ships code with stale docs
-is the thing this phase exists to prevent. It is non-fatal — a failure here logs
-and the build still succeeds — and it never invents features: `DOCS_IMPACT:
+is the thing this phase exists to prevent. A failed writer blocks the build
+because it may have left partial edits. The agent never invents features: `DOCS_IMPACT:
 none` is a legitimate outcome for a change with no user-visible delta. When the
 build changed source, the project keeps a changelog, and nothing was documented,
 the pipeline prints `DOCS_WARNING:<reason>`; relay it, it is a warning and never

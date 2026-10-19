@@ -11,6 +11,8 @@ This module handles the non-interactive pipeline sequencing.
 
 from __future__ import annotations
 
+from build_pipeline.budget import BudgetExceededError
+
 import asyncio
 import logging
 import os
@@ -31,6 +33,8 @@ log = logging.getLogger(__name__)
 
 async def run_orchestrator(config: BuildConfig, args) -> int:
     """Main entry point for the build orchestrator."""
+    budget_mod.reset()
+    budget_mod.configure(max_tokens=config.budget_max_tokens, max_usd=config.budget_max_usd)
     # Resume re-binding, before anything derives a path from the config: a
     # previous run's state file lives INSIDE its worktree, so a plain
     # config.state_file_path() lookup against the source repo would miss it
@@ -58,6 +62,17 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
     progress = ProgressWriter(config.progress_file_path())
 
+    # A spec-only handoff reuses its revision-bound planning evidence and spend.
+    completed = completed_state_path(state_path)
+    if not state_path.exists() and completed.exists():
+        planned = BuildState.load(completed)
+        if planned.completion_kind == "spec-only":
+            if planned.branch and git_ops.current_branch(config.project_dir) != planned.branch:
+                raise git_ops.GitLifecycleError("Spec-only handoff must run on its recorded build branch")
+            config.pipeline_branch = planned.branch or ""
+            budget_mod.get_budget().load_state(planned.budget)
+            planned.checkpoint(state_path)
+
     # Resume or create state
     if state_path.exists():
         state = BuildState.load(state_path)
@@ -73,6 +88,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             state_file=str(state_path),
         )
 
+    if state.phase == BuildPhase.COMPLETE:
+        print("RESULT:SUCCESS:historical", flush=True)
+        return 0
     cm = ChangeManager(config.specs_dir)
 
     # A named input file that is gone stops the build (exit 2) only while the
@@ -139,19 +157,19 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # disk and in the state: running it again rewrites interview.md and,
         # under `self`, pays for two agent calls. A ticket still waiting for
         # replies goes through the phase, which owns that wait.
-        if (not state.is_phase_complete(BuildPhase.INTERVIEW_DONE) and config.mode != "only"
+        if (not state.tdd and not state.is_phase_complete(BuildPhase.INTERVIEW_DONE) and config.mode != "only"
                 and (config.change_dir / "interview.md").is_file() and state.interview_summary
                 and not state.interview_waiting):
             log.info("SKIP phase=INTERVIEW reason=interview-on-disk")
             print("PHASE:INTERVIEW:COMPLETE", flush=True)
-        elif not state.is_phase_complete(BuildPhase.INTERVIEW_DONE) and config.mode != "only":
+        elif not state.tdd and not state.is_phase_complete(BuildPhase.INTERVIEW_DONE) and config.mode != "only":
             from .intake import run_interview_phase
             rc = await run_interview_phase(config, state, args, state_path, progress)
             if rc is not None:
                 return rc
 
         # Phase: Research
-        if not state.is_phase_complete(BuildPhase.RESEARCH):
+        if not state.tdd and not state.is_phase_complete(BuildPhase.RESEARCH):
             if config.skip_research:
                 log.info("SKIP phase=RESEARCH reason=--skip-research")
                 log.info("DONE phase=RESEARCH")
@@ -177,7 +195,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # Best-effort: an analysis failure costs grounding, never the build. The
         # spec-extract step after it ends the build only when spec-extract may
         # still write into specs/registry/ (`_run_spec_extract_step`).
-        if not state.is_phase_complete(BuildPhase.CODEBASE_ANALYSIS):
+        if not state.tdd and not state.is_phase_complete(BuildPhase.CODEBASE_ANALYSIS):
             log.info("START phase=CODEBASE_ANALYSIS")
             await _run_codebase_analysis_phase(config, state, progress)
             # Save the analysis's report path before the step, which may return 1
@@ -198,7 +216,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # `state.epic_single`, which a FAILED build keeps. A build that split
         # (state.epic_dir set) never reaches spec generation.
         just_split = False
-        if state.epic_dir is None and not state.epic_single and not (
+        if not state.tdd and state.epic_dir is None and not state.epic_single and not (
                 state.phase == BuildPhase.EPIC_SPLIT or state.is_phase_complete(BuildPhase.EPIC_SPLIT)):
             log.info("START phase=EPIC_SPLIT")
             from .epic import phase as epic_phase
@@ -214,10 +232,10 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             return await epic_phase.continue_epic(config, state, args, just_split=just_split)
 
         # Phase: Spec Generation
-        if not state.is_phase_complete(BuildPhase.SPEC_GENERATION) and not config.mode == "only":
+        if not state.tdd and not state.is_phase_complete(BuildPhase.SPEC_GENERATION) and config.mode != "only":
             log.info("START phase=SPEC_GENERATION")
             from .spec_generator import run_spec_generator
-            result = await run_spec_generator(config, args)
+            result = await run_spec_generator(config, args, standalone=False)
             if result != 0:
                 log.error("FAIL phase=SPEC_GENERATION exit_code=%d", result)
                 # Reload first, for the reason given below: a re-run keeps the
@@ -259,32 +277,44 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             print("PHASE:SPEC_GENERATION:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.SPEC_GENERATION, progress=progress)
 
-        # Phase: Design Audit (best-effort — failures don't block the build).
-        # The stage runs the audit AND folds critical/major gaps back into
-        # design.md/tasks.md with one regeneration pass; the pass is recorded
-        # in spec_gen.design_audit_regen_done so it happens at most once per
-        # build no matter which call site reaches it first.
-        if not state.is_phase_complete(BuildPhase.DESIGN_AUDIT):
+        # Reconcile edited/legacy plans before required validation. Completed
+        # implementation is kept only while its recorded planning inputs agree.
+        from .spec_generator import reconcile_plan, _generate_all_artifacts
+        if state.phase != BuildPhase.PUBLISH:
+            old_revision = state.spec_gen.revision if state.spec_gen else ""
+            reconcile_plan(config, state)
+            assert state.spec_gen is not None
+            if state.tdd and not old_revision:
+                raise RuntimeError("Legacy implementation has no planning revision; preserve it and start a reviewed build in a clean checkout")
+            if state.tdd and old_revision and old_revision != state.spec_gen.revision:
+                raise RuntimeError("Planning inputs changed after implementation; start a new build to preserve completed work")
+            await _generate_all_artifacts(cm, config.change_dir, config, state)
+            state.checkpoint(state_path)
+
+        # Phase: Prototype — a cheap artifact that proves the shape before the
+        # expensive TDD build. A failed writer leaves a resumable failure.
+        if state.phase != BuildPhase.PUBLISH and (not state.spec_gen or not state.spec_gen.prototype_done):
+            await _run_prototype_phase(config, state, progress, state_path)
+            state.checkpoint(state_path)
+            print("PHASE:PROTOTYPE:COMPLETE", flush=True)
+            board.record(config, state, BuildPhase.PROTOTYPE, progress=progress)
+
+        # Required audit of the final plan, with one owner-published repair.
+        if state.phase != BuildPhase.PUBLISH and (not state.spec_gen or not state.spec_gen.design_audit_done):
             log.info("START phase=DESIGN_AUDIT")
             from .spec_generator import run_design_audit_stage
             gaps = await run_design_audit_stage(
                 config.change_dir, config, state, state_path,
             )
             log.info("DONE phase=DESIGN_AUDIT gaps=%d", len(gaps) if gaps else 0)
-            state.advance_to(BuildPhase.DESIGN_AUDIT, state_path)
+            if not state.is_phase_complete(BuildPhase.DESIGN_AUDIT):
+                state.advance_to(BuildPhase.DESIGN_AUDIT, state_path)
             print("PHASE:DESIGN_AUDIT:COMPLETE", flush=True)
             # Spec'ing is done being shaped; the card is now being planned.
             board.record(config, state, BuildPhase.DESIGN_AUDIT, progress=progress)
 
-        # Phase: Plan Review — the second pair of eyes the board's Planning
-        # column has always claimed ("specs -> impl plan, reviewed by another
-        # eng"). Reads tasks.md against rubric.md, the constraints and the use
-        # cases; critical/major findings drive ONE regeneration of tasks.md,
-        # recorded in spec_gen.plan_review_regen_done. Best-effort — a review
-        # failure never fails the build, and leaves the reviewed plan standing
-        # unless the no-behaviour scan flagged a block, which gets one rewrite
-        # (spec_gen.plan_review_scan_regen_done).
-        if not state.is_phase_complete(BuildPhase.PLAN_REVIEW):
+        # Independent review consumes the final task/rubric revision.
+        if state.phase != BuildPhase.PUBLISH and (not state.spec_gen or not state.spec_gen.plan_review_done):
             log.info("START phase=PLAN_REVIEW")
             from .llm_steps.plan_review_steps import run_plan_review_stage
             findings = await run_plan_review_stage(
@@ -294,22 +324,15 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 "DONE phase=PLAN_REVIEW findings=%d",
                 len(findings) if findings else 0,
             )
-            # Advance only when the stage recorded itself done. `advance_to`
-            # is what makes `plan_review_done` mean anything: the stage leaves
-            # the flag False on an LLM failure precisely so a resume retries,
-            # and moving the pointer anyway made `is_phase_complete` report the
-            # phase finished and skip it forever. A failed review leaves the
-            # pointer at DESIGN_AUDIT; the phases after it are guarded on their
-            # own positions and run regardless.
-            if state.spec_gen is not None and state.spec_gen.plan_review_done:
+            # Progress follows the required revision-bound result.
+            if state.spec_gen is not None and state.spec_gen.plan_review_done and not state.is_phase_complete(BuildPhase.PLAN_REVIEW):
                 state.advance_to(BuildPhase.PLAN_REVIEW, state_path)
             print("PHASE:PLAN_REVIEW:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.PLAN_REVIEW, progress=progress)
 
-        # Size gate — not a BuildPhase: it re-runs on every resume until the
-        # prototype phase is behind the build. A plan that should be split
+        # Reassess size after every plan rewrite. A plan that should be split
         # stops here (exit 3) with split-proposal.md, until --accept-size.
-        if not state.is_phase_complete(BuildPhase.PROTOTYPE):
+        if state.phase != BuildPhase.PUBLISH:
             rc = _run_size_gate(
                 config, state, state_path, progress,
                 accept_size=bool(getattr(args, "accept_size", False)),
@@ -317,19 +340,16 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             if rc is not None:
                 return rc
 
-        # Phase: Prototype — a cheap artifact that proves the shape before the
-        # expensive TDD build. Phase failure is never build failure.
-        if not state.is_phase_complete(BuildPhase.PROTOTYPE):
-            await _run_prototype_phase(config, state, progress, state_path)
-            state.advance_to(BuildPhase.PROTOTYPE, state_path)
-            print("PHASE:PROTOTYPE:COMPLETE", flush=True)
-            board.record(config, state, BuildPhase.PROTOTYPE, progress=progress)
+        if state.phase != BuildPhase.PUBLISH:
+            from .spec_generator import assert_plan_current
+            assert_plan_current(config, state)
 
         # Stop if --spec-only. The checkpoint is kept, renamed, at the last spec
         # phase: not a published build, so the `--mode only` handoff runs as usual.
         if config.spec_only:
             log.info("DONE pipeline=spec-only")
             build_succeeded = True
+            state.completion_kind = "spec-only"
             done = state.complete(state_path)
             progress.log_phase("COMPLETE", f"Specs only. Checkpoint kept at {done}")
             print("RESULT:SUCCESS:spec-only", flush=True)
@@ -375,9 +395,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # Phase: Docs update — README/CHANGELOG/docs catch up with the code the
         # build just wrote, so the documentation lands in the same PR as the
         # change it describes instead of being left for the reviewer to write.
-        # Always on (no flag, no config toggle) and non-fatal, like RESPEC: the
-        # code already exists by now, so a documentation failure must not turn a
-        # finished build into a failed one.
+        # A failed writer blocks completion because it may leave partial edits.
         if not state.is_phase_complete(BuildPhase.DOCS_UPDATE):
             log.info("START phase=DOCS_UPDATE")
             await _run_docs_update_phase(config, state, progress)
@@ -400,6 +418,8 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                     )
                 else:
                     log.warning("Respec audit produced no proposal (non-fatal)")
+            except BudgetExceededError:
+                raise
             except Exception as respec_err:
                 log.warning("Respec audit failed (non-fatal): %s", respec_err)
             # Commit whatever the post-spec-generation phases left inside
@@ -424,18 +444,25 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # PUBLISH runs AFTER the archive move, so the pushed branch carries the
         # archived layout and the move itself is a committed change rather than
         # an uncommitted rename sitting in the worktree.
+        if state.phase != BuildPhase.PUBLISH:
+            from .spec_generator import assert_plan_current
+            assert_plan_current(config, state)
         state.advance_to(BuildPhase.PUBLISH, state_path)
         if config.auto:
             if config.change_dir.exists():
                 log.info("START phase=ARCHIVE reason=--auto")
                 # The checkpoint travels with the move (commit_stage's
                 # bookkeeping excludes keep it out of the archive commit).
-                archive_dest = cm.archive_change(config.change_dir)
+                change_path = config.change_dir
+                registry_paths = [config.specs_dir / "registry" / path.name
+                                  for path in (change_path / "requirements").glob("*.md")]
+                archive_dest = cm.archive_change(change_path)
                 log.info("DONE phase=ARCHIVE dest=%s", archive_dest)
                 git_ops.commit_stage(
                     config,
                     f"chore(specs): archive {config.change_name}",
-                    ["specs"],
+                    [str(path.relative_to(config.project_dir))
+                     for path in [change_path, archive_dest, *registry_paths]],
                 )
                 print("PHASE:ARCHIVE:COMPLETE", flush=True)
             else:
@@ -457,6 +484,35 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             print(f"PHASE:ARCHIVE:PENDING:{config.change_name}", flush=True)
             publish_docs_dir = config.change_dir
 
+        config.change_dir = publish_docs_dir
+        from .spec_generator import assert_plan_current
+        assert_plan_current(config, state, archived=config.auto)
+
+        # All content-writing preparation precedes the shared final gate.
+        from .gates import final_verification, verification_inputs
+        revision = state.spec_gen.revision if state.spec_gen else ""
+        try:
+            current = verification_inputs(config.test_command, config.project_dir,
+                                          parallel=config.parallel_tests, plan_revision=revision)
+        except (OSError, RuntimeError, ValueError):
+            current = None
+        verified = (state.verification or {}).get("passed", False) and current is not None and (
+            (state.verification or {}).get("metadata", {}).get("inputs") == current)
+        if not verified:
+            sections = [p for p in [_worktree_section(state, publish_docs_dir)] if p is not None]
+            sections += _pre_publish_sections(config, state, publish_docs_dir)
+            state.publish_sections = [str(p) for p in sections]
+            if state.branch and not git_ops.tree_is_clean(config.project_dir):
+                raise RuntimeError("Uncommitted build inputs remain; commit only the intended changes before final verification")
+            gate = final_verification(config.test_command, config.project_dir,
+                                      parallel=config.parallel_tests, plan_revision=revision)
+            state.verification = gate.model_dump()
+            state.checkpoint(state_path)
+            if not gate.passed:
+                progress.log_phase("VERIFY", gate.reason)
+                print(f"RESULT:FAILED:verification:{gate.reason}", flush=True)
+                return 1
+
         # Phase: Publish (push branch + open draft PR). Non-fatal by
         # construction — a failure leaves the branch and worktree intact with
         # the exact manual commands in build-progress.md, and the build still
@@ -466,6 +522,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         published = _run_publish(
             config, state, progress, state_path=state_path, docs_dir=publish_docs_dir,
         )
+        state.publication = "published" if published and state.branch and config.git.push else ("skipped" if published else "failed")
         state.phase = BuildPhase.COMPLETE
         build_succeeded = True
         if published:
@@ -480,6 +537,8 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             # persisted by _run_publish / advance_to above).
             state.phase = BuildPhase.PUBLISH
             state.checkpoint(state_path)
+        print("VERIFICATION:passed", flush=True)
+        print(f"PUBLICATION:{state.publication}", flush=True)
         print("RESULT:SUCCESS", flush=True)
         if state.worktree_path:
             print(f"WORKTREE:{state.worktree_path}", flush=True)
@@ -491,6 +550,12 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         log.info("DONE pipeline=complete change=%s", config.change_name)
         return 0
 
+    except budget_mod.BudgetExceededError as e:
+        if state_path.exists():
+            state = BuildState.load(state_path)
+        state.checkpoint(state_path)
+        progress.log_phase("BUDGET", f"STOPPED: {e}\n{e.diagnosis}")
+        return 1
     except (SystemExit, KeyboardInterrupt, asyncio.CancelledError) as e:
         # A stop (SIGTERM/SIGHUP via git_ops._exit_on_termination, Ctrl-C) is
         # not a failure: write it down, save the spend so far, and let it end
@@ -499,9 +564,13 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         _record_interrupt(progress if progress_started else None, state_path, e,
                           completed=build_succeeded)
         raise
+    except BudgetExceededError:
+        raise
     except Exception as e:
         log.error("FAIL pipeline change=%s error=%s", config.change_name, e, exc_info=True)
         print(f"ERROR:{e}", file=sys.stderr, flush=True)
+        if state_path.exists():
+            BuildState.load(state_path).checkpoint(state_path)
         # Cancelled only if nothing survives to resume from; otherwise the card
         # stays in its last column and a re-run picks it up there. Once the
         # build succeeded `.build-state.json` may have become
@@ -538,6 +607,8 @@ def _record_interrupt(progress, state_path: Path, exc: BaseException, *, complet
         return
     try:
         BuildState.load(state_path).checkpoint(state_path)
+    except BudgetExceededError:
+        raise
     except Exception as e:  # noqa: BLE001 — a stop must not turn into a crash
         log.warning("Could not save the checkpoint on %s: %s", sig, e)
 
@@ -586,6 +657,10 @@ async def _run_prototype_phase(
     if not should_run:
         log.info("SKIP phase=PROTOTYPE reason=%s", reason)
         print(f"PHASE:PROTOTYPE:SKIPPED:{reason}", flush=True)
+        if state.spec_gen is None:
+            state.spec_gen = SpecGenState()
+        state.spec_gen.record_step("prototype", "skipped", reason)
+        state.checkpoint(state_path)
         return
 
     log.info("START phase=PROTOTYPE reason=%s", reason)
@@ -593,15 +668,17 @@ async def _run_prototype_phase(
 
     try:
         result = await run_prototype(config)
+    except BudgetExceededError:
+        raise
     except Exception as proto_err:  # non-fatal by design
         log.warning("Prototype stage failed (non-fatal): %s", proto_err)
         _log_prototype_diagnosis(progress, config, str(proto_err))
-        return
+        raise
 
     if not result.passed:
         log.warning("FAIL phase=PROTOTYPE reason=%s", result.reason)
         _log_prototype_diagnosis(progress, config, result.reason)
-        return
+        raise RuntimeError(f"Prototype writer failed: {result.reason}")
 
     log.info("DONE phase=PROTOTYPE — %s", result.reason)
 
@@ -611,12 +688,14 @@ async def _run_prototype_phase(
     if state.spec_gen is None:
         state.spec_gen = SpecGenState()
     try:
-        regenerated = await apply_prototype_findings(config)
+        regenerated = await apply_prototype_findings(config, state)
         log.info("DONE phase=PROTOTYPE_FEEDBACK regenerated=%d", regenerated)
+    except BudgetExceededError:
+        raise
     except Exception as feedback_err:  # non-fatal
         log.warning("Prototype feedback pass failed (non-fatal): %s", feedback_err)
         _log_prototype_diagnosis(progress, config, str(feedback_err))
-        return
+        raise
     state.spec_gen.prototype_done = True
     state.checkpoint(state_path)
 
@@ -633,11 +712,13 @@ async def _run_docs_update_phase(
 
     try:
         files, gate = await run_docs_update(config, state)
+    except BudgetExceededError:
+        raise
     except Exception as docs_err:  # non-fatal by design
         log.warning("Docs update failed (non-fatal): %s", docs_err)
         print(f"PHASE:DOCS_UPDATE:FAILED:{docs_err}", flush=True)
-        _progress_note(progress, "DOCS_UPDATE", f"FAILED (non-fatal): {docs_err}")
-        return
+        _progress_note(progress, "DOCS_UPDATE", f"FAILED: {docs_err}")
+        raise
 
     staged, dropped = _docs_paths(config, files)
     # Only paths that survived validation reach the state — the reported list
@@ -740,6 +821,8 @@ def _uncommitted_paths(config: BuildConfig) -> list[str] | None:
             ["git", "status", "--porcelain", "--", ".", *excludes],
             cwd=str(config.project_dir), capture_output=True, text=True, timeout=30,
         )
+    except BudgetExceededError:
+        raise
     except Exception as e:
         log.warning("Could not check for unreported docs writes: %s", e)
         return None
@@ -895,6 +978,8 @@ async def _run_codebase_analysis_phase(
 
     try:
         analysis = await run_codebase_analysis(config.project_dir, config)
+    except BudgetExceededError:
+        raise
     except Exception as analysis_err:  # non-fatal: grounding, not correctness
         log.warning("Codebase analysis failed (non-fatal): %s", analysis_err)
         return
@@ -1326,6 +1411,8 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
         if not config.pipeline_branch:
             try:
                 here = BuildState.load(config.state_file_path())
+            except BudgetExceededError:
+                raise
             except Exception as e:  # corrupt checkpoint — run_orchestrator reports it
                 log.warning("Ignoring unreadable state at %s: %s", config.state_file_path(), e)
                 return
@@ -1357,6 +1444,8 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
             continue
         try:
             prior = BuildState.load(probe_state)
+        except BudgetExceededError:
+            raise
         except Exception as e:  # corrupt checkpoint — leave it for a fresh run
             log.warning("Ignoring unreadable state at %s: %s", probe_state, e)
             continue
@@ -1469,6 +1558,8 @@ def _completed_builds(config: BuildConfig) -> list[tuple[str, Path, BuildState]]
                 continue
             try:
                 done = BuildState.load(path)
+            except BudgetExceededError:
+                raise
             except Exception as e:  # unreadable — not evidence of a published build
                 log.warning("Ignoring unreadable completed state at %s: %s", path, e)
                 continue
@@ -1494,7 +1585,8 @@ def _spec_paths(config: BuildConfig) -> list[str]:
     """Explicit pathspec for the change's spec directory, relative to the
     worktree root. Never a whole-tree stage."""
     try:
-        return [str(config.change_dir.relative_to(config.project_dir))]
+        return [str(config.change_dir.relative_to(config.project_dir)),
+                str((config.specs_dir / "config.yaml").relative_to(config.project_dir))]
     except ValueError:
         return []
 
@@ -1536,10 +1628,17 @@ def _pre_publish_sections(config: BuildConfig, state: BuildState, docs_dir: Path
     paths: list[Path] = []
     for contributor in PRE_PUBLISH_CONTRIBUTORS:
         name = getattr(contributor, "__name__", repr(contributor))
+        from .gates import verification_inputs
+        before = verification_inputs(config.test_command, config.project_dir)
         try:
             path = contributor(config, state, docs_dir)
+        except BudgetExceededError:
+            raise
         except Exception as e:
-            log.warning("pre-publish contributor %s failed, skipped: %s", name, e, exc_info=True)
+            after = verification_inputs(config.test_command, config.project_dir)
+            if before != after:
+                raise RuntimeError(f"Failed contributor {name} changed build inputs") from e
+            log.warning("pre-publish contributor %s failed without changing inputs: %s", name, e)
             continue
         if path is not None:
             paths.append(Path(path))
@@ -1665,8 +1764,7 @@ def _run_publish(
         print(f"PHASE:PUBLISH:SKIPPED:{state.branch}", flush=True)
         return True
 
-    sections = [p for p in [_worktree_section(state, docs_dir)] if p is not None]
-    sections += _pre_publish_sections(config, state, docs_dir)
+    sections = [Path(p) for p in state.publish_sections]
     # An epic's child opens its PR against the default branch. Its --base-ref is
     # origin's default sha, or the parent's registry commit, which no origin
     # branch holds until a sibling built on it pushes its own branch.
@@ -1694,6 +1792,13 @@ def _run_publish(
         print("PHASE:PUBLISH:FAILED:no-remote", flush=True)
         return False
 
+    from .gates import verification_inputs
+    expected = (state.verification or {}).get("metadata", {}).get("inputs")
+    actual = verification_inputs(config.test_command, config.project_dir,
+                                 parallel=config.parallel_tests,
+                                 plan_revision=state.spec_gen.revision if state.spec_gen else "")
+    if not (state.verification or {}).get("passed") or expected != actual:
+        raise RuntimeError("Publication refused: final verification is missing or stale")
     push = git_ops.push_branch(worktree, state.branch)
     if not push.ok:
         _publish_diagnosis(

@@ -53,6 +53,8 @@ again with its share recomputed once the others end.
 
 from __future__ import annotations
 
+from build_pipeline.budget import BudgetExceededError
+
 import asyncio
 import contextlib
 import json
@@ -1446,6 +1448,8 @@ class Coordinator:
         before, staged = budget.process_spend().cost_usd, merge.index(w)
         try:
             result = await merge.run_merge_agent(self.config, w, files, name, default)
+        except BudgetExceededError:
+            raise
         except Exception as exc:   # an ordinary error, not a stop: the call failed, and its spend is known
             result = AgentResult(success=False, error=f"{type(exc).__name__}: {exc}")
         except BaseException:      # a cancelled call records no usage: its spend is unknown

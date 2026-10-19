@@ -42,6 +42,8 @@ runs no review and posts nothing: it is recorded finished, with no
 
 from __future__ import annotations
 
+from build_pipeline.budget import BudgetExceededError
+
 import asyncio
 import functools
 import logging
@@ -507,7 +509,7 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
                 rnd.code_check_failed = after
                 save()
                 run.emit(f"FINDINGS:CODE_CHECK_FAILED:{after}")
-                return
+                raise StepFailed("code", f"Required post-build check failed: {after}", exit_code=result.exit_code)
             if code.baseline_red(engine_state):
                 raise StepFailed("code", "the PR's test suite fails before any fix (the TDD "
                                          "engine's baseline gate), so no fix can be tested; "
@@ -531,6 +533,13 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
                          exit_code=result.exit_code)
 
     async def do_publish() -> None:
+        from ..gates import final_verification
+        gate = final_verification(run.config.test_command, run.project_dir,
+                                  parallel=run.config.parallel_tests)
+        st.verification = gate.model_dump()
+        save()
+        if not gate.passed:
+            raise StepFailed("publish", f"Final verification failed: {gate.reason}")
         try:
             publish.publish_round(fs, rnd, project_dir=run.project_dir,
                                   change_dir=run.change_dir, save=save, emit=run.emit)
@@ -573,6 +582,8 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         except StepFailed as e:
             run.emit(f"FINDINGS:FAILED:{e.step}:{' '.join(str(e).split())}")
             return e.exit_code
+        except BudgetExceededError:
+            raise
         except Exception as e:  # an agent or model call that raised: resumable
             log.exception("findings round %d: step %s failed", n, name)
             run.emit(f"FINDINGS:FAILED:{name}:{type(e).__name__}: {' '.join(str(e).split())}")
@@ -635,6 +646,10 @@ async def run_findings(run: FindingsRun) -> int:
     progress = ProgressWriter(run.config.progress_file_path())
     try:
         return await _run_findings(run)
+    except BudgetExceededError as e:
+        _progress_note(progress, "BUDGET", str(e))
+        run.emit(f"FINDINGS:FAILED:budget:{e}")
+        return EXIT_FAILED
     except (SystemExit, KeyboardInterrupt, asyncio.CancelledError) as e:
         sig = git_ops.stop_signal_name(e)
         log.warning("INTERRUPTED by %s", sig)
@@ -656,6 +671,9 @@ def _progress_note(progress: ProgressWriter, phase: str, details: str = "") -> N
 
 async def _run_findings(run: FindingsRun) -> int:
     st = load_state(run)
+    budget.reset()
+    budget.configure(max_tokens=run.config.budget_max_tokens, max_usd=run.config.budget_max_usd)
+    budget.get_budget().load_state(st.budget)
     fs = st.findings
     assert fs is not None
     mismatch = state_mismatch(run, fs)

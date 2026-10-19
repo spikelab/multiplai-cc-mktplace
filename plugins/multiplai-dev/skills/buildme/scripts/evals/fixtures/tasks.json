@@ -1,0 +1,114 @@
+[
+  {
+    "id": "simple-feature",
+    "instruction": "Implement clamp(value, low, high), including values outside the interval.",
+    "project": ".",
+    "test_command": "python -m pytest test_public.py -q",
+    "files": {
+      "app.py": "def clamp(v, lo, hi): return v\n",
+      "test_public.py": "def test_import():\n    import app\n    assert app is not None\n",
+      "pyproject.toml": "[project]\nname=\"pilot-fixture\"\nversion=\"0.0.0\"\nrequires-python=\">=3.12\"\n",
+      ".gitignore": "__pycache__/\n.pytest_cache/\n.venv/\nspecs/changes/*/.build-state*.json\nbuild-progress.md\n"
+    },
+    "solution": {
+      "app.py": "def clamp(v, lo, hi): return min(hi, max(lo, v))\n"
+    },
+    "acceptance": "from app import clamp; assert clamp(-3,0,4)==0; assert clamp(7,0,4)==4; assert clamp(2,0,4)==2"
+  },
+  {
+    "id": "bug-fix",
+    "instruction": "Fix mean so it includes every item and rejects empty input with ValueError.",
+    "project": ".",
+    "test_command": "python -m pytest test_public.py -q",
+    "files": {
+      "app.py": "def mean(xs): return sum(xs[:-1])/len(xs)\n",
+      "test_public.py": "def test_import():\n    import app\n    assert app is not None\n",
+      "pyproject.toml": "[project]\nname=\"pilot-fixture\"\nversion=\"0.0.0\"\nrequires-python=\">=3.12\"\n",
+      ".gitignore": "__pycache__/\n.pytest_cache/\n.venv/\nspecs/changes/*/.build-state*.json\nbuild-progress.md\n"
+    },
+    "solution": {
+      "app.py": "def mean(xs):\n    if not xs: raise ValueError(\"empty\")\n    return sum(xs)/len(xs)\n"
+    },
+    "acceptance": "from app import mean; assert mean([2,4,6])==4\ntry: mean([])\nexcept ValueError: pass\nelse: raise AssertionError(\"empty accepted\")"
+  },
+  {
+    "id": "cross-file",
+    "instruction": "Fix the invoice total, including the shipping charge stored in rates.py.",
+    "project": ".",
+    "test_command": "python -m pytest test_public.py -q",
+    "files": {
+      "app.py": "from rates import SHIPPING\ndef total(items): return sum(items)\n",
+      "test_public.py": "def test_import():\n    import app\n    assert app is not None\n",
+      "pyproject.toml": "[project]\nname=\"pilot-fixture\"\nversion=\"0.0.0\"\nrequires-python=\">=3.12\"\n",
+      ".gitignore": "__pycache__/\n.pytest_cache/\n.venv/\nspecs/changes/*/.build-state*.json\nbuild-progress.md\n",
+      "rates.py": "SHIPPING = 5\n"
+    },
+    "solution": {
+      "app.py": "from rates import SHIPPING\ndef total(items): return sum(items)+SHIPPING\n"
+    },
+    "acceptance": "from app import total; assert total([3,7])==15"
+  },
+  {
+    "id": "nested-project",
+    "instruction": "Implement slug(text) that lowercases words and joins whitespace with hyphens.",
+    "project": "services/api",
+    "test_command": "python -m pytest test_public.py -q",
+    "files": {
+      "services/api/app.py": "def slug(text): return text\n",
+      "services/api/test_public.py": "def test_import():\n    import app\n    assert app is not None\n",
+      "services/api/pyproject.toml": "[project]\nname=\"pilot-fixture\"\nversion=\"0.0.0\"\nrequires-python=\">=3.12\"\n",
+      ".gitignore": "__pycache__/\n.pytest_cache/\n.venv/\nspecs/changes/*/.build-state*.json\nbuild-progress.md\n"
+    },
+    "solution": {
+      "services/api/app.py": "def slug(text): return \"-\".join(text.lower().split())\n"
+    },
+    "acceptance": "from app import slug; assert slug(\"  Hello   WORLD \")==\"hello-world\""
+  },
+  {
+    "id": "ambiguous-requirement",
+    "instruction": "Implement two capabilities: stable unique(xs), and pagination page(xs, n, size). Pages are zero-based. Reject negative n or nonpositive size.",
+    "project": ".",
+    "test_command": "python -m pytest test_public.py -q",
+    "files": {
+      "app.py": "def unique(xs): return xs\ndef page(xs,n,size): return xs\n",
+      "test_public.py": "def test_import():\n    import app\n    assert app is not None\n",
+      "pyproject.toml": "[project]\nname=\"pilot-fixture\"\nversion=\"0.0.0\"\nrequires-python=\">=3.12\"\n",
+      ".gitignore": "__pycache__/\n.pytest_cache/\n.venv/\nspecs/changes/*/.build-state*.json\nbuild-progress.md\n"
+    },
+    "solution": {
+      "app.py": "def unique(xs): return list(dict.fromkeys(xs))\ndef page(xs,n,size):\n    if n<0 or size<=0: raise ValueError(\"invalid page\")\n    return xs[n*size:(n+1)*size]\n"
+    },
+    "acceptance": "from app import unique,page; assert unique([2,1,2])==[2,1]; assert page([1,2,3],1,2)==[3]\ntry: page([],0,0)\nexcept ValueError: pass\nelse: raise AssertionError(\"invalid size accepted\")"
+  },
+  {
+    "id": "weak-tests",
+    "instruction": "Fix discount(price, percent) to apply the percentage and preserve zero discount.",
+    "project": ".",
+    "test_command": "python -m pytest test_public.py -q",
+    "files": {
+      "app.py": "def discount(price, percent): return price\n",
+      "test_public.py": "def test_import():\n    import app\n    assert app is not None\n",
+      "pyproject.toml": "[project]\nname=\"pilot-fixture\"\nversion=\"0.0.0\"\nrequires-python=\">=3.12\"\n",
+      ".gitignore": "__pycache__/\n.pytest_cache/\n.venv/\nspecs/changes/*/.build-state*.json\nbuild-progress.md\n"
+    },
+    "solution": {
+      "app.py": "def discount(price, percent): return price*(1-percent/100)\n"
+    },
+    "acceptance": "from app import discount; assert discount(200,25)==150; assert discount(40,0)==40"
+  },
+  {
+    "id": "javascript-feature",
+    "instruction": "Export sumEven(values) from app.cjs; sum only even integers, including negative values.",
+    "project": ".",
+    "test_command": "node test_public.cjs",
+    "files": {
+      "app.cjs": "exports.sumEven = xs => 0;\n",
+      "test_public.cjs": "require(\"node:assert\").equal(require(\"./app.cjs\").sumEven([]),0);\n",
+      "package.json": "{\"name\":\"pilot-node\",\"version\":\"1.0.0\",\"scripts\":{\"test\":\"node test_public.cjs\"}}\n"
+    },
+    "solution": {
+      "app.cjs": "exports.sumEven = xs => xs.filter(x => Number.isInteger(x) && x % 2 === 0).reduce((a,b)=>a+b,0);\n"
+    },
+    "acceptance": "import subprocess; subprocess.run([\"node\",\"-e\",'require(\"node:assert\").equal(require(\"./app.cjs\").sumEven([1,2,-4,6,2.5]),4)'],check=True)"
+  }
+]

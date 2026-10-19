@@ -6,13 +6,13 @@ project. It discovers the project's own documents (`README*`, `CHANGELOG*`,
 `docs/**`), updates the ones the diff made stale, and closes its report with a
 REQUIRED `DOCS_IMPACT:` slot naming what it wrote.
 
-**Non-fatal by construction.** The build has already produced its code by the
-time this runs; a model failure here logs and returns "nothing updated" rather
-than killing a finished build. That case still reaches the deterministic
-`docs_freshness_gate`, which is exactly when its warning is most warranted.
+A failed writer blocks completion because it may have left partial edits.
+Documentation freshness remains advisory after a successful writer.
 """
 
 from __future__ import annotations
+
+from build_pipeline.budget import BudgetExceededError
 
 import logging
 from pathlib import Path
@@ -45,22 +45,14 @@ async def run_docs_update(config, state=None) -> tuple[list[str], GateResult]:
         notes=_read_notes(config),
     )
 
-    output = ""
-    try:
-        agent = await agent_call(
-            prompt,
-            allowed_tools=DOCS_TOOLS,
-            model=config.model_for("docs_update"),
-            effort=config.effort_for("docs_update"),
-            cwd=str(config.project_dir),
-            budget_label="docs_update",
-        )
-    except Exception as e:  # non-fatal by construction — the build is already built
-        log.warning("Docs update agent call failed (non-fatal): %s", e)
-    else:
-        output = agent.output or ""
-        if not agent.success:
-            log.warning("Docs update agent reported failure (non-fatal): %s", agent.error)
+    agent = await agent_call(
+        prompt, allowed_tools=DOCS_TOOLS,
+        model=config.model_for("docs_update"), effort=config.effort_for("docs_update"),
+        cwd=str(config.project_dir), budget_label="docs_update",
+    )
+    if not agent.success:
+        raise RuntimeError(f"Documentation writer failed: {agent.error or agent.output}")
+    output = agent.output or ""
 
     files = parse_docs_impact(output)
     gate = docs_freshness_gate(diff, files, Path(config.project_dir))

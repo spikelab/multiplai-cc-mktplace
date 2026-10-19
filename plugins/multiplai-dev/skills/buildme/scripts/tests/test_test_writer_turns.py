@@ -34,8 +34,9 @@ def _git(repo: Path, *args: str) -> str:
 @pytest.fixture(autouse=True)
 def _agents():
     """No real refactorer, and the test-quality auditor accepts the tests."""
-    from build_pipeline.models import TestQualityAudit
-    with patch("build_pipeline.tdd_engine.run_refactorer", new_callable=AsyncMock, return_value=OK), \
+    from build_pipeline.models import TestQualityAudit, GateResult
+    with patch("build_pipeline.tdd_engine.integration_gate", return_value=GateResult(passed=True, reason="fixture checks pass")), \
+         patch("build_pipeline.tdd_engine.run_refactorer", new_callable=AsyncMock, return_value=OK), \
          patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
                return_value=TestQualityAudit(passed=True)):
         yield
@@ -104,7 +105,7 @@ class TestTurnLimit:
         config, state, progress, block = setup
         writer = _writes(config.project_dir, {"tests/test_old.py": NEW_TEST}, TURN_LIMIT)
         with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=writer), \
-             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED), \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=(1, RED[1].replace("test_new.py", "test_old.py"))), \
              patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=OK):
             assert await run_block_tdd(block, config, state, progress) is True
         assert block.test_commit

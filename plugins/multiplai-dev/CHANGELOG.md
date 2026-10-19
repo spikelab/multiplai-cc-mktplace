@@ -15,6 +15,25 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.85.0] - 2026-10-19
+
+### Fixed
+- buildme verifies the final revision after review fixes, documentation and
+  archive preparation. Failed checks or partial writers cannot publish a build;
+  publication failures remain separately resumable after successful verification.
+- Recovery preserves staged and working versions independently, including nested
+  projects. Legacy stop records without index evidence refuse destructive recovery.
+- Planning resumes missing capability requirements, includes proposal and use cases
+  in task prompts, and invalidates dependent artifacts and reviews after edits.
+  Shared, bounded plan repair stops when blocking findings remain.
+- Planning, retries and resumed calls obey the same budget admission policy as
+  implementation; queued calls cannot dispatch after exhaustion.
+
+### Added
+- A paired evaluation harness with held-out checks, timeout and recovery measurement.
+  The saved dry run validates the harness. Live effectiveness is pending and optional
+  stage defaults remain unchanged.
+
 ## [0.84.0] - 2026-10-18
 
 ### Added

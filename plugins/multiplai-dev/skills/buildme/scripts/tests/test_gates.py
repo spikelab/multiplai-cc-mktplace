@@ -190,7 +190,7 @@ class TestRedGate:
 
     def test_passes_on_terse_lowercase_summary(self):
         """pytest -q --tb=no emits only a summary count — no FAILED lines."""
-        assert red_gate("1 failed, 3 passed in 0.12s", 1).passed
+        assert not red_gate("1 failed, 3 passed in 0.12s", 1).passed
 
     def test_passes_on_jest_style_output(self):
         """Jest/Vitest print `FAIL <file>` and a lowercase `N failed` summary —
@@ -200,7 +200,9 @@ class TestRedGate:
             "  ● login › returns a token\n"
             "Tests: 1 failed, 2 passed, 3 total\n"
         )
-        assert red_gate(output, 1).passed
+        result = red_gate(output, 1, runner="jest")
+        assert result.passed
+        assert result.metadata["classification"] == "unverified"
 
     def test_zero_failed_summary_is_not_red_proof(self):
         result = red_gate("0 failed, 5 passed", 1)
@@ -1347,5 +1349,65 @@ class TestParallelFullSuite:
         from build_pipeline import tdd_engine
         src = inspect.getsource(tdd_engine)
         calls = re.findall(r"(?:integration_gate|baseline_test_gate)\(([^()]*)\)", src)
-        assert len(calls) == 10
+        assert calls  # every call must pass the setting; adding a gate is allowed
         assert all(c.endswith("parallel=config.parallel_tests") for c in calls), calls
+
+
+class TestFinalVerification:
+    def test_requires_a_test_command(self, tmp_path):
+        from build_pipeline.gates import final_verification
+        assert not final_verification("", tmp_path).passed
+
+    def test_rejects_test_command_that_rewrites_tracked_input(self, tmp_path, monkeypatch):
+        import subprocess
+        import sys
+        from build_pipeline.gates import final_verification
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        (tmp_path / "input.txt").write_text("before")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+        command = f'''{sys.executable} -c "from pathlib import Path; Path('input.txt').write_text('after')"'''
+        result = final_verification(command, tmp_path)
+        assert not result.passed
+        assert "changed" in result.reason
+
+    def test_pass_records_command_and_revision(self, tmp_path, monkeypatch):
+        import subprocess
+        import sys
+        from build_pipeline.gates import final_verification, verification_inputs
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-qm", "base"], cwd=tmp_path, check=True)
+        command = f'{sys.executable} -c "print(123)"'
+        result = final_verification(command, tmp_path, plan_revision="plan-one")
+        assert result.passed
+        assert result.metadata["inputs"] == verification_inputs(command, tmp_path, plan_revision="plan-one")
+        assert "123" in result.metadata["output"]
+
+
+def test_red_rejects_missing_fixture_file_even_with_failed_summary():
+    from build_pipeline.gates import red_gate
+    gate = red_gate("FileNotFoundError: missing-fixture.json\nFAILED tests/test_app.py::test_read\n1 failed", 1)
+    assert not gate.passed
+
+
+def test_red_rejects_setup_errors_even_with_assertion_failures():
+    from build_pipeline.gates import red_gate
+    assert not red_gate("ERROR at setup of test_app\nAssertionError\n1 failed, 1 error", 1).passed
+
+
+@pytest.mark.parametrize("body,expected", [
+    ("def test_behavior():\n    assert 1 == 2\n", True),
+    ("def test_behavior(missing_fixture):\n    assert 1 == 2\n", False),
+    ("def test_behavior():\n    open('missing-input')\n", False),
+    ("import missing_buildme_test_module\n", False),
+])
+def test_real_pytest_red_classifies_behavior_and_attributes_changed_test(tmp_path, body, expected):
+    import subprocess
+    import sys
+    (tmp_path / "test_behavior.py").write_text(body)
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", "test_behavior.py"],
+                            cwd=tmp_path, capture_output=True, text=True)
+    gate = red_gate(result.stdout + result.stderr, result.returncode, expected_tests=["test_behavior.py"])
+    assert gate.passed is expected, gate.reason

@@ -15,7 +15,9 @@ import os
 import subprocess
 from pathlib import Path
 
+from tests.planning_fakes import accepted_planning
 import pytest
+from tests.planning_fakes import _prepare_and_publish
 
 from build_pipeline import git_ops, orchestrator
 from build_pipeline.change_manager import ChangeManager
@@ -820,7 +822,7 @@ class TestSiblingsOpenTheirPrsAgainstMain:
             _git(trees[cid], "commit", "-q", "-m", f"child {cid}")
             if cid == "ui":         # the trap: the one origin branch holding the commit is api's
                 assert orchestrator._pr_base_branch(trees["ui"], registry) == "buildme/e-api"
-            assert orchestrator._run_publish(config, state, ProgressWriter(tmp_path / f"{cid}.md")) is True
+            assert _prepare_and_publish(config, state, ProgressWriter(tmp_path / f"{cid}.md")) is True
 
         assert sorted(opened) == ["buildme/e-api", "buildme/e-ui"]
         for argv in opened.values():

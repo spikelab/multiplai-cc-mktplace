@@ -38,6 +38,54 @@ def _no_spec_extract(monkeypatch):
     monkeypatch.setattr(orchestrator, "_run_spec_extract_step", lambda config, state, progress: None)
 
 
+from tests.planning_fakes import _plan_fixture, _prepare_and_publish
+
+
+@pytest.fixture(autouse=True)
+def _phase_wiring_prerequisites(monkeypatch):
+    """Supply model outputs and verified-plan fixtures, retaining real final gates.
+
+    These tests exercise phase routing and Git publication; missing/stale evidence
+    is tested through unwrapped public entry points in test_completion_contract.
+    """
+    from unittest.mock import AsyncMock
+    from build_pipeline import orchestrator, spec_generator
+    from build_pipeline.models import PlanReviewResult, GateResult
+    from build_pipeline.llm_steps import spec_steps, plan_review_steps
+    real = orchestrator.run_orchestrator
+
+    async def generated(cm, change_dir, config, state):
+        _plan_fixture(config, state)
+
+    async def run(config, args):
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        if not config.test_command:
+            config.test_command = "true"
+        orchestrator._rebind_to_existing_worktree(config)
+        path = config.state_file_path()
+        if path.exists():
+            state = BuildState.load(path)
+            if state.phase == BuildPhase.PUBLISH and not (state.spec_gen and state.spec_gen.revision):
+                _plan_fixture(config, state)
+                state.spec_gen.design_audit_done = True
+                state.spec_gen.plan_review_done = True
+                state.checkpoint(path)
+                git_ops.commit_tree(config.project_dir, "test: accepted plan")
+        if not git_ops.rev_parse_head(config.project_dir):
+            git_ops._run(["git", "init", "-q"], cwd=config.project_dir)
+            git_ops._run(["git", "commit", "--allow-empty", "-qm", "test baseline"], cwd=config.project_dir)
+        return await real(config, args)
+
+    monkeypatch.setattr(spec_generator, "_generate_all_artifacts", generated)
+    monkeypatch.setattr(spec_generator, "generate_rubric", AsyncMock(return_value="# Current rubric"))
+    monkeypatch.setattr(spec_steps, "run_tasks_audit", AsyncMock(return_value=[]))
+    monkeypatch.setattr("build_pipeline.llm_steps.docs_steps.run_docs_update", AsyncMock(return_value=([], GateResult(passed=True, reason="unit docs"))))
+    monkeypatch.setattr(spec_steps, "run_design_audit", AsyncMock(return_value=[]))
+    monkeypatch.setattr(plan_review_steps, "run_plan_review", AsyncMock(return_value=PlanReviewResult(findings=[])))
+    monkeypatch.setattr(orchestrator, "run_orchestrator", run)
+    monkeypatch.setitem(globals(), "run_orchestrator", run)
+
+
 class TestPhaseOrdering:
     def test_phase_enum_order(self):
         """Verify phases are ordered correctly for is_phase_complete checks."""
@@ -150,10 +198,10 @@ class TestArchivePhase:
 
         assert result == 0
         # Change directory should be moved to archive
-        assert not change_dir.exists()
+        assert change_dir.exists()  # historical completion never archives or republishes
         archive_root = config.specs_dir / "archive"
         archived_dirs = list(archive_root.glob("*-test-archive"))
-        assert len(archived_dirs) == 1, f"Expected 1 archive entry, got {archived_dirs}"
+        assert archived_dirs == []
 
     @pytest.mark.asyncio
     async def test_non_auto_mode_leaves_change_in_place(self, tmp_path):
@@ -292,7 +340,7 @@ class TestCodebaseAnalysisPhase:
         config = self._config(tmp_path, "record-path")
         seen = {}
 
-        async def _capture(cfg, args=None):
+        async def _capture(cfg, args=None, **kwargs):
             state = BuildState.load(cfg.state_file_path())
             seen["path"] = state.spec_gen.codebase_analysis_path if state.spec_gen else None
             return 0
@@ -539,7 +587,8 @@ class TestPrototypePhase:
 
         config = self._config(tmp_path, "resume-proto", "true", self.FRONTEND_PROPOSAL)
         state = BuildState.load(config.state_file_path())
-        state.spec_gen = SpecGenState(prototype_done=True)
+        _plan_fixture(config, state)
+        state.spec_gen.prototype_done = True
         state.checkpoint(config.state_file_path())
 
         mock_prototype = AsyncMock()
@@ -604,7 +653,7 @@ class TestPrototypePhase:
                           passed=False, reason="no artifact file"))):
             result = await run_orchestrator(config, self._args(tmp_path, "fail-proto"))
 
-        assert result == 0
+        assert result == 1
         progress = config.progress_file_path()
         assert progress.exists()
         assert "no artifact file" in progress.read_text()
@@ -726,11 +775,12 @@ class TestSpecGenerationReloadOnlyMovesForward:
         config = self._config(tmp_path)
         state_path = config.state_file_path()
 
-        async def fake_spec_generator(cfg, args=None):
+        async def fake_spec_generator(cfg, args=None, **kwargs):
             """What the real one leaves behind: the pointer already at
             DESIGN_AUDIT, and the audit stage recorded as spent."""
             s = BuildState.load(state_path)
-            s.spec_gen = SpecGenState(design_audit_done=True)
+            _plan_fixture(cfg, s)
+            s.spec_gen.design_audit_done = True
             s.advance_to(BuildPhase.DESIGN_AUDIT, state_path)
             return 0
 
@@ -934,7 +984,7 @@ class TestDocsUpdatePhaseWiring:
                    new_callable=AsyncMock, return_value=None):
             rc = await run_orchestrator(config, Namespace(interview_summary=""))
 
-        assert rc == 0
+        assert rc == 1
 
     @pytest.mark.asyncio
     async def test_warning_reaches_stdout(self, tmp_path, capsys):
@@ -1326,7 +1376,7 @@ class TestNoWorktreeIsUnchangedBehavior:
         config.specs_dir = repo / "specs"
         state = BuildState(change_name="inplace", mode="scratch", tier="advanced")
         progress = ProgressWriter(config.progress_file_path())
-        assert _run_publish(config, state, progress) is True
+        assert _prepare_and_publish(config, state, progress) is True
         out = capsys.readouterr().out
         assert "PUSHED:" not in out and "PR:" not in out
         assert not config.progress_file_path().exists()
@@ -1462,7 +1512,7 @@ class TestPublishFailureIsNonFatal:
         worktree = Path(state.worktree_path)
         progress = ProgressWriter(config.progress_file_path())
 
-        assert _run_publish(config, state, progress) is False
+        assert _prepare_and_publish(config, state, progress) is False
         out = capsys.readouterr().out
         assert "PHASE:PUBLISH:FAILED:no-remote" in out
         text = (worktree / "build-progress.md").read_text()
@@ -1494,7 +1544,7 @@ class TestPublishFailureIsNonFatal:
             return GitResult(argv, 0, "PR:https://github.com/o/r/pull/9\n", "")
 
         monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
-        assert _run_publish(config, state, progress) is True
+        assert _prepare_and_publish(config, state, progress) is True
         assert state.pr_url == "https://github.com/o/r/pull/9"
         out = capsys.readouterr().out
         assert "PR:https://github.com/o/r/pull/9" in out
@@ -1532,7 +1582,7 @@ class TestPublishFailureIsNonFatal:
 
         monkeypatch.setattr(git_ops, "_run_pr_skill",
                             lambda argv, cwd=None, timeout=None: GitResult(argv, 1, stdout, stderr))
-        assert _run_publish(config, state, progress) is False
+        assert _prepare_and_publish(config, state, progress) is False
         out = capsys.readouterr().out
         assert "PHASE:PUBLISH:FAILED:pr" in out
         # PUBLISH_DIAGNOSIS is a one-line marker: the reason must be on that line.
@@ -1558,7 +1608,7 @@ class TestPublishFailureIsNonFatal:
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
         progress = ProgressWriter(config.progress_file_path())
-        assert _run_publish(config, state, progress) is True
+        assert _prepare_and_publish(config, state, progress) is True
         assert "PHASE:PUBLISH:SKIPPED:buildme/nopush" in capsys.readouterr().out
 
 
@@ -1618,7 +1668,7 @@ class TestAutoPublishPRBody:
         assert "specs/archive/" in str(change_dir), "links must point at the archived layout"
         assert "Because the queue drops jobs." in (change_dir / "proposal.md").read_text()
         assert (change_dir / "respec.md").exists()
-        assert not config2.change_dir.exists()  # archived
+        assert not (config2.specs_dir / "changes" / config2.change_name).exists()  # archived
         # Successful publish keeps the checkpoint, renamed, in its archived home.
         assert list((config2.specs_dir / "archive").glob("*/.build-state.json")) == []
         kept = list((config2.specs_dir / "archive").glob("*/.build-state.complete.json"))
@@ -1707,7 +1757,7 @@ class TestPublishFailureRecovery:
             ),
         )
         state_path = config.state_file_path()
-        assert _run_publish(config, state, progress, state_path=state_path) is True
+        assert _prepare_and_publish(config, state, progress, state_path=state_path) is True
         saved = BuildState.load(state_path)
         assert saved.pr_url == "https://github.com/o/r/pull/9"
 
@@ -1824,7 +1874,7 @@ class TestPublishHandsOffToThePrSkill:
     async def test_runs_the_pr_skill_from_the_skills_directory(self, tmp_path, monkeypatch, captured):
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         config, state, progress = await _published_build(tmp_path, "handoff")
-        assert _run_publish(config, state, progress) is True
+        assert _prepare_and_publish(config, state, progress) is True
         argv = captured["argv"]
         from build_pipeline import orchestrator
 
@@ -1844,7 +1894,7 @@ class TestPublishHandsOffToThePrSkill:
         # specs/config.yaml under --repo, so --repo must be the subproject, not the worktree root.
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         config, state, progress = await _published_build(tmp_path, "nestedpub", sub="packages/api")
-        assert _run_publish(config, state, progress) is True
+        assert _prepare_and_publish(config, state, progress) is True
         argv = captured["argv"]
         assert config.project_dir == Path(state.worktree_path) / "packages" / "api"
         assert argv[argv.index("--repo") + 1] == str(config.project_dir)
@@ -1854,7 +1904,7 @@ class TestPublishHandsOffToThePrSkill:
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         config, state, progress = await _published_build(tmp_path, "ticketed")
         state.ticket_url = "https://plane.example/SPK-7"
-        assert _run_publish(config, state, progress) is True
+        assert _prepare_and_publish(config, state, progress) is True
         argv = captured["argv"]
         assert argv[argv.index("--ticket-url") + 1] == "https://plane.example/SPK-7"
 
@@ -1862,7 +1912,7 @@ class TestPublishHandsOffToThePrSkill:
     async def test_a_build_without_a_ticket_passes_no_ticket_url(self, tmp_path, monkeypatch, captured):
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         config, state, progress = await _published_build(tmp_path, "unticketed")
-        assert _run_publish(config, state, progress) is True
+        assert _prepare_and_publish(config, state, progress) is True
         assert "--ticket-url" not in captured["argv"]
 
     @pytest.mark.asyncio
@@ -1870,14 +1920,14 @@ class TestPublishHandsOffToThePrSkill:
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         config, state, progress = await _published_build(tmp_path, "ready")
         config.git = GitToggles(worktree=True, push=True, pr="ready")
-        assert _run_publish(config, state, progress) is True
+        assert _prepare_and_publish(config, state, progress) is True
         assert "--ready" in captured["argv"]
 
     @pytest.mark.asyncio
     async def test_worktree_note_reaches_the_body_as_a_section(self, tmp_path, monkeypatch, captured):
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         config, state, progress = await _published_build(tmp_path, "note")
-        assert _run_publish(config, state, progress) is True
+        assert _prepare_and_publish(config, state, progress) is True
         note = captured["sections"]["worktree.md"]
         assert note.startswith("## Worktree\n")
         assert state.worktree_path in note and "calling session's decision" in note
@@ -1897,7 +1947,7 @@ class TestPublishHandsOffToThePrSkill:
             return path
 
         monkeypatch.setattr(orchestrator, "PRE_PUBLISH_CONTRIBUTORS", [stale_walkthroughs, lambda *a: None])
-        assert _run_publish(config, state, progress) is True
+        assert _prepare_and_publish(config, state, progress) is True
         assert captured["sections"]["walkthroughs.md"].startswith("## Stale walkthroughs")
         assert [p.name for p in _sections(captured["argv"])] == ["worktree.md", "walkthroughs.md"]
 
@@ -1912,7 +1962,7 @@ class TestPublishHandsOffToThePrSkill:
             raise RuntimeError("contributor bug")
 
         monkeypatch.setattr(orchestrator, "PRE_PUBLISH_CONTRIBUTORS", [broken])
-        assert _run_publish(config, state, progress) is True
+        assert _prepare_and_publish(config, state, progress) is True
         out = capsys.readouterr().out
         assert "PHASE:PUBLISH:COMPLETE" in out and "PR:https://github.com/o/r/pull/5" in out
         assert [p.name for p in _sections(captured["argv"])] == ["worktree.md"]
@@ -1929,7 +1979,7 @@ class TestPublishHandsOffToThePrSkill:
             lambda argv, cwd=None, timeout=None: GitResult(
                 argv, 1, "PR_DIAGNOSIS:a gate rejected the body; nothing was written: too long\n", ""),
         )
-        assert _run_publish(config, state, progress) is False
+        assert _prepare_and_publish(config, state, progress) is False
         out = capsys.readouterr().out
         assert "PHASE:PUBLISH:FAILED:pr" in out
         assert "PUBLISH_DIAGNOSIS:the pr skill (`pr_pipeline open`) failed (exit 1): a gate rejected" in out
@@ -1952,7 +2002,7 @@ class TestPublishHandsOffToThePrSkill:
                 "PR_DIAGNOSIS:`gh pr create` failed (exit 1): a pull request for branch "
                 f'"buildme/exists" into branch "main" already exists: {existing}\n', ""),
         )
-        assert _run_publish(config, state, progress) is False
+        assert _prepare_and_publish(config, state, progress) is False
         diagnosis = [line for line in capsys.readouterr().out.splitlines()
                      if line.startswith("PUBLISH_DIAGNOSIS:")]
         assert len(diagnosis) == 1 and f"already exists: {existing}" in diagnosis[0]
@@ -2059,7 +2109,8 @@ class TestPlanReviewPhase:
 
         config = self._config(tmp_path, "resume-plan")
         state = BuildState.load(config.state_file_path())
-        state.spec_gen = SpecGenState(plan_review_done=True)
+        _plan_fixture(config, state)
+        state.spec_gen.plan_review_done = True
         state.checkpoint(config.state_file_path())
 
         mock_review = AsyncMock()
@@ -2083,7 +2134,7 @@ class TestPlanReviewPhase:
                       AsyncMock(side_effect=RuntimeError("model exploded"))):
             result = await run_orchestrator(config, self._args(tmp_path, "broken-plan"))
 
-        assert result == 0
+        assert result == 1
 
     @pytest.mark.asyncio
     async def test_a_failed_review_is_retried_on_a_resume(self, tmp_path):
@@ -2129,7 +2180,8 @@ class TestPlanReviewPhase:
         state = BuildState.load(config.state_file_path())
         state.advance_to(BuildPhase.PROTOTYPE, config.state_file_path())
 
-        mock_review = AsyncMock()
+        from build_pipeline.models import PlanReviewResult
+        mock_review = AsyncMock(return_value=PlanReviewResult(findings=[]))
         with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
                    AsyncMock(return_value=[])), \
                 patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
@@ -2137,4 +2189,4 @@ class TestPlanReviewPhase:
             result = await run_orchestrator(config, self._args(tmp_path, "past-plan"))
 
         assert result == 0
-        mock_review.assert_not_awaited()
+        mock_review.assert_awaited_once()  # ordinal progress is not review evidence

@@ -464,7 +464,7 @@ class TestRegistryInThePrompts:
             "tasks": TASKS_PROMPT.format(
                 project_context="PROJECT", proposal_content="proposal body",
                 specs_content=_read_specs(config), design_content="design body",
-                granularity=config.task_granularity, unknowns_content="(none detected)",
+                use_cases_content="(not available)", granularity=config.task_granularity, unknowns_content="(none detected)",
                 reference_docs="(none available)", audit_findings="(none — first pass)",
                 instruction="INSTRUCTION", template="TEMPLATE"),
         }[artifact]

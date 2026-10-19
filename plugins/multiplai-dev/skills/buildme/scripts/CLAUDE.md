@@ -5,8 +5,8 @@
 | Module | Purpose | LLM calls? |
 |--------|---------|-----------|
 | `__main__.py` | CLI entry point with subcommands | No |
-| `orchestrator.py` | Phase sequencing state machine | Delegates |
-| `spec_generator.py` | Artifact pipeline (proposal → tasks → rubric) | Via llm_steps |
+| `orchestrator.py` | Phase routing; final preparation, verification, then publication | Delegates |
+| `spec_generator.py` | Sole planning publisher: atomic documents, dependency revisions, bounded repair journal | Via llm_steps |
 | `tdd_engine.py` | Block-by-block TDD with agent spawning. Phase A (`_write_block_tests`) runs only when `_tests_done` finds no earlier work: `"red"` (`test_commit` an ancestor of HEAD, `red_evidence` set, `_snapshot_test_files` equal to `test_file_hashes`) goes straight to the implementer, `"committed"` (ancestor, otherwise) re-runs the quality and RED gates; the implementer then gets `_unreported_tests` (the RED evidence) as its failing tests. A test writer stopped at the Claude CLI's turn cap (`_hit_turn_limit`, `TURN_LIMIT_ERROR`) with test files on disk (`_uncommitted_test_files`: changed since HEAD or untracked, bookkeeping and specs left out) goes on to the gates (`_kept_after_turn_limit`), in Phase A and in both gate retries; Phase A gets `DRAFTS_SECTION` when it starts with such files; a capped mutation round goes through the round's checks. Each block runs test → implement → **refactor** on every tier; the refactor is verified (suite re-run + `unchanged_tests_gate`) and its diff discarded on failure. `_run_refactor_all` is the one conservative whole-change pass, between the block loop and the entry-point check, guarded by `TDDState.refactor_all_done`. buildme runs no whole-change review: that is `/multiplai-dev:review`, on the PR. | Via llm_steps |
 | `signatures.py` | `signatures_section(block, project_dir)`, the test writer's context section (`assemble_context`, role `test_writer` only): for each `.py` source file `code_analysis._named_in` finds in the block text, and the one source file that defines each name in `consumes` or in a backticked name or call (a name with `_` or a capital), its module docstring line, public classes (bases, fields, plain class assignments, public methods and `__init__`), public functions, UPPER_CASE constants and private top-level names the block text names, with signatures and first docstring lines and no bodies; then, for the nearest `tests/` directory of each, the fixtures and public names of its non-test files, the `test_*` functions naming a module symbol as `path::name`, and the shortest test file importing a module (200 lines at most). Files come from `git ls-files --cached --others --exclude-standard` and are parsed from the working tree. Filled in that order up to `MAX_CHARS` (40,000), naming what it cut. Python projects only (`mutation.PYTHON_MARKERS`); never raises. | No |
 | `review_rounds.py` | The per-block review loop's records, in the change dir: `reviews/block-<NN>-round-<k>.json` (`record_round` creates the next free number exclusively and never replaces a file; `update_round` / `amend_fix` fill in the fix brief and the fix agent's report, commit, `SEARCHED` list and whether it was kept; a resumed attempt's earlier fix moves to `earlier_fixes`), `snapshot`/`restore` (so a rollback keeps the records), and `unfixed-findings.md` (`append_unfixed`, heading first: it is a PR-body section, `orchestrator.unfixed_findings_section`). `fixable_on_pass` picks the Critical/Major/Minor findings. Never raises. | No |
@@ -39,14 +39,14 @@
 
 | File | Functions | What They Do |
 |------|-----------|-------------|
-| `spec_steps.py` | `generate_artifact()`, `run_explainer()`, `run_design_audit()`, `run_tasks_audit()`, `run_codebase_analysis()` | `run_explainer()` is the B1 explainer gate — one call per `dependencies.detect_new_dependencies()` hit, run concurrently with `WebSearch`/`WebFetch`/`Read`/`Glob`/`Grep`, concatenated into `unknowns.md`; `unknowns_gate` then forces at most one regeneration pass (`spec_generator._audit_unknowns`, recorded as `SpecGenState.explainers_done`). Spec generation + adversarial audits (design audit and tasks-shape audit, both wired — the tasks audit forces one regeneration pass on horizontal-decomposition findings, and on `no-new-behaviour` blocks from `spec_generator.scan_no_behaviour_blocks`: a block that produces nothing and whose own text says it adds no code (it says an earlier block already satisfies it, with itself as the subject; it says, unscoped, that it needs no code; it is test work, by its heading or first instruction, changes only test files and has no step that writes code; or it adds tests, leaves every file it names unchanged and has no step that writes code), so its tests would pass before it is built and fail the TDD RED gate; it reads a block's prose and checkboxes, and never flags on `Produces: (none)` or a "Verify"/"Confirm" verb alone; `report_no_behaviour_blocks_left` names any block still flagged after a rewrite, `PHASE: no_behaviour_blocks_remain`). `run_design_audit()` covers consistency **and** plan quality (over-engineering, granularity, testability, edge cases); its critical/major gaps force one regeneration pass of design.md + tasks.md through the single call site `spec_generator.run_design_audit_stage` (recorded as `SpecGenState.design_audit_regen_done`, then one report-only re-audit; the stage as a whole is recorded as `design_audit_done` and checked before the model call, so the second call site is free). `run_codebase_analysis()` (one `code_facts` explore agent per slice of the source files, through `code_analysis.analyse`, with `_codebase_analysis_call` as its call function; a project with no commit gets `code_analysis.no_commit_report`, a labelled "not analysed" list of its source files) is **wired** as `BuildPhase.CODEBASE_ANALYSIS` — the orchestrator writes its report to `codebase-analysis.md` and records the path on `SpecGenState.codebase_analysis_path`; `spec_generator.read_codebase_analysis` turns that path back into the text the design prompt inlines. |
-| `prototype_steps.py` | `run_prototype()`, `apply_prototype_findings()`, `primary_prototype_artifact()` | Prototype-first stage (BuildPhase.PROTOTYPE, between DESIGN_AUDIT and REVIEW). One agent writes a mockup / sample output / CLI transcript + `NOTES.md` inside `specs/changes/<name>/prototype/` — the write boundary is enforced in code (`_files_outside`), not only in the prompt. `apply_prototype_findings()` folds the notes' DISPROVES/OPEN_QUESTIONS back into design.md and tasks.md with **one** regeneration pass each. That pass is the last writer of tasks.md before TDD, so `scan_no_behaviour_blocks` runs on the tasks.md it wrote and a flagged block gets one more tasks rewrite carrying the notes and the scan's findings (`_rewrite_no_behaviour_blocks`, non-fatal, inside the same `prototype_done` guard). |
+| `spec_steps.py` | `generate_artifact()`, `run_explainer()`, `run_design_audit()`, `run_tasks_audit()`, `run_codebase_analysis()` | `run_explainer()` is the B1 explainer gate — one call per `dependencies.detect_new_dependencies()` hit, run concurrently with `WebSearch`/`WebFetch`/`Read`/`Glob`/`Grep`, concatenated into `unknowns.md`; `unknowns_gate` then forces at most one regeneration pass (`spec_generator._audit_unknowns`, recorded as `SpecGenState.explainers_done`). Spec generation + adversarial audits (design audit and tasks-shape audit, both wired — the tasks audit forces one regeneration pass on horizontal-decomposition findings, and on `no-new-behaviour` blocks from `spec_generator.scan_no_behaviour_blocks`: a block that produces nothing and whose own text says it adds no code (it says an earlier block already satisfies it, with itself as the subject; it says, unscoped, that it needs no code; it is test work, by its heading or first instruction, changes only test files and has no step that writes code; or it adds tests, leaves every file it names unchanged and has no step that writes code), so its tests would pass before it is built and fail the TDD RED gate; it reads a block's prose and checkboxes, and never flags on `Produces: (none)` or a "Verify"/"Confirm" verb alone; `report_no_behaviour_blocks_left` names any block still flagged after a rewrite, `PHASE: no_behaviour_blocks_remain`). `run_design_audit()` covers consistency **and** plan quality (over-engineering, granularity, testability, edge cases); its critical/major gaps force one regeneration pass of design.md + tasks.md through the single call site `spec_generator.run_design_audit_stage` (recorded as `SpecGenState.design_audit_regen_done`, then a required re-audit; the outcome is tied to its input revision, so an unchanged resume is free). `run_codebase_analysis()` (one `code_facts` explore agent per slice of the source files, through `code_analysis.analyse`, with `_codebase_analysis_call` as its call function; a project with no commit gets `code_analysis.no_commit_report`, a labelled "not analysed" list of its source files) is **wired** as `BuildPhase.CODEBASE_ANALYSIS` — the orchestrator writes its report to `codebase-analysis.md` and records the path on `SpecGenState.codebase_analysis_path`; `spec_generator.read_codebase_analysis` turns that path back into the text the design prompt inlines. |
+| `prototype_steps.py` | Optional prototype before final planning review. Findings request a revision from the shared owner. Failed writers block completion. |
 | `tdd_steps.py` | `run_test_writer()`, `run_mutation_test_writer()`, `run_implementer()`, `run_refactorer()`, `run_refactor_all()`, `run_integration_fix()` | TDD agent spawning with tool allowlists. Reports carry the `SURPRISES:` / `SPEC_IMPACT:` REQUIRED slots parsed by `gates.parse_implementation_note`. `run_refactor_all()` is the whole-change pass: same `REFACTORER_TOOLS`, more turns/time, `budget_label="refactor_all"`. `run_mutation_test_writer()` is the MUTATION step's one survivor round: `TEST_WRITER_TOOLS`, `budget_label="mutation_test_writer"`. |
 | `respec_steps.py` | `append_implementation_note()`, `format_implementation_note()`, `notes_path()`, `ensure_delta_sections()`, `run_respec_audit()` | B3 loop back to the spec. Each parsed `ImplementationNote` is appended to `implementation-notes.md` **as the build runs** (a crashed build still leaves the learning on disk). `run_respec_audit()` (BuildPhase.RESPEC, after TDD_BUILD) reads those notes + current requirements/design and writes `respec.md` in ADDED/MODIFIED/REMOVED form — **propose only, never edits the specs**, and non-fatal on LLM failure. |
-| `docs_steps.py` | `run_docs_update()` | The documentation phase (BuildPhase.DOCS_UPDATE, between TDD_BUILD and RESPEC). One agent with `Read/Write/Edit/Glob/Grep` over the whole build diff (`tdd_engine.capture_build_diff`) plus `implementation-notes.md`; it discovers the project's own `README*` / `CHANGELOG*` / `docs/**` and updates whatever the diff made stale. Closes with a REQUIRED `DOCS_IMPACT:` slot parsed by `gates.parse_docs_impact`. **Always on** — no flag, no config toggle — and non-fatal like RESPEC: the code is already built, so a docs failure logs and the build continues (that path still reaches `docs_freshness_gate`, which is exactly when its warning is warranted). |
+| `docs_steps.py` | Documentation writer; failures propagate. Freshness warnings remain advisory after a successful writer. |
 | `review_steps.py` | `run_code_review()`, `merge_panel_results()`, `run_review_fix()` | `run_code_review()` calls `agent_call_structured` with `REVIEWER_TOOLS = ["Read", "Grep", "Glob"]` and `REVIEWER_MAX_TURNS = 30`, so the reviewer opens the files a changed line calls into instead of judging a diff string — and the whole step now needs a trusted repo. It is **wired** as the active per-block review — `tdd_engine._run_quality_review` calls it with the block's actual diff, rubric, spec context, and coding standards. Runs every model in `config.review_panel` concurrently (empty panel → one reviewer on `review_model`-or-`model`, byte-identical to the pre-panel behavior), drops members that failed, and folds the survivors with `merge_panel_results()`. `run_review_fix()` remains **not wired**. Security review is out of scope for this pipeline — the dedicated security-review prompt, step function and `security_review` config toggle were deleted; use Claude Code's built-in `/security-review` instead. |
 | `interview_steps.py` | `ask_questions()`, `answer_questions()`, `run_self_interview()`, `decide_research()` | `interview: self` is two separate read-only agent calls (`Read`/`Glob`/`Grep`, `budget_label="interview"`): a questioner, then a fresh answerer whose ungrounded answers become assumptions. `ticket` mode uses the questioner alone. `decide_research()` is one toolless `llm_call_structured` (`budget_label="research"`). Each takes `call=` for tests. |
-| `plan_review_steps.py` | `run_plan_review()`, `run_plan_review_stage()` | The `PLAN_REVIEW` phase, between `DESIGN_AUDIT` and `PROTOTYPE`. Reads `tasks.md` against `rubric.md`, the constraints and `use-cases.md` as a read-only subagent (`PLAN_REVIEW_TOOLS = ["Read", "Grep", "Glob"]`, `PLAN_REVIEW_MAX_TURNS = 30`) on `plan_review_model`/`plan_review_effort`. Critical/major findings drive **one** regeneration of `tasks.md` (`SpecGenState.plan_review_regen_done`), then one report-only re-check; the stage as a whole is `plan_review_done`, checked before the model call. `scan_no_behaviour_blocks` runs before the model call on every review and its blocks join the findings as `no-new-behaviour` (critical); when the model call fails, the scan's blocks alone get a rewrite, once per build (`SpecGenState.plan_review_scan_regen_done`), and the review's two flags stay false, as for any failed call, so a resume asks the model again and its findings get the review's one regeneration. The report-only re-check counts the scan too. It is not the last check before TDD: the prototype feedback pass rewrites `tasks.md` after it. `oversized-plan` is in `PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES` — it never earns the regeneration, because acting on it means splitting `tasks.md` across tickets, which no code path here does. Best-effort: a failure never fails the build, and leaves the reviewed plan standing unless the scan flagged a block. Its own module rather than `review_steps.py` only because that file was being edited concurrently. |
+| `plan_review_steps.py` | Read-only final plan review; bounded repairs use the planning owner. Failed/unresolved required review blocks implementation. |
 
 ## Prompt Templates (prompts/)
 
@@ -91,11 +91,11 @@ All tests mock LLM calls — no API keys needed. Tests cover:
 - Models: review scoring, weighted averages, threshold enforcement
 - Gates: all gate functions with pass/fail scenarios
 - Change Manager: DAG resolution, archiving, delta spec merging
-- Spec Generator: dependency ordering, resume, change type detection, design-audit feedback (one regeneration pass + one report-only re-audit, flag-guarded across both call sites)
+- Spec Generator: dependency ordering, resume, change type detection, design-audit feedback (one bounded repair + required re-audit, revision-guarded)
 - TDD Engine: block parsing, context assembly, weak test patterns, agent selection
 - Dependencies: manifest/import subtraction, false-positive suppression
 - Prototype / Respec steps: write boundary, gate retry, one-pass regeneration, propose-only respec
-- Docs steps: `DOCS_IMPACT:` parsing, the warn-only freshness gate, non-fatality, and the refusal to stage an agent-reported path from outside the project
+- Docs steps: `DOCS_IMPACT:` parsing, the warn-only freshness gate, failed-writer propagation, and the refusal to stage an agent-reported path from outside the project
 - Git ops: real temp git repos with `gh` mocked — worktree/branch setup, resume re-binding, explicit-path commits, non-fatal push/PR failure
 - Board: every `(phase, block_status)` → column case, including the columns the pipeline never drives
 
@@ -126,28 +126,30 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   always emits an index of *all* of them, so an omitted section is known to
   exist rather than invisible.
 
-- **Audit feedback is one pass, decided in one place.** Every audit that
-  rewrites an artifact — the unknowns gate, the tasks-shape audit, the
-  prototype notes, the design audit — regenerates **once**, then re-checks
-  **report-only** and lets the document stand. The regeneration is recorded in
-  `SpecGenState` (`explainers_done`, `tasks_audit_done`, `prototype_done`,
-  `design_audit_regen_done`) rather than inferred from file existence, because
-  the artifact already exists when the audit runs. The design audit is reached
-  from two call sites (`run_spec_generator` and the orchestrator's
-  DESIGN_AUDIT phase); both go through `spec_generator.run_design_audit_stage`
-  and the flag is what makes "one pass" true across them. A loop here is not a
-  better audit — it is an unbounded spec-generation bill.
-- **A spent stage is checked before the model call, not after it.**
-  `design_audit_regen_done` records the *regeneration*; `design_audit_done`
-  records the *stage*. Only the second can stop the second call site from
-  re-running a four-artifact audit to rediscover there is nothing left to do —
-  an audit that found nothing actionable never sets the regen flag. Guard
-  clauses for spent work belong at the top of the function, above the LLM call.
-- **`advance_to` assigns unconditionally, so it only ever runs forwards.** The
-  orchestrator re-reads the checkpoint after spec generation, and that copy may
-  already sit at a *later* phase than the one about to be recorded. Every
-  advance after a reload is guarded with `is_phase_complete`; without it the
-  persisted pointer rewinds and the phases in between re-run.
+- **Planning has one publisher.** Design-audit, prototype and plan-review
+  feedback call `spec_generator.rewrite_plan`. It stages and validates the set,
+  regenerates rubric and shape evidence, then publishes through a recovery
+  journal. A pending journal or intervening edit cannot count as a coherent plan.
+- **Evidence belongs to inputs.** `SpecGenState.steps` stores revision and outcome.
+  Compatibility `*_done` properties derive from these records; legacy booleans
+  do not certify current inputs. Explicit dependency invalidation replaces ordinal
+  phase checks as proof. The phase still describes progress.
+- **Bounded repair can fail.** Required review errors or remaining blocking
+  findings leave resumable blocked evidence. Never log failure and mark it passed.
+- **Completion has one check.** `gates.final_verification` is used by standalone
+  TDD, the full orchestrator after docs/respec/archive/contributors, and findings
+  before publication. A failed writer requires verified rollback or build failure.
+  Push rejects a changed fingerprint. `BuildState.result` derives the completion
+  and publication view for adapters; it introduces no parallel state machine.
+- **Recovery preserves two versions.** Stop records contain independent index
+  entries and worktree fingerprints. Missing index evidence refuses discard.
+  `save_wip_ref` uses isolated indexes and stash-shaped commits; it does not move
+  HEAD or stage into the user's index. `commit_tree` refuses divergent partial staging.
+- **Budget admission is inside the semaphore.** Charge successful or partial
+  provider usage before releasing it. Nested TDD reuses planning spend; standalone
+  entries load persisted totals before dispatch. Budget exhaustion propagates
+  through advisory handlers. Child-process spend has its own aggregate semantics.
+
 - **Adjudication is a correctness requirement, not polish.** Reviewers run in
   fresh contexts, so they cannot see the decisions the build already made and
   roughly a quarter of what they raise is wrong. Findings are *proposals*;
@@ -273,7 +275,8 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   integrity gate is `unchanged_tests_gate`.
 - **A panel must never be less reliable than one reviewer.** `run_code_review`
   gathers with `return_exceptions=True`, drops failed members with a warning,
-  and raises only when every member failed. Without that, N members meant N×
+  and raises when every member failed. Budget exhaustion and cancellation
+  always propagate, even when another member returned. Without that, N members meant N×
   the chance of one exception marking the block FAILED — the feature would make
   the pipeline worse the more you invested in it.
 - **`ReviewResult.passed` is the default-policy view; `review_score_gate` is
@@ -284,7 +287,7 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   `agent_call` record `e.partial.usage` before propagating; a review that dies
   after a 150k-char prompt is exactly the spend the breaker exists to catch.
 - **`budget.record()` must never raise.** Accounting cannot be allowed to
-  break a build; only the explicit `check()` at loop boundaries stops one.
+  break a build; admission checks immediately before provider dispatch stop new calls.
   Every `llm_call`/`agent_call` passes a `budget_label` so the stop can say
   which phase spent the money.
 - **A reviewer's tools are read-only — `Read`, `Grep`, `Glob`, and nothing
@@ -297,20 +300,11 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   lists, so adding a writable tool breaks a test rather than a build. The turn
   cap (30) is part of the same bound: enough to open a neighbour and grep for a
   name the plan claims exists, not enough to wander.
-- **PLAN_REVIEW regenerates `tasks.md` at most once from the review, at most
-  once from the no-behaviour scan, and never acts on `oversized-plan`.** The
-  review's single pass is recorded in `SpecGenState.plan_review_regen_done`
-  and the stage in `plan_review_done`, checked *before* the model call — same
-  argument as the design audit's two flags: `tasks.md` already exists when the
-  review runs, so file existence proves nothing. When the review's model call
-  fails, the scan's blocks get their own single pass, recorded in
-  `plan_review_scan_regen_done`; the review's flags stay false, so a resume
-  asks the model again, and the stage rewrites `tasks.md` at most twice per
-  build. `oversized-plan` is excluded from the regenerable categories
-  on purpose: its output is a proposed cut across several tickets, and handing
-  it to a rewriter would have the rewriter perform the split silently inside
-  one plan, which is the opposite of what the finding asks for. This phase
-  proposes; a human or a later gate disposes.
+- **PLAN_REVIEW requests at most one owner repair.** Model and deterministic
+  findings share that bound; the required recheck blocks unresolved major
+  findings. `plan_review_regen_done` records repair admission; the revision-bound
+  step outcome records success. `oversized-plan` proposes a split for the size
+  gate and never silently restructures a plan.
 
 ## Adding a New Gate
 

@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import pytest
+from tests.planning_fakes import _prepare_and_publish
 
 from build_pipeline import git_ops, intake, orchestrator
 from build_pipeline.change_manager import ChangeManager
@@ -852,7 +853,7 @@ def test_the_pr_targets_the_branch_its_base_ref_is_on(tmp_path, monkeypatch, on_
         return GitResult(argv, 0, "PR:https://github.com/o/r/pull/9\n", "")
 
     monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
-    assert orchestrator._run_publish(config, state, ProgressWriter(config.progress_file_path())) is True
+    assert _prepare_and_publish(config, state, ProgressWriter(config.progress_file_path())) is True
     argv = seen["argv"]
     if on_main:
         assert "--base" not in argv

@@ -466,13 +466,14 @@ class TestCommitScope:
         return a, b
 
     def test_row_C1_root_commit_tree_matches_a_bare_commit(self, tmp_path):
-        ref, repo = self._two_roots(tmp_path)
-        _git(ref, "add", "-A", "--", ".", *git_ops.BOOKKEEPING_EXCLUDES)
-        _git(ref, "commit", "-qm", "block")
-
-        assert git_ops.commit_tree(repo, "block", "row C1")
-        assert _out(repo, "rev-parse", "HEAD^{tree}") == _out(ref, "rev-parse", "HEAD^{tree}")
-        assert _repo_view(repo) == _repo_view(ref)
+        _, repo = self._two_roots(tmp_path)
+        before = _repo_view(repo)
+        head = _head(repo)
+        assert git_ops.commit_tree(repo, "block", "partially staged") is None
+        assert _repo_view(repo) == before
+        assert _head(repo) == head
+        assert _out(repo, "show", ":part.py") == "p = 2\n"
+        assert (repo / "part.py").read_text() == "p = 3\n"
 
     def test_row_C1_root_commit_paths_matches_a_bare_commit(self, tmp_path):
         ref, repo = self._two_roots(tmp_path)
@@ -498,7 +499,8 @@ class TestCommitScope:
         else:
             assert git_ops.save_wip_ref(proj, "refs/buildme/wip/feat/c2", "wip")
 
-        committed = _out(root, "diff", "--name-only", "HEAD~1", "HEAD").split()
+        start, end = ("HEAD", "refs/buildme/wip/feat/c2") if commit == "save_wip_ref" else ("HEAD~1", "HEAD")
+        committed = _out(root, "diff", "--name-only", start, end).split()
         assert committed == ["pkg/app/app.py"]
         _assert_outside_edits_kept(root)
 
@@ -982,7 +984,7 @@ class TestSaveWipRef:
         repo = make_repo(tmp_path / "proj")
         assert git_ops.save_wip_ref(repo, "refs/heads/main", "wip") is None
 
-    def test_a_rejected_wip_commit_writes_no_ref(self, tmp_path):
+    def test_a_rejected_wip_commit_writes_no_ref(self, tmp_path, monkeypatch):
         """When the WIP commit fails (a pre-commit hook rejects it), HEAD
         does not hold the edits, so a ref at HEAD would keep nothing and the
         caller's discard would destroy them. No ref, and the edits stay."""
@@ -994,6 +996,12 @@ class TestSaveWipRef:
         (repo / "attempt.txt").write_text("unsaved\n")
         ref = "refs/buildme/wip/calc/r1-code-block1"
 
+        original = git_ops._run
+        def fail_commit_tree(argv, **kwargs):
+            if argv[:2] == ["git", "commit-tree"]:
+                return git_ops.GitResult(argv, 1, "", "object write failed")
+            return original(argv, **kwargs)
+        monkeypatch.setattr(git_ops, "_run", fail_commit_tree)
         assert git_ops.save_wip_ref(repo, ref, "wip") is None
         assert subprocess.run(["git", "rev-parse", "--verify", "-q", ref],
                               cwd=str(repo), capture_output=True).returncode != 0
@@ -1011,7 +1019,7 @@ class TestSaveWipRef:
         ref = "refs/buildme/wip/calc/r1-spec"
 
         assert git_ops.save_wip_ref(repo, ref, "wip") == ref
-        assert _git(repo, "rev-parse", ref).stdout.strip() == head
+        assert _git(repo, "rev-parse", ref + "^1").stdout.strip() == head
 
 
 # --- skill subprocesses: a timeout kills the whole process tree ----------------

@@ -1,30 +1,13 @@
-"""The PLAN_REVIEW phase — a second engineer reads the plan before it is built.
+"""Read-only review of the final plan, after prototype and design repair.
 
-The board's Planning column has always claimed "specs -> impl plan, **reviewed
-by another eng**". This module is that review. It runs after DESIGN_AUDIT (so
-`tasks.md` and `rubric.md` both exist) and before PROTOTYPE.
-
-Three properties are load-bearing and none of them is decoration:
-
-* **Read-only.** `PLAN_REVIEW_TOOLS` is `Read`/`Grep`/`Glob` and nothing else.
-  A reviewer that could `Write` or `Edit` would fix the plan it was asked to
-  judge, and the one-regeneration-pass rule would stop being the only way an
-  artifact changes.
-* **One pass.** The stage regenerates `tasks.md` at most once
-  (`SpecGenState.plan_review_regen_done`) and then re-checks **report-only**.
-  The stage as a whole is recorded in `SpecGenState.plan_review_done` and
-  checked BEFORE the model call, so a resume costs nothing. A loop here is an
-  unbounded bill, not a better review.
-* **It proposes; a gate disposes.** Nothing here creates a ticket, moves a
-  card, or splits `tasks.md`. An `oversized-plan` finding carries a *proposed*
-  cut and stops there.
-
-The plan puts this step in `review_steps.py`; it lives in its own module
-because that file was being edited concurrently. Nothing about the phase
-depends on which module it sits in.
+The planning owner publishes at most one repair for this stage. A required
+recheck blocks unresolved major findings. Passed evidence belongs to the
+reviewed input revision, so an unchanged resume needs no model call.
 """
 
 from __future__ import annotations
+
+from build_pipeline.budget import BudgetExceededError
 
 import logging
 from pathlib import Path
@@ -343,6 +326,8 @@ def split_assessment(config, change_dir: Path):
             package_trigger=getattr(config, "plan_split_package_trigger", 5),
         )
         return render_split_context(assessment), assessment
+    except BudgetExceededError:
+        raise
     except Exception as split_err:  # a review without the graph beats no review
         log.warning(
             "Could not build the block dependency graph for %s (non-fatal): %s",
@@ -470,86 +455,36 @@ async def run_plan_review_stage(
     no-behaviour scan's blocks to one rewrite per build. Returns the
     first-pass findings.
     """
-    from ..spec_generator import report_no_behaviour_blocks_left
-    from ..state import SpecGenState
-
-    if state.spec_gen is None:
-        state.spec_gen = SpecGenState()
-    if state.spec_gen.plan_review_done:
-        # Checked BEFORE the model call, not after it: the review reads five
-        # artifacts, so re-running it on a resume to discover there is nothing
-        # left to do is a whole agent call spent on a log line.
-        log.info("SKIP phase=PLAN_REVIEW reason=recorded-complete-in-state")
-        print("PHASE: plan_review_skipped — already run for this build")
+    from ..spec_generator import reconcile_plan, rewrite_plan
+    reconcile_plan(config, state)
+    sg = state.spec_gen
+    assert sg is not None
+    if sg.step_passed("plan_review"):
         return []
-
-    # The no-behaviour scan needs no model, so it runs before the model call
-    # and whatever that call does.
-    scanned = _no_behaviour_findings(change_dir)
     try:
-        result = await run_plan_review(
-            change_dir, config, split_context=_split_context(config, change_dir),
-        )
-    except Exception as review_err:
-        # Deliberately NOT recorded as done: an LLM failure is a reason to try
-        # again on a resume, unlike a completed review.
-        log.warning("Plan review LLM call failed (non-fatal): %s", review_err)
-        print(f"PHASE: plan_review_skipped — {review_err}")
-        if not scanned:
-            return []
-        # The scan's blocks still get a rewrite, once per build: it has its
-        # own flag. The review's two flags stay false, as for any failed
-        # call, so a resume asks the model again and its findings get the
-        # review's one rewrite.
-        log_plan_review_findings(scanned)
-        if state.spec_gen.plan_review_scan_regen_done:
-            log.info(
-                "SKIP phase=PLAN_REVIEW_SCAN_FEEDBACK "
-                "reason=recorded-complete-in-state"
-            )
-            print(
-                "PHASE: plan_review_feedback_skipped — "
-                "scan rewrite already applied"
-            )
-            report_no_behaviour_blocks_left(change_dir / "tasks.md")
-            return scanned
-        await _apply_plan_review_findings(
-            change_dir, config, state, plan_review_findings_text(scanned),
-        )
-        # Recorded whether or not anything was rewritten, as for the review's
-        # own pass.
-        state.spec_gen.plan_review_scan_regen_done = True
+        result = await run_plan_review(change_dir, config, split_context=_split_context(config, change_dir))
+        findings = list(result.findings) + _no_behaviour_findings(change_dir)
+        text = plan_review_findings_text(findings)
+        if text and not sg.plan_review_regen_done:
+            sg.plan_review_regen_done = True
+            state.checkpoint(state_path)
+            await rewrite_plan(config, state, text)
+            result = await run_plan_review(change_dir, config, split_context=_split_context(config, change_dir))
+            findings = list(result.findings) + _no_behaviour_findings(change_dir)
+            text = plan_review_findings_text(findings)
+        log_plan_review_findings(findings)
+        if text:
+            sg.record_step("plan_review", "blocked", text)
+            state.checkpoint(state_path)
+            raise RuntimeError("Plan review still has blocking findings after bounded repair")
+        sg.record_step("plan_review")
         state.checkpoint(state_path)
-        return scanned
-
-    findings = list(result.findings) + scanned
-    log_plan_review_findings(findings)
-
-    findings_text = plan_review_findings_text(findings)
-    if not findings_text:
-        _mark_plan_review_done(state, state_path)
         return findings
-
-    if state.spec_gen.plan_review_regen_done:
-        # A resume after the regeneration checkpoint: the plan already absorbed
-        # this critique once. Report only.
-        log.info("SKIP phase=PLAN_REVIEW_FEEDBACK reason=recorded-complete-in-state")
-        print("PHASE: plan_review_feedback_skipped — regeneration already applied")
-        _mark_plan_review_done(state, state_path)
-        return findings
-
-    regenerated = await _apply_plan_review_findings(
-        change_dir, config, state, findings_text,
-    )
-    # Recorded whether or not anything was rewritten: the pass has been spent,
-    # and a failed regeneration is not a reason to try again later.
-    state.spec_gen.plan_review_regen_done = True
-    state.checkpoint(state_path)
-
-    if regenerated:
-        await _rereview_after_plan_feedback(change_dir, config)
-    _mark_plan_review_done(state, state_path)
-    return findings
+    except BaseException:
+        if not sg.step_passed("plan_review"):
+            sg.record_step("plan_review", "blocked", "Review or repair did not complete")
+        state.checkpoint(state_path)
+        raise
 
 
 def _no_behaviour_findings(change_dir: Path) -> list[PlanReviewFinding]:
@@ -575,158 +510,3 @@ def _no_behaviour_findings(change_dir: Path) -> list[PlanReviewFinding]:
         )
         for f in scan_no_behaviour_blocks(change_dir / "tasks.md")
     ]
-
-
-def _mark_plan_review_done(state, state_path: Path) -> None:
-    """Record that the review stage ran to completion, and checkpoint it.
-
-    Separate from ``plan_review_regen_done``: a review that found nothing
-    actionable never regenerates, so the regen flag alone cannot tell a resume
-    "there is nothing here for you" — it would re-review to rediscover that.
-    """
-    from ..state import SpecGenState
-
-    if state.spec_gen is None:
-        state.spec_gen = SpecGenState()
-    state.spec_gen.plan_review_done = True
-    state.checkpoint(state_path)
-
-
-async def _apply_plan_review_findings(
-    change_dir: Path, config, state, findings_text: str,
-) -> int:
-    """Regenerate tasks.md ONCE from the plan review's findings.
-
-    Returns the number of artifacts rewritten (0 or 1). Only tasks.md: the plan
-    is what was reviewed, and rewriting design.md from a plan review would
-    relitigate a document the design audit already settled. A regeneration
-    failure is non-fatal — the reviewed plan stands.
-
-    The rewrite is followed by the two things that hang off tasks.md and would
-    otherwise describe the plan it replaced: the shape audit (which is what
-    catches a horizontally-decomposed plan, and only ever ran inside
-    ``_generate_single_artifact``), and rubric.md (which ``ARTIFACT_DAG``
-    declares requires ``tasks``, and which the per-block review scores against).
-    Both are bounded by the same thing that bounds this function — it runs at
-    most once per build behind ``plan_review_regen_done`` (the review's
-    findings) and at most once behind ``plan_review_scan_regen_done`` (the
-    no-behaviour scan's, after a failed review call).
-    """
-    from ..change_manager import ChangeManager
-    from ..spec_generator import (
-        _audit_tasks_shape,
-        _generate_rubric,
-        read_codebase_analysis,
-        read_unknowns,
-    )
-    from .spec_steps import generate_artifact
-
-    cm = ChangeManager(config.specs_dir)
-    context = cm.artifact_context(change_dir, "tasks")
-    context["unknowns_content"] = read_unknowns(change_dir)
-    output_path = change_dir / context["output_path"]
-    if not output_path.exists():
-        log.warning(
-            "SKIP plan-review feedback — %s does not exist", output_path,
-        )
-        return 0
-
-    try:
-        content = await generate_artifact(
-            "tasks",
-            context,
-            config,
-            codebase_analysis=read_codebase_analysis(state),
-            reference_docs=config.reference_docs_text(),
-            audit_findings=findings_text,
-        )
-    except Exception as regen_err:  # non-fatal: the reviewed plan stands
-        log.warning(
-            "Plan-review regeneration of tasks.md failed (non-fatal): %s",
-            regen_err,
-        )
-        print("PHASE: plan_review_feedback_applied — 0 artifact(s)")
-        return 0
-
-    output_path.write_text(content)
-    log.info("Rewrote %s from plan review findings", output_path)
-
-    # Re-audit the plan that will actually be built. Non-fatal: a failed audit
-    # leaves the regenerated plan standing, same as everywhere else here.
-    try:
-        await _audit_tasks_shape(change_dir, context, config, output_path)
-    except Exception as audit_err:
-        log.warning(
-            "Tasks shape re-audit after plan review failed (non-fatal): %s",
-            audit_err,
-        )
-
-    # rubric.md was generated from the plan this rewrite replaced, and the
-    # per-block review scores blocks against it. A stale rubric here is worse
-    # than a slow one.
-    try:
-        await _generate_rubric(change_dir, config, state)
-    except Exception as rubric_err:
-        log.warning(
-            "Rubric regeneration after plan review failed (non-fatal): %s",
-            rubric_err,
-        )
-
-    _commit_plan(config, change_dir)
-    print("PHASE: plan_review_feedback_applied — 1 artifact(s)")
-    return 1
-
-
-def _commit_plan(config, change_dir: Path) -> None:
-    """Commit the regenerated plan, so the branch history shows the review
-    actually changed something.
-
-    No-op unless the pipeline owns a branch, and no-op when the change
-    directory is not under the project — the commit is explicit-path.
-    """
-    from .. import git_ops
-
-    try:
-        rel = str(change_dir.relative_to(config.project_dir))
-    except (ValueError, TypeError):
-        return
-    if rel:
-        git_ops.commit_stage(
-            config,
-            "docs(specs): regenerate tasks.md and rubric.md after plan review",
-            [rel],
-        )
-
-
-async def _rereview_after_plan_feedback(change_dir: Path, config) -> None:
-    """Re-run the review once, REPORT-ONLY — did the critique land?
-
-    No second regeneration follows this, whatever it says; its only job is to
-    put the answer in the build log.
-    """
-    scanned = _no_behaviour_findings(change_dir)
-    try:
-        result = await run_plan_review(
-            change_dir, config, split_context=_split_context(config, change_dir),
-        )
-    except Exception as review_err:
-        log.warning("Plan review re-check failed (non-fatal): %s", review_err)
-        print(f"PHASE: plan_review_recheck_skipped — {review_err}")
-        if scanned:
-            print(f"PHASE: plan_review_recheck — {len(scanned)} still open")
-        return
-
-    still_open = [
-        f for f in list(result.findings) + scanned
-        if f.severity in PLAN_REVIEW_ACTIONABLE
-        and f.category not in PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES
-    ]
-    if still_open:
-        log.warning(
-            "Plan review re-check: %d finding(s) still open after one pass",
-            len(still_open),
-        )
-        print(f"PHASE: plan_review_recheck — {len(still_open)} still open")
-    else:
-        log.info("Plan review re-check: clean after one pass")
-        print("PHASE: plan_review_recheck — clean")

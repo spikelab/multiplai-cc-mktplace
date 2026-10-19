@@ -12,13 +12,22 @@ Flow:
 
 from __future__ import annotations
 
+from build_pipeline.budget import BudgetExceededError
+
 import asyncio
+import hashlib
+import json
+import copy
+import shutil
+import os
+import tempfile
 import logging
 import re
 import sys
 from pathlib import Path
 
-from .change_manager import ChangeManager, ARTIFACT_DAG
+from . import budget
+from .change_manager import ChangeManager, ARTIFACT_DAG, expected_capabilities, valid_requirement, valid_requirement_text
 from .dependencies import NewDependency, design_decisions_text, detect_new_dependencies
 from .gates import unknowns_gate
 from .models import ArtifactStatus, BuildPhase
@@ -28,7 +37,7 @@ from .state import BuildState, SpecGenState
 log = logging.getLogger(__name__)
 
 
-async def run_spec_generator(config, args=None) -> int:
+async def run_spec_generator(config, args=None, *, standalone: bool = True) -> int:
     """Main entry point for spec generation pipeline.
 
     Args:
@@ -40,12 +49,17 @@ async def run_spec_generator(config, args=None) -> int:
     """
     print(f"PHASE: spec_generation — {config.change_name}")
 
+    if standalone:
+        budget.reset()
+        budget.configure(max_tokens=config.budget_max_tokens, max_usd=config.budget_max_usd)
     cm = ChangeManager(config.specs_dir)
     cm.init_specs()
     change_dir = cm.create_change(config.change_name)
 
     # Load or create state
     state = _load_or_create_state(config)
+    if standalone:
+        budget.get_budget().load_state(state.budget)
 
     # Ensure spec_gen sub-state exists
     if state.spec_gen is None:
@@ -58,22 +72,27 @@ async def run_spec_generator(config, args=None) -> int:
         await _generate_all_artifacts(cm, change_dir, config, state)
         log.info("DONE phase=ARTIFACT_GENERATION")
 
-        # Run design audit and fold its findings back into the specs
-        # (best-effort — failures don't block the build)
-        log.info("START phase=DESIGN_AUDIT")
-        print("PHASE: design_audit")
-        state.advance_to(BuildPhase.DESIGN_AUDIT, config.state_file_path())
-        await run_design_audit_stage(
-            change_dir, config, state, config.state_file_path(),
-        )
+        # Full builds prototype first, then audit/review the final plan once.
+        if standalone:
+            log.info("START phase=DESIGN_AUDIT")
+            print("PHASE: design_audit")
+            await run_design_audit_stage(change_dir, config, state, config.state_file_path())
+            state.advance_to(BuildPhase.DESIGN_AUDIT, config.state_file_path())
 
         print("PHASE: spec_generation_complete")
         return 0
 
+    except budget.BudgetExceededError:
+        state.checkpoint(config.state_file_path())
+        raise
     except Exception as e:
+        state.checkpoint(config.state_file_path())
         log.error("FAIL phase=SPEC_GENERATION error=%s", e, exc_info=True)
         print(f"PHASE: spec_generation_failed — {e}")
         return 1
+    except BaseException:
+        state.checkpoint(config.state_file_path())
+        raise
 
 
 async def _generate_all_artifacts(
@@ -85,16 +104,18 @@ async def _generate_all_artifacts(
     """Generate all artifacts in dependency order, with resume support."""
     from .llm_steps.spec_steps import generate_artifact
 
+    reconcile_plan(config, state)
     max_iterations = len(ARTIFACT_DAG) * 2  # safety limit
     iteration = 0
 
     while iteration < max_iterations:
         iteration += 1
-        ready = cm.ready_artifacts(change_dir)
+        status = cm.artifact_status(change_dir, state.spec_gen.stale_artifacts if state.spec_gen else [])
+        ready = [name for name, outcome in status.items() if outcome == ArtifactStatus.READY]
 
         if not ready:
             # Check if all done
-            status = cm.artifact_status(change_dir)
+            status = cm.artifact_status(change_dir, state.spec_gen.stale_artifacts if state.spec_gen else [])
             if all(s == ArtifactStatus.DONE for s in status.values()):
                 log.info("All artifacts generated")
                 break
@@ -104,11 +125,6 @@ async def _generate_all_artifacts(
             raise RuntimeError(f"Artifact generation deadlocked: {blocked}")
 
         for artifact_id in ready:
-            # Skip if already completed in this or previous run
-            if state.spec_gen and artifact_id in state.spec_gen.completed_artifacts:
-                log.info("SKIP artifact=%s reason=already-completed", artifact_id)
-                continue
-
             log.info("START artifact=%s", artifact_id)
             await _generate_single_artifact(
                 cm, change_dir, artifact_id, config, state,
@@ -132,7 +148,7 @@ async def _generate_all_artifacts(
                 unknowns_path.write_text(
                     f"{UNKNOWNS_HEADER}\n{EXPLAINERS_SKIPPED_LINE}\n"
                 )
-            state.spec_gen.explainers_done = True
+            _record_explainer_outcome(config, state)
             state.checkpoint(config.state_file_path())
         elif unknowns_path.exists():
             log.info(
@@ -148,7 +164,7 @@ async def _generate_all_artifacts(
                     unknowns_path,
                     deps,
                 )
-            state.spec_gen.explainers_done = True
+            _record_explainer_outcome(config, state)
             state.checkpoint(config.state_file_path())
     elif state.spec_gen:
         log.info("SKIP phase=UNKNOWNS_GATE reason=recorded-complete-in-state")
@@ -166,16 +182,23 @@ async def _generate_all_artifacts(
                 "Tasks-shape audit not recorded complete — running it now "
                 "(resume durability)"
             )
-            await _audit_tasks_shape(change_dir, context, config, tasks_path)
+            await _audit_tasks_shape(change_dir, context, config, tasks_path, state)
             state.spec_gen.tasks_audit_done = True
             state.checkpoint(config.state_file_path())
     elif state.spec_gen:
         log.info("SKIP phase=TASKS_SHAPE_AUDIT reason=recorded-complete-in-state")
 
+    reconcile_plan(config, state)
+    if state.spec_gen and "rubric" in state.spec_gen.stale_artifacts:
+        await _generate_rubric(change_dir, config, state)
+        reconcile_plan(config, state, regenerated={"rubric"})
+
     # Verify completeness
-    final_status = cm.artifact_status(change_dir)
+    final_status = cm.artifact_status(change_dir, state.spec_gen.stale_artifacts if state.spec_gen else [])
     done_count = sum(1 for s in final_status.values() if s == ArtifactStatus.DONE)
     log.info("Artifact generation complete: %d/%d done", done_count, len(ARTIFACT_DAG))
+    if done_count != len(ARTIFACT_DAG):
+        raise RuntimeError("Planning artifacts are incomplete")
 
 
 async def _generate_single_artifact(
@@ -197,15 +220,7 @@ async def _generate_single_artifact(
     if artifact_id == "requirements":
         await _generate_requirements(cm, change_dir, config, state)
     elif artifact_id == "use-cases":
-        # A change created before `use-cases` joined ARTIFACT_DAG already has a
-        # tasks.md, and the DAG loop reads a file that exists as DONE — so the
-        # plan would never be written against the use cases it is now required
-        # to cover, and PLAN_REVIEW would spend its one regeneration reporting
-        # `use-case-coverage` on every one of them.
-        plan_predates_use_cases = (change_dir / "tasks.md").exists()
         await _generate_use_cases(change_dir, context, config, state)
-        if plan_predates_use_cases:
-            await _backfill_plan_for_use_cases(cm, change_dir, config, state)
     elif artifact_id == "unknowns":
         await _generate_unknowns(cm, change_dir, config, state)
     elif artifact_id == "rubric":
@@ -226,7 +241,7 @@ async def _generate_single_artifact(
         # Write the artifact
         output_path = change_dir / context["output_path"]
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(content)
+        atomic_write(output_path, content)
         log.info("Wrote artifact: %s", output_path)
 
         # Tasks-shape audit: catch horizontal decomposition before the rubric
@@ -237,9 +252,15 @@ async def _generate_single_artifact(
         # DONE and silently skip the audit on resume (see
         # _generate_all_artifacts' durability pass).
         if artifact_id == "tasks":
-            await _audit_tasks_shape(change_dir, context, config, output_path)
+            await _audit_tasks_shape(change_dir, context, config, output_path, state)
             if state.spec_gen:
                 state.spec_gen.tasks_audit_done = True
+
+    reconcile_plan(config, state, regenerated={artifact_id})
+    if state.spec_gen and artifact_id == "tasks":
+        state.spec_gen.tasks_audit_done = True
+    if state.spec_gen and artifact_id == "unknowns":
+        _record_explainer_outcome(config, state)
 
     # Mark completed. `completed_artifacts` is a resume ledger keyed by id, so
     # a re-generated artifact (the use-cases backfill regenerates tasks and
@@ -250,40 +271,6 @@ async def _generate_single_artifact(
         state.checkpoint(config.state_file_path())
 
     print(f"PHASE: artifact_{artifact_id}_complete")
-
-
-async def _backfill_plan_for_use_cases(
-    cm: ChangeManager,
-    change_dir: Path,
-    config,
-    state: BuildState,
-) -> None:
-    """Rewrite tasks.md and rubric.md against a just-added use-cases.md.
-
-    Only reached on a change whose plan predates the artifact — a DAG
-    migration, not a normal build. Both are regenerated, in that order,
-    because `ARTIFACT_DAG` declares rubric requires tasks and the per-block
-    review scores blocks against the rubric.
-
-    Non-fatal: a failure here leaves the existing plan standing, which is the
-    same position the change was already in.
-    """
-    log.info(
-        "Plan predates use-cases.md — regenerating tasks.md and rubric.md "
-        "against it (DAG backfill)"
-    )
-    print("PHASE: use_cases_backfill")
-    for artifact_id in ("tasks", "rubric"):
-        try:
-            await _generate_single_artifact(
-                cm, change_dir, artifact_id, config, state,
-            )
-        except Exception as backfill_err:
-            log.warning(
-                "Backfill of %s after use-cases.md failed (non-fatal): %s",
-                artifact_id, backfill_err,
-            )
-            return
 
 
 async def _generate_requirements(
@@ -299,19 +286,27 @@ async def _generate_requirements(
     if not proposal_path.exists():
         raise RuntimeError("Cannot generate requirements: proposal.md missing")
 
-    # Extract capability names from proposal
-    capabilities = _extract_capabilities(proposal_path.read_text())
+    proposal = proposal_path.read_text()
+    capabilities = expected_capabilities(proposal)
     if not capabilities:
-        # Fallback: generate a single requirement file
-        capabilities = [config.change_name or "main"]
-        log.warning("No capabilities found in proposal, using fallback: %s", capabilities)
+        raise ValueError("Proposal must name at least one capability before requirements can complete")
+    source = hashlib.sha256(proposal.encode()).hexdigest()
+    if state.spec_gen is None:
+        state.spec_gen = SpecGenState()
+    changed = state.spec_gen.requirements_source not in ("", source)
+    force_members = "requirements" in state.spec_gen.stale_artifacts
+    state.spec_gen.expected_capabilities = capabilities
+    if changed:
+        state.spec_gen.requirements_members = {}
+    state.spec_gen.requirements_source = source
+    state.checkpoint(config.state_file_path())
 
     req_dir = change_dir / "requirements"
     req_dir.mkdir(parents=True, exist_ok=True)
 
     for cap_name in capabilities:
         req_file = req_dir / f"{cap_name}.md"
-        if req_file.exists():
+        if valid_requirement(req_file) and ((not changed and not force_members) or state.spec_gen.requirements_members.get(cap_name) == source):
             log.info("Requirements for %s already exist, skipping", cap_name)
             continue
 
@@ -320,7 +315,11 @@ async def _generate_requirements(
 
         content = await generate_artifact("requirements", context, config)
 
-        req_file.write_text(content)
+        if not valid_requirement_text(content):
+            raise ValueError(f"Invalid requirements for {cap_name}: expected Requirement/Scenario/WHEN/THEN")
+        atomic_write(req_file, content)
+        state.spec_gen.requirements_members[cap_name] = source
+        state.checkpoint(config.state_file_path())
         log.info("Wrote requirements: %s", req_file)
 
 
@@ -408,7 +407,7 @@ async def _generate_use_cases(
     )
 
     output_path = change_dir / (context.get("output_path") or "use-cases.md")
-    output_path.write_text(content)
+    atomic_write(output_path, content)
     log.info("Wrote artifact: %s", output_path)
 
 
@@ -475,6 +474,18 @@ def _dependency_list_text(deps: list[NewDependency]) -> str:
     ) or "(none)"
 
 
+def _record_explainer_outcome(config, state: BuildState) -> None:
+    """Advisory explanations never impersonate missing required evidence."""
+    if state.spec_gen is None:
+        return
+    if not getattr(config, "explainers_active", True):
+        state.spec_gen.record_step("explainers", "skipped", "disabled")
+        return
+    deps = detect_new_dependencies(config.change_dir, config.project_dir)
+    result = unknowns_gate((config.change_dir / "unknowns.md").read_text(), deps)
+    state.spec_gen.record_step("explainers", "passed" if result.passed else "advisory", result.reason)
+
+
 async def _generate_unknowns(
     cm: ChangeManager,
     change_dir: Path,
@@ -501,7 +512,7 @@ async def _generate_unknowns(
         print("PHASE: explainers_skipped")
         output_path.write_text(f"{UNKNOWNS_HEADER}\n{EXPLAINERS_SKIPPED_LINE}\n")
         if state.spec_gen:
-            state.spec_gen.explainers_done = True
+            _record_explainer_outcome(config, state)
         return
 
     log.info("START phase=EXPLAINERS")
@@ -517,7 +528,7 @@ async def _generate_unknowns(
         )
         print("PHASE: explainers_complete — 0 new dependencies")
         if state.spec_gen:
-            state.spec_gen.explainers_done = True
+            _record_explainer_outcome(config, state)
         return
 
     log.info(
@@ -532,6 +543,8 @@ async def _generate_unknowns(
 
     sections: list[str] = []
     for dep, result in zip(deps, results):
+        if isinstance(result, BudgetExceededError) or (isinstance(result, BaseException) and not isinstance(result, Exception)):
+            raise result
         if isinstance(result, BaseException):
             # A failed explainer is a recorded hole, not a silent one — the gate
             # sees the empty section and drives the regeneration pass.
@@ -555,7 +568,7 @@ async def _generate_unknowns(
     context = cm.artifact_context(change_dir, "unknowns")
     await _audit_unknowns(change_dir, context, config, output_path, deps)
     if state.spec_gen:
-        state.spec_gen.explainers_done = True
+        _record_explainer_outcome(config, state)
 
 
 async def _audit_unknowns(
@@ -599,6 +612,8 @@ async def _audit_unknowns(
         content = await generate_artifact(
             "unknowns", context, config, audit_findings=findings_text,
         )
+    except BudgetExceededError:
+        raise
     except Exception as regen_err:
         log.warning(
             "Unknowns regeneration failed (non-fatal, first pass stands): %s",
@@ -607,7 +622,7 @@ async def _audit_unknowns(
         print(f"PHASE: unknowns_regeneration_failed — {regen_err}")
         return
 
-    output_path.write_text(content)
+    atomic_write(output_path, content)
     log.info("Rewrote artifact after unknowns gate: %s", output_path)
     print(f"PHASE: unknowns_regenerated — {len(findings)} findings")
 
@@ -943,6 +958,7 @@ async def _audit_tasks_shape(
     context: dict,
     config,
     output_path: Path,
+    state: BuildState | None = None,
 ) -> None:
     """Audit tasks.md for horizontal decomposition; regenerate ONCE on findings.
 
@@ -950,8 +966,8 @@ async def _audit_tasks_shape(
     no-behaviour block scan (both always run) and the LLM shape/traceability
     audit. Any findings trigger exactly
     one regeneration pass with the findings injected into the tasks prompt
-    (no re-audit loop). LLM audit failures are non-fatal — the deterministic
-    findings still count; with none, the first-pass tasks.md stands.
+    followed by a required recheck. Missing audit evidence and unresolved
+    blocking findings stop planning. Repair admission survives interruption.
     """
     from .llm_steps.spec_steps import generate_artifact, run_tasks_audit
 
@@ -961,13 +977,8 @@ async def _audit_tasks_shape(
     findings += scan_no_behaviour_blocks(output_path)
     if findings:
         log.warning("Deterministic scans found %d findings", len(findings))
-    try:
-        findings += await run_tasks_audit(change_dir, config)
-    except Exception as audit_err:
-        log.warning("Tasks shape audit failed (non-fatal): %s", audit_err)
-        print(f"PHASE: tasks_shape_audit_skipped — {audit_err}")
-        if not findings:
-            return
+    findings += await run_tasks_audit(change_dir, config)
+    findings = [f for f in findings if f.get("severity", "major") in {"critical", "major"}]
 
     if not findings:
         log.info("DONE phase=TASKS_SHAPE_AUDIT findings=0")
@@ -984,20 +995,18 @@ async def _audit_tasks_shape(
             finding.get("description", "?"),
         )
 
+    if state and state.spec_gen:
+        if state.spec_gen.tasks_audit_regen_done:
+            raise RuntimeError("Tasks audit repair already attempted; resolve blocking findings before resuming")
+        state.spec_gen.tasks_audit_regen_done = True
+        state.checkpoint(config.state_file_path())
+
     findings_text = tasks_findings_text(findings)
-    try:
-        content = await generate_artifact(
-            "tasks", context, config,
-            reference_docs=config.reference_docs_text(),
-            audit_findings=findings_text,
-        )
-    except Exception as regen_err:
-        log.warning(
-            "Tasks regeneration failed (non-fatal, first pass stands): %s", regen_err
-        )
-        print(f"PHASE: tasks_regeneration_failed — {regen_err}")
-        return
-    output_path.write_text(content)
+    content = await generate_artifact(
+        "tasks", context, config, reference_docs=config.reference_docs_text(),
+        audit_findings=findings_text,
+    )
+    atomic_write(output_path, content)
     log.info("Rewrote artifact after shape audit: %s", output_path)
     # One commit per regeneration pass, so the branch history shows the audit
     # actually changed something. No-op unless the pipeline owns a branch.
@@ -1005,7 +1014,10 @@ async def _audit_tasks_shape(
         config, change_dir, "docs(specs): regenerate tasks.md after shape audit",
     )
     print(f"PHASE: tasks_regenerated_after_shape_audit — {len(findings)} findings")
-    report_no_behaviour_blocks_left(output_path)
+    remaining = scan_placeholders(output_path.read_text()) + scan_no_behaviour_blocks(output_path)
+    remaining += await run_tasks_audit(change_dir, config)
+    if any(f.get("severity", "major") in {"critical", "major"} for f in remaining):
+        raise RuntimeError("Tasks audit still has blocking findings after bounded repair")
 
 
 def _commit_change_dir(config, change_dir: Path, message: str) -> None:
@@ -1033,7 +1045,7 @@ async def _generate_rubric(
     """Generate rubric.md using the rubric module."""
     content = await generate_rubric(change_dir, config)
     rubric_path = change_dir / "rubric.md"
-    rubric_path.write_text(content)
+    atomic_write(rubric_path, content)
     log.info("Wrote rubric: %s", rubric_path)
 
 
@@ -1074,89 +1086,39 @@ async def run_design_audit_stage(
     state: BuildState,
     state_path: Path,
 ) -> list[dict]:
-    """Run the design audit and fold its findings back into design.md/tasks.md.
+    """Audit the current revision, request one owner repair, and require recheck.
 
-    This is the ONE place the design audit's outcome is acted on; both callers
-    (``run_spec_generator`` and the orchestrator's DESIGN_AUDIT phase) go
-    through it, so the audit cannot regenerate twice in one build. The second
-    caller to arrive costs nothing at all — ``spec_gen.design_audit_done`` is
-    checked before the audit call, not after it.
-
-    Shape (deliberately identical to ``apply_prototype_findings`` and
-    ``_audit_tasks_shape``): critical/major gaps drive **one** regeneration
-    pass of design.md and then tasks.md, the pass is committed, and the audit
-    is then re-run **report-only** so the build log records whether the
-    critique landed. There is no loop — a document that still has gaps after
-    one pass stands, and costs one extra audit call rather than an unbounded
-    number.
-
-    Never raises: an audit or regeneration failure is logged and the existing
-    artifacts stand. Returns the first-pass gaps (what the audit found on the
-    artifacts as generated); the re-check reports its own remaining count.
+    Failed or unresolved blocking reviews checkpoint a blocked outcome. An
+    unchanged passed revision costs no additional model call on resume.
     """
-    if state.spec_gen is None:
-        state.spec_gen = SpecGenState()
-    if state.spec_gen.design_audit_done:
-        # The stage already ran to completion in this build (or before a
-        # resume). Checked BEFORE the audit call, not after: a full build
-        # reaches this function twice — once inside run_spec_generator, once in
-        # the orchestrator's DESIGN_AUDIT phase — and the audit reads all four
-        # artifacts, so re-running it to discover there is nothing left to do
-        # is a whole LLM call spent on a log line.
-        log.info("SKIP phase=DESIGN_AUDIT reason=recorded-complete-in-state")
-        print("PHASE: design_audit_skipped — already run for this build")
+    reconcile_plan(config, state)
+    sg = state.spec_gen
+    assert sg is not None
+    if sg.step_passed("design_audit"):
         return []
-
     try:
         gaps = await _run_audit(change_dir, config)
-    except Exception as audit_err:
-        # Deliberately NOT recorded as done: an LLM failure is a reason to try
-        # again (the second call site, or a resume), unlike a completed audit.
-        log.warning("Design audit LLM call failed (non-fatal): %s", audit_err)
-        print(f"PHASE: design_audit_skipped — {audit_err}")
-        return []
-
-    _log_design_audit_gaps(gaps)
-
-    findings_text = design_audit_findings_text(gaps)
-    if not findings_text:
-        _mark_design_audit_done(state, state_path)
+        text = design_audit_findings_text(gaps)
+        if text and not sg.design_audit_regen_done:
+            sg.design_audit_regen_done = True
+            state.checkpoint(state_path)
+            await rewrite_plan(config, state, text, design=True)
+            gaps = await _run_audit(change_dir, config)
+            text = design_audit_findings_text(gaps)
+        if text:
+            sg.record_step("design_audit", "blocked", text)
+            state.checkpoint(state_path)
+            raise RuntimeError("Design audit still has blocking findings after bounded repair")
+        sg.record_step("design_audit")
+        state.checkpoint(state_path)
         return gaps
-
-    if state.spec_gen.design_audit_regen_done:
-        # A resume, or the second of the two call sites in the same build: the
-        # documents already absorbed this critique once. Report only.
-        log.info("SKIP phase=DESIGN_AUDIT_FEEDBACK reason=recorded-complete-in-state")
-        print("PHASE: design_audit_feedback_skipped — regeneration already applied")
-        _mark_design_audit_done(state, state_path)
-        return gaps
-
-    regenerated = await _apply_design_audit_findings(
-        change_dir, config, state, findings_text,
-    )
-    # Recorded whether or not anything was rewritten: the pass has been spent,
-    # and a failed regeneration is not a reason to try again later.
-    state.spec_gen.design_audit_regen_done = True
-    state.checkpoint(state_path)
-
-    if regenerated:
-        await _reaudit_after_design_feedback(change_dir, config)
-    _mark_design_audit_done(state, state_path)
-    return gaps
+    except BaseException:
+        if not sg.step_passed("design_audit"):
+            sg.record_step("design_audit", "blocked", "Audit or repair did not complete")
+        state.checkpoint(state_path)
+        raise
 
 
-def _mark_design_audit_done(state: BuildState, state_path: Path) -> None:
-    """Record that the audit stage ran to completion, and checkpoint it.
-
-    Separate from ``design_audit_regen_done``: an audit that found nothing
-    actionable never regenerates, so the regen flag alone cannot tell the
-    second call site "there is nothing here for you" — it would re-audit to
-    rediscover that. This flag is the record that the *stage* is spent.
-    """
-    if state.spec_gen is None:
-        state.spec_gen = SpecGenState()
-    state.spec_gen.design_audit_done = True
-    state.checkpoint(state_path)
 
 
 def _log_design_audit_gaps(gaps: list[dict]) -> None:
@@ -1181,113 +1143,8 @@ def _log_design_audit_gaps(gaps: list[dict]) -> None:
         log.info("DONE phase=DESIGN_AUDIT gaps=%d critical=0", len(dict_gaps))
 
 
-async def _apply_design_audit_findings(
-    change_dir: Path, config, state: BuildState, findings_text: str,
-) -> int:
-    """Regenerate design.md and then tasks.md ONCE from the audit's findings.
-
-    Returns the number of artifacts rewritten. design.md goes first so the
-    tasks regeneration reads the corrected design off disk. A regeneration
-    failure is non-fatal — that artifact's first pass stands. The regeneration
-    carries the same codebase analysis the first pass had, so a rewrite cannot
-    quietly drift the design away from the project's existing structure.
-    """
-    from .llm_steps.spec_steps import generate_artifact
-
-    cm = ChangeManager(config.specs_dir)
-    regenerated = 0
-
-    for artifact_id in ("design", "tasks"):
-        context = cm.artifact_context(change_dir, artifact_id)
-        if artifact_id == "tasks":
-            context["unknowns_content"] = read_unknowns(change_dir)
-        output_path = change_dir / context["output_path"]
-        if not output_path.exists():
-            log.warning(
-                "SKIP design-audit feedback for %s — %s does not exist",
-                artifact_id, output_path,
-            )
-            continue
-        try:
-            content = await generate_artifact(
-                artifact_id,
-                context,
-                config,
-                codebase_analysis=read_codebase_analysis(state),
-                reference_docs=config.reference_docs_text(),
-                audit_findings=findings_text,
-            )
-        except Exception as regen_err:  # non-fatal: first pass stands
-            log.warning(
-                "Design-audit regeneration of %s failed (non-fatal): %s",
-                artifact_id, regen_err,
-            )
-            continue
-        output_path.write_text(content)
-        regenerated += 1
-        log.info("Rewrote %s from design audit findings", output_path)
-
-    if regenerated:
-        # One commit per regeneration pass, so the branch history shows the
-        # audit actually changed something.
-        _commit_change_dir(
-            config,
-            change_dir,
-            "docs(specs): regenerate design.md and tasks.md after design audit",
-        )
-    print(f"PHASE: design_audit_feedback_applied — {regenerated} artifact(s)")
-    return regenerated
 
 
-async def _reaudit_after_design_feedback(change_dir: Path, config) -> None:
-    """Re-run the audit once, REPORT-ONLY — did the critique land?
-
-    No third artifact pass follows this, whatever it says; its only job is to
-    put the answer in the build log.
-    """
-    try:
-        remaining = await _run_audit(change_dir, config)
-    except Exception as audit_err:
-        log.warning("Design audit re-check failed (non-fatal): %s", audit_err)
-        print(f"PHASE: design_audit_recheck_skipped — {audit_err}")
-        return
-
-    still_open = [
-        g for g in remaining or []
-        if isinstance(g, dict) and g.get("severity") in DESIGN_AUDIT_ACTIONABLE
-    ]
-    if still_open:
-        log.warning(
-            "Design audit re-check: %d critical/major gap(s) remain after the "
-            "single regeneration pass (accepted, no loop)",
-            len(still_open),
-        )
-        for gap in still_open:
-            log.warning(
-                "  remaining gap severity=%s category=%s desc=%s",
-                gap.get("severity", "?"),
-                gap.get("category", "?"),
-                gap.get("description", "?"),
-            )
-        print(
-            f"PHASE: design_audit_recheck — {len(still_open)} critical/major "
-            "gap(s) remain, accepted after one pass"
-        )
-    else:
-        log.info("Design audit re-check: no critical or major gaps remain")
-        print("PHASE: design_audit_recheck — clean")
-
-
-#: A capability line: `- \`capability-name\`: description`.
-_CAPABILITY_ITEM = re.compile(r"^-\s+`([a-z0-9-]+)`", re.MULTILINE)
-#: The `## Capabilities` section — both the New and Modified subsections under
-#: it — up to the next `##` heading.
-_CAPABILITIES_SECTION = re.compile(
-    r"^##\s+Capabilities\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL)
-#: The `## Impact` section, which the proposal template asks the generator to
-#: fill with backticked dependency names.
-_IMPACT_SECTION = re.compile(
-    r"^##\s+Impact\s*$.*?(?=^##\s|\Z)", re.MULTILINE | re.DOTALL)
 
 
 def _extract_capabilities(proposal_text: str) -> list[str]:
@@ -1304,21 +1161,16 @@ def _extract_capabilities(proposal_text: str) -> list[str]:
     behaviour, minus the one section known to carry backticked
     non-capabilities.
     """
-    section = _CAPABILITIES_SECTION.search(proposal_text)
-    scope = section.group(1) if section else _IMPACT_SECTION.sub("", proposal_text)
-    return [match.group(1) for match in _CAPABILITY_ITEM.finditer(scope)]
+    return expected_capabilities(proposal_text)
 
 
 def _load_or_create_state(config) -> BuildState:
     """Load existing state or create new one."""
     state_path = config.state_file_path()
     if state_path.exists():
-        try:
-            state = BuildState.load(state_path)
-            log.info("Resumed state from %s", state_path)
-            return state
-        except Exception as e:
-            log.warning("Failed to load state, starting fresh: %s", e)
+        state = BuildState.load(state_path)
+        log.info("Resumed state from %s", state_path)
+        return state
 
     state = BuildState(
         change_name=config.change_name,
@@ -1330,3 +1182,201 @@ def _load_or_create_state(config) -> BuildState:
     )
     state.checkpoint(state_path)
     return state
+
+
+def atomic_write(path: Path, content: str) -> None:
+    """Publish a complete document; interruption leaves the previous file intact."""
+    if not content.strip():
+        raise ValueError(f"Empty planning document: {path.name}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=".plan-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def _plan_hashes(config) -> dict[str, str]:
+    files = {name: config.change_dir / name for name in (
+        "proposal.md", "use-cases.md", "design.md", "unknowns.md", "tasks.md", "rubric.md",
+        "interview.md", "research.md", "codebase-analysis.md")}
+    files.update({"requirements/" + p.name: p for p in (config.change_dir / "requirements").glob("*.md")})
+    files.update({"registry/" + p.name: p for p in (config.specs_dir / "registry").glob("*.md")})
+    files["config.yaml"] = config.specs_dir / "config.yaml"
+    hashes = {name: hashlib.sha256(p.read_bytes()).hexdigest() for name, p in files.items() if p.is_file()}
+    hashes["references"] = hashlib.sha256(config.reference_docs_text().encode()).hexdigest()
+    hashes["granularity"] = hashlib.sha256(config.task_granularity.encode()).hexdigest()
+    return hashes
+
+
+def reconcile_plan(config, state: BuildState, *, regenerated: set[str] | None = None) -> None:
+    """Invalidate the explicit planning dependencies and publish their revision.
+
+    The state is the only evidence ledger. Existing filenames remain the public
+    interface; their existence alone cannot validate dependent artifacts.
+    """
+    if state.spec_gen is None:
+        state.spec_gen = SpecGenState()
+    sg = state.spec_gen
+    recovered = _finish_plan_publication(config)
+    retired = False
+    proposal = config.change_dir / "proposal.md"
+    expected = set(expected_capabilities(proposal.read_text())) if proposal.exists() else set()
+    if expected:
+        for path in (config.change_dir / "requirements").glob("*.md"):
+            if path.stem not in expected:
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                destination = config.change_dir / "superseded-requirements" / f"{path.stem}-{digest}.md"
+                destination.parent.mkdir(exist_ok=True)
+                os.replace(path, destination)
+                retired = True
+    current = _plan_hashes(config)
+    previous = sg.artifact_hashes
+    changed = {key for key in previous.keys() | current.keys() if previous.get(key) != current.get(key)}
+    stale = set(sg.stale_artifacts)
+    if retired:
+        stale.update({"tasks", "rubric"})
+    if previous:
+        if "proposal.md" in changed:
+            stale.update({"requirements", "use-cases", "design", "unknowns", "tasks", "rubric"})
+        if any(key.startswith("requirements/") for key in changed) or "use-cases.md" in changed:
+            stale.update({"tasks", "rubric"})
+        if "design.md" in changed:
+            stale.update({"unknowns", "tasks", "rubric"})
+        if "unknowns.md" in changed:
+            stale.update({"tasks", "rubric"})
+        if "tasks.md" in changed:
+            stale.add("rubric")
+        if changed & {"interview.md", "research.md"}:
+            stale.update(ARTIFACT_DAG)
+        if changed & {"config.yaml", "references", "granularity", "codebase-analysis.md"} or any(
+                key.startswith("registry/") for key in changed):
+            stale.update({"design", "unknowns", "tasks", "rubric"})
+    if not ChangeManager(config.specs_dir)._artifact_exists(config.change_dir, "requirements/*.md"):
+        stale.update({"tasks", "rubric"})
+    stale -= (regenerated or set()) | recovered
+    sg.stale_artifacts = sorted(stale)
+    revision = hashlib.sha256(json.dumps(current, sort_keys=True).encode()).hexdigest()
+    if revision != sg.revision:
+        # Evidence for any earlier revision is stale. Prototype and explanation
+        # stages are advisory and do not authorize implementation.
+        sg.revision = revision
+        state.verification = None
+        state.split_required = False
+        state.size_accepted = False
+    sg.artifact_hashes = current
+    if recovered:
+        state.checkpoint(config.state_file_path())
+        (config.change_dir / ".plan-publication.json").unlink(missing_ok=True)
+
+
+def _finish_plan_publication(config) -> set[str]:
+    """Complete an interrupted, prevalidated publication, refusing intervening edits."""
+    journal = config.change_dir / ".plan-publication.json"
+    if not journal.exists():
+        return set()
+    files = json.loads(journal.read_text())
+    for name, item in files.items():
+        if Path(name).name != name or name not in {"design.md", "tasks.md", "rubric.md", "unknowns.md"}:
+            raise ValueError("Invalid planning publication journal")
+        path = config.change_dir / name
+        actual = path.read_text() if path.exists() else None
+        if actual not in (item["before"], item["after"]):
+            raise RuntimeError(f"Planning publication interrupted and {name} changed; preserve edits before recovery")
+    for name, item in files.items():
+        atomic_write(config.change_dir / name, item["after"])
+    return {Path(name).stem for name in files}
+
+
+async def rewrite_plan(config, state: BuildState, findings_text: str, *, design: bool = False) -> int:
+    """The sole feedback publisher: stage, validate, then publish one revision.
+
+    Failed generation leaves the original set intact. A crash during publication
+    leaves a journal that must reconcile before any consumer accepts the files.
+    """
+    from .llm_steps.spec_steps import generate_artifact
+    from .tdd_engine import parse_blocks
+
+    reconcile_plan(config, state)
+    names = ["design", "tasks"] if design else ["tasks"]
+    with tempfile.TemporaryDirectory(prefix="buildme-plan-") as directory:
+        staged = copy.copy(config)
+        staged.specs_dir = Path(directory) / "specs"
+        staged._change_dir_override = ""
+        staged.change_dir = staged.specs_dir / "changes" / config.change_name
+        shutil.copytree(config.change_dir, staged.change_dir)
+        registry = config.specs_dir / "registry"
+        if registry.exists():
+            shutil.copytree(registry, staged.specs_dir / "registry")
+        source_config = config.specs_dir / "config.yaml"
+        if source_config.exists():
+            shutil.copy2(source_config, staged.specs_dir / "config.yaml")
+        cm = ChangeManager(staged.specs_dir)
+        for name in list(names):
+            if name == "tasks" and design:
+                await _generate_unknowns(cm, staged.change_dir, staged, state.model_copy(deep=True))
+                names.append("unknowns")
+            context = cm.artifact_context(staged.change_dir, name)
+            context["unknowns_content"] = read_unknowns(staged.change_dir)
+            text = await generate_artifact(name, context, staged, audit_findings=findings_text,
+                                          codebase_analysis=read_codebase_analysis(state),
+                                          reference_docs=config.reference_docs_text())
+            atomic_write(staged.change_dir / f"{name}.md", text)
+        if not parse_blocks(staged.change_dir / "tasks.md"):
+            raise ValueError("Rewritten tasks contain no implementation blocks")
+        if scan_no_behaviour_blocks(staged.change_dir / "tasks.md"):
+            raise ValueError("Rewritten tasks still contain blocks with no behavior")
+        if not cm._artifact_exists(staged.change_dir, "requirements/*.md"):
+            raise ValueError("Cannot publish a plan with incomplete capability requirements")
+        from .llm_steps.spec_steps import run_tasks_audit
+        findings = await run_tasks_audit(staged.change_dir, staged)
+        if any(f.get("severity") in {"critical", "major"} for f in findings):
+            raise ValueError("Rewritten tasks still have blocking shape findings")
+        # The rubric describes this exact task/design set.
+        await _generate_rubric(staged.change_dir, staged, state)
+        names.append("rubric")
+        publication = {}
+        for name in names:
+            filename = f"{name}.md"
+            original = config.change_dir / filename
+            publication[filename] = {"before": original.read_text() if original.exists() else None,
+                                     "after": (staged.change_dir / filename).read_text()}
+        atomic_write(config.change_dir / ".plan-publication.json", json.dumps(publication))
+        _finish_plan_publication(config)
+    reconcile_plan(config, state, regenerated=set(names))
+    # Unknowns were an input to this bounded rewrite; a changed design must
+    # regenerate them before final validation, through the normal artifact DAG.
+    state.checkpoint(config.state_file_path())
+    assert state.spec_gen is not None
+    state.spec_gen.tasks_audit_done = True
+    state.checkpoint(config.state_file_path())
+    _commit_change_dir(config, config.change_dir,
+                       "docs(specs): publish " + ("design audit" if design else "plan review") + " repair")
+    return 2 if design else 1
+
+
+def assert_plan_current(config, state: BuildState, *, archived: bool = False) -> None:
+    """Check the accepted documents after implementation, without rewriting them.
+
+    Archiving merges these requirements into the registry; that expected output
+    is covered by final verification, while the original registry input remains
+    in the accepted planning revision.
+    """
+    if state.spec_gen is None or not state.spec_gen.revision:
+        raise RuntimeError("Planning revision evidence is missing; validate the plan before implementation")
+    if (config.change_dir / ".plan-publication.json").exists():
+        raise RuntimeError("Planning publication is incomplete")
+    if not state.spec_gen.design_audit_done or not state.spec_gen.plan_review_done:
+        raise RuntimeError("Required planning review evidence is missing or stale")
+    current = _plan_hashes(config)
+    expected = state.spec_gen.artifact_hashes
+    keys = current.keys() | expected.keys()
+    changed = [key for key in keys if not (archived and key.startswith("registry/"))
+               and current.get(key) != expected.get(key)]
+    if changed or state.spec_gen.stale_artifacts:
+        state.verification = None
+        raise RuntimeError("Plan changed after implementation; revalidate before building: " + ", ".join(sorted(changed)))

@@ -115,7 +115,7 @@ ARTIFACT_DAG: dict[str, dict] = {
     # against.
     "tasks": {
         "generates": "tasks.md",
-        "requires": ["requirements", "design", "unknowns", "use-cases"],
+        "requires": ["proposal", "requirements", "design", "unknowns", "use-cases"],
     },
     "rubric": {"generates": "rubric.md", "requires": ["tasks"]},
 }
@@ -348,11 +348,13 @@ class ChangeManager:
         log.info("Created change '%s' at %s", name, change_dir)
         return change_dir
 
-    def artifact_status(self, change_dir: Path) -> dict[str, ArtifactStatus]:
+    def artifact_status(self, change_dir: Path, stale: list[str] | None = None) -> dict[str, ArtifactStatus]:
         """Check which artifacts are done/ready/blocked."""
         result: dict[str, ArtifactStatus] = {}
         for artifact_id, spec in ARTIFACT_DAG.items():
-            if self._artifact_exists(change_dir, spec["generates"]):
+            if not all(result.get(dep) == ArtifactStatus.DONE for dep in spec["requires"]):
+                result[artifact_id] = ArtifactStatus.BLOCKED
+            elif artifact_id not in (stale or []) and self._artifact_exists(change_dir, spec["generates"]):
                 result[artifact_id] = ArtifactStatus.DONE
             elif all(result.get(dep) == ArtifactStatus.DONE for dep in spec["requires"]):
                 result[artifact_id] = ArtifactStatus.READY
@@ -464,9 +466,15 @@ class ChangeManager:
 
     def _artifact_exists(self, change_dir: Path, generates: str) -> bool:
         """Check if an artifact's output file(s) exist."""
-        if "*" in generates:
-            return len(list(change_dir.glob(generates))) > 0
-        return (change_dir / generates).exists()
+        if generates == "requirements/*.md":
+            proposal = change_dir / "proposal.md"
+            if not proposal.is_file():
+                return False
+            capabilities = expected_capabilities(proposal.read_text())
+            return bool(capabilities) and all(
+                valid_requirement(change_dir / "requirements" / f"{name}.md") for name in capabilities)
+        path = change_dir / generates
+        return path.is_file() and bool(path.read_text().strip())
 
     def _normalize_name(self, name: str) -> str:
         """Normalize a change name to kebab-case."""
@@ -555,3 +563,43 @@ class ChangeManager:
                 main = pattern.sub(lambda _m: replacement, main)
 
         return main.strip() + "\n"
+
+
+def expected_capabilities(proposal: str) -> list[str]:
+    section = re.search(r"^##\s+Capabilities\s*$(.*?)(?=^##\s|\Z)", proposal, re.M | re.S)
+    scope = section.group(1) if section else re.sub(r"^##\s+Impact\s*$.*?(?=^##\s|\Z)", "", proposal, flags=re.M | re.S)
+    return list(dict.fromkeys(re.findall(r"^-\s+`([a-z0-9]+(?:-[a-z0-9]+)*)`", scope, re.M)))
+
+
+def valid_requirement(path: Path) -> bool:
+    try:
+        text = path.read_text()
+    except (OSError, UnicodeError):
+        return False
+    return valid_requirement_text(text)
+
+
+def valid_requirement_text(text: str) -> bool:
+    """Validate each requirement, preserving the scenario-free REMOVED format."""
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    requirements = list(re.finditer(r"^### Requirement:([^\n]*)(.*?)(?=^### Requirement:|^## |\Z)",
+                                    text, re.M | re.S))
+    if not requirements:
+        return False
+    for requirement in requirements:
+        if not requirement.group(1).strip():
+            return False
+        sections = re.findall(r"^## (\w+) Requirements", text[:requirement.start()], re.M)
+        if sections and sections[-1] == "REMOVED":
+            continue
+        scenarios = list(re.finditer(r"^#### Scenario:([^\n]*)(.*?)(?=^#### Scenario:|\Z)",
+                                     requirement.group(2), re.M | re.S))
+        if not scenarios:
+            return False
+        for scenario in scenarios:
+            if not scenario.group(1).strip() or not all(
+                re.search(rf"\b{keyword}\b[^\n]*\w", scenario.group(2))
+                for keyword in ("WHEN", "THEN")
+            ):
+                return False
+    return True
