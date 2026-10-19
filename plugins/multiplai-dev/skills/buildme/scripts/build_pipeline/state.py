@@ -30,6 +30,7 @@ class StepOutcome(BaseModel):
     outcome: Literal["passed", "blocked", "advisory", "skipped"]
     reason: str = ""
     repair_attempts: int = 0
+    blocking_findings: str = ""
 
 
 class SpecGenState(BaseModel):
@@ -93,9 +94,9 @@ class SpecGenState(BaseModel):
         accepted = {"passed", "skipped", "advisory"} if name in {"prototype", "explainers"} else {"passed"}
         return bool(step and step.revision == self.step_revision(name) and step.outcome in accepted)
 
-    def record_step(self, name: str, outcome: Literal["passed", "blocked", "advisory", "skipped"] = "passed", reason: str = "") -> None:
+    def record_step(self, name: str, outcome: Literal["passed", "blocked", "advisory", "skipped"] = "passed", reason: str = "", *, blocking_findings: str = "") -> None:
         self.steps[name] = StepOutcome(revision=self.step_revision(name), outcome=outcome, reason=reason,
-                                       repair_attempts=self.repair_attempts(name))
+                                       repair_attempts=self.repair_attempts(name), blocking_findings=blocking_findings)
 
 
 

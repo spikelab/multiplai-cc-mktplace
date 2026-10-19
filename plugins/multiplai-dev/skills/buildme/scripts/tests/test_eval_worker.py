@@ -14,7 +14,7 @@ MODULE = Path(__file__).parents[1] / 'evals/pipeline_compare.py'
 
 
 @pytest.mark.asyncio
-async def test_worker_reaches_provider_after_clean_bootstrap_and_preserves_user_staging(tmp_path, monkeypatch, capsys):
+async def test_worker_reaches_sdk_adapter_after_clean_bootstrap_and_preserves_source_staging(tmp_path, monkeypatch, capsys):
     spec = importlib.util.spec_from_file_location('pipeline_compare', MODULE)
     pilot = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(pilot)
@@ -25,7 +25,7 @@ async def test_worker_reaches_provider_after_clean_bootstrap_and_preserves_user_
     pilot.initialize(checkout, task)
     public = tmp_path / 'public.json'
     public.write_text(json.dumps({k: v for k, v in task.items() if k != 'files'}))
-    provider = AsyncMock(side_effect=AgentRunError('offline provider boundary', reason='offline sentinel'))
+    provider = AsyncMock(side_effect=AgentRunError('offline SDK adapter', reason='offline sentinel'))
     monkeypatch.setattr(sdk, 'run_agent', provider)
     # Worker instrumentation is process-local in CLI use; restore it in this test.
     monkeypatch.setattr(git_ops, 'push_branch', git_ops.push_branch)

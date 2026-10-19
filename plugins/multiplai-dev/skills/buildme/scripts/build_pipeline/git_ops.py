@@ -646,13 +646,8 @@ def agent_write_window(repo: Path | str | None):
                     atomic_write(path, json.dumps(evidence, sort_keys=True))
 
 
-def test_output_excludes(repo: Path | str) -> list[str]:
-    """Exclude declared untracked test outputs, never index or HEAD paths.
-
-    Declarations are literal project-relative files/directories in config.yaml.
-    Reading them here keeps commit, clean-tree and verification policy identical.
-    Invalid declarations fail closed, including unreadable tracking evidence.
-    """
+def _declared_test_outputs(repo: Path | str) -> list[str]:
+    """Read and validate literal project-relative output declarations."""
     import yaml
     config = Path(repo) / "specs/config.yaml"
     if not config.exists():
@@ -663,10 +658,16 @@ def test_output_excludes(repo: Path | str) -> list[str]:
     outputs = data.get("test_outputs", [])
     if not isinstance(outputs, list) or any(
         not isinstance(p, str) or not p or Path(p).is_absolute()
-        or ".." in Path(p).parts or str(Path(p)) == "." for p in outputs
+        or ".." in Path(p).parts or str(Path(p)) == "."
+        or any(char in p for char in "*?[]") for p in outputs
     ):
         raise GitLifecycleError("test_outputs must be literal project-relative files or directories")
-    if not outputs:
+    return [Path(p).as_posix().rstrip("/") for p in outputs]
+
+
+def _test_output_candidates(repo: Path | str) -> list[str]:
+    roots = _declared_test_outputs(repo)
+    if not roots:
         return []
     tracked = _run(["git", "ls-files", "--cached", "-z"], cwd=repo)
     head = _run(["git", "ls-tree", "--name-only", "-r", "-z", "HEAD", "--", "."], cwd=repo)
@@ -674,9 +675,53 @@ def test_output_excludes(repo: Path | str) -> list[str]:
     if not all(r.ok for r in (tracked, head, others)):
         raise GitLifecycleError("Cannot establish tracked files for test_outputs")
     protected = set(tracked.stdout.split("\0")) | set(head.stdout.split("\0"))
-    roots = [Path(p).as_posix().rstrip("/") for p in outputs]
-    return [f":(exclude,literal){p}" for p in others.stdout.split("\0")
+    return [p for p in others.stdout.split("\0")
             if p and p not in protected and any(p == r or p.startswith(r + "/") for r in roots)]
+
+
+def _test_output_evidence(repo: Path | str) -> tuple[Path, dict]:
+    result = _run(["git", "rev-parse", "--git-path", "buildme-test-outputs.json"], cwd=repo)
+    if not result.ok:
+        raise GitLifecycleError("Cannot locate test-output evidence")
+    path = Path(result.stdout.strip())
+    if not path.is_absolute():
+        path = Path(repo) / path
+    data = json.loads(path.read_text()) if path.exists() else {}
+    return path, data
+
+
+def test_output_excludes(repo: Path | str) -> list[str]:
+    """Exclude only declared outputs observed being created by test commands."""
+    candidates = _test_output_candidates(repo)
+    if not candidates:
+        return []
+    _, evidence = _test_output_evidence(repo)
+    known = evidence.get(str(Path(repo).resolve()), {})
+    return [f":(exclude,literal){p}" for p in candidates
+            if known.get(p) == _working_identity(Path(repo) / p)]
+
+
+@contextlib.contextmanager
+def test_output_window(repo: Path | str):
+    """Track generated files without adopting code that preceded the test run.
+
+    A later agent/user edit invalidates output ownership. Existing outputs may
+    change during subsequent test runs, but unproven existing files stay inputs.
+    """
+    if not _declared_test_outputs(repo):
+        yield
+        return
+    before = {p: _working_identity(Path(repo) / p) for p in _test_output_candidates(repo)}
+    path, evidence = _test_output_evidence(repo)
+    key = str(Path(repo).resolve())
+    known = evidence.get(key, {})
+    try:
+        yield
+    finally:
+        evidence[key] = {p: _working_identity(Path(repo) / p) for p in _test_output_candidates(repo)
+                         if p not in before or known.get(p) == before[p]}
+        from .io_utils import atomic_write
+        atomic_write(path, json.dumps(evidence, sort_keys=True))
 
 
 def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | None:
@@ -710,11 +755,39 @@ def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | 
     _, evidence = _agent_index_evidence(worktree)
     record = evidence.get(str(Path(worktree).resolve()), {})
     owned = record.get("entries", {}) if record.get("head") == rev_parse_head(worktree) else {}
+    roots = _declared_test_outputs(worktree)
+    if roots:
+        selected = _run(["git", "ls-files", "--others", "--exclude-standard", "-z",
+                         "--", *paths], cwd=worktree)
+        head_files = _run(["git", "ls-tree", "--name-only", "-r", "-z", "HEAD", "--", "."], cwd=worktree)
+        if not selected.ok or not head_files.ok:
+            raise GitLifecycleError("Cannot inspect declared output commit paths")
+        unproven = set(_test_output_candidates(worktree)) & set(selected.stdout.split("\0"))
+        # Agent staging is not the user's explicit choice to track source under
+        # an output directory. Do not silently adopt those new files either.
+        for name in set(staged_paths.stdout.split("\0")) - set(head_files.stdout.split("\0")):
+            if (any(name == root or name.startswith(root + "/") for root in roots)
+                    and isinstance(owned.get(name), dict)
+                    and owned[name].get("index") == (before_index or {}).get(name)):
+                unproven.add(name)
+        if unproven:
+            raise GitLifecycleError(
+                "Declared test outputs lack observed test-run provenance: " + ", ".join(sorted(unproven))
+                + ". Preserve these files outside the project, unstage their new index entries if "
+                "present, then regenerate outputs through build_pipeline.gates.run_test_suite before "
+                "retrying. For source files, narrow test_outputs; untracked source without agent "
+                "staging can also be explicitly selected with git add. Agent-internal test runs "
+                "are not observed output windows.")
     conflicts = divergent | recreated
     if any(not isinstance(owned.get(p), dict)
            or owned[p].get("index") != (before_index or {}).get(p)
            or owned[p].get("working") != _working_identity(Path(worktree) / p) for p in conflicts):
-        raise GitLifecycleError(f"Cannot commit {message}: staged and working versions differ; save both first")
+        raise GitLifecycleError(
+            f"Cannot commit {message}: staged and working versions differ: {', '.join(sorted(conflicts))}. "
+            "Inspect git diff and git diff --cached for these paths. Save both versions, then "
+            "git add the paths whose working version should be committed, or git restore --staged "
+            "the paths whose working version should remain unstaged. Missing agent ownership "
+            "after an interruption cannot be inferred safely.")
     index_path = _run(["git", "rev-parse", "--git-path", "index"], cwd=worktree)
     if before_index is None or not index_path.ok:
         raise GitLifecycleError("Cannot inspect active index")

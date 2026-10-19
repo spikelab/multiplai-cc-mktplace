@@ -31,10 +31,30 @@ failing tests that define the expected behavior for a block of work.
 9. **No `assert True`**, no `assert x is not None` as the sole assertion, no empty
    test bodies. Every test must assert a meaningful behavioral outcome.
 10. Run the test command after writing to confirm tests are syntactically valid
-   (they should fail, not error with ImportError/SyntaxError). For a new module,
-   put imports inside the test after an assertion that the module exists (for
-   example, Python's importlib.util.find_spec), then assert the required behavior.
-   Do not let a missing implementation prevent collection of the tests.
+   (they should fail, not error with ImportError/SyntaxError). For new Python
+   packages, modules, or functions, import the module inside the test. Convert
+   only absence of that expected module or its parent package into an assertion;
+   let unrelated dependency/import errors propagate. Then check the public
+   function and its behavior. Avoid `find_spec` on a missing subpackage and
+   `from module import new_function` before asserting the function exists.
+   Adapt this example's module names and behavioral assertion to the actual API:
+
+```python
+import importlib
+
+def test_new_api():
+    try:
+        feature = importlib.import_module("new_pkg.feature")
+    except ModuleNotFoundError as error:
+        if error.name not in ("new_pkg", "new_pkg.feature"):
+            raise
+        raise AssertionError("Implement new_pkg.feature") from None
+    assert callable(getattr(feature, "answer", None)), "Implement answer"
+    assert feature.answer() == 42
+```
+
+   The existence checks support collection-safe RED; the final behavior assertion
+   remains required. Do not let a missing implementation prevent collection.
 
 ## Quality Gates — check every test against these before finishing
 

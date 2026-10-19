@@ -60,7 +60,7 @@ async def run_spec_generator(config, args=None, *, standalone: bool = True) -> i
     # Load or create state
     state = _load_or_create_state(config)
     if standalone:
-        budget.get_budget().load_state(state.budget)
+        budget.get_budget().load_state(state.budget, accept_unknown_spend=config.accept_unknown_spend)
 
     # Ensure spec_gen sub-state exists
     if state.spec_gen is None:
@@ -1067,6 +1067,20 @@ def design_audit_findings_text(gaps: list[dict]) -> str:
     )
 
 
+def record_blocked_review(config, state: BuildState, state_path: Path, name: str,
+                          reason: str, findings: str) -> None:
+    """Keep actionable review evidence in both the checkpoint and progress log."""
+    assert state.spec_gen is not None
+    details = reason + ("\n" + findings if findings and findings not in reason else "")
+    state.spec_gen.record_step(name, "blocked", details, blocking_findings=findings)
+    state.checkpoint(state_path)
+    from .progress import ProgressWriter
+    path = config.progress_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ProgressWriter(path).log_phase(name.upper() + "_BLOCKED", details)
+    log.error("%s blocked: %s", name, details)
+
+
 async def run_design_audit_stage(
     change_dir: Path,
     config,
@@ -1083,6 +1097,11 @@ async def run_design_audit_stage(
     assert sg is not None
     if sg.step_passed("design_audit"):
         return []
+    previous = sg.steps.get("design_audit")
+    if previous and previous.revision == sg.step_revision("design_audit") and previous.blocking_findings:
+        raise RuntimeError(previous.reason)
+    text = ""
+    findings_revision = sg.step_revision("design_audit")
     try:
         gaps = await _run_audit(change_dir, config)
         text = design_audit_findings_text(gaps)
@@ -1090,19 +1109,20 @@ async def run_design_audit_stage(
             sg.admit_repair("design_audit")
             state.checkpoint(state_path)
             await rewrite_plan(config, state, text, design=True)
+            text = ""  # The old findings do not describe the published revision.
+            findings_revision = sg.step_revision("design_audit")
             gaps = await _run_audit(change_dir, config)
             text = design_audit_findings_text(gaps)
+        _log_design_audit_gaps(gaps)
         if text:
-            sg.record_step("design_audit", "blocked", text)
-            state.checkpoint(state_path)
             raise RuntimeError("Design audit still has blocking findings after bounded repair")
         sg.record_step("design_audit")
         state.checkpoint(state_path)
         return gaps
-    except BaseException:
-        if not sg.step_passed("design_audit"):
-            sg.record_step("design_audit", "blocked", "Audit or repair did not complete")
-        state.checkpoint(state_path)
+    except BaseException as error:
+        record_blocked_review(config, state, state_path, "design_audit",
+                              str(error) or type(error).__name__,
+                              text if findings_revision == sg.step_revision("design_audit") else "")
         raise
 
 
@@ -1214,6 +1234,7 @@ def reconcile_plan(config, state: BuildState, *, regenerated: set[str] | None = 
     if state.spec_gen is None:
         state.spec_gen = SpecGenState()
     sg = state.spec_gen
+    prototype_was_current = sg.step_passed("prototype")
     recovered = _finish_plan_publication(config)
     retired = False
     proposal = config.change_dir / "proposal.md"
@@ -1263,6 +1284,12 @@ def reconcile_plan(config, state: BuildState, *, regenerated: set[str] | None = 
         state.split_required = False
         state.size_accepted = False
     sg.artifact_hashes = current
+    if "unknowns" in recovered:
+        _record_explainer_outcome(config, state)
+    if "design" in recovered and prototype_was_current:
+        # An owner repair may update design after the prototype. External edits
+        # still invalidate its ordinary revision-bound evidence.
+        sg.steps["prototype"].revision = sg.step_revision("prototype")
     if recovered:
         state.checkpoint(config.state_file_path())
         (config.change_dir / ".plan-publication.json").unlink(missing_ok=True)
@@ -1344,8 +1371,7 @@ async def rewrite_plan(config, state: BuildState, findings_text: str, *, design:
         atomic_write(config.change_dir / ".plan-publication.json", json.dumps(publication))
         _finish_plan_publication(config)
     reconcile_plan(config, state, regenerated=set(names))
-    # Unknowns were an input to this bounded rewrite; a changed design must
-    # regenerate them before final validation, through the normal artifact DAG.
+    # Reconciliation records the published unknowns evidence on the live state.
     state.checkpoint(config.state_file_path())
     assert state.spec_gen is not None
     state.spec_gen.record_step("tasks_audit", "passed")
@@ -1363,7 +1389,7 @@ def assert_plan_current(config, state: BuildState, *, archived: bool = False) ->
     in the accepted planning revision.
     """
     if state.spec_gen is None or not state.spec_gen.revision:
-        raise RuntimeError("Planning revision evidence is missing; validate the plan before implementation")
+        raise RuntimeError("Planning revision evidence is missing. This legacy checkpoint cannot resume automatically; preserve its implementation and start a reviewed build in a separate clean checkout")
     if (config.change_dir / ".plan-publication.json").exists():
         raise RuntimeError("Planning publication is incomplete")
     if not state.spec_gen.step_passed("design_audit") or not state.spec_gen.step_passed("plan_review"):

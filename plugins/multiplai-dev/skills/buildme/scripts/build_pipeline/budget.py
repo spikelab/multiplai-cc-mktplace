@@ -80,6 +80,7 @@ class BuildBudget:
     # {label: USD} — the same split in money, which is what a user decides on.
     usd_by_label: dict[str, float] = field(default_factory=dict)
     unaccounted_calls: list[str] = field(default_factory=list)
+    accepted_unknown_calls: int = 0
     _warned: bool = False
 
     @property
@@ -185,9 +186,9 @@ class BuildBudget:
         """
         if not (self.max_tokens or self.max_usd):
             return
-        if self.unaccounted_calls:
+        if len(self.unaccounted_calls) > self.accepted_unknown_calls:
             raise BudgetExceededError(
-                "Interrupted provider usage is unknown; reconcile usage before resuming a capped build",
+                "Interrupted provider usage is unknown; resume with --accept-unknown-spend to accept the missing usage. Totals remain lower bounds and the cap covers known spend only",
                 diagnosis=self.diagnosis(),
             )
         used = self.fraction_used
@@ -218,6 +219,7 @@ class BuildBudget:
         return {
             "calls": self.calls,
             "unaccounted_calls": list(self.unaccounted_calls),
+            "accepted_unknown_calls": self.accepted_unknown_calls,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "cache_read_tokens": self.cache_read_tokens,
@@ -230,13 +232,18 @@ class BuildBudget:
             "max_usd": self.max_usd,
         }
 
-    def load_state(self, data: dict) -> None:
+    def load_state(self, data: dict, *, accept_unknown_spend: bool = False) -> None:
         """Restore cumulative usage from a checkpoint, so a resumed build does
         not get a fresh budget (which would defeat the ceiling entirely)."""
         if not data:
             return
         self.calls = int(data.get("calls", 0) or 0)
         self.unaccounted_calls = list(data.get("unaccounted_calls", []))
+        self.accepted_unknown_calls = min(len(self.unaccounted_calls), int(data.get("accepted_unknown_calls", 0)))
+        if accept_unknown_spend and self.unaccounted_calls:
+            self.accepted_unknown_calls = len(self.unaccounted_calls)
+            log.warning("Accepted %d interrupted calls with unknown spend; totals remain lower bounds",
+                        self.accepted_unknown_calls)
         self.input_tokens = int(data.get("input_tokens", 0) or 0)
         self.output_tokens = int(data.get("output_tokens", 0) or 0)
         self.cache_read_tokens = int(data.get("cache_read_tokens", 0) or 0)

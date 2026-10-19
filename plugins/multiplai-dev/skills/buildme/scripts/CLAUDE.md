@@ -139,9 +139,11 @@ All tests mock LLM calls — no API keys needed. Tests cover:
 - **Bounded repair can fail.** Required review errors or remaining blocking
   findings leave resumable blocked evidence. Never log failure and mark it passed.
 - **Test outputs must be declared.** `test_outputs` in specs/config.yaml names
-  literal project-relative output paths. Only untracked outputs are excluded
-  consistently from final verification, clean-tree checks and commits. Index/HEAD
-  paths and undeclared inputs always remain protected.
+  literal project-relative output paths; globs are rejected. Only untracked files
+  observed being created by pipeline test commands are excluded from verification,
+  clean-tree checks and commits. Existing code under output directories, later
+  external edits, and index/HEAD paths remain protected. Verification failures name
+  changed paths.
 - **Completion has one check.** `gates.final_verification` is used by standalone
   TDD, the full orchestrator after docs/respec/archive/contributors, and findings
   before publication. A failed writer requires verified rollback or build failure.
@@ -158,7 +160,9 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   entries load persisted totals before dispatch. Budget exhaustion propagates
   through advisory handlers. Charge before write-window evidence publication too.
   Cancellation without usage records an unknown call and incomplete process spend;
-  capped admission blocks until reconciled. Findings rounds share the run budget.
+  capped admission blocks until --accept-unknown-spend explicitly accepts prior
+  unknown calls. Preserve their records and lower-bound totals; later interruptions
+  need fresh acceptance. Findings rounds share the run budget.
   Child-process spend has its own aggregate semantics.
 
 - **Adjudication is a correctness requirement, not polish.** Reviewers run in

@@ -262,6 +262,10 @@ def build_parser() -> argparse.ArgumentParser:
     cget.add_argument("key", help="Dotted key, e.g. intake.provider or interview")
     cget.add_argument("--project-dir", default=".", help="Project directory")
 
+    for command in (build, spec, tdd, findings):
+        command.add_argument("--accept-unknown-spend", action="store_true",
+                             help="Resume despite prior interrupted calls with unknown usage; "
+                                  "totals remain lower bounds and the cap covers known spend only")
     return parser
 
 

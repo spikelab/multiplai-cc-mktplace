@@ -673,7 +673,7 @@ async def _run_findings(run: FindingsRun) -> int:
     st = load_state(run)
     budget.reset()
     budget.configure(max_tokens=run.config.budget_max_tokens, max_usd=run.config.budget_max_usd)
-    budget.get_budget().load_state(st.budget)
+    budget.get_budget().load_state(st.budget, accept_unknown_spend=run.config.accept_unknown_spend)
     fs = st.findings
     assert fs is not None
     mismatch = state_mismatch(run, fs)

@@ -11,10 +11,13 @@ from build_pipeline.gates import red_gate, run_test_suite
 
 
 @pytest.mark.parametrize('wrapper', ['cd api && {command}', 'sh -c {quoted}'])
-def test_changed_directory_pytest_red(tmp_path, monkeypatch, wrapper):
+@pytest.mark.parametrize('parent_config', [False, True])
+def test_changed_directory_pytest_red(tmp_path, monkeypatch, wrapper, parent_config):
     monkeypatch.setenv('BUILDME_TRUST_REPO', '1')
     (tmp_path / 'api/tests').mkdir(parents=True)
     (tmp_path / 'api/tests/test_new.py').write_text('def test_new():\n    assert 1 == 2\n')
+    if parent_config:
+        (tmp_path / 'pytest.ini').write_text('[pytest]\n')
     python = shlex.quote(sys.executable)
     simple = f'{python} -m pytest -q'
     command = wrapper.format(command=simple, quoted=shlex.quote(f'cd api && {simple}'))
@@ -60,3 +63,28 @@ def test_real_vitest_failure_is_unverified_red(tmp_path, monkeypatch):
 def test_unparsed_runners_remain_explicitly_unverified(runner, output):
     gate = red_gate(output, 1, runner=runner)
     assert gate.passed and gate.metadata['classification'] == 'unverified'
+
+
+@pytest.mark.parametrize('existing', ['none', 'package', 'module'])
+def test_prompt_recipe_reaches_red_then_green_for_new_python_apis(tmp_path, monkeypatch, existing):
+    import re
+    from build_pipeline.prompts.test_writing import TEST_WRITER_PROMPT
+    monkeypatch.setenv('BUILDME_TRUST_REPO', '1')
+    example = re.search(r"```python\n(.*?)```", TEST_WRITER_PROMPT, re.S)
+    assert example is not None, 'test-writing advice needs an executable import recipe'
+    (tmp_path / 'test_api.py').write_text(example.group(1))
+    package = tmp_path / 'new_pkg'
+    if existing != 'none':
+        package.mkdir()
+        (package / '__init__.py').write_text('')
+    if existing == 'module':
+        (package / 'feature.py').write_text('')
+    command = f'{shlex.quote(sys.executable)} -m pytest -q'
+    code, output = run_test_suite(command, tmp_path)
+    gate = red_gate(output, code, expected_tests=['test_api.py'])
+    assert gate.passed, output
+    package.mkdir(exist_ok=True)
+    (package / '__init__.py').write_text('')
+    (package / 'feature.py').write_text('def answer():\n    return 42\n')
+    code, output = run_test_suite(command, tmp_path)
+    assert code == 0, output

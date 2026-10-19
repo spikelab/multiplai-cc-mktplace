@@ -949,6 +949,7 @@ class BuildConfig:
     # (the pre-budget behavior).
     budget_max_tokens: int | None = None
     budget_max_usd: float | None = None
+    accept_unknown_spend: bool = False
 
     def __post_init__(self) -> None:
         # `review_model` reads its conf section here rather than in a
@@ -1105,6 +1106,7 @@ class BuildConfig:
             skip_research=getattr(args, "skip_research", False),
             lenient_review=getattr(args, "lenient_review", False),
             skip_explainers=getattr(args, "skip_explainers", False),
+            accept_unknown_spend=getattr(args, "accept_unknown_spend", False),
         )
         config.specs_dir = config.project_dir / "specs"
         config._load_specs_config()

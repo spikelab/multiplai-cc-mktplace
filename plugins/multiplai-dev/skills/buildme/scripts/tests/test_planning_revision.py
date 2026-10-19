@@ -1,7 +1,7 @@
 """Requirements interruption, revision publication and budget admission regressions."""
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import Mock, AsyncMock
 
 import pytest
 
@@ -249,3 +249,110 @@ async def test_staged_repair_rejects_placeholders_even_when_model_audit_is_clean
         await owner.rewrite_plan(config, state, 'Remove placeholders')
     assert (config.change_dir / 'tasks.md').read_bytes() == before
     assert not state.spec_gen.step_passed('tasks_audit')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stage', ['design_audit', 'plan_review'])
+async def test_blocked_findings_survive_resume_without_repaying_same_review(plan, monkeypatch, stage):
+    from build_pipeline.llm_steps import plan_review_steps
+    from build_pipeline.models import PlanReviewFinding, PlanReviewResult
+    config, _, state = plan
+    owner.reconcile_plan(config, state)
+    state.spec_gen.admit_repair(stage)
+    sentinel = 'Missing rejection of the unique invalid account 891'
+    if stage == 'design_audit':
+        review = AsyncMock(return_value=[{'severity': 'critical', 'category': 'correctness', 'description': sentinel}])
+        monkeypatch.setattr(owner, '_run_audit', review)
+        run = owner.run_design_audit_stage
+    else:
+        review = AsyncMock(return_value=PlanReviewResult(findings=[PlanReviewFinding(
+            category='correctness', severity='critical', claim=sentinel, reason='Add a rejection scenario')]))
+        monkeypatch.setattr(plan_review_steps, 'run_plan_review', review)
+        run = plan_review_steps.run_plan_review_stage
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            await run(config.change_dir, config, state, config.state_file_path())
+        state = BuildState.load(config.state_file_path())
+        assert sentinel in state.spec_gen.steps[stage].reason
+        assert sentinel in config.progress_file_path().read_text()
+    assert review.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_repaired_unknowns_keep_their_accepted_evidence_on_resume(plan, monkeypatch):
+    config, cm, state = plan
+    (config.change_dir / 'requirements').mkdir(exist_ok=True)
+    for cap in ('one', 'two'):
+        (config.change_dir / f'requirements/{cap}.md').write_text(REQ)
+    owner.reconcile_plan(config, state)
+    state.spec_gen.record_step('prototype', 'skipped', 'no UI')
+    monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.generate_artifact', AsyncMock(side_effect=[
+        '# New design', '## 1. Values\nReturn two']))
+    monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.run_tasks_audit', AsyncMock(return_value=[]))
+    monkeypatch.setattr(owner, 'generate_rubric', AsyncMock(return_value='# New rubric'))
+    monkeypatch.setattr(owner, '_commit_change_dir', lambda *a: None)
+    await owner.rewrite_plan(config, state, 'repair', design=True)
+    saved = BuildState.load(config.state_file_path())
+    assert saved.spec_gen.step_passed('explainers')
+    assert saved.spec_gen.step_passed('prototype')
+    unknowns = (config.change_dir / 'unknowns.md').read_bytes()
+    provider = AsyncMock(side_effect=AssertionError('unchanged resume must not call a model'))
+    monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.generate_artifact', provider)
+    await owner._generate_all_artifacts(cm, config.change_dir, config, saved)
+    assert (config.change_dir / 'unknowns.md').read_bytes() == unknowns
+    provider.assert_not_awaited()
+
+
+def test_proposal_edit_invalidates_preimplementation_prototype_skip(plan):
+    from build_pipeline.orchestrator import _prototype_finished
+    config, _, state = plan
+    owner.reconcile_plan(config, state)
+    state.spec_gen.record_step('prototype', 'skipped', 'no UI')
+    assert _prototype_finished(state)
+    (config.change_dir / 'proposal.md').write_text('## Capabilities\n- `one`\n- `two`\n## UI\nAdd a dashboard')
+    owner.reconcile_plan(config, state)
+    assert not _prototype_finished(state)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stage', ['design_audit', 'plan_review'])
+@pytest.mark.parametrize('failure', ['audit', 'commit'])
+async def test_interrupted_post_repair_audit_resumes_on_the_new_revision(plan, monkeypatch, stage, failure):
+    from build_pipeline.llm_steps import plan_review_steps
+    from build_pipeline.models import PlanReviewFinding, PlanReviewResult
+    config, _, state = plan
+    (config.change_dir / 'requirements').mkdir(exist_ok=True)
+    for cap in ('one', 'two'):
+        (config.change_dir / f'requirements/{cap}.md').write_text(REQ)
+    owner.reconcile_plan(config, state)
+    before = state.spec_gen.revision
+    async def generate(name, *a, **kw):
+        return '# Repaired design' if name == 'design' else '## 1. Values\nReturn repaired values'
+    writer = AsyncMock(side_effect=generate)
+    monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.generate_artifact', writer)
+    monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.run_tasks_audit', AsyncMock(return_value=[]))
+    monkeypatch.setattr(owner, 'generate_rubric', AsyncMock(return_value='# New rubric'))
+    monkeypatch.setattr(owner, '_commit_change_dir', Mock(side_effect=RuntimeError('commit interrupted'))
+                        if failure == 'commit' else lambda *a: None)
+    if stage == 'design_audit':
+        review = AsyncMock(side_effect=[
+            [{'severity': 'critical', 'category': 'correctness', 'description': 'old gap'}],
+            *([RuntimeError('recheck interrupted')] if failure == 'audit' else []), []])
+        monkeypatch.setattr(owner, '_run_audit', review)
+        run = owner.run_design_audit_stage
+    else:
+        review = AsyncMock(side_effect=[PlanReviewResult(findings=[PlanReviewFinding(
+            severity='critical', category='correctness', claim='old gap', reason='fix it')]),
+            *([RuntimeError('recheck interrupted')] if failure == 'audit' else []), PlanReviewResult()])
+        monkeypatch.setattr(plan_review_steps, 'run_plan_review', review)
+        run = plan_review_steps.run_plan_review_stage
+    with pytest.raises(RuntimeError, match='interrupted'):
+        await run(config.change_dir, config, state, config.state_file_path())
+    saved = BuildState.load(config.state_file_path())
+    assert saved.spec_gen.revision != before
+    assert saved.spec_gen.repair_attempts(stage) == 1
+    writes = writer.await_count
+    await run(config.change_dir, config, saved, config.state_file_path())
+    assert saved.spec_gen.step_passed(stage)
+    assert review.await_count == (3 if failure == 'audit' else 2)
+    assert writer.await_count == writes

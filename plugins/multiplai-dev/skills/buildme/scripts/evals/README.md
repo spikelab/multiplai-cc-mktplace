@@ -39,7 +39,9 @@ Acceptance programs stay outside candidate checkouts and prompts and run only
 after workers stop. Fresh repositories isolate every task/repetition/variant.
 After clean worktree creation, an unrelated file in the original checkout gets
 different staged and working contents; both are compared
-after the run to detect loss. Each live arm injects one interruption immediately
+after the run to detect source-checkout loss. This sentinel does not exercise
+protection of edits inside the active build worktree; real-Git regression tests
+cover those operations separately. Each live arm injects one interruption immediately
 after an atomic TDD checkpoint, then resumes through the public build entry.
 The report distinguishes resumed success, a blocked resume and a checkpoint that
 was never reached. Dry runs explicitly do not measure model resume behavior.
@@ -61,6 +63,6 @@ small pilot, not broad statistical proof or a calibrated quality score.
 Bootstrap regression coverage is separate from the synthetic self-check:
 `tests/test_eval_worker.py` executes the actual worker and orchestrator against
 an offline provider double. It asserts that a clean source creates a worktree,
-reaches the provider boundary, and preserves staged/working user versions planted
-in the source checkout after worktree creation. This checks harness startup, not
-model effectiveness. No live pilot has been run.
+reaches the pipeline SDK adapter (replaced by the double), and preserves staged/working user versions planted
+in the source checkout after worktree creation. This checks harness startup; it does not execute the installed core runner or
+provider CLI and does not establish model effectiveness. No live pilot has been run.

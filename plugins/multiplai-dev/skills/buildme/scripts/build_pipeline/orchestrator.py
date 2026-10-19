@@ -70,7 +70,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             if planned.branch and git_ops.current_branch(config.project_dir) != planned.branch:
                 raise git_ops.GitLifecycleError("Spec-only handoff must run on its recorded build branch")
             config.pipeline_branch = planned.branch or ""
-            budget_mod.get_budget().load_state(planned.budget)
+            budget_mod.get_budget().load_state(planned.budget, accept_unknown_spend=config.accept_unknown_spend)
             planned.checkpoint(state_path)
 
     # Resume or create state
@@ -78,7 +78,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         state = BuildState.load(state_path)
         # The spend saved so far carries into this run, whatever phase it
         # resumes in; every checkpoint below saves the running total.
-        budget_mod.get_budget().load_state(state.budget)
+        budget_mod.get_budget().load_state(state.budget, accept_unknown_spend=config.accept_unknown_spend)
         log.info("Resumed build: %s (phase=%s)", config.change_name, state.phase)
     else:
         state = BuildState(
@@ -613,8 +613,7 @@ def prototype_decision(config) -> tuple[bool, str]:
 
 def _prototype_finished(state: BuildState) -> bool:
     """A completed optional prototype is not repeated after downstream repairs."""
-    step = state.spec_gen.steps.get("prototype") if state.spec_gen else None
-    return state.tdd is not None or bool(step and step.outcome in {"passed", "advisory", "skipped"})
+    return state.tdd is not None or bool(state.spec_gen and state.spec_gen.step_passed("prototype"))
 
 
 async def _run_prototype_phase(

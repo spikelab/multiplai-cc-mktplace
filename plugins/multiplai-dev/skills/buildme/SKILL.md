@@ -82,6 +82,7 @@ fixture runs establish harness behavior, not model quality.
 | `--lenient-review` | Accept-and-continue when a block exhausts its review iterations without passing, instead of failing the build. Unattended overnight runs only — the default is to fail, so low-scoring work is never silently marked done. |
 | `--skip-explainers` | Skip the unknowns/edge-case explainer pass for dependencies new to this project. `unknowns.md` is still written, recording the skip. The pass is **off by default**: its dependency scan flags spec words such as `assert` or `followed` as dependencies (#375), so the flag only matters when `explainers: {enabled: true}` turns it on. |
 | `--prototype` | Force the prototype stage on, whatever the change type. |
+| `--accept-unknown-spend` | Resume after interrupted calls whose usage is unknown. Preserves the unknown records; the cap covers known spend only. Pass only when the user explicitly accepts that uncertainty. |
 | `--no-prototype` | Skip the prototype stage (the skip and its reason are logged). |
 | `--no-worktree` | Build in the project dir on the current branch instead of creating a worktree + branch. **Required when the calling session is already inside a worktree** — see [Git lifecycle](#git-lifecycle). Also disables push and PR (they only ever act on a branch the pipeline created). |
 | `--no-push` | Do not push the build's branch to `origin`. |
@@ -469,7 +470,7 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
   [--interview-replies "{replies_md}"] [--accept-size] \
   [--approve-split] [--no-epic-split] \
   [--auto] [--spec-only] [--skip-research] [--lenient-review] \
-  [--skip-explainers] [--prototype|--no-prototype] \
+  [--skip-explainers] [--prototype|--no-prototype] [--accept-unknown-spend] \
   [--no-worktree] [--no-push] [--no-pr] [--pr-ready]
 ```
 

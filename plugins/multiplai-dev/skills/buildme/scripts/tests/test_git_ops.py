@@ -1246,3 +1246,20 @@ def test_unstaged_user_edit_after_agent_window_invalidates_ownership(tmp_path):
         git_ops.commit_tree(root, 'must refuse')
     assert _repo_view(root) == before
     assert _head(root) == head
+
+
+def test_unrecorded_staging_names_paths_and_can_be_resolved_explicitly(tmp_path):
+    repo = make_repo(tmp_path / 'repo')
+    source = repo / 'README.md'
+    source.write_text('staged before interruption\n')
+    _git(repo, 'add', 'README.md')
+    source.write_text('working after interruption\n')
+    with pytest.raises(GitLifecycleError, match='README.md') as stopped:
+        git_ops.commit_tree(repo, 'agent update')
+    assert 'git diff --cached' in str(stopped.value)
+    assert _git(repo, 'show', ':README.md').stdout == 'staged before interruption\n'
+    assert source.read_text() == 'working after interruption\n'
+    # The documented action explicitly selects the working version.
+    _git(repo, 'add', 'README.md')
+    assert git_ops.commit_tree(repo, 'chosen working version')
+    assert _git(repo, 'show', 'HEAD:README.md').stdout == 'working after interruption\n'

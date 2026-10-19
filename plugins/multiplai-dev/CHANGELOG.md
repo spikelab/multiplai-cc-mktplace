@@ -31,18 +31,27 @@ time, not derived from a tag.
   checked before every provider call, including mid-block; committed RED tests
   and cumulative spend survive resume. Findings rounds now share one run budget.
   Cancellation without provider usage is recorded as unknown and blocks capped
-  admission until reconciled; available partial usage is charged.
+  admission until the user resumes with `--accept-unknown-spend`; the unknown
+  records remain and the cap then covers known spend only. Available partial
+  usage is charged.
 - Required design and plan audits revalidate after each bounded repair. Completed
   prototypes do not rerun after downstream repairs or during implementation resume.
+  A failed prototype writer now stops the build at a resumable checkpoint.
+  Proposal edits before implementation invalidate a prior prototype skip.
+  Blocked audit findings remain in the checkpoint and progress log; unchanged
+  blocked plans do not pay for the same audit on each resume.
   Outcomes and repair admission share one revision ledger. Task-audit repairs stage
   the full plan before publishing. Legacy implementation checkpoints without
   revision evidence refuse continuation while preserving code and block state.
 - RED checks reject setup/collection errors through command wrappers and accept
-  assertion failures whose tracebacks quote exception names. Nested review diffs
+  assertion failures whose tracebacks quote exception names. Other runners retain
+  an explicitly unverified nonzero fallback; pytest paths follow literal `cd`
+  wrappers. New Python package/function tests can reach RED without import errors.
+  Nested review diffs
   use project-relative paths and exclude sibling changes.
 - Commits recognize staging created within agent write windows while preserving
   divergent user staging. Commit failures raise instead of appearing as no-ops.
-- Explicit `test_outputs` paths in specs/config.yaml let untracked test reports
+- Explicit, literal `test_outputs` paths in specs/config.yaml let test-created reports
   change during verification and remain out of commits. Tracked and undeclared
   inputs remain protected.
 

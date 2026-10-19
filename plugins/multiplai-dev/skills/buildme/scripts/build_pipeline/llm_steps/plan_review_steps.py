@@ -448,12 +448,17 @@ async def run_plan_review_stage(
     then a required recheck of that revision. Unresolved findings and failed
     review calls record a blocked outcome and raise; they cannot authorize TDD.
     """
-    from ..spec_generator import reconcile_plan, rewrite_plan
+    from ..spec_generator import reconcile_plan, rewrite_plan, record_blocked_review
     reconcile_plan(config, state)
     sg = state.spec_gen
     assert sg is not None
     if sg.step_passed("plan_review"):
         return []
+    previous = sg.steps.get("plan_review")
+    if previous and previous.revision == sg.step_revision("plan_review") and previous.blocking_findings:
+        raise RuntimeError(previous.reason)
+    text = ""
+    findings_revision = sg.step_revision("plan_review")
     try:
         result = await run_plan_review(change_dir, config, split_context=_split_context(config, change_dir))
         findings = list(result.findings) + _no_behaviour_findings(change_dir)
@@ -462,21 +467,21 @@ async def run_plan_review_stage(
             sg.admit_repair("plan_review")
             state.checkpoint(state_path)
             await rewrite_plan(config, state, text)
+            text = ""  # The old findings do not describe the published revision.
+            findings_revision = sg.step_revision("plan_review")
             result = await run_plan_review(change_dir, config, split_context=_split_context(config, change_dir))
             findings = list(result.findings) + _no_behaviour_findings(change_dir)
             text = plan_review_findings_text(findings)
         log_plan_review_findings(findings)
         if text:
-            sg.record_step("plan_review", "blocked", text)
-            state.checkpoint(state_path)
             raise RuntimeError("Plan review still has blocking findings after bounded repair")
         sg.record_step("plan_review")
         state.checkpoint(state_path)
         return findings
-    except BaseException:
-        if not sg.step_passed("plan_review"):
-            sg.record_step("plan_review", "blocked", "Review or repair did not complete")
-        state.checkpoint(state_path)
+    except BaseException as error:
+        record_blocked_review(config, state, state_path, "plan_review",
+                              str(error) or type(error).__name__,
+                              text if findings_revision == sg.step_revision("plan_review") else "")
         raise
 
 

@@ -104,10 +104,12 @@ def run_test_suite(test_command: str, project_dir: Path, timeout: int = 300) -> 
         )
     try:
         argv, directory = _test_invocation(test_command, project_dir)
-        result = subprocess.run(
-            argv,
-            capture_output=True, text=True, cwd=directory, timeout=timeout,
-        )
+        from .git_ops import test_output_window
+        with test_output_window(project_dir):
+            result = subprocess.run(
+                argv,
+                capture_output=True, text=True, cwd=directory, timeout=timeout,
+            )
     except (subprocess.TimeoutExpired, FileNotFoundError, ValueError) as e:
         return None, f"Test command failed to run: {e}"
     return result.returncode, result.stdout + "\n" + result.stderr
@@ -334,7 +336,7 @@ def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "p
                               and re.search(r"^Tests:\s+[^\n]*\b[1-9]\d* failed\b", test_output, re.M))
         jest_output = runner == "jest" or bool(re.search(r"^Test Suites:", test_output, re.M))
         if observed_tests or not jest_output:
-            return GateResult(passed=True, reason="RED test failure observed; detailed classification unverified for this runner",
+            return GateResult(passed=True, reason="Nonzero test-command exit accepted as unverified RED for this runner",
                               metadata={"exit_code": exit_code, "classification": "unverified"})
     if pytest_output and (exit_code == 1 or runner != "pytest") and _RED_RIGHT_REASON.search(test_output):
         return GateResult(
@@ -1219,7 +1221,7 @@ def review_iteration_gate(iteration: int, max_iterations: int = 3) -> GateResult
 
 
 def verification_inputs(test_command: str, project_dir: Path, *, parallel: str = "off",
-                        plan_revision: str = "") -> dict:
+                        plan_revision: str = "", include_files: bool = False) -> dict:
     """Exact inputs to the final check; unavailable Git/file evidence raises.
 
     Paths are project-relative. Bookkeeping and untracked interpreter/test caches
@@ -1251,8 +1253,11 @@ def verification_inputs(test_command: str, project_dir: Path, *, parallel: str =
         else:
             files[name] = "deleted"
     content = json.dumps({"files": files, "index": index}, sort_keys=True).encode()
-    return {"head": head, "content": hashlib.sha256(content).hexdigest(),
-            "command": test_command, "parallel": parallel, "plan_revision": plan_revision}
+    result = {"head": head, "content": hashlib.sha256(content).hexdigest(),
+              "command": test_command, "parallel": parallel, "plan_revision": plan_revision}
+    if include_files:
+        result.update(files=files, index=index)
+    return result
 
 
 def final_verification(test_command: str, project_dir: Path, *, parallel: str = "off",
@@ -1261,13 +1266,19 @@ def final_verification(test_command: str, project_dir: Path, *, parallel: str = 
     if not test_command.strip():
         return GateResult(passed=False, reason="Final verification requires a configured test command")
     try:
-        before = verification_inputs(test_command, project_dir, parallel=parallel, plan_revision=plan_revision)
+        before = verification_inputs(test_command, project_dir, parallel=parallel, plan_revision=plan_revision, include_files=True)
         gate = integration_gate(test_command, project_dir, parallel=parallel)
-        after = verification_inputs(test_command, project_dir, parallel=parallel, plan_revision=plan_revision)
+        after = verification_inputs(test_command, project_dir, parallel=parallel, plan_revision=plan_revision, include_files=True)
     except (OSError, RuntimeError, ValueError) as error:
         return GateResult(passed=False, reason=f"Final verification unavailable: {error}")
-    gate.metadata["inputs"] = before
+    gate.metadata["inputs"] = {k: v for k, v in before.items() if k not in {"files", "index"}}
     if before != after:
-        return GateResult(passed=False, reason="Inputs changed during final verification; verify the new revision",
-                          metadata=gate.metadata)
+        changed = sorted({name for field in ("files", "index")
+                          for name in before[field].keys() | after[field].keys()
+                          if before[field].get(name) != after[field].get(name)})
+        details = ", ".join(changed) or "Git HEAD or verification configuration"
+        return GateResult(passed=False, reason=f"Inputs changed during final verification: {details}. "
+                          "For generated outputs, declare literal test_outputs paths in specs/config.yaml "
+                          "and regenerate existing outputs once; source files must stay protected.",
+                          metadata={**gate.metadata, "changed_files": changed})
     return gate

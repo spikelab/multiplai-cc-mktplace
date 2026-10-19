@@ -291,13 +291,15 @@ async def test_legacy_implementation_resume_refuses_without_rewriting_code(accep
     assert saved.tdd.model_dump() == BuildState.model_validate(raw).tdd.model_dump()
 
 @pytest.mark.asyncio
-async def test_mid_block_budget_stop_resumes_at_implementer_with_original_red_tests(accepted_build, monkeypatch):
+@pytest.mark.parametrize("interruption", ["cap", "cancel"])
+async def test_mid_block_budget_stop_resumes_at_implementer_with_original_red_tests(accepted_build, monkeypatch, interruption):
+    import asyncio
     from types import SimpleNamespace
     from build_pipeline import budget, sdk, tdd_engine
     from build_pipeline.models import AgentResult
     config, state, args, _ = accepted_build
     config.test_command = f'{sys.executable} -m pytest -q'
-    config.budget_max_usd = .1
+    config.budget_max_usd = .1 if interruption == "cap" else 1
     config.git.push = False
     state.phase = BuildPhase.TDD_BUILD
     state.tdd = TDDState(blocks=[BlockInfo(number=1, name='Value', description='Return two')],
@@ -312,6 +314,8 @@ async def test_mid_block_budget_stop_resumes_at_implementer_with_original_red_te
                 'from app import value\ndef test_value():\n    assert value == 2\n')
         else:
             assert prompt == 'implement'
+            if interruption == 'cancel' and calls.count('implement') == 1:
+                raise asyncio.CancelledError()
             (config.project_dir / 'app.py').write_text('value = 2\n')
         return SimpleNamespace(text='STATUS: DONE\n', turns=1, files_changed=[],
                                usage=SimpleNamespace(cost_usd=.2, input_tokens=10))
@@ -324,7 +328,7 @@ async def test_mid_block_budget_stop_resumes_at_implementer_with_original_red_te
     monkeypatch.setattr(tdd_engine, 'run_implementer', implementer)
     monkeypatch.setattr(tdd_engine, 'run_refactorer', AsyncMock(return_value=AgentResult(success=True, output='STATUS: DONE')))
     monkeypatch.setattr(tdd_engine, '_run_integration_and_review', AsyncMock(return_value=True))
-    with pytest.raises(budget.BudgetExceededError):
+    with pytest.raises(budget.BudgetExceededError if interruption == "cap" else asyncio.CancelledError):
         await run_tdd_engine(config, args)
     saved = BuildState.load(config.state_file_path())
     assert saved.tdd.blocks[0].status == BlockStatus.IMPLEMENTING
@@ -333,9 +337,97 @@ async def test_mid_block_budget_stop_resumes_at_implementer_with_original_red_te
     assert saved.budget['cost_usd'] == .2
     tests_before = (config.project_dir / 'test_value.py').read_bytes()
     config.budget_max_usd = 1
+    if interruption == 'cancel':
+        assert await run_tdd_engine(config, args) == 1
+        assert calls == ['write tests', 'implement']
+        from build_pipeline.__main__ import build_parser
+        resume = build_parser().parse_args(['tdd', '--change', 'contract', '--accept-unknown-spend'])
+        config.accept_unknown_spend = resume.accept_unknown_spend
     assert await run_tdd_engine(config, args) == 0
-    assert calls == ['write tests', 'implement']
+    assert calls == ['write tests', 'implement'] + (['implement'] if interruption == 'cancel' else [])
     assert (config.project_dir / 'test_value.py').read_bytes() == tests_before
     completed = BuildState.load(config.state_file_path().with_name('.build-state.complete.json'))
     assert completed.verification['passed']
     assert completed.budget['cost_usd'] == .4
+    if interruption == 'cancel':
+        assert completed.budget['accepted_unknown_calls'] == 1
+        assert completed.budget['unaccounted_calls'] == ['agent']
+
+
+def test_output_directory_cannot_hide_agent_code(accepted_build):
+    config, _, _, _ = accepted_build
+    root = config.project_dir
+    (config.specs_dir / 'config.yaml').write_text('test_outputs: [out/]\n')
+    git(root, 'add', 'specs/config.yaml')
+    git(root, 'commit', '-qm', 'declare output directory')
+    (root / 'out').mkdir()
+    (root / 'out/helper.py').write_text('value = 1\n')
+    command = f'{sys.executable} -c "from out.helper import value; assert value == 1"'
+    assert final_verification(command, root).passed
+    assert not git_ops.tree_is_clean(root), 'agent code must be committed before completion'
+    with pytest.raises(git_ops.GitLifecycleError, match='out/helper.py'):
+        git_ops.commit_tree(root, 'include implementation')
+    git(root, 'add', 'out/helper.py')  # Explicitly select source under an output directory.
+    assert git_ops.commit_tree(root, 'include implementation')
+    assert git(root, 'ls-files', '--', 'out/helper.py') == 'out/helper.py'
+
+
+def test_verification_names_changes_and_output_configuration(accepted_build):
+    config, _, _, _ = accepted_build
+    result = final_verification(
+        f'''{sys.executable} -c "from pathlib import Path; Path('report.json').write_text('report')"''',
+        config.project_dir)
+    assert not result.passed
+    assert 'report.json' in result.reason and 'test_outputs' in result.reason
+
+
+@pytest.mark.parametrize('path', ['out/*', 'out/?.json', 'out/[ab].json'])
+def test_output_globs_are_rejected(accepted_build, path):
+    config, _, _, _ = accepted_build
+    (config.specs_dir / 'config.yaml').write_text(f'test_outputs: ["{path}"]\n')
+    with pytest.raises(git_ops.GitLifecycleError, match='literal'):
+        git_ops.test_output_excludes(config.project_dir)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("staged_report", [False, True])
+async def test_agent_generated_report_is_refused_before_test_phase_commit(accepted_build, monkeypatch, staged_report):
+    from types import SimpleNamespace
+    from build_pipeline import sdk, tdd_engine
+    config, state, args, _ = accepted_build
+    config.test_command = f'{sys.executable} -m pytest -q'
+    (config.specs_dir / 'config.yaml').write_text('test_outputs: [report.json]\n')
+    git(config.project_dir, 'add', 'specs/config.yaml')
+    git(config.project_dir, 'commit', '-qm', 'declare report')
+    state.phase = BuildPhase.TDD_BUILD
+    state.tdd = TDDState(blocks=[BlockInfo(number=1, name='Value', description='Return two')],
+                         baseline_tests_pass=True)
+    state.checkpoint(config.state_file_path())
+    async def provider(prompt, **kwargs):
+        (config.project_dir / 'test_value.py').write_text(
+            'from pathlib import Path\ndef test_value():\n'
+            "    Path('report.json').write_text('generated')\n    assert False\n")
+        result = subprocess.run([sys.executable, '-m', 'pytest', '-q', 'test_value.py'],
+                                cwd=config.project_dir, capture_output=True, text=True)
+        assert result.returncode == 1 and '1 failed' in result.stdout
+        if staged_report:
+            git(config.project_dir, 'add', 'report.json')
+        return SimpleNamespace(text='STATUS: DONE\n', turns=1, files_changed=[],
+                               usage=SimpleNamespace(cost_usd=0, input_tokens=10))
+    monkeypatch.setattr(sdk, 'run_agent', provider)
+    async def writer(**kwargs):
+        return await sdk.agent_call('write tests', allowed_tools=['Write', 'Bash'], cwd=str(config.project_dir))
+    monkeypatch.setattr(tdd_engine, 'run_test_writer', writer)
+    with pytest.raises(git_ops.GitLifecycleError, match='report.json') as stopped:
+        await run_tdd_engine(config, args)
+    assert 'regenerate' in str(stopped.value)
+    assert git(config.project_dir, 'ls-tree', '--name-only', 'HEAD', '--', 'report.json') == ''
+    assert (config.project_dir / 'report.json').read_text() == 'generated'
+    # Preserve the ambiguous file, then generate it through the owned test boundary.
+    git(config.project_dir, 'restore', '--staged', '--', 'report.json') if staged_report else None
+    (config.project_dir / 'report.json').rename(config.project_dir.parent / 'saved-report.json')
+    from build_pipeline.gates import run_test_suite
+    run_test_suite(f'{sys.executable} -m pytest -q test_value.py', config.project_dir)
+    assert git_ops.commit_tree(config.project_dir, 'tests with observed output')
+    assert git(config.project_dir, 'ls-files', '--', 'report.json') == ''
+    assert git(config.project_dir, 'ls-files', '--', 'test_value.py') == 'test_value.py'

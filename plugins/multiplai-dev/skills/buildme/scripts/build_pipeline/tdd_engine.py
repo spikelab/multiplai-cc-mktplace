@@ -2281,7 +2281,7 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
         # A resumed build inherits what the earlier run already spent —
         # a fresh budget on resume would make the ceiling unenforceable.
         if standalone:
-            budget_mod.get_budget().load_state(state.budget)
+            budget_mod.get_budget().load_state(state.budget, accept_unknown_spend=config.accept_unknown_spend)
         log.info("START phase=TDD_ENGINE resumed=true block=%d spent=%d tokens",
                  state.tdd.current_block if state.tdd else 0,
                  budget_mod.get_budget().total_tokens)
