@@ -18,6 +18,7 @@ async def test_worker_reaches_provider_after_clean_bootstrap_and_preserves_user_
     spec = importlib.util.spec_from_file_location('pipeline_compare', MODULE)
     pilot = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(pilot)
+    monkeypatch.setenv("WORKSPACE", str(tmp_path))
     checkout = tmp_path / 'source'
     task = {'id': 'offline', 'files': {'app.py': 'value = 0\n'},
             'instruction': 'Return one from value', 'test_command': 'true'}

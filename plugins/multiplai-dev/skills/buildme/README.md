@@ -1132,7 +1132,7 @@ cd skills/buildme/scripts
 PYTHONPATH=. python -m pytest tests/ -xvs
 ```
 
-1335 tests covering config, state, models, gates, change manager, dependency
+The test suite covers config, state, models, gates, change manager, dependency
 detection, spec generator, plan review and its split assessment, vendored-prompt
 pins, prototype/docs/respec steps, git lifecycle, board seam, and the TDD
 engine. All tests mock LLM calls (and `gh`) — no API keys

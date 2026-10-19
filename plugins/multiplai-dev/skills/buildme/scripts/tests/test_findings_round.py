@@ -1040,10 +1040,7 @@ class TestRoundKilledDuringAFixOnPass:
 
 
 class TestRoundBudget:
-    """`--auto` runs several rounds in one process. Each round's engine is held
-    to `budget.max_usd` on its own spend, the same as when that round runs
-    alone in a fresh process: an earlier round's engine spend, and triage's,
-    must not count against it."""
+    """Automatic findings rounds share the run cap, including triage spend."""
 
     @pytest.fixture(autouse=True)
     def fresh_process_budget(self):
@@ -1090,10 +1087,12 @@ class TestRoundBudget:
             at_entry.append(budget.get_budget().cost_usd)
             return await run_tdd_engine(rc, args, standalone=standalone)
 
-        replaced = {"run_test_writer", "run_implementer"}
+        replaced = {"run_test_writer", "run_implementer", "run_test_suite"}
         stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") not in replaced]
         stubs += [patch("build_pipeline.tdd_engine.run_test_writer", side_effect=test_writer),
-                  patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer)]
+                  patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer),
+                  patch("build_pipeline.tdd_engine.run_test_suite", side_effect=lambda *_a, **_kw:
+                        (1, f"FAILED tests/test_r{calls['n']}.py::test_r{calls['n']} - AssertionError\n1 failed"))]
         run, lines = _run(config, change, triage_call=triage_call, review=review, engine=engine)
         with _Stubs(stubs):
             exit_code = await loop.run_findings(run)
@@ -1146,10 +1145,12 @@ class TestRoundBudget:
         async def engine(rc, args, standalone):
             return await run_tdd_engine(rc, args, standalone=standalone)
 
-        replaced = {"run_test_writer", "run_implementer"}
+        replaced = {"run_test_writer", "run_implementer", "run_test_suite"}
         stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") not in replaced]
         stubs += [patch("build_pipeline.tdd_engine.run_test_writer", side_effect=test_writer),
-                  patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer)]
+                  patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer),
+                  patch("build_pipeline.tdd_engine.run_test_suite", side_effect=lambda *_a, **_kw:
+                        (1, f"FAILED tests/test_r{calls['n']}.py::test_r{calls['n']} - AssertionError\n1 failed"))]
         run, lines = _run(config, change, triage_call=triage_call, review=review, engine=engine)
         with _Stubs(stubs):
             exit_code = await loop.run_findings(run)
