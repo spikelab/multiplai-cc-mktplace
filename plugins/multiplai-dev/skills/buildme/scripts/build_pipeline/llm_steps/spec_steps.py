@@ -93,6 +93,7 @@ def _audit_findings(raw: str, label: str) -> list[dict]:
             for key in ("category", "severity", "description", "suggestion")
         ) or finding["severity"].lower() not in {"critical", "major", "minor"}:
             raise LLMCallError(f"{label} audit returned an invalid finding")
+        finding["severity"] = finding["severity"].lower()
     log.info("%s audit found %d findings", label, len(findings))
     return findings
 

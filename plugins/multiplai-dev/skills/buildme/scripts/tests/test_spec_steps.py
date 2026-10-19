@@ -512,3 +512,13 @@ def test_the_proposal_list_of_capabilities_is_capped_too(tmp_path):
     names = section.split("Capabilities in specs/registry: ", 1)[1]
     assert len(names) <= REGISTRY_TEXT_LIMIT + 1
     assert names.rstrip("\n").endswith(f"(cut at {REGISTRY_TEXT_LIMIT:,} characters)")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
+async def test_audit_severity_is_canonical_for_blocking_consumers(tmp_path, audit):
+    raw = '[{"category":"coverage","severity":"MAJOR","description":"missing behavior","suggestion":"add behavior"}]'
+    with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+        call.return_value = _agent_text(raw)
+        findings = await audit(tmp_path, MagicMock(model="test-model"))
+    assert findings[0]["severity"] == "major"
