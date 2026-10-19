@@ -12,8 +12,6 @@ Documentation freshness remains advisory after a successful writer.
 
 from __future__ import annotations
 
-from build_pipeline.budget import BudgetExceededError
-
 import logging
 from pathlib import Path
 

@@ -583,52 +583,68 @@ def _positive_pathspec(exclude: str) -> str:
     return f":({','.join(kept)}){rest}" if kept else rest
 
 
-def commit_paths(worktree: Path, message: str, paths: list[str]) -> str | None:
-    """Stage exactly ``paths`` and commit them. Returns the new SHA, or None
-    when there was nothing to commit (or the commit failed — logged, never
-    raised: a bookkeeping commit must not kill a build).
+def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | None:
+    """Commit explicit paths using an isolated index, preserving other staging.
 
-    Explicit pathspecs only. This function never stages the whole tree.
-    The commit takes only ``paths`` and leaves anything else that is staged
-    staged.
-
-    Exclude pathspecs (``:(exclude…)``) are applied by staging the positive
-    paths and then resetting the excluded matches out of the index, not by
-    passing them to ``git add``. ``git add -- specs/changes/<name>
-    ':(exclude,glob)**/.board.json'`` stages *nothing* when that directory is
-    wholly untracked and directly holds an excluded file (seen with git
-    2.43), which is exactly the state of a new change directory at its first
-    spec-stage commit.
+    Divergent staged/working versions refuse the commit. A failed commit leaves
+    the active index intact; successful commits reconcile only selected entries
+    if staging has not changed while hooks ran. Returns SHA or None, with failures
+    logged so callers can retain their resumable checkpoint.
     """
-    if not paths:
-        return None
     excludes = [p for p in paths if p.startswith(":(") and "exclude" in p[2:p.find(")")]]
     positives = [p for p in paths if p not in excludes]
     if not positives:
         return None
-    add = _run(["git", "add", "--", *positives], cwd=worktree)
-    if not add.ok:
-        log.warning("git add failed in %s: %s", worktree, add.stderr.strip())
+    staged_paths = _run(["git", "diff", "--cached", "--name-only", "-z", "--relative",
+                         "--", *paths], cwd=worktree)
+    working_paths = _run(["git", "diff", "--name-only", "-z", "--relative",
+                          "--", *paths], cwd=worktree)
+    if not staged_paths.ok or not working_paths.ok:
         return None
-    if excludes:
-        unstage = _run(["git", "reset", "-q", "--",
-                        *(_positive_pathspec(e) for e in excludes)], cwd=worktree)
-        if not unstage.ok:
-            log.warning("git reset of excluded paths failed in %s: %s — not committing",
-                        worktree, unstage.stderr.strip())
-            _run(["git", "reset", "-q", "--", *positives], cwd=worktree)
+    if set(staged_paths.stdout.split("\0")) & set(working_paths.stdout.split("\0")) - {""}:
+        log.warning("Refusing to commit %s: staged and working versions differ; save both first", message)
+        return None
+    before_index = index_entries(worktree)
+    index_path = _run(["git", "rev-parse", "--git-path", "index"], cwd=worktree)
+    if before_index is None or not index_path.ok:
+        return None
+    original = Path(index_path.stdout.strip())
+    if not original.is_absolute():
+        original = Path(worktree) / original
+    with tempfile.TemporaryDirectory(prefix="buildme-commit-index-") as directory:
+        temporary = Path(directory) / "index"
+        if original.exists():
+            shutil.copy2(original, temporary)
+        env = dict(os.environ, GIT_INDEX_FILE=str(temporary))
+        # Stage positive paths first: Git can skip a wholly untracked directory
+        # when its add pathspec also excludes a bookkeeping file inside it.
+        add = _run(["git", "add", "-A", "--", *positives], cwd=worktree, env=env)
+        if not add.ok:
             return None
-    staged = _run(["git", "diff", "--cached", "--quiet", "--", *positives, *excludes], cwd=worktree)
-    if staged.returncode == 0:
-        log.info("Nothing staged to commit in %s (%s)", worktree, message)
-        return None
-    commit = _run(["git", "commit", "-m", message, "--", *positives, *excludes], cwd=worktree)
-    if not commit.ok:
-        log.warning("git commit failed in %s: %s", worktree, commit.stderr.strip())
-        return None
+        if excludes and not _run(["git", "reset", "-q", "--",
+                                  *(_positive_pathspec(p) for p in excludes)], cwd=worktree, env=env).ok:
+            return None
+        staged = _run(["git", "diff", "--cached", "--quiet", "--", *paths], cwd=worktree, env=env)
+        if staged.returncode == 0:
+            return None
+        if staged.returncode != 1:
+            return None
+        commit = _run(["git", "commit", "-m", message, "--", *paths], cwd=worktree, env=env)
+        if not commit.ok:
+            log.warning("Failed to commit %s: %s", message, commit.stderr.strip() or commit.stdout.strip())
+            return None
+    # Only reconcile entries we just committed, and only if no one changed
+    # their staging while hooks ran. Other project/sibling entries stay intact.
+    if index_entries(worktree) == before_index:
+        _run(["git", "reset", "-q", "HEAD", "--", *paths], cwd=worktree)
+    else:
+        log.warning("Index changed during commit; retained the caller's index unchanged")
     sha = _run(["git", "rev-parse", "HEAD"], cwd=worktree).stdout.strip()
-    log.info("COMMIT sha=%s msg=%s", sha[:8], message)
-    return sha or None
+    if not sha:
+        log.warning("Committed %s but could not read HEAD", message)
+        return None
+    log.info("COMMIT %s sha=%s", message, sha[:8])
+    return sha
 
 
 # Buildme's own bookkeeping files must never be committed, from ANY commit
@@ -703,51 +719,7 @@ def commit_tree(repo: Path | str, message: str, label: str = "") -> str | None:
     the commit failed (logged as a warning — never raises). *label* only names
     the operation in log lines.
     """
-    staged_paths = _run(["git", "diff", "--cached", "--name-only", "-z", "--relative",
-                         "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
-    working_paths = _run(["git", "diff", "--name-only", "-z", "--relative",
-                          "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
-    if not staged_paths.ok or not working_paths.ok:
-        return None
-    if set(staged_paths.stdout.split("\0")) & set(working_paths.stdout.split("\0")) - {""}:
-        log.warning("Refusing to commit %s: staged and working versions differ; save both first", label)
-        return None
-    before_index = index_entries(repo)
-    index_path = _run(["git", "rev-parse", "--git-path", "index"], cwd=repo)
-    if before_index is None or not index_path.ok:
-        return None
-    original = Path(index_path.stdout.strip())
-    if not original.is_absolute():
-        original = Path(repo) / original
-    with tempfile.TemporaryDirectory(prefix="buildme-commit-index-") as directory:
-        temporary = Path(directory) / "index"
-        if original.exists():
-            shutil.copy2(original, temporary)
-        env = dict(os.environ, GIT_INDEX_FILE=str(temporary))
-        add = _run(["git", "add", "-A", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo, env=env)
-        if not add.ok:
-            return None
-        staged = _run(["git", "diff", "--cached", "--quiet", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo, env=env)
-        if staged.returncode == 0:
-            return None
-        if staged.returncode != 1:
-            return None
-        commit = _run(["git", "commit", "-m", message, "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo, env=env)
-        if not commit.ok:
-            log.warning("Failed to commit %s: %s", label, commit.stderr.strip() or commit.stdout.strip())
-            return None
-    # Only reconcile entries we just committed, and only if no one changed
-    # their staging while hooks ran. Other project/sibling entries stay intact.
-    if index_entries(repo) == before_index:
-        _run(["git", "reset", "-q", "HEAD", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
-    else:
-        log.warning("Index changed during commit; retained the caller's index unchanged")
-    sha = _run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
-    if not sha:
-        log.warning("Committed %s but could not read HEAD", label)
-        return None
-    log.info("COMMIT %s sha=%s", label, sha[:8])
-    return sha
+    return commit_paths(repo, message, [".", *BOOKKEEPING_EXCLUDES])
 
 
 def save_wip_ref(repo: Path | str, ref: str, message: str) -> str | None:

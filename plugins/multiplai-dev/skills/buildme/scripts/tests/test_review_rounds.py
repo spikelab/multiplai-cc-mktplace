@@ -875,3 +875,15 @@ class TestUnfixedFindingsSection:
         assert text.count("## ") == 1
         assert "off-by-one in add()" in text and "second" in text
         assert "not attempted" in text
+
+
+@pytest.mark.asyncio
+async def test_fix_on_pass_budget_denial_remains_a_stop(project):
+    from build_pipeline import budget, tdd_engine
+    p = project
+    p.block.review_scores = _passing([_finding()])
+    budget.configure(max_usd=.1)
+    budget.get_budget().record(SimpleNamespace(cost_usd=.2))
+    with pytest.raises(budget.BudgetExceededError):
+        await tdd_engine._fix_on_pass(p.block, p.config, p.state, p.progress, 0, None)
+    assert p.block.fix_pass is None

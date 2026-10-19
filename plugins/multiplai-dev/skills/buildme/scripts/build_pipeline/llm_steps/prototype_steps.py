@@ -14,8 +14,6 @@ Two steps live here:
 
 from __future__ import annotations
 
-from build_pipeline.budget import BudgetExceededError
-
 import logging
 from pathlib import Path
 
@@ -38,9 +36,8 @@ MAX_PROTOTYPE_ATTEMPTS = 2  # first pass + one retry, then the phase fails
 async def run_prototype(config) -> GateResult:
     """Produce the prototype artifact + NOTES.md. Returns the gate's verdict.
 
-    Failure is the *phase's* failure, never the build's — the caller logs a
-    diagnosis and continues. One retry, then stop (a second failing attempt is
-    evidence the change is not prototypable, not a reason to loop).
+    One retry is allowed. A failed writer blocks the build because it may
+    have left partial edits; the caller preserves the checkpoint for resume.
     """
     prototype_dir = config.prototype_dir
     prototype_dir.mkdir(parents=True, exist_ok=True)

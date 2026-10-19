@@ -157,8 +157,8 @@ class FindingsRound(BaseModel):
     blocks: dict[int, str] = Field(default_factory=dict)      # block number → row key
     fixes: dict[str, dict[str, str]] = Field(default_factory=dict)  # row key → commits
     # Why the TDD engine stopped after its block loop (a whole-change step
-    # after the blocks failed); the fixes are still published. None in
-    # checkpoints written before the field existed.
+    # after the blocks failed). Legacy diagnostic only: failed required checks
+    # now stop the round before publication.
     code_check_failed: str | None = None
     # HEAD right after the code step's records commit, before any fix: the
     # base of the diff the self-check reads. Set once, never overwritten.

@@ -63,9 +63,9 @@ def accepted_planning(monkeypatch, request):
         _plan_fixture(config, state)
         git_ops.commit_stage(config, f"docs(specs): {config.change_name} — fixture plan", [str(change_dir.relative_to(config.project_dir))])
 
+    monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
     real = orchestrator.run_orchestrator
     async def run(config, args):
-        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
         config.test_command = config.test_command or "true"
         return await real(config, args)
 

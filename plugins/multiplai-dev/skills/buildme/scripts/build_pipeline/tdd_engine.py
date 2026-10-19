@@ -1986,12 +1986,7 @@ async def _fix_on_pass(
     if checkpoint is None or not git_ops.tree_is_clean(config.project_dir):
         return _skip_fix_on_pass(config, block, progress, findings,
                                  "not attempted (no clean commit to roll back to)")
-    try:
-        budget_mod.check(phase=f"fix on pass of block {block.number}")
-    except BudgetExceededError as e:
-        log.warning("Fix on pass of block %d skipped: %s", block.number, e)
-        return _skip_fix_on_pass(config, block, progress, findings,
-                                 "not attempted (budget ceiling reached)")
+    budget_mod.check(phase=f"fix on pass of block {block.number}")
 
     block.fix_pass = FixOnPassState(
         checkpoint=checkpoint,

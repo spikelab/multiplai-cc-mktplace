@@ -346,7 +346,7 @@ async def run_plan_review(
 
     Runs as a read-only subagent on `config.model_for("plan_review")` and
     `config.effort_for("plan_review")`. Returns the findings; raises whatever `agent_call_structured`
-    raises (the stage above treats that as non-fatal).
+    raises (the required stage records a blocked outcome).
     """
     use_cases = _read(change_dir / "use-cases.md", NO_USE_CASES)
 
@@ -444,16 +444,9 @@ async def run_plan_review_stage(
 ) -> list[PlanReviewFinding]:
     """Run the plan review and fold its findings back into tasks.md.
 
-    Same shape as ``spec_generator.run_design_audit_stage``, deliberately:
-    critical/major findings drive **one** regeneration pass of tasks.md, the
-    pass is committed, and the review is then re-run **report-only** so the
-    build log records whether the critique landed. There is no loop — a plan
-    that still has findings after one pass stands.
-
-    Never raises: a review or regeneration failure is logged and the existing
-    plan stands, except that a failed review call still sends the
-    no-behaviour scan's blocks to one rewrite per build. Returns the
-    first-pass findings.
+    Blocking findings request one staged rewrite through the planning owner,
+    then a required recheck of that revision. Unresolved findings and failed
+    review calls record a blocked outcome and raise; they cannot authorize TDD.
     """
     from ..spec_generator import reconcile_plan, rewrite_plan
     reconcile_plan(config, state)

@@ -268,67 +268,27 @@ class TestTasksAudit:
         assert findings[0]["category"] == "horizontal-decomposition"
 
     @pytest.mark.asyncio
-    async def test_non_json_response_returns_empty(self, tmp_path):
+    @pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
+    @pytest.mark.parametrize("raw", ["not json", '{"findings": []}', '["finding"]',
+                                     '[{}]', '[{"severity": "unknown"}]'])
+    async def test_unavailable_audit_evidence_blocks(self, tmp_path, audit, raw):
+        from build_pipeline.sdk import LLMCallError
         change_dir = self._change_dir(tmp_path, "## 1. Slice")
-        config = MagicMock(model="test-model")
-
-        with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = _agent_text("not json at all")
-            findings = await run_tasks_audit(change_dir, config)
-
-        assert findings == []
+        with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+            call.return_value = _agent_text(raw)
+            with pytest.raises(LLMCallError):
+                await audit(change_dir, MagicMock(model="test-model"))
 
     @pytest.mark.asyncio
-    async def test_json_object_response_warns_and_returns_empty(self, tmp_path, caplog):
-        """A JSON object (model wrapped the findings) must not pass silently
-        as 'no findings' — it returns [] but leaves a warning in the log."""
+    @pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
+    async def test_failed_auditor_cannot_supply_passing_partial_output(self, tmp_path, audit):
+        from build_pipeline.models import AgentResult
+        from build_pipeline.sdk import LLMCallError
         change_dir = self._change_dir(tmp_path, "## 1. Slice")
-        config = MagicMock(model="test-model")
-
-        with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-        ) as mock_llm, caplog.at_level("WARNING"):
-            mock_llm.return_value = _agent_text('{"findings": [{"category": "horizontal-decomposition"}]}')
-            findings = await run_tasks_audit(change_dir, config)
-
-        assert findings == []
-        assert any(
-            "instead of a list" in r.getMessage() for r in caplog.records
-        )
-
-    @pytest.mark.asyncio
-    async def test_non_dict_list_items_are_filtered(self, tmp_path):
-        """A JSON list of strings must not leak out — downstream calls .get()."""
-        change_dir = self._change_dir(tmp_path, "## 1. Slice")
-        config = MagicMock(model="test-model")
-
-        with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = _agent_text('["Blocks 1-3 are layers", "re-slice them"]')
-            findings = await run_tasks_audit(change_dir, config)
-
-        assert findings == []
-
-    @pytest.mark.asyncio
-    async def test_mixed_list_keeps_only_dict_findings(self, tmp_path):
-        change_dir = self._change_dir(tmp_path, "## 1. Slice")
-        config = MagicMock(model="test-model")
-        raw = (
-            '["stray string", {"category": "horizontal-decomposition", '
-            '"severity": "critical", "description": "layers", "suggestion": "fix"}]'
-        )
-
-        with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = _agent_text(raw)
-            findings = await run_tasks_audit(change_dir, config)
-
-        assert len(findings) == 1
-        assert findings[0]["category"] == "horizontal-decomposition"
+        with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+            call.return_value = AgentResult(success=False, output="[]", error="timed out")
+            with pytest.raises(LLMCallError, match="timed out"):
+                await audit(change_dir, MagicMock(model="test-model"))
 
 
 class TestEveryBlockAddsBehaviour:

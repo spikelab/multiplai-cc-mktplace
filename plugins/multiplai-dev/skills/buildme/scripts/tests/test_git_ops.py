@@ -475,16 +475,44 @@ class TestCommitScope:
         assert _out(repo, "show", ":part.py") == "p = 2\n"
         assert (repo / "part.py").read_text() == "p = 3\n"
 
-    def test_row_C1_root_commit_paths_matches_a_bare_commit(self, tmp_path):
-        ref, repo = self._two_roots(tmp_path)
-        _git(ref, "add", "--", ".")
-        _git(ref, "reset", "-q", "--",
-             *(git_ops._positive_pathspec(e) for e in git_ops.BOOKKEEPING_EXCLUDES))
-        _git(ref, "commit", "-qm", "spec")
+    def test_row_C1_commit_paths_preserves_divergent_versions(self, tmp_path):
+        _, repo = self._two_roots(tmp_path)
+        before = _repo_view(repo)
+        head = _head(repo)
+        assert git_ops.commit_paths(repo, "spec", [".", *git_ops.BOOKKEEPING_EXCLUDES]) is None
+        assert _repo_view(repo) == before
+        assert _head(repo) == head
+        assert _out(repo, "show", ":part.py") == "p = 2\n"
+        assert (repo / "part.py").read_text() == "p = 3\n"
 
-        assert git_ops.commit_paths(repo, "spec", [".", *git_ops.BOOKKEEPING_EXCLUDES])
-        assert _out(repo, "rev-parse", "HEAD^{tree}") == _out(ref, "rev-parse", "HEAD^{tree}")
-        assert _repo_view(repo) == _repo_view(ref)
+    @pytest.mark.parametrize("whole_tree", [False, True])
+    def test_commit_refusal_keeps_hidden_staged_work(self, tmp_path, whole_tree):
+        root, _ = _project_repo(tmp_path, subdir=False)
+        original = (root / "app.py").read_bytes()
+        (root / "app.py").write_text("user staged B\n")
+        _git(root, "add", "app.py")
+        (root / "app.py").write_bytes(original)
+        before, head = _repo_view(root), _head(root)
+        result = (git_ops.commit_tree(root, "build") if whole_tree else
+                  git_ops.commit_paths(root, "plan", ["app.py"]))
+        assert result is None
+        assert _repo_view(root) == before
+        assert _head(root) == head
+        assert _out(root, "show", ":app.py") == "user staged B\n"
+
+    def test_commit_paths_failed_hook_preserves_active_index(self, tmp_path):
+        root, _ = _project_repo(tmp_path, subdir=False)
+        (root / "app.py").write_text("new working version\n")
+        hooks = root / "test-hooks"
+        hooks.mkdir()
+        hook = hooks / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        _git(root, "config", "core.hooksPath", str(hooks))
+        before, head = _repo_view(root), _head(root)
+        assert git_ops.commit_paths(root, "plan", ["app.py"]) is None
+        assert _repo_view(root) == before
+        assert _head(root) == head
 
     @pytest.mark.parametrize("commit", ["commit_tree", "commit_paths", "save_wip_ref"])
     def test_row_C2_a_staged_outside_edit_stays_staged(self, tmp_path, commit):

@@ -258,8 +258,8 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   first property for the second — report both, stage only what was declared.
 - **An unavailable snapshot means "not checked", never "everything was
   deleted".** `_snapshot_test_files` returns `None` (distinct from `{}`) when
-  git cannot be asked; both windows must pass on `None` rather than compare a
-  populated `before` against nothing and fail the block on a git hiccup.
+  Git or a file cannot be read. Both integrity windows block on `None`:
+  unavailable evidence cannot authorize a required check.
 - **Two test-path regexes, on purpose.** `_TEST_FILE_RE` is Python-only because
   it feeds the `def test_*` weak-test scan; `_TEST_PATH_RE` is
   language-agnostic because integrity hashing never parses source and must
@@ -367,30 +367,26 @@ spec-extract's `--apply`, run by CODEBASE_ANALYSIS while the registry is empty (
 
 ## Phases
 
-`BuildPhase` (models.py) is a linear enum and `state.is_phase_complete` compares
-**positions in it**, so ordinal position is load-bearing and any insertion must
-keep old checkpoints loadable (fixtures under `tests/fixtures/` cover this):
+`BuildPhase` (models.py) retains its legacy enum order for checkpoint
+compatibility and progress display. Required planning decisions use outcomes
+bound to their input revisions, not ordinal position. The execution order is:
 
 ```
 INIT → BOOTSTRAP → INTERVIEW_DONE → RESEARCH → CODEBASE_ANALYSIS → EPIC_SPLIT
-  → SPEC_GENERATION → DESIGN_AUDIT → PLAN_REVIEW → PROTOTYPE → REVIEW
+  → SPEC_GENERATION → PROTOTYPE → DESIGN_AUDIT → PLAN_REVIEW → REVIEW
   → TDD_BUILD → DOCS_UPDATE → RESPEC → PUBLISH → COMPLETE  (or FAILED)
 ```
 
 **Exit code 3 and the size gate are not phases.** `interview: ticket` and a
-`RESEARCH:NEEDED` decision stop with the pointer *at* the phase that must
-re-run (`is_phase_complete` compares strictly, so a phase the pointer sits on
-is not complete): the waiting phase re-runs on resume and the ones before it do
-not. The size gate runs before PROTOTYPE on every resume until PROTOTYPE is
-behind the build, and keeps stopping while `split_required` is set, until
-`--accept-size`.
+`RESEARCH:NEEDED` decision stop at the phase that must rerun. The size gate
+checks the final reviewed plan after prototype and audit repairs. It keeps
+stopping while `split_required` is set until `--accept-size`; a changed plan
+revision invalidates that acceptance.
 
-`PLAN_REVIEW` sits between `DESIGN_AUDIT` and `PROTOTYPE` — it needs
-`tasks.md` and `rubric.md` to exist, and it must run before anything is built
-against them. It maps to the Planning column and never moves the card: the plan
-review *is* the "reviewed by another eng" work Planning already stands for.
-Old checkpoints load unchanged (`tests/fixtures/build-state-pre-plan-review.json`
-covers it).
+`PLAN_REVIEW` validates the final tasks and rubric before implementation. It
+maps to Planning and never moves the card. Old checkpoints load conservatively
+(`tests/fixtures/build-state-pre-plan-review.json` covers the legacy shape):
+missing revision evidence requires validation before implementation can begin.
 
 `PROTOTYPE`, `RESPEC` and `PUBLISH` are the additions from the dark-factory
 lifecycle plan. `DOCS_UPDATE` sits between the build and the respec proposal so

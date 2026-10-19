@@ -62,13 +62,13 @@ def acceptance(task: dict, project: Path) -> bool:
     return command([sys.executable, "-c", task["acceptance"]], project).returncode == 0
 
 
-def decision(rows: list[dict], *, live: bool) -> dict:
+def decision(rows: list[dict], *, live: bool, task_ids: set[str], repetitions: int) -> dict:
     if not live:
         return {"decision": "pending", "reason": "Dry runs validate measurement, not model effectiveness"}
     current = {(r["task"], r["repeat"]): r for r in rows if r["variant"] == "current"}
     candidate = {(r["task"], r["repeat"]): r for r in rows if r["variant"] == "candidate"}
-    if not current or current.keys() != candidate.keys() or any(
-            sum(k[0] == task for k in current) < 3 for task in {k[0] for k in current}):
+    expected = {(task, repeat) for task in task_ids for repeat in range(repetitions)}
+    if len(task_ids) < 6 or repetitions < 3 or current.keys() != expected or candidate.keys() != expected:
         return {"decision": "retain", "reason": "Incomplete paired observations"}
     paired = [(current[k], candidate[k]) for k in current]
     if any(r["false_success"] or r.get("data_loss") for pair in paired for r in pair):
@@ -271,7 +271,7 @@ def main() -> int:
             import shutil
             shutil.rmtree(directory)
     report = {"runs_directory": None if args.dry_run else directory, "kind": "dry-run" if args.dry_run else "live-pilot", "model": args.model or "none",
-              "decision": decision(rows, live=not args.dry_run), "rows": rows,
+              "decision": decision(rows, live=not args.dry_run, task_ids={task["id"] for task in tasks}, repetitions=args.repetitions), "rows": rows,
               "limitations": ["Pilot, not broad statistical proof", "Live runs exercise one atomic TDD-checkpoint interruption; dry runs do not measure model recovery",
                               "Already admitted provider calls can exceed the admission cap"]}
     if args.self_check:
@@ -280,14 +280,16 @@ def main() -> int:
         assert all(r["acceptance"] for r in rows if r["task"] != "weak-tests")
         assert report["decision"]["decision"] == "pending"
         assert not any(r["data_loss"] for r in rows)
-        example = [{"task": "fixture", "repeat": i, "variant": v, "acceptance": True,
+        example = [{"task": task["id"], "repeat": i, "variant": v, "acceptance": True,
                     "false_success": False, "cost_usd": 1 if v == "current" else .7,
-                    "elapsed_s": 1, "data_loss": False} for i in range(3) for v in VARIANTS[:2]]
-        assert decision(example, live=True)["decision"] == "prefer-candidate"
+                    "elapsed_s": 1, "data_loss": False} for task in tasks for i in range(3) for v in VARIANTS[:2]]
+        assert decision(example, live=True, task_ids={task["id"] for task in tasks}, repetitions=3)["decision"] == "prefer-candidate"
+        assert decision(example[:6], live=True, task_ids={task["id"] for task in tasks}, repetitions=3)["decision"] == "retain"
+        assert decision(example, live=True, task_ids={task["id"] for task in tasks}, repetitions=4)["decision"] == "retain"
         example[1]["cost_usd"] = None
-        assert decision(example, live=True)["reason"] == "Missing cost metadata"
+        assert decision(example, live=True, task_ids={task["id"] for task in tasks}, repetitions=3)["reason"] == "Missing cost metadata"
         example[1]["false_success"] = True
-        assert "Safety failure" in decision(example, live=True)["reason"]
+        assert "Safety failure" in decision(example, live=True, task_ids={task["id"] for task in tasks}, repetitions=3)["reason"]
         try:
             command([sys.executable, "-c", "import time; time.sleep(5)"], HERE, timeout=.01)
         except subprocess.TimeoutExpired:
