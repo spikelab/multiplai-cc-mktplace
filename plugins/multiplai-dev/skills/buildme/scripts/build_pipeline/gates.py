@@ -68,6 +68,27 @@ def wiring_task_gate(tasks_path: Path, project_dir: Path) -> GateResult:
     )
 
 
+def _test_invocation(test_command: str, project_dir: Path) -> tuple[list[str], Path]:
+    """Resolve literal leading `cd DIR &&` clauses without running shell code."""
+    lexer = shlex.shlex(test_command, posix=True, punctuation_chars=";&|")
+    lexer.whitespace_split = True
+    argv = list(lexer)
+    directory = project_dir
+    while len(argv) >= 4 and argv[0] == "cd" and argv[2] == "&&":
+        if any(char in argv[1] for char in "$`~"):
+            raise ValueError("Test command cd must name a literal directory")
+        directory = (directory / argv[1]).resolve()
+        argv = argv[3:]
+    return argv, directory
+
+
+def _test_directory(test_command: str, project_dir: Path) -> Path:
+    argv, directory = _test_invocation(test_command, project_dir)
+    if len(argv) == 3 and Path(argv[0]).name in {"sh", "bash", "zsh"} and argv[1] == "-c":
+        return _test_directory(argv[2], directory)
+    return directory
+
+
 def run_test_suite(test_command: str, project_dir: Path, timeout: int = 300) -> tuple[int | None, str]:
     """Run the repo's test suite under the trust guard (shared mechanics for
     the integration and RED gates).
@@ -82,11 +103,12 @@ def run_test_suite(test_command: str, project_dir: Path, timeout: int = 300) -> 
             "(set --trust-repo or BUILDME_TRUST_REPO=1)."
         )
     try:
+        argv, directory = _test_invocation(test_command, project_dir)
         result = subprocess.run(
-            shlex.split(test_command),
-            capture_output=True, text=True, cwd=project_dir, timeout=timeout,
+            argv,
+            capture_output=True, text=True, cwd=directory, timeout=timeout,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError) as e:
         return None, f"Test command failed to run: {e}"
     return result.returncode, result.stdout + "\n" + result.stderr
 
@@ -253,7 +275,8 @@ _RED_BROKEN_TESTS = re.compile(
 
 
 def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "pytest",
-             expected_tests: list[str] | None = None) -> GateResult:
+             expected_tests: list[str] | None = None, test_command: str = "",
+             project_dir: Path | None = None) -> GateResult:
     """RED-phase gate: prove the freshly written tests fail for the right reason.
 
     Pass iff the suite exits non-zero AND the failure signature is a genuine
@@ -293,15 +316,24 @@ def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "p
     pytest_output = runner == "pytest" or bool(re.search(r"^FAILED\s+.+?::", test_output, re.M))
     if pytest_output and expected_tests is not None:
         failed_paths = set(re.findall(r"^FAILED\s+(.+?)::", test_output, re.M))
+        if project_dir is not None:
+            try:
+                directory = _test_directory(test_command, project_dir)
+                failed_paths = {(directory / p).resolve().relative_to(project_dir.resolve()).as_posix()
+                                for p in failed_paths}
+            except ValueError:
+                return GateResult(passed=False, reason="Cannot resolve pytest failure paths within the project",
+                                  action="fix_tests")
         if not expected_tests or not failed_paths or not failed_paths <= set(expected_tests):
             return GateResult(passed=False, reason="RED cannot attribute the failure to the changed tests",
                               action="fix_tests", metadata={"classification": "unverified"})
     if not pytest_output:
-        # Preserve other runners without treating a failed shell command as a
-        # failing test. Their detailed failure classification remains unverified.
+        # Jest has a recognizable summary; other runners retain the historical
+        # nonzero fallback, explicitly unverified after common setup rejection.
         observed_tests = bool(re.search(r"^FAIL\s+\S", test_output, re.M)
                               and re.search(r"^Tests:\s+[^\n]*\b[1-9]\d* failed\b", test_output, re.M))
-        if observed_tests:
+        jest_output = runner == "jest" or bool(re.search(r"^Test Suites:", test_output, re.M))
+        if observed_tests or not jest_output:
             return GateResult(passed=True, reason="RED test failure observed; detailed classification unverified for this runner",
                               metadata={"exit_code": exit_code, "classification": "unverified"})
     if pytest_output and (exit_code == 1 or runner != "pytest") and _RED_RIGHT_REASON.search(test_output):

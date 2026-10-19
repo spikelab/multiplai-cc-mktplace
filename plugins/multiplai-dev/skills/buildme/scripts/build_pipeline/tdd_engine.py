@@ -1004,7 +1004,8 @@ async def _enforce_red_gate(
         exit_code, output = run_test_suite(command, config.project_dir)
         from .narrow_tests import runner_of
         gate = red_gate(output, exit_code, runner=runner_of(command, config.project_dir),
-                        expected_tests=_list_block_test_files(config, block))
+                        expected_tests=_list_block_test_files(config, block),
+                        test_command=command, project_dir=config.project_dir)
         if gate.passed:
             block.red_evidence = _trim_evidence(gate.reason + "\n" + output)
             # Freeze the bar the moment it is proven to be a bar. Everything
