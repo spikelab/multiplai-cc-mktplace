@@ -293,42 +293,23 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
         # Phase: Prototype — a cheap artifact that proves the shape before the
         # expensive TDD build. A failed writer leaves a resumable failure.
-        if state.phase != BuildPhase.PUBLISH and (not state.spec_gen or not state.spec_gen.prototype_done):
+        if state.phase != BuildPhase.PUBLISH and not state.tdd and (
+                not state.spec_gen or "prototype" not in state.spec_gen.steps):
             await _run_prototype_phase(config, state, progress, state_path)
             state.checkpoint(state_path)
             print("PHASE:PROTOTYPE:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.PROTOTYPE, progress=progress)
 
-        # Required audit of the final plan, with one owner-published repair.
-        if state.phase != BuildPhase.PUBLISH and (not state.spec_gen or not state.spec_gen.design_audit_done):
-            log.info("START phase=DESIGN_AUDIT")
-            from .spec_generator import run_design_audit_stage
-            gaps = await run_design_audit_stage(
-                config.change_dir, config, state, state_path,
-            )
-            log.info("DONE phase=DESIGN_AUDIT gaps=%d", len(gaps) if gaps else 0)
-            if not state.is_phase_complete(BuildPhase.DESIGN_AUDIT):
-                state.advance_to(BuildPhase.DESIGN_AUDIT, state_path)
-            print("PHASE:DESIGN_AUDIT:COMPLETE", flush=True)
-            # Spec'ing is done being shaped; the card is now being planned.
-            board.record(config, state, BuildPhase.DESIGN_AUDIT, progress=progress)
-
-        # Independent review consumes the final task/rubric revision.
-        if state.phase != BuildPhase.PUBLISH and (not state.spec_gen or not state.spec_gen.plan_review_done):
-            log.info("START phase=PLAN_REVIEW")
-            from .llm_steps.plan_review_steps import run_plan_review_stage
-            findings = await run_plan_review_stage(
-                config.change_dir, config, state, state_path,
-            )
-            log.info(
-                "DONE phase=PLAN_REVIEW findings=%d",
-                len(findings) if findings else 0,
-            )
-            # Progress follows the required revision-bound result.
-            if state.spec_gen is not None and state.spec_gen.plan_review_done and not state.is_phase_complete(BuildPhase.PLAN_REVIEW):
-                state.advance_to(BuildPhase.PLAN_REVIEW, state_path)
-            print("PHASE:PLAN_REVIEW:COMPLETE", flush=True)
-            board.record(config, state, BuildPhase.PLAN_REVIEW, progress=progress)
+        # A plan-review repair can invalidate the earlier design audit. The
+        # owner returns only once both outcomes describe the final revision.
+        if state.phase != BuildPhase.PUBLISH:
+            from .spec_generator import validate_plan
+            await validate_plan(config, state, state_path)
+            for phase in (BuildPhase.DESIGN_AUDIT, BuildPhase.PLAN_REVIEW):
+                if not state.is_phase_complete(phase):
+                    state.advance_to(phase, state_path)
+                print(f"PHASE:{phase.name}:COMPLETE", flush=True)
+                board.record(config, state, phase, progress=progress)
 
         # Reassess size after every plan rewrite. A plan that should be split
         # stops here (exit 3) with split-proposal.md, until --accept-size.
@@ -640,8 +621,9 @@ async def _run_prototype_phase(
 ) -> None:
     """Run the prototype stage and feed its notes back into design/tasks.
 
-    Never raises: a failed prototype fails the phase, writes a diagnosis to
-    build-progress.md, and lets the build continue.
+    Completed prototype work is not repeated after downstream audit repairs.
+    A failed writer raises because it can leave partial edits; disabled or
+    inapplicable prototypes record an explicit skipped outcome.
     """
     # Resume guard, BEFORE the expensive agent run: prototype_done is
     # checkpointed after the feedback pass, so a crash between that checkpoint
@@ -649,7 +631,7 @@ async def _run_prototype_phase(
     # skip the feedback pass — discarding whatever the fresh run disproved.
     # The artifact already exists on disk and its findings were applied; skip
     # the whole re-run.
-    if state.spec_gen and state.spec_gen.prototype_done:
+    if state.tdd or (state.spec_gen and "prototype" in state.spec_gen.steps):
         log.info("SKIP phase=PROTOTYPE reason=recorded-complete-in-state")
         return
 
@@ -670,8 +652,8 @@ async def _run_prototype_phase(
         result = await run_prototype(config)
     except BudgetExceededError:
         raise
-    except Exception as proto_err:  # non-fatal by design
-        log.warning("Prototype stage failed (non-fatal): %s", proto_err)
+    except Exception as proto_err:
+        log.warning("Prototype stage failed: %s", proto_err)
         _log_prototype_diagnosis(progress, config, str(proto_err))
         raise
 
@@ -692,8 +674,8 @@ async def _run_prototype_phase(
         log.info("DONE phase=PROTOTYPE_FEEDBACK regenerated=%d", regenerated)
     except BudgetExceededError:
         raise
-    except Exception as feedback_err:  # non-fatal
-        log.warning("Prototype feedback pass failed (non-fatal): %s", feedback_err)
+    except Exception as feedback_err:
+        log.warning("Prototype feedback pass failed: %s", feedback_err)
         _log_prototype_diagnosis(progress, config, str(feedback_err))
         raise
     state.spec_gen.prototype_done = True

@@ -186,3 +186,50 @@ async def test_cancelled_standalone_tdd_persists_current_spend(accepted_build, m
     with pytest.raises(asyncio.CancelledError):
         await run_tdd_engine(config, args)
     assert BuildState.load(config.state_file_path()).budget["cost_usd"] == .3
+
+
+@pytest.mark.asyncio
+async def test_plan_review_repair_revalidates_design_before_spec_only_success(accepted_build, monkeypatch):
+    from build_pipeline.models import PlanReviewFinding, PlanReviewResult
+    from build_pipeline.state import completed_state_path
+    config, state, args, _ = accepted_build
+    config.spec_only = True
+    config.skip_explainers = True
+    state.phase = BuildPhase.REVIEW
+    state.tdd = None
+    state.spec_gen.steps.clear()
+    state.spec_gen.record_step("prototype", "skipped")
+    state.checkpoint(config.state_file_path())
+    design_audit = AsyncMock(return_value=[])
+    monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.run_design_audit", design_audit)
+    monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.run_tasks_audit", AsyncMock(return_value=[]))
+    repair = PlanReviewFinding(category="use-case-coverage", severity="major", file_path="tasks.md",
+                               location="block 1", claim="Missing case", reason="Cover the case")
+    review = AsyncMock(side_effect=[PlanReviewResult(findings=[repair]), PlanReviewResult(findings=[])])
+    monkeypatch.setattr("build_pipeline.llm_steps.plan_review_steps.run_plan_review", review)
+    monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.generate_artifact", AsyncMock(return_value="## 1. Value\nReturn one including the missing case"))
+    monkeypatch.setattr("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Updated rubric"))
+    assert await orchestrator.run_orchestrator(config, args) == 0
+    saved = BuildState.load(completed_state_path(config.state_file_path()))
+    assert saved.spec_gen.step_passed("design_audit")
+    assert saved.spec_gen.step_passed("plan_review")
+    assert design_audit.await_count == 2
+    assert review.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_implementation_resume_does_not_repeat_superseded_prototype(accepted_build, monkeypatch):
+    config, state, args, _ = accepted_build
+    config.spec_only = True
+    config.skip_explainers = True
+    state.phase = BuildPhase.TDD_BUILD
+    state.spec_gen.record_step("prototype")
+    (config.change_dir / "design.md").write_text("# Design after audit repair")
+    reconcile_plan(config, state, regenerated={"design", "unknowns", "tasks", "rubric"})
+    for step in ("design_audit", "plan_review", "tasks_audit", "explainers"):
+        state.spec_gen.record_step(step)
+    state.checkpoint(config.state_file_path())
+    prototype = AsyncMock(side_effect=AssertionError("must not repeat prototype after implementation began"))
+    monkeypatch.setattr(orchestrator, "_run_prototype_phase", prototype)
+    assert await orchestrator.run_orchestrator(config, args) == 0
+    prototype.assert_not_awaited()

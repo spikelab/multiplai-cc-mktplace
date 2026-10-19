@@ -1121,6 +1121,25 @@ async def run_design_audit_stage(
 
 
 
+async def validate_plan(config, state: BuildState, state_path: Path) -> None:
+    """Review until both required audits describe the same final revision.
+
+    Either audit can request its one bounded repair. That repair invalidates
+    earlier evidence, so validate again before returning. Two possible repair
+    publications need at most three validation passes; unresolved findings stop
+    inside the audit stages and cannot advance to implementation.
+    """
+    from .llm_steps.plan_review_steps import run_plan_review_stage
+
+    for _ in range(3):
+        await run_design_audit_stage(config.change_dir, config, state, state_path)
+        await run_plan_review_stage(config.change_dir, config, state, state_path)
+        assert state.spec_gen is not None
+        if all(state.spec_gen.step_passed(step) for step in ("design_audit", "plan_review")):
+            return
+    raise RuntimeError("Planning reviews did not converge within the bounded repairs")
+
+
 def _log_design_audit_gaps(gaps: list[dict]) -> None:
     """Record what the audit found, at the severity it found it."""
     dict_gaps = [g for g in gaps or [] if isinstance(g, dict)]
@@ -1243,7 +1262,9 @@ def reconcile_plan(config, state: BuildState, *, regenerated: set[str] | None = 
     if previous:
         if "proposal.md" in changed:
             stale.update({"requirements", "use-cases", "design", "unknowns", "tasks", "rubric"})
-        if any(key.startswith("requirements/") for key in changed) or "use-cases.md" in changed:
+        if any(key.startswith("requirements/") for key in changed):
+            stale.update({"design", "unknowns", "tasks", "rubric"})
+        if "use-cases.md" in changed:
             stale.update({"tasks", "rubric"})
         if "design.md" in changed:
             stale.update({"unknowns", "tasks", "rubric"})
