@@ -56,3 +56,10 @@ acceptance successes, and at least 20% improvement in median paired cost or time
 with no more than 10% regression in the other dimension. Otherwise retain the
 current flow. Any safety failure requires individual investigation. This is a
 small pilot, not broad statistical proof or a calibrated quality score.
+
+Bootstrap regression coverage is separate from the synthetic self-check:
+`tests/test_eval_worker.py` executes the actual worker and orchestrator against
+an offline provider double. It asserts that a clean source creates a worktree,
+reaches the provider boundary, and preserves staged/working user versions planted
+in the source checkout after worktree creation. This checks harness startup, not
+model effectiveness. No live pilot has been run.

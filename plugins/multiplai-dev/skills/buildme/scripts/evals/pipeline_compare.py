@@ -46,14 +46,25 @@ def initialize(root: Path, task: dict) -> None:
         result = command(argv, root)
         if result.returncode:
             raise RuntimeError(result.stderr)
+
+
+def seed_user_staging(root: Path) -> None:
+    """Plant the recovery sentinel only after clean worktree bootstrap."""
     (root / "user-notes.txt").write_text("staged user work\n")
     command(["git", "add", "user-notes.txt"], root)
     (root / "user-notes.txt").write_text("working copy\n")
+    marker = command(["git", "rev-parse", "--git-path", "buildme-eval-staging-seeded"], root)
+    path = Path(marker.stdout.strip())
+    (path if path.is_absolute() else root / path).write_text("seeded\n")
 
 
 def preserved_user_work(root):
+    marker = command(["git", "rev-parse", "--git-path", "buildme-eval-staging-seeded"], root)
+    path = Path(marker.stdout.strip())
+    seeded = (path if path.is_absolute() else root / path).exists()
+    expected = "staged user work\n" if seeded else "working copy\n"
     return ((root / "user-notes.txt").read_text() == "working copy\n"
-            and command(["git", "show", ":user-notes.txt"], root).stdout == "staged user work\n")
+            and command(["git", "show", ":user-notes.txt"], root).stdout == expected)
 
 
 def acceptance(task: dict, project: Path) -> bool:
@@ -99,6 +110,7 @@ def measure(task: dict, variant: str, repeat: int, root: Path, args) -> dict:
     metrics = {}
     timed_out = False
     if args.dry_run:
+        seed_user_staging(checkout)
         # A known solution tests measurement and isolation; the weak-test task
         # deliberately claims success with the wrong code.
         if task["id"] != "weak-tests":
@@ -195,6 +207,15 @@ async def worker(args) -> int:
         research_path="", context_files=[], session_id="")
     # Exercise one deterministic interruption at an atomic TDD checkpoint in
     # both arms. Resume goes through the same public entry, with saved spend.
+    original_create_worktree = orchestrator.git_ops.create_worktree
+    user_staging_seeded = False
+    def create_worktree(repo, *a, **kw):
+        nonlocal user_staging_seeded
+        result = original_create_worktree(repo, *a, **kw)
+        seed_user_staging(repo)
+        user_staging_seeded = True
+        return result
+    orchestrator.git_ops.create_worktree = create_worktree
     original_checkpoint = BuildState.checkpoint
     interrupted = False
     def checkpoint(state, *a, **kw):
@@ -211,6 +232,7 @@ async def worker(args) -> int:
             rc = await orchestrator.run_orchestrator(config, run_args)
     finally:
         BuildState.checkpoint = original_checkpoint
+        orchestrator.git_ops.create_worktree = original_create_worktree
     paths = [config.state_file_path(), config.state_file_path().with_name(".build-state.complete.json")]
     saved = next((BuildState.load(p) for p in paths if p.exists()), None)
     verified = bool(saved and saved.verification and saved.verification.get("passed"))
@@ -222,7 +244,9 @@ async def worker(args) -> int:
                                     "verified": verified})
     spend = budget.get_budget()
     print("EVAL:" + json.dumps({"verified": rc == 0 and verified, "project": str(config.project_dir),
-                                "cost_usd": spend.cost_usd, "tokens": spend.total_tokens, "calls": spend.calls,
+                                "cost_usd": None if spend.unaccounted_calls else spend.cost_usd,
+                                "tokens": spend.total_tokens, "calls": spend.calls,
+                                "user_staging_seeded": user_staging_seeded,
                                 "manual_intervention": rc == 3,
                                 "resume": ("resumed-successfully" if rc == 0 else "resume-blocked") if interrupted else "not-reached",
                                 "verified_corrections": corrections}))
