@@ -128,6 +128,10 @@ def _record_partial(error: BaseException, label: str) -> None:
     partial = getattr(error, "partial", None)
     if partial is not None:
         budget.record(partial.usage, label=label)
+    elif isinstance(error, asyncio.CancelledError):
+        # Core/providers do not always expose partial usage on cancellation.
+        # Preserve that uncertainty rather than reporting the call as free.
+        budget.record_unaccounted(label)
 
 
 async def llm_call(
@@ -226,17 +230,19 @@ async def agent_call(
     async with _get_semaphore():
         budget.check(phase=budget_label or "sdk")
         try:
-            result = await run_agent(
-                prompt,
-                allowed_tools=allowed_tools,
-                max_turns=max_turns,
-                model=model,
-                effort=effort,
-                cwd=cwd,  # None → run_agent's isolated hook-sessions dir
-                timeout_s=call_timeout,
-                label="agent",
-                component="buildme",
-            )
+            from . import git_ops
+            with git_ops.agent_write_window(cwd):
+                result = await run_agent(
+                    prompt,
+                    allowed_tools=allowed_tools,
+                    max_turns=max_turns,
+                    model=model,
+                    effort=effort,
+                    cwd=cwd,  # None → run_agent's isolated hook-sessions dir
+                    timeout_s=call_timeout,
+                    label="agent",
+                    component="buildme",
+                )
         except asyncio.CancelledError as e:
             _record_partial(e, budget_label or "agent")
             raise

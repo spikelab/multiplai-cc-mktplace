@@ -402,3 +402,34 @@ async def test_queued_calls_and_parse_retries_obey_budget(monkeypatch):
         assert budget_mod.get_budget().cost_usd == 2
     finally:
         budget_mod.reset()
+
+@pytest.mark.asyncio
+async def test_real_core_cancellation_without_usage_stays_unknown_on_resume(monkeypatch):
+    import asyncio
+    import claude_agent_sdk as provider
+    from build_pipeline import sdk
+    from multiplai_core import agent_runner
+    entered = asyncio.Event()
+    async def stream(**_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+        yield  # async generator; cancellation supplies no final usage
+    monkeypatch.setattr(provider, 'query', stream)
+    monkeypatch.setenv('MULTIPLAI_SDK_DEBUG_LOG', 'off')
+    monkeypatch.setenv('MULTIPLAI_AGENT_HEARTBEAT_S', '0')
+    monkeypatch.setattr(sdk, 'run_agent', agent_runner.run_agent)
+    budget_mod.reset()
+    budget_mod.configure(max_usd=1)
+    task = asyncio.create_task(sdk.llm_call('offline cancellation', model='anthropic:claude-test', budget_label='planning'))
+    await asyncio.wait_for(entered.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    saved = budget_mod.get_budget().to_state()
+    assert saved['unaccounted_calls'] == ['planning']
+    assert saved['cost_usd'] == 0  # unknown is not fabricated into a charge
+    budget_mod.reset().load_state(saved)
+    budget_mod.configure(max_usd=10)
+    with pytest.raises(budget_mod.BudgetExceededError, match='unknown'):
+        await sdk.llm_call('must not start another request', model='anthropic:claude-test')
+    budget_mod.reset()

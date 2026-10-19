@@ -14,15 +14,14 @@ Design notes:
   would be a far larger change than the feature warrants. `reset()` makes it
   test-friendly.
 - Recording never raises. Accounting must not be able to break a build; only
-  the explicit `check()` call, at loop boundaries, can stop one.
+  admission checks before provider calls can stop one.
 - No budget configured → the tracker still accounts (so the run reports what
   it spent) but never stops anything.
 - Beside the build's tracker, a process total (`ProcessSpend`) adds up every
   recorded call for the life of the process, and the `SPEND:` line of each
   model-calling skill it runs (`add_process_spend`, from
   `git_ops._count_skill_spend`; a skill that printed none makes it
-  incomplete). Neither `reset()` (which
-  `findings` runs before each round's engine) nor `BuildBudget.load_state`
+  incomplete). Neither `reset()` (for a new run) nor `BuildBudget.load_state`
   (which a resumed engine runs) touches it, so `SPEND:<usd>:<tokens>`
   (`spend_marker`), printed by `build` and `findings` on exit, is what this
   process spent: an epic adds it up across attempts and rounds without
@@ -80,6 +79,7 @@ class BuildBudget:
     by_label: dict[str, int] = field(default_factory=dict)
     # {label: USD} — the same split in money, which is what a user decides on.
     usd_by_label: dict[str, float] = field(default_factory=dict)
+    unaccounted_calls: list[str] = field(default_factory=list)
     _warned: bool = False
 
     @property
@@ -152,6 +152,8 @@ class BuildBudget:
         lines = [
             f"Budget: {self.total_tokens:,} tokens / ${self.cost_usd:.2f} over {self.calls} SDK calls.",
         ]
+        if self.unaccounted_calls:
+            lines.append("  unknown usage for interrupted calls: " + ", ".join(self.unaccounted_calls))
         if self.max_tokens:
             lines.append(f"  token ceiling: {self.max_tokens:,}")
         if self.max_usd:
@@ -175,14 +177,19 @@ class BuildBudget:
     def check(self, *, phase: str = "") -> None:
         """Stop the build if a ceiling is spent. Warn once at 80%.
 
-        Called at loop boundaries rather than per call, so a single expensive
-        call cannot be interrupted half-way (which would waste what it spent).
+        Called before provider dispatch inside the concurrency slot. An admitted
+        call may finish above the ceiling; the next call stops, even mid-block.
 
         Raises:
             BudgetExceededError: a configured ceiling is at or past 100%.
         """
         if not (self.max_tokens or self.max_usd):
             return
+        if self.unaccounted_calls:
+            raise BudgetExceededError(
+                "Interrupted provider usage is unknown; reconcile usage before resuming a capped build",
+                diagnosis=self.diagnosis(),
+            )
         used = self.fraction_used
         if used >= 1.0:
             where = f" during {phase}" if phase else ""
@@ -210,6 +217,7 @@ class BuildBudget:
         """Serializable snapshot for the build state file."""
         return {
             "calls": self.calls,
+            "unaccounted_calls": list(self.unaccounted_calls),
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "cache_read_tokens": self.cache_read_tokens,
@@ -228,6 +236,7 @@ class BuildBudget:
         if not data:
             return
         self.calls = int(data.get("calls", 0) or 0)
+        self.unaccounted_calls = list(data.get("unaccounted_calls", []))
         self.input_tokens = int(data.get("input_tokens", 0) or 0)
         self.output_tokens = int(data.get("output_tokens", 0) or 0)
         self.cache_read_tokens = int(data.get("cache_read_tokens", 0) or 0)
@@ -326,6 +335,13 @@ def record(usage, *, label: str = "") -> None:
             "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"))
     except Exception as e:  # pragma: no cover — accounting must never break a build
         log.warning("Process spend accounting failed for a call (ignored): %s", e)
+
+
+def record_unaccounted(label: str) -> None:
+    """A provider stopped without usage evidence; totals are a lower bound."""
+    _budget.unaccounted_calls.append(label)
+    _process.complete = False
+    log.warning("Provider usage unavailable after interruption: %s", label)
 
 
 def check(*, phase: str = "") -> None:
