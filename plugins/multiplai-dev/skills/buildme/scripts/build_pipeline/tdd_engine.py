@@ -99,8 +99,7 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
     """Commit the block phase's changes in the project repo.
 
     phase: "test", "impl", "refactor" or "fix" (used for the conventional-commit
-    prefix). Returns the new commit's SHA, or None if there was nothing to
-    commit or the commit failed (logged as a warning — never raises).
+    prefix). Returns the new SHA or None for no changes; commit failures raise.
     """
     return git_ops.commit_tree(
         config.project_dir,
@@ -213,8 +212,6 @@ def _list_block_test_files(config: BuildConfig, block: BlockInfo) -> list[str] |
         if untracked.returncode:
             return None
         names += untracked.stdout.split("\0")
-    except BudgetExceededError:
-        raise
     except Exception as e:
         log.warning("Could not list changed files for block %d: %s", block.number, e)
         return None
@@ -354,7 +351,7 @@ def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
     target = block.baseline_commit or "HEAD"
     try:
         proc = subprocess.run(
-            ["git", "diff", target, *_without_review_records(config)],
+            ["git", "diff", "--relative", target, *_without_review_records(config)],
             cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
         )
         if proc.returncode != 0:
@@ -364,8 +361,6 @@ def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
             )
             return ""
         diff = proc.stdout + _untracked_diff(config)
-    except BudgetExceededError:
-        raise
     except Exception as e:
         log.warning("Failed to capture diff for block %d: %s", block.number, e)
         return ""
@@ -406,8 +401,6 @@ def _untracked_diff(config: BuildConfig) -> str:
              "--", ".", *git_ops.BOOKKEEPING_EXCLUDES, *records],
             cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
         )
-    except BudgetExceededError:
-        raise
     except Exception as e:
         log.warning("Could not list untracked files for the review diff: %s", e)
         return ""
@@ -426,8 +419,6 @@ def _untracked_diff(config: BuildConfig) -> str:
                 ["git", "diff", "--no-index", "--", os.devnull, name],
                 cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
             )
-        except BudgetExceededError:
-            raise
         except Exception as e:
             log.warning("Could not diff untracked file %s: %s", name, e)
             continue
@@ -2458,7 +2449,7 @@ def capture_build_diff(config: BuildConfig, state: BuildState) -> str:
     target = baseline or "HEAD"
     try:
         proc = subprocess.run(
-            ["git", "diff", target, *_without_review_records(config)],
+            ["git", "diff", "--relative", target, *_without_review_records(config)],
             cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
         )
         if proc.returncode != 0:
@@ -2466,8 +2457,6 @@ def capture_build_diff(config: BuildConfig, state: BuildState) -> str:
                         target, proc.stderr.strip())
             return ""
         diff = proc.stdout + _untracked_diff(config)
-    except BudgetExceededError:
-        raise
     except Exception as e:
         log.warning("Failed to capture full build diff: %s", e)
         return ""

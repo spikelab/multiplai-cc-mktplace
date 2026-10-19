@@ -85,6 +85,7 @@ def _unit_agent_evidence(request, monkeypatch):
                "TestImplementationNotesLoop", "TestEvidenceBasedReview", "TestIntegrationFixCircuitBreaker",
                "TestRefactorAllOrdering", "TestCheckpointLifecycleOwnership", "TestMutationStepPlacement"}
     if request.cls and request.cls.__name__ in classes:
+        monkeypatch.setattr(git_ops, "commit_tree", lambda *a, **kw: None)
         monkeypatch.setattr("build_pipeline.tdd_engine._list_block_test_files", lambda *a: ["tests/test_x.py"])
         monkeypatch.setattr("build_pipeline.tdd_engine._snapshot_test_files", lambda *a: {"tests/test_x.py": "unchanged"})
         monkeypatch.setattr("build_pipeline.tdd_engine.integration_gate", lambda *a, **kw: GateResult(passed=True, reason="unit suite"))
@@ -928,8 +929,8 @@ RED_SUITE_RESULT = (1, "FAILED tests/test_x.py::test_a - AssertionError: not imp
 def red_gate_passes():
     """Make the RED gate see a properly failing suite (most engine tests
     exercise other phases and just need RED to be satisfied)."""
-    with patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT):
-        yield
+    with patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT) as run:
+        yield run
 
 
 @pytest.fixture
@@ -1194,6 +1195,7 @@ class TestBlockRefactorVerification:
 
     @pytest.fixture(autouse=True)
     def _red(self, red_gate_passes, quality_audit_overturns):
+        red_gate_passes.return_value = (1, "FAILED tests/test_thing.py::test_addition - AssertionError\n1 failed")
         yield
 
     @pytest.fixture
@@ -3167,7 +3169,7 @@ class TestWholeChangeRefactor:
         assert "# review fix" in (config.project_dir / "module.py").read_text()
 
     @pytest.mark.asyncio
-    async def test_failed_checkpoint_commit_with_dirty_tree_skips_the_pass(self, setup):
+    async def test_failed_checkpoint_commit_preserves_work_and_blocks_the_pass(self, setup):
         """`_git_commit_tree` returns None for "commit failed" too (failing
         hook, missing identity) — with the dirty work possibly all staged.
         HEAD is then NOT a faithful snapshot, and trusting it as the rewind
@@ -3187,7 +3189,8 @@ class TestWholeChangeRefactor:
 
         with patch("build_pipeline.tdd_engine.run_refactor_all",
                    new_callable=AsyncMock) as agent:
-            assert await _run_refactor_all(config, state, progress) is True
+            with pytest.raises(git_ops.GitLifecycleError, match="Commit failed"):
+                await _run_refactor_all(config, state, progress)
 
         agent.assert_not_awaited()
         # The uncommitted review fix survived, and HEAD never moved.
@@ -3196,7 +3199,7 @@ class TestWholeChangeRefactor:
             ["git", "rev-parse", "HEAD"], cwd=config.project_dir,
             capture_output=True, text=True, check=True).stdout.strip()
         assert head_after == head_before
-        assert state.tdd.refactor_all_done is True
+        assert state.tdd.refactor_all_done is False
 
     @pytest.mark.asyncio
     async def test_red_tree_on_resume_is_not_checkpointed_as_a_baseline(self, setup):
@@ -3834,3 +3837,23 @@ def test_nested_test_evidence_uses_project_relative_paths(tmp_path):
     block = BlockInfo(number=1, name="nested", description="Read nested tests", baseline_commit=baseline)
     assert "assert True" in _read_block_test_files(config, block)
     assert set(_snapshot_test_files(config, block)) == {"tests/test_with spaces.py"}
+
+
+def test_nested_review_diffs_have_project_relative_headers(tmp_path):
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    project = tmp_path / 'services/api'
+    project.mkdir(parents=True)
+    (project / 'app.py').write_text('value = 1\n')
+    (tmp_path / 'sibling.txt').write_text('untouched\n')
+    subprocess.run(['git', 'add', '.'], cwd=tmp_path, check=True)
+    subprocess.run(['git', 'commit', '-qm', 'base'], cwd=tmp_path, check=True)
+    (project / 'app.py').write_text('value = 2\n')
+    (tmp_path / 'sibling.txt').write_text('sibling secret\n')
+    config = BuildConfig(project_dir=project)
+    block = BlockInfo(number=1, name='nested', description='change value')
+    state = BuildState(change_name='nested', mode='only', tier='standard', tdd=TDDState(blocks=[block]))
+    for diff in (_capture_block_diff(config, block), capture_build_diff(config, state)):
+        assert '--- a/app.py' in diff
+        assert '+++ b/app.py' in diff
+        assert 'services/api' not in diff
+        assert 'sibling' not in diff
