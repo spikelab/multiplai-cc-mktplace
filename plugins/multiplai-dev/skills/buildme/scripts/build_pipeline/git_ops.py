@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import logging
 import os
 import shlex
@@ -583,14 +584,98 @@ def _positive_pathspec(exclude: str) -> str:
     return f":({','.join(kept)}){rest}" if kept else rest
 
 
+def _agent_index_evidence(repo: Path | str) -> tuple[Path | None, dict]:
+    result = _run(["git", "rev-parse", "--git-path", "buildme-agent-index.json"], cwd=repo)
+    if not result.ok:
+        return None, {}
+    path = Path(result.stdout.strip())
+    if not path.is_absolute():
+        path = Path(repo) / path
+    try:
+        data = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, ValueError):
+        data = {}
+    return path, data
+
+
+@contextlib.contextmanager
+def agent_write_window(repo: Path | str | None):
+    """Remember staging introduced by this agent, never pre-existing user staging.
+
+    Evidence is worktree-local and bound to HEAD, project, and exact index blobs.
+    A hard kill before the exit record fails closed; normal cancellation records
+    the agent's index in finally. Callers must serialize writers to a project.
+    """
+    if repo is None or not Path(repo).is_dir():
+        yield
+        return
+    path, evidence = _agent_index_evidence(repo)
+    before = index_entries(repo) if path else None
+    staged = _run(["git", "diff", "--cached", "--name-only", "--relative", "-z", "--", "."], cwd=repo) if path else None
+    head = rev_parse_head(repo) if path else None
+    key = str(Path(repo).resolve())
+    prior = evidence.get(key, {})
+    owned = prior.get("entries", {}) if prior.get("head") == head else {}
+    protected = {p for p in (staged.stdout.split("\0") if staged and staged.ok else [])
+                 if p and (p not in owned or owned[p] != (before or {}).get(p))}
+    try:
+        yield
+    finally:
+        if path and before is not None and staged and staged.ok and head == rev_parse_head(repo):
+            after = index_entries(repo)
+            if after is not None:
+                owned = {p: blob for p, blob in owned.items() if p not in protected and before.get(p) == blob}
+                for name in before.keys() | after.keys():
+                    if name not in protected and before.get(name) != after.get(name):
+                        owned[name] = after.get(name)
+                if owned:
+                    evidence[key] = {"head": head, "entries": owned}
+                    from .io_utils import atomic_write
+                    atomic_write(path, json.dumps(evidence, sort_keys=True))
+
+
+def test_output_excludes(repo: Path | str) -> list[str]:
+    """Exclude declared untracked test outputs, never index or HEAD paths.
+
+    Declarations are literal project-relative files/directories in config.yaml.
+    Reading them here keeps commit, clean-tree and verification policy identical.
+    Invalid declarations fail closed, including unreadable tracking evidence.
+    """
+    import yaml
+    config = Path(repo) / "specs/config.yaml"
+    if not config.exists():
+        return []
+    data = yaml.safe_load(config.read_text()) or {}
+    if not isinstance(data, dict):
+        raise GitLifecycleError("specs/config.yaml must be a mapping")
+    outputs = data.get("test_outputs", [])
+    if not isinstance(outputs, list) or any(
+        not isinstance(p, str) or not p or Path(p).is_absolute()
+        or ".." in Path(p).parts or str(Path(p)) == "." for p in outputs
+    ):
+        raise GitLifecycleError("test_outputs must be literal project-relative files or directories")
+    if not outputs:
+        return []
+    tracked = _run(["git", "ls-files", "--cached", "-z"], cwd=repo)
+    head = _run(["git", "ls-tree", "--name-only", "-r", "-z", "HEAD", "--", "."], cwd=repo)
+    others = _run(["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=repo)
+    if not all(r.ok for r in (tracked, head, others)):
+        raise GitLifecycleError("Cannot establish tracked files for test_outputs")
+    protected = set(tracked.stdout.split("\0")) | set(head.stdout.split("\0"))
+    roots = [Path(p).as_posix().rstrip("/") for p in outputs]
+    return [f":(exclude,literal){p}" for p in others.stdout.split("\0")
+            if p and p not in protected and any(p == r or p.startswith(r + "/") for r in roots)]
+
+
 def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | None:
     """Commit explicit paths using an isolated index, preserving other staging.
 
-    Divergent staged/working versions refuse the commit. A failed commit leaves
+    Divergent staged/working versions require exact agent ownership evidence. A failed commit leaves
     the active index intact; successful commits reconcile only selected entries
-    if staging has not changed while hooks ran. Returns SHA or None, with failures
-    logged so callers can retain their resumable checkpoint.
+    if staging has not changed while hooks ran. Returns SHA, or None only for no changes. Refusals/failures raise
+    GitLifecycleError so callers retain their checkpoint without advancing.
     """
+    paths = [*paths, *test_output_excludes(worktree)]
     excludes = [p for p in paths if p.startswith(":(") and "exclude" in p[2:p.find(")")]]
     positives = [p for p in paths if p not in excludes]
     if not positives:
@@ -600,22 +685,25 @@ def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | 
     working_paths = _run(["git", "diff", "--name-only", "-z", "--relative",
                           "--", *paths], cwd=worktree)
     if not staged_paths.ok or not working_paths.ok:
-        return None
+        raise GitLifecycleError("Cannot inspect commit paths")
     # A staged deletion (including the old side of a rename) can still have
     # a working file. It is now untracked, so plain `git diff` omits it.
     deleted = _run(["git", "diff", "--cached", "--no-renames", "--diff-filter=D",
                     "--name-only", "-z", "--relative", "--", *paths], cwd=worktree)
     if not deleted.ok:
-        return None
-    recreated = any(os.path.lexists(Path(worktree) / name) for name in deleted.stdout.split("\0") if name)
+        raise GitLifecycleError("Cannot inspect staged deletions")
+    recreated = {name for name in deleted.stdout.split("\0") if name and os.path.lexists(Path(worktree) / name)}
     divergent = (set(staged_paths.stdout.split("\0")) & set(working_paths.stdout.split("\0"))) - {""}
-    if divergent or recreated:
-        log.warning("Refusing to commit %s: staged and working versions differ; save both first", message)
-        return None
     before_index = index_entries(worktree)
+    _, evidence = _agent_index_evidence(worktree)
+    record = evidence.get(str(Path(worktree).resolve()), {})
+    owned = record.get("entries", {}) if record.get("head") == rev_parse_head(worktree) else {}
+    conflicts = divergent | recreated
+    if any(p not in owned or owned[p] != (before_index or {}).get(p) for p in conflicts):
+        raise GitLifecycleError(f"Cannot commit {message}: staged and working versions differ; save both first")
     index_path = _run(["git", "rev-parse", "--git-path", "index"], cwd=worktree)
     if before_index is None or not index_path.ok:
-        return None
+        raise GitLifecycleError("Cannot inspect active index")
     original = Path(index_path.stdout.strip())
     if not original.is_absolute():
         original = Path(worktree) / original
@@ -628,19 +716,19 @@ def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | 
         # when its add pathspec also excludes a bookkeeping file inside it.
         add = _run(["git", "add", "-A", "--", *positives], cwd=worktree, env=env)
         if not add.ok:
-            return None
+            raise GitLifecycleError("Cannot stage commit paths: " + add.stderr)
         if excludes and not _run(["git", "reset", "-q", "--",
                                   *(_positive_pathspec(p) for p in excludes)], cwd=worktree, env=env).ok:
-            return None
+            raise GitLifecycleError("Cannot exclude bookkeeping from commit")
         staged = _run(["git", "diff", "--cached", "--quiet", "--", *paths], cwd=worktree, env=env)
         if staged.returncode == 0:
             return None
         if staged.returncode != 1:
-            return None
+            raise GitLifecycleError("Cannot compare commit index")
         commit = _run(["git", "commit", "-m", message, "--", *paths], cwd=worktree, env=env)
         if not commit.ok:
             log.warning("Failed to commit %s: %s", message, commit.stderr.strip() or commit.stdout.strip())
-            return None
+            raise GitLifecycleError("Commit failed: " + (commit.stderr or commit.stdout))
     # Only reconcile entries we just committed, and only if no one changed
     # their staging while hooks ran. Other project/sibling entries stay intact.
     if index_entries(worktree) == before_index:
@@ -650,7 +738,7 @@ def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | 
     sha = _run(["git", "rev-parse", "HEAD"], cwd=worktree).stdout.strip()
     if not sha:
         log.warning("Committed %s but could not read HEAD", message)
-        return None
+        raise GitLifecycleError("Commit succeeded but HEAD is unreadable")
     log.info("COMMIT %s sha=%s", message, sha[:8])
     return sha
 
@@ -723,9 +811,8 @@ def commit_stage(config, message: str, paths: list[str]) -> str | None:
 def commit_tree(repo: Path | str, message: str, label: str = "") -> str | None:
     """Commit everything under *repo* except buildme's bookkeeping.
 
-    Returns the new commit's SHA, or None when there was nothing to commit or
-    the commit failed (logged as a warning — never raises). *label* only names
-    the operation in log lines.
+    Returns the new SHA or None for no changes. Commit refusals/failures raise
+    GitLifecycleError. *label* is retained for caller compatibility.
     """
     return commit_paths(repo, message, [".", *BOOKKEEPING_EXCLUDES])
 
@@ -863,7 +950,7 @@ def tree_is_clean(repo: Path | str, ignore: Path | str | None = None) -> bool:
     read as "safe to reset", because a reset over uncommitted work destroys it.
     *ignore*, a directory relative to *repo*, is left out of the check too.
     """
-    excludes = list(BOOKKEEPING_EXCLUDES)
+    excludes = [*BOOKKEEPING_EXCLUDES, *test_output_excludes(repo)]
     if ignore is not None:
         excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
     res = _run(["git", "status", "--porcelain", "--", ".", *excludes], cwd=repo)

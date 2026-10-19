@@ -1202,7 +1202,7 @@ def verification_inputs(test_command: str, project_dir: Path, *, parallel: str =
     if not head or index is None:
         raise RuntimeError("Cannot identify the Git revision/index for final verification")
     result = git_ops._run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z",
-                           "--", ".", *git_ops.BOOKKEEPING_EXCLUDES], cwd=project_dir)
+                           "--", ".", *git_ops.BOOKKEEPING_EXCLUDES, *git_ops.test_output_excludes(project_dir)], cwd=project_dir)
     if not result.ok:
         raise RuntimeError("Cannot read final verification inputs: " + result.stderr)
     files = {}
