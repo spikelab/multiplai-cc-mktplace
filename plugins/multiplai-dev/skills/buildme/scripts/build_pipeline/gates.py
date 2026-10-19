@@ -241,12 +241,13 @@ _RED_RIGHT_REASON = re.compile(
 
 # Signatures of broken test files: pytest could not even collect/parse them.
 _RED_BROKEN_TESTS = re.compile(
-    r"^(?:E\s+|FAILED\s+.+?\s+-\s+)?"
+    r"^[ \t]*(?:E\s+|FAILED\s+.+?\s+-\s+)?"
     r"(?:SyntaxError|IndentationError|FileNotFoundError|ModuleNotFoundError|ImportError|PermissionError)(?::|$)|"
     r"^[_= ]*(?:ERROR collecting|ERROR at (?:setup|teardown)|INTERNALERROR)\b|"
     r"^(?:E\s+)?fixture .+ not found|"
     r"^.*\b\d+ errors? during collection\b|"
-    r"^(?:Error: )?(?:Cannot find module|Cannot find package|command not found)\b",
+    r"^[ \t]*(?:Error: )?(?:Cannot find module|Cannot find package|command not found)\b|"
+    r"^[ \t]*(?:●[ \t]*)?Test suite failed to run\b",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -299,7 +300,7 @@ def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "p
         # Preserve other runners without treating a failed shell command as a
         # failing test. Their detailed failure classification remains unverified.
         observed_tests = bool(re.search(r"^FAIL\s+\S", test_output, re.M)
-                              and re.search(r"\b[1-9]\d* failed\b", test_output))
+                              and re.search(r"^Tests:\s+[^\n]*\b[1-9]\d* failed\b", test_output, re.M))
         if observed_tests:
             return GateResult(passed=True, reason="RED test failure observed; detailed classification unverified for this runner",
                               metadata={"exit_code": exit_code, "classification": "unverified"})

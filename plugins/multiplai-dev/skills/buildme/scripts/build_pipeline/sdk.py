@@ -229,9 +229,12 @@ async def agent_call(
 
     async with _get_semaphore():
         budget.check(phase=budget_label or "sdk")
-        try:
-            from . import git_ops
-            with git_ops.agent_write_window(cwd):
+        from . import git_ops
+        from contextlib import nullcontext
+        writable = bool(set(allowed_tools) & {"Write", "Edit", "Bash", "NotebookEdit"})
+        window = git_ops.agent_write_window(cwd) if writable else nullcontext()
+        with window:
+            try:
                 result = await run_agent(
                     prompt,
                     allowed_tools=allowed_tools,
@@ -243,36 +246,36 @@ async def agent_call(
                     label="agent",
                     component="buildme",
                 )
-        except asyncio.CancelledError as e:
-            _record_partial(e, budget_label or "agent")
-            raise
-        except AgentRunError as e:
-            # Degrade to partial output instead of raising — the TDD engine
-            # decides whether a failed agent aborts the block or retries.
-            elapsed = time.monotonic() - start
-            partial = e.partial
-            timed_out = isinstance(e, AgentRunTimeout)
-            # A failed agent still burned tokens up to the failure point.
-            _record_partial(e, budget_label or "agent")
-            log.error("FAIL sdk_call=agent reason=%s elapsed=%.0fs turns=%d\n--- CLI stderr ---\n%s",
-                      "timeout" if timed_out else e.reason, elapsed,
-                      partial.turns if partial else 0, e.stderr_tail)
-            error_msg = (
-                f"Agent timed out after {elapsed:.0f}s\nCLI stderr:\n{e.stderr_tail}"
-                if timed_out
-                else f"{e.reason}\nCLI stderr:\n{e.stderr_tail}"
-            )
-            return AgentResult(
-                success=False,
-                output=partial.text if partial else "",
-                error=error_msg,
-                timed_out=timed_out,
-                turns_used=partial.turns if partial else 0,
-                elapsed_seconds=elapsed,
-                files_changed=partial.files_changed if partial else [],
-            )
+            except asyncio.CancelledError as e:
+                _record_partial(e, budget_label or "agent")
+                raise
+            except AgentRunError as e:
+                # Degrade to partial output instead of raising — the TDD engine
+                # decides whether a failed agent aborts the block or retries.
+                elapsed = time.monotonic() - start
+                partial = e.partial
+                timed_out = isinstance(e, AgentRunTimeout)
+                # A failed agent still burned tokens up to the failure point.
+                _record_partial(e, budget_label or "agent")
+                log.error("FAIL sdk_call=agent reason=%s elapsed=%.0fs turns=%d\n--- CLI stderr ---\n%s",
+                          "timeout" if timed_out else e.reason, elapsed,
+                          partial.turns if partial else 0, e.stderr_tail)
+                error_msg = (
+                    f"Agent timed out after {elapsed:.0f}s\nCLI stderr:\n{e.stderr_tail}"
+                    if timed_out
+                    else f"{e.reason}\nCLI stderr:\n{e.stderr_tail}"
+                )
+                return AgentResult(
+                    success=False,
+                    output=partial.text if partial else "",
+                    error=error_msg,
+                    timed_out=timed_out,
+                    turns_used=partial.turns if partial else 0,
+                    elapsed_seconds=elapsed,
+                    files_changed=partial.files_changed if partial else [],
+                )
 
-        budget.record(result.usage, label=budget_label or "agent")
+            budget.record(result.usage, label=budget_label or "agent")
 
     elapsed = time.monotonic() - start
     log.info("DONE sdk_call=agent turns=%d elapsed=%.0fs files_changed=%d",

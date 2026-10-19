@@ -233,3 +233,19 @@ def test_legacy_repair_flag_cannot_be_lost_when_step_evidence_already_exists():
     assert sg.steps['design_audit'].revision == 'accepted'
     with pytest.raises(RuntimeError, match='already attempted'):
         sg.admit_repair('design_audit')
+
+@pytest.mark.asyncio
+async def test_staged_repair_rejects_placeholders_even_when_model_audit_is_clean(plan, monkeypatch):
+    config, _, state = plan
+    (config.change_dir / 'requirements').mkdir()
+    for cap in ('one', 'two'):
+        (config.change_dir / f'requirements/{cap}.md').write_text(REQ)
+    before = (config.change_dir / 'tasks.md').read_bytes()
+    monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.generate_artifact',
+                        AsyncMock(return_value='## 1. Values\nError handling: TBD\nReturn values'))
+    monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.run_tasks_audit', AsyncMock(return_value=[]))
+    monkeypatch.setattr(owner, 'generate_rubric', AsyncMock(return_value='# Rubric'))
+    with pytest.raises(ValueError, match='placeholder'):
+        await owner.rewrite_plan(config, state, 'Remove placeholders')
+    assert (config.change_dir / 'tasks.md').read_bytes() == before
+    assert not state.spec_gen.step_passed('tasks_audit')

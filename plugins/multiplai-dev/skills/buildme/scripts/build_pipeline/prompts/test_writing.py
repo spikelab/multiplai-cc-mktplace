@@ -31,7 +31,10 @@ failing tests that define the expected behavior for a block of work.
 9. **No `assert True`**, no `assert x is not None` as the sole assertion, no empty
    test bodies. Every test must assert a meaningful behavioral outcome.
 10. Run the test command after writing to confirm tests are syntactically valid
-   (they should fail, not error with ImportError/SyntaxError).
+   (they should fail, not error with ImportError/SyntaxError). For a new module,
+   put imports inside the test after an assertion that the module exists (for
+   example, Python's importlib.util.find_spec), then assert the required behavior.
+   Do not let a missing implementation prevent collection of the tests.
 
 ## Quality Gates — check every test against these before finishing
 

@@ -584,6 +584,15 @@ def _positive_pathspec(exclude: str) -> str:
     return f":({','.join(kept)}){rest}" if kept else rest
 
 
+def _working_identity(path: Path) -> str:
+    """Fingerprint the working version independently from its staged blob."""
+    if path.is_symlink():
+        return "link:" + os.readlink(path)
+    if path.is_file():
+        return f"mode:{path.stat().st_mode & 0o111}:sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    return "other" if path.exists() else "deleted"
+
+
 def _agent_index_evidence(repo: Path | str) -> tuple[Path | None, dict]:
     result = _run(["git", "rev-parse", "--git-path", "buildme-agent-index.json"], cwd=repo)
     if not result.ok:
@@ -595,14 +604,14 @@ def _agent_index_evidence(repo: Path | str) -> tuple[Path | None, dict]:
         data = json.loads(path.read_text()) if path.exists() else {}
     except (OSError, ValueError):
         data = {}
-    return path, data
+    return path, data if isinstance(data, dict) else {}
 
 
 @contextlib.contextmanager
 def agent_write_window(repo: Path | str | None):
     """Remember staging introduced by this agent, never pre-existing user staging.
 
-    Evidence is worktree-local and bound to HEAD, project, and exact index blobs.
+    Evidence binds HEAD, project, index blobs and final working contents.
     A hard kill before the exit record fails closed; normal cancellation records
     the agent's index in finally. Callers must serialize writers to a project.
     """
@@ -615,19 +624,22 @@ def agent_write_window(repo: Path | str | None):
     head = rev_parse_head(repo) if path else None
     key = str(Path(repo).resolve())
     prior = evidence.get(key, {})
-    owned = prior.get("entries", {}) if prior.get("head") == head else {}
+    entries = prior.get("entries", {}) if prior.get("head") == head else {}
+    owned = {p: item for p, item in entries.items() if isinstance(item, dict)
+             and item.get("index") == (before or {}).get(p)
+             and item.get("working") == _working_identity(Path(repo) / p)}
     protected = {p for p in (staged.stdout.split("\0") if staged and staged.ok else [])
-                 if p and (p not in owned or owned[p] != (before or {}).get(p))}
+                 if p and p not in owned}
     try:
         yield
     finally:
         if path and before is not None and staged and staged.ok and head == rev_parse_head(repo):
             after = index_entries(repo)
             if after is not None:
-                owned = {p: blob for p, blob in owned.items() if p not in protected and before.get(p) == blob}
-                for name in before.keys() | after.keys():
-                    if name not in protected and before.get(name) != after.get(name):
-                        owned[name] = after.get(name)
+                names = set(owned) | {p for p in before.keys() | after.keys()
+                                      if p not in protected and before.get(p) != after.get(p)}
+                owned = {p: {"index": after.get(p), "working": _working_identity(Path(repo) / p)}
+                         for p in names}
                 if owned:
                     evidence[key] = {"head": head, "entries": owned}
                     from .io_utils import atomic_write
@@ -699,7 +711,9 @@ def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | 
     record = evidence.get(str(Path(worktree).resolve()), {})
     owned = record.get("entries", {}) if record.get("head") == rev_parse_head(worktree) else {}
     conflicts = divergent | recreated
-    if any(p not in owned or owned[p] != (before_index or {}).get(p) for p in conflicts):
+    if any(not isinstance(owned.get(p), dict)
+           or owned[p].get("index") != (before_index or {}).get(p)
+           or owned[p].get("working") != _working_identity(Path(worktree) / p) for p in conflicts):
         raise GitLifecycleError(f"Cannot commit {message}: staged and working versions differ; save both first")
     index_path = _run(["git", "rev-parse", "--git-path", "index"], cwd=worktree)
     if before_index is None or not index_path.ok:
@@ -999,12 +1013,7 @@ def dirty_files(repo: Path | str, ignore: Path | str | None = None) -> dict[str,
     for rel in filter(None, (changed.stdout + staged.stdout + untracked.stdout).split("\0")):
         path = Path(repo) / rel
         try:
-            if path.is_symlink():
-                out[rel] = "link:" + os.readlink(path)
-            elif path.is_file():
-                out[rel] = f"mode:{path.stat().st_mode & 0o111}:sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
-            else:
-                out[rel] = "other" if path.exists() else "deleted"
+            out[rel] = _working_identity(path)
         except OSError as e:
             log.warning("Could not read %s: %s", path, e)
             return None

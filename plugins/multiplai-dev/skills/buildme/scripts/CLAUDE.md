@@ -39,7 +39,7 @@
 
 | File | Functions | What They Do |
 |------|-----------|-------------|
-| `spec_steps.py` | `generate_artifact()`, `run_explainer()`, `run_design_audit()`, `run_tasks_audit()`, `run_codebase_analysis()` | `run_explainer()` is the B1 explainer gate — one call per `dependencies.detect_new_dependencies()` hit, run concurrently with `WebSearch`/`WebFetch`/`Read`/`Glob`/`Grep`, concatenated into `unknowns.md`; `unknowns_gate` then forces at most one regeneration pass (`spec_generator._audit_unknowns`, recorded as `SpecGenState.explainers_done`). Spec generation + adversarial audits (design audit and tasks-shape audit, both wired — the tasks audit forces one regeneration pass on horizontal-decomposition findings, and on `no-new-behaviour` blocks from `spec_generator.scan_no_behaviour_blocks`: a block that produces nothing and whose own text says it adds no code (it says an earlier block already satisfies it, with itself as the subject; it says, unscoped, that it needs no code; it is test work, by its heading or first instruction, changes only test files and has no step that writes code; or it adds tests, leaves every file it names unchanged and has no step that writes code), so its tests would pass before it is built and fail the TDD RED gate; it reads a block's prose and checkboxes, and never flags on `Produces: (none)` or a "Verify"/"Confirm" verb alone; `report_no_behaviour_blocks_left` names any block still flagged after a rewrite, `PHASE: no_behaviour_blocks_remain`). `run_design_audit()` covers consistency **and** plan quality (over-engineering, granularity, testability, edge cases); its critical/major gaps force one regeneration pass of design.md + tasks.md through the single call site `spec_generator.run_design_audit_stage` (recorded as `SpecGenState.design_audit_regen_done`, then a required re-audit; the outcome is tied to its input revision, so an unchanged resume is free). `run_codebase_analysis()` (one `code_facts` explore agent per slice of the source files, through `code_analysis.analyse`, with `_codebase_analysis_call` as its call function; a project with no commit gets `code_analysis.no_commit_report`, a labelled "not analysed" list of its source files) is **wired** as `BuildPhase.CODEBASE_ANALYSIS` — the orchestrator writes its report to `codebase-analysis.md` and records the path on `SpecGenState.codebase_analysis_path`; `spec_generator.read_codebase_analysis` turns that path back into the text the design prompt inlines. |
+| `spec_steps.py` | `generate_artifact()`, `run_explainer()`, `run_design_audit()`, `run_tasks_audit()`, `run_codebase_analysis()` | `run_explainer()` is the B1 explainer gate — one call per `dependencies.detect_new_dependencies()` hit, run concurrently with `WebSearch`/`WebFetch`/`Read`/`Glob`/`Grep`, concatenated into `unknowns.md`; `unknowns_gate` then forces at most one regeneration pass (`spec_generator._audit_unknowns`, recorded as `SpecGenState.steps["explainers"]`). Spec generation + adversarial audits (design audit and tasks-shape audit, both wired — the tasks audit forces one regeneration pass on horizontal-decomposition findings, and on `no-new-behaviour` blocks from `spec_generator.scan_no_behaviour_blocks`: a block that produces nothing and whose own text says it adds no code (it says an earlier block already satisfies it, with itself as the subject; it says, unscoped, that it needs no code; it is test work, by its heading or first instruction, changes only test files and has no step that writes code; or it adds tests, leaves every file it names unchanged and has no step that writes code), so its tests would pass before it is built and fail the TDD RED gate; it reads a block's prose and checkboxes, and never flags on `Produces: (none)` or a "Verify"/"Confirm" verb alone; `report_no_behaviour_blocks_left` names any block still flagged after a rewrite, `PHASE: no_behaviour_blocks_remain`). `run_design_audit()` covers consistency **and** plan quality (over-engineering, granularity, testability, edge cases); its critical/major gaps force one regeneration pass of design.md + tasks.md through the single call site `spec_generator.run_design_audit_stage` (recorded as `SpecGenState.steps["design_audit"].repair_attempts`, then a required re-audit; the outcome is tied to its input revision, so an unchanged resume is free). `run_codebase_analysis()` (one `code_facts` explore agent per slice of the source files, through `code_analysis.analyse`, with `_codebase_analysis_call` as its call function; a project with no commit gets `code_analysis.no_commit_report`, a labelled "not analysed" list of its source files) is **wired** as `BuildPhase.CODEBASE_ANALYSIS` — the orchestrator writes its report to `codebase-analysis.md` and records the path on `SpecGenState.codebase_analysis_path`; `spec_generator.read_codebase_analysis` turns that path back into the text the design prompt inlines. |
 | `prototype_steps.py` | Optional prototype before final planning review. Findings request a revision from the shared owner. Failed writers block completion. |
 | `tdd_steps.py` | `run_test_writer()`, `run_mutation_test_writer()`, `run_implementer()`, `run_refactorer()`, `run_refactor_all()`, `run_integration_fix()` | TDD agent spawning with tool allowlists. Reports carry the `SURPRISES:` / `SPEC_IMPACT:` REQUIRED slots parsed by `gates.parse_implementation_note`. `run_refactor_all()` is the whole-change pass: same `REFACTORER_TOOLS`, more turns/time, `budget_label="refactor_all"`. `run_mutation_test_writer()` is the MUTATION step's one survivor round: `TEST_WRITER_TOOLS`, `budget_label="mutation_test_writer"`. |
 | `respec_steps.py` | `append_implementation_note()`, `format_implementation_note()`, `notes_path()`, `ensure_delta_sections()`, `run_respec_audit()` | B3 loop back to the spec. Each parsed `ImplementationNote` is appended to `implementation-notes.md` **as the build runs** (a crashed build still leaves the learning on disk). `run_respec_audit()` (BuildPhase.RESPEC, after TDD_BUILD) reads those notes + current requirements/design and writes `respec.md` in ADDED/MODIFIED/REMOVED form — **propose only, never edits the specs**, and non-fatal on LLM failure. |
@@ -127,15 +127,21 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   exist rather than invisible.
 
 - **Planning has one publisher.** Design-audit, prototype and plan-review
-  feedback call `spec_generator.rewrite_plan`. It stages and validates the set,
+  feedback and task-audit repairs call `spec_generator.rewrite_plan`. It stages
+  and validates the set, including placeholders and no-behaviour blocks,
   regenerates rubric and shape evidence, then publishes through a recovery
   journal. A pending journal or intervening edit cannot count as a coherent plan.
-- **Evidence belongs to inputs.** `SpecGenState.steps` stores revision and outcome.
-  Compatibility `*_done` properties derive from these records; legacy booleans
-  do not certify current inputs. Explicit dependency invalidation replaces ordinal
+- **Evidence belongs to inputs.** `SpecGenState.steps` stores revision, outcome and
+  repair attempts. Legacy repair allowances migrate into that ledger; legacy
+  done booleans do not certify current inputs. Legacy implementation checkpoints
+  without revision evidence refuse continuation while preserving code/block state. Explicit dependency invalidation replaces ordinal
   phase checks as proof. The phase still describes progress.
 - **Bounded repair can fail.** Required review errors or remaining blocking
   findings leave resumable blocked evidence. Never log failure and mark it passed.
+- **Test outputs must be declared.** `test_outputs` in specs/config.yaml names
+  literal project-relative output paths. Only untracked outputs are excluded
+  consistently from final verification, clean-tree checks and commits. Index/HEAD
+  paths and undeclared inputs always remain protected.
 - **Completion has one check.** `gates.final_verification` is used by standalone
   TDD, the full orchestrator after docs/respec/archive/contributors, and findings
   before publication. A failed writer requires verified rollback or build failure.
@@ -144,11 +150,16 @@ All tests mock LLM calls — no API keys needed. Tests cover:
 - **Recovery preserves two versions.** Stop records contain independent index
   entries and worktree fingerprints. Missing index evidence refuses discard.
   `save_wip_ref` uses isolated indexes and stash-shaped commits; it does not move
-  HEAD or stage into the user's index. `commit_tree` refuses divergent partial staging.
+  HEAD or stage into the user's index. Divergent staging requires agent write-window
+  evidence matching HEAD, index blobs and final working fingerprints. External
+  edits invalidate that ownership. Commit failures raise; None means no changes.
 - **Budget admission is inside the semaphore.** Charge successful or partial
   provider usage before releasing it. Nested TDD reuses planning spend; standalone
   entries load persisted totals before dispatch. Budget exhaustion propagates
-  through advisory handlers. Child-process spend has its own aggregate semantics.
+  through advisory handlers. Charge before write-window evidence publication too.
+  Cancellation without usage records an unknown call and incomplete process spend;
+  capped admission blocks until reconciled. Findings rounds share the run budget.
+  Child-process spend has its own aggregate semantics.
 
 - **Adjudication is a correctness requirement, not polish.** Reviewers run in
   fresh contexts, so they cannot see the decisions the build already made and
@@ -302,8 +313,9 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   name the plan claims exists, not enough to wander.
 - **PLAN_REVIEW requests at most one owner repair.** Model and deterministic
   findings share that bound; the required recheck blocks unresolved major
-  findings. `plan_review_regen_done` records repair admission; the revision-bound
-  step outcome records success. `oversized-plan` proposes a split for the size
+  findings. `steps.plan_review.repair_attempts` records repair admission; its
+  revision-bound outcome records success. Revalidate both required audits after
+  a repair, including any audit invalidated by a later review. `oversized-plan` proposes a split for the size
   gate and never silently restructures a plan.
 
 ## Adding a New Gate

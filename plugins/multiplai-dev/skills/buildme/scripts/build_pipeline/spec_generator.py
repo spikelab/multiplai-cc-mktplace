@@ -1322,6 +1322,8 @@ async def rewrite_plan(config, state: BuildState, findings_text: str, *, design:
             atomic_write(staged.change_dir / f"{name}.md", text)
         if not parse_blocks(staged.change_dir / "tasks.md"):
             raise ValueError("Rewritten tasks contain no implementation blocks")
+        if scan_placeholders((staged.change_dir / "tasks.md").read_text()):
+            raise ValueError("Rewritten tasks still contain placeholder findings")
         if scan_no_behaviour_blocks(staged.change_dir / "tasks.md"):
             raise ValueError("Rewritten tasks still contain blocks with no behavior")
         if not cm._artifact_exists(staged.change_dir, "requirements/*.md"):

@@ -1454,3 +1454,8 @@ def test_new_module_can_reach_red_without_collection_failure(tmp_path):
     run = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=tmp_path,
                          capture_output=True, text=True)
     assert red_gate(run.stdout + run.stderr, run.returncode, expected_tests=["test_new.py"]).passed
+
+
+def test_jest_collection_failure_is_not_behavioral_red():
+    output = "FAIL tests/a.test.js\n  ● Test suite failed to run\n\n    Cannot find module 'not-installed' from 'tests/a.test.js'\n\nTest Suites: 1 failed, 1 total\nTests: 0 total"
+    assert not red_gate(output, 1, runner='jest').passed

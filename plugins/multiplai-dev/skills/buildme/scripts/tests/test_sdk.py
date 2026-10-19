@@ -433,3 +433,38 @@ async def test_real_core_cancellation_without_usage_stays_unknown_on_resume(monk
     with pytest.raises(budget_mod.BudgetExceededError, match='unknown'):
         await sdk.llm_call('must not start another request', model='anthropic:claude-test')
     budget_mod.reset()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('result_kind', ['success', 'partial_error', 'cancel'])
+async def test_evidence_write_failure_cannot_hide_provider_spend(tmp_path, monkeypatch, result_kind):
+    import asyncio
+    import subprocess
+    from build_pipeline import sdk, io_utils
+    def git(*args):
+        subprocess.run(['git', *args], cwd=tmp_path, check=True, capture_output=True)
+    git('init', '-q')
+    (tmp_path / 'app.py').write_text('base\n')
+    git('add', '.')
+    git('commit', '-qm', 'base')
+    monkeypatch.setenv('BUILDME_TRUST_REPO', '1')
+    usage = SimpleNamespace(cost_usd=.2, input_tokens=20)
+    partial = SimpleNamespace(text='partial', turns=1, files_changed=[], usage=usage)
+    async def provider(*a, **kw):
+        (tmp_path / 'app.py').write_text('agent\n')
+        git('add', 'app.py')
+        if result_kind == 'partial_error':
+            raise AgentRunError('provider failed', reason='failure', partial=partial)
+        if result_kind == 'cancel':
+            raise asyncio.CancelledError()
+        return partial
+    monkeypatch.setattr(sdk, 'run_agent', provider)
+    def no_space(*a, **kw):
+        raise OSError('no space for ownership evidence')
+    monkeypatch.setattr(io_utils, 'atomic_write', no_space)
+    with pytest.raises(OSError, match='ownership evidence'):
+        await sdk.agent_call('write', allowed_tools=['Write'], cwd=str(tmp_path))
+    if result_kind == 'cancel':
+        assert budget_mod.get_budget().unaccounted_calls == ['agent']
+    else:
+        assert budget_mod.get_budget().cost_usd == .2
+        assert budget_mod.get_budget().calls == 1

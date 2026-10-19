@@ -1232,3 +1232,17 @@ def test_later_external_staging_invalidates_agent_ownership(tmp_path):
     with pytest.raises(git_ops.GitLifecycleError, match='staged and working'):
         git_ops.commit_tree(root, 'must refuse')
     assert _out(root, 'show', ':app.py') == 'user staged later\n'
+
+
+def test_unstaged_user_edit_after_agent_window_invalidates_ownership(tmp_path):
+    root, _ = _project_repo(tmp_path, subdir=False)
+    with git_ops.agent_write_window(root):
+        (root / 'app.py').write_text('agent staged\n')
+        _git(root, 'add', 'app.py')
+        (root / 'app.py').write_text('agent working\n')
+    (root / 'app.py').write_text('user after stop\n')
+    before, head = _repo_view(root), _head(root)
+    with pytest.raises(git_ops.GitLifecycleError, match='staged and working'):
+        git_ops.commit_tree(root, 'must refuse')
+    assert _repo_view(root) == before
+    assert _head(root) == head
