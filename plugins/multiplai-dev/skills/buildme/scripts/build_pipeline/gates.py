@@ -241,12 +241,13 @@ _RED_RIGHT_REASON = re.compile(
 
 # Signatures of broken test files: pytest could not even collect/parse them.
 _RED_BROKEN_TESTS = re.compile(
-    r"(SyntaxError|IndentationError|"
-    r"error(s)? during collection|collection error|"
-    r"errors during collection|ERROR collecting|"
-    r"INTERNALERROR|ERROR at (?:setup|teardown)|fixture .* not found|"
-    r"FileNotFoundError|ModuleNotFoundError|ImportError|PermissionError)",
-    re.IGNORECASE,
+    r"^(?:E\s+|FAILED\s+.+?\s+-\s+)?"
+    r"(?:SyntaxError|IndentationError|FileNotFoundError|ModuleNotFoundError|ImportError|PermissionError)(?::|$)|"
+    r"^[_= ]*(?:ERROR collecting|ERROR at (?:setup|teardown)|INTERNALERROR)\b|"
+    r"^(?:E\s+)?fixture .+ not found|"
+    r"^.*\b\d+ errors? during collection\b|"
+    r"^(?:Error: )?(?:Cannot find module|Cannot find package|command not found)\b",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -280,14 +281,6 @@ def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "p
             action="rewrite_tests",
             metadata={"exit_code": 0},
         )
-    if runner != "pytest":
-        return GateResult(passed=True, reason="RED exit observed; failure classification unverified for this runner",
-                          metadata={"exit_code": exit_code, "classification": "unverified"})
-    if expected_tests is not None:
-        failed_paths = set(re.findall(r"^FAILED\s+(.+?)::", test_output, re.M))
-        if not expected_tests or not failed_paths or not failed_paths <= set(expected_tests):
-            return GateResult(passed=False, reason="RED cannot attribute the failure to the changed tests",
-                              action="fix_tests", metadata={"classification": "unverified"})
     if _RED_BROKEN_TESTS.search(test_output):
         return GateResult(
             passed=False,
@@ -296,7 +289,21 @@ def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "p
             action="fix_tests",
             metadata={"exit_code": exit_code},
         )
-    if exit_code == 1 and _RED_RIGHT_REASON.search(test_output):
+    pytest_output = runner == "pytest" or bool(re.search(r"^FAILED\s+.+?::", test_output, re.M))
+    if pytest_output and expected_tests is not None:
+        failed_paths = set(re.findall(r"^FAILED\s+(.+?)::", test_output, re.M))
+        if not expected_tests or not failed_paths or not failed_paths <= set(expected_tests):
+            return GateResult(passed=False, reason="RED cannot attribute the failure to the changed tests",
+                              action="fix_tests", metadata={"classification": "unverified"})
+    if not pytest_output:
+        # Preserve other runners without treating a failed shell command as a
+        # failing test. Their detailed failure classification remains unverified.
+        observed_tests = bool(re.search(r"^FAIL\s+\S", test_output, re.M)
+                              and re.search(r"\b[1-9]\d* failed\b", test_output))
+        if observed_tests:
+            return GateResult(passed=True, reason="RED test failure observed; detailed classification unverified for this runner",
+                              metadata={"exit_code": exit_code, "classification": "unverified"})
+    if pytest_output and (exit_code == 1 or runner != "pytest") and _RED_RIGHT_REASON.search(test_output):
         return GateResult(
             passed=True,
             reason=f"RED confirmed: tests fail for the right reason (exit {exit_code})",

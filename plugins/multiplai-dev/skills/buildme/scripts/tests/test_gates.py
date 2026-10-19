@@ -1411,3 +1411,46 @@ def test_real_pytest_red_classifies_behavior_and_attributes_changed_test(tmp_pat
                             cwd=tmp_path, capture_output=True, text=True)
     gate = red_gate(result.stdout + result.stderr, result.returncode, expected_tests=["test_behavior.py"])
     assert gate.passed is expected, gate.reason
+
+
+@pytest.mark.parametrize("runner", [None, "jest", "pytest"])
+def test_red_never_accepts_collection_errors_from_wrapped_runners(tmp_path, runner):
+    import subprocess
+    import sys
+    (tmp_path / "test_missing.py").write_text("import nonexistent_buildme_dependency\n")
+    run = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=tmp_path,
+                         capture_output=True, text=True)
+    gate = red_gate(run.stdout + run.stderr, run.returncode, runner=runner)
+    assert not gate.passed
+
+
+@pytest.mark.parametrize("exception", ["FileNotFoundError", "ImportError", "PermissionError"])
+def test_red_classifies_exception_diagnostics_not_displayed_source(tmp_path, exception):
+    import subprocess
+    import sys
+    (tmp_path / "test_behavior.py").write_text(
+        "from unittest.mock import patch\n\n"
+        "def test_behavior():\n"
+        f"    with patch('builtins.open', side_effect={exception}):\n"
+        "        assert 1 == 2\n")
+    run = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=tmp_path,
+                         capture_output=True, text=True)
+    gate = red_gate(run.stdout + run.stderr, run.returncode, expected_tests=["test_behavior.py"])
+    assert gate.passed, gate.reason
+
+
+def test_unknown_runner_must_supply_test_failure_evidence():
+    assert not red_gate("command not found: node", 127, runner=None).passed
+    assert not red_gate("Error: Cannot find module 'jest'", 1, runner="node").passed
+
+
+def test_new_module_can_reach_red_without_collection_failure(tmp_path):
+    import subprocess
+    import sys
+    (tmp_path / "test_new.py").write_text(
+        "import importlib.util\n\ndef test_api():\n"
+        "    assert importlib.util.find_spec('new_buildme_feature') is not None\n"
+        "    from new_buildme_feature import answer\n    assert answer() == 42\n")
+    run = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=tmp_path,
+                         capture_output=True, text=True)
+    assert red_gate(run.stdout + run.stderr, run.returncode, expected_tests=["test_new.py"]).passed

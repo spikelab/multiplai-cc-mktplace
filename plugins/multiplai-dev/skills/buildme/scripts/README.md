@@ -494,3 +494,12 @@ EFFORT=high
 A stage section's `MODEL=` takes a Claude model or a `pi:` spec. A stage
 section falls back to `models.default` / `efforts.default`, then `[buildme]`,
 then `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT`, then the session.
+
+RED evidence rejects actual collection, setup, missing-fixture and dependency errors
+for every runner, including shell wrappers. Exception names in displayed source
+lines are not errors by themselves. Unsupported runners need recognizable failed
+test output; a nonzero exit alone is insufficient, and their classification is
+still labelled unverified. For a new Python module, assert
+`importlib.util.find_spec("new_module") is not None` inside the test before importing
+it. This gives behavioral RED while preserving the rule against collection errors;
+missing attributes and explicit `NotImplementedError` remain supported RED cases.
