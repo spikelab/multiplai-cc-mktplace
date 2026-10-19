@@ -1171,3 +1171,21 @@ def test_a_signal_to_buildme_kills_the_skill_it_is_waiting_on(tmp_path, signame,
                 os.kill(child, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+@pytest.mark.parametrize("whole_tree", [False, True])
+@pytest.mark.parametrize("rename", [False, True])
+def test_commit_preserves_staged_removal_and_recreated_worktree(tmp_path, whole_tree, rename):
+    root, _ = _project_repo(tmp_path, subdir=False)
+    if rename:
+        _git(root, "mv", "app.py", "renamed.py")
+    else:
+        _git(root, "rm", "--cached", "app.py")
+    (root / "app.py").write_text("recreated working version\n")
+    before, head = _repo_view(root), _head(root)
+    result = (git_ops.commit_tree(root, "build") if whole_tree else
+              git_ops.commit_paths(root, "plan", ["."]))
+    assert result is None
+    assert _repo_view(root) == before
+    assert _head(root) == head
+    assert "app.py" not in git_ops.index_entries(root)

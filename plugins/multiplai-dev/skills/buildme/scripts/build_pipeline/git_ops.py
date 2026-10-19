@@ -601,7 +601,15 @@ def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | 
                           "--", *paths], cwd=worktree)
     if not staged_paths.ok or not working_paths.ok:
         return None
-    if set(staged_paths.stdout.split("\0")) & set(working_paths.stdout.split("\0")) - {""}:
+    # A staged deletion (including the old side of a rename) can still have
+    # a working file. It is now untracked, so plain `git diff` omits it.
+    deleted = _run(["git", "diff", "--cached", "--no-renames", "--diff-filter=D",
+                    "--name-only", "-z", "--relative", "--", *paths], cwd=worktree)
+    if not deleted.ok:
+        return None
+    recreated = any(os.path.lexists(Path(worktree) / name) for name in deleted.stdout.split("\0") if name)
+    divergent = (set(staged_paths.stdout.split("\0")) & set(working_paths.stdout.split("\0"))) - {""}
+    if divergent or recreated:
         log.warning("Refusing to commit %s: staged and working versions differ; save both first", message)
         return None
     before_index = index_entries(worktree)
