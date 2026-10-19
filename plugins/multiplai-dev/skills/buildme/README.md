@@ -1143,3 +1143,39 @@ detection, spec generator, plan review and its split assessment, vendored-prompt
 pins, prototype/docs/respec steps, git lifecycle, board seam, and the TDD
 engine. All tests mock LLM calls (and `gh`) — no API keys
 needed.
+
+Test commands may declare generated files or directories in `specs/config.yaml`:
+
+```yaml
+test_outputs:
+  - test-results/
+  - .coverage
+```
+
+These are literal paths relative to the project (no globs or parent traversal).
+Only untracked outputs are omitted from final verification, clean-tree checks,
+and pipeline commits. Tracked files, including staged deletions, remain protected;
+all undeclared inputs must stay unchanged during verification. Declare dedicated
+output locations, not source directories.
+
+Legacy checkpoints without planning revision evidence load for inspection. Those
+already in TDD, review, or publication deliberately refuse automatic continuation:
+old booleans cannot establish which documents the implementation accepted. The
+orchestrator keeps their implementation and block state intact and does not call
+models or publish. Preserve that checkout; start a reviewed build in a separate
+clean checkout. Earlier planning checkpoints revalidate, and current-format
+checkpoints resume from their recorded revision. Repair allowances from legacy
+flags migrate into the step ledger; legacy done flags do not become passing evidence.
+
+The budget is cumulative across findings rounds and is checked before each
+provider dispatch, inside the concurrency slot. This intentionally replaces the
+older block-boundary-only admission policy: an admitted call can finish above the
+cap, and the next call stops even midway through a block. Committed RED tests and
+spend survive that stop; raising the cap resumes from the saved evidence.
+
+Cancellation is counted from partial usage when the provider exposes it. The
+shared runner can cancel without returning usage; Buildme records those calls in
+`budget.unaccounted_calls`, marks process spend incomplete, and refuses further
+provider admission for a capped run. Reported amounts are then lower bounds.
+Reconcile the missing provider usage in the checkpoint before clearing that list
+and resuming; raising the cap alone does not resolve unknown spend.

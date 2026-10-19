@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.85.0] - 2026-10-19
+## [0.87.0] - 2026-10-19
 
 ### Fixed
 - buildme verifies the final revision after review fixes, documentation and
@@ -27,12 +27,30 @@ time, not derived from a tag.
   in task prompts, and invalidates dependent artifacts and reviews after edits.
   Shared, bounded plan repair stops when blocking findings remain.
 - Planning, retries and resumed calls obey the same budget admission policy as
-  implementation; queued calls cannot dispatch after exhaustion.
+  implementation; queued calls cannot dispatch after exhaustion. Admission is
+  checked before every provider call, including mid-block; committed RED tests
+  and cumulative spend survive resume. Findings rounds now share one run budget.
+  Cancellation without provider usage is recorded as unknown and blocks capped
+  admission until reconciled; available partial usage is charged.
+- Required design and plan audits revalidate after each bounded repair. Completed
+  prototypes do not rerun after downstream repairs or during implementation resume.
+  Outcomes and repair admission share one revision ledger. Task-audit repairs stage
+  the full plan before publishing. Legacy implementation checkpoints without
+  revision evidence refuse continuation while preserving code and block state.
+- RED checks reject setup/collection errors through command wrappers and accept
+  assertion failures whose tracebacks quote exception names. Nested review diffs
+  use project-relative paths and exclude sibling changes.
+- Commits recognize staging created within agent write windows while preserving
+  divergent user staging. Commit failures raise instead of appearing as no-ops.
+- Explicit `test_outputs` paths in specs/config.yaml let untracked test reports
+  change during verification and remain out of commits. Tracked and undeclared
+  inputs remain protected.
 
 ### Added
 - A paired evaluation harness with held-out checks, timeout and recovery measurement.
-  The saved dry run validates the harness. Live effectiveness is pending and optional
-  stage defaults remain unchanged.
+  The saved dry run validates scoring only. An offline worker regression exercises
+  clean bootstrap and provider admission before checking staged-user-work preservation.
+  Live effectiveness is pending and optional stage defaults remain unchanged.
 
 ## [0.84.0] - 2026-10-18
 

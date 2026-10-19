@@ -37,7 +37,8 @@ Publication is disabled and any attempted push raises an error.
 
 Acceptance programs stay outside candidate checkouts and prompts and run only
 after workers stop. Fresh repositories isolate every task/repetition/variant.
-An unrelated file has different staged and working contents; both are compared
+After clean worktree creation, an unrelated file in the original checkout gets
+different staged and working contents; both are compared
 after the run to detect loss. Each live arm injects one interruption immediately
 after an atomic TDD checkpoint, then resumes through the public build entry.
 The report distinguishes resumed success, a blocked resume and a checkpoint that
