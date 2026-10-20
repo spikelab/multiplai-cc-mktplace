@@ -315,6 +315,14 @@ def test_a_budget_stop_and_its_resume_each_end_with_a_ledger_line(fixture_repo, 
     assert len(finished) == 2 and finished[-1]["stopped"] is None and finished[-1]["round"] == "01"
 
 
+def test_a_usage_limit_stop_ends_with_a_ledger_line_naming_it(fixture_repo, tmp_path, agents):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    agents(limit_at=3)
+    assert main(_review_args(repo, base, head, out)) == 6
+    assert _ledger_lines(tmp_path, "finished")[-1]["stopped"] == "usage-limit"
+
+
 def test_each_target_of_a_batch_gets_a_ledger_line(fixture_repo, tmp_path, agents):
     repo, base, head = fixture_repo
     out = tmp_path / "out"

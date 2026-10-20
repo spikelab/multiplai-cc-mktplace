@@ -25,7 +25,10 @@ from log_doctor import (  # noqa: E402
     hook_health_notes,
     hook_stats,
     hook_timeouts,
+    first_watchdog_seen,
+    hook_watchdog_hooks,
     hooks_json_payload,
+    main,
     load_hook_runs,
     render_hooks_markdown,
 )
@@ -379,3 +382,267 @@ def test_json_mode_is_serializable(logs):
                                     default=str))
 
     assert payload["hooks"][0]["stages"][0]["stage"] == "registry"
+
+
+# --- Cancelled vs timed out -------------------------------------------------
+#
+# context_manager arms a watchdog that logs HOOK_WATCHDOG at 26s, before the
+# harness kills it at 30s. An orphan ENTRY from that hook with no watchdog line
+# therefore never reached 26s: it was not killed at the ceiling. On 2026-10-20
+# the report called 22 such runs "killed at the 30s ceiling" when none were.
+
+
+def _watchdog(ts, hook, session, pid, ms=26010):
+    return (
+        f"[2026-08-10T{ts}Z] [{hook}] [session:{session}] WARNING: "
+        f"HOOK_WATCHDOG hook={hook} ms={ms} pid={pid} session={session} "
+        f"stage=router stages=transcript:0,catalogs:1\n"
+    )
+
+
+def _entry_pid(ts, hook, session, pid):
+    return _line(ts, hook, session, f"HOOK_ENTRY hook={hook} pid={pid} startup_ms=300")
+
+
+def test_orphan_without_watchdog_line_is_cancelled_not_killed(logs):
+    (logs / "context_manager.log").write_text(
+        _entry_pid("15:00:00", "context_manager", "aaaaaaaa", 11)
+        + _entry_pid("15:00:09", "context_manager", "aaaaaaaa", 12)
+        + _exit("15:00:12", "context_manager", "aaaaaaaa", ms=3000,
+                extra="pid=12")
+    )
+
+    stats = hook_stats(
+        load_hook_runs(logs), {"context_manager": 30},
+        watchdog_hooks={"context_manager": 26},
+    )
+
+    row = stats["hooks"][0]
+    assert row["killed"] == 0
+    assert row["cancelled"] == 1
+    assert stats["killed"] == 0
+    assert stats["cancelled"] == 1
+    assert stats["unexpected_killed"] == 0
+    # A cancelled run never reached the ceiling, so it must not be floored
+    # into the latency sample at 30s.
+    assert row["p95_ms"] == 3000
+    assert row["p95_is_lower_bound"] is False
+    notes = " | ".join(hook_health_notes(stats))
+    assert "cancelled" in notes
+    assert "killed at the 30s ceiling" not in notes
+
+
+def test_orphan_with_watchdog_line_is_a_timeout(logs):
+    (logs / "context_manager.log").write_text(
+        _entry_pid("15:00:00", "context_manager", "aaaaaaaa", 11)
+        + _watchdog("15:00:26", "context_manager", "aaaaaaaa", 11)
+    )
+
+    stats = hook_stats(
+        load_hook_runs(logs), {"context_manager": 30},
+        watchdog_hooks={"context_manager": 26},
+    )
+
+    row = stats["hooks"][0]
+    assert row["killed"] == 1
+    assert row["cancelled"] == 0
+    assert stats["unexpected_killed"] == 1
+    assert row["p95_ms"] == 30000
+
+
+def test_watchdog_line_is_matched_to_its_own_run_by_pid(logs):
+    """Two concurrent runs; only the one whose pid the watchdog names timed out."""
+    (logs / "context_manager.log").write_text(
+        _entry_pid("15:00:00", "context_manager", "aaaaaaaa", 11)
+        + _entry_pid("15:00:00", "context_manager", "aaaaaaaa", 22)
+        + _watchdog("15:00:26", "context_manager", "aaaaaaaa", 22)
+    )
+
+    runs = load_hook_runs(logs)
+    stats = hook_stats(runs, {"context_manager": 30},
+                       watchdog_hooks={"context_manager": 26})
+
+    assert stats["killed"] == 1
+    assert stats["cancelled"] == 1
+    assert [r.watchdog for r in runs] == [False, True]
+
+
+def test_watchdog_then_exit_is_neither_killed_nor_cancelled(logs):
+    (logs / "context_manager.log").write_text(
+        _entry_pid("15:00:00", "context_manager", "aaaaaaaa", 11)
+        + _watchdog("15:00:26", "context_manager", "aaaaaaaa", 11)
+        + _exit("15:00:28", "context_manager", "aaaaaaaa", ms=28000,
+                extra="pid=11")
+    )
+
+    stats = hook_stats(load_hook_runs(logs), {"context_manager": 30},
+                       watchdog_hooks={"context_manager": 26})
+
+    assert stats["killed"] == 0
+    assert stats["cancelled"] == 0
+
+
+def test_hooks_without_a_watchdog_keep_counting_orphans_as_kills(logs):
+    """No watchdog means no evidence either way; stay on the side of alarm."""
+    (logs / "pre_compact.log").write_text(
+        _entry_pid("15:00:00", "pre_compact", "aaaaaaaa", 11)
+    )
+
+    stats = hook_stats(load_hook_runs(logs), {"pre_compact": 60},
+                       watchdog_hooks={"context_manager": 26})
+
+    assert stats["killed"] == 1
+    assert stats["cancelled"] == 0
+    assert stats["unexpected_killed"] == 1
+
+
+def test_the_watchdog_detail_line_is_not_read_as_a_watchdog_line(logs):
+    (logs / "context_manager.log").write_text(
+        _entry_pid("15:00:00", "context_manager", "aaaaaaaa", 11)
+        + _line("15:00:26", "context_manager", "aaaaaaaa",
+                "HOOK_WATCHDOG_DETAIL hook=context_manager pid=11 "
+                "session=aaaaaaaa dns=3ms tcp=20ms")
+    )
+
+    stats = hook_stats(load_hook_runs(logs), {"context_manager": 30},
+                       watchdog_hooks={"context_manager": 26})
+
+    assert stats["cancelled"] == 1
+
+
+def test_watchdog_hooks_are_read_from_the_hook_scripts():
+    """Derived from the scripts, so a hook that later arms one is picked up."""
+    armed = hook_watchdog_hooks(PLUGIN_ROOT)
+
+    assert armed["context_manager"] == 26
+    assert "session_stop" not in armed
+
+
+def test_markdown_reports_the_cancelled_column(logs):
+    (logs / "context_manager.log").write_text(
+        _entry_pid("15:00:00", "context_manager", "aaaaaaaa", 11)
+    )
+
+    stats = hook_stats(load_hook_runs(logs), {"context_manager": 30},
+                       watchdog_hooks={"context_manager": 26})
+    out = render_hooks_markdown(stats, hook_health_notes(stats))
+
+    assert "| cancelled |" in out
+    assert "**0 killed**" in out
+    assert "1 cancelled" in out
+
+
+def test_slow_startup_leaves_no_room_for_the_watchdog_so_it_is_a_kill(logs):
+    """The watchdog counts from hook_run(), the harness from process start.
+
+    With 5s of startup the harness kills at 30s before the 26s watchdog
+    (at 31s of wall time) can fire, so a missing watchdog line proves nothing.
+    """
+    (logs / "context_manager.log").write_text(
+        _line("15:00:00", "context_manager", "aaaaaaaa",
+              "HOOK_ENTRY hook=context_manager pid=11 startup_ms=5000")
+    )
+
+    stats = hook_stats(load_hook_runs(logs), {"context_manager": 30},
+                       watchdog_hooks={"context_manager": 26})
+
+    assert stats["killed"] == 1
+    assert stats["cancelled"] == 0
+
+
+def test_unknown_startup_is_a_kill(logs):
+    (logs / "context_manager.log").write_text(
+        _line("15:00:00", "context_manager", "aaaaaaaa",
+              "HOOK_ENTRY hook=context_manager pid=11")
+    )
+
+    stats = hook_stats(load_hook_runs(logs), {"context_manager": 30},
+                       watchdog_hooks={"context_manager": 26})
+
+    assert stats["killed"] == 1
+
+
+def test_orphans_before_the_watchdog_was_first_seen_stay_kills(logs):
+    """A run from before the watchdog shipped (or on a core without it) never
+    could have logged the line, so its silence is no evidence of a cancel."""
+    (logs / "context_manager.log").write_text(
+        _entry_pid("14:00:00", "context_manager", "aaaaaaaa", 10)
+        + _entry_pid("15:00:00", "context_manager", "bbbbbbbb", 11)
+        + _watchdog("15:00:26", "context_manager", "bbbbbbbb", 11)
+        + _exit("15:00:28", "context_manager", "bbbbbbbb", ms=28000,
+                extra="pid=11")
+        + _entry_pid("16:00:00", "context_manager", "cccccccc", 12)
+    )
+    seen = first_watchdog_seen(logs, ["context_manager"])
+
+    stats = hook_stats(load_hook_runs(logs), {"context_manager": 30},
+                       watchdog_hooks={"context_manager": 26},
+                       watchdog_seen=seen)
+
+    assert seen["context_manager"].hour == 15
+    assert stats["killed"] == 1       # 14:00, before any watchdog line
+    assert stats["cancelled"] == 1    # 16:00, after it
+
+
+def test_a_watchdog_that_never_fired_proves_nothing(logs):
+    (logs / "context_manager.log").write_text(
+        _entry_pid("16:00:00", "context_manager", "cccccccc", 12)
+    )
+
+    stats = hook_stats(load_hook_runs(logs), {"context_manager": 30},
+                       watchdog_hooks={"context_manager": 26},
+                       watchdog_seen=first_watchdog_seen(logs, ["context_manager"]))
+
+    assert stats["killed"] == 1
+    assert stats["cancelled"] == 0
+
+
+def test_first_watchdog_seen_ignores_the_scan_window(logs):
+    """The window bounds what is counted, not the evidence that it was armed."""
+    (logs / "context_manager-2026-01-01.log").write_text(
+        "[2026-01-01T10:00:26Z] [context_manager] [session:aaaaaaaa] WARNING: "
+        "HOOK_WATCHDOG hook=context_manager ms=26001 pid=1 session=aaaaaaaa "
+        "stage=router\n"
+    )
+
+    seen = first_watchdog_seen(logs, ["context_manager"])
+
+    assert seen["context_manager"].year == 2026
+    assert seen["context_manager"].month == 1
+
+
+def _today_line(hms, msg, level="INFO"):
+    from datetime import datetime, timezone
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return f"[{day}T{hms}Z] [context_manager] [session:aaaaaaaa] {level}: {msg}\n"
+
+
+def test_hooks_cli_reports_a_cancel_and_exits_zero(logs, capsys):
+    """End to end: the --hooks entry point wires in the watchdog evidence."""
+    (logs / "context_manager.log").write_text(
+        _today_line("00:00:01", "HOOK_ENTRY hook=context_manager pid=11 startup_ms=60")
+        + _today_line("00:00:27", "HOOK_WATCHDOG hook=context_manager ms=26001 "
+                      "pid=11 session=aaaaaaaa stage=router", "WARNING")
+        + _today_line("00:00:29", "HOOK_EXIT hook=context_manager status=ok "
+                      "ms=28000 startup_ms=60 pid=11 session=aaaaaaaa")
+        + _today_line("00:01:00", "HOOK_ENTRY hook=context_manager pid=12 startup_ms=60")
+    )
+
+    code = main(["--hooks", "--logs-dir", str(logs), "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["cancelled"] == 1
+    assert payload["unexpected_killed"] == 0
+
+
+def test_hooks_cli_still_fails_on_an_orphan_with_no_watchdog_evidence(logs, capsys):
+    (logs / "context_manager.log").write_text(
+        _today_line("00:01:00", "HOOK_ENTRY hook=context_manager pid=12 startup_ms=60")
+    )
+
+    code = main(["--hooks", "--logs-dir", str(logs), "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert payload["unexpected_killed"] == 1

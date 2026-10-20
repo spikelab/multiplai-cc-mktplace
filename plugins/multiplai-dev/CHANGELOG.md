@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.90.0] - 2026-10-20
+## [0.93.0] - 2026-10-20
 
 ### Added
 - The review skill has a `round-metrics` command, which reports how a PR's
@@ -32,6 +32,61 @@ time, not derived from a tag.
   review's worktree has been deleted, `--repo <checkout>` names another
   checkout of the same repository to read. The command writes nothing, calls
   no model and needs no `--trust-repo`.
+
+## [0.92.0] - 2026-10-20
+
+### Changed
+- buildme's per-block review loop now remembers its earlier rounds. Every
+  accepted finding gets an id in its round record
+  (`reviews/block-NN-round-K.json`, e.g. `B01-R1-F1`), and from the second
+  round on the reviewer is shown the findings still open and asked whether
+  each is resolved, still present, partly resolved, or cannot be verified. A
+  finding it gives no answer for stays open. The judge that accepts or
+  rejects findings now also says when a new finding restates an open or an
+  earlier-rejected one, and whether it lies within reach of what changed
+  since the previous review. A restatement of an open finding is merged into
+  it instead of counted as new; a restatement of a rejected one stays
+  accepted, with the earlier rejection reason recorded next to it.
+- From the second round on, a new finding outside the reach of the last fix
+  is listed in the round record's `outside_fix_scope`, and is fixed like any
+  other. The fix agent gets the findings still open, each with its status,
+  plus the new ones. Round 1 runs as before, and the review still passes or
+  fails on its scores alone.
+- The last fix of the loop now questions the block's approach: it runs on
+  the review model (new step `review_fix_escalated` under `models:` /
+  `efforts:`), sees every finding of every round with what each round said
+  about it, is told to fix only the findings in its brief, and ends its
+  report with a `RECURRING:` line naming the findings
+  that share a cause, which the round record keeps. When the loop runs out,
+  `build-progress.md` lists the findings still present in two or more rounds
+  and that `RECURRING:` answer.
+- Reviewers now name each finding's kind of defect and every other place in
+  the diff with the same defect; the fix agent is told to fix every listed
+  location and cover each one with a test.
+- On a block that passes at round 2 or later, the fix on pass works on the
+  findings still open plus the new ones, so a finding the
+  reviewer left unanswered is fixed there instead of dropped.
+
+## [0.91.0] - 2026-10-20
+
+### Fixed
+- `/multiplai-dev:review` stops as soon as the Claude usage limit is hit,
+  instead of calling the model until every finder and verifier has failed.
+  Before, each verify call was tried up to three times, each with a re-ask,
+  and the other stages carried on, so one run could make hundreds of calls
+  that each failed in seconds against a limit that resets hours later. Now
+  the first call that reports `You've hit your session limit` (or `weekly`)
+  stops the run: no stage retries or re-asks that call or starts another,
+  and the checkpoint keeps every answer that came back. The run exits `6`
+  with the reset time (when the CLI gives one) and, for each target it
+  stopped, the command to continue: `python -m review_pipeline resume
+  <target_dir> --trust-repo`, with the run's `--max-cost-usd` and
+  `--no-deps`. After the reset that resume asks only for what is missing; a
+  plain `review` of the same target would start over. The ledger's
+  `finished` line says `stopped: usage-limit`. A batch starts no further
+  target after the limit and lists those as `not started`; `assess-only`
+  does the same and still writes its report. Needs multiplai-core 0.25.0,
+  which this release locks.
 
 ## [0.88.0] - 2026-10-20
 

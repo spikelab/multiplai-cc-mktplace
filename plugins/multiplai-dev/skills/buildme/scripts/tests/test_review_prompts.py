@@ -284,3 +284,39 @@ class TestAttribution:
         # payoff — delete it rather than carry it.
         for name, text in _block_constants().items():
             assert text.strip() in review.CODE_REVIEW_PROMPT, name
+
+
+# --- PR B: open findings, defect class, and the prompt staying unbiased -----
+
+
+class TestRoundMemoryFields:
+    def test_output_schema_asks_for_prior_assessments(self):
+        flat = _flat(review.CODE_REVIEW_PROMPT)
+        assert '"prior_assessments"' in flat
+        assert ("For each finding listed under Findings still open from earlier rounds, "
+                "give its status with the diff lines that show it.") in flat
+        for status in ("resolved", "still_present", "partially_resolved", "cannot_verify"):
+            assert status in flat
+
+    def test_findings_schema_asks_for_defect_class_and_other_locations(self):
+        flat = _flat(review.CODE_REVIEW_PROMPT)
+        assert '"defect_class"' in flat and '"other_locations"' in flat
+        assert ("Name the kind of defect in a few words in `defect_class`, and list every "
+                "other place in the diff with the same defect as `path:line` in "
+                "`other_locations`.") in flat
+
+    def test_the_schema_example_is_valid_json_after_formatting(self):
+        text = review.CODE_REVIEW_PROMPT.format(**{k: "x" for k in EXPECTED_PLACEHOLDERS})
+        example = text.split("```json\n", 1)[1].split("\n```", 1)[0]
+        parsed = json.loads(example)
+        assert parsed["prior_assessments"][0].keys() == {"finding_id", "status", "evidence"}
+        assert {"defect_class", "other_locations"} <= parsed["findings"][0].keys()
+
+
+class TestReviewPromptStaysUnbiased:
+    """Scoping happens after the reviewer, in adjudication and code
+    (scripts/CLAUDE.md, "Review prompts stay unbiased")."""
+
+    @pytest.mark.parametrize("phrase", ["do not flag", "do not report", "ignore", "only report"])
+    def test_the_review_prompt_never_tells_the_reviewer_what_to_leave_out(self, phrase):
+        assert phrase not in _flat(review.CODE_REVIEW_PROMPT).lower()

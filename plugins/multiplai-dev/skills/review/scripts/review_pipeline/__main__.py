@@ -32,7 +32,10 @@ post refused, or another process is running a review of the target now
 the run (resume with a higher --max-cost-usd to continue), or `review` found
 an interrupted run of the same target and head in the ledger whose saved
 state is still in the target directory (resume it, or pass --restart); 5 the verifier gave no usable answer for some findings after
-three tries each (resume retries only those).
+three tries each (resume retries only those); 6 the Claude usage limit was hit:
+the checkpoint is saved, and the message names the reset time when the CLI
+gave one and each stopped target's resume command (do not resume before the
+reset).
 
 Every run appends to `<data_dir>/reviews/ledger.jsonl` (see ledger.py),
 whatever --out says.
@@ -350,8 +353,12 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "assess-only":
             results, skipped = [], []
+            limit: sdk.UsageLimitError | None = None
             for raw in args.target_dirs:
                 target_dir = Path(raw).expanduser().resolve()
+                if limit is not None:
+                    skipped.append(f"{target_dir.name}: not started: {limit}")
+                    continue
                 if not (target_dir / "viewer" / "decisions.json").is_file():
                     skipped.append(f"{target_dir.name}: no viewer/decisions.json")
                     continue
@@ -360,6 +367,11 @@ def main(argv: list[str] | None = None) -> int:
                         target_dir, load_config(rounds.out_root(target_dir), **max_cost)))
                 except sdk.RepoTrustError:
                     raise
+                except sdk.UsageLimitError as e:
+                    # Every later review would fail the same way: stop, and keep the report so far.
+                    limit = e
+                    skipped.append(f"{target_dir.name}: stopped: {e}")
+                    continue
                 except orchestrator.budget.BudgetExceededError as e:
                     # One review over budget skips that review only; the others' results are kept.
                     skipped.append(f"{target_dir.name}: stopped at the cost limit ({e})")
@@ -378,17 +390,27 @@ def main(argv: list[str] | None = None) -> int:
             report.parent.mkdir(parents=True, exist_ok=True)
             report.write_text(orchestrator.assess_report(results, skipped), encoding="utf-8")
             print(f"report: {report}")
+            if limit is not None:
+                print(f"STOPPED: {limit}\nAfter the limit resets, run assess-only again for the reviews the "
+                      "report lists as stopped or not started.", file=sys.stderr)
+                return 6
             return 0
 
         if args.command == "batch":
             specs = orchestrator.load_batch(Path(args.file), args.mode)
             out.mkdir(parents=True, exist_ok=True)
             print(f"out: {out}", flush=True)
-            written, failures = asyncio.run(orchestrator.batch(
-                specs, out, load_config(out, **max_cost), parallel=args.parallel,
-                session_id=args.session_id))
+            stopped: sdk.UsageLimitError | None = None
+            try:
+                written, failures = asyncio.run(orchestrator.batch(
+                    specs, out, load_config(out, **max_cost), parallel=args.parallel,
+                    session_id=args.session_id))
+            except sdk.UsageLimitError as e:
+                stopped, written, failures = e, e.written, e.failures
             print("findings: " + " ".join(str(p) for p in written))
             print("checks: " + " ".join(str(p.parent / "checks.json") for p in written))
+            if stopped is not None:
+                raise stopped
             return 1 if failures else 0
     except orchestrator.InterruptedRun as e:
         print(f"STOPPED: {e}\nTo start over instead, pass --restart.", file=sys.stderr)
@@ -408,6 +430,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"STOPPED: {e}\nThe other verdicts are kept. Retry only these findings with: "
               f"python -m review_pipeline resume <out>/<repo>/<object> --trust-repo", file=sys.stderr)
         return 5
+    except sdk.UsageLimitError as e:
+        dirs = getattr(e, "stopped_dirs", None) or [getattr(e, "target_dir", None) or "<out>/<repo>/<object>"]
+        flags = (f" --max-cost-usd {args.max_cost_usd:g}" if getattr(args, "max_cost_usd", None) is not None else "") \
+            + (" --no-deps" if getattr(args, "no_deps", False) else "")
+        commands = "\n".join(f"  python -m review_pipeline resume {d} --trust-repo{flags}" for d in dirs)
+        not_started = " A target listed as not started has no checkpoint: review it after the reset." \
+            if args.command == "batch" else ""
+        print(f"STOPPED: {e}\nEvery answer that came back before the stop is kept. Do not retry before the "
+              f"limit resets; then continue with:\n{commands}\nOnly resume continues a stopped review: a plain "
+              f"review of the same target starts over.{not_started}", file=sys.stderr)
+        return 6
     except sdk.AgentCallError as e:
         log.error("review failed: %s", e, exc_info=True)
         print(f"ERROR: {e}", file=sys.stderr)

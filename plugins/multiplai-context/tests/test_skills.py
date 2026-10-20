@@ -1309,3 +1309,120 @@ class TestPluginSkillsDiscovery:
         )
         gen = SkillsGenerator(config=config, model_client=_make_mock_client())
         assert set(gen.discover_sources()) == {"landing-page"}
+
+
+class TestModelInvocationDisabledSkillsAreNotCataloged:
+    """A skill whose frontmatter sets ``disable-model-invocation: true`` can
+    only be run by the user typing it; the model cannot invoke it. Cataloging
+    it made the router suggest skills the model could never call (55 such
+    suggestions in 30 days, memory-health 2026-10-20), so it is left out, and
+    an entry cataloged before it was disabled is pruned on regeneration.
+    """
+
+    _DISABLED = (
+        "---\nname: propose-skill\ndescription: Propose skills.\n"
+        "disable-model-invocation: true\n---\n\n# Propose Skill\n"
+    )
+
+    def test_local_skill_with_invocation_disabled_is_excluded(self, tmp_path):
+        gen, _catalogs, skills_dir = _make_skills_generator(tmp_path)
+        _write_skill_file(skills_dir, "propose-skill", self._DISABLED)
+        _write_skill_file(skills_dir, "dream", "---\nname: dream\n---\n# Dream")
+
+        assert set(gen.discover_sources()) == {"dream"}
+
+    def test_plugin_skill_with_invocation_disabled_is_excluded(self, tmp_path):
+        from generators.config import CatalogConfig
+        from generators.skills import SkillsGenerator
+
+        install = tmp_path / "cache" / "multiplai-dev" / "0.1.0"
+        for name, body in (("propose-skill", self._DISABLED),
+                           ("review", "---\nname: review\n---\n# Review")):
+            d = install / "skills" / name
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text(body, encoding="utf-8")
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+        (plugins_dir / "installed_plugins.json").write_text(json.dumps(
+            {"version": 2, "plugins": {
+                "multiplai-dev@multiplai": [{"installPath": str(install)}]}}
+        ), encoding="utf-8")
+
+        config = CatalogConfig(
+            enable_skills=True, skills_dir=str(tmp_path / "none"),
+            plugins_dir=str(plugins_dir),
+        )
+        gen = SkillsGenerator(config=config, model_client=_make_mock_client())
+
+        assert set(gen.discover_sources()) == {"review"}
+
+    @pytest.mark.parametrize("body", [
+        "---\nname: x\ndisable-model-invocation: false\n---\n# X",
+        "---\nname: x\n---\n# X\n\ndisable-model-invocation: true\n",
+        "# X\nno frontmatter at all\n",
+    ])
+    def test_only_a_true_frontmatter_key_excludes(self, tmp_path, body):
+        gen, _catalogs, skills_dir = _make_skills_generator(tmp_path)
+        _write_skill_file(skills_dir, "x", body)
+
+        assert set(gen.discover_sources()) == {"x"}
+
+    def test_an_existing_entry_is_pruned_once_invocation_is_disabled(
+        self, tmp_path, monkeypatch
+    ):
+        gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        path = _write_skill_file(skills_dir, "propose-skill", "# Propose")
+        _write_skill_file(skills_dir, "dream", "# Dream")
+        asyncio.run(gen.run())
+        assert len(_read_catalog(catalogs_dir)["entries"]) == 2
+
+        path.write_text(self._DISABLED, encoding="utf-8")
+        result = asyncio.run(gen.run())
+
+        assert result.pruned == 1
+        sources = [e.get("source") for e in _read_catalog(catalogs_dir)["entries"]]
+        assert "propose-skill" not in sources
+        assert "propose-skill" not in (
+            _read_state(catalogs_dir)["generators"]["skills"]["source_hashes"]
+        )
+
+    def test_a_disabled_local_skill_still_shadows_a_plugin_skill(self, tmp_path):
+        from generators.config import CatalogConfig
+        from generators.skills import SkillsGenerator
+
+        skills_dir = tmp_path / "skills"
+        _write_skill_file(skills_dir, "propose-skill", self._DISABLED)
+        install = tmp_path / "cache" / "multiplai-dev" / "0.1.0"
+        d = install / "skills" / "propose-skill"
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text("---\nname: propose-skill\n---\n", encoding="utf-8")
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+        (plugins_dir / "installed_plugins.json").write_text(json.dumps(
+            {"version": 2, "plugins": {
+                "multiplai-dev@multiplai": [{"installPath": str(install)}]}}
+        ), encoding="utf-8")
+        config = CatalogConfig(enable_skills=True, skills_dir=str(skills_dir),
+                               plugins_dir=str(plugins_dir))
+        gen = SkillsGenerator(config=config, model_client=_make_mock_client())
+
+        assert gen.discover_sources() == {}
+
+    @pytest.mark.parametrize("raw", [
+        b"\xff\xfe not utf-8 at all",
+        b"---\nname: [x\n---\n# broken yaml",
+    ])
+    def test_an_unreadable_or_malformed_skill_stays_cataloged(self, tmp_path, raw):
+        gen, _catalogs, skills_dir = _make_skills_generator(tmp_path)
+        path = _write_skill_file(skills_dir, "x", "")
+        path.write_bytes(raw)
+
+        assert set(gen.discover_sources()) == {"x"}
+
+    def test_a_byte_order_mark_does_not_hide_the_frontmatter(self, tmp_path):
+        gen, _catalogs, skills_dir = _make_skills_generator(tmp_path)
+        path = _write_skill_file(skills_dir, "propose-skill", "")
+        path.write_bytes(b"\xef\xbb\xbf" + self._DISABLED.encode("utf-8"))
+
+        assert gen.discover_sources() == {}

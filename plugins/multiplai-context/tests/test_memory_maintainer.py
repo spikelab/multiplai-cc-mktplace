@@ -259,6 +259,129 @@ class TestCatalogPass:
         assert not result.ran and calls == []
 
 
+class TestSkillsCatalogPass:
+    """The scheduled rebuild covered memory only, so the skills catalog went
+    stale for ~1,500 h (2026-08-17 → 10-20) and installing a plugin never
+    reached it. It now rebuilds when past its TTL or when the installed plugin
+    set changed since it was generated."""
+
+    def _setup(self, tmp_path, monkeypatch, *, generated_hours_ago=1.0,
+               manifest_newer=False, catalog=True):
+        import json
+        import os
+        import time
+
+        calls = []
+        monkeypatch.setattr(mm, "run_supervised",
+                            lambda cmd, **kw: calls.append((cmd, kw)) or
+                            subprocess.CompletedProcess(cmd, 0, "", ""))
+        catalogs = tmp_path / "catalogs"
+        catalogs.mkdir()
+        plugins = tmp_path / "plugins"
+        plugins.mkdir()
+        manifest = plugins / "installed_plugins.json"
+        manifest.write_text("{}", encoding="utf-8")
+        now = time.time()
+        os.utime(manifest, (now - 7200, now - 7200))
+        if catalog:
+            gen = datetime.now(timezone.utc) - timedelta(hours=generated_hours_ago)
+            path = catalogs / "skills.json"
+            path.write_text(json.dumps({"generated_at": gen.isoformat(),
+                                        "entries": []}), encoding="utf-8")
+            os.utime(path, (now - 3600, now - 3600))
+        if manifest_newer:
+            os.utime(manifest, (now, now))
+        return calls, catalogs, plugins
+
+    def _run(self, tmp_path, catalogs, plugins, **kw):
+        args = dict(enable_skills=True, ttl_hours=168, plugins_dir=plugins)
+        args.update(kw)
+        return mm.run_skills_catalog(tmp_path, catalogs, **args)
+
+    def test_disabled_skills_never_rebuild(self, tmp_path, monkeypatch):
+        calls, catalogs, plugins = self._setup(tmp_path, monkeypatch, catalog=False)
+        result = self._run(tmp_path, catalogs, plugins, enable_skills=False)
+        assert not result.ran and calls == []
+
+    def test_a_current_catalog_is_left_alone(self, tmp_path, monkeypatch):
+        calls, catalogs, plugins = self._setup(tmp_path, monkeypatch)
+        result = self._run(tmp_path, catalogs, plugins)
+        assert not result.ran and calls == []
+        assert result.name == "skills_catalog"
+
+    def test_a_catalog_past_its_ttl_rebuilds_skills_only(self, tmp_path, monkeypatch):
+        calls, catalogs, plugins = self._setup(
+            tmp_path, monkeypatch, generated_hours_ago=200)
+        result = self._run(tmp_path, catalogs, plugins)
+        assert result.ran
+        (cmd, kw), = calls
+        assert cmd[-2:] == ["--only", "skills"]
+        assert "generate_catalog.py" in " ".join(map(str, cmd))
+        assert kw["timeout"] == mm.SHORT_PASS_TIMEOUT_S
+
+    def test_a_changed_plugin_set_rebuilds(self, tmp_path, monkeypatch):
+        calls, catalogs, plugins = self._setup(
+            tmp_path, monkeypatch, manifest_newer=True)
+        assert self._run(tmp_path, catalogs, plugins).ran
+        assert len(calls) == 1
+
+    def test_a_missing_catalog_rebuilds(self, tmp_path, monkeypatch):
+        calls, catalogs, plugins = self._setup(tmp_path, monkeypatch, catalog=False)
+        assert self._run(tmp_path, catalogs, plugins).ran
+
+    def test_an_unreadable_timestamp_falls_back_to_the_file_mtime(
+        self, tmp_path, monkeypatch
+    ):
+        import os
+        import time
+
+        calls, catalogs, plugins = self._setup(tmp_path, monkeypatch)
+        path = catalogs / "skills.json"
+        path.write_text("not json", encoding="utf-8")
+        old = time.time() - 200 * 3600
+        os.utime(path, (old, old))
+        os.utime(plugins / "installed_plugins.json", (old - 60, old - 60))
+        assert self._run(tmp_path, catalogs, plugins).ran
+
+    def test_dry_run_runs_nothing(self, tmp_path, monkeypatch):
+        calls, catalogs, plugins = self._setup(
+            tmp_path, monkeypatch, generated_hours_ago=200)
+        result = self._run(tmp_path, catalogs, plugins, dry_run=True)
+        assert result.ran and "dry run" in result.detail and calls == []
+
+    def test_a_failed_rebuild_is_reported(self, tmp_path, monkeypatch):
+        _, catalogs, plugins = self._setup(
+            tmp_path, monkeypatch, generated_hours_ago=200)
+        monkeypatch.setattr(mm, "run_supervised",
+                            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 2, "", ""))
+        result = self._run(tmp_path, catalogs, plugins)
+        assert not result.ran and "exit 2" in result.detail
+
+    def test_the_daily_run_includes_the_pass(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS", "true")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_PLUGINS_DIR", str(tmp_path / "plugins"))
+        calls = []
+        monkeypatch.setattr(mm, "run_supervised",
+                            lambda cmd, **kw: calls.append(cmd) or
+                            subprocess.CompletedProcess(cmd, 0, "", ""))
+
+        class FakePaths:
+            def data_dir(self): return tmp_path / "data"
+            def memory_dir(self): return tmp_path / "memory"
+            def dreams_dir(self): return tmp_path / "dreams"
+            def learnings_dir(self): return tmp_path / "learnings"
+            def catalogs_dir(self): return tmp_path / "catalogs"
+            def diary_dir(self): return tmp_path / "diary"
+            def dream_state_file(self): return tmp_path / "data" / "dream_state.yaml"
+
+        (tmp_path / "memory").mkdir()
+        monkeypatch.setattr(mm, "get_paths", lambda: FakePaths())
+        report = mm.run_maintenance(force=True)
+        skills = next(p for p in report.passes if p.name == "skills_catalog")
+        assert skills.ran  # no catalog yet
+        assert any(c[-2:] == ["--only", "skills"] for c in calls)
+
+
 class TestActiveProject:
     def test_none_without_diary_entries(self, tmp_path):
         d = tmp_path / "diary"

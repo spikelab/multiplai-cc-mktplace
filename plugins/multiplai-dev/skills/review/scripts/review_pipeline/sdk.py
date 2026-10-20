@@ -36,7 +36,7 @@ from typing import Iterator, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, run_agent
+from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, is_usage_limit, run_agent
 from multiplai_core.structured import parse_answer, reformat_prompt
 
 from . import budget
@@ -105,6 +105,23 @@ class RepoTrustError(AgentCallError):
     """The user has not said the reviewed repository is trusted."""
 
 
+class UsageLimitError(AgentCallError):
+    """The Claude usage limit was hit: no call can succeed until it resets, so it is never retried or
+    re-asked. `limit` and `resets` come from multiplai-core's `UsageLimitError` (`"session"`, `"9:40am (UTC)"`,
+    or `""`)."""
+
+    def __init__(self, message: str, *, limit: str = "", resets: str = "") -> None:
+        super().__init__(message)
+        self.limit = limit
+        self.resets = resets
+
+
+def _usage_limit(e: AgentRunError) -> UsageLimitError:
+    limit, resets = getattr(e, "limit", "") or "", getattr(e, "resets", "") or ""
+    message = f"the Claude {limit + ' ' if limit else ''}usage limit was hit"
+    return UsageLimitError(message + (f"; it resets {resets}" if resets else ""), limit=limit, resets=resets)
+
+
 def repo_is_trusted() -> bool:
     return os.environ.get("REVIEW_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
 
@@ -147,6 +164,8 @@ async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effo
         if partial is not None:
             budget.record(partial.usage, label=budget_label)
             _note(partial)
+        if is_usage_limit(e):
+            raise _usage_limit(e) from e
         kind = "timeout" if isinstance(e, AgentRunTimeout) else e.reason
         raise AgentCallError(f"agent call failed ({kind})\n{e.stderr_tail}") from e
     budget.record(result.usage, label=budget_label)
@@ -184,7 +203,8 @@ async def agent_call_structured(
 ) -> T:
     """Run an agent and parse its final message into *schema*.
 
-    A failure gets one re-ask; a second failure raises `AgentCallError`. An
+    A failure gets one re-ask; a second failure raises `AgentCallError`. A
+    hit usage limit (`UsageLimitError`) and a trust stop are never re-asked. An
     answer that does not parse is re-asked as a reformat of that answer, with
     no tools. A failed run (timeout, CLI error) re-runs the prompt with the
     error appended.
@@ -195,7 +215,7 @@ async def agent_call_structured(
     try:
         text = await _run(prompt, allowed_tools=allowed_tools, max_turns=max_turns, **common)
         return parse_answer(text, schema)
-    except RepoTrustError:
+    except (RepoTrustError, UsageLimitError):
         raise
     except (ValidationError, ValueError, AgentCallError) as e:
         first_error = e
@@ -213,7 +233,7 @@ async def agent_call_structured(
             text = await _run(reformat_prompt(text, schema, first_error), allowed_tools=[],
                               max_turns=REFORMAT_MAX_TURNS, run_label=f"{name}:reformat", **common)
         return parse_answer(text, schema)
-    except RepoTrustError:
+    except (RepoTrustError, UsageLimitError):
         raise
     except (ValidationError, ValueError, AgentCallError) as e:
         log.warning("%s: answer unusable (attempt 2/2): %s", name, str(e)[:500])
