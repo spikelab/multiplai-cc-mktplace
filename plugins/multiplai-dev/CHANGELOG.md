@@ -30,9 +30,10 @@ time, not derived from a tag.
   dependency list merged from both sides, failed the check.
 - buildme epic mode: the merge agent is now told to raise only the package's
   own version, the one the merge step checks. Before, when main and a child
-  both raised a tool's or a dependency's version alike (such as
-  `[tool.commitizen]`), the agent raised that one too, the check refused it,
-  and the child parked.
+  both raised a dependency's version alike (such as
+  `[dependencies.<name>]`), the agent raised that one too, the check refused
+  it, and the child parked. `[tool.commitizen]`'s `version` counts as the
+  package's own, so the agent raises it with `[project]`'s.
 
 ### Changed
 - buildme docs: SKILL.md and the scripts' notes now say that an epic's spend

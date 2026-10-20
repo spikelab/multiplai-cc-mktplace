@@ -39,8 +39,9 @@ LOCKFILES = frozenset({
 _LEFT = re.compile(r"^(?:<{7}|>{7}|\|{7})(?: |$)", re.MULTILINE)
 # The CHANGELOGs 40.3 lets the step resolve: by name, never a source file such as `changelog.py`.
 _CHANGELOG_SUFFIXES = frozenset({"", ".md", ".markdown", ".rst", ".txt", ".adoc"})
-# The tables of a TOML or INI file whose `version` is the package's own (not a dependency's).
-_PACKAGE_TABLES = frozenset({"project", "package", "tool.poetry", "workspace.package", "metadata"})
+# The tables of a TOML or INI file whose `version` is the package's own (not a dependency's). commitizen's
+# `version` is its copy of the project's version, which `cz bump` raises with it.
+_PACKAGE_TABLES = frozenset({"project", "package", "tool.poetry", "workspace.package", "metadata", "tool.commitizen"})
 _TABLE = re.compile(r"^\s*(\[\[?)\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$")
 # JSON: a string, or a punctuation mark that opens, closes or separates.
 _TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|[{}\[\]:,]')

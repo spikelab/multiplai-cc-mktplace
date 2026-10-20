@@ -1300,26 +1300,37 @@ def test_the_prompt_asks_for_the_new_version_only_where_the_check_accepts_it(tmp
 
 
 def test_the_prompt_leaves_a_version_both_sides_raised_that_is_not_the_package_s_own(tmp_path):
-    """40.3 (owed review of 5c8a5602..8165ed8a, finding 4991ad04ec): both
-    sides raise `[project]` and `[tool.commitizen]` alike. The check accepts
-    the new version only in the package's own field, so the prompt limits
-    the rule to it and names a dependency's or a tool's version as one to
-    leave as the merge left it."""
+    """40.3 (owed review of 5c8a5602..8165ed8a, finding 4991ad04ec; PR #387
+    review, finding 320e2b1539): both sides raise Cargo's `[package]` and a
+    `[dependencies.<name>]` version alike. The check accepts the new version
+    only in the package's own field, so the prompt limits the rule to it and
+    names a dependency's version as one to leave as the merge left it.
+    `[tool.commitizen]`'s `version` is commitizen's copy of the project's
+    version, so it is the package's own and is raised with `[project]`'s."""
     from build_pipeline.prompts.epic_merge import MERGE_PROMPT
 
     text = " ".join(MERGE_PROMPT.split())
     assert "The package's own version field" in text
-    assert "`[tool.commitizen]`" in text
+    assert "`[dependencies.<name>]`" in text
+
+    def cargo(own: str, dep: str) -> str:
+        return f'[package]\nname = "app"\nversion = "{own}"\n\n[dependencies.serde]\nversion = "{dep}"\n'
+
+    s = Sides(tmp_path / "cargo", {"Cargo.toml": cargo("0.64.0", "1.0.0")},
+              {"Cargo.toml": cargo("0.65.0", "1.1.0")}, {"Cargo.toml": cargo("0.65.0", "1.1.0"), "main.py": ""})
+    assert s.plan() == merge.Plan(["Cargo.toml"], [])
+    assert s.beyond({"Cargo.toml": cargo("0.66.0", "1.1.0"), "main.py": ""}) == []
+    assert s.beyond({"Cargo.toml": cargo("0.66.0", "1.2.0"), "main.py": ""}) == ["Cargo.toml"]
 
     def pyproject(own: str, tool: str) -> str:
         return f'[project]\nname = "app"\nversion = "{own}"\n\n[tool.commitizen]\nversion = "{tool}"\n'
 
-    s = Sides(tmp_path, {"pyproject.toml": pyproject("0.64.0", "0.64.0")},
+    s = Sides(tmp_path / "cz", {"pyproject.toml": pyproject("0.64.0", "0.64.0")},
               {"pyproject.toml": pyproject("0.65.0", "0.65.0")},
               {"pyproject.toml": pyproject("0.65.0", "0.65.0"), "main.py": ""})
     assert s.plan() == merge.Plan(["pyproject.toml"], [])
-    assert s.beyond({"pyproject.toml": pyproject("0.66.0", "0.65.0"), "main.py": ""}) == []
-    assert s.beyond({"pyproject.toml": pyproject("0.66.0", "0.66.0"), "main.py": ""}) == ["pyproject.toml"]
+    assert s.beyond({"pyproject.toml": pyproject("0.66.0", "0.66.0"), "main.py": ""}) == []
+    assert s.beyond({"pyproject.toml": pyproject("0.66.0", "0.65.0"), "main.py": ""}) == ["pyproject.toml"]
 
 
 def test_a_conflict_without_markers_is_never_the_step_s_resolution(tmp_path):
