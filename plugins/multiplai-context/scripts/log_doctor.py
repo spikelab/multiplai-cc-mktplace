@@ -589,6 +589,10 @@ def render_injections_markdown(stats: dict, decisions: list,
 
 HOOK_ENTRY_RE = re.compile(r"HOOK_ENTRY hook=(?P<hook>\S+)(?P<rest>.*)$")
 HOOK_EXIT_RE = re.compile(r"HOOK_EXIT hook=(?P<hook>\S+)(?P<rest>.*)$")
+# Written by multiplai-core's hook_run() when a hook armed with ``watchdog_s``
+# is still running at that mark (context_manager: 26s of its 30s ceiling).
+# The trailing space keeps HOOK_WATCHDOG_DETAIL from matching.
+HOOK_WATCHDOG_RE = re.compile(r"HOOK_WATCHDOG hook=(?P<hook>\S+)(?P<rest>.*)$")
 
 # Anything over this fraction of a hook's configured timeout is one bad day
 # away from being killed. 0.5 rather than 0.9 on purpose: p95 is not the
@@ -662,7 +666,29 @@ class HookRunRecord:
     stages: dict = field(default_factory=dict)
     fields: dict = field(default_factory=dict)
     killed: bool = False          # entered and never exited
+    watchdog: bool = False        # logged HOOK_WATCHDOG (near its ceiling)
     file: str = ""
+
+
+def hook_watchdog_hooks(plugin_root: Path | None = None) -> set:
+    """Hook names whose script arms the near-timeout watchdog.
+
+    Such a hook logs ``HOOK_WATCHDOG`` a few seconds before the harness kills
+    it, so an orphan ENTRY from it *without* that line ended before the
+    watchdog mark: it was cancelled or crashed, not killed at the ceiling. Read
+    from the scripts (``watchdog_s`` is the ``hook_run`` argument that arms it)
+    rather than hardcoded, so a hook that later arms one is picked up.
+    """
+    root = plugin_root or Path(__file__).resolve().parent.parent
+    armed = set()
+    for name in hook_component_names(root):
+        try:
+            source = (root / "scripts" / f"{name}.py").read_text()
+        except OSError:
+            continue
+        if "watchdog_s" in source:
+            armed.add(name)
+    return armed
 
 
 def hook_timeouts(plugin_root: Path | None = None) -> dict:
@@ -746,6 +772,16 @@ def load_hook_runs(logs_dir: Path, since: date | None = None) -> list:
                     runs.append(rec)
                     open_entries[(rec.hook, rec.session, kv.get("pid", ""))] = rec
                     continue
+                wd_m = HOOK_WATCHDOG_RE.search(e.msg)
+                if wd_m:
+                    kv = _kv(wd_m.group("rest"))
+                    rec = open_entries.get(
+                        (wd_m.group("hook"), _session_of(kv, e.session),
+                         kv.get("pid", ""))
+                    )
+                    if rec is not None:
+                        rec.watchdog = True
+                    continue
                 exit_m = HOOK_EXIT_RE.search(e.msg)
                 if not exit_m:
                     continue
@@ -811,8 +847,20 @@ def _pct(values: list, q: float) -> float | None:
     return ordered[idx]
 
 
-def hook_stats(runs: list, timeouts: dict | None = None) -> dict:
+def hook_stats(
+    runs: list,
+    timeouts: dict | None = None,
+    watchdog_hooks: set | None = None,
+) -> dict:
     """Aggregate per hook: volume, kills, latency percentiles, stage costs.
+
+    An orphan (ENTRY, no EXIT) is a **kill** unless its hook is in
+    *watchdog_hooks* and it never logged ``HOOK_WATCHDOG``. Such a hook writes
+    that line seconds before its ceiling, so an orphan without it ended early:
+    it is counted as **cancelled** (the prompt was interrupted, or the process
+    crashed), not as a timeout, and is left out of the latency sample because
+    its duration is unknown and below the watchdog mark. A hook with no
+    watchdog gives no evidence either way, so its orphans stay kills.
 
     Killed runs record no duration — they never reached their EXIT line. Left
     out of the latency sample they invert the headline metric: a hook timing out
@@ -823,14 +871,21 @@ def hook_stats(runs: list, timeouts: dict | None = None) -> dict:
     budget contributes nothing, because there is no defensible number to use.
     """
     timeouts = timeouts or {}
+    watchdog_hooks = watchdog_hooks or set()
     per_hook: dict[str, dict] = {}
     for r in runs:
         h = per_hook.setdefault(r.hook, {
-            "runs": 0, "killed": 0, "errors": 0, "ms": [], "startup": [],
-            "stages": {}, "outcomes": {}, "kill_sessions": [], "floored": 0,
+            "runs": 0, "killed": 0, "cancelled": 0, "errors": 0, "ms": [],
+            "startup": [], "stages": {}, "outcomes": {}, "kill_sessions": [],
+            "cancel_sessions": [], "floored": 0,
         })
         h["runs"] += 1
-        if r.killed:
+        if r.killed and r.hook in watchdog_hooks and not r.watchdog:
+            h["cancelled"] += 1
+            h["cancel_sessions"].append(
+                (r.ts.isoformat() if r.ts else "?", r.session)
+            )
+        elif r.killed:
             h["killed"] += 1
             h["kill_sessions"].append((r.ts.isoformat() if r.ts else "?", r.session))
             ceiling = timeouts.get(r.hook)
@@ -857,6 +912,7 @@ def hook_stats(runs: list, timeouts: dict | None = None) -> dict:
             "hook": hook,
             "runs": h["runs"],
             "killed": h["killed"],
+            "cancelled": h["cancelled"],
             "expected_orphan": hook in EXPECTED_ORPHAN_HOOKS,
             "p95_is_lower_bound": bool(h["floored"]),
             "errors": h["errors"],
@@ -881,11 +937,13 @@ def hook_stats(runs: list, timeouts: dict | None = None) -> dict:
             ),
             "outcomes": h["outcomes"],
             "kill_sessions": h["kill_sessions"][-5:],
+            "cancel_sessions": h["cancel_sessions"][-5:],
         })
     rows.sort(key=lambda r: (-r["killed"], -(r["p95_pct"] or 0), -r["p95_ms"]))
     return {
         "runs": len(runs),
         "killed": sum(r["killed"] for r in rows),
+        "cancelled": sum(r["cancelled"] for r in rows),
         # What a caller can gate on: orphans from hooks the harness is
         # documented to kill (see EXPECTED_ORPHAN_HOOKS) are routine teardown,
         # not a regression.
@@ -915,6 +973,16 @@ def hook_health_notes(stats: dict) -> list:
                 f"{row['hook']}: {row['killed']} run(s) entered and never "
                 f"exited — killed at the {row['budget_s'] or '?'}s ceiling or "
                 f"crashed hard. Last: {where}"
+            )
+        if row["cancelled"]:
+            where = ", ".join(
+                f"{ts} ({sid})" for ts, sid in row["cancel_sessions"]
+            )
+            notes.append(
+                f"{row['hook']}: {row['cancelled']} run(s) logged no exit and "
+                f"no near-timeout warning — cancelled (interrupted or crashed "
+                f"before the watchdog mark), not timeouts; not counted as "
+                f"failures. Last: {where}"
             )
         if row["p95_pct"] and row["p95_pct"] >= HOOK_BUDGET_WARN_RATIO * 100:
             bound = (
@@ -962,6 +1030,9 @@ def hooks_json_payload(stats: dict, notes: list) -> dict:
         out["kill_sessions"] = [
             [ts, defang(sid, 40)] for ts, sid in r["kill_sessions"]
         ]
+        out["cancel_sessions"] = [
+            [ts, defang(sid, 40)] for ts, sid in r["cancel_sessions"]
+        ]
         return out
 
     return {
@@ -982,14 +1053,20 @@ def render_hooks_markdown(stats: dict, notes: list) -> str:
     out.append(
         f"{stats['runs']} hook run(s) observed; "
         f"**{stats['unexpected_killed']} killed** (entered, never exited)"
-        + (f", plus {expected} expected orphan(s)." if expected else ".")
+        + (f", plus {expected} expected orphan(s)" if expected else "")
+        + (
+            f"; {stats['cancelled']} cancelled (no exit and no near-timeout "
+            f"warning — not timeouts)."
+            if stats.get("cancelled") else "."
+        )
     )
     out.append("")
-    out.append("| hook | runs | killed | err | p50 | p95 | max | startup p50 | budget | p95 % |")
-    out.append("|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+    out.append("| hook | runs | killed | cancelled | err | p50 | p95 | max | startup p50 | budget | p95 % |")
+    out.append("|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
     for r in stats["hooks"]:
         out.append(
-            f"| `{defang(r['hook'], 40)}` | {r['runs']} | {r['killed']} | {r['errors']} | "
+            f"| `{defang(r['hook'], 40)}` | {r['runs']} | {r['killed']} | "
+            f"{r.get('cancelled', 0)} | {r['errors']} | "
             f"{r['p50_ms']}ms | {r['p95_ms']}ms | {r['max_ms']}ms | "
             f"{r['startup_p50_ms']}ms | "
             f"{str(r['budget_s']) + 's' if r['budget_s'] else '—'} | "
@@ -1436,7 +1513,7 @@ def main(argv: list | None = None) -> int:
         days = args.days if args.days else HOOK_DEFAULT_DAYS
         since = date.today() - timedelta(days=days)
         runs = load_hook_runs(logs_dir, since=since)
-        stats = hook_stats(runs, hook_timeouts())
+        stats = hook_stats(runs, hook_timeouts(), hook_watchdog_hooks())
         stats["window_days"] = days
         notes = hook_health_notes(stats)
         if args.json:

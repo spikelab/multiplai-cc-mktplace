@@ -144,6 +144,13 @@ drain. Its orphans are reported and labelled, never counted as failures.
    log its own death. This column *is* the timeout report; there will be no
    error line anywhere else. The finding names the session id and timestamp:
    take those to the session transcript to see which prompt lost its context.
+
+   **`cancelled`** is the exception. A hook that arms the near-timeout
+   watchdog (today `context_manager`, which logs `HOOK_WATCHDOG` at 26s of its
+   30s) and left an orphan ENTRY *without* that line ended before 26s — the
+   prompt was interrupted, or the process crashed — so it was not a timeout.
+   Those runs are counted in `cancelled`, not `killed`, do not set the exit
+   code, and stay out of the latency sample.
 2. **`p95 %`** — p95 as a percentage of that hook's configured budget. Above
    50% means the tail is one slow dependency away from a kill. A killed run
    enters the sample at its ceiling (it has no duration of its own), so where
