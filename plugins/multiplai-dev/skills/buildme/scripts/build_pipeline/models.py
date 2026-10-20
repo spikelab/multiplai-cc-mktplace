@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from enum import Enum
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 
 # --- Build phases ---
@@ -184,6 +186,30 @@ class ReviewFinding(BaseModel):
     # Which panel members raised it. Independent confirmation is the strongest
     # signal a panel produces, so it is recorded rather than collapsed away.
     reviewers: list[str] = Field(default_factory=list)
+    # `B<block:02d>-R<round>-F<n>`, given by `review_rounds.record_round` to
+    # an accepted finding that has none. A finding carried open into a later
+    # round keeps its id, so rounds can say which earlier finding they mean.
+    finding_id: str = ""
+    # The kind of defect in a few words, and every other `path:line` in the
+    # diff with the same defect: the fix agent fixes all of them at once.
+    defect_class: str = ""
+    other_locations: list[str] = Field(default_factory=list)
+
+    @field_validator("defect_class", mode="before")
+    @classmethod
+    def _class_text(cls, value):
+        return "" if value is None else str(value)
+
+    @field_validator("other_locations", mode="before")
+    @classmethod
+    def _locations_list(cls, value):
+        """A reviewer that writes one location as a string, or a location as
+        an object, still parses: a parse failure would fail the review."""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        return [v if isinstance(v, str) else str(v) for v in value]
 
     def dedupe_key(self) -> tuple:
         """Identity for cross-reviewer dedupe: same place, same claim."""
@@ -217,6 +243,27 @@ class FindingAdjudication(BaseModel):
         return (judged - rejected) | unjudged
 
 
+PRIOR_STATUSES = ("resolved", "cannot_verify", "partially_resolved", "still_present")
+
+
+class PriorAssessment(BaseModel):
+    """A reviewer's status, from round 2 of a block on, for one finding left
+    open by an earlier round. `PRIOR_STATUSES` runs from best to worst."""
+
+    finding_id: str
+    status: Literal["resolved", "cannot_verify", "partially_resolved", "still_present"]
+    evidence: str = ""
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _known_status(cls, value):
+        """An unknown status is `cannot_verify`, never `resolved`: a reviewer
+        that answers in its own words must not close a finding, and must not
+        fail the review's parse either."""
+        text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        return text if text in PRIOR_STATUSES else "cannot_verify"
+
+
 class ReviewResult(BaseModel):
     scores: list[ReviewScore]
     issues: list[ReviewIssue] = Field(default_factory=list)
@@ -236,6 +283,9 @@ class ReviewResult(BaseModel):
     rejected_findings: list[ReviewFinding] = Field(default_factory=list)
     # Reviewer labels that produced this result (>1 after a panel merge).
     panel: list[str] = Field(default_factory=list)
+    # From round 2 of a block on: the status of each finding an earlier round
+    # left open (`review_rounds.open_state`).
+    prior_assessments: list[PriorAssessment] = Field(default_factory=list)
 
     def weighted_average_with(self, policy: ReviewGatePolicy | None = None) -> float:
         """Confidence-discounted weighted average (see ReviewScore.effective_score)."""

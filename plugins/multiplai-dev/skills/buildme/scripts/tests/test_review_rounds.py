@@ -887,3 +887,114 @@ async def test_fix_on_pass_budget_denial_remains_a_stop(project):
     with pytest.raises(budget.BudgetExceededError):
         await tdd_engine._fix_on_pass(p.block, p.config, p.state, p.progress, 0, None)
     assert p.block.fix_pass is None
+
+
+# --- PR B (plan-buildme-review-convergence-2026-10-20.md) -------------------
+#
+# B1: every accepted finding gets a stable id in its round record, and the
+# loop reads the open findings of the last round back from disk.
+
+from build_pipeline.models import PriorAssessment  # noqa: E402
+
+
+def _record(change_dir: Path, block: BlockInfo, review: ReviewResult, **memory) -> Path:
+    return review_rounds.record_round(
+        change_dir, block, head_sha="abc1234", review=review, gate_passed=False,
+        gate_reason="low", weighted_average=2.0, **memory)
+
+
+class TestFindingIds:
+    def test_record_round_gives_each_accepted_finding_its_id(self, tmp_path):
+        block = BlockInfo(number=3, name="B", description="d")
+        _record(tmp_path, block, _failing())
+        path = _record(tmp_path, block, _failing([_finding(), _finding("Minor", "second")]))
+        record = json.loads(path.read_text())
+        assert [f["finding_id"] for f in record["accepted"]] == ["B03-R2-F1", "B03-R2-F2"]
+
+    def test_an_id_a_finding_already_has_is_kept(self, tmp_path):
+        block = BlockInfo(number=1, name="B", description="d")
+        carried = _finding().model_copy(update={"finding_id": "B01-R1-F1"})
+        path = _record(tmp_path, block, _failing([carried, _finding("Minor", "new")]))
+        assert [f["finding_id"] for f in json.loads(path.read_text())["accepted"]] == [
+            "B01-R1-F1", "B01-R1-F2"]
+
+    def test_a_round_record_holds_the_new_fields(self, tmp_path):
+        block = BlockInfo(number=1, name="B", description="d")
+        path = _record(tmp_path, block, _failing([_finding()]))
+        record = json.loads(path.read_text())
+        # Round 1: every accepted finding is open, nothing was assessed or
+        # left outside the fix's scope.
+        assert [f["finding_id"] for f in record["open_findings"]] == ["B01-R1-F1"]
+        assert record["prior_assessments"] == []
+        assert record["outside_fix_scope"] == []
+        assert record["accepted"][0]["defect_class"] == ""
+        assert record["accepted"][0]["other_locations"] == []
+
+    def test_open_and_outside_lists_are_written_with_the_records_ids(self, tmp_path):
+        block = BlockInfo(number=1, name="B", description="d")
+        carried = _finding("Major", "still open").model_copy(update={"finding_id": "B01-R1-F1"})
+        review = _failing([_finding("Major", "new in scope"), _finding("Minor", "elsewhere")])
+        _record(tmp_path, block, _failing())
+        path = _record(
+            tmp_path, block, review, carried_open=[carried], new_open=[0], outside=[1],
+            prior_assessments=[PriorAssessment(finding_id="B01-R1-F1", status="still_present")])
+        record = json.loads(path.read_text())
+        # The carried finding keeps its id; the new one gets this round's.
+        assert [f["finding_id"] for f in record["open_findings"]] == ["B01-R1-F1", "B01-R2-F1"]
+        assert [f["claim"] for f in record["outside_fix_scope"]] == ["elsewhere"]
+        assert record["outside_fix_scope"][0]["finding_id"] == record["accepted"][1]["finding_id"]
+        assert record["prior_assessments"] == [
+            {"finding_id": "B01-R1-F1", "status": "still_present", "evidence": ""}]
+
+
+class TestOpenState:
+    def test_no_records_means_round_one(self, tmp_path):
+        assert review_rounds.open_state(tmp_path, 1) == ([], [], None)
+
+    def test_an_old_format_record_falls_back_to_accepted_with_ids(self, tmp_path):
+        reviews = tmp_path / "reviews"
+        reviews.mkdir()
+        old = {"kind": "review", "round": 2, "head_sha": "abc",
+               "accepted": [_finding().model_dump(mode="json")],
+               "rejected": [{**_finding("Minor", "nope").model_dump(mode="json"),
+                             "judge_reason": "the spec says so"}]}
+        (reviews / "block-01-round-2.json").write_text(json.dumps(old))
+        open_, rejected, last = review_rounds.open_state(tmp_path, 1)
+        assert [(f.finding_id, f.claim) for f in open_] == [("B01-R2-F1", "off-by-one in add()")]
+        assert [(r["finding_id"], r["judge_reason"]) for r in rejected] == [
+            ("B01-R2-X1", "the spec says so")]
+        assert last["round"] == 2
+
+    def test_a_new_format_record_gives_its_open_findings(self, tmp_path):
+        block = BlockInfo(number=1, name="B", description="d")
+        carried = _finding("Major", "carried").model_copy(update={"finding_id": "B01-R1-F1"})
+        _record(tmp_path, block, _failing([_finding("Major", "first")]))
+        _record(tmp_path, block, _failing([_finding("Minor", "dup")]), carried_open=[carried],
+                new_open=[], outside=[])
+        open_, _, last = review_rounds.open_state(tmp_path, 1)
+        assert [(f.finding_id, f.claim) for f in open_] == [("B01-R1-F1", "carried")]
+        assert last["round"] == 2
+
+    def test_rejected_is_the_union_across_the_blocks_review_records(self, tmp_path):
+        block = BlockInfo(number=1, name="B", description="d")
+        for claim in ("one", "two"):
+            review = _failing().model_copy(update={"rejected_findings": [
+                _finding("Minor", claim).model_copy(
+                    update={"evidence": f"e\nREJECTED: not {claim}"})]})
+            _record(tmp_path, block, review)
+        _, rejected, _ = review_rounds.open_state(tmp_path, 1)
+        assert [(r["finding_id"], r["claim"], r["judge_reason"]) for r in rejected] == [
+            ("B01-R1-X1", "one", "not one"), ("B01-R2-X1", "two", "not two")]
+
+    def test_only_this_blocks_review_records_count(self, tmp_path):
+        block = BlockInfo(number=1, name="B", description="d")
+        other = BlockInfo(number=2, name="C", description="d")
+        _record(tmp_path, block, _failing([_finding("Major", "review round")]))
+        review_rounds.record_round(
+            tmp_path, block, head_sha="x", review=_passing([_finding("Minor", "fop")]),
+            gate_passed=True, gate_reason="ok", weighted_average=5.0, kind="fix_on_pass_review")
+        _record(tmp_path, other, _failing([_finding("Major", "other block")]))
+        (tmp_path / "reviews" / "block-01-round-9.json").write_text("{not json")
+        open_, _, last = review_rounds.open_state(tmp_path, 1)
+        assert [f.claim for f in open_] == ["review round"]
+        assert last["round"] == 1
