@@ -749,7 +749,7 @@ TEST_CHANGE_MARKER = "TEST CHANGE REQUIRED:"
 # Every REQUIRED slot label an agent report can carry — used as the stop
 # boundary when reading the free-text SURPRISES and SEARCHED slots, together
 # with `_TEST_CHANGE_LINE` below.
-_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IMPACT|SEARCHED"
+_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|RED_EXPECTED|SURPRISES|SPEC_IMPACT|SEARCHED"
 
 # The colon after a slot label is MANDATORY — every legitimate slot form
 # carries one (`SURPRISES: x`, `- **SURPRISES:** x`, `**SURPRISES**: x`).
@@ -886,6 +886,96 @@ def parse_searched(output: str) -> list[str] | None:
         if text:
             entries.append(text)
     return entries
+
+
+# --- Test writer: which tests must fail (RED_EXPECTED: slot) ---
+
+# The test writer names the tests it expects the RED run to fail and why:
+# `RED_EXPECTED: <ids, comma-separated> — <what is missing>`. Same label
+# grammar as SEARCHED: the colon is mandatory, and the slot runs to the next
+# slot label, a test-change declaration or the end.
+_RED_EXPECTED_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?RED_EXPECTED" + _SLOT_COLON + r"[ \t]*"
+    r"(.*?)"
+    r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")"
+    + _SLOT_COLON + r"|" + _TEST_CHANGE_LINE + r"|\Z)",
+    re.MULTILINE | re.IGNORECASE | re.DOTALL,
+)
+
+# The dash between the ids and the reason: an em or en dash, `--`, or a
+# hyphen with a space on each side.
+_RED_EXPECTED_DASH_RE = re.compile(r"\s*[—–]\s*|\s+--?\s+")
+
+
+def _split_ids(text: str) -> list[str]:
+    """Comma-separated ids, keeping a comma inside a parametrize `[...]`."""
+    ids, depth, current = [], 0, ""
+    for char in text:
+        depth += (char == "[") - (char == "]")
+        if char == "," and depth <= 0:
+            ids.append(current)
+            current = ""
+        else:
+            current += char
+    ids.append(current)
+    return [i.strip().strip("`").strip() for i in ids if i.strip().strip("`").strip()]
+
+
+def parse_red_expected(report: str) -> tuple[list[str], str] | None:
+    """The test ids and the reason in the test writer's `RED_EXPECTED:` slot.
+    ``None`` when the report has no such slot, or the slot is empty or echoes
+    the prompt's `<...>` template. The last slot wins, as in
+    `parse_searched`."""
+    matches = _RED_EXPECTED_RE.findall(report or "")
+    if not matches:
+        return None
+    value = " ".join(line.strip() for line in matches[-1].splitlines()
+                     if line.strip() and not line.strip().startswith("```"))
+    if not value or (value.startswith("<") and value.endswith(">")):
+        return None
+    dash = _RED_EXPECTED_DASH_RE.search(value)
+    if not dash:
+        return _split_ids(value), ""
+    return _split_ids(value[:dash.start()]), value[dash.end():].strip()
+
+
+
+def _names_node(named: str, node: str) -> bool:
+    """Whether a test id the test writer named is the pytest node id *node*:
+    the same id, or the same one written relative to another directory, or
+    a bare test name, or the id without its parametrize `[...]`."""
+    for candidate in {node, node.split("[", 1)[0]}:
+        if (candidate == named or candidate.endswith("/" + named) or named.endswith("/" + candidate)
+                or candidate.endswith("::" + named)):
+            return True
+    return False
+
+
+def red_expected_note(report: str | None, test_output: str, exit_code: int | None, *,
+                      runner: str | None, expected_tests: list[str] | None = None,
+                      test_command: str = "", project_dir: Path | None = None) -> str:
+    """`BlockInfo.red_expected` for a passed RED gate: the test writer's
+    `RED_EXPECTED:` slot and one result line. The result is "named tests
+    failed" when the run is direct pytest and every named id is a `FAILED`
+    node id; "named tests not among the failures: <ids>" when some are not;
+    "not stated" when the report (None on resume) has no slot or names no
+    test; and "cannot check for this runner" when the run is not direct
+    pytest or prints no `FAILED` line. It decides no verdict."""
+    stated = parse_red_expected(report or "")
+    if stated is None:
+        return "RED_EXPECTED result: not stated"
+    ids, reason = stated
+    slot = "RED_EXPECTED: " + ", ".join(ids) + (f" — {reason}" if reason else "")
+    facts = _red_facts(test_output, exit_code, runner, expected_tests, test_command, project_dir)
+    if not ids:
+        result = "not stated"
+    elif facts.runner_kind != "direct_pytest" or not facts.failed_ids:
+        result = "cannot check for this runner"
+    else:
+        missing = [i for i in ids if not any(_names_node(i, node) for node in facts.failed_ids)]
+        result = ("named tests failed" if not missing
+                  else "named tests not among the failures: " + ", ".join(missing))
+    return f"{slot}\nRED_EXPECTED result: {result}"
 
 
 # --- Documentation update (DOCS_IMPACT: slot) ---
