@@ -15,6 +15,17 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.94.1] - 2026-10-20
+
+### Fixed
+- review: an earlier finding no longer shows as resolved when this round's
+  finding still open against it is merged into a duplicate by the assess
+  stage. The merged-away finding's label used to be dropped, so the earlier
+  finding kept the recheck's `resolved`, and the surviving duplicate was
+  counted as new. Now the earlier finding is `still_present`, and the
+  survivor is labelled `still-open` against it, with its `lineage`. When a
+  duplicate set is still open against two earlier findings, both stay open.
+
 ## [0.94.0] - 2026-10-20
 
 ### Fixed

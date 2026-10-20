@@ -311,6 +311,8 @@ class Merged(BaseModel):
     finding: Finding
     into: str  # the id of the finding it was merged into
     reason: str
+    # Its label when the assess stage merged it, kept so a `still-open` label still counts for the survivor.
+    assessment: Assessment | None = None
 
 
 class Interval(BaseModel):
@@ -618,4 +620,5 @@ class AssessOutput(_Model):
     duplicate_sets: list[DuplicateSet] = Field(default_factory=list)
 
 
+Merged.model_rebuild()
 ReviewState.model_rebuild()

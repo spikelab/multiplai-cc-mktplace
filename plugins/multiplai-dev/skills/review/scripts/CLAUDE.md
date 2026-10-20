@@ -209,7 +209,10 @@ finding or changes a verdict or a severity; both run on the merger's model.
   line per set. The agent sees every finding at once and set root bugs with
   weaker findings in other files, whose claim then hid them. The rest go
   through the merge stage's `apply_duplicate_sets` (`usable_sets`,
-  `merge_set`). The raw answer is
+  `merge_set`); each finding merged away keeps its label on its `Merged`
+  entry (`assessment`), and `carry_still_open` labels a `useful` or
+  `low-value` survivor `still-open` against the earlier finding of the first
+  absorbed `still-open` finding in `state.findings` order. The raw answer is
   stored in `state.assess_answer`, so a resume asks nothing twice; a failed
   call stores an empty answer and leaves every finding `useful`.
 - Both labels end up in `state.assessments` (repeats as `repeat`), exported
@@ -221,8 +224,9 @@ finding or changes a verdict or a severity; both run on the merger's model.
   finding of the recheck stage's open set, its stored answer, or
   `cannot_verify` with reason `not rechecked` when it has none (a checkpoint
   past recheck written before 0.94), made `still_present` (`worst_status`)
-  with the finding's citations added when a finding of this round is
-  `still-open` against it. It reads only the state and the rounds, so running
+  with the finding's citations added when a finding of this round, or one
+  merged into it (`absorbed_still_open`), is `still-open` against it. It
+  reads only the state and the rounds, so running
   it again gives the same result.
 - Neither stage's answers have been tuned against recorded decisions. Run
   `assess-only` over the saved reviews first (see `review/SKILL.md`), and
