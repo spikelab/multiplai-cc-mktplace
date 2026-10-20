@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .models import GateResult, ImplementationNote, ReviewGatePolicy, ReviewResult
-from .narrow_tests import PYTEST, _pytest_config, _UnreadableConfig, _words, runner_of
+from .narrow_tests import PYTEST, _pytest_config, _UnreadableConfig, _words, _runner_of_tokens, runner_of
 
 log = logging.getLogger(__name__)
 
@@ -103,15 +103,13 @@ def run_test_suite(test_command: str, project_dir: Path, timeout: int = 300) -> 
             "Repo not trusted — refusing to run its test_command/conftest.py "
             "(set --trust-repo or BUILDME_TRUST_REPO=1)."
         )
-    from .git_ops import GitLifecycleError, test_output_window
     try:
         argv, directory = _test_invocation(test_command, project_dir)
-        with test_output_window(project_dir):
-            result = subprocess.run(
-                argv,
-                capture_output=True, text=True, cwd=directory, timeout=timeout,
-            )
-    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError, GitLifecycleError) as e:
+        result = subprocess.run(
+            argv,
+            capture_output=True, text=True, cwd=directory, timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError) as e:
         return None, f"Test command failed to run: {e}"
     return result.returncode, result.stdout + "\n" + result.stderr
 
@@ -282,9 +280,10 @@ def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "p
              project_dir: Path | None = None) -> GateResult:
     """RED-phase gate: prove the freshly written tests fail for the right reason.
 
+    Direct pytest requires failure paths in the changed tests and exit 1.
     Pytest/Jest collection and setup failures are rejected. Attributable pytest
-    assertion failures are behavioral evidence. Other nonzero exits, including
-    opaque wrappers whose pytest paths cannot be attributed, are unverified RED.
+    assertion failures are behavioral evidence. Unparsed runners and opaque
+    wrappers whose pytest paths cannot be attributed retain unverified RED.
 
     Fail actions:
     - "rewrite_tests": suite passed — the new tests exercise nothing that is
@@ -308,7 +307,18 @@ def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "p
             action="rewrite_tests",
             metadata={"exit_code": 0},
         )
-    pytest_output = runner == "pytest" or bool(re.search(
+    direct_pytest = runner == "pytest"
+    if project_dir is not None and test_command:
+        try:
+            argv, directory = _test_invocation(test_command, project_dir)
+            while len(argv) == 3 and Path(argv[0]).name in {"sh", "bash", "zsh"} and argv[1] == "-c":
+                argv, directory = _test_invocation(argv[2], directory)
+            # The executed argv keeps punctuation literal; runner_of rejects
+            # shell-looking text even inside a quoted pytest argument.
+            direct_pytest = direct_pytest or _runner_of_tokens(argv) == PYTEST
+        except ValueError:
+            pass
+    pytest_output = direct_pytest or bool(re.search(
         r"^FAILED\s+.+?::|ERROR collecting|ERROR at (?:setup|teardown)|errors? during collection", test_output, re.M))
     jest_output = runner == "jest" or bool(re.search(r"^Test Suites:|Test suite failed to run", test_output, re.M))
     if (pytest_output or jest_output) and _RED_BROKEN_TESTS.search(test_output):
@@ -319,19 +329,26 @@ def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "p
             action="fix_tests",
             metadata={"exit_code": exit_code},
         )
-    if pytest_output and expected_tests is not None:
+    if pytest_output:
         failed_paths = set(re.findall(r"^FAILED\s+(.+?)::", test_output, re.M))
-        if project_dir is not None:
-            try:
-                directory = _test_directory(test_command, project_dir)
-                failed_paths = {(directory / p).resolve().relative_to(project_dir.resolve()).as_posix()
-                                for p in failed_paths}
-            except ValueError:
-                return GateResult(passed=True, reason="Pytest failure paths cannot be resolved; RED is unverified",
+        if not failed_paths or (direct_pytest and exit_code != 1):
+            return GateResult(passed=False, reason=f"RED gate failed: pytest supplied no usable test failures (exit {exit_code}): {tail}",
+                              action="fix_tests", metadata={"exit_code": exit_code})
+        if expected_tests is not None:
+            if project_dir is not None:
+                try:
+                    directory = _test_directory(test_command, project_dir)
+                    failed_paths = {(directory / p).resolve().relative_to(project_dir.resolve()).as_posix()
+                                    for p in failed_paths}
+                except ValueError:
+                    return GateResult(passed=True, reason="Pytest failure paths cannot be resolved; RED is unverified",
+                                      metadata={"classification": "unverified"})
+            if not expected_tests or not failed_paths <= set(expected_tests):
+                if direct_pytest:
+                    return GateResult(passed=False, reason="RED gate failed: pytest failures are outside the changed tests",
+                                      action="fix_tests", metadata={"exit_code": exit_code})
+                return GateResult(passed=True, reason="RED cannot attribute the wrapper's failure to the changed tests; accepted as unverified",
                                   metadata={"classification": "unverified"})
-        if not expected_tests or not failed_paths or not failed_paths <= set(expected_tests):
-            return GateResult(passed=True, reason="RED cannot attribute the failure to the changed tests; accepted as unverified",
-                              metadata={"classification": "unverified"})
     if not pytest_output:
         # Jest has a recognizable summary; other runners retain the historical
         # nonzero fallback, explicitly unverified.
@@ -1239,7 +1256,7 @@ def verification_inputs(test_command: str, project_dir: Path, *, parallel: str =
     if not head or index is None:
         raise RuntimeError("Cannot identify the Git revision/index for final verification")
     result = git_ops._run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z",
-                           "--", ".", *git_ops.BOOKKEEPING_EXCLUDES, *git_ops.test_output_excludes(project_dir)], cwd=project_dir)
+                           "--", ".", *git_ops.BOOKKEEPING_EXCLUDES], cwd=project_dir)
     if not result.ok:
         raise RuntimeError("Cannot read final verification inputs: " + result.stderr)
     files = {}
@@ -1273,13 +1290,6 @@ def final_verification(test_command: str, project_dir: Path, *, parallel: str = 
         after = verification_inputs(test_command, project_dir, parallel=parallel, plan_revision=plan_revision, include_files=True)
     except (OSError, RuntimeError, ValueError) as error:
         return GateResult(passed=False, reason=f"Final verification unavailable: {error}")
-    # Use the same observed output set on both sides, including reports that
-    # existed before this run (for example from the agent's own test command).
-    from . import git_ops
-    outputs = {p.removeprefix(":(exclude,literal)") for p in git_ops.test_output_excludes(project_dir)}
-    for snapshot in (before, after):
-        for field in ("files", "index"):
-            snapshot[field] = {p: v for p, v in snapshot[field].items() if p not in outputs}
     gate.metadata["inputs"] = {k: v for k, v in after.items() if k not in {"files", "index"}}
     if any(before[k] != after[k] for k in before if k != "content"):
         changed = sorted({name for field in ("files", "index")
@@ -1287,8 +1297,7 @@ def final_verification(test_command: str, project_dir: Path, *, parallel: str = 
                           if before[field].get(name) != after[field].get(name)})
         details = ", ".join(changed) or "Git HEAD or verification configuration"
         return GateResult(passed=False, reason=f"Inputs changed during final verification: {details}. "
-                          "Tracked files and source inputs stay protected even under test_outputs. "
-                          "For untracked generated files outside a declaration, add literal test_outputs "
-                          "paths in specs/config.yaml. Inspect declared inputs that the command changed.",
+                          "Add untracked test reports to .gitignore before retrying. "
+                          "Inspect changes to tracked files and source inputs.",
                           metadata={**gate.metadata, "changed_files": changed})
     return gate

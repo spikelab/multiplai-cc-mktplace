@@ -138,13 +138,10 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   phase checks as proof. The phase still describes progress.
 - **Bounded repair can fail.** Required review errors or remaining blocking
   findings leave resumable blocked evidence. Never log failure and mark it passed.
-- **Test outputs must be declared.** `test_outputs` in specs/config.yaml names
-  literal project-relative output paths; globs are rejected. Only untracked files
-  observed being created or rewritten by test commands are excluded from verification,
-  clean-tree checks and commits. Whole-tree commits observe a test run when declared
-  output files exist. Unchanged imported source, HEAD files and user staging remain
-  protected; new agent-staged outputs are unstaged after observed writes. There is
-  no persistent output-provenance ledger. Verification failures name changed paths.
+- **Ignore generated test reports.** Projects put reports in `.gitignore`.
+  Gitignored files stay out of verification, clean-tree checks and commits;
+  tracked files remain inputs. Commits never run test commands. Final verification
+  names changed paths and tells users to ignore untracked reports.
 - **Completion has one check.** `gates.final_verification` is used by standalone
   TDD, the full orchestrator after docs/respec/archive/contributors, and findings
   before publication. A failed writer requires verified rollback or build failure.

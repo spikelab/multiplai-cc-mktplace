@@ -1265,20 +1265,16 @@ def test_unrecorded_staging_names_paths_and_can_be_resolved_explicitly(tmp_path)
     assert _git(repo, 'show', 'HEAD:README.md').stdout == 'working after interruption\n'
 
 
-def test_output_observation_preserves_intervening_user_staging(tmp_path):
+def test_commits_never_invoke_test_runner(tmp_path, monkeypatch):
     repo = make_repo(tmp_path / 'repo')
+    monkeypatch.setattr('build_pipeline.gates.run_test_suite',
+                        lambda *a, **kw: pytest.fail('commit ran the test suite'))
     (repo / 'specs').mkdir()
-    (repo / 'specs/config.yaml').write_text('test_outputs: [report.txt]\n')
-    _git(repo, 'add', 'specs/config.yaml')
-    _git(repo, 'commit', '-qm', 'declare report')
-    report = repo / 'report.txt'
-    with git_ops.agent_write_window(repo):
-        report.write_text('agent output\n')
-        _git(repo, 'add', 'report.txt')
-    with pytest.raises(GitLifecycleError, match='report.txt'):
-        with git_ops.test_output_window(repo):
-            report.write_text('new user staging\n')
-            _git(repo, 'add', 'report.txt')
-            report.write_text('test run output\n')
-    assert _git(repo, 'show', ':report.txt').stdout == 'new user staging\n'
-    assert report.read_text() == 'test run output\n'
+    # Old declarations are inert, even globs; Git operations do not parse config.
+    (repo / 'specs/config.yaml').write_text('test_outputs: ["out/*"]\n')
+    (repo / 'out').mkdir()
+    (repo / 'out/report.txt').write_text('report')
+    assert not git_ops.tree_is_clean(repo)
+    assert git_ops.commit_tree(repo, 'commit inputs')
+    assert git_ops.tree_is_clean(repo)
+    assert git_ops.commit_tree(repo, 'no changes') is None

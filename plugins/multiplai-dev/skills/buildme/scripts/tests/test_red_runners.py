@@ -30,7 +30,7 @@ def test_changed_directory_pytest_red(tmp_path, monkeypatch, wrapper, parent_con
     assert gate.passed, gate.reason
     wrong = red_gate(output, code, runner=None, expected_tests=['other/tests/test_new.py'],
                      test_command=command, project_dir=tmp_path)
-    assert wrong.passed and wrong.metadata['classification'] == 'unverified'
+    assert not wrong.passed and wrong.action == 'fix_tests'
 
 
 def test_real_unittest_failure_is_unverified_red(tmp_path, monkeypatch):
@@ -126,9 +126,33 @@ def test_unparsed_runner_nonzero_is_unverified_even_for_setup_diagnostics(runner
     gate = red_gate('SyntaxError: invalid syntax\ncommand not found: compiler', 2, runner=runner)
     assert gate.passed and gate.metadata['classification'] == 'unverified'
 
-def test_invalid_output_declaration_is_unavailable_not_an_exception(tmp_path, monkeypatch):
+@pytest.mark.parametrize('prefix', ['', 'cd api && ', 'sh -c '])
+@pytest.mark.parametrize('case', ['empty', 'usage', 'unrelated'])
+def test_direct_pytest_rejects_runs_without_changed_test_failures(tmp_path, monkeypatch, prefix, case):
+    from build_pipeline.config import BuildConfig
+    from build_pipeline.models import BlockInfo
+    from build_pipeline.tdd_engine import _block_test_command
+    from build_pipeline.narrow_tests import runner_of
     monkeypatch.setenv('BUILDME_TRUST_REPO', '1')
-    (tmp_path / 'specs').mkdir()
-    (tmp_path / 'specs/config.yaml').write_text('test_outputs: ["out/*"]\n')
-    code, output = run_test_suite(f'{sys.executable} -c "print(42)"', tmp_path)
-    assert code is None and 'literal' in output
+    directory = tmp_path / 'api' if prefix else tmp_path
+    directory.mkdir(exist_ok=True)
+    (directory / 'test_new.py').write_text(
+        '# no tests\n' if case == 'empty' else 'def test_new():\n    assert True\n')
+    if case == 'unrelated':
+        (directory / 'test_old.py').write_text('def test_old():\n    assert False\n')
+    command = f'{shlex.quote(sys.executable)} -m pytest -q'
+    if case == 'usage':
+        command += ' ' + shlex.quote('--no-such-option=load|x')
+    if prefix == 'sh -c ':
+        command = prefix + shlex.quote('cd api && ' + command)
+    else:
+        command = prefix + command
+    config = BuildConfig(project_dir=tmp_path, test_command=command)
+    block = BlockInfo(number=1, name='New behavior', description='new behavior')
+    command = _block_test_command(config, block)
+    code, output = run_test_suite(command, tmp_path)
+    assert code == {'empty': 5, 'usage': 4, 'unrelated': 1}[case], output
+    expected = ['api/test_new.py'] if prefix else ['test_new.py']
+    gate = red_gate(output, code, runner=runner_of(command, tmp_path), expected_tests=expected,
+                    test_command=command, project_dir=tmp_path)
+    assert not gate.passed and gate.action == 'fix_tests', gate.reason

@@ -234,36 +234,6 @@ async def test_implementation_resume_does_not_repeat_superseded_prototype(accept
     assert await orchestrator.run_orchestrator(config, args) == 0
     prototype.assert_not_awaited()
 
-@pytest.mark.parametrize("output", ["report.json", "results/test.db", ".coverage"])
-def test_declared_untracked_test_outputs_do_not_block_verification_or_commit(accepted_build, output):
-    config, _, _, _ = accepted_build
-    (config.specs_dir / "config.yaml").write_text("test_outputs:\n  - " + output + "\n")
-    git(config.project_dir, "add", "specs/config.yaml")
-    git(config.project_dir, "commit", "-qm", "declare test outputs")
-    command = (f'''{sys.executable} -c "from pathlib import Path; p=Path('{output}'); '''
-               '''p.parent.mkdir(parents=True, exist_ok=True); p.write_text(p.read_text()+'x' if p.exists() else 'x')"''')
-    for _ in range(2):
-        assert final_verification(command, config.project_dir).passed
-        assert git_ops.tree_is_clean(config.project_dir)
-        assert git_ops.commit_tree(config.project_dir, "test output only") is None
-    assert not git(config.project_dir, "ls-files", "--", output)
-
-
-@pytest.mark.parametrize("tracked,declared", [(True, True), (False, False)])
-def test_test_output_contract_protects_inputs(accepted_build, tracked, declared):
-    config, _, _, _ = accepted_build
-    root = config.project_dir
-    (root / "input.txt").write_text("before")
-    (config.specs_dir / "config.yaml").write_text("test_outputs: [input.txt]\n" if declared else "{}\n")
-    git(root, "add", "specs/config.yaml")
-    if tracked:
-        git(root, "add", "input.txt")
-    git(root, "commit", "-qm", "configuration")
-    command = f'''{sys.executable} -c "from pathlib import Path; Path('input.txt').write_text('after')"'''
-    result = final_verification(command, root)
-    assert not result.passed
-    assert "Inputs changed" in result.reason
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize('fixture', [
     'build-state-pre-prototype-tdd.json', 'build-state-pre-docs-update.json',
@@ -354,137 +324,65 @@ async def test_mid_block_budget_stop_resumes_at_implementer_with_original_red_te
         assert completed.budget['unaccounted_calls'] == ['agent']
 
 
-def test_output_directory_cannot_hide_agent_code(accepted_build):
+@pytest.mark.parametrize('output', ['report.json', 'results/test.db', '.coverage'])
+def test_ignored_reports_survive_verification_commit_and_restart(accepted_build, output):
     config, _, _, _ = accepted_build
     root = config.project_dir
-    (config.specs_dir / 'config.yaml').write_text('test_outputs: [out/]\n')
-    git(root, 'add', 'specs/config.yaml')
-    git(root, 'commit', '-qm', 'declare output directory')
-    (root / 'out').mkdir()
-    (root / 'out/helper.py').write_text('value = 1\n')
-    command = f'{sys.executable} -c "from out.helper import value; assert value == 1"'
+    (root / '.gitignore').write_text(output + '\n')
+    git(root, 'add', '.gitignore')
+    git(root, 'commit', '-qm', 'ignore reports')
+    command = (f"{sys.executable} -c \"from pathlib import Path; p=Path('{output}'); "
+               "p.parent.mkdir(parents=True, exist_ok=True); p.write_text('report')\"")
     assert final_verification(command, root).passed
-    assert not git_ops.tree_is_clean(root), 'agent code must be committed before completion'
-    assert git_ops.commit_tree(root, 'include implementation')
-    assert git(root, 'ls-files', '--', 'out/helper.py') == 'out/helper.py'
-
-
-def test_verification_names_changes_and_output_configuration(accepted_build):
-    config, _, _, _ = accepted_build
-    result = final_verification(
-        f'''{sys.executable} -c "from pathlib import Path; Path('report.json').write_text('report')"''',
-        config.project_dir)
-    assert not result.passed
-    assert 'report.json' in result.reason and 'test_outputs' in result.reason
-
-
-@pytest.mark.parametrize('path', ['out/*', 'out/?.json', 'out/[ab].json'])
-def test_output_globs_are_rejected(accepted_build, path):
-    config, _, _, _ = accepted_build
-    (config.specs_dir / 'config.yaml').write_text(f'test_outputs: ["{path}"]\n')
-    with pytest.raises(git_ops.GitLifecycleError, match='literal'):
-        git_ops.test_output_excludes(config.project_dir)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("staged_report", [False, True])
-async def test_agent_generated_report_commits_after_observing_test_writes(accepted_build, monkeypatch, staged_report):
-    from types import SimpleNamespace
-    from build_pipeline import sdk, tdd_engine
-    config, state, args, _ = accepted_build
-    config.test_command = f'{sys.executable} -m pytest -q --junitxml=test-results/junit.xml'
-    (config.specs_dir / 'config.yaml').write_text('test_outputs: [test-results/]\n')
-    git(config.project_dir, 'add', 'specs/config.yaml')
-    git(config.project_dir, 'commit', '-qm', 'declare report')
-    async def provider(prompt, **kwargs):
-        (config.project_dir / 'test_value.py').write_text(
-            'from app import value\ndef test_value():\n    assert value == 1\n')
-        result = subprocess.run(config.test_command.split(), cwd=config.project_dir,
-                                capture_output=True, text=True)
-        assert result.returncode == 0
-        if staged_report:
-            git(config.project_dir, 'add', 'test-results/junit.xml')
-        return SimpleNamespace(text='STATUS: DONE\n', turns=1, files_changed=[],
-                               usage=SimpleNamespace(cost_usd=0, input_tokens=10))
-    monkeypatch.setattr(sdk, 'run_agent', provider)
-    for _ in range(2):
-        await sdk.agent_call('write tests', allowed_tools=['Write', 'Bash'], cwd=str(config.project_dir))
-        tdd_engine._git_commit_block_phase(config, 'test', state.tdd.blocks[0])
-        assert git(config.project_dir, 'ls-files', '--', 'test-results/junit.xml') == ''
-        assert (config.project_dir / 'test-results/junit.xml').exists()
-        assert final_verification(config.test_command, config.project_dir).passed
-        assert git_ops.tree_is_clean(config.project_dir)
-    assert git(config.project_dir, 'ls-files', '--', 'test_value.py') == 'test_value.py'
-
-
-@pytest.mark.parametrize('staged', [False, True])
-def test_reports_rewritten_by_agent_and_suite_do_not_hide_imported_source(accepted_build, staged):
-    from build_pipeline import tdd_engine
-    config, state, _, _ = accepted_build
-    root = config.project_dir
-    (config.specs_dir / 'config.yaml').write_text('test_outputs: [out/]\n')
-    git(root, 'add', 'specs/config.yaml')
-    git(root, 'commit', '-qm', 'declare outputs')
-    (root / 'out').mkdir()
-    (root / 'out/helper.py').write_text('value = 2\n')
-    (root / 'test_value.py').write_text(
-        'from out.helper import value\ndef test_value():\n    assert value == 2\n')
-    config.test_command = f'{sys.executable} -m pytest -q --junitxml=out/report.xml'
-    from build_pipeline.gates import run_test_suite
-    assert run_test_suite(config.test_command, root)[0] == 0
-    with git_ops.agent_write_window(root):
-        # Real agent-side run replaces the report with another valid report.
-        assert subprocess.run(config.test_command.split(), cwd=root, capture_output=True).returncode == 0
-        if staged:
-            git(root, 'add', 'out/')
-    assert tdd_engine._git_commit_block_phase(config, 'impl', state.tdd.blocks[0])
-    assert git(root, 'ls-files', '--', 'out/helper.py') == 'out/helper.py'
-    assert git(root, 'ls-files', '--', 'out/report.xml') == ''
-    assert final_verification(config.test_command, root).passed
     assert git_ops.tree_is_clean(root)
-
-
-def test_test_output_configuration_failure_does_not_commit(accepted_build):
-    from build_pipeline import tdd_engine
-    config, state, _, _ = accepted_build
-    (config.specs_dir / 'config.yaml').write_text('test_outputs: ["out/*"]\n')
-    head = git(config.project_dir, 'rev-parse', 'HEAD')
-    with pytest.raises(git_ops.GitLifecycleError, match='literal'):
-        tdd_engine._git_commit_block_phase(config, 'test', state.tdd.blocks[0])
-    assert git(config.project_dir, 'rev-parse', 'HEAD') == head
-
-
-def test_identical_output_rewrites_and_restart_are_observed(accepted_build):
-    config, _, _, _ = accepted_build
-    root = config.project_dir
-    (config.specs_dir / 'config.yaml').write_text('test_outputs: [report.txt]\n')
-    git(root, 'add', 'specs/config.yaml')
-    git(root, 'commit', '-qm', 'declare report')
-    (root / 'report.txt').write_text('constant')
-    command = f"{sys.executable} -c \"from pathlib import Path; Path('report.txt').write_text('constant')\""
-    assert final_verification(command, root).passed
-    # A fresh process has no output cache or saved provenance to consult.
+    assert git_ops.commit_tree(root, 'reports only') is None
+    (root / 'app.py').write_text('value = 2\n')
+    assert git_ops.commit_tree(root, 'implementation')
+    assert git(root, 'ls-files', '--', output) == ''
     script = (f"import sys; sys.path.insert(0, {str(Path(git_ops.__file__).parents[1])!r}); "
-              "from build_pipeline.gates import final_verification; from pathlib import Path; "
-              f"result = final_verification({command!r}, Path({str(root)!r})); "
-              "assert result.passed, result.reason")
+              "from build_pipeline import git_ops; from pathlib import Path; "
+              f"root=Path({str(root)!r}); assert git_ops.tree_is_clean(root); "
+              "assert git_ops.commit_tree(root, 'fresh process') is None")
     result = subprocess.run([sys.executable, '-c', script], cwd=root, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 
-def test_unchanged_and_subset_output_runs_keep_valid_observations(accepted_build):
+def test_verification_names_unignored_report_and_gitignore_remedy(accepted_build):
+    config, _, _, _ = accepted_build
+    result = final_verification(
+        f"{sys.executable} -c \"from pathlib import Path; Path('report.json').write_text('report')\"",
+        config.project_dir)
+    assert not result.passed
+    assert 'report.json' in result.reason and '.gitignore' in result.reason
+    assert not git_ops.tree_is_clean(config.project_dir)
+
+
+def test_tracked_report_remains_a_protected_input(accepted_build):
     config, _, _, _ = accepted_build
     root = config.project_dir
-    (config.specs_dir / 'config.yaml').write_text('test_outputs: [reports/]\n')
-    git(root, 'add', 'specs/config.yaml')
-    git(root, 'commit', '-qm', 'declare reports')
-    (root / 'reports').mkdir()
-    command = f'''{sys.executable} -c "from pathlib import Path; [(p.write_text('created') if not p.exists() else None) for p in [Path('reports/a.txt'), Path('reports/b.txt')]]"'''
-    for _ in range(2):
-        assert final_verification(command, root).passed
-    subset = f'''{sys.executable} -c "from pathlib import Path; Path('reports/a.txt').write_text('rewritten')"'''
-    assert final_verification(subset, root).passed
-    (root / 'app.py').write_text('value = 2\n')
-    assert git_ops.commit_tree(root, 'implementation', test_command=subset)
-    assert git(root, 'ls-files', '--', 'reports/') == ''
+    (root / 'report.txt').write_text('tracked')
+    git(root, 'add', 'report.txt')
+    git(root, 'commit', '-qm', 'track report')
+    (root / '.gitignore').write_text('report.txt\n')
+    result = final_verification(
+        f"{sys.executable} -c \"from pathlib import Path; Path('report.txt').write_text('changed')\"", root)
+    assert not result.passed and 'report.txt' in result.reason
+
+
+def test_agent_pytest_reports_are_ignored_through_block_commit(accepted_build):
+    from build_pipeline import tdd_engine
+    config, state, _, _ = accepted_build
+    root = config.project_dir
+    (root / '.gitignore').write_text('test-results/\n')
+    git(root, 'add', '.gitignore')
+    git(root, 'commit', '-qm', 'ignore test reports')
+    (root / 'test_value.py').write_text('from app import value\ndef test_value():\n    assert value == 1\n')
+    config.test_command = f'{sys.executable} -m pytest -q --junitxml=test-results/junit.xml'
+    for _ in range(4):
+        result = subprocess.run(config.test_command.split(), cwd=root, capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+    assert tdd_engine._git_commit_block_phase(config, 'test', state.tdd.blocks[0])
+    assert git(root, 'ls-files', '--', 'test-results/junit.xml') == ''
+    assert (root / 'test-results/junit.xml').is_file()
+    assert final_verification(config.test_command, root).passed
     assert git_ops.tree_is_clean(root)

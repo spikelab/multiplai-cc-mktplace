@@ -646,92 +646,6 @@ def agent_write_window(repo: Path | str | None):
                     atomic_write(path, json.dumps(evidence, sort_keys=True))
 
 
-def _declared_test_outputs(repo: Path | str) -> list[str]:
-    """Read and validate literal project-relative output declarations."""
-    import yaml
-    config = Path(repo) / "specs/config.yaml"
-    if not config.exists():
-        return []
-    data = yaml.safe_load(config.read_text()) or {}
-    if not isinstance(data, dict):
-        raise GitLifecycleError("specs/config.yaml must be a mapping")
-    outputs = data.get("test_outputs", [])
-    if not isinstance(outputs, list) or any(
-        not isinstance(p, str) or not p or Path(p).is_absolute()
-        or ".." in Path(p).parts or str(Path(p)) == "."
-        or any(char in p for char in "*?[]") for p in outputs
-    ):
-        raise GitLifecycleError("test_outputs must be literal project-relative files or directories")
-    return [Path(p).as_posix().rstrip("/") for p in outputs]
-
-
-def _test_output_candidates(repo: Path | str) -> list[str]:
-    roots = _declared_test_outputs(repo)
-    if not roots:
-        return []
-    tracked = _run(["git", "ls-files", "--cached", "-z"], cwd=repo)
-    head = _run(["git", "ls-tree", "--name-only", "-r", "-z", "HEAD", "--", "."], cwd=repo)
-    others = _run(["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=repo)
-    if not all(r.ok for r in (tracked, head, others)):
-        raise GitLifecycleError("Cannot establish tracked files for test_outputs")
-    _, evidence = _agent_index_evidence(repo)
-    record = evidence.get(str(Path(repo).resolve()), {})
-    owned = record.get("entries", {}) if record.get("head") == rev_parse_head(repo) else {}
-    entries = index_entries(repo) or {}
-    agent_staged = {p for p, entry in owned.items()
-                    if isinstance(entry, dict) and entry.get("index") == entries.get(p)
-                    and entry.get("working") == _working_identity(Path(repo) / p)}
-    protected = (set(tracked.stdout.split("\0")) - agent_staged) | set(head.stdout.split("\0"))
-    return [p for p in set(others.stdout.split("\0")) | agent_staged
-            if p and p not in protected and any(p == r or p.startswith(r + "/") for r in roots)]
-
-
-# Observations are local to this process. Resume observes a new test run; there
-# is no persistent provenance ledger to repair when an agent regenerates reports.
-_test_outputs: dict[Path, dict[str, object]] = {}
-
-
-def test_output_excludes(repo: Path | str) -> list[str]:
-    """Files written by an observed test run and unchanged since observation."""
-    candidates = _test_output_candidates(repo)
-    known = _test_outputs.get(Path(repo).resolve(), {})
-    return [f":(exclude,literal){p}" for p in candidates
-            if p in known and known[p] == _working_identity(Path(repo) / p)]
-
-
-@contextlib.contextmanager
-def test_output_window(repo: Path | str):
-    """Observe declared test writes; unchanged source remains an input."""
-    key = Path(repo).resolve()
-    known = _test_outputs.pop(key, {})
-    if not _declared_test_outputs(repo):
-        yield
-        return
-    def identity(name):
-        path = Path(repo) / name
-        stat = path.lstat()
-        return (_working_identity(path), stat.st_mtime_ns, stat.st_ctime_ns)
-    before = {p: identity(p) for p in _test_output_candidates(repo)}
-    before_index = index_entries(repo) or {}
-    unchanged = {p: value for p, value in known.items()
-                 if p in before and value == before[p][0]}
-    try:
-        yield
-    finally:
-        # Previously eligible agent-staged files may have new working contents
-        # now. They stay eligible for this observation, but never HEAD files.
-        candidates = set(_test_output_candidates(repo)) | before.keys()
-        changed = {p for p in candidates if os.path.lexists(Path(repo) / p)
-                   and before.get(p) != identity(p)}
-        staged = [p for p in changed | unchanged.keys() if p in before_index]
-        current_index = index_entries(repo)
-        if staged and (current_index is None or any(current_index.get(p) != before_index[p] for p in staged)):
-            raise GitLifecycleError("Staging changed during test-output observation; preserved: " + ", ".join(staged))
-        if staged and not _run(["git", "reset", "-q", "HEAD", "--", *staged], cwd=repo).ok:
-            raise GitLifecycleError("Cannot unstage agent-generated test outputs: " + ", ".join(staged))
-        _test_outputs[key] = {**unchanged, **{p: _working_identity(Path(repo) / p) for p in changed}}
-
-
 def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | None:
     """Commit explicit paths using an isolated index, preserving other staging.
 
@@ -740,7 +654,6 @@ def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | 
     if staging has not changed while hooks ran. Returns SHA, or None only for no changes. Refusals/failures raise
     GitLifecycleError so callers retain their checkpoint without advancing.
     """
-    paths = [*paths, *test_output_excludes(worktree)]
     excludes = [p for p in paths if p.startswith(":(") and "exclude" in p[2:p.find(")")]]
     positives = [p for p in paths if p not in excludes]
     if not positives:
@@ -880,18 +793,12 @@ def commit_stage(config, message: str, paths: list[str]) -> str | None:
 # branch pointer and restores files under `.`.
 
 
-def commit_tree(repo: Path | str, message: str, label: str = "", *,
-                test_command: str = "") -> str | None:
+def commit_tree(repo: Path | str, message: str, label: str = "") -> str | None:
     """Commit everything under *repo* except buildme's bookkeeping.
 
     Returns the new SHA or None for no changes. Commit refusals/failures raise
     GitLifecycleError. *label* is retained for caller compatibility.
     """
-    if test_command and _test_output_candidates(repo):
-        from .gates import run_test_suite
-        code, output = run_test_suite(test_command, Path(repo))
-        if code is None:
-            raise GitLifecycleError("Cannot observe test outputs before commit: " + output)
     return commit_paths(repo, message, [".", *BOOKKEEPING_EXCLUDES])
 
 
@@ -1028,7 +935,7 @@ def tree_is_clean(repo: Path | str, ignore: Path | str | None = None) -> bool:
     read as "safe to reset", because a reset over uncommitted work destroys it.
     *ignore*, a directory relative to *repo*, is left out of the check too.
     """
-    excludes = [*BOOKKEEPING_EXCLUDES, *test_output_excludes(repo)]
+    excludes = list(BOOKKEEPING_EXCLUDES)
     if ignore is not None:
         excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
     res = _run(["git", "status", "--porcelain", "--", ".", *excludes], cwd=repo)
