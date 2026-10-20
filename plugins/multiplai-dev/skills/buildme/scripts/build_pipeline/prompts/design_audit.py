@@ -148,7 +148,7 @@ completes, cutting through all the layers that behavior needs.
 
 ## Blocks That Add No Behaviour
 
-Report (category "no-new-behaviour", severity "critical") a block whose
+Report (category "no-new-behaviour") a block whose
 acceptance criteria an earlier block already delivers, so its tests would pass
 before the block is built: one that only confirms, verifies or pins earlier
 behaviour, adds tests and no code, or says an earlier block satisfies it. The

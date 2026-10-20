@@ -599,6 +599,206 @@ def test_asking_again_after_is_running_now_is_a_launch_the_epic_budget_stops(tmp
     assert e.child_status("a")["status"] == "built"
 
 
+def test_a_pr_that_cannot_be_read_as_its_review_step_starts_leaves_the_child_unknown(tmp_path, monkeypatch):
+    """`gh pr view` fails at the start of a child's review step: the child is
+    `unknown` ("cannot read its PR"), no review record is written, and the
+    run exits 1. The next run, once `gh` answers, reviews it."""
+    e = Epic(tmp_path, monkeypatch)
+    (e.fakes.root / "gh-fails").write_text("")
+    assert e.run() == 1
+    st = e.child_status("a")
+    assert (st["status"], st["reason"]) == ("unknown", "cannot read its PR: gh pr view failed")
+    assert e.reviews("a") == [] and e.launched() == []
+    (e.fakes.root / "gh-fails").unlink()
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+    assert [a.result["exit_code"] for a in e.reviews("a")] == [0]
+
+
+def test_a_resume_told_another_review_runs_now_waits_and_asks_again(tmp_path, monkeypatch):
+    """C.S2 for `resume`: it exits 2 `is running now`. The coordinator records
+    that exit, waits REVIEW_WAIT, and asks again (here `review` exits 4 again,
+    and the second `resume` finishes); nothing parks."""
+    running = {"exit": 2, "stderr": "ERROR: a review of x is running now (pid 1); wait for it"}
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN)
+    e.fakes.root.joinpath("reviews.json").write_text(json.dumps({"resume": [running, {}]}))
+    e.target().mkdir(parents=True)
+    (e.target() / "review-state.json").write_text(json.dumps({"head": e.head()}))
+    e.add_ledger({"event": "started", "slug": f"o-r--pr-{N}", "target_dir": str(e.target()),
+                  "head_sha": e.head()})
+    waits, real = [], FakeClock.sleep
+
+    async def sleep(clock, seconds):
+        if seconds == review.REVIEW_WAIT:
+            waits.append(seconds)
+        await real(clock, seconds)
+
+    monkeypatch.setattr(FakeClock, "sleep", sleep)
+    assert e.run() == 3                                       # b waits for a's merge
+    assert [(a.kind, a.result["exit_code"]) for a in e.reviews("a")] == [
+        ("review", 4), ("resume", 2), ("review", 4), ("resume", 0)]
+    assert len(waits) == 1 and "parked" not in e.reviews("a")[1].result
+    assert e.reviews("a")[-1].result["pr_round"] == 1 and e.child_status("a")["status"] == "built"
+
+
+def test_a_failed_read_after_a_review_without_a_complete_line_leaves_the_child_unknown(tmp_path, monkeypatch):
+    """The review exits 0 with no complete `finished` line for the head, and
+    the second `gh pr view`, which asks whether the head moved, fails: the
+    record gets a plain result, the child is `unknown` and the run exits 1."""
+    e = Epic(tmp_path, monkeypatch, reviews={str(N): [{"stopped": "budget"}]})
+    real = coordinator.Coordinator._run_review
+
+    async def run_review(self, c, kind, argv, head):
+        got = await real(self, c, kind, argv, head)
+        if c.id == "a":
+            (e.fakes.root / "gh-fails").write_text("")
+        return got
+
+    monkeypatch.setattr(coordinator.Coordinator, "_run_review", run_review)
+    assert e.run() == 1
+    st = e.child_status("a")
+    assert (st["status"], st["reason"]) == ("unknown", "cannot read its PR: gh pr view failed")
+    [a] = e.reviews("a")
+    assert (a.result["exit_code"], a.result["interrupted"]) == (0, False)
+    assert "parked" not in a.result and "blocking" not in a.result
+
+
+def test_a_finished_review_whose_findings_cannot_be_read_parks_and_stays_parked(tmp_path, monkeypatch):
+    """The review exits 0 with its `finished` line, but its findings.json
+    cannot be read (`blockers` is None): the child parks, b is skipped, and a
+    later run keeps the park."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN)
+    real = coordinator.Coordinator._run_review
+
+    async def run_review(self, c, kind, argv, head):
+        got = await real(self, c, kind, argv, head)
+        if c.id == "a":
+            (e.target() / "findings.json").unlink()
+        return got
+
+    monkeypatch.setattr(coordinator.Coordinator, "_run_review", run_review)
+    assert e.run() == 0
+    st = e.child_status("a")
+    assert (st["status"], st["reason"]) == ("parked", f"cannot read the review's findings in {e.target()}")
+    assert e.reviews("a")[0].result["parked"] == st["reason"]
+    assert e.child_status("b")["status"] == "skipped"
+    assert e.run() == 0 and e.launched() == ["review"] and e.child_status("a")["status"] == "parked"
+
+
+def test_a_reused_review_closes_every_open_record_of_its_head(tmp_path, monkeypatch):
+    """C.S10: two review records of this head have no result (two stopped
+    runs) and the ledger holds a finished review of it. The earlier one gets a
+    plain interrupted result, the last one the review's fields; nothing is
+    launched."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN)
+    argv = review.review_argv(e.project, N)
+    first, last = (records.start(e.dir, "review", "a", argv, head_sha=e.head(), pr_round=0) for _ in range(2))
+    e.target().mkdir(parents=True)
+    (e.target() / "findings.json").write_text(json.dumps({"mode": None, "findings": []}))
+    e.add_ledger({"event": "finished", "slug": f"o-r--pr-{N}", "pr": N, "target_dir": str(e.target()),
+                  "head_sha": e.head(), "base_sha": "c" * 40, "round": "01", "stopped": None,
+                  "run": {"cost_usd": 2.0}})
+    assert e.run() == 3 and e.launched() == []
+    got = {a.n: a.result for a in e.reviews("a")}
+    assert set(got) == {first.n, last.n}
+    assert (got[first.n]["exit_code"], got[first.n]["interrupted"], "blocking" in got[first.n]) == (None, True, False)
+    assert (got[last.n]["interrupted"], got[last.n]["reused"], got[last.n]["blocking"]) == (True, True, [])
+
+
+def test_a_reused_review_is_read_from_its_kept_round_once_a_later_run_moved_it(tmp_path, monkeypatch):
+    """The ledger's finished review of this head is round 01; a later run in
+    the same folder (another head) moved round 01 to `rounds/01-<head12>/`
+    and left its own findings.json on top. The blockers, and the folder the
+    record names, are round 01's."""
+    e = Epic(tmp_path, monkeypatch)
+    kept = e.target() / "rounds" / f"01-{e.head()[:12]}"
+    kept.mkdir(parents=True)
+    (kept / "findings.json").write_text(json.dumps({"mode": None, "findings": [high()]}))
+    (e.target() / "findings.json").write_text(json.dumps({"mode": None, "findings": []}))
+    for head, rnd in ((e.head(), "01"), ("d" * 40, "02")):
+        e.add_ledger({"event": "finished", "slug": f"o-r--pr-{N}", "pr": N, "target_dir": str(e.target()),
+                      "head_sha": head, "base_sha": "c" * 40, "round": rnd, "stopped": None,
+                      "run": {"cost_usd": 2.0}})
+    e.run()
+    r = e.reviews("a")[0].result
+    assert r["reused"] is True and r["review_dir"] == str(kept)
+    assert [b.split()[:2] for b in r["blocking"]] == [["HIGH", "f1"]]
+    assert r["reused_pipeline_run"] == {"target_dir": str(e.target()), "round": "01"}
+
+
+def _no_uv(monkeypatch) -> None:
+    """The review skill's commands start a binary that is not on PATH, as `uv` is when not installed."""
+    monkeypatch.setattr(review, "_skill", lambda *args: ["buildme-test-no-such-uv", "run", *args])
+
+
+def test_a_review_that_cannot_start_leaves_the_child_unknown_and_the_next_run_reviews_it(tmp_path, monkeypatch):
+    """`uv` is not on PATH, so no review can start: each record gets a result
+    (no exit code, not interrupted), each child is `unknown`, and the run
+    ends with exit 1 instead of an error. Once `uv` is there, the next run
+    reviews them."""
+    e = Epic(tmp_path, monkeypatch)
+    with monkeypatch.context() as m:
+        _no_uv(m)
+        assert e.run() == 1
+    assert e.child_status("b")["status"] == "unknown"
+    st = e.child_status("a")
+    assert st["status"] == "unknown" and st["reason"].startswith("its review could not start: ")
+    assert "buildme-test-no-such-uv" in st["reason"]
+    [a] = e.reviews("a")
+    assert (a.result["exit_code"], a.result["interrupted"]) == (None, False) and "parked" not in a.result
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+    assert [x.result["exit_code"] for x in e.reviews("a")] == [None, 0]
+
+
+def test_a_post_that_cannot_start_leaves_the_child_unknown_and_the_next_run_posts(tmp_path, monkeypatch):
+    """A reused review left a blocker, and `uv` is not on PATH, so its `post`
+    cannot start: the post's record gets a result, the child is `unknown`, no
+    fixer runs and the run exits 1 (b's review cannot start either). The next
+    run posts."""
+    e = Epic(tmp_path, monkeypatch)
+    e.target().mkdir(parents=True)
+    (e.target() / "findings.json").write_text(json.dumps({"mode": None, "findings": [high()]}))
+    e.add_ledger({"event": "finished", "slug": f"o-r--pr-{N}", "pr": N, "target_dir": str(e.target()),
+                  "head_sha": e.head(), "base_sha": "c" * 40, "round": "01", "stopped": None,
+                  "run": {"cost_usd": 2.0}})
+    with monkeypatch.context() as m:
+        _no_uv(m)
+        assert e.run() == 1
+    st = e.child_status("a")
+    assert st["status"] == "unknown" and st["reason"].startswith("its post could not start: ")
+    assert e.child_status("b")["reason"].startswith("its review could not start: ")
+    [post] = [a for a in records.attempts(e.dir) if a.child == "a" and a.kind == "post"]
+    assert (post.result["exit_code"], post.result["interrupted"]) == (None, False)
+    assert e.fakes.fix_launches() == [] and e.fakes.post_launches() == []
+    e.run()
+    assert len(e.fakes.post_launches()) == 1
+
+
+def test_a_review_alive_after_the_stop_wait_keeps_no_result(tmp_path, monkeypatch):
+    """Ctrl-C, and the review this run started ignores it past STOP_WAIT: its
+    record keeps no result, so the next run asks it again."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN, reviews={str(N): [{"block": True, "ignore_signals": True}]})
+    monkeypatch.setattr(coordinator, "STOP_WAIT", 1.0)
+    lock = e.fakes.review_lock()
+
+    def ctrl_c(coord):
+        if lock.exists() and lock.read_text():
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(coordinator, "_tick", ctrl_c)
+    try:
+        assert e.run() == 130
+        pid = int(lock.read_text())
+        assert alive(pid)
+        assert [a.result for a in e.reviews("a")] == [None]
+        assert e.child_status("a")["status"] == "built"
+    finally:
+        e.fakes.release_review("e-a")
+    for _ in range(250):
+        if not alive(pid):
+            break
+        time.sleep(0.02)
+
+
 # --- the pieces -------------------------------------------------------------------------
 
 def test_records_past_999_are_seen_and_numbered_in_order(tmp_path):
@@ -616,6 +816,8 @@ def test_records_past_999_are_seen_and_numbered_in_order(tmp_path):
 
 def test_conflicts_reads_mergeable_and_merge_state():
     assert review.conflicts({"mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY"}) is True
+    assert review.conflicts({"mergeable": "UNKNOWN", "mergeStateStatus": "DIRTY"}) is True      # either one says so
+    assert review.conflicts({"mergeable": "CONFLICTING", "mergeStateStatus": "UNKNOWN"}) is True
     assert review.conflicts({"mergeable": "MERGEABLE", "mergeStateStatus": "BEHIND"}) is False
     assert review.conflicts({"mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN"}) is None
     assert review.conflicts({}) is None

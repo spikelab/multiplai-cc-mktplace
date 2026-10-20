@@ -100,7 +100,8 @@ def render_tasks(round_n: int, records: list[TriageRecord],
             f"Why it is a defect: {_line(t.reason)} Code involved: {where}",
             f"- [ ] {i}.3 Search the same function, its other branches, its callers and the "
             "rest of the PR's diff for the same mistake, and fix each one you find; change "
-            "nothing else. End your report with a `SEARCHED:` section: one line per finding "
+            "nothing else. Close your report with a `SEARCHED:` section, after the other "
+            "slots and before any test-change declaration: one line per finding "
             "saying where you looked and what you found.",
             "",
         ]
@@ -268,8 +269,9 @@ _CHECK_MARKER = re.compile(
     r"^(?:#+[ \t]*)?[*_`]*(?:(?P<none>no problems?\b)|problems[*_`]*[ \t]*:)",
     re.IGNORECASE | re.MULTILINE)
 
-# A list that says only "none" or "nothing", with punctuation at most.
-_NONE = re.compile(r"[^\w\n]*(?:none|nothing)[^\w\n]*", re.IGNORECASE)
+# A list that says only "none" or "nothing", optionally "found", with
+# punctuation at most.
+_NONE = re.compile(r"[^\w\n]*(?:none|nothing)(?:[ \t]+found)?[^\w\n]*", re.IGNORECASE)
 
 _LIST_ITEM = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\S", re.MULTILINE)
 

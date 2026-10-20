@@ -345,9 +345,11 @@ def _review_skill_dir() -> Path:
 
 
 def review_argv(run: FindingsRun) -> list[str]:
+    """`--fetch`: `review` refuses a PR whose head or base is not in the clone,
+    and the base moves on GitHub without any fetch here."""
     argv = ["uv", "run", "--directory", str(_review_skill_dir()),
             "python", "-m", "review_pipeline", "review",
-            "--repo", str(run.project_dir), "--pr", str(run.pr)]
+            "--repo", str(run.project_dir), "--pr", str(run.pr), "--fetch"]
     if run.trust_repo:
         argv.append("--trust-repo")
     return argv

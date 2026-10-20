@@ -39,8 +39,9 @@ LOCKFILES = frozenset({
 _LEFT = re.compile(r"^(?:<{7}|>{7}|\|{7})(?: |$)", re.MULTILINE)
 # The CHANGELOGs 40.3 lets the step resolve: by name, never a source file such as `changelog.py`.
 _CHANGELOG_SUFFIXES = frozenset({"", ".md", ".markdown", ".rst", ".txt", ".adoc"})
-# The tables of a TOML or INI file whose `version` is the package's own (not a dependency's).
-_PACKAGE_TABLES = frozenset({"project", "package", "tool.poetry", "workspace.package", "metadata"})
+# The tables of a TOML or INI file whose `version` is the package's own (not a dependency's). commitizen's
+# `version` is its copy of the project's version, which `cz bump` raises with it.
+_PACKAGE_TABLES = frozenset({"project", "package", "tool.poetry", "workspace.package", "metadata", "tool.commitizen"})
 _TABLE = re.compile(r"^\s*(\[\[?)\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$")
 # JSON: a string, or a punctuation mark that opens, closes or separates.
 _TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|[{}\[\]:,]')
@@ -151,7 +152,8 @@ class Plan(NamedTuple):
     """What merging *second* into *first* leaves the merge step (item 40.3)."""
     files: list[str]          # what the merge agent resolves, in this order: conflicted files it may resolve;
     #                           version files both sides raised, which git merges cleanly when both wrote the
-    #                           same version; with those, the CHANGELOGs and lockfiles both sides changed
+    #                           same version; with those, the CHANGELOGs and lockfiles both sides changed and
+    #                           each CHANGELOG only *first* changed whose added lines name a version it raised
     refused: list[str]        # conflicted files it may not resolve
 
 
@@ -201,6 +203,16 @@ def _merge(w: Path, first: str, second: str) -> _Merge | None:
     raised = [p for p in both_changed if p not in refused and not _special(p)
               and (s := side(p)) is not None and _raised(p, *s)]
     extra = [p for p in both_changed if raised and _special(p) and p not in refused and side(p) is not None]
+    # The child's raised versions in *changelog*'s package: a CHANGELOG only the child changed whose added lines
+    # name one must move to the version the agent writes (finding 54632ff87f), not another package's (9149e1b300).
+    def mine(changelog: str) -> set[str]:
+        top = Path(changelog).parent.as_posix()
+        files = [p for p in raised if top == "." or p.startswith(top + "/")]
+        return ({v for p in files for v in _normal(p, side(p)[1])[1].values()}
+                - {v for p in files for v in _normal(p, side(p)[0])[1].values()})
+    extra += [p for p in ours if p not in both and _is_changelog(p) and (s := side(p)) is not None
+              and (raised_here := mine(p))
+              and any(v in raised_here for x in _added(s[0], s[1]) for v in _VERSION_TEXT.findall(x))]
     files = list(dict.fromkeys([*(p for p in conflicted if p not in refused), *raised, *extra]))
     return _Merge(tree.strip(), conflicted, raised, Plan(files, refused), {p: side(p) for p in files})
 
@@ -572,12 +584,14 @@ def _pinned(data) -> list[tuple[tuple, dict]]:
     it (a hash key, or Cargo.lock's `git+` source) that no mapping below it
     with a `version` claims: one locked package, with the keys of the
     mappings above it (a list adds none: regenerating reorders it). The top
-    one's `version` is the lockfile format's."""
+    one's `version` is the lockfile format's. A package's `metadata` is not
+    searched: uv.lock keeps there what the project asks for (`requires-dist`,
+    whose `git` is a request, not a revision), not what it locked."""
     found: list[tuple[tuple, dict]] = []
 
     def walk(x, at: tuple) -> bool:              # True: x holds a pin no package below claims
         if isinstance(x, dict):
-            held = [walk(v, (*at, k)) for k, v in x.items()]
+            held = [walk(v, (*at, k)) for k, v in x.items() if not (k == "metadata" and "version" in x)]
             pins = any(k in _HASH_KEYS for k in x) or str(x.get("source", "")).startswith("git+")   # Cargo.lock
             if (any(held) or pins) and "version" in x and at:
                 found.append((at, x))

@@ -35,7 +35,7 @@ from ..checks import add_coverage, drop_coverage
 from ..chunks import piece_diff_text
 from ..config import TRIM_DIMENSION, ReviewConfig
 from ..gates import file_at_head, finding_gate, gated_need, reason_kind
-from ..linked_docs import LinkSource, linked_docs
+from ..linked_docs import LinkSource, linked_docs, not_included_line
 from ..models import (AgentCheck, ConvertedItem, ConvertOutput, CoverageRecord, Finding, FinderOutput,
                       FinderReport, FinderResult, GateCheck, Need, Rejected, ReviewState, TargetInfo)
 from ..paths_io import load_paths, views
@@ -147,7 +147,8 @@ def conventions_blocks(target: TargetInfo, files: list[str] | None = None, *,
     come first: when the text passes CONVENTIONS_MAX_CHARS, CLAUDE.md is skipped first.
     The linked docs share what is left of CONVENTIONS_MAX_CHARS; the first one
     included carries `binding_instruction`, and one left out is a
-    (path, False, "") entry and a record appended to *coverage*.
+    (path, False, block) entry and a record appended to *coverage*: the block
+    is `not_included_line` when it was left out for length, else "".
     """
     chain = _dir_chain(target, files)
     blocks, total = [], 0
@@ -173,7 +174,8 @@ def conventions_blocks(target: TargetInfo, files: list[str] | None = None, *,
     lead = binding_instruction(docs.included)
     for i, (path, block) in enumerate(zip(docs.included, docs.blocks)):
         blocks.append((path, True, lead + block if i == 0 else block))
-    blocks += [(record.subject, False, "") for record in docs.skipped]
+    blocks += [(record.subject, False, not_included_line(record.subject) if record.reason == "budget" else "")
+               for record in docs.skipped]
     if coverage is not None:
         coverage.extend(docs.skipped)
     return blocks

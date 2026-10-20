@@ -2,11 +2,14 @@
 
 Two sources, each read from disk on every look:
 - the records: each result's `spend`, the USD on the process's
-  `SPEND:<usd>:<tokens>` line (`records.spend_of`). A result with no spend, or
-  an attempt with no result yet, counts 0 and makes the total incomplete.
-  Only the kinds whose process prints `SPEND:` count (`SPEND_KINDS`); a
-  review's spend is in the review ledger, and posting a review or running a
-  test command calls no model.
+  `SPEND:<usd>:<tokens>` line (`records.spend_of`); a `merge` result has no
+  log line, so its `spend` is the change in `budget.process_spend()` around
+  the merge agent's call (`Coordinator._resolve_conflicts`), and an
+  interrupted call leaves it null. A result with no spend, or an attempt
+  with no result yet, counts 0 and makes the total incomplete. Only the
+  kinds that call a model count (`SPEND_KINDS`); a review's spend is in the
+  review ledger, and posting a review or running a test command calls no
+  model.
 - the review ledger, `<data_dir>/reviews/ledger.jsonl`, read as a file: the
   `finished` lines of a child PR's reviews, per `(target_dir, head_sha)` and
   per review run. A `resume` continues a run: it keeps the run's first start

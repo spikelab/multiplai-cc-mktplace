@@ -104,6 +104,11 @@ class ReadFailed(Exception):
     """A `git`, `gh` or `ps` read failed, so what it would have said is not known."""
 
 
+class StartFailed(Exception):
+    """A review step's process could not start (`uv` not on PATH): its record
+    has its result, and the child is `unknown` until a run starts it."""
+
+
 class Clock:
     """The one sleep-and-clock seam: every wait the coordinator makes."""
 
@@ -481,7 +486,7 @@ class Coordinator:
             argv += ["--research-path", str(research)]
         else:
             argv += ["--skip-research"]
-        argv += ["--auto", "--trust-repo", "--no-epic-split", "--pr-ready",
+        argv += ["--auto", "--trust-repo", "--no-epic-split", "--epic-child", "--pr-ready",
                  "--project-dir", str(self.children[cid].project.absolute())]
         if base:
             argv += ["--base-ref", base]
@@ -774,10 +779,15 @@ class Coordinator:
     async def _run_review(self, c: Child, kind: str, argv: list[str], head: str) -> tuple[int, str]:
         """Run one `review` or `resume` to its end, as a pair of records; its
         exit code and output. The process is in its own group with its output
-        in the attempt's log, so it outlives a killed coordinator (C.S2)."""
+        in the attempt's log, so it outlives a killed coordinator (C.S2).
+        Raises StartFailed when it cannot start."""
         c.rattempt = records.start(self.epic_dir, kind, c.id, argv, head_sha=head, pr_round=c.pr_round)
         self._save()
-        c.rproc = _spawn_review(argv, c.rattempt.log, self._worktree(c))
+        try:
+            c.rproc = _spawn_review(argv, c.rattempt.log, self._worktree(c))
+        except OSError as e:
+            records.finish(c.rattempt, None, interrupted=False)
+            raise StartFailed(f"its {kind} could not start: {e}") from None
         while c.rproc.poll() is None:
             await CLOCK.sleep(POLL)
         code, c.rproc = c.rproc.returncode, None
@@ -823,7 +833,7 @@ class Coordinator:
         writes nothing."""
         tries = [a for a in records.attempts(self.epic_dir) if a.child == c.id and a.kind in REVIEW_KINDS
                  and a.started.get("head_sha") == head]
-        fields = self._fields(c, line, str(line.get("target_dir")), number, reused=True)
+        fields = self._fields(c, line, review.review_folder(line), number, reused=True)
         open_ = [a for a in tries if a.result is None]
         for a in open_[:-1]:
             records.finish(a, None, interrupted=True)
@@ -944,6 +954,9 @@ class Coordinator:
                 c.status, c.reason = "parked", why
                 log.warning("EPIC child %s: parked: %s", c.id, why)
                 return
+        except StartFailed as e:      # not the PR's fault: the next run starts it again
+            c.status, c.reason = "unknown", str(e)
+            log.warning("EPIC child %s: %s", c.id, c.reason)
         finally:
             if c.rproc is None:
                 c.rattempt = None
@@ -1101,7 +1114,13 @@ class Coordinator:
             records.finish(attempt, None, interrupted=False, extra={"parked": why})
             self._park(c, why)
             return False
-        code, out = await self._run_step(c, attempt, self._child_project(c))
+        try:
+            code, out = await self._run_step(c, attempt, self._child_project(c))
+        except OSError as e:          # it could not start (`uv` not on PATH): the next run posts again
+            records.finish(attempt, None, interrupted=False)
+            c.status, c.reason = "unknown", f"its post could not start: {e}"
+            log.warning("EPIC child %s: %s", c.id, c.reason)
+            return False
         if code == 0:
             records.finish(attempt, code, interrupted=False)
             return True
@@ -1813,7 +1832,7 @@ class Coordinator:
             except (NotImplementedError, RuntimeError, ValueError):
                 pass
         try:
-            rc = await self._loop()
+            await self._loop()
         except (KeyboardInterrupt, asyncio.CancelledError):
             sig = self.signal_sent or signal.SIGINT
             await self._cancel_reviews()
@@ -1843,6 +1862,10 @@ class Coordinator:
         bad = [c for c in self.children.values() if c.status in ("failed", "unknown")]
         for c in bad:       # beside EPIC:MERGE_WAITING too, not only in the summary
             print(f"EPIC: child {c.id} {c.status}: {c.reason}", file=sys.stderr, flush=True)
+        unreviewed = [c for c in self.children.values() if self._unreviewed(c)]
+        for c in unreviewed:
+            print(f"EPIC: child {c.id} built: its PR's head {(c.head or '')[:12]} has no finished review; "
+                  f"the next run reviews it", file=sys.stderr, flush=True)
         if self.budget_stop is not None:      # the spend at exit, the running children's included
             print(f"{MARKER_BUDGET}:{self.spent()[0]:.2f}", flush=True)
             return 3
@@ -1851,7 +1874,16 @@ class Coordinator:
         if waited and (not bad or any(c.id in deps for c in waited)):     # a human merge (41) hides no failure
             print(f"{MARKER_MERGE_WAITING}:{','.join(c.pr for c in waited)}", flush=True)
             return 3
-        return 1 if bad else 0
+        return 1 if bad or unreviewed else 0
+
+    def _unreviewed(self, c: Child) -> bool:
+        """*c*'s review step ran in this invocation, yet its PR's head, last
+        read, has no finished review: its review was stopped (C.S3), or the
+        PR got a new head after a clean review. It is not waited on, as it
+        has not passed review (`_passed`), and the next run reviews it."""
+        last = self._last_review(c)
+        return (c.status == "built" and c.reviewed and c.head is not None and not self._passed(c)
+                and (last is None or last.started.get("head_sha") != c.head))
 
     async def _loop(self) -> int:
         last_read = CLOCK.now()
@@ -1916,7 +1948,8 @@ def _new_run_dir(epic_dir: Path) -> Path:
 
 async def run_epic(config, state, args, epic_dir: Path, epic: store.Epic) -> int:
     """Build an approved epic's children (item 11). Returns 0 when nothing is
-    left to do, 1 when a child failed or its state is unknown, 3 with `EPIC:MERGE_WAITING:<urls>` while a
+    left to do, 1 when a child failed or its state is unknown, or a child's PR
+    head has no finished review (`Coordinator._unreviewed`), 3 with `EPIC:MERGE_WAITING:<urls>` while a
     child waits on an open PR or with `EPIC:BUDGET:<spent>` once `epic.max_usd` is reached,
     128 + the signal when stopped."""
     from . import lock as epic_lock

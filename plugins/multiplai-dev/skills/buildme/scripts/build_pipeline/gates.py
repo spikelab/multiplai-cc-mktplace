@@ -578,12 +578,20 @@ _SLOT_COLON = r"(?::\*{0,2}|\*{1,2}:)"
 # first word, nested in any order (`> - `).
 _LIST_PREFIX = r"[ \t]*(?:(?:[-*+]|\d+[.)]|>)[ \t]*)*"
 
+# A markdown heading's `#`s, or an inline-code backtick that a second backtick
+# closes at the end of the line, before a declaration's marker. Inline code
+# that ends before the line does ("`TEST CHANGE REQUIRED:` lines are not
+# needed") is a mention, not a declaration.
+_HEADING_PREFIX = r"(?:#{1,6}[ \t]+)?"
+_LINE_IN_CODE = r"(?:`(?=[^`\n]*`[ \t]*$))?"
+
 # The start of a test-change declaration: the marker opens the line, after a
-# list or quote prefix and optional bold, with the colon inside or outside the
-# bold. The prompts put these lines at the end of the report, after the other
-# slots, so the free-text slots stop here too and never read one in.
+# list or quote prefix, a heading or an inline code span that holds the whole
+# line, and optional bold, with the colon inside or outside the bold. The
+# prompts put these lines at the end of the report, after the other slots, so
+# the free-text slots stop here too and never read one in.
 _TEST_CHANGE_LINE = (
-    r"^" + _LIST_PREFIX + r"(?:\*\*)?"
+    r"^" + _LIST_PREFIX + _HEADING_PREFIX + _LINE_IN_CODE + r"(?:\*\*)?"
     + re.escape(TEST_CHANGE_MARKER.removesuffix(":")) + _SLOT_COLON
 )
 
@@ -926,6 +934,10 @@ def review_score_gate(
 # TEST CHANGE REQUIRED: line is needed") must not count as one.
 _TEST_CHANGE_RE = re.compile(_TEST_CHANGE_LINE + r"[ \t]*(.*)$", re.IGNORECASE)
 
+# A declaration line that opens an inline code span; its closing backtick is
+# not part of the reason.
+_IN_CODE_RE = re.compile(r"^" + _LIST_PREFIX + _HEADING_PREFIX + r"`")
+
 # A line that cannot be the reason of a marker left alone on its line: a slot
 # label, another declaration, or a code fence.
 _NOT_A_REASON_RE = re.compile(
@@ -943,9 +955,10 @@ def parse_test_change_claims(report: str) -> list[str]:
     fence. So pass one agent's report at a time: in two reports joined, a bare
     marker at the end of the first would take the second's first line.
     An echo of the prompt's template (`<reason>`) and an empty answer
-    (`none`, `tbd`, `no` or any other `_EMPTY_SLOT_VALUES` entry, also with a
-    trailing parenthesis or full stop, as in `None (no test files modified)`)
-    declare nothing.
+    (an `_EMPTY_SLOT_VALUES` entry such as `none` or `tbd`, or `no`, also with
+    a trailing parenthesis after it or a full stop, as in
+    `None (no test files modified)`) declare nothing. A reason written wholly
+    in parentheses is not an empty answer.
     """
     lines = (report or "").splitlines()
     claims = []
@@ -954,13 +967,15 @@ def parse_test_change_claims(report: str) -> list[str]:
         if not m:
             continue
         reason = m.group(1).strip()
+        if _IN_CODE_RE.match(line):
+            reason = reason.removesuffix("`").strip()
         if not reason:
             following = next((ln for ln in lines[i + 1:] if ln.strip()), "")
             if not _NOT_A_REASON_RE.match(following):
                 reason = re.sub(r"^" + _LIST_PREFIX, "", following).strip()
         if reason.startswith("<") and reason.endswith(">"):
             continue
-        bare = re.sub(r"\s*\(.*\)$", "", reason).rstrip(" .").lower()
+        bare = re.sub(r"(?<=\S)\s*\(.*\)$", "", reason).rstrip(" .").lower()
         if bare in _EMPTY_SLOT_VALUES or bare == "no":
             continue
         claims.append(reason)
