@@ -1388,6 +1388,164 @@ class TestFinalVerification:
         assert "123" in result.metadata["output"]
 
 
+def _git(repo, *args):
+    import subprocess
+    return subprocess.run(["git", *args], cwd=repo, text=True, capture_output=True,
+                          check=True).stdout.strip()
+
+
+def _python(code):
+    import shlex
+    import sys
+    return shlex.quote(sys.executable) + " -c " + shlex.quote(code)
+
+
+def _repo_with_one_file(repo, text):
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "a.txt").write_text(text)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", text.strip())
+
+
+@pytest.fixture
+def with_submodule(tmp_path, trust_repo):
+    """A project with the checked-out submodule `vendor`, one commit ahead of `older`."""
+    source, project = tmp_path / "source", tmp_path / "project"
+    _repo_with_one_file(source, "first\n")
+    older = _git(source, "rev-parse", "HEAD")
+    (source / "a.txt").write_text("second\n")
+    _git(source, "commit", "-qam", "second")
+    _repo_with_one_file(project, "project\n")
+    _git(project, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), "vendor")
+    _git(project, "commit", "-qm", "add vendor")
+    return project, older
+
+
+class TestFinalVerificationSubmodules:
+    """A submodule's directory is checked as a checkout of its own, never read as a file."""
+
+    PASS = _python("pass")
+
+    def test_a_clean_submodule_passes_and_its_inputs_are_stable(self, with_submodule):
+        from build_pipeline.gates import final_verification, verification_inputs
+        project, _ = with_submodule
+        result = final_verification(self.PASS, project)
+        assert result.passed, result.reason
+        first = verification_inputs(self.PASS, project, include_files=True)
+        assert verification_inputs(self.PASS, project, include_files=True) == first
+        assert first["files"]["vendor"].startswith("checkout:" + _git(project / "vendor", "rev-parse", "HEAD"))
+
+    def test_reading_the_inputs_changes_nothing_in_the_submodule(self, with_submodule):
+        from build_pipeline.gates import verification_inputs
+        project, _ = with_submodule
+        git_dir = Path(_git(project / "vendor", "rev-parse", "--absolute-git-dir"))
+        (project / "vendor" / "a.txt").write_text("edited\n")
+        before = {p: p.read_bytes() for p in git_dir.rglob("*") if p.is_file()}
+        verification_inputs(self.PASS, project)
+        assert {p: p.read_bytes() for p in git_dir.rglob("*") if p.is_file()} == before
+
+    @pytest.mark.parametrize("mutation", ["head", "tracked", "index", "untracked"])
+    def test_a_submodule_changed_by_the_command_fails_and_is_named(self, with_submodule, mutation):
+        from build_pipeline.gates import final_verification
+        project, older = with_submodule
+        # The parent's ignore setting hides the submodule from the parent's own status.
+        _git(project, "config", "submodule.vendor.ignore", "all")
+        blob = _git(project / "vendor", "rev-parse", f"{older}:a.txt")
+        code = {
+            "head": f"import subprocess; subprocess.run(['git', '-C', 'vendor', 'checkout', '-q', '--detach', {older!r}], check=True)",
+            "tracked": "from pathlib import Path; Path('vendor/a.txt').write_text('changed')",
+            "index": "import subprocess; subprocess.run(['git', '-C', 'vendor', 'update-index', "
+                     f"'--cacheinfo', '100644,{blob},a.txt'], check=True)",
+            "untracked": "from pathlib import Path; Path('vendor/new.txt').write_text('new')",
+        }[mutation]
+        result = final_verification(_python(code), project)
+        assert not result.passed
+        assert result.reason.startswith("Inputs changed during final verification: vendor.")
+        assert "vendor is a submodule or nested repository: run git -C vendor status" in result.reason
+        assert result.metadata["changed_files"] == ["vendor"]
+
+    def test_a_changed_file_gets_no_submodule_advice(self, with_submodule):
+        from build_pipeline.gates import final_verification
+        project, _ = with_submodule
+        result = final_verification(_python("from pathlib import Path; Path('a.txt').write_text('x')"), project)
+        assert result.metadata["changed_files"] == ["a.txt"]
+        assert "submodule" not in result.reason
+
+    def test_a_submodule_edited_before_the_check_and_left_alone_passes(self, with_submodule):
+        from build_pipeline.gates import final_verification
+        project, _ = with_submodule
+        (project / "vendor" / "a.txt").write_text("edited\n")
+        (project / "vendor" / "new.txt").write_text("new\n")
+        result = final_verification(self.PASS, project)
+        assert result.passed, result.reason
+
+    def test_a_changed_file_in_a_nested_submodule_is_named(self, with_submodule, tmp_path):
+        from build_pipeline.gates import final_verification
+        project, _ = with_submodule
+        inner = tmp_path / "inner"
+        _repo_with_one_file(inner, "inner\n")
+        vendor = project / "vendor"
+        _git(vendor, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(inner), "inner")
+        _git(vendor, "commit", "-qm", "add inner")
+        _git(project, "add", "vendor")
+        _git(project, "commit", "-qm", "move vendor")
+        assert final_verification(self.PASS, project).passed
+        code = "from pathlib import Path; Path('vendor/inner/a.txt').write_text('changed')"
+        result = final_verification(_python(code), project)
+        assert not result.passed
+        assert result.metadata["changed_files"] == ["vendor"]
+
+    def test_an_uninitialized_submodule_passes_the_same_way_every_time(self, with_submodule):
+        from build_pipeline.gates import final_verification, verification_inputs
+        project, _ = with_submodule
+        _git(project, "submodule", "deinit", "-q", "-f", "vendor")
+        first, second = final_verification(self.PASS, project), final_verification(self.PASS, project)
+        assert first.passed and second.passed, first.reason
+        assert verification_inputs(self.PASS, project, include_files=True)["files"]["vendor"] == "gitlink:uninitialized"
+
+    def test_a_gitlink_with_no_checkout_passes(self, tmp_path, trust_repo):
+        from build_pipeline.gates import final_verification
+        project = tmp_path / "project"
+        _repo_with_one_file(project, "project\n")
+        (project / "vendor").mkdir()
+        commit = _git(project, "rev-parse", "HEAD")
+        _git(project, "update-index", "--add", "--cacheinfo", f"160000,{commit},vendor")
+        _git(project, "commit", "-qm", "gitlink")
+        result = final_verification(self.PASS, project)
+        assert result.passed, result.reason
+
+    def test_a_gitlink_directory_with_files_but_no_checkout_is_unavailable(self, with_submodule):
+        from build_pipeline.gates import final_verification
+        project, _ = with_submodule
+        _git(project, "submodule", "deinit", "-q", "-f", "vendor")
+        (project / "vendor" / "stray.txt").write_text("stray\n")
+        result = final_verification(self.PASS, project)
+        assert not result.passed
+        assert result.reason.startswith("Final verification unavailable: vendor ")
+        assert "Is a directory" not in result.reason
+
+    def test_a_file_where_the_submodule_was_is_read_as_a_file(self, with_submodule):
+        from build_pipeline.gates import verification_inputs
+        import shutil
+        project, _ = with_submodule
+        shutil.rmtree(project / "vendor")
+        (project / "vendor").write_text("now a file\n")
+        files = verification_inputs(self.PASS, project, include_files=True)["files"]
+        assert files["vendor"].startswith("0:")
+
+    def test_an_untracked_nested_repository_is_checked_like_a_submodule(self, tmp_path, trust_repo):
+        from build_pipeline.gates import final_verification
+        project = tmp_path / "project"
+        _repo_with_one_file(project, "project\n")
+        _repo_with_one_file(project / "nested", "nested\n")
+        assert final_verification(self.PASS, project).passed
+        code = "from pathlib import Path; Path('nested/a.txt').write_text('changed')"
+        result = final_verification(_python(code), project)
+        assert not result.passed
+        assert result.metadata["changed_files"] == ["nested/"]
+
+
 def test_red_rejects_missing_fixture_file_even_with_failed_summary():
     from build_pipeline.gates import red_gate
     gate = red_gate("FileNotFoundError: missing-fixture.json\nFAILED tests/test_app.py::test_read\n1 failed", 1)
