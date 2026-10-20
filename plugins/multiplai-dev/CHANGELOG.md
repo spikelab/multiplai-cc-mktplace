@@ -15,6 +15,20 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.85.0] - 2026-10-20
+
+### Fixed
+- `/multiplai-dev:review`: a link on a `CLAUDE.md` or `coding-standards.md`
+  line that says `binds` (as in "**binds on** any skill") now counts as
+  binding, so that doc goes to the conventions finder before the
+  non-binding ones. On a multiplai-dev change this puts
+  `docs/untrusted-content.md` and `docs/degradation-contract.md` in the
+  prompt, where `docs/degradation-contract.md` used to be cut for length.
+- `/multiplai-dev:review`: a linked doc left out of the conventions finder's
+  prompt for length is now named there, one line each ("Not included for
+  length; open it if it applies: `<path>`"), so the finder can open it
+  itself. Before, it left no trace in the prompt.
+
 ## [0.84.2] - 2026-10-20
 
 ### Fixed
