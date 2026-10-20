@@ -99,6 +99,11 @@ class Absorbed(_Strict):
 PATH_IDS_SCHEMA = {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": True}
 # `Finding.lineage` as the schema states it: optional, but never null when present.
 LINEAGE_SCHEMA = {"type": "string", "pattern": r"^[0-9a-f]{10}$"}
+# `Finding.defect_class` and `Finding.other_locations` as the schema states them: optional, but never
+# null or empty when present. Each location is `path:line` or `path:start-end`.
+DEFECT_CLASS_SCHEMA = {"type": "string", "minLength": 1}
+OTHER_LOCATIONS_SCHEMA = {"type": "array", "minItems": 1,
+                          "items": {"type": "string", "pattern": r"^.+:\d+(-\d+)?$"}}
 
 
 class Finding(_Strict):
@@ -144,6 +149,11 @@ class Finding(_Strict):
     # `still-open` or `repeat` assessment (multiplai-dev 0.94+). Absent when it is
     # the finding's own id, and in older files.
     lineage: Annotated[str | None, WithJsonSchema(LINEAGE_SCHEMA)] = None
+    # The kind of defect in a few words, and every other place at head with the
+    # same defect (multiplai-dev 0.95+). Absent when the finder named none, and in
+    # older files.
+    defect_class: Annotated[str | None, WithJsonSchema(DEFECT_CLASS_SCHEMA)] = None
+    other_locations: Annotated[list[str] | None, WithJsonSchema(OTHER_LOCATIONS_SCHEMA)] = None
 
     @field_validator("paths")
     @classmethod

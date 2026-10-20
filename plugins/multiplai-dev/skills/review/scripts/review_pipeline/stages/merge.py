@@ -138,7 +138,9 @@ def merge_set(members: list[Finding], state: ReviewState) -> Finding:
     severity = min((f.severity for f in members), key=rank.__getitem__)
     citations, seen = [], set()
     finders: list[str] = []
+    locations: list[str] = []
     for f in [survivor] + [m for m in members if m is not survivor]:
+        locations += [loc for loc in f.other_locations if loc not in locations]
         for c in f.citations:
             if _citation_key(c) not in seen:
                 seen.add(_citation_key(c))
@@ -151,7 +153,9 @@ def merge_set(members: list[Finding], state: ReviewState) -> Finding:
         # so each was lowered; the merged finding was lowered from the highest.
         state.original_severity[survivor.id] = min(
             (state.original_severity.get(f.id, f.severity) for f in members), key=rank.__getitem__)
-    return survivor.model_copy(update={"severity": severity, "citations": citations, "finders": finders})
+    # The survivor's `defect_class` stands; the other places are every member's.
+    return survivor.model_copy(update={"severity": severity, "citations": citations, "finders": finders,
+                                       "other_locations": locations})
 
 
 def mark_merged(state: ReviewState) -> None:

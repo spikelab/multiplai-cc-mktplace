@@ -175,7 +175,9 @@ SCHEMA = """\
                "line_start": 1, "line_end": 1,
                "failure_scenario": "concrete inputs or state -> the wrong output or crash",
                "citations": [{"path": "...", "line_start": 1, "line_end": 1, "quote": "exact text"}],
-               "dimension": "" }],
+               "dimension": "",
+               "defect_class": "the kind of defect, in a few words",
+               "other_locations": ["path/to/other.py:17"] }],
  "needs": [{"what": "one sentence naming what you could not check, and why it matters here",
             "cause": "no-access" | "unreachable",
             "command": "one read-only shell command that fetches it, or empty",
@@ -202,6 +204,8 @@ FILE_RULE = (
     "files. If the problem is in an unchanged file that the change makes reachable, executes, or "
     "makes wrong (code the change now calls or builds, documentation the change makes stale), set "
     "`dimension` to \"pre-existing\" and `file` to that file; otherwise leave `dimension` empty. "
+    "Name the kind of defect in a few words in `defect_class`, and list every other place with the "
+    "same defect as `path:line` in `other_locations`. "
     "Report only what you can show from the code; an empty list is a valid answer."
 )
 
@@ -210,8 +214,10 @@ FILE_RULE_TREE = (
     "without a quote is discarded by a program, not a person. `file` must be one of the files under "
     "review listed above. If the problem is in any other file (one these files call, build or make "
     "wrong, including a file the review skipped), set `dimension` to \"pre-existing\" and `file` to "
-    "that file; otherwise leave `dimension` empty. Report only what you can show from the code; an "
-    "empty list is a valid answer."
+    "that file; otherwise leave `dimension` empty. "
+    "Name the kind of defect in a few words in `defect_class`, and list every other place with the "
+    "same defect as `path:line` in `other_locations`. "
+    "Report only what you can show from the code; an empty list is a valid answer."
 )
 
 

@@ -248,12 +248,24 @@ def _one_line(text: str) -> str:
     return " ".join((text or "").split())
 
 
+def class_line(fd: dict) -> str:
+    """`class: <defect_class>; also at: <locations>`, the parts present, or "" (buildme's `class_line` wording)."""
+    parts = []
+    if fd.get("defect_class"):
+        parts.append(f"class: {_one_line(fd['defect_class'])}")
+    if fd.get("other_locations"):
+        parts.append(f"also at: {', '.join(_one_line(loc) for loc in fd['other_locations'])}")
+    return "; ".join(parts)
+
+
 def finding_section(fd: dict, *, web_base: str | None, head_sha: str,
                     original_severity: str | None = None,
                     finders: list[str] | None = None) -> str:
     """One finding. *finders* are the finders that reported it, from the pipeline state."""
     lines_ = f"{fd['line_start']}" if fd["line_start"] == fd["line_end"] else f"{fd['line_start']}-{fd['line_end']}"
     out = [f"### {fd['severity']} — {fd['file']}:{lines_} — {_one_line(fd['claim'])}", ""]
+    if class_line(fd):
+        out += [class_line(fd), ""]
     if assessment_line(fd):
         out += [assessment_line(fd), ""]
     if fd.get("impact"):
