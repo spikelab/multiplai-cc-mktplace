@@ -12,18 +12,20 @@ from build_pipeline.gates import red_gate, run_test_suite
 
 @pytest.mark.parametrize('wrapper', ['cd api && {command}', 'cd api&&{command}', 'sh -c {quoted}'])
 @pytest.mark.parametrize('parent_config', [False, True])
-def test_changed_directory_pytest_red(tmp_path, monkeypatch, wrapper, parent_config):
+@pytest.mark.parametrize('directory_name', ['api', 'api space', 'api&&docs'])
+def test_changed_directory_pytest_red(tmp_path, monkeypatch, wrapper, parent_config, directory_name):
     monkeypatch.setenv('BUILDME_TRUST_REPO', '1')
-    (tmp_path / 'api/tests').mkdir(parents=True)
-    (tmp_path / 'api/tests/test_new.py').write_text('def test_new():\n    assert 1 == 2\n')
+    (tmp_path / directory_name / 'tests').mkdir(parents=True)
+    (tmp_path / directory_name / 'tests/test_new.py').write_text('def test_new():\n    assert 1 == 2\n')
     if parent_config:
         (tmp_path / 'pytest.ini').write_text('[pytest]\n')
     python = shlex.quote(sys.executable)
     simple = f'{python} -m pytest -q'
-    command = wrapper.format(command=simple, quoted=shlex.quote(f'cd api && {simple}'))
+    command = wrapper.replace('api', shlex.quote(directory_name)).format(
+        command=simple, quoted=shlex.quote(f'cd {shlex.quote(directory_name)} && {simple}'))
     code, output = run_test_suite(command, tmp_path)
     assert code == 1, output
-    gate = red_gate(output, code, runner=None, expected_tests=['api/tests/test_new.py'],
+    gate = red_gate(output, code, runner=None, expected_tests=[f'{directory_name}/tests/test_new.py'],
                     test_command=command, project_dir=tmp_path)
     assert gate.passed, gate.reason
     wrong = red_gate(output, code, runner=None, expected_tests=['other/tests/test_new.py'],
