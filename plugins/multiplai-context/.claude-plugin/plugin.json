@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.57.1",
+  "version": "0.58.0",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -233,6 +233,18 @@
       "title": "Memory Relevance Cutoff (keep_ratio)",
       "description": "token_overlap router: keep a memory file only if it scores at least this fraction of the top match (0-1). Higher = stricter (fewer, more-relevant files, less 10-file cap saturation); lower admits more of the weaker tail. Default 0.30. Ignored under the 'llm' strategy.",
       "default": 0.3
+    },
+    "memory_budget_bytes": {
+      "type": "number",
+      "title": "Memory Budget (Bytes)",
+      "description": "Most memory content injected into one prompt, in bytes. When the router picks more, the lowest-ranked picks are dropped first; a top pick that alone exceeds the budget is replaced by a pointer to its file. 0 disables the budget.",
+      "default": 40000
+    },
+    "whole_file_max_bytes": {
+      "type": "number",
+      "title": "Whole-File Limit (Bytes)",
+      "description": "Memory files larger than this are never injected whole. A pick naming such a file without a section loads the sections the router also picked from it, or else a pointer: the file's path, its opening lines and its section list (nothing, for a file in a shared bank). 0 disables the limit.",
+      "default": 20000
     },
     "enable_costs": {
       "type": "boolean",
