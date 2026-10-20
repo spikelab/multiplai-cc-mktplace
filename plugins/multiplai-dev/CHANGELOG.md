@@ -15,6 +15,22 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.88.0] - 2026-10-20
+
+### Added
+- buildme ships `scripts/review_metrics.py`, which reports how a build's
+  per-block review loop went, from the round records buildme already writes
+  (`reviews/block-NN-round-K.json`). Run
+  `python3 review_metrics.py <project>/specs` from the buildme scripts
+  directory: it prints a Markdown table per change with each block's review
+  rounds, the round it passed at, and the accepted and rejected findings of
+  every round. For each finding accepted in round 2 or later it says whether
+  the flagged line was already there at the first review or was written by a
+  fix (from `git blame` and `git merge-base` in the project; `unknown` when
+  git cannot tell). A totals line gives the mean rounds-to-pass, the share of
+  blocks passing at round 1 and the share of round-2+ findings present at the
+  first review. It writes nothing, uses no network and makes no model calls.
+
 ## [0.86.0] - 2026-10-20
 
 ### Fixed
