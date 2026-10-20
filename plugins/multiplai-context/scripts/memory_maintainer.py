@@ -26,8 +26,10 @@ This runs eight passes, unattended, at most once a day (pass 8 weekly):
   2. **Dream proposal** — only when the dream gate is open AND there is a
      learnings backlog. Generates a *proposal*; applying stays behind
      `/dream-remember`.
-  3. **Catalog refresh** — only when the catalog is older than the memory
-     files it indexes.
+  3. **Catalog refresh** — the memory catalog only when it is older than the
+     memory files it indexes; the skills catalog (when ``enable_skills`` is
+     on) only when it is past ``catalog_ttl_hours`` or the installed plugin
+     set changed after it was generated.
   4. **Project status** (`synthesize_now`) — rebuilds `now/<project>.md` for
      the active project only, so the state injected at the next SessionStart
      reflects yesterday's work rather than whenever `/now` was last run.
@@ -372,6 +374,94 @@ def run_catalog(script_dir: Path, memory_dir: Path, catalogs_dir: Path,
         return PassResult("catalog", False, f"error: {exc}")
 
 
+def skills_catalog_is_stale(
+    catalog_path: Path, ttl_hours: float, plugins_manifest: Path
+) -> bool:
+    """True when the skills catalog is missing, past its TTL, or older than
+    the installed plugin set.
+
+    Age comes from the catalog's ``generated_at``, falling back to the file's
+    mtime when that is missing or unreadable. ``installed_plugins.json``
+    changes on every plugin install, update or removal, which is what adds
+    or removes plugin skills; a newer manifest means the catalog may list
+    skills that are gone and miss ones that arrived.
+    """
+    if not catalog_path.is_file():
+        return True
+    try:
+        cat_mtime = catalog_path.stat().st_mtime
+    except OSError:
+        return False
+    generated = None
+    try:
+        raw = json.loads(catalog_path.read_text(encoding="utf-8")).get("generated_at")
+        if isinstance(raw, str):
+            generated = datetime.fromisoformat(raw)
+            if generated.tzinfo is None:
+                generated = generated.replace(tzinfo=timezone.utc)
+    except (OSError, ValueError, AttributeError):
+        generated = None
+    if generated is None:
+        generated = datetime.fromtimestamp(cat_mtime, timezone.utc)
+    if datetime.now(timezone.utc) - generated > timedelta(hours=max(0.0, ttl_hours)):
+        return True
+    try:
+        return plugins_manifest.stat().st_mtime > cat_mtime
+    except OSError:
+        return False
+
+
+def run_skills_catalog(script_dir: Path, catalogs_dir: Path, *,
+                       enable_skills: bool, ttl_hours: float, plugins_dir: Path,
+                       dry_run: bool = False) -> PassResult:
+    """Rebuild the skills catalog when it is stale (see the staleness test).
+
+    ``--only skills`` runs the generator even when the subprocess does not
+    receive ``enable_skills``; the option is checked here instead. Same
+    supervised, bounded subprocess as the memory rebuild.
+    """
+    try:
+        if not enable_skills:
+            return PassResult("skills_catalog", False, "enable_skills is off")
+        manifest = plugins_dir / "installed_plugins.json"
+        if not skills_catalog_is_stale(catalogs_dir / "skills.json", ttl_hours, manifest):
+            return PassResult("skills_catalog", False, "skills catalog is current")
+        if dry_run:
+            return PassResult("skills_catalog", True, "would rebuild (dry run)")
+        proc = run_supervised(
+            uv_run_argv(script_dir / "generate_catalog.py", "--only", "skills"),
+            timeout=SHORT_PASS_TIMEOUT_S,
+        )
+        if proc.returncode != 0:
+            return PassResult("skills_catalog", False, f"exit {proc.returncode}")
+        return PassResult("skills_catalog", True, "skills catalog rebuilt")
+    except subprocess.TimeoutExpired:
+        return PassResult("skills_catalog", False, "timed out")
+    except Exception as exc:
+        logger.exception("Skills catalog pass failed")
+        return PassResult("skills_catalog", False, f"error: {exc}")
+
+
+def _skills_catalog_pass(script_dir: Path, catalogs_dir: Path, *,
+                         dry_run: bool) -> PassResult:
+    """``run_skills_catalog`` with its settings read from the plugin options."""
+    try:
+        from generators.config import load_catalog_config
+        from lib.plugin_skills import default_plugins_dir
+
+        cfg = load_catalog_config()
+        return run_skills_catalog(
+            script_dir, catalogs_dir,
+            enable_skills=cfg.enable_skills,
+            ttl_hours=cfg.ttl_hours,
+            plugins_dir=default_plugins_dir(cfg.plugins_dir or None),
+            dry_run=dry_run,
+        )
+    except Exception as exc:
+        logger.exception("Skills catalog pass failed")
+        return PassResult("skills_catalog", False, f"error: {exc}")
+
+
 # --- pass 4: project status -------------------------------------------------
 
 def active_project(diary_dir: Path) -> str | None:
@@ -672,6 +762,8 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
                                    dry_run=dry_run))
     report.passes.append(run_catalog(script_dir, memory_dir, paths.catalogs_dir(),
                                      dry_run=dry_run))
+    report.passes.append(_skills_catalog_pass(script_dir, paths.catalogs_dir(),
+                                              dry_run=dry_run))
     report.passes.append(run_status(paths.diary_dir(), dry_run=dry_run))
     report.passes.append(run_utilisation_compact(data_dir, dry_run=dry_run))
     report.passes.append(run_utilisation_judge(data_dir, dry_run=dry_run))

@@ -1075,7 +1075,7 @@ fetch at session start. Eight passes — seven daily, one weekly:
 |---|---|---|
 | 1. Memory lint | `lib/memory_lint` — expired `review by` dates, unannotated volatile facts, duplicate `##` section names | no |
 | 2. Dream proposal | Only when the dream gate is open, a learnings backlog exists, **and** no un-archived proposal is already waiting | yes |
-| 3. Catalog refresh | Only when a memory file is newer than the catalog that indexes it | yes |
+| 3. Catalog refresh | Memory: only when a memory file is newer than the catalog that indexes it. Skills (with `enable_skills` on): only when the skills catalog is older than `catalog_ttl_hours` or `installed_plugins.json` changed after it was generated | yes |
 | 4. `now/` rebuild | `synthesize_now` for the **active project only**, on a **Haiku** tier | yes (cheap) |
 | 5. Utilisation retention | Collapses `utilisation.jsonl` records older than 90 days into per-section totals | no |
 | 6. Utilisation judge | Rules on a sample of un-judged sessions (`utilisation_judge_sample`, default 5), on a **Haiku** tier | yes (cheap) |

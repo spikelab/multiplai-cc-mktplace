@@ -40,6 +40,11 @@ are the release dates recorded at the time, not derived from a tag.
   again as soon as the catalog or memory file they are about changes. The stale-catalog warning now
   names the exact command that fixes it:
   `/multiplai-context:refresh-catalogs --only <catalog>`.
+- The daily maintenance run now also rebuilds the skills catalog, when
+  `enable_skills` is on and the catalog is older than `catalog_ttl_hours`
+  (default 168 h) or a plugin was installed, updated or removed since it was
+  generated. Before, only memory was rebuilt automatically, so skills
+  suggestions went stale until someone ran the refresh by hand.
 
 ### Added
 - The `context` `inject` activity event carries `pointers` (memory entries,
