@@ -150,6 +150,64 @@ class TestParseLearning:
         assert "kind" not in entry
         assert entry["provenance"] == "RESEARCH"
 
+    # The extractor put a *kind* in the provenance field six times in a week
+    # (2026-10-16..18: provenance='DECISION'). The kind it meant is not in
+    # doubt, so it is recovered; where the knowledge came from was never
+    # stated, so provenance stays absent (renders as `?`) rather than being
+    # filled with a guess.
+
+    def test_a_kind_given_as_provenance_is_moved_to_kind(self, caplog):
+        entry = _parse_learning(
+            "provenance: DECISION\ndescription: We're going with Postgres.\n"
+        )
+        assert entry["kind"] == "DECISION"
+        assert "provenance" not in entry
+        assert entry["description"] == "We're going with Postgres."
+        assert "not in the accepted set" not in caplog.text
+
+    def test_a_kind_given_as_provenance_matching_kind_is_kept_once(self):
+        entry = _parse_learning(
+            "provenance: decision\nkind: DECISION\ndescription: Use Postgres.\n"
+        )
+        assert entry["kind"] == "DECISION"
+        assert "provenance" not in entry
+
+    def test_a_kind_given_as_provenance_never_overrides_an_explicit_kind(self):
+        entry = _parse_learning(
+            "provenance: DECISION\nkind: RULE\ndescription: Always use Postgres.\n"
+        )
+        assert entry["kind"] == "RULE"
+        assert "provenance" not in entry
+
+    def test_a_kind_given_as_provenance_fills_a_rejected_kind(self):
+        """An out-of-set kind is dropped, and the recovered kind takes its place."""
+        entry = _parse_learning(
+            "provenance: FACT\nkind: PREFERENCE\ndescription: X is true.\n"
+        )
+        assert entry["kind"] == "FACT"
+        assert "provenance" not in entry
+
+    def test_the_log_says_recovered_only_when_the_kind_was_used(self, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger="lib.extraction"):
+            _parse_learning("provenance: DECISION\ndescription: Use Postgres.\n")
+        assert "recovered as kind" in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="lib.extraction"):
+            _parse_learning(
+                "provenance: DECISION\nkind: RULE\ndescription: Use Postgres.\n"
+            )
+        assert "recovered as kind" not in caplog.text
+        assert "ignored" in caplog.text
+
+    def test_a_recovered_record_renders_with_provenance_unstated(self):
+        entry = _parse_learning(
+            "provenance: DECISION\ntarget: dev.md\n"
+            "description: Use Postgres.\naction: Note it.\n"
+        )
+        assert "**[?/DECISION]**" in _format_learning_entry(entry)
+
     def test_a_legacy_record_still_parses(self):
         """Case 2. 227 pending records use the old shape and are never rewritten."""
         entry = _parse_learning(
