@@ -186,8 +186,10 @@ one-pass rule as the design audit, recorded in
 A failed review call records neither, so a resume asks the model again. The
 `no-new-behaviour` blocks a model-free scan finds still get one rewrite of
 `tasks.md` in that case, recorded as `spec_gen.plan_review_scan_regen_done`, so
-the stage rewrites `tasks.md` at most twice per build: once for that scan after
-a failed call, once for a completed review.
+the review rewrites `tasks.md` at most twice per build: once for that scan after
+a failed call, once for a completed review. The shape audit runs on each of
+those rewrites and may rewrite `tasks.md` once more after each, so `tasks.md`
+is written at most four times in this stage.
 
 `oversized-plan` is deliberately excluded from that regeneration. It names a
 proposed cut and the signature boundary the cut crosses, and stops there:

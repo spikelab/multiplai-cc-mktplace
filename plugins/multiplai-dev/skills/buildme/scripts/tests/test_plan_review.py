@@ -780,12 +780,14 @@ class TestNoBehaviourBlocks:
         assert state.spec_gen.plan_review_regen_done is True
         assert state.spec_gen.plan_review_done is True
 
-    def test_the_prompt_section_makes_it_critical_and_names_the_home(self):
+    def test_the_severity_scale_rates_it_and_the_section_names_the_home(self):
+        """The reviewer rates the finding from the severity scale; the
+        category's own text does not decide its severity in advance."""
         section = PLAN_REVIEW_PROMPT[
             PLAN_REVIEW_PROMPT.index("### `no-new-behaviour`"):
         ]
         section = section[:section.index("\n### ", 1)]
-        assert "**critical**" in section
+        assert "critical" not in section
         assert "Name the earlier block its criteria belong in" in section
         severity = PLAN_REVIEW_PROMPT[PLAN_REVIEW_PROMPT.index("- **critical**"):]
         assert "adds no behaviour" in severity[:severity.index("- **major**")]

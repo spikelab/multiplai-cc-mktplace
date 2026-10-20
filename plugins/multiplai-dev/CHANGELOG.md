@@ -15,6 +15,31 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.85.1] - 2026-10-20
+
+### Fixed
+- buildme: when the tasks.md rewrite after the shape audit fails, the first
+  pass stands as before, and the log now names any block in it that adds no
+  behaviour (`PHASE: no_behaviour_blocks_remain`), so a TDD RED-gate failure
+  on that block is no longer a surprise.
+- buildme: a block that says "no new code changes to the core" or "no new
+  code needed in the core" (scoped to another part of the code) is no longer
+  flagged as a block that adds no behaviour, so it no longer costs a
+  tasks.md rewrite.
+- buildme: a block of test steps such as "Update `tests/test_words.py` with
+  tab cases" or "Add a case for an empty string" is flagged again as a block
+  that adds no behaviour, and gets its tasks.md rewrite before the TDD RED
+  gate fails it. A test-first block whose code step ends "so the tests pass",
+  or is "Make the failing tests pass", is not flagged, nor is one whose code
+  step is "Add case-insensitive matching".
+- buildme: the README and SKILL.md now give the right number of tasks.md
+  rewrites the plan review can cause.
+- buildme: the plan review now rates a block that adds no behaviour from its
+  severity scale, as every other finding, instead of being told it is
+  critical; the tasks audit, which rewrites on any finding, no longer asks for
+  a fixed severity either. The tasks prompt now says where criteria that
+  only confirm earlier behaviour belong, instead of forbidding such blocks.
+
 ## [0.85.0] - 2026-10-20
 
 ### Fixed
