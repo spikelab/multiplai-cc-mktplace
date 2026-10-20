@@ -108,6 +108,7 @@ STATUS: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
 TESTS_RUN: <the exact command you ran>
 FILES: <test files you created or modified, comma-separated>
 TEST_COUNT: <how many tests you wrote>
+RED_EXPECTED: <test ids that must fail, comma-separated> — <what is missing that makes them fail>
 SURPRISES: <what did not match the spec/design, or "none">
 SPEC_IMPACT: <none | clarify | contradicts>
 ```
@@ -115,6 +116,12 @@ SPEC_IMPACT: <none | clarify | contradicts>
 Use DONE when the tests are written and fail for the right reason;
 DONE_WITH_CONCERNS when they are written but something is worth flagging (state
 what under the slot); NEEDS_CONTEXT or BLOCKED per the section above.
+
+RED_EXPECTED names each test you expect to fail before the implementation
+exists, by the id the test command prints for it (for pytest,
+`path/to/test_file.py::test_name`), then what the code is missing that makes
+them fail. The pipeline compares it with the failures the RED run reports and
+gives both to the reviewer.
 
 SURPRISES and SPEC_IMPACT close the loop back to the spec. Write down anything
 the specs did not prepare you for — a scenario whose expected shape differs from
