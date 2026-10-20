@@ -22,10 +22,11 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import BlockInfo, PriorAssessment, ReviewFinding, ReviewResult
+from .models import BlockInfo, PriorAssessment, ReviewFinding, ReviewResult, class_line
 
 log = logging.getLogger(__name__)
 
@@ -230,6 +231,137 @@ def open_state(
     last = records[-1]
     entries = last["open_findings"] if "open_findings" in last else last.get("accepted")
     return _findings(entries, block_number, last["round"]), rejected, last
+
+
+@dataclass
+class RoundMemory:
+    """What the adjudicator is given from round 2 of a block on: the open
+    findings, every earlier-rejected one (with its judge's reason), and the
+    scope diff since the previous review (None when git could not give it,
+    which leaves every finding in scope)."""
+
+    open: list[ReviewFinding]
+    rejected: list[dict]
+    scope_diff: str | None
+
+
+def complete_assessments(
+    assessments: list[PriorAssessment], open_: list[ReviewFinding],
+) -> list[PriorAssessment]:
+    """One assessment per open finding, in the open list's order. An open
+    finding the review gave no status is ``cannot_verify``, never resolved;
+    a status for an id that is not open is left out."""
+    given = {a.finding_id: a for a in assessments}
+    return [given.get(f.finding_id) or PriorAssessment(finding_id=f.finding_id,
+                                                       status="cannot_verify")
+            for f in open_]
+
+
+@dataclass
+class RoundPlan:
+    """What a round from 2 on does with its findings (plan B2 step 4).
+
+    *carried*: the open findings that stay open, with any restatement's
+    evidence appended. *new_open* / *outside*: indices into the round's
+    accepted findings that are new and within the fix's reach (Critical ones
+    whatever their reach) / new, outside it and not Critical. *to_fix*: what
+    the fix agent is given, *carried* then the *new_open* findings."""
+
+    assessments: list[PriorAssessment]
+    carried: list[ReviewFinding] = field(default_factory=list)
+    new_open: list[int] = field(default_factory=list)
+    outside: list[int] = field(default_factory=list)
+    to_fix: list[ReviewFinding] = field(default_factory=list)
+
+    def status(self, finding_id: str) -> str:
+        return next((a.status for a in self.assessments if a.finding_id == finding_id),
+                    "cannot_verify")
+
+
+def plan_round(
+    accepted: list[ReviewFinding], open_: list[ReviewFinding],
+    assessments: list[PriorAssessment],
+) -> RoundPlan:
+    """Sort a round's accepted findings against the open list (plan B2
+    step 4). An accepted finding whose `duplicate_of` names an open finding
+    is not new: its evidence goes on that finding, which then stays open
+    even if the review called it resolved. A missing `in_fix_scope` is in
+    scope; a Critical finding is fixed whatever its scope."""
+    plan = RoundPlan(assessments=complete_assessments(assessments, open_))
+    open_ids = {f.finding_id for f in open_}
+    restated: dict[str, list[str]] = {}
+    for i, f in enumerate(accepted):
+        if f.duplicate_of and f.duplicate_of in open_ids:
+            restated.setdefault(f.duplicate_of, []).append(f.evidence or f.claim)
+        elif f.in_fix_scope is False and f.severity.strip().lower() != "critical":
+            plan.outside.append(i)
+        else:
+            plan.new_open.append(i)
+    for f in open_:
+        more = restated.get(f.finding_id)
+        if plan.status(f.finding_id) == "resolved" and not more:
+            continue
+        if more:
+            f = f.model_copy(update={"evidence": "\n".join(
+                [f.evidence, *(f"RESTATED: {e}" for e in more)]).strip()})
+        plan.carried.append(f)
+    plan.to_fix = plan.carried + [accepted[i] for i in plan.new_open]
+    return plan
+
+
+def open_findings_text(plan: RoundPlan) -> str:
+    """The carried open findings for the fix brief, each with its status."""
+    lines = []
+    for f in plan.carried:
+        where = f" ({f.file_path}:{f.line})" if f.file_path else ""
+        lines.append(f"- {f.finding_id} [{f.severity}] {f.claim}{where} — status: "
+                     f"{plan.status(f.finding_id)}")
+        if f.evidence:
+            lines.append(f"  evidence: {f.evidence}")
+        if class_line(f):
+            lines.append(class_line(f).lstrip("\n"))
+    return "\n".join(lines)
+
+
+def history(change_dir: Path, block_number: int) -> list[tuple[ReviewFinding, list[str]]]:
+    """Every finding this block's review records accepted, by id, in the
+    order first raised, with what each round said about it."""
+    seen: dict[str, tuple[ReviewFinding, list[str]]] = {}
+    for record in _review_records(change_dir, block_number):
+        k = record["round"]
+        for f in _findings(record.get("accepted"), block_number, k):
+            if f.duplicate_of and f.duplicate_of in seen:
+                seen[f.duplicate_of][1].append(f"round {k}: restated")
+                continue
+            seen.setdefault(f.finding_id, (f, []))[1].append(f"round {k}: raised")
+        for entry in record.get("prior_assessments") or []:
+            fid = entry.get("finding_id") if isinstance(entry, dict) else None
+            if fid in seen:
+                seen[fid][1].append(f"round {k}: {entry.get('status')}")
+        for f in _findings(record.get("outside_fix_scope"), block_number, k):
+            if f.finding_id in seen:
+                seen[f.finding_id][1].append(f"round {k}: outside the last fix's scope")
+    return list(seen.values())
+
+
+def history_text(change_dir: Path, block_number: int) -> str:
+    lines = []
+    for f, events in history(change_dir, block_number):
+        where = f" ({f.file_path}:{f.line})" if f.file_path else ""
+        lines.append(f"- {f.finding_id} [{f.severity}] {f.claim}{where} — {'; '.join(events)}")
+    return "\n".join(lines) or "(no findings recorded)"
+
+
+def recurring_ids(change_dir: Path, block_number: int) -> list[str]:
+    """Ids whose status was ``still_present`` or ``partially_resolved`` in
+    two or more of the block's review records."""
+    counts: dict[str, int] = {}
+    for record in _review_records(change_dir, block_number):
+        for entry in record.get("prior_assessments") or []:
+            if isinstance(entry, dict) and entry.get("status") in (
+                    "still_present", "partially_resolved"):
+                counts[entry.get("finding_id")] = counts.get(entry.get("finding_id"), 0) + 1
+    return [fid for fid, n in counts.items() if fid and n >= 2]
 
 
 def update_round(path: Path | str | None, **fields) -> None:

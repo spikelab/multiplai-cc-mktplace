@@ -258,7 +258,7 @@ the same reason. Your job is to decide which of their findings are real.
 
 ## Findings to adjudicate
 {findings}
-
+{round_memory}
 ## How to judge
 Accept a finding when the diff genuinely shows the problem it claims, and
 fixing it would improve the block.
@@ -288,3 +288,40 @@ Return a verdict for EVERY finding, by its index.
 
 Return ONLY the JSON. No commentary.
 """
+
+# From round 2 of a block on, `_adjudicate_review_findings` fills
+# FINDING_ADJUDICATION_PROMPT's `{round_memory}` with this; in round 1 it is
+# empty and the prompt is what it always was. Scoping is the adjudicator's
+# job, never the reviewer's: the review prompt stays unbiased. Filled with
+# `.format()`, so the JSON example's braces are doubled.
+ADJUDICATION_ROUND_MEMORY = """
+## Findings still open from earlier rounds
+{open_findings}
+
+## Findings rejected in earlier rounds
+{rejected_findings}
+{scope_section}
+## Restatements{scope_title}
+Earlier rounds of this block were judged already. For each finding above
+(under Findings to adjudicate), also give:
+
+- `duplicate_of`: the id of the open or earlier-rejected finding it restates
+  (the same defect at the same place, in other words), or null when it
+  restates none of them.{scope_field}
+
+Add these to each verdict, for example:
+`{{"index": 0, "accepted": true, "reason": "...", "duplicate_of": null{scope_example}}}`
+"""
+
+ADJUDICATION_SCOPE_SECTION = """
+## Changes since the previous review (scope diff)
+Everything committed since the previous review ran, which is what the last
+fix changed:
+```
+{scope_diff}
+```
+"""
+
+ADJUDICATION_SCOPE_FIELD = """
+- `in_fix_scope`: true when the finding is in code the scope diff added or
+  changed, or in code that calls what it changed; false otherwise."""

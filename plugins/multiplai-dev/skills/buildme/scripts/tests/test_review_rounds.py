@@ -169,7 +169,11 @@ class TestRoundRecords:
     async def test_round_files_are_written_and_never_overwritten(self, project):
         p = project
         head_at_review = _git(p.dir, "rev-parse", "HEAD")
-        reviews = [_failing([_finding(), _finding("Minor", "names are unclear")]), _passing()]
+        # Round 2 calls round 1's finding resolved, so the block passes with
+        # nothing open and no fix on pass.
+        resolved = _passing().model_copy(update={"prior_assessments": [
+            PriorAssessment(finding_id="B01-R1-F1", status="resolved")]})
+        reviews = [_failing([_finding(), _finding("Minor", "names are unclear")]), resolved]
         adjudication = FindingAdjudication(verdicts=[
             FindingVerdict(index=0, accepted=True),
             FindingVerdict(index=1, accepted=False, reason="the spec names them"),
@@ -228,7 +232,7 @@ class TestRoundRecords:
         p = project
         seen = []
 
-        async def review(block, config):
+        async def review(block, config, **_):
             from build_pipeline.tdd_engine import _capture_block_diff
             seen.append(_capture_block_diff(config, block))
             return _failing([_finding()]) if len(seen) == 1 else _passing()
@@ -998,3 +1002,265 @@ class TestOpenState:
         open_, _, last = review_rounds.open_state(tmp_path, 1)
         assert [f.claim for f in open_] == ["review round"]
         assert last["round"] == 1
+
+
+# B2-B4: from round 2 on, the loop remembers the open findings, merges
+# restatements, keeps new findings within the last fix's reach, escalates
+# the last fix, and names each defect's kind and other locations.
+
+
+def _memory_engine(reviews, fixer, adjudications):
+    """`_engine` with one adjudication result (or exception) per round.
+    Returns (stack, review_mock, fixer_mock, judge_mock)."""
+    stack = ExitStack()
+    review = stack.enter_context(patch(
+        "build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+        side_effect=list(reviews)))
+    fix = stack.enter_context(patch(
+        "build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
+        side_effect=fixer))
+    judge = stack.enter_context(patch(
+        "build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
+        side_effect=list(adjudications)))
+    return stack, review, fix, judge
+
+
+def _assess(review: ReviewResult, *pairs) -> ReviewResult:
+    return review.model_copy(update={"prior_assessments": [
+        PriorAssessment(finding_id=fid, status=status) for fid, status in pairs]})
+
+
+def _verdicts(*verdicts) -> FindingAdjudication:
+    return FindingAdjudication(verdicts=list(verdicts))
+
+
+OFF_BY_ONE = "off-by-one in add()"
+NAMES = "names are unclear"
+NEW = "sub() is missing"
+
+
+async def _two_rounds(p, round2: ReviewResult, verdict2: FindingAdjudication | Exception,
+                      round1: ReviewResult | None = None,
+                      verdict1: FindingAdjudication | None = None, third=None):
+    """Round 1 fails with OFF_BY_ONE accepted and NAMES rejected, a fix
+    lands, round 2 is *round2* judged by *verdict2*; then *third* (passing
+    by default) ends the loop, with no fix on pass. Returns (passed, records,
+    review, fix, judge)."""
+    p.config.fix_on_pass = False
+    round1 = round1 or _failing([_finding(), _finding("Minor", NAMES)])
+    verdict1 = verdict1 or _verdicts(
+        FindingVerdict(index=0, accepted=True),
+        FindingVerdict(index=1, accepted=False, reason="the spec names them"))
+    reviews = [round1, round2] + ([] if round2.passed else [third or _passing()])
+    judges = [verdict1, verdict2, FindingAdjudication()]
+    stack, review, fix, judge = _memory_engine(
+        reviews, _fixer(p.dir, {"app.py": FIXED}), judges)
+    with stack:
+        passed = await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+    return passed, _rounds(p), review, fix, judge
+
+
+def _ids(entries) -> list[str]:
+    return [e["finding_id"] for e in entries]
+
+
+class TestRoundMemory:
+    @pytest.mark.asyncio
+    async def test_round_one_is_reviewed_and_judged_as_today(self, project):
+        from build_pipeline.prompts.review import FINDING_ADJUDICATION_PROMPT
+        p = project
+        _, rounds, review, _, judge = await _two_rounds(
+            p, _passing(), FindingAdjudication())
+        assert review.await_args_list[0].kwargs == {}
+        prompt = judge.await_args_list[0].args[0]
+        assert "Findings still open from earlier rounds" not in prompt
+        assert "duplicate_of" not in prompt and "in_fix_scope" not in prompt
+        assert prompt.endswith(FINDING_ADJUDICATION_PROMPT.split("{round_memory}", 1)[1].format())
+        assert _ids(rounds[1]["open_findings"]) == ["B01-R1-F1"]
+
+    @pytest.mark.asyncio
+    async def test_round_two_reviewer_is_given_the_open_findings(self, project):
+        p = project
+        _, _, review, _, _ = await _two_rounds(p, _passing(), FindingAdjudication())
+        given = review.await_args_list[1].kwargs["open_findings"]
+        assert [(f.finding_id, f.claim) for f in given] == [("B01-R1-F1", OFF_BY_ONE)]
+
+    @pytest.mark.asyncio
+    async def test_round_two_adjudicator_sees_open_rejected_and_the_scope_diff(self, project):
+        p = project
+        await_ = await _two_rounds(p, _failing([_finding("Major", NEW)]), FindingAdjudication())
+        prompt = await_[4].await_args_list[1].args[0]
+        assert "B01-R1-F1" in prompt and OFF_BY_ONE in prompt
+        assert "B01-R1-X1" in prompt and "the spec names them" in prompt
+        # The scope diff is everything since round 1's head: the fix commit.
+        scope = prompt.split("## Changes since the previous review", 1)[1]
+        assert "-    return a + b + 1" in scope and "+    return a + b" in scope
+        assert "block-01-round-1.json" not in scope
+        assert "duplicate_of" in prompt and "in_fix_scope" in prompt
+
+    @pytest.mark.asyncio
+    async def test_a_missing_assessment_is_cannot_verify_and_stays_open(self, project):
+        p = project
+        _, rounds, *_ = await _two_rounds(p, _failing([_finding("Major", NEW)]),
+                                          FindingAdjudication())
+        assert rounds[2]["prior_assessments"] == [
+            {"finding_id": "B01-R1-F1", "status": "cannot_verify", "evidence": ""}]
+        assert _ids(rounds[2]["open_findings"]) == ["B01-R1-F1", "B01-R2-F1"]
+
+    @pytest.mark.asyncio
+    async def test_a_resolved_finding_leaves_the_open_list_and_the_brief(self, project):
+        p = project
+        _, rounds, *_ = await _two_rounds(
+            p, _assess(_failing([_finding("Major", NEW)]), ("B01-R1-F1", "resolved")),
+            FindingAdjudication())
+        assert _ids(rounds[2]["open_findings"]) == ["B01-R2-F1"]
+        assert OFF_BY_ONE not in rounds[2]["fix_brief"]
+        assert NEW in rounds[2]["fix_brief"]
+
+    @pytest.mark.asyncio
+    async def test_a_finding_still_present_is_in_the_brief_with_its_status(self, project):
+        p = project
+        _, rounds, *_ = await _two_rounds(
+            p, _assess(_failing(), ("B01-R1-F1", "still_present")), FindingAdjudication())
+        brief = rounds[2]["fix_brief"]
+        section = brief.split("## Findings still open from earlier rounds", 1)[1]
+        assert "B01-R1-F1" in section and OFF_BY_ONE in section and "still_present" in section
+
+    @pytest.mark.asyncio
+    async def test_a_restatement_of_an_open_finding_is_merged_into_it(self, project):
+        p = project
+        restated = _finding("Major", "add() returns one too many").model_copy(
+            update={"evidence": "line 2 adds 1"})
+        _, rounds, *_ = await _two_rounds(
+            p, _failing([restated]),
+            _verdicts(FindingVerdict(index=0, accepted=True, duplicate_of="B01-R1-F1")))
+        assert rounds[2]["accepted"][0]["duplicate_of"] == "B01-R1-F1"
+        assert _ids(rounds[2]["open_findings"]) == ["B01-R1-F1"]
+        assert "line 2 adds 1" in rounds[2]["open_findings"][0]["evidence"]
+        adjudicated = rounds[2]["fix_brief"].split("## Adjudicated findings", 1)
+        assert len(adjudicated) == 1 or "one too many" not in adjudicated[1]
+
+    @pytest.mark.asyncio
+    async def test_a_restatement_of_a_rejected_finding_stays_accepted(self, project):
+        p = project
+        _, rounds, *_ = await _two_rounds(
+            p, _failing([_finding("Minor", "the names are still unclear")]),
+            _verdicts(FindingVerdict(index=0, accepted=True, duplicate_of="B01-R1-X1")))
+        entry = rounds[2]["accepted"][0]
+        assert entry["duplicate_of"] == "B01-R1-X1"
+        assert entry["earlier_judge_reason"] == "the spec names them"
+        assert "B01-R2-F1" in _ids(rounds[2]["open_findings"])
+        assert "the names are still unclear" in rounds[2]["fix_brief"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("duplicate_of", [None, "B07-R9-F9"], ids=["missing", "unknown"])
+    async def test_no_known_duplicate_means_a_new_finding(self, project, duplicate_of):
+        p = project
+        _, rounds, *_ = await _two_rounds(
+            p, _failing([_finding("Major", NEW)]),
+            _verdicts(FindingVerdict(index=0, accepted=True, duplicate_of=duplicate_of)))
+        assert rounds[2]["accepted"][0]["duplicate_of"] is None
+        assert "B01-R2-F1" in _ids(rounds[2]["open_findings"])
+        assert NEW in rounds[2]["fix_brief"]
+
+    @pytest.mark.asyncio
+    async def test_a_finding_outside_the_fix_scope_is_recorded_not_fixed(self, project):
+        p = project
+        _, rounds, *_ = await _two_rounds(
+            p, _failing([_finding("Major", NEW)]),
+            _verdicts(FindingVerdict(index=0, accepted=True, in_fix_scope=False)))
+        assert [f["claim"] for f in rounds[2]["outside_fix_scope"]] == [NEW]
+        assert "B01-R2-F1" not in _ids(rounds[2]["open_findings"])
+        assert NEW not in rounds[2]["fix_brief"]
+        unfixed = _unfixed(p)
+        assert NEW in unfixed and "outside the last fix's scope (round 2)" in unfixed
+
+    @pytest.mark.asyncio
+    async def test_a_critical_finding_outside_the_fix_scope_is_still_fixed(self, project):
+        p = project
+        _, rounds, *_ = await _two_rounds(
+            p, _failing([_finding("Critical", NEW)]),
+            _verdicts(FindingVerdict(index=0, accepted=True, in_fix_scope=False)))
+        assert rounds[2]["outside_fix_scope"] == []
+        assert "B01-R2-F1" in _ids(rounds[2]["open_findings"])
+        assert NEW in rounds[2]["fix_brief"]
+        assert "outside the last fix's scope" not in _unfixed(p)
+
+    @pytest.mark.asyncio
+    async def test_a_missing_scope_verdict_means_in_scope(self, project):
+        p = project
+        _, rounds, *_ = await _two_rounds(
+            p, _failing([_finding("Minor", NEW)]),
+            _verdicts(FindingVerdict(index=0, accepted=True)))
+        assert rounds[2]["outside_fix_scope"] == []
+        assert NEW in rounds[2]["fix_brief"]
+
+    @pytest.mark.asyncio
+    async def test_an_adjudicator_error_in_round_two_keeps_everything_open(self, project):
+        p = project
+        _, rounds, *_ = await _two_rounds(
+            p, _failing([_finding("Minor", NEW)]), RuntimeError("judge down"))
+        assert _ids(rounds[2]["open_findings"]) == ["B01-R1-F1", "B01-R2-F1"]
+        assert rounds[2]["outside_fix_scope"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_reviewer_cannot_set_ids_or_scope_itself(self, project):
+        p = project
+        sneaky = _finding("Minor", NEW).model_copy(update={
+            "finding_id": "B01-R1-F1", "duplicate_of": "B01-R1-F1", "in_fix_scope": False})
+        _, rounds, *_ = await _two_rounds(p, _failing([sneaky]), FindingAdjudication())
+        entry = rounds[2]["accepted"][0]
+        assert entry["finding_id"] == "B01-R2-F1"
+        assert entry["duplicate_of"] is None and entry["in_fix_scope"] is None
+        assert NEW in rounds[2]["fix_brief"]
+
+    @pytest.mark.asyncio
+    async def test_the_fix_on_pass_works_on_the_open_set_not_the_out_of_scope(self, project):
+        p = project
+        p.config.fix_on_pass = True
+        reviews = [_failing([_finding()]), _passing([_finding("Minor", NEW)]), _passing()]
+        stack, _, fix, _ = _memory_engine(
+            reviews, _fixer(p.dir, {"app.py": FIXED}),
+            [FindingAdjudication(),
+             _verdicts(FindingVerdict(index=0, accepted=True, in_fix_scope=False)),
+             FindingAdjudication()])
+        with stack:
+            assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+        on_pass = fix.await_args_list[1].kwargs["block_description"]
+        assert OFF_BY_ONE in on_pass and NEW not in on_pass
+
+    @pytest.mark.asyncio
+    async def test_reviewer_section_lists_open_findings_only_from_round_two(self, project):
+        from build_pipeline.tdd_engine import _run_quality_review
+        p = project
+        carried = _finding().model_copy(update={"finding_id": "B01-R1-F1"})
+        with patch("build_pipeline.tdd_engine.run_code_review", new_callable=AsyncMock,
+                   return_value=_passing()) as code_review:
+            await _run_quality_review(p.block, p.config)
+            await _run_quality_review(p.block, p.config, open_findings=[carried])
+        first, second = (c.kwargs["implementer_report"] for c in code_review.await_args_list)
+        assert "Findings still open from earlier rounds" not in first
+        section = second.split("### Findings still open from earlier rounds", 1)[1]
+        assert "B01-R1-F1" in section and "[Major]" in section
+        assert OFF_BY_ONE in section and "app.py:2" in section
+
+
+class TestDefectClass:
+    def test_findings_text_renders_class_and_other_locations(self):
+        f = _finding().model_copy(update={"defect_class": "off-by-one",
+                                          "other_locations": ["app.py:7", "lib.py:3"]})
+        text = ReviewResult(scores=[], findings=[f, _finding("Minor", NAMES)]).findings_text()
+        assert "class: off-by-one; also at: app.py:7, lib.py:3" in text
+        assert text.count("class:") == 1
+
+    @pytest.mark.asyncio
+    async def test_the_brief_asks_for_every_location_with_a_test(self, project):
+        p = project
+        located = _finding().model_copy(update={"other_locations": ["app.py:9"]})
+        p.config.fix_on_pass = False
+        stack, _, fix = _engine([_failing([located]), _passing()], _fixer(p.dir, {"app.py": FIXED}))
+        with stack:
+            assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+        brief = fix.await_args.kwargs["block_description"]
+        assert "also at: app.py:9" in brief
+        assert "Fix every listed location, and cover each one with a test." in brief

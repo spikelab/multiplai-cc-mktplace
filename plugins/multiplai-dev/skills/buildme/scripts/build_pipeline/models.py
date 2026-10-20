@@ -194,6 +194,15 @@ class ReviewFinding(BaseModel):
     # diff with the same defect: the fix agent fixes all of them at once.
     defect_class: str = ""
     other_locations: list[str] = Field(default_factory=list)
+    # Set from round 2 of a block on, by the adjudicator's verdict and never
+    # by a reviewer (`_adjudicate_review_findings` clears what a reviewer
+    # wrote here): the open or earlier-rejected finding this one restates,
+    # whether it is within the reach of the changes since the last review
+    # (None reads as in scope), and, for a restated rejected finding, the
+    # reason that earlier round rejected it.
+    duplicate_of: str | None = None
+    in_fix_scope: bool | None = None
+    earlier_judge_reason: str = ""
 
     @field_validator("defect_class", mode="before")
     @classmethod
@@ -223,6 +232,10 @@ class FindingVerdict(BaseModel):
     index: int
     accepted: bool
     reason: str = ""
+    # Asked for from round 2 of a block on. A missing value means "not a
+    # duplicate" and "in scope": adjudication fails open.
+    duplicate_of: str | None = None
+    in_fix_scope: bool | None = None
 
 
 class FindingAdjudication(BaseModel):
@@ -387,8 +400,19 @@ class ReviewResult(BaseModel):
             f"- [{f.severity}] {f.claim}"
             + (f" ({f.file_path}:{f.line})" if f.file_path else "")
             + (f"\n  evidence: {f.evidence}" if f.evidence else "")
+            + class_line(f)
             for f in self.findings
         )
+
+
+def class_line(f: ReviewFinding) -> str:
+    """`class: <defect_class>; also at: <locations>`, the parts present."""
+    parts = []
+    if f.defect_class:
+        parts.append(f"class: {f.defect_class}")
+    if f.other_locations:
+        parts.append(f"also at: {', '.join(f.other_locations)}")
+    return f"\n  {'; '.join(parts)}" if parts else ""
 
 
 class WeakTestFinding(BaseModel):

@@ -65,6 +65,7 @@ from .models import (
     FixOnPassState,
     GateResult,
     MutationResult,
+    ReviewFinding,
     ReviewResult,
     TestQualityAudit,
 )
@@ -72,7 +73,12 @@ from .mutation import changed_source_files, mutation_applies, render_report, run
 from .narrow_tests import agent_test_command, narrow_test_command
 from .progress import ProgressWriter
 from .prompts.implementation import REVIEW_FIX_SELF_CHECK
-from .prompts.review import FINDING_ADJUDICATION_PROMPT
+from .prompts.review import (
+    ADJUDICATION_ROUND_MEMORY,
+    ADJUDICATION_SCOPE_FIELD,
+    ADJUDICATION_SCOPE_SECTION,
+    FINDING_ADJUDICATION_PROMPT,
+)
 from .prompts.test_writing import DRAFTS_SECTION, TEST_QUALITY_PROMPT
 from .sdk import llm_call_structured
 from .state import BuildState, TDDState
@@ -789,12 +795,50 @@ async def _audit_test_quality(test_files_content: str, contracts: str, config: B
                                      budget_label="test_quality_audit")
 
 
+def _finding_lines(findings: list[ReviewFinding]) -> str:
+    """Open findings, by id, for the adjudicator."""
+    return "\n".join(
+        f"- {f.finding_id} [{f.severity}] {f.claim}"
+        + (f" ({f.file_path}:{f.line})" if f.file_path else "")
+        for f in findings) or "(none)"
+
+
+def _rejected_lines(rejected: list[dict]) -> str:
+    """Earlier-rejected findings, by id, each with the judge's reason."""
+    return "\n".join(
+        f"- {r.get('finding_id')} [{r.get('severity', '')}] {r.get('claim', '')}"
+        + (f" ({r['file_path']}:{r.get('line')})" if r.get("file_path") else "")
+        + f" — rejected: {r.get('judge_reason') or '(no reason recorded)'}"
+        for r in rejected) or "(none)"
+
+
+def _round_memory_text(memory: review_rounds.RoundMemory) -> str:
+    """FINDING_ADJUDICATION_PROMPT's `{round_memory}` for a round from 2 on."""
+    scoped = memory.scope_diff is not None
+    return ADJUDICATION_ROUND_MEMORY.format(
+        open_findings=_finding_lines(memory.open),
+        rejected_findings=_rejected_lines(memory.rejected),
+        scope_section=(ADJUDICATION_SCOPE_SECTION.format(
+            scope_diff=memory.scope_diff or "(no changes since the previous review)")
+            if scoped else ""),
+        scope_title=" and scope" if scoped else "",
+        scope_field=ADJUDICATION_SCOPE_FIELD if scoped else "",
+        scope_example=', "in_fix_scope": true' if scoped else "",
+    )
+
+
+# What only the adjudicator sets on a finding; a reviewer's value is cleared.
+_JUDGE_FIELDS = {"finding_id": "", "duplicate_of": None, "in_fix_scope": None,
+                 "earlier_judge_reason": ""}
+
+
 async def _adjudicate_review_findings(
     review: ReviewResult,
     block: BlockInfo,
     config: BuildConfig,
     diff: str,
     build_context: str = "",
+    memory: review_rounds.RoundMemory | None = None,
 ) -> ReviewResult:
     """Accept or reject each reviewer finding before anything acts on it.
 
@@ -816,8 +860,14 @@ async def _adjudicate_review_findings(
     finding stays accepted. The alternative — dropping findings when the judge
     is unavailable — would silently weaken review exactly when something is
     already going wrong.
+
+    *memory* (from round 2 of a block on) adds the open findings, the
+    earlier-rejected ones and the scope diff to the prompt, and each accepted
+    finding gets the verdict's `duplicate_of` (only an id the memory knows)
+    and `in_fix_scope`. Missing values mean "not a duplicate" and "in scope",
+    the same fail-open direction.
     """
-    candidates = review.findings_or_derived()
+    candidates = [f.model_copy(update=_JUDGE_FIELDS) for f in review.findings_or_derived()]
     if not candidates:
         return review.model_copy(update={"findings": []})
     if not config.adjudicate_findings:
@@ -841,6 +891,7 @@ async def _adjudicate_review_findings(
         diff=diff or "(no diff captured)",
         build_context=build_context or "(no additional build context)",
         findings=findings_text,
+        round_memory=_round_memory_text(memory) if memory else "",
     )
     try:
         adjudication = await llm_call_structured(
@@ -859,9 +910,21 @@ async def _adjudicate_review_findings(
 
     accepted_idx = adjudication.accepted_indices(len(candidates))
     reasons = {v.index: v.reason for v in adjudication.verdicts}
+    verdicts = {v.index: v for v in adjudication.verdicts}
+    open_ids = {f.finding_id for f in memory.open} if memory else set()
+    earlier = {r.get("finding_id"): r for r in memory.rejected} if memory else {}
     accepted, rejected = [], []
     for i, finding in enumerate(candidates):
         if i in accepted_idx:
+            v = verdicts.get(i)
+            if memory and v is not None:
+                dup = v.duplicate_of if v.duplicate_of in open_ids | set(earlier) else None
+                finding = finding.model_copy(update={
+                    "duplicate_of": dup,
+                    "in_fix_scope": v.in_fix_scope if memory.scope_diff is not None else None,
+                    "earlier_judge_reason": (earlier[dup].get("judge_reason") or ""
+                                             if dup in earlier else ""),
+                })
             accepted.append(finding)
         else:
             rejected.append(finding.model_copy(
@@ -1732,10 +1795,16 @@ async def _run_integration_and_review(
             state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
             return False
 
+        # What the block's earlier review rounds left open, read from the
+        # round records on disk (so a resumed loop picks it up too). Round 1
+        # has no earlier record and runs exactly as it always has.
+        open_, earlier_rejected, last = review_rounds.open_state(config.change_dir, block.number)
+
         # Run review (via llm_call_structured). Propagates SDK failures —
         # no silent fallback to fabricated passing scores.
         try:
-            review = await _run_quality_review(block, config)
+            review = await _run_quality_review(
+                block, config, **({"open_findings": open_} if open_ else {}))
         except BudgetExceededError:
             raise
         except Exception as e:
@@ -1750,16 +1819,29 @@ async def _run_integration_and_review(
 
         # Reviewers propose; the orchestrator disposes. THE core invariant:
         # no reviewer suggestion may reach a fix agent unadjudicated.
+        memory = None if last is None else review_rounds.RoundMemory(
+            open=open_, rejected=earlier_rejected, scope_diff=_scope_diff(config, last))
         review = await _adjudicate_review_findings(
             review, block, config, _capture_block_diff(config, block),
-            build_context=_global_constraints_text(config),
+            build_context=_global_constraints_text(config), memory=memory,
         )
-        block.review_scores = review
+        # From round 2: restatements of open findings merge into them, and
+        # new findings outside the last fix's reach (not Critical) are
+        # recorded, not fixed. The fix agent, and the fix on pass, get the
+        # rest; every one of them was accepted by the adjudicator.
+        plan = None if memory is None else review_rounds.plan_round(
+            review.findings, open_, review.prior_assessments)
+        block.review_scores = review if plan is None else review.model_copy(
+            update={"findings": plan.to_fix})
         block.review_iterations = iteration + 1
 
         score_gate = review_score_gate(review, config.review_gate)
         progress.log_review(block.name, iteration + 1, review.weighted_average, score_gate.passed)
-        round_path = _record_review_round(config, block, review, score_gate)
+        round_path = _record_review_round(config, block, review, score_gate, plan=plan)
+        if plan is not None and plan.outside:
+            review_rounds.append_unfixed(
+                config.change_dir, block, [review.findings[i] for i in plan.outside],
+                f"outside the last fix's scope (round {_round_of(round_path, last)})")
 
         if score_gate.passed:
             review_passed = True
@@ -1770,10 +1852,19 @@ async def _run_integration_and_review(
             break  # no fix agent after the last review — its work would go unreviewed
         # Spawn fix agent for the failing dimensions PLUS the findings that
         # survived adjudication. Rejected findings are absent by construction.
-        accepted_text = review.findings_text()
         fix_brief = score_gate.reason
+        if plan is None:
+            new_findings = review.findings
+        else:
+            new_findings = [review.findings[i] for i in plan.new_open]
+            open_text = review_rounds.open_findings_text(plan)
+            if open_text:
+                fix_brief += f"\n\n## Findings still open from earlier rounds (fix these)\n{open_text}"
+        accepted_text = ReviewResult(scores=[], findings=new_findings).findings_text()
         if accepted_text:
             fix_brief += f"\n\n## Adjudicated findings (accepted — fix these)\n{accepted_text}"
+        if any(f.other_locations for f in block.review_scores.findings):
+            fix_brief += "\n\nFix every listed location, and cover each one with a test."
         review_rounds.update_round(round_path, fix_brief=_review_fix_description(fix_brief))
         context = assemble_context(block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None)
         fix = await run_implementer(
@@ -1869,9 +1960,15 @@ def _finish_block(
 
 def _record_review_round(
     config: BuildConfig, block: BlockInfo, review: ReviewResult, gate: GateResult,
-    kind: str = "review",
+    kind: str = "review", plan: review_rounds.RoundPlan | None = None,
 ) -> Path | None:
-    """Write this round's record under the change dir's `reviews/`."""
+    """Write this round's record under the change dir's `reviews/`. With a
+    *plan* (round 2 on), its open list, assessments and out-of-scope
+    findings go in the record too."""
+    memory = {} if plan is None else {
+        "carried_open": plan.carried, "new_open": plan.new_open,
+        "outside": plan.outside, "prior_assessments": plan.assessments,
+    }
     return review_rounds.record_round(
         config.change_dir, block,
         head_sha=git_ops.rev_parse_head(config.project_dir),
@@ -1880,7 +1977,40 @@ def _record_review_round(
         gate_reason=gate.reason,
         weighted_average=review.weighted_average_with(config.review_gate),
         kind=kind,
+        **memory,
     )
+
+
+def _scope_diff(config: BuildConfig, last: dict) -> str | None:
+    """`git diff <last head_sha> HEAD`: every change committed since the
+    previous review ran, the round records left out as in the review diff.
+    None when the record has no head or git cannot give the diff."""
+    sha = last.get("head_sha")
+    if not sha:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--relative", sha, "HEAD", *_without_review_records(config)],
+            cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
+        )
+    except Exception as e:
+        log.warning("Could not diff %s..HEAD for the review scope: %s", sha[:8], e)
+        return None
+    if proc.returncode != 0:
+        log.warning("Could not diff %s..HEAD for the review scope: %s", sha[:8],
+                    proc.stderr.strip())
+        return None
+    diff = proc.stdout
+    if len(diff) > MAX_REVIEW_DIFF_CHARS:
+        diff = diff[:MAX_REVIEW_DIFF_CHARS] + "\n... (diff truncated)"
+    return diff
+
+
+def _round_of(round_path: Path | None, last: dict | None) -> int:
+    """The round number of a record path; the one after *last* when the
+    record could not be written."""
+    m = re.search(r"-round-(\d+)\.json$", str(round_path or ""))
+    return int(m.group(1)) if m else (last or {}).get("round", 0) + 1
 
 
 def _review_fix_description(brief: str) -> str:
@@ -2171,7 +2301,9 @@ async def _resume_fix_on_pass(
     return _finish_block(block, config, state, progress, block_idx, total)
 
 
-async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewResult:
+async def _run_quality_review(
+    block: BlockInfo, config: BuildConfig, open_findings: list[ReviewFinding] | None = None,
+) -> ReviewResult:
     """Run an evidence-based quality review of the block's implementation.
 
     Reviews the block's ACTUAL diff (pre-block baseline → working tree), with
@@ -2181,6 +2313,10 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
     Propagates LLMCallError / LLMCallTimeoutError on failure. Callers must
     handle the exception and fail the block — silently fabricating passing
     scores is worse than a loud failure (the old fallback was a real bug).
+
+    *open_findings* (round 2 of a block on) are listed after the RED/GREEN
+    evidence, for the reviewer to give each a status. Nothing there tells the
+    reviewer what to leave out ("Review prompts stay unbiased").
     """
     rubric = ""
     if config.rubric_path.exists():
@@ -2218,6 +2354,11 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
     if block.green_evidence:
         report_parts.append(f"### GREEN evidence (suite after implementation)\n"
                             f"```\n{block.green_evidence}\n```")
+    if open_findings:
+        report_parts.append("### Findings still open from earlier rounds\n" + "\n".join(
+            f"- {f.finding_id} [{f.severity}] {f.claim}"
+            + (f" ({f.file_path}:{f.line})" if f.file_path else "")
+            for f in open_findings))
     if block.test_change_claims:
         # Same treatment as RED/GREEN: the implementer said the test had to
         # change, and that assertion is exactly what needs checking. A green
