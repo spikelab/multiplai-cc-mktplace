@@ -312,8 +312,7 @@ if the way the block is built keeps producing these findings, change the way
 it is built, keeping to the spec and the tests.
 
 This history is for finding shared causes. Fix only the findings in the brief
-below: one marked resolved is already fixed, and one marked outside the last
-fix's scope was left unfixed on purpose.
+below: one marked resolved is already fixed.
 
 End your report with a `RECURRING:` line naming the ids of the findings that
 share a cause, and the cause, or `none` when no two of them share one. For

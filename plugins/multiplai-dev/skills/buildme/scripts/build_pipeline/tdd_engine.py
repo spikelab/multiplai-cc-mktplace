@@ -1827,10 +1827,11 @@ async def _run_integration_and_review(
             review, block, config, _capture_block_diff(config, block),
             build_context=_global_constraints_text(config), memory=memory,
         )
-        # From round 2: restatements of open findings merge into them, and
-        # new findings outside the last fix's reach (not Critical) are
-        # recorded, not fixed. The fix agent, and the fix on pass, get the
-        # rest; every one of them was accepted by the adjudicator.
+        # From round 2: restatements of open findings merge into them. New
+        # findings outside the last fix's reach are labelled in the round
+        # record and fixed like the rest. The fix agent, and the fix on pass,
+        # get the open and new findings; every one of them was accepted by
+        # the adjudicator.
         plan = None if memory is None else review_rounds.plan_round(
             review.findings, open_, review.prior_assessments)
         block.review_scores = review if plan is None else review.model_copy(
@@ -1840,10 +1841,6 @@ async def _run_integration_and_review(
         score_gate = review_score_gate(review, config.review_gate)
         progress.log_review(block.name, iteration + 1, review.weighted_average, score_gate.passed)
         round_path = _record_review_round(config, block, review, score_gate, plan=plan)
-        if plan is not None and plan.outside:
-            review_rounds.append_unfixed(
-                config.change_dir, block, [review.findings[i] for i in plan.outside],
-                f"outside the last fix's scope (round {_round_of(round_path, last)})")
 
         if score_gate.passed:
             review_passed = True
@@ -1982,8 +1979,8 @@ def _record_review_round(
     kind: str = "review", plan: review_rounds.RoundPlan | None = None,
 ) -> Path | None:
     """Write this round's record under the change dir's `reviews/`. With a
-    *plan* (round 2 on), its open list, assessments and out-of-scope
-    findings go in the record too."""
+    *plan* (round 2 on), its open list, assessments and the labels of the
+    findings outside the last fix's reach go in the record too."""
     memory = {} if plan is None else {
         "carried_open": plan.carried, "new_open": plan.new_open,
         "outside": plan.outside, "prior_assessments": plan.assessments,
@@ -2037,13 +2034,6 @@ def _review_exhausted_diagnosis(config: BuildConfig, block: BlockInfo,
     if recurring is not None:
         lines.append(f"RECURRING (from the last fix): {recurring}")
     return "\n".join(lines)
-
-
-def _round_of(round_path: Path | None, last: dict | None) -> int:
-    """The round number of a record path; the one after *last* when the
-    record could not be written."""
-    m = re.search(r"-round-(\d+)\.json$", str(round_path or ""))
-    return int(m.group(1)) if m else (last or {}).get("round", 0) + 1
 
 
 def _review_fix_description(brief: str) -> str:

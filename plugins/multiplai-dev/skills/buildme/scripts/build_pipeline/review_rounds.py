@@ -8,9 +8,7 @@ Round numbers continue across resumes: a new round takes the next free
 number and never replaces an earlier file.
 
 ``unfixed-findings.md`` lists the accepted findings a block that passed kept
-unfixed (the fix on pass was not kept, or not attempted), and, from a block's
-second review round on, the new findings outside the last fix's reach that
-were recorded and not fixed. PUBLISH hands it to
+unfixed (the fix on pass was not kept, or not attempted). PUBLISH hands it to
 the pr skill as a PR-body section (``orchestrator.unfixed_findings_section``).
 
 Both files are committed with the block's commits, like the change
@@ -119,7 +117,8 @@ def record_round(
     earlier round left open, with their ids) followed by the accepted
     findings at the indices *new_open*; with *new_open* None, as in round 1,
     it is every accepted finding. ``outside_fix_scope`` holds the accepted
-    findings at the indices *outside*."""
+    findings at the indices *outside*: a label, since they are in
+    ``open_findings`` too."""
     directory = reviews_dir(change_dir)
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -264,10 +263,11 @@ class RoundPlan:
     """What a round from 2 on does with its findings (plan B2 step 4).
 
     *carried*: the open findings that stay open, with any restatement's
-    evidence appended. *new_open* / *outside*: indices into the round's
-    accepted findings that are new and within the fix's reach (Critical ones
-    whatever their reach) / new, outside it and not Critical. *to_fix*: what
-    the fix agent is given, *carried* then the *new_open* findings."""
+    evidence appended. *new_open*: indices into the round's accepted
+    findings that are new, whatever their reach. *outside*: the subset of
+    *new_open* the judge placed outside the last fix's reach, recorded as a
+    label and fixed like the rest. *to_fix*: what the fix agent is given,
+    *carried* then the *new_open* findings."""
 
     assessments: list[PriorAssessment]
     carried: list[ReviewFinding] = field(default_factory=list)
@@ -287,18 +287,18 @@ def plan_round(
     """Sort a round's accepted findings against the open list (plan B2
     step 4). An accepted finding whose `duplicate_of` names an open finding
     is not new: its evidence goes on that finding, which then stays open
-    even if the review called it resolved. A missing `in_fix_scope` is in
-    scope; a Critical finding is fixed whatever its scope."""
+    even if the review called it resolved. Every new finding is fixed; one
+    whose `in_fix_scope` is False is also listed in *outside*."""
     plan = RoundPlan(assessments=complete_assessments(assessments, open_))
     open_ids = {f.finding_id for f in open_}
     restated: dict[str, list[str]] = {}
     for i, f in enumerate(accepted):
         if f.duplicate_of and f.duplicate_of in open_ids:
             restated.setdefault(f.duplicate_of, []).append(f.evidence or f.claim)
-        elif f.in_fix_scope is False and f.severity.strip().lower() != "critical":
-            plan.outside.append(i)
         else:
             plan.new_open.append(i)
+            if f.in_fix_scope is False:
+                plan.outside.append(i)
     for f in open_:
         more = restated.get(f.finding_id)
         if plan.status(f.finding_id) == "resolved" and not more:

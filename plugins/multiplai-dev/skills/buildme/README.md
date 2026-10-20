@@ -1006,12 +1006,14 @@ From a block's second review round on, the loop remembers the earlier rounds:
   and whether it lies in code that diff changed or in its callers
   (`in_fix_scope`). A restated open finding is merged into it, not counted as
   new; a restated rejected one stays accepted with the earlier reason
-  (`earlier_judge_reason`). A new finding outside that reach, unless Critical,
-  goes to `outside_fix_scope` and `unfixed-findings.md` instead of the fix
-  agent. A missing answer means "not a restatement" and "within reach".
+  (`earlier_judge_reason`). A new finding outside that reach is listed in
+  `outside_fix_scope` and still goes to the fix agent: a bug found is fixed
+  wherever it is. A missing answer means "not a restatement" and "within
+  reach".
 - **The last fix questions the approach.** The fix before the loop's last
   review runs on the review model (step `review_fix_escalated`), sees every
-  finding of every round with what each round said about it, and ends with a
+  finding of every round with what each round said about it, fixes only the
+  findings in its brief, and ends with a
   `RECURRING:` line naming the findings that share a cause, which its round
   record keeps (`fix.escalated`, `fix.recurring`). When review is exhausted,
   `build-progress.md` lists the findings still present in two or more rounds
@@ -1022,7 +1024,7 @@ From a block's second review round on, the loop remembers the earlier rounds:
 
 The review still passes or fails on its scores and the spec verdict alone, and
 round 1 runs exactly as before. A passing round from 2 on hands the fix on pass
-the open findings plus the new ones within reach.
+the open findings plus the new ones.
 
 ### Budget
 

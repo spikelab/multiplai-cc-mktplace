@@ -940,11 +940,13 @@ class TestFindingIds:
         review = _failing([_finding("Major", "new in scope"), _finding("Minor", "elsewhere")])
         _record(tmp_path, block, _failing())
         path = _record(
-            tmp_path, block, review, carried_open=[carried], new_open=[0], outside=[1],
+            tmp_path, block, review, carried_open=[carried], new_open=[0, 1], outside=[1],
             prior_assessments=[PriorAssessment(finding_id="B01-R1-F1", status="still_present")])
         record = json.loads(path.read_text())
-        # The carried finding keeps its id; the new one gets this round's.
-        assert [f["finding_id"] for f in record["open_findings"]] == ["B01-R1-F1", "B01-R2-F1"]
+        # The carried finding keeps its id; the new ones get this round's,
+        # and the one outside the fix's scope is open too.
+        assert [f["finding_id"] for f in record["open_findings"]] == [
+            "B01-R1-F1", "B01-R2-F1", "B01-R2-F2"]
         assert [f["claim"] for f in record["outside_fix_scope"]] == ["elsewhere"]
         assert record["outside_fix_scope"][0]["finding_id"] == record["accepted"][1]["finding_id"]
         assert record["prior_assessments"] == [
@@ -1170,27 +1172,16 @@ class TestRoundMemory:
         assert NEW in _brief(rounds[2])
 
     @pytest.mark.asyncio
-    async def test_a_finding_outside_the_fix_scope_is_recorded_not_fixed(self, project):
+    @pytest.mark.parametrize("severity", ["Minor", "Major", "Critical"])
+    async def test_a_finding_outside_the_fix_scope_is_labelled_and_fixed(self, project, severity):
         p = project
         _, rounds, *_ = await _two_rounds(
-            p, _failing([_finding("Major", NEW)]),
+            p, _failing([_finding(severity, NEW)]),
             _verdicts(FindingVerdict(index=0, accepted=True, in_fix_scope=False)))
         assert [f["claim"] for f in rounds[2]["outside_fix_scope"]] == [NEW]
-        assert "B01-R2-F1" not in _ids(rounds[2]["open_findings"])
-        assert NEW not in _brief(rounds[2])
-        unfixed = _unfixed(p)
-        assert NEW in unfixed and "outside the last fix's scope (round 2)" in unfixed
-
-    @pytest.mark.asyncio
-    async def test_a_critical_finding_outside_the_fix_scope_is_still_fixed(self, project):
-        p = project
-        _, rounds, *_ = await _two_rounds(
-            p, _failing([_finding("Critical", NEW)]),
-            _verdicts(FindingVerdict(index=0, accepted=True, in_fix_scope=False)))
-        assert rounds[2]["outside_fix_scope"] == []
         assert "B01-R2-F1" in _ids(rounds[2]["open_findings"])
         assert NEW in _brief(rounds[2])
-        assert "outside the last fix's scope" not in _unfixed(p)
+        assert NEW not in _unfixed(p)
 
     @pytest.mark.asyncio
     async def test_a_missing_scope_verdict_means_in_scope(self, project):
@@ -1221,7 +1212,7 @@ class TestRoundMemory:
         assert NEW in _brief(rounds[2])
 
     @pytest.mark.asyncio
-    async def test_the_fix_on_pass_works_on_the_open_set_not_the_out_of_scope(self, project):
+    async def test_the_fix_on_pass_works_on_the_open_set_and_the_out_of_scope(self, project):
         p = project
         p.config.fix_on_pass = True
         reviews = [_failing([_finding()]), _passing([_finding("Minor", NEW)]), _passing()]
@@ -1233,7 +1224,7 @@ class TestRoundMemory:
         with stack:
             assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
         on_pass = fix.await_args_list[1].kwargs["block_description"]
-        assert OFF_BY_ONE in on_pass and NEW not in on_pass
+        assert OFF_BY_ONE in on_pass and NEW in on_pass
 
     @pytest.mark.asyncio
     async def test_reviewer_section_lists_open_findings_only_from_round_two(self, project):

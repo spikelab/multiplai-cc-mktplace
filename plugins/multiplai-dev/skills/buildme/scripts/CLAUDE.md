@@ -205,9 +205,10 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   for each (a missing one is `cannot_verify`, never resolved); the
   adjudicator decides `duplicate_of` and `in_fix_scope` against the earlier
   rounds and `git diff <last head_sha> HEAD`; code then merges restatements
-  into the open finding and records out-of-scope non-Critical findings
-  (`outside_fix_scope`, `unfixed-findings.md`) without sending them to a fix
-  agent. Every missing value fails open: not a duplicate, in scope. Round 1
+  into the open finding, and lists out-of-scope findings in
+  `outside_fix_scope` as a label while still sending them to the fix agent
+  (a bug found is fixed wherever it is). Every missing value fails open: not
+  a duplicate, in scope. Round 1
   runs as it always did. The loop's last fix (`review_fix_escalated`, on the
   review model) gets `REVIEW_FIX_ESCALATION` with every finding's history and
   records its `RECURRING:` answer, recorded, not gated.

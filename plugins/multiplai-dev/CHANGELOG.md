@@ -30,11 +30,10 @@ time, not derived from a tag.
   it instead of counted as new; a restatement of a rejected one stays
   accepted, with the earlier rejection reason recorded next to it.
 - From the second round on, a new finding outside the reach of the last fix
-  is recorded (in the round record's `outside_fix_scope` and in
-  `unfixed-findings.md`, which the PR body carries) and not sent to the fix
-  agent, unless it is Critical. The fix agent gets the findings still open,
-  each with its status, plus the new ones within reach. Round 1 runs as
-  before, and the review still passes or fails on its scores alone.
+  is listed in the round record's `outside_fix_scope`, and is fixed like any
+  other. The fix agent gets the findings still open, each with its status,
+  plus the new ones. Round 1 runs as before, and the review still passes or
+  fails on its scores alone.
 - The last fix of the loop now questions the block's approach: it runs on
   the review model (new step `review_fix_escalated` under `models:` /
   `efforts:`), sees every finding of every round with what each round said
@@ -47,7 +46,7 @@ time, not derived from a tag.
   the diff with the same defect; the fix agent is told to fix every listed
   location and cover each one with a test.
 - On a block that passes at round 2 or later, the fix on pass works on the
-  findings still open plus the new ones within reach, so a finding the
+  findings still open plus the new ones, so a finding the
   reviewer left unanswered is fixed there instead of dropped.
 
 ## [0.88.0] - 2026-10-20
