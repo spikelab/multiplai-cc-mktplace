@@ -1364,3 +1364,396 @@ class TestEscalation:
 
     def test_searched_stops_at_a_recurring_slot(self):
         assert parse_searched("SEARCHED:\n- add()\nRECURRING: none\n") == ["add()"]
+
+
+# --- Stop-and-resume rows S4-S13 (plan-buildme-review-convergence-2026-10-20.md)
+#
+# A stop is a `Killed` raised at the row's point. The "new process" loads the
+# checkpoint from disk and runs the block's review loop again, which is what
+# a resumed build reaches for a block stopped in review (it starts again at
+# iteration 0). Each row is compared with the same block run in a second
+# project that never stopped.
+
+from contextlib import contextmanager  # noqa: E402
+
+MEMORY_FIELDS = ("accepted", "rejected", "open_findings", "prior_assessments",
+                 "outside_fix_scope", "gate")
+
+
+def _memory_of(record: dict) -> dict:
+    return {k: record[k] for k in MEMORY_FIELDS}
+
+
+@contextmanager
+def _dies_at(target: str, call: int):
+    """Patch *target* (a `review_rounds` function) so its *call*-th call
+    raises Killed instead of running; the others run for real."""
+    real = getattr(review_rounds, target)
+    calls = []
+
+    def wrapper(*a, **k):
+        calls.append(a)
+        if len(calls) == call:
+            raise Killed()
+        return real(*a, **k)
+
+    with patch(f"build_pipeline.review_rounds.{target}", side_effect=wrapper):
+        yield
+
+
+def _round_one():
+    return _failing([_finding()])
+
+
+def _resolved_pass():
+    """Round 1's finding resolved, and one new Note, so the adjudicator runs
+    (it is not called for a review with no findings)."""
+    return _assess(_passing([_finding("Note", "a note")]), ("B01-R1-F1", "resolved"))
+
+
+async def _unstopped(base: Path, reviews=None, judges=None, fixer=None, review_model=None):
+    """The scenario run without a stop: round 1 fails on OFF_BY_ONE, the fix
+    lands, round 2 calls it resolved and passes. No fix on pass."""
+    clean = _make_project(base)
+    clean.config.fix_on_pass = False
+    clean.config.review_model = review_model
+    reviews = reviews or [_round_one(), _resolved_pass()]
+    stack, review, fix, judge = _memory_engine(
+        reviews, fixer or _fixer(clean.dir, {"app.py": FIXED}),
+        judges or [FindingAdjudication()] * len(reviews))
+    with stack:
+        ok = await _run_integration_and_review(clean.block, clean.config, clean.state,
+                                               clean.progress)
+    return SimpleNamespace(p=clean, ok=ok, review=review, fix=fix, judge=judge)
+
+
+async def _stopped(p, reviews, fixer=None, judges=None, kill=None):
+    """Run the loop until it raises Killed."""
+    p.config.fix_on_pass = False
+    stack, *_ = _memory_engine(reviews, fixer or _fixer(p.dir, {"app.py": FIXED}),
+                               judges or [FindingAdjudication()] * len(reviews))
+    with stack, (kill or ExitStack()), pytest.raises(Killed):
+        await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+
+
+async def _resumed(p, reviews, fixer=None, judges=None):
+    """The new process: the block and state as the checkpoint holds them."""
+    state = BuildState.load(p.config.state_file_path())
+    block = state.tdd.blocks[0]
+    stack, review, fix, judge = _memory_engine(
+        reviews, fixer or _fixer(p.dir, {"app.py": FIXED}),
+        judges or [FindingAdjudication()] * len(reviews))
+    with stack:
+        ok = await _run_integration_and_review(block, p.config, state, p.progress)
+    return SimpleNamespace(ok=ok, block=block, review=review, fix=fix, judge=judge)
+
+
+def _open_given(review_mock, call: int) -> list[str]:
+    return [f.finding_id for f in review_mock.await_args_list[call].kwargs.get("open_findings", [])]
+
+
+def _scope_of(judge_mock, call: int) -> str:
+    prompt = judge_mock.await_args_list[call].args[0]
+    return prompt.split("## Changes since the previous review", 1)[1].split("## Restatements", 1)[0]
+
+
+def _state_without(p, *keys) -> dict:
+    """The saved block, commit shas named by their place in the history
+    (`row_helpers`, as the repo comparison names them), without *keys*."""
+    from tests.row_helpers import _norm_json, _tokens
+    block = BuildState.load(p.config.state_file_path()).tdd.blocks[0].model_dump(mode="json")
+    block = _norm_json(block, p.root, _tokens(p.root))
+    return {k: v for k, v in block.items() if k not in keys}
+
+
+def _rel_state(p) -> str:
+    return p.config.state_file_path().relative_to(p.root).as_posix()
+
+
+def _stop_before_the_fix(p):
+    """Row S5's stop: round 1 recorded, killed as the fix agent starts."""
+    def dying_fixer(**kwargs):
+        raise Killed()
+    return _stopped(p, [_round_one()], dying_fixer)
+
+
+class TestReviewMemoryRows:
+    @pytest.mark.asyncio
+    async def test_review_memory_resume_S4_stop_before_record_round(self, project, tmp_path):
+        clean = await _unstopped(tmp_path / "unstopped")
+        p = project
+        await _stopped(p, [_round_one(), _resolved_pass()],
+                       kill=_dies_at("record_round", 2))
+        assert sorted(_rounds(p)) == [1]                      # nothing new on disk
+
+        resumed = await _resumed(p, [_resolved_pass()])
+
+        assert resumed.ok is clean.ok is True
+        assert _open_given(resumed.review, 0) == _open_given(clean.review, 1) == ["B01-R1-F1"]
+        assert _rounds(p).keys() == _rounds(clean.p).keys() == {1, 2}
+        assert _memory_of(_rounds(p)[2]) == _memory_of(_rounds(clean.p)[2])
+        # Same records, commits and tree. The saved state differs in
+        # review_iterations (the new process counts from 0) and in the fix's
+        # report, which today's loop adds to implementer_report in memory
+        # after the last checkpoint: both as today.
+        assert_same_as_unstopped(p.root, clean.p.root, extra_files=(_rel_state(p),))
+        assert (_state_without(p, "review_iterations", "implementer_report")
+                == _state_without(clean.p, "review_iterations", "implementer_report"))
+
+    @pytest.mark.asyncio
+    async def test_review_memory_resume_S5_stop_after_record_round(self, project, tmp_path):
+        clean = await _unstopped(tmp_path / "unstopped")
+        p = project
+        await _stop_before_the_fix(p)
+        first = _rounds(p)[1]
+        assert first["fix"] is None and first["fix_brief"]
+        assert _ids(first["open_findings"]) == ["B01-R1-F1"]
+
+        resumed = await _resumed(p, [_resolved_pass()])
+
+        assert resumed.ok is True
+        # The first review of the new process reads record 1 as `last`.
+        assert _open_given(resumed.review, 0) == _open_given(clean.review, 1)
+        assert "(no changes since the previous review)" in _scope_of(resumed.judge, 0)
+        # ...and writes record 2, with the memory an unstopped round 2 has.
+        assert sorted(_rounds(p)) == [1, 2]
+        assert _memory_of(_rounds(p)[2]) == _memory_of(_rounds(clean.p)[2])
+
+    @pytest.mark.asyncio
+    async def test_review_memory_resume_S6_stop_while_the_fix_runs(self, project, tmp_path):
+        clean = await _unstopped(tmp_path / "unstopped")
+        p = project
+
+        def dying_mid_edit(**kwargs):
+            (p.dir / "app.py").write_text(FIXED)
+            raise Killed()
+
+        await _stopped(p, [_round_one()], dying_mid_edit)
+        assert _git(p.dir, "status", "--porcelain", "app.py")    # uncommitted edit
+
+        seen = []
+
+        async def review(block, config, **kw):
+            seen.append((p.dir / "app.py").read_text())
+            return _resolved_pass()
+
+        with patch("build_pipeline.tdd_engine._run_quality_review", side_effect=review), \
+             patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
+                   return_value=FindingAdjudication()):
+            state = BuildState.load(p.config.state_file_path())
+            assert await _run_integration_and_review(state.tdd.blocks[0], p.config, state,
+                                                     p.progress)
+        assert seen == [FIXED]                                # the edits were kept, as today
+        assert _memory_of(_rounds(p)[2]) == _memory_of(_rounds(clean.p)[2])
+        assert (p.dir / "app.py").read_text() == (clean.p.dir / "app.py").read_text()
+        assert not _git(p.dir, "status", "--porcelain", "app.py")
+
+    @pytest.mark.asyncio
+    async def test_review_memory_resume_S7_stop_before_amend_fix(self, project, tmp_path):
+        clean = await _unstopped(tmp_path / "unstopped")
+        p = project
+        await _stopped(p, [_round_one()], kill=_dies_at("amend_fix", 1))
+        first = _rounds(p)[1]
+        assert first["fix"]["report"] == "fixed" and first["fix"]["commit"] is None
+
+        resumed = await _resumed(p, [_resolved_pass()])
+
+        # The scope diff runs from record 1's head, so it holds the fix
+        # commit the record does not name: the same diff as unstopped.
+        scope = _scope_of(resumed.judge, 0)
+        assert "+    return a + b\n" in scope
+        assert scope == _scope_of(clean.judge, 1)
+        assert _memory_of(_rounds(p)[2]) == _memory_of(_rounds(clean.p)[2])
+        assert resumed.ok is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("point", ["while_running", "before_amend_fix"])
+    async def test_review_memory_resume_S8_stop_in_the_escalated_fix(
+            self, project, tmp_path, point):
+        still = lambda r: _assess(r, ("B01-R1-F1", "still_present"))  # noqa: E731
+        unstopped_reviews = [_round_one(), still(_failing()), _passing()]
+        clean = await _unstopped(tmp_path / "unstopped", unstopped_reviews,
+                                 review_model="claude-haiku-4-5")
+        p = project
+        p.config.review_model = "claude-haiku-4-5"
+        calls = []
+
+        def fixer(**kwargs):
+            calls.append(kwargs["model"])
+            if point == "while_running" and len(calls) == 2:
+                raise Killed()
+            (p.dir / "app.py").write_text(FIXED if len(calls) == 1 else "def add(a, b):\n    return b + a\n")
+            return AgentResult(success=True, output="fixed\nRECURRING: none\n")
+
+        kill = _dies_at("amend_fix", 2) if point == "before_amend_fix" else None
+        await _stopped(p, [_round_one(), still(_failing())], fixer, kill=kill)
+        second = _rounds(p)[2]
+        assert second["fix_brief"].startswith(ESCALATION_HEAD)
+        if point == "while_running":
+            assert second["fix"] is None                       # `escalated` missing
+        else:
+            assert second["fix"]["escalated"] is True and second["fix"]["commit"] is None
+
+        resumed_reviews = [still(_failing()), still(_failing()), _passing()]
+        resumed = await _resumed(p, resumed_reviews, _fixer(p.dir, {"app.py": FIXED}))
+
+        # Counted from 0 in the new process: its own last fix is the escalated
+        # one, whatever record 2 says.
+        models = [c.kwargs["model"] for c in resumed.fix.await_args_list]
+        assert models == [c.kwargs["model"] for c in clean.fix.await_args_list] == [
+            p.config.model_for("review_fix"), p.config.model_for("review_fix_escalated")]
+        descriptions = [c.kwargs["block_description"] for c in resumed.fix.await_args_list]
+        assert not descriptions[0].startswith(ESCALATION_HEAD)
+        assert descriptions[1].startswith(ESCALATION_HEAD)
+        assert resumed.ok is clean.ok is True
+        assert "escalated" not in _rounds(p)[3]["fix"]
+
+    @pytest.mark.asyncio
+    async def test_review_memory_resume_S9_user_edits_between_stop_and_resume(
+            self, project, tmp_path):
+        p = project
+        await _stop_before_the_fix(p)
+        # The user moves the flagged line and adds a file.
+        (p.dir / "app.py").write_text("# moved\n" + BUGGY)
+        (p.dir / "notes.md").write_text("mine\n")
+
+        resumed = await _resumed(p, [_passing()])
+
+        assert resumed.ok is True                              # nothing new refuses
+        assert _open_given(resumed.review, 0) == ["B01-R1-F1"]
+        assert _rounds(p)[2]["prior_assessments"] == [
+            {"finding_id": "B01-R1-F1", "status": "cannot_verify", "evidence": ""}]
+        assert (p.dir / "app.py").read_text() == "# moved\n" + BUGGY
+        assert (p.dir / "notes.md").read_text() == "mine\n"
+
+    @pytest.mark.asyncio
+    async def test_review_memory_resume_S10_origin_moved(self, project, tmp_path):
+        still_here = _make_project(tmp_path / "unmoved")
+        await _stop_before_the_fix(still_here)
+        unmoved = await _resumed(still_here, [_resolved_pass()])
+
+        p = project
+        origin = tmp_path / "origin.git"
+        _git(tmp_path, "init", "-q", "--bare", str(origin))
+        _git(p.root, "remote", "add", "origin", str(origin))
+        _git(p.root, "push", "-q", "origin", "HEAD:refs/heads/main")
+        await _stop_before_the_fix(p)
+        other = tmp_path / "other-clone"
+        _git(tmp_path, "clone", "-q", "-b", "main", str(origin), str(other))
+        _git(other, "-c", "user.email=o@example.com", "-c", "user.name=O",
+             "commit", "-q", "--allow-empty", "-m", "someone else's commit")
+        _git(other, "push", "-q", "origin", "HEAD:refs/heads/main")
+        _git(p.root, "fetch", "-q", "origin")
+
+        resumed = await _resumed(p, [_resolved_pass()])
+
+        assert resumed.ok is unmoved.ok is True
+        assert _open_given(resumed.review, 0) == _open_given(unmoved.review, 0)
+        assert _scope_of(resumed.judge, 0) == _scope_of(unmoved.judge, 0)
+        assert _memory_of(_rounds(p)[2]) == _memory_of(_rounds(still_here)[2])
+
+    @pytest.mark.asyncio
+    async def test_review_memory_resume_S11_the_same_stop_twice(self, project, tmp_path):
+        clean = await _unstopped(tmp_path / "unstopped", [
+            _round_one(), _failing([_finding("Major", NEW)]), _resolved_pass()])
+        p = project
+        await _stop_before_the_fix(p)
+
+        def dying_fixer(**kwargs):
+            raise Killed()
+
+        state = BuildState.load(p.config.state_file_path())
+        stack, *_ = _memory_engine([_failing([_finding("Major", NEW)])], dying_fixer,
+                                   [FindingAdjudication()])
+        with stack, pytest.raises(Killed):
+            await _run_integration_and_review(state.tdd.blocks[0], p.config, state, p.progress)
+        assert sorted(_rounds(p)) == [1, 2]
+
+        resumed = await _resumed(p, [_resolved_pass()])
+
+        # The latest record (2) is `last`: its open list, as unstopped round 3's.
+        assert _open_given(resumed.review, 0) == _open_given(clean.review, 2) == [
+            "B01-R1-F1", "B01-R2-F1"]
+        assert resumed.ok is True
+
+    @pytest.mark.asyncio
+    async def test_review_memory_resume_S11_a_rolled_back_fix_keeps_its_findings_open(
+            self, project):
+        p = project
+        stack, _, _ = _engine([_passing([_finding()]), _failing()],
+                              _fixer(p.dir, {"app.py": FIXED}))
+        with stack:
+            assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+        assert _rounds(p)[1]["fix"]["kept"] is False           # the fix on pass was rolled back
+        open_, _, last = review_rounds.open_state(p.config.change_dir, 1)
+        assert last["round"] == 1
+        assert [f.finding_id for f in open_] == ["B01-R1-F1"]
+
+    @pytest.mark.asyncio
+    async def test_review_memory_resume_S12_the_stopped_process_is_still_alive(self, project):
+        p = project
+        p.config.fix_on_pass = False
+        second_review = []
+
+        async def fixer(**kwargs):
+            if len(second_review) == 0:
+                # Process A's fix agent is still running when B resumes the block.
+                second_review.append("B")
+                state = BuildState.load(p.config.state_file_path())
+                assert await _run_integration_and_review(
+                    state.tdd.blocks[0], p.config, state, p.progress)
+            (p.dir / "app.py").write_text(FIXED)
+            return AgentResult(success=True, output="fixed")
+
+        reviews = [
+            _round_one(),                                                # A, round 1
+            _assess(_passing([_finding("Minor", NEW)]), ("B01-R1-F1", "still_present")),  # B
+            _resolved_pass(),                                            # A, after its fix
+        ]
+        stack, review, _, _ = _memory_engine(reviews, fixer, [FindingAdjudication()] * 3)
+        with stack:
+            assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+
+        rounds = _rounds(p)
+        assert sorted(rounds) == [1, 2, 3]                    # distinct numbers, no lock
+        assert _open_given(review, 1) == ["B01-R1-F1"]        # B read record 1
+        # A's next review reads the latest record, B's round 2.
+        assert _open_given(review, 2) == _ids(rounds[2]["open_findings"]) == [
+            "B01-R1-F1", "B01-R2-F1"]
+        assert [a["finding_id"] for a in rounds[3]["prior_assessments"]] == [
+            "B01-R1-F1", "B01-R2-F1"]
+
+    @pytest.mark.asyncio
+    async def test_review_memory_resume_S13_finding_fields_survive_the_stop(
+            self, project, tmp_path):
+        located = _finding().model_copy(update={
+            "defect_class": "off-by-one", "other_locations": ["app.py:9"]})
+        first = _failing([located, _finding("Minor", NAMES)])
+        judge1 = _verdicts(FindingVerdict(index=0, accepted=True),
+                           FindingVerdict(index=1, accepted=False, reason="the spec names them"))
+        restated = _assess(_failing([_finding("Minor", "names are still unclear")]),
+                           ("B01-R1-F1", "still_present"))
+        judge2 = _verdicts(FindingVerdict(index=0, accepted=True, duplicate_of="B01-R1-X1"))
+        clean = await _unstopped(tmp_path / "unstopped", [first, restated, _resolved_pass()],
+                                 [judge1, judge2, FindingAdjudication()])
+        p = project
+
+        def dying_fixer(**kwargs):
+            raise Killed()
+
+        await _stopped(p, [first], dying_fixer, judges=[judge1])
+        resumed = await _resumed(p, [restated, _resolved_pass()],
+                                 judges=[judge2, FindingAdjudication()])
+
+        assert resumed.ok is True
+        second = _rounds(p)[2]
+        assert _memory_of(second) == _memory_of(_rounds(clean.p)[2])
+        carried, new = second["open_findings"]
+        assert carried["defect_class"] == "off-by-one" and carried["other_locations"] == ["app.py:9"]
+        assert new["duplicate_of"] == "B01-R1-X1"
+        assert new["earlier_judge_reason"] == "the spec names them"
+        assert "class: off-by-one; also at: app.py:9" in _brief(second)
+        assert "Fix every listed location, and cover each one with a test." in _brief(second)
+        reread, _, _ = review_rounds.open_state(p.config.change_dir, 1)
+        assert {f.finding_id: f.earlier_judge_reason for f in reread}["B01-R2-F1"] == (
+            "the spec names them")
