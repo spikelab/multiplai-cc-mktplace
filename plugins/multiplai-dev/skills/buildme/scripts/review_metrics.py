@@ -17,6 +17,10 @@ For each change directory it reports, per block:
   ``written by a fix``. A failed git command, or a missing ``head_sha``, gives
   ``unknown``.
 
+The totals line gives the mean rounds-to-pass, the share of blocks passing at
+round 1, and the share of round-2+ findings present at first review, over all
+records and over ``review`` records alone.
+
 The git commands run in the project, which is the directory above ``specs/``.
 
 The script prints Markdown to stdout and writes nothing. It uses no network
@@ -72,6 +76,9 @@ class BlockMetrics:
     block: int
     records: list[Record]
     origins: Counter = field(default_factory=Counter)
+    # The same count over records with `kind == "review"` only, leaving out
+    # fix-on-pass reviews.
+    review_origins: Counter = field(default_factory=Counter)
 
     @property
     def rounds(self) -> int:
@@ -182,10 +189,11 @@ def measure_block(block: int, records: list[Record], project: Path | None) -> Bl
             continue
         for finding in record.findings("accepted"):
             where = _location(finding)
-            if where is None:
-                metrics.origins[NO_LINE] += 1
-                continue
-            metrics.origins[line_origin(project, *where, record.head_sha, first_head)] += 1
+            origin = NO_LINE if where is None else line_origin(
+                project, *where, record.head_sha, first_head)
+            metrics.origins[origin] += 1
+            if record.kind == "review":
+                metrics.review_origins[origin] += 1
     return metrics
 
 
@@ -245,9 +253,12 @@ def render(changes: list[ChangeMetrics], directories: list[Path]) -> str:
     mean = f"{sum(passed) / len(passed):.2f}" if passed else "n/a"
     at_one = sum(1 for p in passed if p == 1)
     totals: Counter = Counter()
+    review_totals: Counter = Counter()
     for b in all_blocks:
         totals.update(b.origins)
+        review_totals.update(b.review_origins)
     known = totals[PRESENT] + totals[BY_FIX]
+    review_known = review_totals[PRESENT] + review_totals[BY_FIX]
     out.append(
         f"**Totals** ({len(changes)} change(s), {len(all_blocks)} blocks): "
         f"mean rounds-to-pass {mean} (over {len(passed)} blocks that passed; "
@@ -255,7 +266,10 @@ def render(changes: list[ChangeMetrics], directories: list[Path]) -> str:
         f"blocks passing at round 1: {_share(at_one, len(all_blocks))}; "
         f"round-2+ findings present at first review: {_share(totals[PRESENT], known)} "
         f"with a known origin ({totals[BY_FIX]} written by a fix, "
-        f"{totals[UNKNOWN]} unknown, {totals[NO_LINE]} with no line)."
+        f"{totals[UNKNOWN]} unknown, {totals[NO_LINE]} with no line); "
+        f"in `review` records only: {_share(review_totals[PRESENT], review_known)} "
+        f"({review_totals[BY_FIX]} written by a fix, {review_totals[UNKNOWN]} unknown, "
+        f"{review_totals[NO_LINE]} with no line)."
     )
     return "\n".join(out) + "\n"
 

@@ -115,7 +115,9 @@ def test_table_rows_and_totals(project):
             "(over 3 blocks that passed; 0 did not pass); "
             "blocks passing at round 1: 1 of 3 (33%); "
             "round-2+ findings present at first review: 1 of 2 (50%) with a known "
-            "origin (1 written by a fix, 1 unknown, 1 with no line).") in text
+            "origin (1 written by a fix, 1 unknown, 1 with no line); "
+            "in `review` records only: 1 of 2 (50%) (1 written by a fix, 1 unknown, "
+            "1 with no line).") in text
 
 
 def test_fix_on_pass_reviews_are_listed_but_not_counted(project):
@@ -127,6 +129,7 @@ def test_fix_on_pass_reviews_are_listed_but_not_counted(project):
     block = _block(changes, 1)
     assert (block.rounds, block.passed_at) == (1, 1)
     assert dict(block.origins) == {review_metrics.BY_FIX: 1}
+    assert block.review_origins == {}
     assert "r2† 1/0" in review_metrics.render(changes, [project / "specs"])
 
 
