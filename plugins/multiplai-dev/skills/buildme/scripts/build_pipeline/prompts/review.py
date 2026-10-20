@@ -178,7 +178,16 @@ Return a JSON object matching this schema:
       "evidence": "The exact diff lines that support the claim",
       "dimension": "Dimension Name",
       "file_path": "path/to/file.py",
-      "line": 42
+      "line": 42,
+      "defect_class": "The kind of defect, in a few words",
+      "other_locations": ["path/to/other.py:17"]
+    }}
+  ],
+  "prior_assessments": [
+    {{
+      "finding_id": "B01-R1-F1",
+      "status": "resolved | still_present | partially_resolved | cannot_verify",
+      "evidence": "The diff lines that show the status"
     }}
   ]
 }}
@@ -204,6 +213,15 @@ full build context accepts or rejects each one before anything acts on it.
 Write each so it can be judged alone — a finding whose evidence is "see above"
 cannot be adjudicated and will be discarded. Every issue you list should also
 appear as a finding.
+
+Name the kind of defect in a few words in `defect_class`, and list every other
+place in the diff with the same defect as `path:line` in `other_locations`.
+
+For each finding listed under Findings still open from earlier rounds, give its
+status with the diff lines that show it. The status is `resolved`,
+`still_present`, `partially_resolved` or `cannot_verify`, and it goes in
+`prior_assessments` with the finding's `finding_id`. With no such list above,
+`prior_assessments` is an empty array.
 
 `dimension` is normally a rubric dimension's name. Two values are also
 available for findings the rubric has no dimension for:
