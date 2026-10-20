@@ -296,7 +296,9 @@ blocks were already consistent" is a valid and useful result.
 # not pass review (`tdd_engine._run_integration_and_review`). A template: its
 # one placeholder is `{findings}`, every finding of every round of the block
 # with its id and what each round said about it. `gates.parse_recurring` puts
-# the RECURRING: slot in the round record.
+# the RECURRING: slot in the round record. A findings round on the last round
+# `max_rounds` allows starts every block with it, filled with every lineage of
+# the PR's reviews (`findings/code.escalation_task`).
 REVIEW_FIX_ESCALATION = """\
 ## Last review fix for this block: question the approach
 
@@ -320,6 +322,12 @@ example:
 
 RECURRING: B01-R1-F1, B01-R2-F1 — add() never validates its inputs
 """
+
+
+# Added to a review-fix brief when a finding lists `other_locations`
+# (`tdd_engine`), and to a findings round's fix block whose review finding
+# lists them (`findings/code.render_tasks`).
+REVIEW_FIX_LOCATIONS = "Fix every listed location, and cover each one with a test."
 
 
 # Appended to every review-fix brief (`tdd_engine._review_fix_brief`): the

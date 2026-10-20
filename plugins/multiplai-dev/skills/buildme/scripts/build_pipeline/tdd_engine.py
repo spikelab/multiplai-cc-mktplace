@@ -73,7 +73,7 @@ from .models import (
 from .mutation import changed_source_files, mutation_applies, render_report, run_mutation, score_text
 from .narrow_tests import agent_test_command, narrow_test_command
 from .progress import ProgressWriter
-from .prompts.implementation import REVIEW_FIX_ESCALATION, REVIEW_FIX_SELF_CHECK
+from .prompts.implementation import REVIEW_FIX_ESCALATION, REVIEW_FIX_LOCATIONS, REVIEW_FIX_SELF_CHECK
 from .prompts.review import (
     ADJUDICATION_ROUND_MEMORY,
     ADJUDICATION_SCOPE_FIELD,
@@ -1863,7 +1863,7 @@ async def _run_integration_and_review(
         if accepted_text:
             fix_brief += f"\n\n## Adjudicated findings (accepted — fix these)\n{accepted_text}"
         if any(f.other_locations for f in block.review_scores.findings):
-            fix_brief += "\n\nFix every listed location, and cover each one with a test."
+            fix_brief += "\n\n" + REVIEW_FIX_LOCATIONS
         # The last fix (its review is the loop's last) questions the approach,
         # on the review model, with every finding of every round in front of
         # it — as the integration gate's last fix does. Counted per process.

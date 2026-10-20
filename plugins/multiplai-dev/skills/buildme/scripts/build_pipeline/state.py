@@ -135,6 +135,12 @@ class FindingsRound(BaseModel):
     finished: list[str] = Field(default_factory=list)
     step_heads: dict[str, str] = Field(default_factory=dict)  # step → HEAD when it started
     comments: list[PRComment] = Field(default_factory=list)   # new this round, as fetched
+    # Saved once, when the round starts: it is the last round `max_rounds`
+    # allows and not the first. Its tasks file starts every block with the
+    # escalation text and its implementer runs as `review_fix_escalated`. A
+    # resume keeps it, whatever `--max-rounds` says then. False in older
+    # checkpoints.
+    escalated: bool = False
     triaged: dict[int, Triage] = Field(default_factory=dict)  # comment id → verdict
     delta_path: str | None = None
     spec_changes: list[SpecChange] = Field(default_factory=list)
@@ -143,6 +149,9 @@ class FindingsRound(BaseModel):
     engine_state_path: str | None = None
     blocks: dict[int, str] = Field(default_factory=dict)      # block number → row key
     fixes: dict[str, dict[str, str]] = Field(default_factory=dict)  # row key → commits
+    # An escalated round's `RECURRING:` answers: block number → the fixer's
+    # slot (`gates.parse_recurring`), for each block whose fixer gave one.
+    recurring: dict[int, str] = Field(default_factory=dict)
     # Why the TDD engine stopped after its block loop (a whole-change step
     # after the blocks failed). Legacy diagnostic only: failed required checks
     # now stop the round before publication.
