@@ -670,25 +670,66 @@ class HookRunRecord:
     file: str = ""
 
 
-def hook_watchdog_hooks(plugin_root: Path | None = None) -> set:
-    """Hook names whose script arms the near-timeout watchdog.
+_WATCHDOG_S_RE = re.compile(r"^_WATCHDOG_S\s*=\s*([0-9.]+)", re.MULTILINE)
+
+
+def hook_watchdog_hooks(plugin_root: Path | None = None) -> dict:
+    """Map hook name → seconds at which its near-timeout watchdog fires.
 
     Such a hook logs ``HOOK_WATCHDOG`` a few seconds before the harness kills
-    it, so an orphan ENTRY from it *without* that line ended before the
-    watchdog mark: it was cancelled or crashed, not killed at the ceiling. Read
-    from the scripts (``watchdog_s`` is the ``hook_run`` argument that arms it)
-    rather than hardcoded, so a hook that later arms one is picked up.
+    it, so an orphan ENTRY from it *without* that line may have ended before
+    the watchdog mark (see :func:`hook_stats` for when that is accepted). Read
+    from the scripts (``watchdog_s`` arms it, ``_WATCHDOG_S`` holds the
+    seconds) rather than hardcoded, so a hook that later arms one is picked
+    up. A script that arms it without a readable ``_WATCHDOG_S`` is left out:
+    without the seconds there is no way to tell whether it had time to fire.
     """
     root = plugin_root or Path(__file__).resolve().parent.parent
-    armed = set()
+    armed: dict[str, float] = {}
     for name in hook_component_names(root):
         try:
             source = (root / "scripts" / f"{name}.py").read_text()
         except OSError:
             continue
-        if "watchdog_s" in source:
-            armed.add(name)
+        m = _WATCHDOG_S_RE.search(source)
+        if "watchdog_s" in source and m:
+            try:
+                secs = float(m.group(1))
+            except ValueError:
+                continue
+            armed[name] = int(secs) if secs.is_integer() else secs
     return armed
+
+
+def first_watchdog_seen(logs_dir: Path, hooks) -> dict:
+    """Map hook name → timestamp of its earliest ``HOOK_WATCHDOG`` line.
+
+    Scans every log of those components, ignoring the report window: the
+    window bounds which runs are counted, not the evidence that the watchdog
+    was live. A hook whose watchdog never fired is absent, and none of its
+    orphans can be called cancelled — on a multiplai-core without
+    ``hook_run(watchdog_s=)``, or before the watchdog shipped, it never could
+    have logged the line.
+    """
+    seen: dict[str, datetime] = {}
+    for subsystem, paths in discover(logs_dir, list(hooks) or None).items():
+        for path in paths:
+            try:
+                text = path.read_text(errors="replace")
+            except OSError:
+                continue
+            if "HOOK_WATCHDOG hook=" not in text:
+                continue
+            for line in text.splitlines():
+                m = HOOK_WATCHDOG_RE.search(line)
+                if not m:
+                    continue
+                ts_m = re.match(r"\[([^\]]+)\]", line)
+                ts = _parse_ts(ts_m.group(1)) if ts_m else None
+                hook = m.group("hook")
+                if ts and (hook not in seen or ts < seen[hook]):
+                    seen[hook] = ts
+    return seen
 
 
 def hook_timeouts(plugin_root: Path | None = None) -> dict:
@@ -850,17 +891,25 @@ def _pct(values: list, q: float) -> float | None:
 def hook_stats(
     runs: list,
     timeouts: dict | None = None,
-    watchdog_hooks: set | None = None,
+    watchdog_hooks: dict | None = None,
+    watchdog_seen: dict | None = None,
 ) -> dict:
     """Aggregate per hook: volume, kills, latency percentiles, stage costs.
 
-    An orphan (ENTRY, no EXIT) is a **kill** unless its hook is in
-    *watchdog_hooks* and it never logged ``HOOK_WATCHDOG``. Such a hook writes
-    that line seconds before its ceiling, so an orphan without it ended early:
-    it is counted as **cancelled** (the prompt was interrupted, or the process
-    crashed), not as a timeout, and is left out of the latency sample because
-    its duration is unknown and below the watchdog mark. A hook with no
-    watchdog gives no evidence either way, so its orphans stay kills.
+    An orphan (ENTRY, no EXIT) is **cancelled** rather than killed only when
+    all of these hold, so its missing ``HOOK_WATCHDOG`` line is evidence:
+
+    - its hook arms a watchdog (*watchdog_hooks*: hook → seconds);
+    - its startup plus the watchdog seconds is under the hook's budget. The
+      watchdog counts from ``hook_run()``, the harness from process start, so
+      a slow start can be killed before the watchdog was due;
+    - when *watchdog_seen* is given, that hook's watchdog had fired at least
+      once at or before this run, so it was demonstrably live.
+
+    Anything else stays a kill. A cancelled run is not a timeout: the prompt
+    was interrupted, or the process died hard (the log cannot tell those
+    apart). It is left out of the latency sample, since its duration is
+    unknown and below the watchdog mark.
 
     Killed runs record no duration — they never reached their EXIT line. Left
     out of the latency sample they invert the headline metric: a hook timing out
@@ -871,7 +920,7 @@ def hook_stats(
     budget contributes nothing, because there is no defensible number to use.
     """
     timeouts = timeouts or {}
-    watchdog_hooks = watchdog_hooks or set()
+    watchdog_hooks = watchdog_hooks or {}
     per_hook: dict[str, dict] = {}
     for r in runs:
         h = per_hook.setdefault(r.hook, {
@@ -880,7 +929,7 @@ def hook_stats(
             "cancel_sessions": [], "floored": 0,
         })
         h["runs"] += 1
-        if r.killed and r.hook in watchdog_hooks and not r.watchdog:
+        if r.killed and _is_cancel(r, timeouts, watchdog_hooks, watchdog_seen):
             h["cancelled"] += 1
             h["cancel_sessions"].append(
                 (r.ts.isoformat() if r.ts else "?", r.session)
@@ -952,6 +1001,22 @@ def hook_stats(
         ),
         "hooks": rows,
     }
+
+
+def _is_cancel(r, timeouts: dict, watchdog_hooks: dict,
+               watchdog_seen: dict | None) -> bool:
+    """Whether orphan *r* provably ended before its watchdog (see hook_stats)."""
+    secs = watchdog_hooks.get(r.hook)
+    budget = timeouts.get(r.hook)
+    if r.watchdog or not secs or not budget or r.startup_ms is None:
+        return False
+    if r.startup_ms / 1000.0 + float(secs) >= float(budget):
+        return False
+    if watchdog_seen is not None:
+        first = watchdog_seen.get(r.hook)
+        if first is None or r.ts is None or r.ts < first:
+            return False
+    return True
 
 
 def hook_health_notes(stats: dict) -> list:
@@ -1513,7 +1578,10 @@ def main(argv: list | None = None) -> int:
         days = args.days if args.days else HOOK_DEFAULT_DAYS
         since = date.today() - timedelta(days=days)
         runs = load_hook_runs(logs_dir, since=since)
-        stats = hook_stats(runs, hook_timeouts(), hook_watchdog_hooks())
+        armed = hook_watchdog_hooks()
+        stats = hook_stats(
+            runs, hook_timeouts(), armed, first_watchdog_seen(logs_dir, armed)
+        )
         stats["window_days"] = days
         notes = hook_health_notes(stats)
         if args.json:
