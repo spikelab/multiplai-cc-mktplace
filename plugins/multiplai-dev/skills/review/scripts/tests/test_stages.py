@@ -457,3 +457,44 @@ async def test_a_budget_stop_keeps_the_verdicts_already_paid_for(target_info, ct
     with pytest.raises(budget.BudgetExceededError):
         await run_verify(state, ctx)
     assert list(state.verdicts) == [high.id] and state.stage == "find"
+
+
+# --- a hit usage limit -------------------------------------------------------------
+
+
+def _limit() -> sdk.UsageLimitError:
+    return sdk.UsageLimitError("the Claude session usage limit was hit; it resets 9:40am (UTC)",
+                               limit="session", resets="9:40am (UTC)")
+
+
+async def test_a_usage_limit_stops_verify_at_once_and_keeps_the_verdicts(target_info, ctx, monkeypatch):
+    """No second or third try: every call until the reset would fail the same way."""
+    high, medium = high_finding(), medium_finding()
+    state = ReviewState(target=target_info, stage="find", findings=[high, medium])
+    ctx.config.concurrency = 1
+    canned = use(monkeypatch, {"verify": [
+        Verdict(status="confirmed", impact="breaks-users", topic="code", reason="r", citations=[KEYWORD_CITATION]),
+        _limit(), _limit(), _limit()]})
+    with pytest.raises(sdk.UsageLimitError):
+        await run_verify(state, ctx)
+    assert len(canned.calls) == 2
+    assert list(state.verdicts) == [high.id] and state.stage == "find"
+
+
+async def test_a_usage_limit_stops_find_and_stores_nothing_for_that_finder(target_info, ctx, monkeypatch):
+    ctx.config.concurrency = 1
+    state = ReviewState(target=target_info)
+    use(monkeypatch, {"find:diff-bugs": [FinderOutput(findings=[high_finding()])],
+                      "find:callers": [_limit()], "find:trim": [FinderOutput()]})
+    with pytest.raises(sdk.UsageLimitError):
+        await run_find(state, ctx)
+    assert "callers" not in state.finder_results and not state.past("find")
+    assert [f.id for f in state.finder_results["diff-bugs"].findings] == [high_finding().id]
+
+
+async def test_a_usage_limit_stops_merge(target_info, ctx, monkeypatch):
+    state, *_ = _merge_state(target_info)
+    use(monkeypatch, {"merge": [_limit()]})
+    with pytest.raises(sdk.UsageLimitError):
+        await run_merge(state, ctx)
+    assert state.merge_answers == {} and state.stage == "verify" and state.errors == []
