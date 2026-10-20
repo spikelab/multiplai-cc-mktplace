@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import email
+import email.policy
 import json
 from pathlib import Path
 
@@ -235,6 +236,51 @@ class TestReplyRecipient:
         assert args[0] == "gmail" and args[1] == "draft"
         assert kwargs.get("mode") == "reply"
         assert kwargs.get("draft_id") == "draft-xyz"
+
+
+# --------------------------------------------------------------------------- #
+# Drafts carry an HTML part so Gmail reflows paragraphs instead of hard-wrapping
+# --------------------------------------------------------------------------- #
+class TestDraftHtmlAlternative:
+    LONG = "word " * 60
+
+    def _created(self, gmail, tmp_path, body: str):
+        sink: dict = {}
+        inp = tmp_path / "p.json"
+        inp.write_text(json.dumps({"to": "a@example.com", "body": body}),
+                       encoding="utf-8")
+        gmail.cmd_draft(FakeService(sink=sink), reply_to="none",
+                        input_file=str(inp))
+        raw = sink["body"]["message"]["raw"]
+        return email.message_from_bytes(
+            base64.urlsafe_b64decode(raw.encode("utf-8")),
+            policy=email.policy.default)
+
+    def test_draft_is_multipart_alternative(self, gmail, tmp_path):
+        msg = self._created(gmail, tmp_path, "Hi,\n\n" + self.LONG)
+        assert msg.get_content_type() == "multipart/alternative"
+        types = [p.get_content_type() for p in msg.iter_parts()]
+        assert types == ["text/plain", "text/html"]
+
+    def test_plain_part_keeps_paragraph_on_one_line(self, gmail, tmp_path):
+        body = "Hi,\n\n" + self.LONG.strip() + "\n\nSpike"
+        msg = self._created(gmail, tmp_path, body)
+        plain = msg.get_body(preferencelist=("plain",)).get_content()
+        assert plain.rstrip("\n") == body
+
+    def test_html_part_has_paragraphs_and_line_breaks(self, gmail, tmp_path):
+        body = "Ciao Mati,\n\n1. one\n2. two\n\nSpike"
+        html = self._created(gmail, tmp_path, body).get_body(
+            preferencelist=("html",)).get_content()
+        assert "<p>Ciao Mati,</p>" in html
+        assert "<p>1. one<br>\n2. two</p>" in html
+        assert "<p>Spike</p>" in html
+
+    def test_html_part_escapes_markup(self, gmail, tmp_path):
+        html = self._created(gmail, tmp_path, "a < b & <script>x</script>").get_body(
+            preferencelist=("html",)).get_content()
+        assert "<script>" not in html
+        assert "a &lt; b &amp; &lt;script&gt;" in html
 
 
 # --------------------------------------------------------------------------- #
