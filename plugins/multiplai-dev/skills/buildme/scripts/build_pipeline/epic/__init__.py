@@ -13,5 +13,6 @@ once approved, builds them (plan-buildme-epic-mode-2026-10-12.md).
 # epic's own repository branches from the parent's commit that holds the
 # baseline (`coordinator.registry_commit`). Siblings at one commit would also
 # race for spec-extract's lock. A child in another repository builds without a
-# baseline.
+# baseline. The child's argv also carries `--epic-child`, which a hand re-run of
+# its saved command keeps; `orchestrator._epic_child` reads either (#347).
 CHILD_ENV = "BUILDME_EPIC_CHILD"
