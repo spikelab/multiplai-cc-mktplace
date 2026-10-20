@@ -15,6 +15,31 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.96.0] - 2026-10-20
+
+### Added
+- buildme-findings: triage now sees the verdicts earlier rounds gave the
+  same defect (findings of one lineage in the review's `findings.json`),
+  fenced as data, and is told to weigh them against the code as it is now
+  rather than copy them. A `not_defect` verdict still never hides a finding
+  from the next review.
+- buildme-findings: a fix block lists the other places the review found the
+  same defect (`other_locations`) and asks for every listed place to be fixed
+  and covered by a test.
+- buildme-findings: the last round `findings.max_rounds` allows, from round 2
+  on, starts every fix block with the escalation text buildme's own last
+  review fix uses: every finding lineage of the PR's reviews with what each
+  review said about it, a request to question the approach, and a
+  `RECURRING:` line naming findings that share a cause. That round's fixer
+  runs on the `review_fix_escalated` model and effort. Whether a round is the
+  last is decided when it starts and kept on a resume, even if
+  `--max-rounds` changed.
+- buildme-findings: after `FINDINGS:MAX_ROUNDS`, one
+  `FINDINGS_RECURRING:<lineage>:<rounds>` line names each finding lineage
+  open in two or more of the PR's reviews, and one
+  `FINDINGS_RECURRING_SLOT:<block>:<answer>` line quotes each `RECURRING:`
+  answer of the last round.
+
 ## [0.95.0] - 2026-10-20
 
 ### Added

@@ -30,7 +30,10 @@ finished steps and restarts the first unfinished one:
 
 The loop stops when a fetch finds no new comment to act on
 (`FINDINGS:DONE:<rounds>`), after `findings.max_rounds` rounds
-(`FINDINGS:MAX_ROUNDS:<n>`), or, with `--max-usd`, when a fetch finds
+(`FINDINGS:MAX_ROUNDS:<n>`, then `FINDINGS_RECURRING:<lineage>:<rounds>` for
+each lineage open in two or more of the PR's reviews and
+`FINDINGS_RECURRING_SLOT:<block>:<answer>` for each `RECURRING:` answer the
+last round saved), or, with `--max-usd`, when a fetch finds
 something to act on once this process's spend plus the reviews of the PR it
 ran have reached it (`FINDINGS:BUDGET:<rounds>:<usd>`). Each stops between
 rounds, exit 0. With `--severities`, `--auto` posts only findings of those
