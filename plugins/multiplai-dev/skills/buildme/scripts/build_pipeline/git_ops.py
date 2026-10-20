@@ -692,7 +692,7 @@ _test_outputs: dict[Path, dict[str, object]] = {}
 
 
 def test_output_excludes(repo: Path | str) -> list[str]:
-    """Only files actually written by the last test run, still unchanged since."""
+    """Files written by an observed test run and unchanged since observation."""
     candidates = _test_output_candidates(repo)
     known = _test_outputs.get(Path(repo).resolve(), {})
     return [f":(exclude,literal){p}" for p in candidates
@@ -703,7 +703,7 @@ def test_output_excludes(repo: Path | str) -> list[str]:
 def test_output_window(repo: Path | str):
     """Observe declared test writes; unchanged source remains an input."""
     key = Path(repo).resolve()
-    _test_outputs.pop(key, None)
+    known = _test_outputs.pop(key, {})
     if not _declared_test_outputs(repo):
         yield
         return
@@ -713,6 +713,8 @@ def test_output_window(repo: Path | str):
         return (_working_identity(path), stat.st_mtime_ns, stat.st_ctime_ns)
     before = {p: identity(p) for p in _test_output_candidates(repo)}
     before_index = index_entries(repo) or {}
+    unchanged = {p: value for p, value in known.items()
+                 if p in before and value == before[p][0]}
     try:
         yield
     finally:
@@ -721,10 +723,13 @@ def test_output_window(repo: Path | str):
         candidates = set(_test_output_candidates(repo)) | before.keys()
         changed = {p for p in candidates if os.path.lexists(Path(repo) / p)
                    and before.get(p) != identity(p)}
-        staged = [p for p in changed if p in before_index]
+        staged = [p for p in changed | unchanged.keys() if p in before_index]
+        current_index = index_entries(repo)
+        if staged and (current_index is None or any(current_index.get(p) != before_index[p] for p in staged)):
+            raise GitLifecycleError("Staging changed during test-output observation; preserved: " + ", ".join(staged))
         if staged and not _run(["git", "reset", "-q", "HEAD", "--", *staged], cwd=repo).ok:
             raise GitLifecycleError("Cannot unstage agent-generated test outputs: " + ", ".join(staged))
-        _test_outputs[key] = {p: _working_identity(Path(repo) / p) for p in changed}
+        _test_outputs[key] = {**unchanged, **{p: _working_identity(Path(repo) / p) for p in changed}}
 
 
 def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | None:

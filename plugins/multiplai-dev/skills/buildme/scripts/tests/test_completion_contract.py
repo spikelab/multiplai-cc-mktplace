@@ -316,7 +316,7 @@ async def test_mid_block_budget_stop_resumes_at_implementer_with_original_red_te
             assert prompt == 'implement'
             if interruption == 'cancel' and calls.count('implement') == 1:
                 raise asyncio.CancelledError()
-            (config.project_dir / 'app.py').write_text('value = 2\n')
+            (config.project_dir / 'app.py').write_text('value = 2  # implemented\n')
         return SimpleNamespace(text='STATUS: DONE\n', turns=1, files_changed=[],
                                usage=SimpleNamespace(cost_usd=.2, input_tokens=10))
     monkeypatch.setattr(sdk, 'run_agent', provider)
@@ -470,3 +470,21 @@ def test_identical_output_rewrites_and_restart_are_observed(accepted_build):
               "assert result.passed, result.reason")
     result = subprocess.run([sys.executable, '-c', script], cwd=root, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_unchanged_and_subset_output_runs_keep_valid_observations(accepted_build):
+    config, _, _, _ = accepted_build
+    root = config.project_dir
+    (config.specs_dir / 'config.yaml').write_text('test_outputs: [reports/]\n')
+    git(root, 'add', 'specs/config.yaml')
+    git(root, 'commit', '-qm', 'declare reports')
+    (root / 'reports').mkdir()
+    command = f'''{sys.executable} -c "from pathlib import Path; [(p.write_text('created') if not p.exists() else None) for p in [Path('reports/a.txt'), Path('reports/b.txt')]]"'''
+    for _ in range(2):
+        assert final_verification(command, root).passed
+    subset = f'''{sys.executable} -c "from pathlib import Path; Path('reports/a.txt').write_text('rewritten')"'''
+    assert final_verification(subset, root).passed
+    (root / 'app.py').write_text('value = 2\n')
+    assert git_ops.commit_tree(root, 'implementation', test_command=subset)
+    assert git(root, 'ls-files', '--', 'reports/') == ''
+    assert git_ops.tree_is_clean(root)

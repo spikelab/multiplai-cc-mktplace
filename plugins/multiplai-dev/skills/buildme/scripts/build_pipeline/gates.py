@@ -70,14 +70,17 @@ def wiring_task_gate(tasks_path: Path, project_dir: Path) -> GateResult:
 
 def _test_invocation(test_command: str, project_dir: Path) -> tuple[list[str], Path]:
     """Resolve literal leading `cd DIR &&` clauses without running shell code."""
-    argv = shlex.split(test_command, comments=False)
     directory = project_dir
-    while len(argv) >= 4 and argv[0] == "cd" and argv[2] == "&&":
-        if any(char in argv[1] for char in "$`~"):
+    # Tokenize only the leading cd clause as shell syntax. The remaining argv
+    # retains literal punctuation, matching the historical shlex.split contract.
+    clause = re.compile(r"""^\s*cd\s+((?:\\.|"(?:\\.|[^"\\])*"|'[^']*'|[^\s&"'\\])+)\s*&&\s*""")
+    while match := clause.match(test_command):
+        target, = shlex.split(match.group(1), comments=False)
+        if any(char in target for char in "$`~"):
             raise ValueError("Test command cd must name a literal directory")
-        directory = (directory / argv[1]).resolve()
-        argv = argv[3:]
-    return argv, directory
+        directory = (directory / target).resolve()
+        test_command = test_command[match.end():]
+    return shlex.split(test_command, comments=False), directory
 
 
 def _test_directory(test_command: str, project_dir: Path) -> Path:

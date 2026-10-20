@@ -10,7 +10,7 @@ import pytest
 from build_pipeline.gates import red_gate, run_test_suite
 
 
-@pytest.mark.parametrize('wrapper', ['cd api && {command}', 'sh -c {quoted}'])
+@pytest.mark.parametrize('wrapper', ['cd api && {command}', 'cd api&&{command}', 'sh -c {quoted}'])
 @pytest.mark.parametrize('parent_config', [False, True])
 def test_changed_directory_pytest_red(tmp_path, monkeypatch, wrapper, parent_config):
     monkeypatch.setenv('BUILDME_TRUST_REPO', '1')

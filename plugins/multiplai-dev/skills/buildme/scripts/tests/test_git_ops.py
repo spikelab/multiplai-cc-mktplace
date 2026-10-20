@@ -1263,3 +1263,22 @@ def test_unrecorded_staging_names_paths_and_can_be_resolved_explicitly(tmp_path)
     _git(repo, 'add', 'README.md')
     assert git_ops.commit_tree(repo, 'chosen working version')
     assert _git(repo, 'show', 'HEAD:README.md').stdout == 'working after interruption\n'
+
+
+def test_output_observation_preserves_intervening_user_staging(tmp_path):
+    repo = make_repo(tmp_path / 'repo')
+    (repo / 'specs').mkdir()
+    (repo / 'specs/config.yaml').write_text('test_outputs: [report.txt]\n')
+    _git(repo, 'add', 'specs/config.yaml')
+    _git(repo, 'commit', '-qm', 'declare report')
+    report = repo / 'report.txt'
+    with git_ops.agent_write_window(repo):
+        report.write_text('agent output\n')
+        _git(repo, 'add', 'report.txt')
+    with pytest.raises(GitLifecycleError, match='report.txt'):
+        with git_ops.test_output_window(repo):
+            report.write_text('new user staging\n')
+            _git(repo, 'add', 'report.txt')
+            report.write_text('test run output\n')
+    assert _git(repo, 'show', ':report.txt').stdout == 'new user staging\n'
+    assert report.read_text() == 'test run output\n'
