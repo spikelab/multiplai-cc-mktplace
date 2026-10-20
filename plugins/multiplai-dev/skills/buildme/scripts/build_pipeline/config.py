@@ -797,6 +797,10 @@ class BuildConfig:
     # `efforts:` from specs/config.yaml, the same keys → an effort name.
     # `effort_for` resolves it.
     effort_specs: dict[str, str] = field(default_factory=dict)
+    # Step → the step whose model and effort it runs on, set only on a copy
+    # made for one run: a findings round on the last allowed round runs its
+    # implementer as `review_fix_escalated` (`findings/code.round_config`).
+    step_aliases: dict[str, str] = field(default_factory=dict)
     # `tier:` from specs/config.yaml. Read only when the default model is not
     # a Claude model (see detect_tier).
     configured_tier: str | None = None
@@ -1023,9 +1027,12 @@ class BuildConfig:
         passed before this method existed; ``run_agent`` reads a bare ID as
         Anthropic. Any other provider comes back qualified (``pi:…``).
 
+        A step named in ``step_aliases`` resolves as the step it names.
+
         Raises:
             KeyError: *step* is not in ``STEP_STAGES``.
         """
+        step = self.step_aliases.get(step, step)
         stage = STEP_STAGES[step]
         spec = resolve_model_spec([self.model_specs.get(step), self.model_specs.get(stage)])
         if spec is None:
@@ -1054,9 +1061,12 @@ class BuildConfig:
         6. multiplai-core's ``default_effort()``: ``MULTIPLAI_EFFORT``, then
            the Claude Code session's effort
 
+        A step named in ``step_aliases`` resolves as the step it names.
+
         Raises:
             KeyError: *step* is not in ``STEP_STAGES``.
         """
+        step = self.step_aliases.get(step, step)
         stage = STEP_STAGES[step]
         for key in (step, stage):
             if self.effort_specs.get(key):

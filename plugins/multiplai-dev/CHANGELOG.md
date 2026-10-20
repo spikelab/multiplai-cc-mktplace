@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.94.1] - 2026-10-20
+## [0.96.1] - 2026-10-20
 
 ### Fixed
 - review: an earlier finding no longer shows as resolved when this round's
@@ -25,6 +25,48 @@ time, not derived from a tag.
   counted as new. Now the earlier finding is `still_present`, and the
   survivor is labelled `still-open` against it, with its `lineage`. When a
   duplicate set is still open against two earlier findings, both stay open.
+
+## [0.96.0] - 2026-10-20
+
+### Added
+- buildme-findings: triage now sees the verdicts earlier rounds gave the
+  same defect (findings of one lineage in the review's `findings.json`),
+  fenced as data, and is told to weigh them against the code as it is now
+  rather than copy them. A `not_defect` verdict still never hides a finding
+  from the next review.
+- buildme-findings: a fix block lists the other places the review found the
+  same defect (`other_locations`) and asks for every listed place to be fixed
+  and covered by a test.
+- buildme-findings: the last round `findings.max_rounds` allows, from round 2
+  on, starts every fix block with the escalation text buildme's own last
+  review fix uses: every finding lineage of the PR's reviews with what each
+  review said about it, a request to question the approach, and a
+  `RECURRING:` line naming findings that share a cause. That round's fixer
+  runs on the `review_fix_escalated` model and effort. Whether a round is the
+  last is decided when it starts and kept on a resume, even if
+  `--max-rounds` changed. The new `--no-escalation` flag turns this off; an
+  epic passes it to every fixer, since it runs them one round at a time.
+- buildme-findings: after `FINDINGS:MAX_ROUNDS`, one
+  `FINDINGS_RECURRING:<lineage>:<rounds>` line names each finding lineage
+  open in two or more of the PR's reviews, and one
+  `FINDINGS_RECURRING_SLOT:<block>:<answer>` line quotes each `RECURRING:`
+  answer of the last round.
+
+## [0.95.0] - 2026-10-20
+
+### Added
+- review: every finding now names its kind of defect in a few words and
+  every other place in the change or the code with the same defect. The
+  finders are asked for both, and the review shows them under the finding as
+  `class: …; also at: …`, as do the PR comments `post` writes, so whoever
+  fixes the finding sees every place to fix. Python checks each other place
+  before it is shown: one whose file is not at the reviewed commit, or whose
+  line is past the end of the file, is dropped with a line under agent
+  failures, and the finding itself is kept. When duplicates are merged, the
+  merged finding lists every place its members named. `findings.json`
+  carries the two optional keys `defect_class` and `other_locations`, which
+  review-viewer's schema accepts; a review stopped before this version
+  resumes without asking any finder again.
 
 ## [0.94.0] - 2026-10-20
 

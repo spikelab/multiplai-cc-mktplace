@@ -11,7 +11,7 @@ way.
 from __future__ import annotations
 
 from ..paths_io import PathView
-from .piece import REPORT_FORMAT, REVIEW_BRIEF
+from .piece import CLASS_AND_PLACES, REPORT_FORMAT, REVIEW_BRIEF
 from .untrusted import fenced
 
 NO_E2E = "No e2e test is listed for this path."
@@ -59,5 +59,6 @@ def build_path(view: PathView, *, workspace: str) -> str:
         (f"The trace stops at hop {view.broken_at}; continue from there by reading the code."
          if view.broken_at is not None else ""),
         REPORT_FORMAT,
+        CLASS_AND_PLACES,
     ]
     return "\n\n".join(p for p in parts if p)

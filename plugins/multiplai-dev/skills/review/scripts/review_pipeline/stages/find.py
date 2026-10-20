@@ -34,7 +34,7 @@ from .. import budget, checks, sdk, timings
 from ..checks import add_coverage, drop_coverage
 from ..chunks import piece_diff_text
 from ..config import TRIM_DIMENSION, ReviewConfig
-from ..gates import file_at_head, finding_gate, gated_need, reason_kind
+from ..gates import file_at_head, finding_gate, gated_locations, gated_need, reason_kind
 from ..linked_docs import LinkSource, linked_docs, not_included_line
 from ..models import (AgentCheck, ConvertedItem, ConvertOutput, CoverageRecord, Finding, FinderOutput,
                       FinderReport, FinderResult, GateCheck, Need, Rejected, ReviewState, TargetInfo)
@@ -221,6 +221,7 @@ def _normalise(finding: Finding, dimension: str, target: TargetInfo, ctx: RunCon
     return finding.with_location(
         file=relative_path(finding.file, target, ctx.snapshot),
         citations=[c.model_dump() for c in citations if c is not None],
+        other_locations=[relative_path(loc, target, ctx.snapshot) for loc in finding.other_locations],
         dimension="pre-existing" if finding.dimension == "pre-existing" else dimension,
         finder=dimension,
         finders=[dimension],
@@ -284,7 +285,8 @@ def map_converted(key: str, out: ConvertOutput) -> tuple[list[ConvertedItem], li
                 finding = Finding(claim=it.claim, severity=severity, dimension=kind, file=it.file,
                                   line_start=it.line_start, line_end=it.line_end or it.line_start,
                                   failure_scenario=it.failure_scenario, citations=it.citations,
-                                  finder=kind, finders=[kind])
+                                  finder=kind, finders=[kind], defect_class=it.defect_class,
+                                  other_locations=it.other_locations)
             except ValidationError:
                 finding = None
         if finding is not None:
@@ -299,7 +301,8 @@ def _relative(out: ConvertOutput, target: TargetInfo, snapshot: Path) -> Convert
     for it in out.items:
         items.append(it.model_copy(update={
             "file": relative_path(it.file, target, snapshot) if it.file else it.file,
-            "citations": [fix_citation(c, target, snapshot) for c in it.citations]}))
+            "citations": [fix_citation(c, target, snapshot) for c in it.citations],
+            "other_locations": [relative_path(loc, target, snapshot) for loc in it.other_locations]}))
     return ConvertOutput(items=items)
 
 
@@ -587,6 +590,10 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
                     first.finders.append(finding.finder)
                 entry.update(fate="deduped", into=first.id)
                 continue
+            # Every exported location is one at head, a rejected finding's too; the finding itself stays.
+            finding, dropped = gated_locations(target, finding)
+            state.errors.extend(f"locations_gate dropped a location of finding {finding.id}: {reason}"
+                                for reason in dropped)
             seen[key] = finding
             gate = finding_gate(target, finding)
             state.gate_checks.append(GateCheck(finding_id=finding.id, gate="finding_gate", passed=gate.passed,

@@ -391,10 +391,14 @@ class FakeReview:
 
 
 def _run(config, change, *, triage_call, review, spec_call=None, engine=None, auto=True,
-         self_check=..., decisions=...):
-    """`...` for *self_check* is a check agent that finds nothing, and for
-    *decisions* the path `write_decisions` would write, with nothing written;
-    None is the real call."""
+         self_check=..., decisions=..., review_dirs=...):
+    """`...` for *self_check* is a check agent that finds nothing, for
+    *decisions* the path `write_decisions` would write, with nothing written,
+    and for *review_dirs* a ledger that holds no review of the PR (the real
+    ledger is never read); None is the real call."""
+    if review_dirs is ...:
+        def review_dirs(run):
+            return []
     if self_check is ...:
         async def self_check(config, diff):
             return ""
@@ -407,7 +411,8 @@ def _run(config, change, *, triage_call, review, spec_call=None, engine=None, au
         auto=auto, trust_repo=True,
         seams=loop.Seams(triage_call=triage_call, spec_call=spec_call, engine=engine,
                          review=review.review, post=review.post,
-                         self_check=self_check, decisions=decisions),
+                         self_check=self_check, decisions=decisions,
+                         review_dirs=review_dirs),
         emit=lines.append)
     return run, lines
 
@@ -2216,3 +2221,5 @@ class TestNoReview:
         base = ["findings", "--pr", str(PR), "--project-dir", str(repo)]
         assert cli.resolve(build_parser().parse_args([*base, "--no-review"])).review is False
         assert cli.resolve(build_parser().parse_args(base)).review is True
+        assert cli.resolve(build_parser().parse_args([*base, "--no-escalation"])).escalate is False
+        assert cli.resolve(build_parser().parse_args(base)).escalate is True

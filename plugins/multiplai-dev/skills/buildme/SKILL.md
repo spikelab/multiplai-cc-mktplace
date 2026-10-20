@@ -728,7 +728,7 @@ review_pipeline post <review dir> --decisions <that file>`, run in the child's
 project directory (`agents/<NNN>-post-<id>.*`). Then the fixer runs there:
 `python -m build_pipeline findings --pr <n> --change <epic>-<id> --project-dir
 <child project dir> --auto --trust-repo --max-rounds <M> --severities
-HIGH,MEDIUM --code-only [--max-usd <left>]` (`agents/<NNN>-fix-<id>.*`;
+HIGH,MEDIUM --code-only --no-escalation [--max-usd <left>]` (`agents/<NNN>-fix-<id>.*`;
 `<left>` is its share of `epic.max_usd`, above, only when `epic.max_usd` is
 set; its re-reviews post only HIGH and MEDIUM Code findings, so it runs no
 round for a finding the epic would merge with), where `<M>` is every round in

@@ -168,7 +168,7 @@ def fix_argv(session_id: str, number: int, change: str, project: Path, max_round
     argv = ["python", "-m", "build_pipeline", "--session-id", session_id, "findings", "--pr", str(number),
             "--change", change, "--project-dir", str(project), "--auto", "--trust-repo",
             "--max-rounds", str(max_rounds), "--severities", ",".join(review.BLOCKING_SEVERITIES),
-            "--code-only"]
+            "--code-only", ESCALATION_OFF]
     if accept_unknown_spend:
         argv.append("--accept-unknown-spend")
     if final:
@@ -179,6 +179,9 @@ def fix_argv(session_id: str, number: int, change: str, project: Path, max_round
 
 
 FINAL_FLAG = "--no-review"
+# Every fixer: its `--max-rounds` allows one round at a time, so each round
+# would otherwise be "the last allowed round" and run the escalated fix.
+ESCALATION_OFF = "--no-escalation"
 
 
 def is_final(attempt_argv: list[str]) -> bool:

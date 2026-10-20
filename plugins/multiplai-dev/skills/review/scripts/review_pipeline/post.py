@@ -34,7 +34,7 @@ from pathlib import Path
 from multiplai_core.log_utils import log_event
 
 from .pr_marker import format_marker, parse_markers
-from .render import SHOWN_STATUSES, listed, section
+from .render import SHOWN_STATUSES, class_line, listed, section
 from .rounds import round_name
 from .state import load_state
 from .target import _DIFF_FLAGS, TargetError, git, github_web_base
@@ -166,7 +166,10 @@ def inline_comment(f: dict, lines: dict[str, set[int]], round_id: str) -> dict |
     have = lines.get(f["file"], set())
     if any(n not in have for n in range(start, end + 1)):
         return None
-    body = [f"**{f['severity']}** — {_text(f['claim'])}", "", _text(f["failure_scenario"]), ""]
+    body = [f"**{f['severity']}** — {_text(f['claim'])}", ""]
+    if class_line(f):
+        body += [class_line(f), ""]
+    body += [_text(f["failure_scenario"]), ""]
     if f.get("expected_behaviour"):
         body += [f"Expected behaviour: {_text(f['expected_behaviour'])}", ""]
     body.append(format_marker(f["id"], round_id))
@@ -188,6 +191,9 @@ def review_body(web: str, head_sha: str, total: int, inline: int, outside: list[
     for i, f in enumerate(outside, 1):
         out.append(f"{i}. {_text(f['claim'])} ({f['severity']})")
         out.append("")
+        if class_line(f):
+            out.append(class_line(f))
+            out.append("")
         out.append(_text(f["failure_scenario"]))
         out.append("")
         if f.get("expected_behaviour"):

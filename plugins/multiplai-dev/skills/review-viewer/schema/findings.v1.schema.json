@@ -220,6 +220,12 @@
           "title": "Claim",
           "type": "string"
         },
+        "defect_class": {
+          "default": null,
+          "minLength": 1,
+          "title": "Defect Class",
+          "type": "string"
+        },
         "expected_behaviour": {
           "anyOf": [
             {
@@ -295,6 +301,16 @@
             "$ref": "#/$defs/Need"
           },
           "title": "Needs",
+          "type": "array"
+        },
+        "other_locations": {
+          "default": null,
+          "items": {
+            "pattern": "^.+:\\d+(-\\d+)?$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Other Locations",
           "type": "array"
         },
         "paths": {

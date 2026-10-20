@@ -16,7 +16,7 @@ build runs. Each round replies on the PR and re-runs the review.
 uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
   python -m build_pipeline findings --pr <number> --project-dir "<repo>" \
   [--change <name>] [--auto] [--max-rounds <n>] [--max-usd <usd>] \
-  [--severities <list>] [--code-only] [--no-review] [--trust-repo]
+  [--severities <list>] [--code-only] [--no-review] [--no-escalation] [--trust-repo]
 ```
 
 - `--pr`: the PR number on the repository at `--project-dir`.
@@ -52,6 +52,9 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
   so it posts no new findings. An epic's final fix runs one such round
   (`--max-rounds` one more than the rounds in its state, finished or not): its commits
   get no review.
+- `--no-escalation`: no round runs as the escalated last round, whatever
+  `--max-rounds` says. An epic passes it to every fixer: it launches one
+  round at a time, so each round would otherwise count as the last.
 - `--trust-repo`: required. The triage, fix, self-check and review agents
   hold tools and run without asking; pass it only after the user says they trust the
   repository's specs and code.
@@ -78,7 +81,10 @@ never removed. A PR whose branch lives in a fork is refused.
    comment, given the comment only inside an `<untrusted-content>` fence.
    `findings-r<N>.md` in the change directory lists every comment, allowed or
    not, with its verdict and reason; a review finding keeps one row across
-   rounds.
+   rounds. The agent also gets the verdicts earlier rounds gave findings of
+   the same lineage (the review's `lineage` in its `findings.json`), fenced
+   as data, as evidence to weigh against the code as it is now. A
+   `not_defect` verdict never hides a finding from the next review.
 3. **Spec.** For a `spec_change`, or a fix that contradicts the spec, one
    model call writes `respec-findings-r<N>.md`; the pipeline applies it to the
    change's `requirements/*.md` (and, when the change is archived, to
@@ -91,7 +97,16 @@ never removed. A PR whose branch lives in a fork is refused.
    review. Each block also asks the fixer to search the same function, its
    other branches, its callers and the rest of the PR's diff for the same
    mistake, fix each one, and end its report with a `SEARCHED:` section; the
-   reply quotes it. A block the engine fails (its test never fails before the
+   reply quotes it. When the review listed other places with the same defect
+   (`other_locations`), the block lists them and asks for every listed
+   location to be fixed and tested.
+   On the last round `findings.max_rounds` allows, from round 2 on, every
+   block starts with the escalation text of buildme's review fix: every
+   finding lineage of the PR's reviews with what each review said about it,
+   and a request to question the approach and name shared causes on a
+   `RECURRING:` line. That round's fixer runs on the `review_fix_escalated`
+   model. Whether a round is the last is saved when it starts, so a resume
+   keeps it even if `--max-rounds` changed. A block the engine fails (its test never fails before the
    fix, say) is kept under a wip ref, discarded from the branch, and answered
    "not fixed"; the round goes on with the next block.
    When the engine finishes every block with nothing stopping after them,
@@ -125,6 +140,8 @@ with comments to act on once `--max-usd` is reached.
 | `FINDINGS:REVIEW_READY:<dir>` (exit 3) | The re-review is done. Hand `<dir>/findings.json` to `/multiplai-dev:review-viewer`; after the user accepts findings, post them with `/multiplai-dev:review`'s `post` step on their yes, then run this command again to start the next round. |
 | `FINDINGS:DONE:<rounds>` | Nothing new to act on; the PR is ready for a human. |
 | `FINDINGS:MAX_ROUNDS:<n>` | The round cap was reached; say which comments are still open. |
+| `FINDINGS_RECURRING:<lineage>:<rounds>` (after `FINDINGS:MAX_ROUNDS`) | That finding lineage was open in `<rounds>` of the PR's reviews; name it as a defect the fixes have not settled. |
+| `FINDINGS_RECURRING_SLOT:<block>:<answer>` (after the `FINDINGS_RECURRING` lines) | The last round's fixer of block `<block>` named the findings that share a cause, and the cause (or `none`); quote it. |
 | `FINDINGS:BUDGET:<rounds>:<usd>` | `--max-usd` was reached after `<rounds>` rounds, with `<usd>` spent, and comments are still open to act on; say which. A re-run counts from 0 again, so its `--max-usd` is what that run may spend on top of the `<usd>` already spent: ask the user how much more before re-running. |
 | `FINDINGS:FAILED:<step>:<reason>` (exit 1, or 4 for an agent timeout) | Quote the reason. Re-running the same command resumes at that step. A resumed code step first keeps the stopped attempt's edits under a wip ref, then runs that block again. When the reason says the test suite fails before any fix, the suite must pass before a re-run can get further. |
 | `FINDINGS:CODE_CHECK_FAILED:<reason>` | Every fix passed its block's gates and is committed, but a step the TDD engine runs after the fixes (the whole-change refactor's budget stop, or mutation testing) failed. The fixes are still pushed and answered, and each reply says what failed. |
