@@ -654,6 +654,86 @@ def test_post_leaves_out_repeats_unless_accepted(target_info):
     assert medium in [f["id"] for f in select(data["findings"], {medium: {"decision": "accept"}})]
 
 
+# --- lineage and the earlier statuses ------------------------------------------------
+
+
+def _round_rows(target_dir: Path, name: str, head: str, rows: list[dict], when: str) -> None:
+    d = target_dir / "rounds" / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "findings.json").write_text(json.dumps({"schema_version": 1, "generated_at": when, "producer": "test",
+                                                 "target": {"head_sha": head}, "findings": rows}))
+
+
+async def test_lineage_follows_still_open_and_repeat_to_the_first_appearance(target_info, ctx, fake):
+    from review_pipeline.models import Repeat
+
+    first = at("first said in round one", file="settings.py", line=9)
+    reworded = at("said again in round two", file="settings.py", line=9)
+    plain = at("listed once", file="settings.py", line=20)
+    rejected = at("rejected in round two", file="settings.py", line=30)
+    _round_rows(ctx.target_dir, OLDER_HEAD[:12], OLDER_HEAD, [_finding(first, "confirmed", "r", "e")],
+                "2026-01-01T00:00:00Z")
+    _round_rows(ctx.target_dir, OLD_HEAD[:12], OLD_HEAD,
+                [{**_finding(reworded, "confirmed", "r", "e"), "lineage": first.id},
+                 _finding(plain, "confirmed", "r", "e"),
+                 {**_finding(rejected, "confirmed", "r", "e"), "lineage": first.id}], "2026-01-02T00:00:00Z")
+    decide(ctx.target_dir, **{rejected.id: ("reject", "")})
+    a = at("still open against the reworded one", line=2)
+    b = at("still open against the plain one", line=4)
+    c = at("repeats the rejected one", line=8)
+    d = at("new", line=10)
+    state = state_with(target_info, a, b, c, d, stage="repeats")
+    state.repeats = {c.id: Repeat(rejected_id=rejected.id, reason="same", round=OLD_HEAD)}
+    fake(assess=[AssessOutput(assessments=[
+        AssessItem(id=a.id, label="still-open", reason="r", earlier_id=reworded.id),
+        AssessItem(id=b.id, label="still-open", reason="r", earlier_id=plain.id),
+        AssessItem(id=d.id, label="useful")])])
+    state = await run_assess(state, ctx)
+    assert state.lineage == {a.id: first.id, b.id: plain.id, c.id: first.id, d.id: d.id}
+    rows = {f["id"]: f for f in to_findings_file(state)["findings"]}
+    assert [rows[i].get("lineage") for i in (a.id, b.id, c.id, d.id)] == [first.id, plain.id, first.id, None]
+
+
+async def test_the_earlier_status_is_the_worst_of_the_recheck_and_still_open(target_info, ctx, fake):
+    from review_pipeline.models import EarlierStatus
+
+    e1 = at("fixed, says the recheck", file="settings.py", line=9)
+    e2 = at("half fixed", file="settings.py", line=20)
+    e3 = at("not rechecked", file="settings.py", line=30)
+    write_round(ctx.target_dir, OLD_HEAD, [e1, e2, e3])
+    state = state_with(target_info, at("still open against e1", KEYWORD_USE_CITATION, line=6),
+                       at("other", line=1), stage="repeats")
+    a = state.findings[0]
+    state.recheck_answers = {
+        e1.id: EarlierStatus(earlier_id=e1.id, lineage=e1.id, round=OLD_HEAD, status="resolved",
+                             reason="it reads the setting now.", citations=[KEYWORD_CITATION]),
+        e2.id: EarlierStatus(earlier_id=e2.id, lineage=e2.id, round=OLD_HEAD, status="partially_resolved",
+                             reason="one of two", citations=[KEYWORD_CITATION]),
+    }
+    fake(assess=[AssessOutput(assessments=[AssessItem(id=a.id, label="still-open", reason="r", earlier_id=e1.id),
+                                           AssessItem(id=state.findings[1].id, label="useful")])])
+    state = await run_assess(state, ctx)
+    by_id = {e.earlier_id: e for e in state.earlier_status}
+    assert [e.earlier_id for e in state.earlier_status] == [e1.id, e2.id, e3.id]
+    assert by_id[e1.id].status == "still_present"
+    assert by_id[e1.id].reason == f"it reads the setting now. Still open in this round as {a.id}."
+    assert by_id[e1.id].citations == [KEYWORD_CITATION, KEYWORD_USE_CITATION]
+    assert (by_id[e2.id].status, by_id[e2.id].reason) == ("partially_resolved", "one of two")
+    assert (by_id[e3.id].status, by_id[e3.id].reason) == ("cannot_verify", "not rechecked")
+    exported = to_findings_file(state)["earlier"]
+    assert [(e["earlier_id"], e["status"]) for e in exported] == [
+        (e1.id, "still_present"), (e2.id, "partially_resolved"), (e3.id, "cannot_verify")]
+
+
+async def test_a_skipped_assess_stage_still_sets_lineage_and_the_earlier_statuses(target_info, ctx, fake):
+    earlier = at("listed last round", file="settings.py", line=9)
+    write_round(ctx.target_dir, OLD_HEAD, [earlier])
+    calls = fake()
+    state = await run_assess(state_with(target_info, stage="repeats"), ctx)  # nothing shown: skipped
+    assert calls.calls == []
+    assert [(e.earlier_id, e.status) for e in state.earlier_status] == [(earlier.id, "cannot_verify")]
+
+
 # --- two rounds through the CLI ----------------------------------------------------
 
 
