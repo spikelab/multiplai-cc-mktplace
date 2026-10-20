@@ -33,11 +33,12 @@ from .models import MODES, SEVERITIES, ReviewState
 from .progress import ProgressWriter
 from .render import count_line, listed, summary_path, write_review, write_rollups, write_runs
 from .stages import RunContext
-from .stages.assess import run_assess
+from .stages.assess import reconcile_earlier, run_assess
 from .stages.explain import run_explain
 from .stages.paths import PATH_CAP, run_paths
 from .stages.find import file_chars, file_groups, finder_dimensions, run_find
 from .stages.merge import run_merge
+from .stages.recheck import run_recheck
 from .stages.repeats import run_repeats
 from .stages.verify import VerifyIncomplete, run_verify
 from .state import STATE_FILE, load_state, save_state
@@ -49,6 +50,7 @@ STAGE_FUNCTIONS = (
     ("paths", run_paths),  # every change review; a tree review only with `--paths`
     ("find", run_find),
     ("verify", run_verify),
+    ("recheck", run_recheck),  # earlier rounds' open findings; skipped on a tree and with none open
     ("merge", run_merge),
     ("repeats", run_repeats),
     ("assess", run_assess),
@@ -213,6 +215,9 @@ async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig
     state.run_config = run_config(config)
     timings.open_interval(state, "run")
     save_state(state, target_dir)
+    # A checkpoint saved after assess and before export: the assess stage will not run
+    # again, and one written before 0.94 has no earlier statuses or lineage (row S3).
+    reconcile_now = state.past("assess") and not state.past("export")
 
     for name, fn in STAGE_FUNCTIONS:
         if state.past(name) or (name == "explain" and not config.explain):
@@ -269,6 +274,8 @@ async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig
                       session_id=session_id, target=t.slug, stage=name, count=len(ctx.gate_reasons),
                       reasons=sorted({reason_kind(r) for r in ctx.gate_reasons}))
 
+    if reconcile_now:
+        reconcile_earlier(state, ctx)
     timings.close_interval(state, "run")
     note_missing_usage(state, ledger)
     state.budget = ledger.to_state()

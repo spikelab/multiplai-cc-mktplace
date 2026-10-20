@@ -407,6 +407,46 @@ def _decisions_beside(findings: Path) -> dict[str, dict]:
     return load_decisions(target_dir)
 
 
+def _read_rounds(target_dir: Path, current_head: str,
+                 elsewhere: list[Path] | tuple) -> tuple[list[tuple[str, str, dict, datetime | None]], dict]:
+    """The earlier rounds `load_rounds` and `open_findings` read, oldest first, and the decisions.
+
+    Each round is `(generated_at, head_sha, findings.json dict, until)`: a
+    decision applies to that round's copy of a finding only when it was made
+    no later than *until*, the next round's `generated_at` (for the last
+    round, the top-level `findings.json` when it is *current_head*'s and not
+    itself a kept round, else None: no limit). A kept round with no
+    `findings.json` (a run that stopped before export) is left out.
+    """
+    rounds = []
+    seen = set()
+    own = [d / "findings.json" for d in _round_dirs(target_dir)]
+    decisions: dict[str, dict] = {}
+    for path in [*own, *elsewhere]:
+        data = _read_json(path)
+        if data is None:
+            continue
+        head = str((data.get("target") or {}).get("head_sha") or "")
+        key = (*_round_key(data), head)
+        if key in seen and path not in own:  # a copy of a round already read
+            continue
+        seen.add(key)
+        rounds.append((str(data.get("generated_at") or ""), head, data))
+    for path in elsewhere:
+        for fid, d in _decisions_beside(path).items():
+            if str(d.get("ts") or "") >= str((decisions.get(fid) or {}).get("ts") or ""):
+                decisions[fid] = d
+    rounds.sort(key=lambda r: r[0])
+    current = _read_json(target_dir / "findings.json") or {}
+    current_at = None
+    if (current_head and str((current.get("target") or {}).get("head_sha") or "") == current_head
+            and str(current.get("generated_at") or "") not in {r[0] for r in rounds}):
+        current_at = _when(current.get("generated_at") or "")
+    ends = [_when(r[0]) for r in rounds[1:]] + [current_at]
+    decisions.update(load_decisions(target_dir))
+    return [(*r, until) for r, until in zip(rounds, ends)], decisions
+
+
 def load_rounds(target_dir: Path, current_head: str = "", elsewhere: list[Path] | tuple = ()) -> list[EarlierFinding]:
     """Every finding in `rounds/*/findings.json`, the latest round's copy of each id.
 
@@ -423,41 +463,80 @@ def load_rounds(target_dir: Path, current_head: str = "", elsewhere: list[Path] 
     found twice (a migrated copy) counts once, and a decision recorded in
     *target_dir* wins over one recorded there.
     """
-    rounds = []
-    seen = set()
-    own = [d / "findings.json" for d in _round_dirs(target_dir)]
-    decisions: dict[str, dict] = {}
-    for path in [*own, *elsewhere]:
-        data = _read_json(path)
-        if data is None:
-            continue
-        head = str((data.get("target") or {}).get("head_sha") or "")
-        key = (*_round_key(data), head)
-        if key in seen and path not in own:  # a copy of a round already read
-            continue
-        seen.add(key)
-        rounds.append((str(data.get("generated_at") or ""), head, data.get("findings") or []))
-    for path in elsewhere:
-        for fid, d in _decisions_beside(path).items():
-            if str(d.get("ts") or "") >= str((decisions.get(fid) or {}).get("ts") or ""):
-                decisions[fid] = d
-    rounds.sort(key=lambda r: r[0])
-    current = _read_json(target_dir / "findings.json") or {}
-    current_at = None
-    if (current_head and str((current.get("target") or {}).get("head_sha") or "") == current_head
-            and str(current.get("generated_at") or "") not in {r[0] for r in rounds}):
-        current_at = _when(current.get("generated_at") or "")
-    ends = [_when(r[0]) for r in rounds[1:]] + [current_at]
-    decisions.update(load_decisions(target_dir))
+    rounds, decisions = _read_rounds(target_dir, current_head, elsewhere)
     by_id: dict[str, EarlierFinding] = {}
-    for (_, head, findings), until in zip(rounds, ends):
-        for f in findings:
+    for _, head, data, until in rounds:
+        for f in data.get("findings") or []:
             if not isinstance(f, dict) or not f.get("id"):
                 continue
             d = _made_by(decisions.get(f["id"]) or {}, until) or _carried(f)
             by_id[f["id"]] = EarlierFinding(finding=f, head_sha=head, decision=str(d.get("decision") or ""),
                                             note=str(d.get("note") or ""))
     return list(by_id.values())
+
+
+@dataclass
+class OpenFinding:
+    """A finding an earlier round left open, which the recheck stage asks about.
+
+    `finding` is its findings.json v1 row (only `id` when no kept round holds
+    it any more), `head_sha` the head of the round it was listed in (the
+    commit its citations are at), `lineage` the id of its first appearance.
+    """
+    finding: dict
+    head_sha: str
+    lineage: str
+
+    @property
+    def id(self) -> str:
+        return self.finding["id"]
+
+
+def open_findings(target_dir: Path, current_head: str = "",
+                  elsewhere: list[Path] | tuple = ()) -> list[OpenFinding]:
+    """The findings the latest kept round with a `findings.json` left open.
+
+    Those it listed (`render.listed`, in its own mode), and its own `earlier`
+    entries whose status is not `resolved`, so a finding stays open across
+    rounds until a recheck resolves it; less every one the person rejected
+    (the decision rule of `load_rounds`). A round written before 0.94 has no
+    `earlier` key: then only its listed findings count. An id listed and also
+    in `earlier` counts once, as listed.
+    """
+    from .render import listed  # here, not at the top: render imports this module
+
+    rounds, decisions = _read_rounds(target_dir, current_head, elsewhere)
+    if not rounds:
+        return []
+    _, head, latest, until = rounds[-1]
+    rows = {f["id"]: (f, h) for _, h, data, _ in rounds for f in data.get("findings") or []
+            if isinstance(f, dict) and f.get("id")}
+
+    def rejected_(fid: str, row: dict) -> bool:
+        d = _made_by(decisions.get(fid) or {}, until) or _carried(row)
+        return d.get("decision") == "reject"
+
+    out: dict[str, OpenFinding] = {}
+    findings = [f for f in latest.get("findings") or [] if isinstance(f, dict) and f.get("id")]
+    for f in listed(findings, latest.get("mode")):
+        if not rejected_(f["id"], f):
+            out[f["id"]] = OpenFinding(finding=f, head_sha=head, lineage=str(f.get("lineage") or f["id"]))
+    for e in latest.get("earlier") or []:
+        fid = str((e or {}).get("earlier_id") or "") if isinstance(e, dict) else ""
+        if not fid or fid in out or e.get("status") == "resolved":
+            continue
+        row, row_head = rows.get(fid, ({"id": fid}, ""))
+        if rejected_(fid, row):
+            continue
+        out[fid] = OpenFinding(finding=row, head_sha=str(e.get("round") or row_head),
+                               lineage=str(e.get("lineage") or fid))
+    return list(out.values())
+
+
+def kept_findings_files(target_dir: Path) -> list[dict]:
+    """Every kept round's `findings.json`, oldest first (`generated_at`); rounds without one left out."""
+    files = [d for d in (_read_json(p / "findings.json") for p in _round_dirs(target_dir)) if d is not None]
+    return sorted(files, key=lambda d: str(d.get("generated_at") or ""))
 
 
 def rejected(earlier: list[EarlierFinding]) -> list[EarlierFinding]:

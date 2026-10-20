@@ -132,6 +132,61 @@
       "title": "Citation",
       "type": "object"
     },
+    "EarlierStatus": {
+      "additionalProperties": false,
+      "description": "What became of a finding an earlier round listed and nobody rejected, at this round's head\n(multiplai-dev 0.94+).\n\n`round` is the head of the round that listed it (its citations are at that\ncommit); `citations` are at this round's head and back the status. A finding\nno agent could assess is `cannot_verify`, never `resolved`; `error` says why\nwhen every recheck call failed.",
+      "properties": {
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/Citation"
+          },
+          "title": "Citations",
+          "type": "array"
+        },
+        "earlier_id": {
+          "pattern": "^[0-9a-f]{10}$",
+          "title": "Earlier Id",
+          "type": "string"
+        },
+        "error": {
+          "default": "",
+          "title": "Error",
+          "type": "string"
+        },
+        "lineage": {
+          "pattern": "^[0-9a-f]{10}$",
+          "title": "Lineage",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "round": {
+          "title": "Round",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "resolved",
+            "still_present",
+            "partially_resolved",
+            "cannot_verify"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "earlier_id",
+        "lineage",
+        "round",
+        "status"
+      ],
+      "title": "EarlierStatus",
+      "type": "object"
+    },
     "Finding": {
       "additionalProperties": false,
       "properties": {
@@ -228,6 +283,12 @@
           "minimum": 1,
           "title": "Line Start",
           "type": "integer"
+        },
+        "lineage": {
+          "default": null,
+          "pattern": "^[0-9a-f]{10}$",
+          "title": "Lineage",
+          "type": "string"
         },
         "needs": {
           "items": {
@@ -784,6 +845,13 @@
   "additionalProperties": false,
   "description": "One review's findings, for review-viewer and the other readers of `findings.json`.\n\nAdditive changes keep the version: a new optional field is added under\n`schema_version` 1, and a file written before it still validates.",
   "properties": {
+    "earlier": {
+      "items": {
+        "$ref": "#/$defs/EarlierStatus"
+      },
+      "title": "Earlier",
+      "type": "array"
+    },
     "findings": {
       "items": {
         "$ref": "#/$defs/Finding"

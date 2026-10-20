@@ -16,6 +16,7 @@ import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import rounds
 from .export import to_checks_file, to_findings_file
 from .models import CRITICAL_IMPACTS, DEPS_DIR, SECTIONS, SEVERITIES, CoverageRecord, ReviewState, section_of
 from .paths_io import load_paths, views
@@ -109,6 +110,120 @@ def assessment_line(fd: dict) -> str:
         what = "repeats" if label == "repeat" else "still open from"
         return f"**Assessment:** {label} — {what} {earlier}, your decision {decision}{note}. {reason}".rstrip()
     return f"**Assessment:** {label} — {reason}".rstrip()
+
+
+# --- earlier rounds: statuses, recurring lineages, the summary line ----------------
+
+# A lineage open in this many rounds or more is listed under `## Recurring`.
+RECURRING_ROUNDS = 3
+STILL_OPEN_STATUSES = ("still_present", "partially_resolved")
+
+
+def lineage(fd: dict) -> str:
+    """The id of the finding's first appearance: its `lineage`, else its own id (a file before 0.94 has none)."""
+    return str(fd.get("lineage") or fd["id"])
+
+
+def open_lineages(data: dict) -> dict[str, set[str]]:
+    """The lineages one round's findings file left open, each with its files: those it listed
+    (`still-open` ones included) and its `earlier` statuses other than `resolved`."""
+    out: dict[str, set[str]] = {}
+    for f in listed([f for f in data.get("findings") or [] if isinstance(f, dict) and f.get("id")], data.get("mode")):
+        out.setdefault(lineage(f), set()).add(str(f.get("file") or ""))
+    for e in data.get("earlier") or []:
+        if isinstance(e, dict) and e.get("lineage") and e.get("status") != "resolved":
+            out.setdefault(str(e["lineage"]), set()).update(
+                str(c.get("path") or "") for c in e.get("citations") or []
+                if not str(c.get("path") or "").lower().startswith(("http://", "https://")))
+    return {k: {p for p in v if p} for k, v in out.items()}
+
+
+def recurring(earlier_files: list[dict], data: dict) -> list[dict]:
+    """Each lineage open in `RECURRING_ROUNDS` or more rounds (the kept ones, then *data*), in code.
+
+    `{"lineage", "rounds", "heads", "files"}`, the most rounds first.
+    """
+    seen: dict[str, dict] = {}
+    for d in [*earlier_files, data]:
+        head = str((d.get("target") or {}).get("head_sha") or "")
+        for lin, files in open_lineages(d).items():
+            entry = seen.setdefault(lin, {"lineage": lin, "rounds": 0, "heads": [], "files": set()})
+            entry["rounds"] += 1
+            entry["heads"].append(head)
+            entry["files"] |= files
+    out = [{**e, "files": sorted(e["files"])} for e in seen.values() if e["rounds"] >= RECURRING_ROUNDS]
+    return sorted(out, key=lambda e: (-e["rounds"], e["lineage"]))
+
+
+def _claims(earlier_files: list[dict], data: dict) -> dict[str, str]:
+    """Every claim by finding id and by lineage, the latest round's copy winning."""
+    out: dict[str, str] = {}
+    for d in [*earlier_files, data]:
+        for f in d.get("findings") or []:
+            if isinstance(f, dict) and f.get("id"):
+                out[f["id"]] = out[lineage(f)] = str(f.get("claim") or "")
+    return out
+
+
+def earlier_counts(data: dict) -> dict[str, int]:
+    """`new`: listed findings not `still-open`; `still`: earlier findings still open, each once (an
+    `earlier` status still present or partly resolved, or the earlier id a listed `still-open`
+    finding names); `resolved` and `unknown` (`cannot_verify`): the `earlier` statuses."""
+    shown = listed(data.get("findings") or [], data.get("mode"))
+    earlier = [e for e in data.get("earlier") or [] if isinstance(e, dict)]
+    still = {e.get("earlier_id") for e in earlier if e.get("status") in STILL_OPEN_STATUSES}
+    still |= {(f.get("assessment") or {}).get("earlier_id") or f["id"] for f in shown
+              if assess_label(f) == "still-open"}
+    return {"new": sum(1 for f in shown if assess_label(f) != "still-open"), "still": len(still),
+            "resolved": sum(1 for e in earlier if e.get("status") == "resolved"),
+            "unknown": sum(1 for e in earlier if e.get("status") == "cannot_verify")}
+
+
+def earlier_line(data: dict) -> str:
+    """`2 new, 1 still open, 3 earlier resolved, 0 earlier cannot verify`, or "" when the round
+    has no earlier statuses and no `still-open` finding."""
+    c = earlier_counts(data)
+    if not data.get("earlier") and not c["still"]:
+        return ""
+    return (f"{c['new']} new, {c['still']} still open, {c['resolved']} earlier resolved, "
+            f"{c['unknown']} earlier cannot verify")
+
+
+def render_earlier_sections(data: dict, earlier_files: list[dict], *, web_base: str | None,
+                            head_sha: str) -> list[str]:
+    """`## Findings from earlier rounds` and `## Recurring`, each only when it has a row. States what
+    the code shows and what recurred; proposes no fix."""
+    out: list[str] = []
+    claims = _claims(earlier_files, data)
+    earlier = [e for e in data.get("earlier") or [] if isinstance(e, dict)]
+    if earlier:
+        out += ["## Findings from earlier rounds", "",
+                "The status at this head of each finding the last round left open and nobody rejected, with "
+                "the lines that show it. One no agent could check is `cannot_verify`, never resolved.", ""]
+        for e in earlier:
+            fid = str(e.get("earlier_id") or "")
+            claim = claims.get(fid) or claims.get(str(e.get("lineage") or "")) or "(claim not in a kept round)"
+            out.append(f"- **{e.get('status')}** `{fid}` (round {str(e.get('round') or '')[:12] or 'unknown'}) — "
+                       f"{_one_line(claim)}  ")
+            if e.get("reason"):
+                out.append(f"  {_one_line(e['reason'])}")
+            out += [f"  - {code_link(web_base, head_sha, c['path'], c['line_start'], c['line_end'])}"
+                    for c in e.get("citations") or []
+                    if not str(c.get("path") or "").lower().startswith(("http://", "https://"))]
+        out.append("")
+    repeated = recurring(earlier_files, data)
+    if repeated:
+        out += ["## Recurring", "",
+                f"Defects open in {RECURRING_ROUNDS} or more rounds of this review (listed, still open, or an "
+                "earlier status other than resolved), counted in code from the kept rounds and this one.", ""]
+        for r in repeated:
+            heads = ", ".join(f"`{h[:12]}`" for h in r["heads"] if h)
+            files = ", ".join(f"`{p}`" for p in r["files"]) or "no file cited"
+            claim = _one_line(claims.get(r["lineage"]) or "")
+            out.append(f"- `{r['lineage']}` open in {r['rounds']} rounds ({heads}) — {claim}  ")
+            out.append(f"  Files: {files}")
+        out.append("")
+    return out
 
 
 def code_link(web_base: str | None, head_sha: str, path: str, start: int, end: int) -> str:
@@ -295,7 +410,10 @@ def render_paths_section(state: ReviewState, result: PathsResult | None, finding
 
 
 def render_review(state: ReviewState, *, deployed: str | None = None,
-                  findings_file: dict | None = None, paths: PathsResult | None = None) -> str:
+                  findings_file: dict | None = None, paths: PathsResult | None = None,
+                  earlier_rounds: list[dict] | None = None) -> str:
+    """The full review. *earlier_rounds* are the kept rounds' findings files (`rounds.kept_findings_files`),
+    for the `## Recurring` section; without them it counts this round only."""
     data = findings_file or to_findings_file(state)
     t = state.target
     web = github_web_base(t.remote_url)
@@ -327,6 +445,8 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
         out.append(f"- **Mode:** critical. {mode_line(mode)}")
     out.append(f"- **Findings:** {count_line(findings, mode)}"
                + (" (what was left out is only in the appendix)" if hidden else ""))
+    if earlier_line(data):
+        out.append(f"- **Against earlier rounds:** {earlier_line(data)}")
     if data.get("run"):
         out.append(f"- **Model cost:** {cost_line(data['run'])}")
     if state.errors:
@@ -355,6 +475,7 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
                                        original_severity=state.original_severity.get(fd["id"]),
                                        finders=finders.get(fd["id"])))
 
+    out += render_earlier_sections(data, earlier_rounds or [], web_base=web, head_sha=head)
     paths_section = render_paths_section(state, paths, findings)
     if paths_section:
         out += [paths_section]
@@ -395,7 +516,8 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
 def write_review(state: ReviewState, target_dir: Path, *, deployed: str | None = None) -> Path:
     """Write the full review, its short summary and the checks record; return the full review's path."""
     path = target_dir / f"review-{state.target.slug}.md"
-    path.write_text(render_review(state, deployed=deployed, paths=load_paths(target_dir, state)), encoding="utf-8")
+    path.write_text(render_review(state, deployed=deployed, paths=load_paths(target_dir, state),
+                                  earlier_rounds=rounds.kept_findings_files(target_dir)), encoding="utf-8")
     summary_path(state, target_dir).write_text(render_summary(state), encoding="utf-8")
     (target_dir / f"checks-{state.target.slug}.md").write_text(render_checks(state), encoding="utf-8")
     return path
@@ -446,9 +568,8 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
         out.append(mode_line(mode))
     out.append(f"Findings: {count_line(findings, mode)}."
                + (f" {len(state.merged)} merged into another finding as duplicates." if state.merged else ""))
-    still = sum(1 for f in shown if assess_label(f) == "still-open")
-    if still:
-        out.append(f"{still} still open from earlier rounds.")
+    if earlier_line(data):
+        out.append(f"Against earlier rounds: {earlier_line(data)}.")
     needs = [n for n in data.get("needs", []) if n["blocks"] == "review" or n["blocks"] in shown_ids]
     left_out = len(data.get("needs", [])) - len(needs)
     if needs:

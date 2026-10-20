@@ -29,6 +29,13 @@ no earlier rounds.
 Trim findings (`models.is_trim`) are never sent to the agent and get no label
 from it: they sit in their own advisory section. The `important` labels the
 verify stage gives some of them are recomputed and kept.
+
+Once the labels are final, `reconcile_earlier` sets, in code, each finding's
+`lineage` (the id of its first appearance, through a `still-open` or `repeat`
+label) and the final status of each earlier finding the recheck stage was
+given: the worst of its recheck status and `still_present` when a finding of
+this round is `still-open` against it. An open earlier finding with no
+recheck answer is `cannot_verify`, reason `not rechecked`.
 """
 
 from __future__ import annotations
@@ -37,10 +44,12 @@ import logging
 import re
 
 from .. import checks, rounds, sdk
-from ..models import AgentCheck, AssessItem, AssessOutput, Assessment, DuplicateSet, Finding, ReviewState, is_trim
+from ..models import (AgentCheck, AssessItem, AssessOutput, Assessment, DuplicateSet, EarlierStatus, Finding,
+                      ReviewState, is_trim, worst_status)
 from ..prompts import assess as prompt
 from . import RunContext
 from .merge import MERGE_LINE_GAP, anchors_near, apply_duplicate_sets, link_groups, mark_merged
+from .recheck import open_set
 from .repeats import earlier_findings, shown_findings
 from .verify import important_assessments
 
@@ -121,6 +130,42 @@ def _repeat_assessments(state: ReviewState) -> dict[str, Assessment]:
             for fid, r in state.repeats.items() if fid in shown}
 
 
+def reconcile_earlier(state: ReviewState, ctx: RunContext,
+                      earlier: list[rounds.EarlierFinding] | None = None) -> None:
+    """Set `state.lineage` and `state.earlier_status` from the final labels and the stored recheck answers.
+
+    Code only, so running it again on the same state and rounds gives the same result.
+    """
+    by_earlier = {e.id: e for e in (earlier_findings(state, ctx) if earlier is None else earlier)}
+    lineage: dict[str, str] = {}
+    against: dict[str, list[Finding]] = {}
+    for f in state.findings:
+        a = state.assessments.get(f.id)
+        lineage[f.id] = f.id
+        if a is not None and a.label in ("still-open", "repeat") and a.earlier_id:
+            e = by_earlier.get(a.earlier_id)
+            lineage[f.id] = str((e.finding.get("lineage") if e else "") or a.earlier_id)
+            if a.label == "still-open":
+                against.setdefault(a.earlier_id, []).append(f)
+    state.lineage = lineage
+
+    statuses: list[EarlierStatus] = []
+    for o in open_set(state, ctx):
+        status = state.recheck_answers.get(o.id) or EarlierStatus(
+            earlier_id=o.id, lineage=o.lineage, round=o.head_sha, status="cannot_verify", reason="not rechecked")
+        still = against.get(o.id, [])
+        if still:
+            cited = list(status.citations)
+            for f in still:
+                cited += [c for c in f.citations if not c.is_web and not c.is_dependency and c not in cited]
+            ids = ", ".join(f.id for f in still)
+            status = status.model_copy(update={
+                "status": worst_status(status.status, "still_present"), "citations": cited,
+                "reason": f"{status.reason.rstrip('. ')}. Still open in this round as {ids}.".lstrip(". ")})
+        statuses.append(status)
+    state.earlier_status = statuses
+
+
 async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
     if state.past("assess"):
         return state
@@ -132,6 +177,7 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     if not candidates or (len(candidates) < 2 and not earlier):
         state.assessments = {**{f.id: Assessment(label="useful") for f in candidates}, **repeats, **important}
+        reconcile_earlier(state, ctx, earlier)
         ctx.counts = {"skipped": 1, "repeats": len(repeats)}
         state.stage = "assess"
         return state
@@ -190,6 +236,7 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
         parts += [f"merged {m.finding.id} into {m.into}" for m in state.merged if m.finding.id in removed]
         check.outcome = "; ".join(parts) or "no labels"
 
+    reconcile_earlier(state, ctx, earlier)
     values = [a.label for a in state.assessments.values()]
     ctx.counts = {"useful": values.count("useful"), "still_open": values.count("still-open"),
                   "low_value": values.count("low-value"), "repeats": values.count("repeat"),
