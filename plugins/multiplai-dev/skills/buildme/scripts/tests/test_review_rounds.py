@@ -403,6 +403,13 @@ class TestFixOnPass:
         assert "open_findings" not in review.await_args_list[2].kwargs
         assert [f.claim for f in p.block.review_scores.findings] == ["a second defect"]
         assert "a second defect" in _unfixed(p) and "off-by-one" not in _unfixed(p)
+        # The record of the review after the fix says the same as the block and the report.
+        terminal = max(_rounds(p).values(), key=lambda r: r["round"])
+        assert terminal["kind"] == "fix_on_pass_review"
+        assert [f["claim"] for f in terminal["open_findings"]] == ["a second defect"]
+        assert terminal["prior_assessments"] == []
+        saved = BuildState.load(p.config.state_file_path())
+        assert [f.claim for f in saved.tdd.blocks[0].review_scores.findings] == ["a second defect"]
 
     @pytest.mark.asyncio
     async def test_fix_on_pass_rolled_back_when_tests_go_red(self, project):

@@ -2226,6 +2226,7 @@ async def _run_fix_on_pass(
 
     new_review: ReviewResult | None = None
     plan: review_rounds.RoundPlan | None = None
+    memory: review_rounds.RoundMemory | None = None
     if not reason:
         _record_fix_pass_stop(config, fp)
         fp.step = "review"
@@ -2258,8 +2259,17 @@ async def _run_fix_on_pass(
                 new_review, block, config, _capture_block_diff(config, block),
                 build_context=_global_constraints_text(config), memory=memory,
             )
-            plan = None if memory is None else review_rounds.plan_round(
-                new_review.findings, open_, new_review.prior_assessments)
+            if memory is not None:
+                plan = review_rounds.plan_round(new_review.findings, open_,
+                                                new_review.prior_assessments)
+            else:
+                # No round record to match the review's statuses to: missing
+                # history is not a resolution, so what the pass worked on
+                # stays open, in the record as in the block and the report.
+                plan = review_rounds.RoundPlan(
+                    assessments=[], carried=list(fp.findings),
+                    new_open=list(range(len(new_review.findings))))
+                plan.to_fix = plan.carried + list(new_review.findings)
             gate = review_score_gate(new_review, config.review_gate)
             progress.log_review(block.name, block.review_iterations + 1,
                                 new_review.weighted_average, gate.passed)
@@ -2271,16 +2281,10 @@ async def _run_fix_on_pass(
     if not reason and new_review is not None:
         sha = _git_commit_block_phase(config, "fix", block)
         review_rounds.amend_fix(fp.round_path, commit=sha, kept=True)
-        if plan is not None:
-            still = [(f, plan.status(f.finding_id)) for f in plan.carried]
-            raised = [new_review.findings[i] for i in plan.new_open]
-            block.review_scores = new_review.model_copy(update={"findings": plan.to_fix})
-        else:
-            # No round record to match the review's statuses to: missing
-            # history is not a resolution, so what the pass worked on stays.
-            still = [(f, "no round record to check it against") for f in fp.findings]
-            raised = new_review.findings
-            block.review_scores = new_review.model_copy(update={"findings": [*fp.findings, *raised]})
+        still = [(f, plan.status(f.finding_id) if memory is not None
+                  else "no round record to check it against") for f in plan.carried]
+        raised = [new_review.findings[i] for i in plan.new_open]
+        block.review_scores = new_review.model_copy(update={"findings": plan.to_fix})
         block.fix_on_pass_kept = True
         for f, status in still:
             if review_rounds.fixable_on_pass([f]):
