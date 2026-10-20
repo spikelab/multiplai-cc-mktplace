@@ -412,3 +412,71 @@ def test_red_verdicts_match_base(case, tmp_path):
 
 def test_every_case_has_a_recorded_verdict():
     assert sorted(VERDICTS) == sorted(c.id for c in CASES)
+
+
+def test_every_table_row_decides_at_least_one_case(tmp_path):
+    from build_pipeline.gates import RED_TABLE, _red_facts, _red_row
+    hit = {_red_row(_red_facts(c.output, c.exit_code, c.runner, c.expected_tests, c.test_command,
+                               tmp_path if c.project else None))
+           for c in CASES}
+    assert [row for row in RED_TABLE if row not in hit] == []
+
+
+@pytest.mark.parametrize("report, expected", [
+    ("STATUS: DONE\nTEST_COUNT: 2\n"
+     "RED_EXPECTED: tests/test_a.py::test_x, tests/test_a.py::test_y — login() does not exist yet\n"
+     "SURPRISES: none\nSPEC_IMPACT: none\n",
+     (["tests/test_a.py::test_x", "tests/test_a.py::test_y"], "login() does not exist yet")),
+    ("STATUS: DONE\nTEST_COUNT: 2\nSURPRISES: none\nSPEC_IMPACT: none\n", None),
+    ("- **RED_EXPECTED:** `tests/test_a.py::test_x[1,2]` - parse() returns None\n- **SURPRISES:** none\n",
+     (["tests/test_a.py::test_x[1,2]"], "parse() returns None")),
+    ("RED_EXPECTED: tests/test_a.py::test_x — add() is missing\n"
+     "TEST CHANGE REQUIRED: the old test asserted the bug\n",
+     (["tests/test_a.py::test_x"], "add() is missing")),
+    ("RED_EXPECTED: <test ids that must fail, comma-separated> — <what is missing that makes them fail>\n", None),
+], ids=["present", "missing", "bold_label", "followed_by_test_change", "template_echo"])
+def test_parse_red_expected(report, expected):
+    from build_pipeline.gates import parse_red_expected
+    assert parse_red_expected(report) == expected
+
+
+def test_red_expected_stops_the_surprises_slot():
+    from build_pipeline.gates import parse_implementation_note
+    note = parse_implementation_note(
+        "SURPRISES: the design named it sum()\nRED_EXPECTED: t.py::test_a — no add()\nSPEC_IMPACT: clarify\n",
+        block_number=1, block_name="Block1", role="test_writer")
+    assert note is not None and note.surprises == "the design named it sum()"
+
+
+@pytest.mark.parametrize("report, output, runner, expected", [
+    ("RED_EXPECTED: tests/test_a.py::test_x — no x()",
+     "FAILED tests/test_a.py::test_x - AssertionError\n1 failed", "pytest", "named tests failed"),
+    ("RED_EXPECTED: test_x — no x()",
+     "FAILED tests/test_a.py::test_x - AssertionError\n1 failed", "pytest", "named tests failed"),
+    ("RED_EXPECTED: tests/test_a.py::test_x — no x()",
+     "FAILED tests/test_a.py::test_x[1] - AssertionError\n1 failed", "pytest", "named tests failed"),
+    ("RED_EXPECTED: tests/test_a.py::test_x, tests/test_a.py::test_z — no x()",
+     "FAILED tests/test_a.py::test_x - AssertionError\n1 failed", "pytest",
+     "named tests not among the failures: tests/test_a.py::test_z"),
+    ("STATUS: DONE", "FAILED tests/test_a.py::test_x - AssertionError", "pytest", "not stated"),
+    (None, "FAILED tests/test_a.py::test_x - AssertionError", "pytest", "not stated"),
+    ("RED_EXPECTED: — no x()", "FAILED tests/test_a.py::test_x - AssertionError", "pytest", "not stated"),
+    ("RED_EXPECTED: tests/test_a.py::test_x — no x()", "1 failed in 0.01s", "pytest",
+     "cannot check for this runner"),
+    ("RED_EXPECTED: answer_test.go — no Answer()", "--- FAIL: TestAnswer (0.00s)\nFAIL", "go",
+     "cannot check for this runner"),
+], ids=["exact", "bare_name", "parametrized", "not_among", "no_slot", "no_report", "no_ids",
+        "suppressed_summary", "other_runner"])
+def test_red_expected_note_result(report, output, runner, expected):
+    from build_pipeline.gates import red_expected_note
+    note = red_expected_note(report, output, 1, runner=runner)
+    assert note.splitlines()[-1] == f"RED_EXPECTED result: {expected}"
+
+
+def test_red_expected_note_keeps_the_slot_text():
+    from build_pipeline.gates import red_expected_note
+    note = red_expected_note("RED_EXPECTED: t.py::test_a, t.py::test_b — add() is missing",
+                             "FAILED t.py::test_a - AssertionError\nFAILED t.py::test_b - AssertionError", 1,
+                             runner="pytest")
+    assert note == ("RED_EXPECTED: t.py::test_a, t.py::test_b — add() is missing\n"
+                    "RED_EXPECTED result: named tests failed")
