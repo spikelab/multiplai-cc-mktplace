@@ -14,7 +14,11 @@ paths through the change from each entry point (see "The paths stage" below).
    `conventions`, `tests`), plus the `trim` finder, which judges the tests and
    comments the change adds or edits (see "Trim" below). A change review also
    runs one finder per piece of its diff (see "The kinds of finder" below).
-   Every finding cites lines with an exact quote.
+   Every finding cites lines with an exact quote, and names its kind of
+   defect in a few words (`defect_class`) and every other place with the same
+   defect (`other_locations`, `path:line`). Python drops each such place whose
+   file is not at head or whose line is past the file's end, with a line
+   under agent failures; the finding itself stays.
 2. **verify** — a fresh agent per finding re-reads the code and answers
    `confirmed`, `refuted` or `unverifiable`, citing what it read. Unless it
    refutes the finding, it also says in one sentence what correct behaviour
@@ -52,8 +56,8 @@ paths through the change from each entry point (see "The paths stage" below).
    findings are grouped when their lines overlap (or come within two lines)
    in one file, or when they cite overlapping lines of any file, and one agent
    per group says which describe the same defect. Each such set becomes one
-   finding with the highest severity, every citation and every finder that
-   reported it. The findings merged away are listed in the review's appendix
+   finding with the highest severity, every citation, every finder that
+   reported it and every other place its members named. The findings merged away are listed in the review's appendix
    with the finding they went into.
 5. **repeats** — when this PR (or branch) was reviewed before, each earlier
    round is kept in full (its findings, review, `progress.log`,
@@ -641,7 +645,9 @@ or `not-seen` when the agent cites lines it never read, searched or was shown).
 `checks-<slug>.md` beside it is the same record as markdown, and review-viewer
 shows it on its Checked tab. `findings.json` also carries each finding's
 `verifier_citations`, and, on a finding others were merged into, their ids
-and claims (`absorbed`). On a later round, a finding whose first appearance
+and claims (`absorbed`), and, when the finder named them, its `defect_class`
+and `other_locations`, which the review shows under the finding's heading as
+`class: …; also at: …`. On a later round, a finding whose first appearance
 was in an earlier round carries that finding's id as `lineage`, and the
 top-level `earlier` list holds each earlier finding's status, reason and
 citations (step 3).
@@ -722,9 +728,11 @@ How it posts: one GitHub review on the PR's head commit, with event
 - A finding whose lines (`line_start` to `line_end`) are all in the PR's diff
   is an inline comment on those lines, on the head side (`side: RIGHT`; a
   range also gets `start_line` and `start_side`). It shows the severity, the
-  claim, the failure scenario and the expected behaviour.
+  claim, a `class: …; also at: …` line when the finder named a kind of defect
+  or other places, the failure scenario and the expected behaviour.
 - Any other finding (a line outside the diff, a deleted or binary file) goes
-  in the review's body, numbered, with a link to its lines. The body starts
+  in the review's body, numbered, with the same `class: …; also at: …` line
+  and a link to its lines. The body starts
   with a count line: "Code review: N findings, M inline, K on lines outside
   this PR's diff".
 - Before posting, it reads the PR's review comments and reviews and skips a

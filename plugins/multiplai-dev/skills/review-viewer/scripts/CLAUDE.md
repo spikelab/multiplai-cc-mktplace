@@ -86,6 +86,12 @@ and a top-level `earlier` list (`EarlierStatus`: each finding the last round
 left open, with its status at this head, reason and citations). `models.py`
 and the schema accept both; the page does not show them yet.
 
+From multiplai-dev 0.95 a finding may also carry `defect_class` (the kind of
+defect in a few words) and `other_locations` (every other `path:line` or
+`path:start-end` at head with the same defect, each checked by the review's
+`locations_gate`). Both are absent when the finder named none, never null or
+empty. `models.py` and the schema accept them; the page does not show them yet.
+
 ## Protocol 1a: `checks.json` v1 (optional)
 
 The review writes it beside `findings.json`: `agents` (each agent call's

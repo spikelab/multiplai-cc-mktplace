@@ -15,6 +15,22 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.95.0] - 2026-10-20
+
+### Added
+- review: every finding now names its kind of defect in a few words and
+  every other place in the change or the code with the same defect. The
+  finders are asked for both, and the review shows them under the finding as
+  `class: …; also at: …`, as do the PR comments `post` writes, so whoever
+  fixes the finding sees every place to fix. Python checks each other place
+  before it is shown: one whose file is not at the reviewed commit, or whose
+  line is past the end of the file, is dropped with a line under agent
+  failures, and the finding itself is kept. When duplicates are merged, the
+  merged finding lists every place its members named. `findings.json`
+  carries the two optional keys `defect_class` and `other_locations`, which
+  review-viewer's schema accepts; a review stopped before this version
+  resumes without asking any finder again.
+
 ## [0.94.0] - 2026-10-20
 
 ### Fixed
