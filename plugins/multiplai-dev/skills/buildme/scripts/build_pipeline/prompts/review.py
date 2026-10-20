@@ -178,7 +178,16 @@ Return a JSON object matching this schema:
       "evidence": "The exact diff lines that support the claim",
       "dimension": "Dimension Name",
       "file_path": "path/to/file.py",
-      "line": 42
+      "line": 42,
+      "defect_class": "The kind of defect, in a few words",
+      "other_locations": ["path/to/other.py:17"]
+    }}
+  ],
+  "prior_assessments": [
+    {{
+      "finding_id": "B01-R1-F1",
+      "status": "resolved | still_present | partially_resolved | cannot_verify",
+      "evidence": "The diff lines that show the status"
     }}
   ]
 }}
@@ -204,6 +213,15 @@ full build context accepts or rejects each one before anything acts on it.
 Write each so it can be judged alone — a finding whose evidence is "see above"
 cannot be adjudicated and will be discarded. Every issue you list should also
 appear as a finding.
+
+Name the kind of defect in a few words in `defect_class`, and list every other
+place in the diff with the same defect as `path:line` in `other_locations`.
+
+For each finding listed under Findings still open from earlier rounds, give its
+status with the diff lines that show it. The status is `resolved`,
+`still_present`, `partially_resolved` or `cannot_verify`, and it goes in
+`prior_assessments` with the finding's `finding_id`. With no such list above,
+`prior_assessments` is an empty array.
 
 `dimension` is normally a rubric dimension's name. Two values are also
 available for findings the rubric has no dimension for:
@@ -240,7 +258,7 @@ the same reason. Your job is to decide which of their findings are real.
 
 ## Findings to adjudicate
 {findings}
-
+{round_memory}
 ## How to judge
 Accept a finding when the diff genuinely shows the problem it claims, and
 fixing it would improve the block.
@@ -270,3 +288,40 @@ Return a verdict for EVERY finding, by its index.
 
 Return ONLY the JSON. No commentary.
 """
+
+# From round 2 of a block on, `_adjudicate_review_findings` fills
+# FINDING_ADJUDICATION_PROMPT's `{round_memory}` with this; in round 1 it is
+# empty and the prompt is what it always was. Scoping is the adjudicator's
+# job, never the reviewer's: the review prompt stays unbiased. Filled with
+# `.format()`, so the JSON example's braces are doubled.
+ADJUDICATION_ROUND_MEMORY = """
+## Findings still open from earlier rounds
+{open_findings}
+
+## Findings rejected in earlier rounds
+{rejected_findings}
+{scope_section}
+## Restatements{scope_title}
+Earlier rounds of this block were judged already. For each finding above
+(under Findings to adjudicate), also give:
+
+- `duplicate_of`: the id of the open or earlier-rejected finding it restates
+  (the same defect at the same place, in other words), or null when it
+  restates none of them.{scope_field}
+
+Add these to each verdict, for example:
+`{{"index": 0, "accepted": true, "reason": "...", "duplicate_of": null{scope_example}}}`
+"""
+
+ADJUDICATION_SCOPE_SECTION = """
+## Changes since the previous review (scope diff)
+Everything committed since the previous review ran, which is what the last
+fix changed:
+```
+{scope_diff}
+```
+"""
+
+ADJUDICATION_SCOPE_FIELD = """
+- `in_fix_scope`: true when the finding is in code the scope diff added or
+  changed, or in code that calls what it changed; false otherwise."""

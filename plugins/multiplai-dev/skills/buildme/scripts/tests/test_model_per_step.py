@@ -63,6 +63,8 @@ TODAY.update({
     "review": lambda c: c.review_model or c.model,
     "plan_review": lambda c: c.plan_review_model or c.review_model,
     "integration_fix_escalated": lambda c: c.review_model or c.model,
+    # New in 0.89.0, on the review stage like integration_fix_escalated.
+    "review_fix_escalated": lambda c: c.review_model or c.model,
     "findings_triage": lambda c: c.review_model or c.model,
 })
 
@@ -91,8 +93,8 @@ class TestSessionDefaults:
     MULTIPLAI_MODEL moves every step's model; `models:` / `efforts:` move only
     the steps they name."""
 
-    def test_there_are_28_steps(self):
-        assert len(STEP_STAGES) == 28
+    def test_there_are_29_steps(self):
+        assert len(STEP_STAGES) == 29
 
     def test_every_step_follows_the_session(self, tmp_path, no_conf):
         with patch.dict(os.environ, SESSION):
@@ -230,7 +232,8 @@ class TestPrecedence:
 
     def test_review_model_moves_the_review_stage_but_not_adjudication(self, tmp_path, no_conf):
         config = _config(tmp_path, model="model-x", review_model="claude-haiku-4-5")
-        for step in ("review", "plan_review", "test_quality_audit", "integration_fix_escalated"):
+        for step in ("review", "plan_review", "test_quality_audit", "integration_fix_escalated",
+                     "review_fix_escalated"):
             assert config.model_for(step) == "claude-haiku-4-5", step
         assert config.model_for("adjudication") == "model-x"
 
@@ -415,7 +418,7 @@ CALL_SITES = {
     ("tdd_engine.py", "_run_integration_and_review", "run_integration_fix"):
         ("fix_model", ("integration_fix", "integration_fix_escalated")),
     ("tdd_engine.py", "_run_integration_and_review", "run_implementer"):
-        ("config.model_for('review_fix')", ("review_fix",)),
+        ("fix_model", ("review_fix", "review_fix_escalated")),
     ("tdd_engine.py", "_run_fix_on_pass", "run_implementer"):
         ("config.model_for('review_fix')", ("review_fix",)),
     ("tdd_engine.py", "_run_refactor_all", "run_refactor_all"):

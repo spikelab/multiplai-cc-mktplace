@@ -11,7 +11,14 @@ import logging
 import math
 
 from ..budget import BudgetExceededError
-from ..models import AgentResult, ReviewFinding, ReviewResult, ReviewScore
+from ..models import (
+    PRIOR_STATUSES,
+    AgentResult,
+    PriorAssessment,
+    ReviewFinding,
+    ReviewResult,
+    ReviewScore,
+)
 from ..prompts.review import CODE_REVIEW_PROMPT
 from ..sdk import agent_call, agent_call_structured, LLMCallError
 
@@ -116,6 +123,27 @@ def _merge_findings(results: list[ReviewResult], labels: list[str]) -> list[Revi
                 existing.severity = f.severity
             if f.evidence and f.evidence not in existing.evidence:
                 existing.evidence = f"{existing.evidence}\n{f.evidence}".strip()
+            # Every place any reviewer saw the same defect.
+            existing.other_locations = [
+                *existing.other_locations,
+                *(loc for loc in f.other_locations if loc not in existing.other_locations),
+            ]
+            existing.defect_class = existing.defect_class or f.defect_class
+    return list(merged.values())
+
+
+def _merge_prior_assessments(results: list[ReviewResult]) -> list[PriorAssessment]:
+    """One assessment per `finding_id`, the worst status any reviewer gave
+    (`PRIOR_STATUSES` runs from best to worst): one reviewer still seeing a
+    finding keeps it open. Ids keep the order they were first given in."""
+    merged: dict[str, PriorAssessment] = {}
+    for result in results:
+        for a in result.prior_assessments:
+            existing = merged.get(a.finding_id)
+            if existing is None:
+                merged[a.finding_id] = a.model_copy()
+            elif PRIOR_STATUSES.index(a.status) > PRIOR_STATUSES.index(existing.status):
+                merged[a.finding_id] = a.model_copy()
     return list(merged.values())
 
 
@@ -129,7 +157,8 @@ def merge_panel_results(results: list[ReviewResult], labels: list[str]) -> Revie
     """
     if len(results) == 1:
         only = results[0]
-        return only.model_copy(update={"panel": list(labels)})
+        return only.model_copy(update={
+            "panel": list(labels), "prior_assessments": _merge_prior_assessments(results)})
 
     def _union(attr: str) -> list[str]:
         seen: list[str] = []
@@ -148,6 +177,7 @@ def merge_panel_results(results: list[ReviewResult], labels: list[str]) -> Revie
         extra=_union("extra"),
         misunderstood=_union("misunderstood"),
         panel=list(labels),
+        prior_assessments=_merge_prior_assessments(results),
     )
 
 
