@@ -230,10 +230,12 @@ A target outside the repository, or a symlink pointing outside it, is never
 read. Each doc is read once, from the reviewed commit (on a change review, a
 link the change removed is still followed, and a doc the change deleted is
 read at base), never from the working tree. A doc whose linking line says
-`bind`, `binding`, `must` or `required` goes first. Docs share what is left of
+`bind`, `binds`, `binding`, `must` or `required` goes first. Docs share what is left of
 the 40 000 characters and go in whole or not at all; one that does not fit,
 is missing, cannot be read or points outside the repository is listed in
-`checks.json`'s `coverage` (`info`) and the review goes on. The prompt tells
+`checks.json`'s `coverage` (`info`) and the review goes on. A doc that does
+not fit is also named in the prompt, one line each ("Not included for length;
+open it if it applies: `<path>`"), so the finder can open it. The prompt tells
 the finder these docs are the repository's rules: a changed line that breaks
 one is a finding, citing the changed line and naming the doc. Each doc is
 fenced as untrusted text, since the change's author can edit it.

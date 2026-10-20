@@ -6,7 +6,9 @@ review, at base) and follows every link in them, one level only, to a
 Markdown file inside the repository. Each doc is read with git at head, or at
 base when the change deleted it, never from the working tree, and is fenced
 as untrusted text: the change's author controls it. A doc goes in whole or
-not at all; one that cannot be followed is a `conventions` coverage record.
+not at all; one that cannot be followed is a `conventions` coverage record,
+and one left out for length is also named in the prompt (`not_included_line`)
+so the finder can open it.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from multiplai_core.citations import GIT_ARGV, git_env
+from multiplai_core.untrusted import defang
 
 from .models import CoverageRecord
 from .prompts.untrusted import fenced
@@ -26,7 +29,7 @@ from .prompts.untrusted import fenced
 INLINE_LINK = re.compile(r"\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
 REFERENCE_DEF = re.compile(r"^\s{0,3}\[([^\]]+)\]:\s*<?(\S+?)>?(?:\s|$)")
 SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
-BINDING = re.compile(r"(?i)\b(bind|binding|must|required)\b")
+BINDING = re.compile(r"(?i)\b(bind|binds|binding|must|required)\b")
 FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 MARKDOWN_SUFFIXES = (".md", ".markdown")
 SYMLINK_MODE = "120000"
@@ -93,6 +96,12 @@ def resolve(source: str, target: str) -> str | None:
         return None
     joined = bare.lstrip("/") if bare.startswith("/") else posixpath.join(posixpath.dirname(source), bare)
     return posixpath.normpath(joined)
+
+
+def not_included_line(path: str) -> str:
+    """The prompt line naming a doc left out for the budget, so the finder can open it with its Read tool."""
+    shown = " ".join(defang(path, markdown_fences=False).split())
+    return f"Not included for length; open it if it applies: `{shown}`\n"
 
 
 def _outside(path: str) -> bool:

@@ -296,6 +296,26 @@ def test_critical_paths_reads_one_backticked_glob_per_bullet_under_the_heading(t
     assert critical_paths(info, ["tests/test_charge.py"]) == [("billing/*", "coding-standards.md")]
 
 
+def test_a_critical_path_listed_only_in_a_nested_coding_standards_md_still_marks_its_test_important(tmp_path):
+    repo = tmp_path / "nested"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    nested = {k: v for k, v in BASE_FILES.items() if k != "coding-standards.md"}
+    nested["billing/coding-standards.md"] = BASE_FILES["coding-standards.md"]
+    base = _commit(repo, nested, "base")
+    head = _commit(repo, {**nested, "tests/test_charge.py": HEAD_FILES["tests/test_charge.py"]}, "add a test")
+    info = target_mod.build_target(target_mod.resolve(repo, range_=f"{base}..{head}"))
+    assert critical_paths(info, ["billing/charge.py"]) == [("billing/*", "billing/coding-standards.md")]
+    assert critical_paths(info, ["tests/test_charge.py"]) == []  # read only for a path under billing/
+
+    critical = trimmed(critical_test_finding())
+    state = ReviewState(target=info, findings=[critical], verdicts={critical.id: confirmed(
+        "tests", "correctness-only", cite("billing/charge.py", 2, "return max(cents, 0)"))})
+    assessment = important_assessments(state)[critical.id]
+    assert assessment.label == "important"
+    assert "billing/coding-standards.md" in assessment.reason
+
+
 # --- Done means 5: trim findings stay apart from the others -----------------------------------------
 
 
