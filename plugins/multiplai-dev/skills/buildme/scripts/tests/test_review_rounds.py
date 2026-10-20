@@ -1327,6 +1327,7 @@ class TestEscalation:
         assert "round 1: raised; round 2: still_present" in history
         assert f"B01-R2-F1 [Major] {NEW}" in history
         assert "RECURRING:" in history and "question" in history.lower()
+        assert "Fix only the findings in the brief" in history
         # The ordinary brief still follows, self-check included.
         assert "SEARCHED:" in brief
 

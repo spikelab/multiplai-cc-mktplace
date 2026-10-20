@@ -38,7 +38,8 @@ time, not derived from a tag.
 - The last fix of the loop now questions the block's approach: it runs on
   the review model (new step `review_fix_escalated` under `models:` /
   `efforts:`), sees every finding of every round with what each round said
-  about it, and ends its report with a `RECURRING:` line naming the findings
+  about it, is told to fix only the findings in its brief, and ends its
+  report with a `RECURRING:` line naming the findings
   that share a cause, which the round record keeps. When the loop runs out,
   `build-progress.md` lists the findings still present in two or more rounds
   and that `RECURRING:` answer.
