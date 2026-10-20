@@ -15,6 +15,24 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.90.0] - 2026-10-20
+
+### Added
+- The review skill has a `round-metrics` command, which reports how a PR's
+  repeated reviews went, from the rounds the review already keeps. Run
+  `python -m review_pipeline round-metrics [<reviews dir>]` from the review
+  scripts directory: it prints a Markdown table per review with each round's
+  head, the findings it listed, and how many were labelled `still-open`,
+  `repeat` and `low-value`. For each finding listed in round 2 or later it says
+  whether the cited line was already there at the first review or was written
+  since (from `git blame` and `git merge-base` in the reviewed repository;
+  `unknown` when git cannot tell). A totals line gives the mean rounds per
+  review with two or more rounds, and the share of later findings present at
+  the first review and the share still open, each with its counts. When a
+  review's worktree has been deleted, `--repo <checkout>` names another
+  checkout of the same repository to read. The command writes nothing, calls
+  no model and needs no `--trust-repo`.
+
 ## [0.88.0] - 2026-10-20
 
 ### Added
