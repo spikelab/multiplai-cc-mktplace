@@ -991,6 +991,15 @@ def report_no_behaviour_blocks_left(tasks_path: Path) -> list[dict]:
     return left
 
 
+def _blocks_plan(finding: dict, default: str | None = "major") -> bool:
+    """A tasks-audit finding that a repair must resolve: critical or major, or
+    any `no-new-behaviour` finding, whose severity the audit prompt leaves to
+    the model although such a block always fails the RED gate."""
+    if finding.get("category") == "no-new-behaviour":
+        return True
+    return finding.get("severity", default) in {"critical", "major"}
+
+
 async def _audit_tasks_shape(
     change_dir: Path,
     context: dict,
@@ -1016,7 +1025,7 @@ async def _audit_tasks_shape(
     if findings:
         log.warning("Deterministic scans found %d findings", len(findings))
     findings += await run_tasks_audit(change_dir, config)
-    findings = [f for f in findings if f.get("severity", "major") in {"critical", "major"}]
+    findings = [f for f in findings if _blocks_plan(f)]
 
     if not findings:
         log.info("DONE phase=TASKS_SHAPE_AUDIT findings=0")
@@ -1394,7 +1403,7 @@ async def rewrite_plan(config, state: BuildState, findings_text: str, *, design:
             raise ValueError("Cannot publish a plan with incomplete capability requirements")
         from .llm_steps.spec_steps import run_tasks_audit
         findings = await run_tasks_audit(staged.change_dir, staged)
-        if any(f.get("severity") in {"critical", "major"} for f in findings):
+        if any(_blocks_plan(f, default=None) for f in findings):
             raise ValueError("Rewritten tasks still have blocking shape findings")
         # The rubric describes this exact task/design set.
         await _generate_rubric(staged.change_dir, staged, state)

@@ -2082,6 +2082,61 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
         assert "Block 2 only pins what Block 1 builds" in regen_findings
         assert (change_dir / "tasks.md").read_text() == rewritten
 
+    @staticmethod
+    def _minor_model_case(tmp_path):
+        """A plan the deterministic scan passes, and a model finding under the
+        no-new-behaviour category that the model rated minor."""
+        cm, change_dir, config, state = TestTasksShapeAuditRejectsNoBehaviourBlocks._setup(tmp_path)
+        first = (
+            "## 1. Summarize\n\nCreate `src/summary.py`.\n\n"
+            "Interfaces:\n- Produces: `summarize(text: str) -> str`\n\n"
+            "## 2. Pin plurals\n\nPin the plural nouns.\n\n"
+            "Interfaces:\n- Produces: (none)\n"
+        )
+        finding = {
+            "category": "no-new-behaviour", "severity": "minor",
+            "description": "Block 2 only pins what Block 1 builds",
+            "suggestion": "Move its criteria into Block 1",
+        }
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements/cap-a.md").write_text(
+            "### Requirement: Slice\n#### Scenario: Works\nWHEN used\nTHEN returns a result\n")
+        config.pipeline_branch = None
+        return cm, change_dir, config, state, first, finding
+
+    @pytest.mark.asyncio
+    async def test_a_minor_no_new_behaviour_finding_still_drives_the_rewrite(self, tmp_path):
+        """The audit prompt leaves this category's severity to the model, so a
+        block it rates minor is still a block whose tests cannot fail first."""
+        cm, change_dir, config, state, first, finding = self._minor_model_case(tmp_path)
+        rewritten = "## 1. Summarize\n\nBuilds it, plurals included.\n"
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.side_effect = [first, rewritten]
+            mock_audit.side_effect = [[finding], []]
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        assert mock_gen.call_count == 2
+        assert "Block 2 only pins what Block 1 builds" in mock_gen.call_args_list[1].kwargs["audit_findings"]
+        assert (change_dir / "tasks.md").read_text() == rewritten
+
+    @pytest.mark.asyncio
+    async def test_a_minor_no_new_behaviour_finding_on_the_rewrite_blocks_it(self, tmp_path):
+        cm, change_dir, config, state, first, finding = self._minor_model_case(tmp_path)
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.side_effect = [first, first]
+            mock_audit.side_effect = [[finding], [finding]]
+
+            with pytest.raises(ValueError, match="blocking shape findings"):
+                await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        assert (change_dir / "tasks.md").read_text() == first
+        assert not state.spec_gen.step_passed("tasks_audit")
+
     @pytest.mark.asyncio
     async def test_a_block_left_after_the_rewrite_blocks_completion(
         self, tmp_path, capsys,

@@ -63,6 +63,8 @@ time, not derived from a tag.
   the changed tests; exit 1 with a suppressed failure summary is unverified.
   Opaque wrappers with unmatched failure paths remain unverified. Recovery guidance
   covers reports already tracked by a block commit: untrack, ignore and commit.
+- A tasks-audit finding that a block adds no new behaviour now drives the plan
+  repair, and blocks a repaired plan, whatever severity the model gives it.
 
 ### Added
 - A paired evaluation harness with held-out checks, timeout and recovery measurement.
