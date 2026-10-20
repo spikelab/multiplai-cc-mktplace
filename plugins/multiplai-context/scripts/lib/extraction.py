@@ -664,10 +664,6 @@ def _parse_learning(block: str) -> Optional[dict]:
     ):
         misfiled_kind = taxonomy.normalize_kind(entry["provenance"])
         if misfiled_kind is not None:
-            logger.info(
-                "Learning provenance=%r is a kind value — recovered as kind; "
-                "provenance left unstated", entry["provenance"],
-            )
             del entry["provenance"]
     for key, normalize in (
         ("provenance", taxonomy.normalize_provenance),
@@ -684,8 +680,16 @@ def _parse_learning(block: str) -> Optional[dict]:
             del entry[key]
         else:
             entry[key] = normalized
-    if misfiled_kind is not None and "kind" not in entry:
-        entry["kind"] = misfiled_kind
+    if misfiled_kind is not None:
+        if "kind" not in entry:
+            entry["kind"] = misfiled_kind
+            outcome = "recovered as kind"
+        else:
+            outcome = f"ignored, the record's own kind={entry['kind']!r} wins"
+        logger.info(
+            "Learning provenance=%r is a kind value — %s; provenance left "
+            "unstated", misfiled_kind, outcome,
+        )
     return entry if entry.get("description") else None
 
 

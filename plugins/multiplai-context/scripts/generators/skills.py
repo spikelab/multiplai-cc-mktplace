@@ -34,8 +34,9 @@ def model_invocation_disabled(path: Path) -> bool:
     the catalog, as it did before this check existed.
     """
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
+        # utf-8-sig: a leading byte-order mark would otherwise hide the "---".
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
         return False
     if not text.startswith("---"):
         return False

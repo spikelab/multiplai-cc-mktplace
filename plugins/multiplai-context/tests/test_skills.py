@@ -1386,3 +1386,43 @@ class TestModelInvocationDisabledSkillsAreNotCataloged:
         assert "propose-skill" not in (
             _read_state(catalogs_dir)["generators"]["skills"]["source_hashes"]
         )
+
+    def test_a_disabled_local_skill_still_shadows_a_plugin_skill(self, tmp_path):
+        from generators.config import CatalogConfig
+        from generators.skills import SkillsGenerator
+
+        skills_dir = tmp_path / "skills"
+        _write_skill_file(skills_dir, "propose-skill", self._DISABLED)
+        install = tmp_path / "cache" / "multiplai-dev" / "0.1.0"
+        d = install / "skills" / "propose-skill"
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text("---\nname: propose-skill\n---\n", encoding="utf-8")
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+        (plugins_dir / "installed_plugins.json").write_text(json.dumps(
+            {"version": 2, "plugins": {
+                "multiplai-dev@multiplai": [{"installPath": str(install)}]}}
+        ), encoding="utf-8")
+        config = CatalogConfig(enable_skills=True, skills_dir=str(skills_dir),
+                               plugins_dir=str(plugins_dir))
+        gen = SkillsGenerator(config=config, model_client=_make_mock_client())
+
+        assert gen.discover_sources() == {}
+
+    @pytest.mark.parametrize("raw", [
+        b"\xff\xfe not utf-8 at all",
+        b"---\nname: [x\n---\n# broken yaml",
+    ])
+    def test_an_unreadable_or_malformed_skill_stays_cataloged(self, tmp_path, raw):
+        gen, _catalogs, skills_dir = _make_skills_generator(tmp_path)
+        path = _write_skill_file(skills_dir, "x", "")
+        path.write_bytes(raw)
+
+        assert set(gen.discover_sources()) == {"x"}
+
+    def test_a_byte_order_mark_does_not_hide_the_frontmatter(self, tmp_path):
+        gen, _catalogs, skills_dir = _make_skills_generator(tmp_path)
+        path = _write_skill_file(skills_dir, "propose-skill", "")
+        path.write_bytes(b"\xef\xbb\xbf" + self._DISABLED.encode("utf-8"))
+
+        assert gen.discover_sources() == {}
