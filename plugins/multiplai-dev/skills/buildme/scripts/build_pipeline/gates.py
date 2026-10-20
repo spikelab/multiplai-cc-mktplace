@@ -12,8 +12,9 @@ import re
 import shlex
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 from .models import GateResult, ImplementationNote, ReviewGatePolicy, ReviewResult
 from .narrow_tests import PYTEST, _pytest_config, _UnreadableConfig, _words, _runner_of_tokens, runner_of
@@ -275,39 +276,38 @@ _RED_BROKEN_TESTS = re.compile(
 )
 
 
-def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "pytest",
-             expected_tests: list[str] | None = None, test_command: str = "",
-             project_dir: Path | None = None) -> GateResult:
-    """RED-phase gate: prove the freshly written tests fail for the right reason.
+class _RedFacts(NamedTuple):
+    """What the RED gate observed about one run of the block's tests."""
+    ran: bool                    # the command ran (exit code not None)
+    exit_code: int | None
+    runner: str | None           # as given: `narrow_tests.runner_of`
+    # "direct_pytest": the runner, or the executed argv after unwrapping
+    # `cd DIR &&` and `sh -c` / `bash -c` / `zsh -c`, is pytest;
+    # "pytest_output": the output is pytest's (a `FAILED <path>::` line or a
+    # collection or setup error) from some other command; "jest": the runner
+    # is jest or the output has Jest's summary; "other": none of these.
+    runner_kind: str
+    broken: bool                 # the output matches `_RED_BROKEN_TESTS`
+    failed_paths: frozenset[str]  # `FAILED <path>::` paths, project-relative when resolved
+    failed_ids: tuple[str, ...]  # the node ids on those `FAILED` lines, in order
+    # None when not checked (no expected tests given, or no `FAILED` path);
+    # "unresolvable" when a path cannot be placed inside the project;
+    # "inside" when every path is one of the expected tests; else "outside".
+    attribution: str | None
+    right_reason: bool           # the output matches `_RED_RIGHT_REASON`
+    jest_failed: bool            # Jest's `FAIL <file>` and `Tests: N failed` lines, N > 0
+    tail: str                    # the output's last 1000 characters
 
-    Direct pytest requires exit 1. Failure paths must belong to the changed
-    tests when present; suppressed summaries are accepted as unverified RED.
-    Pytest/Jest collection and setup failures are rejected. Attributable pytest
-    assertion failures are behavioral evidence. Unparsed runners and opaque
-    wrappers whose pytest paths cannot be attributed retain unverified RED.
 
-    Fail actions:
-    - "rewrite_tests": suite passed — the new tests exercise nothing that is
-      still unimplemented, so they prove nothing.
-    - "fix_tests": tests are broken (collection/syntax error) or the failure
-      signature is unrecognizable — repair the test files, don't implement yet.
-    """
-    tail = test_output[-1000:]
-    if exit_code is None:
-        return GateResult(
-            passed=False,
-            reason=f"RED gate could not run the suite: {tail}",
-            action="fix_tests",
-            metadata={"exit_code": None},
-        )
-    if exit_code == 0:
-        return GateResult(
-            passed=False,
-            reason="RED gate failed: suite passed BEFORE implementation — the new "
-                   "tests exercise nothing unimplemented and prove nothing",
-            action="rewrite_tests",
-            metadata={"exit_code": 0},
-        )
+_FAILED_LINE_RE = re.compile(r"^FAILED\s+(.+?)::", re.M)
+_FAILED_ID_RE = re.compile(r"^FAILED\s+(.+?::.+?)(?:\s+-\s|\s*$)", re.M)
+
+
+def _red_facts(test_output: str, exit_code: int | None, runner: str | None,
+               expected_tests: list[str] | None, test_command: str,
+               project_dir: Path | None) -> _RedFacts:
+    """The facts `red_gate` decides on, computed the way the gate always has.
+    It decides nothing."""
     direct_pytest = runner == "pytest"
     if project_dir is not None and test_command:
         try:
@@ -322,58 +322,179 @@ def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "p
     pytest_output = direct_pytest or bool(re.search(
         r"^FAILED\s+.+?::|ERROR collecting|ERROR at (?:setup|teardown)|errors? during collection", test_output, re.M))
     jest_output = runner == "jest" or bool(re.search(r"^Test Suites:|Test suite failed to run", test_output, re.M))
-    if (pytest_output or jest_output) and _RED_BROKEN_TESTS.search(test_output):
-        return GateResult(
-            passed=False,
-            reason=f"RED gate failed: tests error instead of failing "
-                   f"(collection/syntax problem, exit {exit_code}): {tail}",
-            action="fix_tests",
-            metadata={"exit_code": exit_code},
-        )
-    if pytest_output:
-        failed_paths = set(re.findall(r"^FAILED\s+(.+?)::", test_output, re.M))
-        if direct_pytest and exit_code == 1 and not failed_paths:
-            return GateResult(passed=True, reason="Pytest exited 1 without failure paths; RED is unverified",
-                              metadata={"exit_code": exit_code, "classification": "unverified"})
-        if not failed_paths or (direct_pytest and exit_code != 1):
-            return GateResult(passed=False, reason=f"RED gate failed: pytest supplied no usable test failures (exit {exit_code}): {tail}",
-                              action="fix_tests", metadata={"exit_code": exit_code})
-        if expected_tests is not None:
-            if project_dir is not None:
-                try:
-                    directory = _test_directory(test_command, project_dir)
-                    failed_paths = {(directory / p).resolve().relative_to(project_dir.resolve()).as_posix()
-                                    for p in failed_paths}
-                except ValueError:
-                    return GateResult(passed=True, reason="Pytest failure paths cannot be resolved; RED is unverified",
-                                      metadata={"classification": "unverified"})
-            if not expected_tests or not failed_paths <= set(expected_tests):
-                if direct_pytest:
-                    return GateResult(passed=False, reason="RED gate failed: pytest failures are outside the changed tests",
-                                      action="fix_tests", metadata={"exit_code": exit_code})
-                return GateResult(passed=True, reason="RED cannot attribute the wrapper's failure to the changed tests; accepted as unverified",
-                                  metadata={"classification": "unverified"})
-    if not pytest_output:
-        # Jest has a recognizable summary; other runners retain the historical
-        # nonzero fallback, explicitly unverified.
-        observed_tests = bool(re.search(r"^FAIL\s+\S", test_output, re.M)
-                              and re.search(r"^Tests:\s+[^\n]*\b[1-9]\d* failed\b", test_output, re.M))
-        if observed_tests or not jest_output:
-            return GateResult(passed=True, reason="Nonzero test-command exit accepted as unverified RED for this runner",
-                              metadata={"exit_code": exit_code, "classification": "unverified"})
-    if pytest_output and (exit_code == 1 or runner != "pytest") and _RED_RIGHT_REASON.search(test_output):
-        return GateResult(
-            passed=True,
-            reason=f"RED confirmed: tests fail for the right reason (exit {exit_code})",
-            metadata={"exit_code": exit_code, "classification": "behavioral"},
-        )
-    return GateResult(
-        passed=False,
-        reason=f"RED gate failed: suite exits {exit_code} but with no recognizable "
-               f"test-failure signature: {tail}",
-        action="fix_tests",
-        metadata={"exit_code": exit_code},
+    kind = ("direct_pytest" if direct_pytest else "pytest_output" if pytest_output
+            else "jest" if jest_output else "other")
+    failed_paths = set(_FAILED_LINE_RE.findall(test_output))
+    attribution = None
+    if expected_tests is not None and failed_paths:
+        attribution = "inside"
+        if project_dir is not None:
+            try:
+                directory = _test_directory(test_command, project_dir)
+                failed_paths = {(directory / p).resolve().relative_to(project_dir.resolve()).as_posix()
+                                for p in failed_paths}
+            except ValueError:
+                attribution = "unresolvable"
+        if attribution == "inside" and (not expected_tests or not failed_paths <= set(expected_tests)):
+            attribution = "outside"
+    return _RedFacts(
+        ran=exit_code is not None,
+        exit_code=exit_code,
+        runner=runner,
+        runner_kind=kind,
+        broken=bool(_RED_BROKEN_TESTS.search(test_output)),
+        failed_paths=frozenset(failed_paths),
+        failed_ids=tuple(_FAILED_ID_RE.findall(test_output)),
+        attribution=attribution,
+        right_reason=bool(_RED_RIGHT_REASON.search(test_output)),
+        jest_failed=bool(re.search(r"^FAIL\s+\S", test_output, re.M)
+                         and re.search(r"^Tests:\s+[^\n]*\b[1-9]\d* failed\b", test_output, re.M)),
+        tail=test_output[-1000:],
     )
+
+
+# The outcomes the RED table matches on, each a predicate over the facts.
+def _not_run(f: _RedFacts) -> bool:
+    return not f.ran
+
+
+def _exit_zero(f: _RedFacts) -> bool:
+    return f.exit_code == 0
+
+
+def _pytest_shaped(f: _RedFacts) -> bool:
+    return f.runner_kind in ("direct_pytest", "pytest_output")
+
+
+def _tests_broken(f: _RedFacts) -> bool:
+    return f.runner_kind != "other" and f.broken
+
+
+def _direct_exit_1_without_paths(f: _RedFacts) -> bool:
+    return f.runner_kind == "direct_pytest" and f.exit_code == 1 and not f.failed_paths
+
+
+def _no_usable_failures(f: _RedFacts) -> bool:
+    return _pytest_shaped(f) and (
+        not f.failed_paths or (f.runner_kind == "direct_pytest" and f.exit_code != 1))
+
+
+def _paths_unresolvable(f: _RedFacts) -> bool:
+    return _pytest_shaped(f) and f.attribution == "unresolvable"
+
+
+def _direct_outside_changed_tests(f: _RedFacts) -> bool:
+    return f.runner_kind == "direct_pytest" and f.attribution == "outside"
+
+
+def _wrapper_outside_changed_tests(f: _RedFacts) -> bool:
+    return f.runner_kind == "pytest_output" and f.attribution == "outside"
+
+
+def _jest_reported_failures(f: _RedFacts) -> bool:
+    return f.runner_kind == "jest" and f.jest_failed
+
+
+def _other_runner(f: _RedFacts) -> bool:
+    return f.runner_kind == "other"
+
+
+def _right_reason(f: _RedFacts) -> bool:
+    return _pytest_shaped(f) and (f.exit_code == 1 or f.runner != "pytest") and f.right_reason
+
+
+def _anything(f: _RedFacts) -> bool:
+    return True
+
+
+class RedRow(NamedTuple):
+    """One row of `RED_TABLE`. *verdict* is "reject", "unverified" or
+    "behavioral"; *reason* is formatted with `exit_code` and `tail`."""
+    runner_kind: str
+    outcome: Callable[[_RedFacts], bool]
+    verdict: str
+    action: str | None
+    reason: str
+    # Two unverified rows have never put the exit code in the metadata.
+    reports_exit_code: bool = True
+
+
+# Ordered: the first row whose outcome holds decides. The runner-kind column
+# says which kinds an outcome can match; the predicate itself checks it.
+RED_TABLE: tuple[RedRow, ...] = (
+    RedRow("any", _not_run, "reject", "fix_tests", "RED gate could not run the suite: {tail}"),
+    RedRow("any", _exit_zero, "reject", "rewrite_tests",
+           "RED gate failed: suite passed BEFORE implementation — the new "
+           "tests exercise nothing unimplemented and prove nothing"),
+    RedRow("pytest-shaped or jest", _tests_broken, "reject", "fix_tests",
+           "RED gate failed: tests error instead of failing "
+           "(collection/syntax problem, exit {exit_code}): {tail}"),
+    RedRow("direct_pytest", _direct_exit_1_without_paths, "unverified", None,
+           "Pytest exited 1 without failure paths; RED is unverified"),
+    RedRow("pytest-shaped", _no_usable_failures, "reject", "fix_tests",
+           "RED gate failed: pytest supplied no usable test failures (exit {exit_code}): {tail}"),
+    RedRow("pytest-shaped", _paths_unresolvable, "unverified", None,
+           "Pytest failure paths cannot be resolved; RED is unverified", reports_exit_code=False),
+    RedRow("direct_pytest", _direct_outside_changed_tests, "reject", "fix_tests",
+           "RED gate failed: pytest failures are outside the changed tests"),
+    RedRow("pytest_output", _wrapper_outside_changed_tests, "unverified", None,
+           "RED cannot attribute the wrapper's failure to the changed tests; accepted as unverified",
+           reports_exit_code=False),
+    RedRow("jest", _jest_reported_failures, "unverified", None,
+           "Nonzero test-command exit accepted as unverified RED for this runner"),
+    RedRow("other", _other_runner, "unverified", None,
+           "Nonzero test-command exit accepted as unverified RED for this runner"),
+    RedRow("pytest-shaped", _right_reason, "behavioral", None,
+           "RED confirmed: tests fail for the right reason (exit {exit_code})"),
+    RedRow("any", _anything, "reject", "fix_tests",
+           "RED gate failed: suite exits {exit_code} but with no recognizable "
+           "test-failure signature: {tail}"),
+)
+
+
+def _red_row(facts: _RedFacts) -> RedRow:
+    return next(row for row in RED_TABLE if row.outcome(facts))
+
+
+def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "pytest",
+             expected_tests: list[str] | None = None, test_command: str = "",
+             project_dir: Path | None = None) -> GateResult:
+    """RED-phase gate: prove the freshly written tests fail for the right reason.
+
+    The verdict is the first row of `RED_TABLE` whose outcome holds for the
+    run's facts (`_red_facts`). In order:
+
+    1. the command did not run → reject, `fix_tests`;
+    2. exit 0 → reject, `rewrite_tests`: the new tests exercise nothing that
+       is still unimplemented, so they prove nothing;
+    3. pytest-shaped or Jest output that matches `_RED_BROKEN_TESTS`
+       (collection, setup or syntax errors) → reject, `fix_tests`;
+    4. direct pytest, exit 1, no `FAILED` paths (a suppressed summary) →
+       unverified;
+    5. pytest-shaped with no `FAILED` paths, or direct pytest with an exit
+       other than 1 → reject, `fix_tests`;
+    6. `FAILED` paths that cannot be placed inside the project → unverified;
+    7. direct pytest whose `FAILED` paths are outside the changed tests →
+       reject, `fix_tests`;
+    8. a wrapper's pytest paths outside the changed tests → unverified;
+    9. Jest whose summary shows failed tests → unverified;
+    10. any other runner's non-zero exit (a `make` missing target included) →
+        unverified;
+    11. pytest-shaped, attributable or unchecked paths, a right-reason
+        signature, and exit 1 or a runner other than pytest → behavioral;
+    12. anything else → reject, `fix_tests`.
+
+    `metadata` holds `exit_code` (except for rows 6 and 8) and, on a pass,
+    `classification` (the row's verdict).
+    """
+    facts = _red_facts(test_output, exit_code, runner, expected_tests, test_command, project_dir)
+    row = _red_row(facts)
+    metadata: dict = {"exit_code": exit_code} if row.reports_exit_code else {}
+    passed = row.verdict != "reject"
+    if passed:
+        metadata["classification"] = row.verdict
+    return GateResult(passed=passed, reason=row.reason.format(exit_code=exit_code, tail=facts.tail),
+                      action=row.action, metadata=metadata)
 
 
 _AGENT_STATUS_RE = re.compile(
