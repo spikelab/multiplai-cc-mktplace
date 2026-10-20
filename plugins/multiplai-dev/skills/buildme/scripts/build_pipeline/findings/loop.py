@@ -136,6 +136,7 @@ class FindingsRun:
     severities: tuple[str, ...] | None = None    # `--severities`: what `--auto` posts
     code_only: bool = False                  # `--code-only`: `--auto` posts Code findings only
     review: bool = True                      # False (`--no-review`): a round ends with no review
+    escalate: bool = True                    # False (`--no-escalation`): no round is escalated
 
     @property
     def project_dir(self) -> Path:
@@ -792,7 +793,7 @@ async def _run_findings(run: FindingsRun) -> int:
             # `--max-rounds` says then.
             rnd = FindingsRound(number=done + 1, since=since, fetched_at=fetched_at,
                                 comments=new, started=["fetch"], finished=["fetch"],
-                                escalated=done + 1 == max_rounds and done + 1 >= 2)
+                                escalated=run.escalate and done + 1 == max_rounds and done + 1 >= 2)
             fs.rounds.append(rnd)
             st.checkpoint(run.state_path)
             acted = sum(1 for c in new if triage.should_triage(c)[0])

@@ -118,7 +118,8 @@ def resolve(args: argparse.Namespace) -> FindingsRun:
                        trust_repo=bool(args.trust_repo), max_usd=getattr(args, "max_usd", None),
                        severities=getattr(args, "severities", None),
                        code_only=bool(getattr(args, "code_only", False)),
-                       review=not getattr(args, "no_review", False))
+                       review=not getattr(args, "no_review", False),
+                       escalate=not getattr(args, "no_escalation", False))
 
 
 def run_cli(args: argparse.Namespace) -> int:

@@ -240,6 +240,9 @@ def build_parser() -> argparse.ArgumentParser:
     findings.add_argument("--no-review", action="store_true",
                           help="End each round after its replies, with no re-review (an epic's "
                                "final fix)")
+    findings.add_argument("--no-escalation", action="store_true",
+                          help="Never run the last round's fix as the escalated fix (an epic's "
+                               "fixer, whose --max-rounds allows one round at a time)")
     _add_trust_repo_flag(findings)
 
     # --- archive ---

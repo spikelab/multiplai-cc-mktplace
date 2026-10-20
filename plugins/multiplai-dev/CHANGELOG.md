@@ -33,7 +33,8 @@ time, not derived from a tag.
   `RECURRING:` line naming findings that share a cause. That round's fixer
   runs on the `review_fix_escalated` model and effort. Whether a round is the
   last is decided when it starts and kept on a resume, even if
-  `--max-rounds` changed.
+  `--max-rounds` changed. The new `--no-escalation` flag turns this off; an
+  epic passes it to every fixer, since it runs them one round at a time.
 - buildme-findings: after `FINDINGS:MAX_ROUNDS`, one
   `FINDINGS_RECURRING:<lineage>:<rounds>` line names each finding lineage
   open in two or more of the PR's reviews, and one

@@ -121,7 +121,7 @@ class _PR:
         self.review = FilesReview(self.pr, self.target, files)
         self.lines: list[str] = []
 
-    def run(self, max_rounds: int, *, stop_at: str | None = None, patches=()) -> int:
+    def run(self, max_rounds: int, *, stop_at: str | None = None, patches=(), escalate=True) -> int:
         self.config.findings.max_rounds = max_rounds
         verdicts = FakeTriage({"add still subtracts": FIX2, "is this right": QUESTION,
                                "add subtracts": FIX})
@@ -132,6 +132,7 @@ class _PR:
 
         run, lines = _run(self.config, self.change, triage_call=triage_call, review=self.review,
                           review_dirs=lambda r: [str(self.target)])
+        run.escalate = escalate
         stubs = block_stubs(self.repo, self.log)
         stubs[1] = patch("build_pipeline.tdd_engine.run_implementer",
                          side_effect=_implementer(self.repo, self.log, stop_at))
@@ -396,6 +397,17 @@ class TestLoop:
 
         at = s.lines.index("FINDINGS:MAX_ROUNDS:2")
         assert s.lines[at + 1:] == [f"FINDINGS_RECURRING:{F0}:3", f"FINDINGS_RECURRING_SLOT:1:{SLOT}"]
+
+    def test_findings_convergence_no_escalation_never_escalates_the_last_round(
+            self, tmp_path, monkeypatch):
+        # An epic's fixer passes --no-escalation: its --max-rounds allows one
+        # round at a time, so every round would otherwise be the last.
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        s = _PR(tmp_path, monkeypatch, review2=REVIEW2)
+        assert s.run(max_rounds=2, escalate=False) == 0, s.lines
+        assert [r.escalated for r in s.state().findings.rounds] == [False, False]
+        assert ESCALATION_NEEDLE not in (s.change / code.tasks_file_name(2)).read_text()
+        assert all(c[2] != ESCALATED_MODEL for c in s.implementer_calls())
 
     def test_findings_convergence_the_first_round_is_never_escalated(self, tmp_path, monkeypatch):
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")

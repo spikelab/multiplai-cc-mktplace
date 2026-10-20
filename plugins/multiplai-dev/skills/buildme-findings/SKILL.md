@@ -16,7 +16,7 @@ build runs. Each round replies on the PR and re-runs the review.
 uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
   python -m build_pipeline findings --pr <number> --project-dir "<repo>" \
   [--change <name>] [--auto] [--max-rounds <n>] [--max-usd <usd>] \
-  [--severities <list>] [--code-only] [--no-review] [--trust-repo]
+  [--severities <list>] [--code-only] [--no-review] [--no-escalation] [--trust-repo]
 ```
 
 - `--pr`: the PR number on the repository at `--project-dir`.
@@ -52,6 +52,9 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
   so it posts no new findings. An epic's final fix runs one such round
   (`--max-rounds` one more than the rounds in its state, finished or not): its commits
   get no review.
+- `--no-escalation`: no round runs as the escalated last round, whatever
+  `--max-rounds` says. An epic passes it to every fixer: it launches one
+  round at a time, so each round would otherwise count as the last.
 - `--trust-repo`: required. The triage, fix, self-check and review agents
   hold tools and run without asking; pass it only after the user says they trust the
   repository's specs and code.

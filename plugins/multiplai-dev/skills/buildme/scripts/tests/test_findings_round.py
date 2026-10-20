@@ -2221,3 +2221,5 @@ class TestNoReview:
         base = ["findings", "--pr", str(PR), "--project-dir", str(repo)]
         assert cli.resolve(build_parser().parse_args([*base, "--no-review"])).review is False
         assert cli.resolve(build_parser().parse_args(base)).review is True
+        assert cli.resolve(build_parser().parse_args([*base, "--no-escalation"])).escalate is False
+        assert cli.resolve(build_parser().parse_args(base)).escalate is True
