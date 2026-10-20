@@ -552,6 +552,45 @@ def test_a_trust_error_from_a_piece_call_stops_the_review(tmp_path, model, where
     assert not state.past("find")
 
 
+def _limit() -> Exception:
+    return sdk.UsageLimitError("the Claude session usage limit was hit; it resets 9:40am (UTC)",
+                               limit="session", resets="9:40am (UTC)")
+
+
+@pytest.mark.parametrize("where", ["report", "convert"])
+def test_a_usage_limit_from_a_piece_call_stops_the_review_and_resume_asks_only_the_rest(tmp_path, model, capsys,
+                                                                                       where):
+    repo, base, head = make_repo(tmp_path, 3)
+    if where == "report":
+        fake = model(fail_report=(name(2),), error=_limit())
+    else:
+        fake = model(fail_convert=("piece@2",), error=_limit())
+    assert review(repo, base, head, tmp_path / "out") == 6
+    assert "resets 9:40am (UTC)" in capsys.readouterr().err
+    target_dir, state = saved(tmp_path / "out")
+    assert not state.past("find")
+    assert not any(c.subject.startswith("piece@2") for c in state.coverage)  # not recorded as a failed finder
+    done = {c["package"] for c in fake.text_calls if c["package"] != name(2)}
+    fake.fail_report, fake.fail_convert = (), ()
+    texts = len(fake.text_calls)
+    assert resume(target_dir) == 0
+    again = {c["package"] for c in fake.text_calls[texts:]}
+    assert not again & done
+    if where == "convert":  # piece 2's report was stored before its convert hit the limit
+        assert name(2) not in again
+    _, finished = saved(tmp_path / "out")
+    assert len(piece_reports(finished)) == 3 and all(r.converted for r in piece_reports(finished).values())
+
+
+def test_a_usage_limit_from_a_path_finder_stops_the_review(tmp_path, model, mapped):
+    repo, base, head = make_repo(tmp_path, 1)
+    mapped(2)
+    model(fail_path=("p1",), error=_limit())
+    assert review(repo, base, head, tmp_path / "out") == 6
+    _, state = saved(tmp_path / "out")
+    assert not state.past("find") and not any(c.subject == "path@p1" for c in state.coverage)
+
+
 # --- the old flag ---------------------------------------------------------------------------------------------
 
 

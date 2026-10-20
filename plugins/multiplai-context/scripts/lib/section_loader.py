@@ -6,9 +6,10 @@ module parses such references and extracts the matching H2 section
 from the file's text.
 
 If the section can't be found (typo, file changed since catalog
-generation), the loader returns the FULL file as a fallback —
-better to show too much than nothing. Empty section refs (just
-``"file.md#"``) also return the full file.
+generation), :func:`extract_section` returns the FULL file as a fallback.
+The context hook never takes that fallback: it first maps the fragment to a
+real heading with :func:`resolve_section_name` and drops the pick when there
+is none. Empty section refs (just ``"file.md#"``) also return the full file.
 
 Section matching is case-insensitive on the trimmed header text.
 The header line itself is included in the extracted output so the
@@ -21,14 +22,14 @@ Two things a section pick must not lose, both of which it used to:
   instructions like ``> **Load core-voice.md first.**`` and
   ``Boundaries — route elsewhere:`` routing prose live. No section slice
   contains it, so :func:`preamble` exists to let the caller prepend it once
-  per file. Without that, a section pick returns strictly less than the
-  whole file would have, which falsifies the only safety claim this feature
-  makes.
+  per file. Without that, a section pick silently loses the file's date stamp
+  and its cross-file load instructions.
 * **A repeated H2's later bodies** — see :func:`extract_section`.
 """
 
 from __future__ import annotations
 
+import difflib
 import re
 
 # Match "## Section Name" — H2 only (not H1 or H3+), one line at a time.
@@ -94,7 +95,7 @@ def h2_names(text: str) -> list[str]:
     Catalog generation glosses this exact list and the router picks from
     it, so extraction MUST use the same parser ``extract_section`` matches
     with — an anchor name produced by a second, subtly different parser is
-    a permanent silent full-file fallback. Both now call :func:`_h2_spans`.
+    an anchor that never loads. Both now call :func:`_h2_spans`.
 
     De-duplication is case-insensitive on the trimmed text, keeping the
     first spelling: a repeated header is one addressable section whose body
@@ -209,3 +210,105 @@ def load_picked_content(
     if section is None:
         return base, file_text
     return base, extract_section(file_text, section)
+
+
+# Similarity a fragment must reach to stand in for a heading it does not spell
+# exactly. Calibrated on the 22 misses logged 2026-10-10 → 10-20: a lost
+# ``GCP —`` prefix with ``IAM`` for ``IAP`` scores 0.89, while every pick
+# whose section had moved to another file scored 0.65 or less against the
+# nearest heading that was left.
+SECTION_MATCH_MIN_RATIO = 0.85
+
+# Where a router pasted the anchor's gloss after its name: "Name — gloss".
+_GLOSS_SEPARATOR_RE = re.compile(r"\s+[—–-]\s+|:\s+")
+
+
+def _tokens(text: str) -> list[str]:
+    """Case-folded words (any script): case and punctuation do not count."""
+    return re.findall(r"[^\W_]+", text.casefold())
+
+
+def _numbers(tokens) -> list[str]:
+    """The tokens holding a digit: ``Phase 1`` and ``Phase 2`` differ here."""
+    return [t for t in tokens if any(c.isdigit() for c in t)]
+
+
+def _unique_best(scored: list[tuple[float, str]]) -> str | None:
+    """The single highest-scoring heading, or None on a tie for first."""
+    if not scored:
+        return None
+    scored = sorted(scored, reverse=True)
+    if len(scored) > 1 and scored[0][0] == scored[1][0]:
+        return None
+    return scored[0][1]
+
+
+def resolve_section_name(text: str, fragment: str) -> str | None:
+    """The H2 of *text* that *fragment* names, or None when none is close.
+
+    :func:`extract_section` matches a header exactly (case-insensitive) and
+    returns the whole file when nothing matches. A router fragment drifts from
+    the real header in a few recurring ways, all seen in the logs, and each is
+    tried in this order:
+
+    1. Exact ignoring case and surrounding whitespace, then exact ignoring
+       punctuation too.
+    2. Close spelling: the most similar header at or above
+       :data:`SECTION_MATCH_MIN_RATIO` (``IAM`` for ``IAP``), never one whose
+       numbers differ (``Phase 1`` is not ``Phase 2``).
+    3. Gloss appended: the fragment cut at a dash or colon separator,
+       longest first, then steps 1-2 on each cut
+       (``Distribution — Release chain, tags…`` → ``Distribution``).
+    4. Qualifier dropped: the fragment's words are the trailing words of
+       exactly one header and number at least two
+       (``Tooling & UI Preferences`` → ``Code Quality — Tooling & UI
+       Preferences``).
+
+    Returns None when none of these finds exactly one header. The caller then
+    drops the pick; it must never stand in the whole file for it.
+    """
+    names = h2_names(text)
+    if not names or not fragment or not fragment.strip():
+        return None
+    by_tokens = [(tuple(_tokens(n)), n) for n in names]
+
+    def exact_or_close(candidate: str) -> str | None:
+        plain = candidate.strip().casefold()
+        for name in names:
+            if name.strip().casefold() == plain:
+                return name
+        want = tuple(_tokens(candidate))
+        if not want:
+            return None
+        for toks, name in by_tokens:
+            if toks == want:
+                return name
+        joined = " ".join(want)
+        scored = []
+        for toks, name in by_tokens:
+            if _numbers(toks) != _numbers(want):
+                continue
+            ratio = difflib.SequenceMatcher(None, " ".join(toks), joined).ratio()
+            if ratio >= SECTION_MATCH_MIN_RATIO:
+                scored.append((ratio, name))
+        return _unique_best(scored)
+
+    found = exact_or_close(fragment)
+    if found:
+        return found
+
+    cuts = [m.start() for m in _GLOSS_SEPARATOR_RE.finditer(fragment)]
+    for cut in sorted(cuts, reverse=True):
+        found = exact_or_close(fragment[:cut])
+        if found:
+            return found
+
+    want = tuple(_tokens(fragment))
+    if len(want) >= 2:
+        suffix_of = [
+            name for toks, name in by_tokens
+            if len(toks) > len(want) and toks[-len(want):] == want
+        ]
+        if len(suffix_of) == 1:
+            return suffix_of[0]
+    return None

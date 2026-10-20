@@ -10,10 +10,11 @@ These tests cover the seven behaviours that keep the feature honest
 rather than merely present:
 
 1. anchors are regenerated, never preserved (a stale one must not freeze)
-2. an anchor naming no real H2 degrades to the FULL file, end to end
+2. an anchor naming no real H2 is dropped — never the whole file (0.58.0)
 3. a ``file.md#Section`` pick injects only that section, and the inject
    event records it
-4. a bare ``file.md`` pick injects the whole file, recorded as ``[]``
+4. a bare ``file.md`` pick of a small file injects the whole file, recorded
+   as ``[]`` (a large file gets a pointer: test_context_injection_cap.py)
 5. ``router_prompt`` renders both the object and the legacy-string shape
 6. ``memory_lint`` flags a duplicate H2 across files, and only then
 7. a file below the anchoring thresholds gets no anchors, without error
@@ -168,18 +169,16 @@ class TestAnchorsAreGenerated:
 
 
 # ---------------------------------------------------------------------------
-# 2. A wrong anchor falls back to the full file, end to end
+# 2. A wrong anchor is dropped, never answered with the whole file
 # ---------------------------------------------------------------------------
 
 
-class TestWrongAnchorFallsBackToFullFile:
-    def test_stale_catalog_anchor_loads_the_whole_file(self, tmp_path):
-        """The fallback is why this change can never make a prompt worse.
+class TestWrongAnchorIsDropped:
+    def test_stale_catalog_anchor_loads_nothing(self, tmp_path):
+        """A wrong anchor is dropped; the whole file is never loaded instead.
 
-        Driven from a catalog entry, through the same
-        ``_load_memory_content`` the hook calls: an anchor naming a header
-        the file no longer has costs a whole-file load — i.e. exactly
-        today's behaviour — never an empty injection.
+        Near misses resolve to the nearest heading
+        (test_context_injection_cap.py); this anchor is nowhere near one.
         """
         from context_manager import _load_memory_content
 
@@ -192,14 +191,12 @@ class TestWrongAnchorFallsBackToFullFile:
         pick = f"{entry['source']}#{entry['section_anchors'][0]['name']}"
 
         loaded = _load_memory_content(tmp_path, [pick])
-        # Keyed on the bare filename, not the pick: what was loaded is the
-        # whole file, and `_section_attribution` reads an empty section list
-        # off that key. Keying it on the fragment would log "one section" for
-        # a whole-file load.
-        assert loaded == {"big.md": body}
+        assert loaded == {}
 
     def test_section_loader_contract_holds_for_a_missing_anchor(self):
-        """Unit-level statement of the same contract."""
+        """``extract_section`` keeps its whole-file fallback for its other
+        callers (memory_judge, doctor_deadweight); the hook resolves the
+        fragment first and never reaches it."""
         from lib.section_loader import load_picked_content
 
         text = _big_doc("Alpha", "Beta", "Gamma")
@@ -208,19 +205,15 @@ class TestWrongAnchorFallsBackToFullFile:
         assert content == text
 
 
-class TestStaleAnchorsFallBackOnce:
-    """Requirement: N unresolvable anchors on one file load it **once**.
+class TestStaleAnchors:
+    """Requirement: unresolvable anchors load nothing and are named.
 
-    The fallback above is the safety claim and does not change. What used to
-    happen alongside it is that the fallback ran per *pick*, so two stale
-    anchors on one file injected that file twice — measured 2026-08-30 on the
-    real corpus, where two ``ai-agent-patterns.md`` section picks each logged
-    64,817 B against a file of roughly 65 KB. Nothing upstream checks a
-    fragment against ``section_anchors``, so catalog↔file drift arrives here
-    unfiltered; it must not be amplified on the way in.
+    Nothing upstream checks a fragment against ``section_anchors``, so
+    catalog↔file drift arrives here unfiltered; the answer to it is to load
+    nothing for that pick.
     """
 
-    def test_two_stale_anchors_load_the_file_once(self, tmp_path):
+    def test_two_stale_anchors_load_nothing(self, tmp_path):
         from context_manager import _load_memory_content
 
         body = _big_doc("Alpha", "Beta", "Gamma")
@@ -229,32 +222,18 @@ class TestStaleAnchorsFallBackOnce:
         loaded = _load_memory_content(
             tmp_path, ["big.md#Gone One", "big.md#Gone Two"]
         )
-        assert loaded == {"big.md": body}
-        assert sum(len(v) for v in loaded.values()) == len(body)
+        assert loaded == {}
 
-    def test_attribution_reports_a_whole_file_not_two_sections(self, tmp_path):
-        """The mis-report is what hid this for four days in the real log."""
-        from context_manager import _load_memory_content, _section_attribution
-
-        body = _big_doc("Alpha", "Beta", "Gamma")
-        (tmp_path / "big.md").write_text(body)
-
-        loaded = _load_memory_content(
-            tmp_path, ["big.md#Gone One", "big.md#Gone Two"]
-        )
-        sections, sizes = _section_attribution(loaded)
-        assert sections == {"big.md": []}      # [] means "the whole file"
-        assert sizes["big.md"] == len(body)    # not 2 × len(body)
-
-    def test_a_stale_anchor_absorbs_a_good_one_for_the_same_file(self, tmp_path):
-        """The whole file is a superset of any section of it, so emit it alone."""
+    def test_a_stale_anchor_does_not_cost_a_good_one(self, tmp_path):
+        """The good section loads alone; the stale pick is simply dropped."""
         from context_manager import _load_memory_content
 
         body = _big_doc("Alpha", "Beta", "Gamma")
         (tmp_path / "big.md").write_text(body)
 
         loaded = _load_memory_content(tmp_path, ["big.md#Beta", "big.md#Gone"])
-        assert loaded == {"big.md": body}
+        assert list(loaded) == ["big.md#Beta"]
+        assert "Alpha content." not in loaded["big.md#Beta"]
 
     def test_another_file_s_good_sections_are_untouched(self, tmp_path):
         from context_manager import _load_memory_content
@@ -263,7 +242,7 @@ class TestStaleAnchorsFallBackOnce:
         (tmp_path / "b.md").write_text(_big_doc("Delta", "Epsilon", "Zeta"))
 
         loaded = _load_memory_content(tmp_path, ["a.md#Gone", "b.md#Zeta"])
-        assert set(loaded) == {"a.md", "b.md#Zeta"}
+        assert set(loaded) == {"b.md#Zeta"}
         assert "Delta content." not in loaded["b.md#Zeta"]
 
     def test_the_unresolved_anchor_is_logged_by_name(self, tmp_path, caplog):
@@ -383,23 +362,32 @@ class TestStaleAnchorsFallBackOnce:
 
 
 class TestTheFallbackIsKeyedSoCooldownCanFindIt:
-    """Requirement: an absorbed pick is still stamped in the cooldown map.
+    """Requirement: a pick answered under another key is still stamped.
 
-    ``_filter_cooldown`` looks a raw pick up; ``_load_memory_content`` keys a
-    whole-file load on the bare ref. Stamping only the returned keys therefore
-    never matched the pick, so the fallback re-injected the whole file on
-    *every* turn — strictly worse than the duplicate load this change removed,
-    and unbounded in the length of the session.
+    ``_filter_cooldown`` looks a raw pick up, but ``_load_memory_content`` keys
+    a whole-file load on the bare ref and a resolved section on its real
+    heading. Stamping only the returned keys would never match such a pick,
+    so the same content would be re-injected every turn.
     """
 
-    def test_absorbed_section_picks_are_stamped(self, tmp_path):
+    def test_a_whole_file_pick_stamps_a_stale_anchor_it_absorbed(self, tmp_path):
+        from context_manager import _cooldown_keys, _load_memory_content
+
+        (tmp_path / "big.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
+        picks = ["big.md", "big.md#Gone"]
+        loaded = _load_memory_content(tmp_path, picks)
+
+        assert set(_cooldown_keys(picks, loaded)) == {"big.md", *picks}
+
+    def test_dropped_anchors_are_not_stamped(self, tmp_path):
+        """Nothing was injected for them, so nothing is on cooldown."""
         from context_manager import _cooldown_keys, _load_memory_content
 
         (tmp_path / "big.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
         picks = ["big.md#Gone One", "big.md#Gone Two"]
         loaded = _load_memory_content(tmp_path, picks)
 
-        assert set(_cooldown_keys(picks, loaded)) == {"big.md", *picks}
+        assert _cooldown_keys(picks, loaded) == []
 
     def test_a_whole_file_pick_stamps_the_sections_it_absorbed(self, tmp_path):
         from context_manager import _cooldown_keys, _load_memory_content
@@ -426,27 +414,32 @@ class TestTheFallbackIsKeyedSoCooldownCanFindIt:
 
         assert _cooldown_keys([], {"life.md": "body"}) == ["life.md"]
 
-    def test_the_fallback_is_suppressed_on_the_next_turn(self, tmp_path):
-        """End to end over the two functions the hook actually composes."""
+    def test_a_nearest_heading_pick_is_suppressed_on_the_next_turn(self, tmp_path):
+        """End to end over the functions the hook actually composes.
+
+        The router re-emits the same misspelt pick each turn; its content is
+        keyed on the real heading, so only the alias can match it.
+        """
         from context_manager import (
-            _cooldown_keys, _filter_cooldown, _load_memory_content,
+            MemoryLoadReport, _cooldown_keys, _filter_cooldown,
+            _load_memory_content,
         )
 
-        body = _big_doc("Alpha", "Beta", "Gamma")
-        (tmp_path / "big.md").write_text(body)
-        picks = ["big.md#Gone One", "big.md#Gone Two"]
+        (tmp_path / "big.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
+        picks = ["big.md#beta — what the router pasted from the gloss"]
 
         recent: dict[str, int] = {}
-        injected = 0
+        loads = 0
         for turn in range(1, 7):
             kept, _ = _filter_cooldown(picks, recent, turn, cooldown=3)
-            loaded = _load_memory_content(tmp_path, kept)
-            injected += sum(len(v) for v in loaded.values())
-            for key in _cooldown_keys(kept, loaded):
+            report = MemoryLoadReport()
+            loaded = _load_memory_content(tmp_path, kept, report=report)
+            loads += len(loaded)
+            for key in _cooldown_keys(kept, loaded, report.aliases):
                 recent[key] = turn
 
-        # Turns 1 and 5 load the file; turns 2-4 and 6 are inside the window.
-        assert injected == 2 * len(body)
+        # Turns 1 and 5 load the section; turns 2-4 and 6 are inside the window.
+        assert loads == 2
 
 
 class TestADuplicatePickKeepsThePreamble:
@@ -511,10 +504,13 @@ class TestOneFileReachesTheMapsUnderOneSpelling:
     def test_a_capitalised_bank_prefix_is_keyed_canonically(self, tmp_path):
         from context_manager import _load_memory_content
 
-        loaded = _load_memory_content(
-            tmp_path, ["Team/dev.md#Gone"], self._banks(tmp_path)
-        )
-        assert list(loaded) == ["team/dev.md"]
+        banks = self._banks(tmp_path)
+        assert list(_load_memory_content(tmp_path, ["Team/dev.md"], banks)) == [
+            "team/dev.md"
+        ]
+        assert list(_load_memory_content(tmp_path, ["Team/dev.md#beta"], banks)) == [
+            "team/dev.md#Beta"
+        ]
 
     def test_the_warning_names_the_bank_qualified_file(self, tmp_path, caplog):
         """``path.name`` alone cannot say which bank's ``dev.md`` drifted."""
@@ -898,14 +894,15 @@ class TestPreambleReachesTheInjectedContext:
         (tmp_path / "voice.md").write_text(body)
         assert _load_memory_content(tmp_path, ["voice.md"]) == {"voice.md": body}
 
-    def test_a_stale_anchor_falls_back_without_duplicating_the_preamble(self, tmp_path):
-        """The fallback returns the whole file, which already has the preamble."""
+    def test_a_nearest_heading_pick_carries_the_preamble_once(self, tmp_path):
         from context_manager import _load_memory_content
 
         (tmp_path / "voice.md").write_text(self._doc())
-        content = _load_memory_content(tmp_path, ["voice.md#Renamed"])["voice.md"]
-        assert content.count(self.PREAMBLE) == 1
-        assert "Alpha content." in content   # whole-file fallback
+        loaded = _load_memory_content(
+            tmp_path, ["voice.md#beta — gloss", "voice.md#Gamma"]
+        )
+        assert list(loaded) == ["voice.md#Beta", "voice.md#Gamma"]
+        assert "".join(loaded.values()).count(self.PREAMBLE) == 1
 
 
 class TestMixedPicksForOneFile:

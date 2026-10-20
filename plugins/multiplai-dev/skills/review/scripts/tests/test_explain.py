@@ -521,3 +521,13 @@ def test_a_tree_group_gets_only_the_facts_that_cite_its_files():
     assert group_facts(facts, None) == facts
     assert [f.id for f in group_facts(facts, ["settings.py"])] == ["f2"]
     assert group_facts(facts, ["other.py"]) == []
+
+
+async def test_a_usage_limit_stops_explain_instead_of_becoming_an_error_line(change_target, change_ctx, monkeypatch):
+    canned = Canned([sdk.UsageLimitError("the Claude session usage limit was hit", limit="session"),
+                     sdk.AgentCallError("never asked")])
+    monkeypatch.setattr(sdk, "agent_call_structured", canned)
+    state = ReviewState(target=change_target)
+    with pytest.raises(sdk.UsageLimitError):
+        await run_explain(state, change_ctx)
+    assert len(canned.calls) == 1 and state.errors == [] and not state.past("explain")

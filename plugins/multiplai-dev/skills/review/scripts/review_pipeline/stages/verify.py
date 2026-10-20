@@ -20,7 +20,9 @@ Every answer but `refuted` must carry `impact` and `topic`
 call that still fails is run again, up to `VERIFY_TRIES` times per finding.
 A finding whose every try failed gets no verdict: the stage lets the other
 verifiers finish, keeps their verdicts, then raises `VerifyIncomplete`, and
-`resume` asks only for the findings left without one. No finding reaches the
+`resume` asks only for the findings left without one. A hit usage limit is
+never tried again: it stops the stage at once (`sdk.UsageLimitError`), with
+the verdicts already returned kept. No finding reaches the
 review unverified or with no impact or topic. A finding about `tests` never
 breaks users or the business: a `breaks-*` impact on one is lowered to
 `correctness-only`, with a line in `state.errors`.
@@ -144,7 +146,7 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
                         max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="verify",
                     )
                     break
-                except sdk.RepoTrustError:
+                except (sdk.RepoTrustError, sdk.UsageLimitError):
                     raise
                 except sdk.AgentCallError as e:
                     error = f"the verifier failed: {str(e).splitlines()[0][:200]}"

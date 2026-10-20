@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.89.0] - 2026-10-20
+## [0.92.0] - 2026-10-20
 
 ### Changed
 - buildme's per-block review loop now remembers its earlier rounds. Every
@@ -48,6 +48,27 @@ time, not derived from a tag.
 - On a block that passes at round 2 or later, the fix on pass works on the
   findings still open plus the new ones, so a finding the
   reviewer left unanswered is fixed there instead of dropped.
+
+## [0.91.0] - 2026-10-20
+
+### Fixed
+- `/multiplai-dev:review` stops as soon as the Claude usage limit is hit,
+  instead of calling the model until every finder and verifier has failed.
+  Before, each verify call was tried up to three times, each with a re-ask,
+  and the other stages carried on, so one run could make hundreds of calls
+  that each failed in seconds against a limit that resets hours later. Now
+  the first call that reports `You've hit your session limit` (or `weekly`)
+  stops the run: no stage retries or re-asks that call or starts another,
+  and the checkpoint keeps every answer that came back. The run exits `6`
+  with the reset time (when the CLI gives one) and, for each target it
+  stopped, the command to continue: `python -m review_pipeline resume
+  <target_dir> --trust-repo`, with the run's `--max-cost-usd` and
+  `--no-deps`. After the reset that resume asks only for what is missing; a
+  plain `review` of the same target would start over. The ledger's
+  `finished` line says `stopped: usage-limit`. A batch starts no further
+  target after the limit and lists those as `not started`; `assess-only`
+  does the same and still writes its report. Needs multiplai-core 0.25.0,
+  which this release locks.
 
 ## [0.88.0] - 2026-10-20
 

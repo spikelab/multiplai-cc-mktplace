@@ -13,8 +13,8 @@ last. Each writes a plain-text report
 (`sdk.agent_call_text`), stored in `state.finder_reports` and written as
 `report-piece-<id>.md` or `report-path-<id>.md` before a second call converts it into findings
 (`run_reported`). Its findings then go through the same dedupe and
-`finding_gate` as the dimension finders'. Only `RepoTrustError` and a budget
-stop end the stage; a failed report or convert call is recorded in coverage
+`finding_gate` as the dimension finders'. Only `RepoTrustError`, a hit usage
+limit and a budget stop end the stage; a failed report or convert call is recorded in coverage
 and the others go on, and `resume` asks only for the missing report or convert.
 """
 
@@ -336,7 +336,7 @@ async def run_reported(key: str, prompt_text: str, state: ReviewState, ctx: RunC
             try:
                 text = await sdk.agent_call_text(prompt_text, cwd=ctx.snapshot, budget_label=label,
                                                  call_timeout=sdk.DEFAULT_CALL_TIMEOUT_S, **common)
-            except (sdk.RepoTrustError, budget.BudgetExceededError):
+            except (sdk.RepoTrustError, sdk.UsageLimitError, budget.BudgetExceededError):
                 raise
             except Exception as e:  # noqa: BLE001 — one failed finder must not stop the others
                 log.error("finder %s failed for %s", key, target.slug, exc_info=True)
@@ -378,7 +378,7 @@ async def run_reported(key: str, prompt_text: str, state: ReviewState, ctx: RunC
         try:
             out = await sdk.agent_call_structured(build_convert(key, rep.text), ConvertOutput,
                                                   cwd=str(ctx.snapshot), budget_label=label, **common)
-        except (sdk.RepoTrustError, budget.BudgetExceededError):
+        except (sdk.RepoTrustError, sdk.UsageLimitError, budget.BudgetExceededError):
             raise
         except Exception as e:  # noqa: BLE001 — the report is kept and the convert left for resume
             log.error("convert %s failed for %s", key, target.slug, exc_info=True)
@@ -505,7 +505,7 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
                     max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label=f"find:{dimension}",
                 )
                 error = ""
-            except sdk.RepoTrustError:
+            except (sdk.RepoTrustError, sdk.UsageLimitError):
                 raise
             except sdk.AgentCallError as e:
                 log.error("finder %s failed for %s", key, target.slug, exc_info=True)

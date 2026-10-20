@@ -16,6 +16,74 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-10-20
+
+### Changed
+- Injected memory is now capped per prompt by the new `memory_budget_bytes`
+  option (default 40,000 bytes). When the router picks more than fits, its
+  lowest-ranked picks are dropped first; a top pick that alone is too large
+  is replaced by a pointer to its file. Before, only the no-catalog fallback
+  had a cap, and one prompt received 708 KB. That fallback now uses the same
+  budget as a hard cap and skips files over `whole_file_max_bytes`.
+- Memory files larger than the new `whole_file_max_bytes` option (default
+  20,000 bytes) are no longer injected whole. A pick of such a file without a
+  section loads the sections the router also picked, or else a short pointer:
+  the file's path, its opening lines and its section list, so Claude can Read
+  just the part it needs. A file in a shared memory bank gets no pointer (its
+  text stays inside the untrusted fence), so such a pick loads nothing.
+- A section pick whose name does not match a heading now loads the nearest
+  heading (ignoring case and punctuation, a description pasted after the
+  name, a missing qualifier, or a close spelling), and otherwise loads
+  nothing. It no longer loads the whole file instead.
+- Catalog and section warnings ("Catalog skills is stale", "Memory anchor(s)
+  … did not resolve") are logged once a day rather than on every prompt, and
+  again as soon as the catalog or memory file they are about changes. The stale-catalog warning now
+  names the exact command that fixes it:
+  `/multiplai-context:refresh-catalogs --only <catalog>`.
+- The daily maintenance run now also rebuilds the skills catalog, when
+  `enable_skills` is on and the catalog is older than `catalog_ttl_hours`
+  (default 168 h) or a plugin was installed, updated or removed since it was
+  generated. Before, only memory was rebuilt automatically, so skills
+  suggestions went stale until someone ran the refresh by hand.
+
+### Added
+- The `context` `inject` activity event carries `pointers` (memory entries,
+  whole files or sections, injected as a pointer instead of content; kept out
+  of `sections_by_file`) and `budget_dropped` (picks dropped to hold the
+  budget).
+
+## [0.57.1] - 2026-10-20
+
+### Added
+- `log-doctor --hooks` has a `cancelled` column (and `cancelled`,
+  `cancel_sessions` in `--json`).
+- `/multiplai-context:health` reports `logged_strategy`,
+  `logged_strategy_at` and `strategy_mismatch`, and `routing.live` now says
+  which strategy and which log lines its numbers come from (`strategy`,
+  `source`).
+
+### Fixed
+- `log-doctor --hooks` no longer reports cancelled context-manager runs as
+  timeouts. A run that logged no exit and never reached the warning the hook
+  writes at 26s is counted as **cancelled**, not killed at the 30s ceiling,
+  when it started fast enough for that warning to be due and the warning is
+  known to work on this install. Cancelled runs do not set the exit code and
+  do not inflate p95. The exit code also cannot see a hard crash of that hook;
+  a rising `cancelled` count is where one shows up.
+- A learning whose `provenance` line holds a kind (for example
+  `provenance: DECISION`) now keeps that value as its `kind` instead of losing
+  it. Its provenance is left unstated rather than guessed. The extraction
+  prompt now says which values provenance allows.
+- `/multiplai-context:health` reports live routing stats for the `llm` router
+  (how often it picked no memory, abstained, or fell back to token overlap)
+  instead of "0 samples", shows the router the hook last used, and flags it
+  when that differs from the configured one. `llm_hybrid` without a model
+  client is now reported as falling back to token overlap, like `llm`.
+- The skills catalog no longer lists skills whose frontmatter sets
+  `disable-model-invocation: true`, so the router stops suggesting skills
+  Claude cannot run. Entries already in the catalog are removed the next time
+  it is regenerated.
+
 ## [0.57.0] - 2026-10-16
 
 ### Changed

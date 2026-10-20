@@ -683,6 +683,38 @@ def test_assess_only_keeps_the_report_when_one_review_goes_over_budget_or_fails(
     assert "- broken: failed (RuntimeError: snapshot failed)" in text
 
 
+def test_assess_only_stops_at_a_usage_limit_and_keeps_the_report_so_far(tmp_path, monkeypatch, capsys):
+    from review_pipeline import orchestrator
+    from review_pipeline.__main__ import main
+
+    dirs = {}
+    for name in ("done", "limited", "later"):
+        d = tmp_path / "out" / name
+        decide(d, **{"aaaaaaaaaa": ("accept", "")})
+        dirs[name] = d
+    asked = []
+
+    async def assess_only(target_dir, config):
+        asked.append(target_dir.name)
+        if target_dir.name != "done":
+            raise sdk.UsageLimitError("the Claude weekly usage limit was hit; it resets Oct 19, 4am (UTC)",
+                                      limit="weekly", resets="Oct 19, 4am (UTC)")
+        return orchestrator.AssessOnly(target_dir=target_dir, cost_usd=0.5, rows=[
+            {"id": "aaaaaaaaaa", "severity": "LOW", "claim": "c", "decision": "accept", "note": "",
+             "label": "useful", "reason": ""}])
+
+    monkeypatch.setattr(orchestrator, "assess_only", assess_only)
+    report = tmp_path / "report.md"
+    code = main(["assess-only", *(str(d) for d in dirs.values()), "--report", str(report), "--trust-repo"])
+    out, err = capsys.readouterr()
+    assert code == 6 and asked == ["done", "limited"]
+    assert "STOPPED: the Claude weekly usage limit was hit; it resets Oct 19, 4am (UTC)" in err
+    text = report.read_text()
+    assert "| done | `aaaaaaaaaa`" in text
+    assert "- limited: stopped: the Claude weekly usage limit was hit" in text
+    assert "- later: not started: the Claude weekly usage limit was hit" in text
+
+
 # --- the record of what was checked (checks.json) --------------------------------------
 
 
@@ -763,3 +795,26 @@ async def test_checks_json_with_repeats_and_assess_entries_validates(target_info
     assert [x["stage"] for x in data["agents"]] == ["assess"]
     from review_pipeline.render import render_checks
     assert "### assess: assess — 3 useful" in render_checks(state, checks_file=data)
+
+
+def _limit() -> sdk.UsageLimitError:
+    return sdk.UsageLimitError("the Claude session usage limit was hit", limit="session")
+
+
+async def test_a_usage_limit_stops_repeats_instead_of_leaving_findings_unmatched(target_info, ctx, fake):
+    earlier, now = at("earlier"), at("now", file="settings.py", line=3)
+    write_round(ctx.target_dir, OLD_HEAD, [earlier])
+    decide(ctx.target_dir, **{earlier.id: ("reject", "")})
+    fake(repeats=[_limit()])
+    state = state_with(target_info, now)
+    with pytest.raises(sdk.UsageLimitError):
+        await run_repeats(state, ctx)
+    assert state.repeats == {} and state.errors == [] and not state.past("repeats")
+
+
+async def test_a_usage_limit_stops_assess_instead_of_labelling_everything_useful(target_info, ctx, fake):
+    state, *_ = three(target_info)
+    fake(assess=[_limit()])
+    with pytest.raises(sdk.UsageLimitError):
+        await run_assess(state, ctx)
+    assert state.assessments == {} and state.errors == [] and not state.past("assess")
