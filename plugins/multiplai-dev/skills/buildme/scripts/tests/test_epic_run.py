@@ -259,7 +259,7 @@ def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b"), pr_url("e-c")]
     argv = records.attempts(e.dir)[0].started["argv"]
     assert argv[:6] == ["python", "-m", "build_pipeline", "--session-id", "s", "build"]
-    for flag in ("--auto", "--trust-repo", "--no-epic-split", "--pr-ready"):
+    for flag in ("--auto", "--trust-repo", "--no-epic-split", "--epic-child", "--pr-ready"):
         assert flag in argv
     assert argv[argv.index("--mode") + 1] == "brief"
     assert argv[argv.index("--change") + 1] == "e-a"
@@ -272,6 +272,22 @@ def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
     for i, a in enumerate(argv):
         if a in ("--plan-file", "--project-dir", "--context-files", "--research-path"):
             assert Path(argv[i + 1]).is_absolute()
+
+
+def test_a_childs_saved_command_marks_it_an_epic_child(tmp_path, monkeypatch):
+    """#347: the command the coordinator builds for a child (`new_argv`), parsed
+    without the coordinator's environment, is still an epic child
+    (`--epic-child`). The saved argv holding the flag is
+    `test_the_argv_holds_the_flags_and_absolute_paths`."""
+    from build_pipeline.__main__ import build_parser
+
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
+    coord = coordinator.Coordinator(e.config, BuildState(change_name="e", mode="scratch", tier="advanced"),
+                                    None, e.dir, store.load_epic(e.dir))
+    argv = coord.new_argv("a", None)
+    assert BuildConfig.from_cli_args(build_parser().parse_args(argv[3:])).epic_child is True
+    plain = ["build", "--project-dir", str(e.project)]
+    assert BuildConfig.from_cli_args(build_parser().parse_args(plain)).epic_child is False
 
 
 def test_a_parent_that_skipped_research_skips_it_in_each_child(tmp_path, monkeypatch):

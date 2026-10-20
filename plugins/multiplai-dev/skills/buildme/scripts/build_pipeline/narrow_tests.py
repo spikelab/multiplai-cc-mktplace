@@ -22,8 +22,9 @@ that already names what to run (paths, a jest / vitest filter, pytest
 `addopts` paths, another pytest config or rootdir, `python_files`); a pytest
 config it cannot read; a selected pytest file below another pytest config or
 `setup.py` than the whole run's (pytest finds its config from the paths it is
-given), or under a `conftest.py` that sets `collect_ignore` or
-`pytest_ignore_collect` (pytest skips those for paths it is given); a
+given), or under a `conftest.py` pytest loads whose `collect_ignore` or
+`collect_ignore_glob` could cover it, or that has a `pytest_ignore_collect`
+hook (pytest does not apply them to a path named on its command line); a
 selection too long for one command; an empty
 selection; a changed file the engine counts as a test but this module cannot
 name (Django's `tests.py`, a `__tests__/` file, a helper under `tests/`); a
@@ -39,6 +40,7 @@ module it changes.
 """
 from __future__ import annotations
 
+import ast
 import configparser
 import fnmatch
 import json
@@ -81,7 +83,8 @@ _PYTEST_INI_ORDER = (("pytest.toml", None), (".pytest.toml", None),
 _PYTEST_CONFIG_FILES = tuple(name for name, _ in _PYTEST_INI_ORDER)
 # What in a conftest.py makes pytest skip files the whole run would collect.
 # pytest never applies it to a path named on its command line.
-_CONFTEST_IGNORES = ("collect_ignore", "pytest_ignore_collect")
+_CONFTEST_IGNORE_HOOK = "pytest_ignore_collect"
+_CONFTEST_IGNORE_LISTS = ("collect_ignore", "collect_ignore_glob")
 _PYTEST_DEFAULT_NORECURSE = ("*.egg", ".*", "_darcs", "build", "CVS", "dist",
                              "node_modules", "venv", "{arch}")
 # Options whose value is a path that is not a test to run.
@@ -356,20 +359,82 @@ def _pytest_setup(start: Path) -> Path | None:
     return next((d / "setup.py" for d in dirs if (d / "setup.py").is_file()), None)
 
 
+def _ignore_lists(tree: ast.Module) -> dict[str, list[str]] | None:
+    """The `collect_ignore` / `collect_ignore_glob` entries a conftest's
+    *tree* writes out, or None when it has a `pytest_ignore_collect` hook or
+    sets or changes a list in any other way than one top-level assignment
+    of a list or tuple of strings."""
+    lists: dict[str, list[str]] = {}
+    written: set[int] = set()
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in _CONFTEST_IGNORE_LISTS):
+            try:
+                value = ast.literal_eval(node.value)
+            except (ValueError, TypeError, RecursionError):
+                return None
+            if (not isinstance(value, (list, tuple))
+                    or not all(isinstance(v, str) for v in value)):
+                return None
+            lists.setdefault(node.targets[0].id, []).extend(value)
+            written.add(id(node.targets[0]))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and id(node) not in written and (
+                node.id in _CONFTEST_IGNORE_LISTS or node.id == _CONFTEST_IGNORE_HOOK):
+            return None
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and node.name == _CONFTEST_IGNORE_HOOK:
+            return None
+        if isinstance(node, ast.alias) and _CONFTEST_IGNORE_HOOK in (node.name, node.asname):
+            return None
+    return lists
+
+
+def _conftest_ignores(conftest: Path, selected: Path) -> bool:
+    """True when *conftest* could make the whole run skip *selected*, a
+    file below its directory. A mention in a comment or a string ignores
+    nothing; a hook, a list that is not written out, or a conftest that does
+    not parse counts as ignoring it."""
+    text = _read(conftest)
+    if not any(name in text for name in (_CONFTEST_IGNORE_HOOK, *_CONFTEST_IGNORE_LISTS)):
+        return False
+    try:
+        lists = _ignore_lists(ast.parse(text))
+    except (SyntaxError, ValueError, RecursionError):
+        return True
+    if lists is None:
+        return True
+    here = Path(os.path.abspath(conftest.parent))
+    # pytest checks each directory on the way down, then the file.
+    walked = [Path(os.path.abspath(selected))]
+    walked += [p for p in walked[0].parents if here in p.parents]
+    ignored = {Path(os.path.normpath(here / entry)) for entry in lists.get("collect_ignore", [])}
+    globs = [str(here / entry) for entry in lists.get("collect_ignore_glob", [])]
+    return any(p in ignored or any(fnmatch.fnmatch(str(p), g) for g in globs)
+               for p in walked)
+
+
 def _pytest_runs_alike(paths: list[str], project_dir: Path) -> str | None:
     """Why the narrow pytest run of *paths* could behave unlike the whole
     run, or None. pytest finds its config from the directories of the paths
-    it is given (the whole run starts from *project_dir*), and skips
-    `collect_ignore` and `pytest_ignore_collect` for those paths."""
+    it is given (the whole run starts from *project_dir*), and does not
+    apply a conftest's `collect_ignore`, `collect_ignore_glob` or
+    `pytest_ignore_collect` to those paths. It loads no conftest above the
+    directory of its config file (else its rootdir), the whole run's
+    `confcutdir`."""
     try:
         whole = _pytest_setup(project_dir)
+        cut = whole.parent if whole is not None else project_dir
         for path in paths:
             start = (project_dir / path).parent
             if _pytest_setup(start) != whole:
                 return f"{path} is below another pytest config or setup.py"
             for d in _config_dirs(start):
-                if any(word in _read(d / "conftest.py") for word in _CONFTEST_IGNORES):
-                    return f"{d / 'conftest.py'} sets which files pytest ignores"
+                if _conftest_ignores(d / "conftest.py", project_dir / path):
+                    return f"{d / 'conftest.py'} may make the whole run skip {path}"
+                if d == cut:
+                    break
     except _UnreadableConfig as e:
         return f"cannot read the pytest config ({e})"
     return None
