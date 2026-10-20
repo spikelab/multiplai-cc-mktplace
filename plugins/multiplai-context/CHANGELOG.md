@@ -16,6 +16,27 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.57.1] - 2026-10-20
+
+### Fixed
+- `log-doctor --hooks` no longer reports cancelled context-manager runs as
+  timeouts. A run that logged no exit and never reached the warning the hook
+  writes at 26s is now counted as **cancelled** (interrupted or crashed early),
+  not killed at the 30s ceiling. Cancelled runs do not set the exit code and do
+  not inflate p95.
+- A learning whose `provenance` line holds a kind (for example
+  `provenance: DECISION`) now keeps that value as its `kind` instead of losing
+  it. Its provenance is left unstated rather than guessed. The extraction
+  prompt now says which values provenance allows.
+- `/multiplai-context:health` reports live routing stats for the `llm` router
+  (how often it picked no memory, abstained, or fell back to token overlap)
+  instead of "0 samples". It also shows the router the hook last used, and
+  flags it when that differs from the configured one.
+- The skills catalog no longer lists skills whose frontmatter sets
+  `disable-model-invocation: true`, so the router stops suggesting skills
+  Claude cannot run. Entries already in the catalog are removed the next time
+  it is regenerated.
+
 ## [0.57.0] - 2026-10-16
 
 ### Changed
