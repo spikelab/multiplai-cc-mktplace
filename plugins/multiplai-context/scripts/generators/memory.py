@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 # from the file's own H2 headers, so preserving it would freeze the
 # first value ever written: a file could gain, rename, or drop a
 # section and the anchors would never follow. A stale anchor is not a
-# loud failure either — ``section_loader`` falls back to the whole
-# file — so the rot would be invisible forever. Regeneration is already
+# loud failure either — the context hook resolves it to the nearest
+# heading or drops it with a warning — so the rot would be easy to miss. Regeneration is already
 # content-hash-gated (``generators/base.py``), so anchors are only
 # re-derived when the file actually changed.
 _HAND_AUTHORED_FIELDS = (

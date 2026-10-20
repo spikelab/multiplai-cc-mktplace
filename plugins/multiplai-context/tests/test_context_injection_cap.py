@@ -138,6 +138,27 @@ class TestResolveSectionName:
         text = _doc("Team Notes", "Other")
         assert resolve_section_name(text, "Notes") is None
 
+    def test_a_non_ascii_heading_resolves_exactly(self):
+        from lib.section_loader import resolve_section_name
+
+        text = _doc("Über uns", "日本語メモ", "Other")
+        assert resolve_section_name(text, "über uns") == "Über uns"
+        assert resolve_section_name(text, "日本語メモ") == "日本語メモ"
+
+    def test_an_exact_spelling_wins_over_a_punctuation_twin(self):
+        from lib.section_loader import resolve_section_name
+
+        text = _doc("C++ Notes", "C Notes")
+        assert resolve_section_name(text, "C Notes") == "C Notes"
+        assert resolve_section_name(text, "c++ notes") == "C++ Notes"
+
+    def test_a_different_number_is_not_a_close_spelling(self):
+        """``Phase 1`` and ``Phase 2`` are different sections, not a typo."""
+        from lib.section_loader import resolve_section_name
+
+        text = _doc("Rollout Phase 2", "Other")
+        assert resolve_section_name(text, "Rollout Phase 1") is None
+
     def test_a_file_without_h2_resolves_to_nothing(self):
         from lib.section_loader import resolve_section_name
 
@@ -150,14 +171,18 @@ class TestResolveSectionName:
 
 
 class TestAnchorMissIsNeverTheWholeFile:
-    def test_an_unresolvable_anchor_is_dropped(self, tmp_path, caplog):
-        from context_manager import _load_memory_content
+    def test_an_unresolvable_anchor_is_dropped_and_reported(self, tmp_path, caplog):
+        from context_manager import MemoryLoadReport, _load_memory_content
 
         (tmp_path / "big.md").write_text(_doc("Alpha", "Beta", "Gamma"))
+        report = MemoryLoadReport()
         with caplog.at_level(logging.WARNING):
-            loaded = _load_memory_content(tmp_path, ["big.md#Ghost Section"])
+            loaded = _load_memory_content(
+                tmp_path, ["big.md#Ghost Section"], report=report
+            )
 
         assert loaded == {}
+        assert report.dropped_anchors == ["big.md#Ghost Section"]
         assert "big.md#Ghost Section" in caplog.text
         assert "dropped" in caplog.text
 
@@ -176,15 +201,6 @@ class TestAnchorMissIsNeverTheWholeFile:
         assert "Alpha content." not in content
         assert "**Purpose:** test file." in content  # preamble kept
         assert "Beta Release" in caplog.text
-
-    def test_a_stale_anchor_does_not_absorb_a_good_one(self, tmp_path):
-        from context_manager import _load_memory_content
-
-        (tmp_path / "big.md").write_text(_doc("Alpha", "Beta", "Gamma"))
-        loaded = _load_memory_content(tmp_path, ["big.md#Beta", "big.md#Gone"])
-
-        assert list(loaded) == ["big.md#Beta"]
-        assert "Alpha content." not in loaded["big.md#Beta"]
 
     def test_two_picks_resolving_to_one_heading_load_it_once(self, tmp_path):
         from context_manager import _load_memory_content
@@ -207,13 +223,22 @@ class TestAnchorMissIsNeverTheWholeFile:
         keys = set(_cooldown_keys(picks, loaded, report.aliases))
         assert keys == {"big.md#Beta Release", "big.md#beta release — gloss"}
 
-    def test_dropped_anchors_are_reported(self, tmp_path):
-        from context_manager import MemoryLoadReport, _load_memory_content
 
-        (tmp_path / "big.md").write_text(_doc("Alpha", "Beta", "Gamma"))
-        report = MemoryLoadReport()
-        _load_memory_content(tmp_path, ["big.md#Gone"], report=report)
-        assert report.dropped_anchors == ["big.md#Gone"]
+
+class TestRankOrderSurvivesGrouping:
+    def test_entries_come_back_in_pick_order_across_files(self, tmp_path):
+        """The budget drops from the end, so the end must be the lowest rank."""
+        from context_manager import _load_memory_content
+
+        (tmp_path / "a.md").write_text(_doc("Alpha", "Beta", "Gamma"))
+        (tmp_path / "b.md").write_text("# B\n\nsmall b\n")
+        loaded = _load_memory_content(
+            tmp_path, ["a.md#Alpha", "b.md", "a.md#Gamma"]
+        )
+        assert list(loaded) == ["a.md#Alpha", "b.md", "a.md#Gamma"]
+        # The preamble still rides on the file's first (highest-ranked) slice.
+        assert "**Purpose:** test file." in loaded["a.md#Alpha"]
+        assert "**Purpose:** test file." not in loaded["a.md#Gamma"]
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +314,29 @@ class TestLargeFilesLoadOnlyBySection:
         loaded = _load_memory_content(tmp_path, ["huge.md"])
         assert "Section 0 content." not in loaded["huge.md"]
 
+    def test_a_bare_pick_answered_by_sections_is_stamped_for_cooldown(self, tmp_path):
+        from context_manager import MemoryLoadReport, _cooldown_keys, _load_memory_content
+
+        (tmp_path / "big.md").write_text(_doc("Alpha", "Beta", "Gamma"))
+        picks = ["big.md", "big.md#Beta"]
+        report = MemoryLoadReport()
+        loaded = _load_memory_content(
+            tmp_path, picks, whole_file_max_bytes=1000, report=report
+        )
+        assert set(_cooldown_keys(picks, loaded, report.aliases)) == {
+            "big.md", "big.md#Beta",
+        }
+
+    def test_a_pointer_carries_at_most_a_bounded_preamble(self, tmp_path):
+        from context_manager import _POINTER_PREAMBLE_MAX_CHARS, _load_memory_content
+
+        (tmp_path / "big.md").write_text(
+            _doc("Alpha", "Beta", preamble="P" * 10_000)
+        )
+        loaded = _load_memory_content(tmp_path, ["big.md"], whole_file_max_bytes=1000)
+        assert loaded["big.md"].count("P") <= _POINTER_PREAMBLE_MAX_CHARS + 5
+        assert "- Beta" in loaded["big.md"]
+
     def test_a_pointer_is_not_attributed_as_a_whole_file_load(self, tmp_path):
         """Utilisation reads ``sections_by_file == []`` as "the whole file"."""
         from context_manager import (
@@ -306,6 +354,75 @@ class TestLargeFilesLoadOnlyBySection:
         sections, sizes = _section_attribution(loaded, pointers=report.pointers)
         assert sections == {"small.md": []}
         assert set(sizes) == {"small.md"}
+
+
+class TestSharedBankFilesAreNeverPointedAt:
+    """A pointer says "Read this path"; inside the untrusted fence that is inert,
+    and outside it, it would pull teammate-written text in unfenced."""
+
+    def _banks(self, tmp_path):
+        from lib.banks import MemoryBank, personal_bank
+
+        bank_dir = tmp_path / "team"
+        bank_dir.mkdir()
+        (bank_dir / "dev.md").write_text(_doc("Alpha", "Beta", "Gamma"))
+        return [
+            personal_bank(tmp_path),
+            MemoryBank(name="team", path=bank_dir, mode="propose"),
+        ]
+
+    def test_a_large_shared_file_bare_pick_is_dropped(self, tmp_path):
+        from context_manager import MemoryLoadReport, _load_memory_content
+
+        report = MemoryLoadReport()
+        loaded = _load_memory_content(
+            tmp_path, ["team/dev.md"], self._banks(tmp_path),
+            whole_file_max_bytes=1000, report=report,
+        )
+        assert loaded == {} and report.pointers == []
+
+    def test_its_sections_still_load(self, tmp_path):
+        from context_manager import _load_memory_content
+
+        loaded = _load_memory_content(
+            tmp_path, ["team/dev.md#Beta"], self._banks(tmp_path),
+            whole_file_max_bytes=1000,
+        )
+        assert list(loaded) == ["team/dev.md#Beta"]
+
+    def test_an_oversized_shared_top_pick_is_dropped_not_pointed_at(self, tmp_path):
+        from context_manager import _apply_memory_budget
+
+        content = {"team/dev.md#Beta": "x" * 5_000, "small.md": "y"}
+        kept, dropped = _apply_memory_budget(
+            tmp_path, content, 2_000, self._banks(tmp_path)
+        )
+        assert kept == {"small.md": "y"}
+        assert dropped == ["team/dev.md#Beta"]
+
+
+class TestRecencyFallbackLimits:
+    def _files(self, mem, sizes):
+        for i, size in enumerate(sizes):
+            path = mem / f"r{i}.md"
+            path.write_text(f"# R{i}\n\nrecent-{i} " + "z" * size)
+            # newest first, so r0 ranks first
+            os.utime(path, (time.time() - i * 60, time.time() - i * 60))
+
+    def test_skips_files_over_the_whole_file_limit(self, tmp_path):
+        from context_manager import _read_top_memory_files
+
+        self._files(tmp_path, [30_000, 1_000])
+        got = _read_top_memory_files(
+            tmp_path, max_bytes=40_000, whole_file_max_bytes=20_000
+        )
+        assert list(got) == ["r1.md"]
+
+    def test_the_budget_is_a_hard_cap_even_for_the_first_file(self, tmp_path):
+        from context_manager import _read_top_memory_files
+
+        self._files(tmp_path, [5_000])
+        assert _read_top_memory_files(tmp_path, max_bytes=1_000) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -506,8 +623,47 @@ class TestHookBody:
         )
 
         assert context == ""
-        assert "recency-net content" not in context
         assert notes["outcome"] == "anchor_miss"
+
+    def test_the_recency_fallback_gets_the_configured_budget(
+        self, hook_env, monkeypatch, capsys
+    ):
+        import context_manager
+
+        mem = hook_env["memory_dir"]
+        for i in range(3):
+            (mem / f"r{i}.md").write_text(f"# R{i}\n\nrecent-{i} " + "z" * 4000)
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_BUDGET_BYTES", "5000")
+
+        def broken_router(**_kw):
+            raise RuntimeError("router down")
+
+        write_catalog(
+            context_manager.get_paths().catalogs_dir(), "memory.json",
+            [{"source": "r0.md", "summary": "r0"}],
+        )
+        monkeypatch.setattr(context_manager, "create_router", broken_router)
+        run = _StubRun()
+        context_manager._assemble_and_emit({"prompt": "anything"}, run)
+        context = json.loads(capsys.readouterr().out)["hookSpecificOutput"][
+            "additionalContext"
+        ]
+        assert sum(f"recent-{i}" in context for i in range(3)) == 1
+
+    def test_a_missing_file_beside_a_dropped_anchor_still_falls_back(
+        self, hook_env, monkeypatch, capsys
+    ):
+        """Catalog drift (a file gone from disk) is the fallback's job."""
+        mem = hook_env["memory_dir"]
+        (mem / "big.md").write_text(_doc("Alpha", "Beta", "Gamma"))
+        (mem / "recent.md").write_text("# Recent\n\nrecency-net content\n")
+
+        context, notes = _run_body(
+            monkeypatch, capsys, ["big.md#Ghost", "gone.md"],
+            ["big.md", "gone.md", "recent.md"],
+        )
+        assert "recency-net content" in context
+        assert notes["outcome"] == "injected"
 
     def test_a_bare_pick_of_a_large_file_reaches_the_context_as_a_pointer(
         self, hook_env, monkeypatch, capsys
@@ -543,12 +699,11 @@ def data_env(tmp_path, monkeypatch):
     _reset_cache()
     import context_manager
 
+    from conftest import real_warn_state_path
+
     # The autouse conftest fixture points the state file at a per-test temp
-    # path; this test needs the real data-dir location.
-    monkeypatch.setattr(
-        context_manager, "_warn_state_path",
-        lambda: data_dir / context_manager._WARN_ONCE_FILE,
-    )
+    # path; these tests put the real resolution back, into a temp data dir.
+    monkeypatch.setattr(context_manager, "_warn_state_path", real_warn_state_path())
     yield data_dir
     _reset_cache()
 
@@ -642,6 +797,33 @@ class TestWarnOnceAcrossProcesses:
 
         (message,) = _stale_warnings(caplog)
         assert "/multiplai-context:refresh-catalogs --only skills" in message
+
+    def test_the_state_file_lives_in_the_data_dir(self, data_env):
+        import context_manager
+
+        assert context_manager._warn_state_path() == (
+            data_env / context_manager._WARN_ONCE_FILE
+        )
+
+    def test_an_edited_memory_file_re_logs_its_anchor_warning(
+        self, data_env, tmp_path, caplog
+    ):
+        import context_manager
+
+        mem = tmp_path / "mem"
+        mem.mkdir()
+        path = mem / "big.md"
+        path.write_text(_doc("Alpha", "Beta", "Gamma"))
+        with caplog.at_level(logging.WARNING):
+            context_manager._load_memory_content(mem, ["big.md#Ghost"])
+            _new_process()
+            path.write_text(_doc("Alpha", "Beta", "Delta"))
+            st = path.stat()
+            os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+            context_manager._load_memory_content(mem, ["big.md#Ghost"])
+
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(warnings) == 2
 
     def test_anchor_warnings_persist_too(self, data_env, tmp_path, caplog):
         import context_manager

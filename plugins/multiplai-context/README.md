@@ -221,7 +221,7 @@ over the anchor:
 | `recommend_cooldown_turns` | `4` | After a file is injected, suppress re-injecting it for this many turns (it's already in the conversation). `0` disables. See [Re-recommendation cooldown](#re-recommendation-cooldown). |
 | `keep_ratio` | `0.30` | `token_overlap` relevance cutoff: keep a memory file only if it scores ≥ this fraction of the top match (0–1). Higher = stricter (fewer, more-relevant files, less 10-file cap saturation); lower admits more of the weaker tail. Ignored under `llm`. See [Routing relevance cutoff](#routing-relevance-cutoff). |
 | `memory_budget_bytes` | `40000` | Most memory content one prompt may inject, in bytes. Past it, the router's lowest-ranked picks are dropped first (logged as `MEMORY_BUDGET`); a top pick that alone exceeds it is replaced by a pointer to its file. Also caps the recency fallback. `0` disables. |
-| `whole_file_max_bytes` | `20000` | Memory files larger than this are never injected whole. A pick naming such a file without a section is answered by that file's section picks if the router made any, otherwise by a pointer: the file's path, its opening lines and its section list (logged as `WHOLE_FILE_POINTER`). `0` disables. |
+| `whole_file_max_bytes` | `20000` | Memory files larger than this are never injected whole. A pick naming such a file without a section is answered by that file's section picks if the router made any, otherwise by a pointer: the file's path, its opening lines and its section list (logged as `WHOLE_FILE_POINTER`). A shared-bank file gets no pointer, since its fence forbids acting on a Read instruction; the pick is dropped (`WHOLE_FILE_DROPPED`). The recency fallback skips such files. `0` disables. |
 | `memory_conflict_preamble` | `true` | Conflict-surfacing directive + per-file last-updated stamps above every injected MEMORY block, so the model flags memory-vs-session disagreements. ~90 tokens per memory-carrying turn; turn off to save them. |
 | `enable_skills` / `skills_dir` | `false` / `~/.claude/skills` | Optionally catalog skills for routing |
 | `enable_resources` / `resources_dir` | `false` / `""` | Optionally retrieve a research/reference corpus per prompt, through qmd. There is no resources catalog and no generator — the index is qmd's, built on the host. See [Resources retrieval via qmd](#resources-retrieval-via-qmd). |
@@ -795,9 +795,10 @@ Four things keep it safe:
 ### Bundles and co-retrieval pull *whole* files
 
 `expand_bundles` and `expand_co_retrieve` add a companion by bare filename, so a
-companion is injected whole even when it has anchors of its own. On a corpus
-where the largest companion is 140 KB with 38 sections, that undoes anchoring for
-every turn it fires. Measure before you author these fields: on one 514-turn
+companion is injected whole even when it has anchors of its own — unless it is
+over `whole_file_max_bytes` (default 20 KB), when it becomes a pointer: path,
+opening lines and section list. Under a higher limit, a 140 KB companion with 38
+sections undoes anchoring for every turn it fires. Measure before you author these fields: on one 514-turn
 sample, the four documented `bundle: writing` members plus three `co_retrieve_for`
 pairs would have added **3.7 MB** of whole-file injections — against 32.8 MB of
 whole-file bytes in the same window. Bundle a set of *small* files, or leave the

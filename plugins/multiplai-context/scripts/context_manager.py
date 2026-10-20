@@ -98,13 +98,9 @@ _KNOWN_CATALOG_TYPES = frozenset({"memory", "banks", "diary", "skills"})
 # truncation site in _assemble_and_emit for why (P7).
 _LAST_RESPONSE_MAX_CHARS = 2000
 
-# Warning deduplication (Decision 8), in two layers. This set dedups within
-# one process. It cannot dedup across prompts: each prompt runs a fresh hook
-# process, so on its own it let "Catalog skills is stale" log ~930 times in
-# 11 days. The cross-process layer is a small JSON file in the data dir
-# (_WARN_ONCE_FILE), keyed the same way, consulted the first time a key comes
-# up in a process. Keyed by full catalog file path to correctly dedup across
-# different data directories.
+# In-process layer of the warn-once dedup (see _warn_once for the
+# cross-process layer). Keyed by full catalog file path to correctly dedup
+# across different data directories.
 _catalog_warnings_emitted: set[str] = set()
 
 _WARN_ONCE_FILE = "warn_once.json"
@@ -173,6 +169,7 @@ def _read_top_memory_files(
     max_files: int = 5,
     max_bytes: int | None = 40_000,
     exclude: set[str] | None = None,
+    whole_file_max_bytes: int = DEFAULT_WHOLE_FILE_MAX_BYTES,
 ) -> dict[str, str]:
     """Rank memory files by metadata, then read only the top candidates.
 
@@ -182,8 +179,10 @@ def _read_top_memory_files(
     from dumping the whole memory corpus each turn:
       - ``exclude`` skips files still within the re-recommendation cooldown,
         so the fallback doesn't re-inject what a recent turn already sent.
-      - ``max_bytes`` caps the total injected payload (``None`` or 0: no
-        cap beyond ``max_files``).
+      - ``max_bytes`` caps the total injected payload, the first file
+        included (``None`` or 0: no cap beyond ``max_files``).
+      - a file over ``whole_file_max_bytes`` is skipped: this path has no
+        section picks to load it by (0 disables).
     """
     exclude = exclude or set()
     ranked = _rank_memory_files(memory_dir)
@@ -199,10 +198,13 @@ def _read_top_memory_files(
         except Exception:
             logger.warning("Failed to read ranked memory file: %s", item.path)
             continue
-        if max_bytes and total + len(content.encode("utf-8")) > max_bytes and result:
+        size = len(content.encode("utf-8"))
+        if 0 < whole_file_max_bytes < size:
+            continue
+        if max_bytes and total + size > max_bytes:
             break
         result[item.path.name] = content
-        total += len(content.encode("utf-8"))
+        total += size
     return result
 
 
@@ -512,11 +514,19 @@ class MemoryLoadReport:
       is not.
     * ``dropped_anchors`` — section picks whose fragment matched no heading
       and were therefore not loaded at all.
+    * ``missing`` — picks whose file did not resolve or exists nowhere on
+      disk: catalog drift, which the recency fallback is there to cover.
     """
 
     aliases: dict[str, str] = field(default_factory=dict)
     pointers: list[str] = field(default_factory=list)
     dropped_anchors: list[str] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
+
+
+# A pointer stands in for content that was too large, so it must stay small
+# itself. Preambles measured 40-896 characters across the real corpus.
+_POINTER_PREAMBLE_MAX_CHARS = 1_000
 
 
 def _memory_pointer(
@@ -535,6 +545,8 @@ def _memory_pointer(
         )
         return "\n".join(lines) + "\n"
     head = section_preamble(text).strip()
+    if len(head) > _POINTER_PREAMBLE_MAX_CHARS:
+        head = head[:_POINTER_PREAMBLE_MAX_CHARS].rstrip() + " …"
     if head:
         lines.append(head)
     names = h2_names(text)
@@ -576,14 +588,12 @@ def _load_memory_content(
       punctuation, then the nearest heading (a gloss pasted after the name, a
       dropped qualifier, a close spelling). A fragment with no heading close
       enough is dropped and named in a warning. It is **never** answered with
-      the whole file: that fallback fired 22 times in 10 days (2026-10), each
-      time loading a 54-132 KB file for one section.
+      the whole file, which would load a large file for one section.
     * **A file over *whole_file_max_bytes* loads only by section.** A bare
       pick of it is answered by the file's section picks when there are any,
       and otherwise by a pointer (:func:`_memory_pointer`): path, preamble and
-      section list. Bare picks of the two largest files averaged 125-133 KB
-      per injection and were scored ~0% used by both utilisation estimators.
-      0 disables the limit.
+      section list; for a shared-bank file, by nothing (see the
+      ``WHOLE_FILE_DROPPED`` branch). 0 disables the limit.
     * **A whole-file pick of a smaller file absorbs that file's section
       picks**, so the router's legitimate ``["dev.md", "dev.md#Testing"]``
       injects the file once, not the file plus the section again. A file with
@@ -612,9 +622,11 @@ def _load_memory_content(
     for ref_picks in by_ref.values():
         path = _memory_path_for(ref_picks[0], memory_dir, banks)
         if path is None:
+            report.missing.extend(ref_picks)
             continue
         if not path.exists():
             logger.debug("Picked memory file missing: %s", path)
+            report.missing.extend(ref_picks)
             continue
         try:
             text = path.read_text()
@@ -655,8 +667,7 @@ def _load_memory_content(
             _warn_once(
                 f"anchor::{whole_ref}::{joined}",
                 f"Memory anchor(s) {joined} did not resolve in {whole_ref} — "
-                f"no heading close enough, dropped (the whole file is not "
-                f"loaded in their place). Run "
+                f"no heading close enough, so the pick(s) were dropped. Run "
                 f"/multiplai-context:refresh-catalogs --only memory if a "
                 f"section was renamed.",
                 sig=_file_sig(path),
@@ -676,6 +687,16 @@ def _load_memory_content(
             # fragment pick would make `_section_attribution` log a section
             # list for a whole-file load.
             result[whole_ref] = text
+            continue
+
+        if bare and not sections and _is_shared_ref(whole_ref, banks):
+            # A pointer is an instruction to Read a path. Inside the shared
+            # bank's untrusted fence the model must ignore it; outside, it
+            # would pull teammate-written text in unfenced. Neither is right.
+            logger.info(
+                "WHOLE_FILE_DROPPED %s bytes=%d limit=%d (shared bank: no pointer)",
+                whole_ref, size, whole_file_max_bytes,
+            )
             continue
 
         if bare and not sections:
@@ -719,7 +740,36 @@ def _load_memory_content(
             first_key = next(iter(keys_by_heading.values()))
             for p in bare:
                 report.aliases[p] = first_key
-    return result
+    return _in_pick_order(result, picks, report.aliases)
+
+
+def _in_pick_order(
+    result: dict[str, str], picks: list[str], aliases: dict[str, str]
+) -> dict[str, str]:
+    """*result* reordered by the rank of the first pick each entry answers.
+
+    Grouping by file emits a file's entries together, at the file's first
+    pick, so ``[a#X, b, a#Y]`` came out ``a#X, a#Y, b`` and the budget, which
+    drops from the end, could drop ``b`` while keeping lower-ranked ``a#Y``.
+    Entries of one file keep their relative order, so the preamble stays on
+    that file's highest-ranked slice.
+    """
+    rank: dict[str, int] = {}
+    for index, pick in enumerate(picks):
+        for key in (pick, aliases.get(pick), _whole_file_ref(pick)):
+            if key in result and key not in rank:
+                rank[key] = index
+                break
+    last = len(picks)
+    return dict(sorted(result.items(), key=lambda kv: rank.get(kv[0], last)))
+
+
+def _is_shared_ref(ref: str, banks) -> bool:
+    """Does *ref* name a file in a shared (other people's) bank?"""
+    if not banks:
+        return False
+    resolved = resolve_bank_ref(ref, banks)
+    return resolved is not None and resolved[0].is_shared
 
 
 def _apply_memory_budget(
@@ -742,9 +792,6 @@ def _apply_memory_budget(
     to its file (``_memory_pointer``), added to *pointers*, so the best match
     still reaches the model as a path to Read. ``budget_bytes <= 0`` disables
     the budget. Returns ``(kept, dropped_keys)``.
-
-    Before this, router picks had no cap at all: over 2026-10-13 → 10-20, 21
-    prompts got more than 100 KB and one got 708,504 bytes.
     """
     if budget_bytes <= 0 or not memory_content:
         return memory_content, []
@@ -769,8 +816,9 @@ def _apply_memory_budget(
                 if pointers is not None and key not in pointers:
                     pointers.append(key)
             else:
-                # Nothing to point at (the file vanished): drop it alone; it
-                # displaced nothing, so the entries below it still compete.
+                # Nothing to point at (the file vanished, or it is a shared
+                # bank's): drop it alone; it displaced nothing, so the entries
+                # below it still compete.
                 dropped.append(key)
             continue
         overflowed = True
@@ -788,7 +836,13 @@ def _apply_memory_budget(
 def _budget_pointer(
     memory_dir: Path, key: str, size: int, budget_bytes: int, banks
 ) -> str | None:
-    """A pointer for the top entry that alone exceeds the budget, or None."""
+    """A pointer for the top entry that alone exceeds the budget, or None.
+
+    None for a shared-bank file: see the ``WHOLE_FILE_DROPPED`` branch of
+    ``_load_memory_content`` for why a pointer cannot help there.
+    """
+    if _is_shared_ref(key, banks):
+        return None
     path = _memory_path_for(key, memory_dir, banks)
     if path is None:
         return None
@@ -1139,9 +1193,9 @@ def _section_attribution(
 ) -> tuple[dict[str, list[str]], dict[str, int]]:
     """Attribute injected memory to ``(sections_by_file, bytes_by_file)``.
 
-    ``memory_content`` is keyed by the *raw pick*, so ``"dev.md"`` and
-    ``"dev.md#Testing"`` are different keys for the same file. Both
-    returned maps are keyed by the bare filename instead:
+    ``memory_content`` is keyed per entry (``"dev.md"`` for a whole file,
+    ``"dev.md#Testing"`` for a section), so one file can have several keys.
+    Both returned maps are keyed by the bare filename instead:
 
     * ``sections_by_file`` — the H2 names loaded from that file, in pick
       order. **An empty list means the whole file was injected**, which
@@ -1847,7 +1901,11 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
     # Picks dropped for naming no real heading are a decision, not a failure:
     # the router did rank, and answering it with recency-ranked files would
     # inject exactly the unrelated bulk the drop exists to avoid.
-    mem_anchor_dropped = bool(memory_report.dropped_anchors) and not memory_content
+    mem_anchor_dropped = (
+        bool(memory_report.dropped_anchors)
+        and not memory_report.missing
+        and not memory_content
+    )
     if (
         not memory_content and not router_abstained and not mem_on_cooldown
         and not mem_anchor_dropped
@@ -1863,6 +1921,7 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
         memory_content = _read_top_memory_files(
             memory_dir, exclude=on_cooldown,
             max_bytes=cfg.memory_budget_bytes or None,
+            whole_file_max_bytes=cfg.whole_file_max_bytes,
         )
         if memory_content:
             used_fallback = True

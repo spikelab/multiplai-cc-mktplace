@@ -22,9 +22,8 @@ Two things a section pick must not lose, both of which it used to:
   instructions like ``> **Load core-voice.md first.**`` and
   ``Boundaries — route elsewhere:`` routing prose live. No section slice
   contains it, so :func:`preamble` exists to let the caller prepend it once
-  per file. Without that, a section pick returns strictly less than the
-  whole file would have, which falsifies the only safety claim this feature
-  makes.
+  per file. Without that, a section pick silently loses the file's date stamp
+  and its cross-file load instructions.
 * **A repeated H2's later bodies** — see :func:`extract_section`.
 """
 
@@ -96,7 +95,7 @@ def h2_names(text: str) -> list[str]:
     Catalog generation glosses this exact list and the router picks from
     it, so extraction MUST use the same parser ``extract_section`` matches
     with — an anchor name produced by a second, subtly different parser is
-    a permanent silent full-file fallback. Both now call :func:`_h2_spans`.
+    an anchor that never loads. Both now call :func:`_h2_spans`.
 
     De-duplication is case-insensitive on the trimmed text, keeping the
     first spelling: a repeated header is one addressable section whose body
@@ -225,8 +224,13 @@ _GLOSS_SEPARATOR_RE = re.compile(r"\s+[—–-]\s+|:\s+")
 
 
 def _tokens(text: str) -> list[str]:
-    """Lower-cased alphanumeric words: case and punctuation do not count."""
-    return re.sub(r"[^0-9a-z]+", " ", text.casefold()).split()
+    """Case-folded words (any script): case and punctuation do not count."""
+    return re.findall(r"[^\W_]+", text.casefold())
+
+
+def _numbers(tokens) -> list[str]:
+    """The tokens holding a digit: ``Phase 1`` and ``Phase 2`` differ here."""
+    return [t for t in tokens if any(c.isdigit() for c in t)]
 
 
 def _unique_best(scored: list[tuple[float, str]]) -> str | None:
@@ -247,9 +251,11 @@ def resolve_section_name(text: str, fragment: str) -> str | None:
     the real header in a few recurring ways, all seen in the logs, and each is
     tried in this order:
 
-    1. Exact, ignoring case, whitespace and punctuation.
+    1. Exact ignoring case and surrounding whitespace, then exact ignoring
+       punctuation too.
     2. Close spelling: the most similar header at or above
-       :data:`SECTION_MATCH_MIN_RATIO` (``IAM`` for ``IAP``).
+       :data:`SECTION_MATCH_MIN_RATIO` (``IAM`` for ``IAP``), never one whose
+       numbers differ (``Phase 1`` is not ``Phase 2``).
     3. Gloss appended: the fragment cut at a dash or colon separator,
        longest first, then steps 1-2 on each cut
        (``Distribution — Release chain, tags…`` → ``Distribution``).
@@ -267,6 +273,10 @@ def resolve_section_name(text: str, fragment: str) -> str | None:
     by_tokens = [(tuple(_tokens(n)), n) for n in names]
 
     def exact_or_close(candidate: str) -> str | None:
+        plain = candidate.strip().casefold()
+        for name in names:
+            if name.strip().casefold() == plain:
+                return name
         want = tuple(_tokens(candidate))
         if not want:
             return None
@@ -276,6 +286,8 @@ def resolve_section_name(text: str, fragment: str) -> str | None:
         joined = " ".join(want)
         scored = []
         for toks, name in by_tokens:
+            if _numbers(toks) != _numbers(want):
+                continue
             ratio = difflib.SequenceMatcher(None, " ".join(toks), joined).ratio()
             if ratio >= SECTION_MATCH_MIN_RATIO:
                 scored.append((ratio, name))

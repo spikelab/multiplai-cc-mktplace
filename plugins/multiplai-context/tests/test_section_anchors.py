@@ -13,7 +13,8 @@ rather than merely present:
 2. an anchor naming no real H2 is dropped — never the whole file (0.58.0)
 3. a ``file.md#Section`` pick injects only that section, and the inject
    event records it
-4. a bare ``file.md`` pick injects the whole file, recorded as ``[]``
+4. a bare ``file.md`` pick of a small file injects the whole file, recorded
+   as ``[]`` (a large file gets a pointer: test_context_injection_cap.py)
 5. ``router_prompt`` renders both the object and the legacy-string shape
 6. ``memory_lint`` flags a duplicate H2 across files, and only then
 7. a file below the anchoring thresholds gets no anchors, without error
@@ -168,7 +169,7 @@ class TestAnchorsAreGenerated:
 
 
 # ---------------------------------------------------------------------------
-# 2. A wrong anchor falls back to the full file, end to end
+# 2. A wrong anchor is dropped, never answered with the whole file
 # ---------------------------------------------------------------------------
 
 
@@ -176,11 +177,7 @@ class TestWrongAnchorIsDropped:
     def test_stale_catalog_anchor_loads_nothing(self, tmp_path):
         """A wrong anchor is dropped; the whole file is never loaded instead.
 
-        Driven from a catalog entry, through the same
-        ``_load_memory_content`` the hook calls. This reverses the original
-        fallback, which loaded the whole file on a miss: it fired 22 times in
-        10 days (2026-10), each time injecting a 54-132 KB file for one
-        section. Near misses now resolve to the nearest heading
+        Near misses resolve to the nearest heading
         (test_context_injection_cap.py); this anchor is nowhere near one.
         """
         from context_manager import _load_memory_content
@@ -211,13 +208,9 @@ class TestWrongAnchorIsDropped:
 class TestStaleAnchors:
     """Requirement: unresolvable anchors load nothing and are named.
 
-    History: the whole-file fallback once ran per *pick*, so two stale anchors
-    on one file injected that file twice (measured 2026-08-30: two
-    ``ai-agent-patterns.md`` section picks each logged 64,817 B against a
-    ~65 KB file). It then ran once per file. Since 0.58.0 it does not run at
-    all: nothing upstream checks a fragment against ``section_anchors``, so
-    catalog↔file drift arrives here unfiltered, and the safe answer to it is
-    to load nothing for that pick.
+    Nothing upstream checks a fragment against ``section_anchors``, so
+    catalog↔file drift arrives here unfiltered; the answer to it is to load
+    nothing for that pick.
     """
 
     def test_two_stale_anchors_load_nothing(self, tmp_path):
@@ -230,19 +223,6 @@ class TestStaleAnchors:
             tmp_path, ["big.md#Gone One", "big.md#Gone Two"]
         )
         assert loaded == {}
-
-    def test_attribution_records_nothing_for_dropped_anchors(self, tmp_path):
-        """A file with nothing loaded has no attribution key at all."""
-        from context_manager import _load_memory_content, _section_attribution
-
-        body = _big_doc("Alpha", "Beta", "Gamma")
-        (tmp_path / "big.md").write_text(body)
-
-        loaded = _load_memory_content(
-            tmp_path, ["big.md#Gone One", "big.md#Gone Two"]
-        )
-        sections, sizes = _section_attribution(loaded)
-        assert sections == {} and sizes == {}
 
     def test_a_stale_anchor_does_not_cost_a_good_one(self, tmp_path):
         """The good section loads alone; the stale pick is simply dropped."""
@@ -382,13 +362,12 @@ class TestStaleAnchors:
 
 
 class TestTheFallbackIsKeyedSoCooldownCanFindIt:
-    """Requirement: an absorbed pick is still stamped in the cooldown map.
+    """Requirement: a pick answered under another key is still stamped.
 
-    ``_filter_cooldown`` looks a raw pick up; ``_load_memory_content`` keys a
-    whole-file load on the bare ref. Stamping only the returned keys therefore
-    never matched the pick, so the fallback re-injected the whole file on
-    *every* turn — strictly worse than the duplicate load this change removed,
-    and unbounded in the length of the session.
+    ``_filter_cooldown`` looks a raw pick up, but ``_load_memory_content`` keys
+    a whole-file load on the bare ref and a resolved section on its real
+    heading. Stamping only the returned keys would never match such a pick,
+    so the same content would be re-injected every turn.
     """
 
     def test_a_whole_file_pick_stamps_a_stale_anchor_it_absorbed(self, tmp_path):

@@ -23,26 +23,29 @@ are the release dates recorded at the time, not derived from a tag.
   option (default 40,000 bytes). When the router picks more than fits, its
   lowest-ranked picks are dropped first; a top pick that alone is too large
   is replaced by a pointer to its file. Before, only the no-catalog fallback
-  had a cap, and one prompt received 708 KB.
+  had a cap, and one prompt received 708 KB. That fallback now uses the same
+  budget as a hard cap and skips files over `whole_file_max_bytes`.
 - Memory files larger than the new `whole_file_max_bytes` option (default
   20,000 bytes) are no longer injected whole. A pick of such a file without a
   section loads the sections the router also picked, or else a short pointer:
   the file's path, its opening lines and its section list, so Claude can Read
-  just the part it needs.
+  just the part it needs. A file in a shared memory bank gets no pointer (its
+  text stays inside the untrusted fence), so such a pick loads nothing.
 - A section pick whose name does not match a heading now loads the nearest
   heading (ignoring case and punctuation, a description pasted after the
   name, a missing qualifier, or a close spelling), and otherwise loads
   nothing. It no longer loads the whole file instead.
 - Catalog and section warnings ("Catalog skills is stale", "Memory anchor(s)
   … did not resolve") are logged once a day rather than on every prompt, and
-  again as soon as the catalog file changes. The stale-catalog warning now
+  again as soon as the catalog or memory file they are about changes. The stale-catalog warning now
   names the exact command that fixes it:
   `/multiplai-context:refresh-catalogs --only <catalog>`.
 
 ### Added
-- The `context` `inject` activity event carries `pointers` (memory files
-  injected as a pointer, kept out of `sections_by_file`) and `budget_dropped`
-  (picks dropped to hold the budget).
+- The `context` `inject` activity event carries `pointers` (memory entries,
+  whole files or sections, injected as a pointer instead of content; kept out
+  of `sections_by_file`) and `budget_dropped` (picks dropped to hold the
+  budget).
 
 ## [0.57.0] - 2026-10-16
 
