@@ -29,6 +29,25 @@ time, not derived from a tag.
   to the merge stage, which already groups findings that cite the same lines.
 
 ### Added
+- review: a review run again on the same PR or branch now says what became
+  of each finding the last round listed and nobody rejected. A new recheck
+  step, after verification, gives each one to a fresh agent with the diff of
+  the files it cites since that round (never this round's findings, and the
+  finders still see nothing of earlier rounds), which answers `resolved`,
+  `still_present`, `partially_resolved` or `cannot_verify` with lines at the
+  new head. A status other than `cannot_verify` stands only when its cited
+  lines are there; an earlier finding no agent could check, or that a stopped
+  run's resume did not recheck, is `cannot_verify`, never resolved; one a
+  finding of this round is `still-open` against is `still_present`. The
+  review lists them under "Findings from earlier rounds". Every finding
+  carries a `lineage`, the id of its first appearance, kept across rewordings
+  through `still-open` and `repeat`; a "Recurring" section names each one open
+  in three or more rounds, and the header and summary count new findings
+  apart from those still open ("2 new, 1 still open, 3 earlier resolved, 0
+  earlier cannot verify"). `findings.json` gains the optional `lineage` per
+  finding and a top-level `earlier` list (`findings.v1`, `schema_version`
+  still 1), and `checks.json` the `earlier_status_gate` results. A review of
+  a tree, or one with nothing open from before, makes no recheck call.
 - review: in `findings.json`, a finding that others were merged into lists
   their ids and claims under the new optional `absorbed` field
   (`findings.v1`, `schema_version` still 1; the schema now says additive

@@ -13,7 +13,7 @@ and the pipeline's models carry more than it allows.
 
 A finding merged into another by the merge or assess stage is not exported:
 it is gone from `state.findings`, and the finding it went into carries its
-citations. That finding's `absorbed` (optional, 0.86+) lists the id and claim
+citations. That finding's `absorbed` (optional, 0.94+) lists the id and claim
 of every finding merged into it, also through a finding merged into it in
 turn, in `state.merged` order; it is written only when there are some.
 `expected_behaviour` comes from the verifier and is written for confirmed and

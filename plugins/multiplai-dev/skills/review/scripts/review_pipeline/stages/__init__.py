@@ -1,4 +1,4 @@
-"""Stages: find → verify → merge → repeats → assess.
+"""Stages: find → verify → recheck → merge → repeats → assess.
 
 Each is `async def run_<stage>(state, ctx) -> state`. A stage returns at once
 when `state.stage` is already past it, and skips items it already has a
@@ -7,7 +7,8 @@ result for, so a resumed run repeats no finished work.
 Only `RepoTrustError`, `UsageLimitError` (a hit Claude usage limit) and
 `BudgetExceededError` escape a stage. Any other
 agent failure is logged at ERROR and turned into the conservative outcome for
-that item (no findings from that finder, `unverifiable`, an unmerged group).
+that item (no findings from that finder, `unverifiable`, `cannot_verify` for an
+earlier finding, an unmerged group).
 """
 
 from __future__ import annotations
