@@ -85,6 +85,9 @@ def _citation(c: Citation) -> dict:
 def _finding(f: Finding, status: str, reason: str | None, expected: str | None) -> dict:
     # `paths` only when the finding lies on a mapped path: never null, never [].
     on_paths = {"paths": list(f.paths)} if f.paths else {}
+    # `defect_class` and `other_locations` (0.95+) only when the finder named them.
+    kind = {"defect_class": f.defect_class} if f.defect_class else {}
+    elsewhere = {"other_locations": list(f.other_locations)} if f.other_locations else {}
     return {
         "id": f.id,
         "severity": f.severity,
@@ -98,6 +101,8 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
         "verdict_reason": reason,
         "expected_behaviour": expected or None,
         **on_paths,
+        **kind,
+        **elsewhere,
     }
 
 

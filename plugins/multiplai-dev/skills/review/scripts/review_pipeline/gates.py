@@ -25,7 +25,7 @@ _REASON_KINDS = (
     "quote not at cited lines", "path not at head", "empty quote", "is not a changed file",
     "unknown severity", "no citations", "first citation is a web source", "confirmed without citing",
     "none of its citations reproduce", "dependency not in manifest", "first citation is a dependency",
-    "path not at commit", "status without citing",
+    "path not at commit", "status without citing", "not a path:line location", "line past the end of the file",
 )
 
 
@@ -149,6 +149,50 @@ def earlier_status_gate(target: TargetInfo, status: EarlierStatus) -> GateResult
         reasons.append(f"{citation.path}:{citation.line_start}: {result.reason}")
     return GateResult(passed=False, action="downgrade",
                       reason=f"{status.status}: none of its citations reproduce (" + "; ".join(reasons) + ")")
+
+
+# --- other locations ----------------------------------------------------------
+
+# `path:line` or `path:start-end`; the path is everything before the last colon-number part.
+_LOCATION_RE = re.compile(r"^(?P<path>.+?):(?P<start>\d+)(?:-(?P<end>\d+))?$")
+
+
+def locations_gate(target: TargetInfo, location: str) -> GateResult:
+    """One of a finding's `other_locations` names a file at head and lines inside it.
+
+    A web URL, a dependency path or a location without a line is not at head,
+    so it fails too. On failure the caller drops the location and keeps the finding.
+    """
+    m = _LOCATION_RE.match(location.strip())
+    if m is None:
+        return GateResult(passed=False, reason=f"{location!r} is not a path:line location", action="drop")
+    path, start = m.group("path"), int(m.group("start"))
+    end = int(m.group("end") or start)
+    if start < 1 or end < start:
+        return GateResult(passed=False, reason=f"{location!r} is not a path:line location", action="drop")
+    text = file_at_head(target, path)
+    if text is None:
+        return GateResult(passed=False, reason=f"{location!r}: path not at head", action="drop")
+    # Split on \n as git numbers lines; the empty string after a final newline is not a line.
+    count = len(text.split("\n")) - (1 if text.endswith("\n") else 0)
+    if end > count:
+        return GateResult(passed=False, action="drop",
+                          reason=f"{location!r}: line past the end of the file ({count} lines)")
+    return GateResult(passed=True)
+
+
+def gated_locations(target: TargetInfo, finding: Finding) -> tuple[Finding, list[str]]:
+    """*finding* with each location `locations_gate` fails dropped, and one reason per dropped location."""
+    kept, dropped = [], []
+    for location in finding.other_locations:
+        result = locations_gate(target, location)
+        if result.passed:
+            kept.append(location)
+        else:
+            dropped.append(result.reason)
+    if not dropped:
+        return finding, []
+    return finding.model_copy(update={"other_locations": kept}), dropped
 
 
 # --- needs --------------------------------------------------------------------

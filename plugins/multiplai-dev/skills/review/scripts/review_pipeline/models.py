@@ -50,6 +50,20 @@ def lower_severity(severity: str) -> str:
     return SEVERITIES[min(i + 1, len(SEVERITIES) - 1)]
 
 
+def locations_list(value) -> list[str]:
+    """A finder's `other_locations` as a list of stripped strings: None is [], one string is a list of one.
+
+    A parse failure would lose the whole finding, so a malformed value is read
+    as best it can be; `gates.locations_gate` judges each location afterwards.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    out = [(v if isinstance(v, str) else str(v)).strip() for v in value]
+    return [v for v in out if v]
+
+
 class _Model(BaseModel):
     # Models answer in JSON; an unknown key is ignored rather than failing the
     # whole parse. Export builds the v1 dicts field by field, so nothing
@@ -99,6 +113,23 @@ class Finding(_Model):
     # The ids of the mapped paths the finding lies on (`paths_io.assign_paths`, after merge), in
     # `paths.json` order; None when it lies on none or the review mapped no path.
     paths: list[str] | None = None
+    # The kind of defect in a few words, and every other place with the same
+    # defect as `path:line` or `path:start-end`, as the finder named them
+    # (buildme's `ReviewFinding` names). `gates.locations_gate` drops a
+    # location that is not at head; merge takes the union of a set's locations.
+    defect_class: str = ""
+    other_locations: list[str] = Field(default_factory=list)
+
+    @field_validator("defect_class", mode="before")
+    @classmethod
+    def _class_text(cls, value):
+        return "" if value is None else str(value).strip()
+
+    @field_validator("other_locations", mode="before")
+    @classmethod
+    def _locations_list(cls, value):
+        """One location written as a string, or a location as an object, still parses."""
+        return locations_list(value)
 
     @model_validator(mode="after")
     def _compute_id(self) -> "Finding":
@@ -565,6 +596,18 @@ class ConvertItem(_Model):
     claim: str
     failure_scenario: str = ""
     citations: list[Citation] = Field(default_factory=list)
+    defect_class: str = ""
+    other_locations: list[str] = Field(default_factory=list)
+
+    @field_validator("defect_class", mode="before")
+    @classmethod
+    def _class_text(cls, value):
+        return "" if value is None else str(value).strip()
+
+    @field_validator("other_locations", mode="before")
+    @classmethod
+    def _locations_list(cls, value):
+        return locations_list(value)
 
 
 class ConvertOutput(_Model):
