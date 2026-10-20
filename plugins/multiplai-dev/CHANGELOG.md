@@ -15,6 +15,31 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.85.4] - 2026-10-20
+
+### Fixed
+- buildme-findings: the review step now runs `/multiplai-dev:review` with
+  `--fetch`, so a PR whose base moved on GitHub since the last fetch is
+  reviewed instead of refused.
+- buildme epic mode: when a child's review or the post of its findings cannot
+  start (for example `uv` is not on PATH), that child is `unknown` and the
+  other children go on. The epic run no longer stops with a traceback, and
+  the next run starts the review, or posts the findings, again. Before, this
+  failed every later run.
+- buildme epic mode: a child whose earlier review is reused is judged on that
+  review's own findings, read from its kept round, rather than on the latest
+  run in the same review folder, which may be for another head.
+- buildme epic mode: a run no longer exits `0` while a child's PR is at a head
+  no review finished on (its review was stopped, or the PR got a new head
+  after a clean review). The run names that child on stderr and exits `1`,
+  or `3` when it also prints `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; the next
+  run reviews the new head.
+
+### Changed
+- buildme: SKILL.md says what happens when another child depends on a child
+  left `unknown` by its review: the same run reads its PR again and waits on
+  it, so the run ends with `EPIC:MERGE_WAITING`.
+
 ## [0.85.3] - 2026-10-20
 
 ### Fixed

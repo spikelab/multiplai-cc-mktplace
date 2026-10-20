@@ -99,7 +99,8 @@ MEDIUM earns one (`epic.round_worth: breaks`: the verifier rated it
 `breaks-users`/`breaks-business` or did not rate it; `any`: every one);
 `final_fix` when only Code MEDIUMs are left and none earns a round, or at
 the cap; `park` for an open HIGH at the cap. A park, or any other failure,
-parks the child. A review counts against `epic.max_parallel` and
+parks the child, except a failed read (`READ_FAILED`) and a review, resume or
+post that cannot start, which leave it `unknown`. A review counts against `epic.max_parallel` and
 `epic.max_usd` like a build. `final_fix` runs one fixer round with
 `--no-review` and `--max-rounds <rounds in its findings state, finished or
 not, + 1>` (kept on a relaunch);
@@ -132,9 +133,13 @@ stopped by SIGKILL, SIGTERM or SIGHUP (a negative exit, or 137, 143 or 129,
 `fix.stopped`); one whose log holds `FINDINGS:FAILED` parks instead. A post
 or review stopped the same way (`uv run` reports 128 + signal) gets an
 `interrupted` result, and the next run posts or reviews again. `FINDINGS:FAILED`, another failing exit, or a failed post parks the
-child. A PR whose last review left no blockers is waited on as a
-dependency's is (`Coordinator._waited_on`), so every run with one open exits
-3 with `EPIC:MERGE_WAITING` (1 beside a failed or `unknown` child when no child waits on a dependency's PR). Under `epic.merge: auto` the merge step runs
+child. A PR whose review at its current head left no blockers is waited on
+as a dependency's is (`Coordinator._waited_on`, `_passed`), so every run with
+one open exits 3 with `EPIC:MERGE_WAITING` (1 beside a failed or `unknown`
+child when no child waits on a dependency's PR). One whose current head no
+review finished on is waited on only as a dependency's, is named on stderr,
+and makes the run exit 1 when it prints neither `EPIC:MERGE_WAITING` nor
+`EPIC:BUDGET` (`_unreviewed`). Under `epic.merge: auto` the merge step runs
 first (PRs E1 and E2, `epic/merge.py`, `Coordinator._merge`), under one
 `asyncio.Lock` per repository and on the worktree root: a merge commit made
 and not pushed, holding only what `merge.merges_onto` accepts, is checked (`stop_record.others_work`), tested and pushed; a

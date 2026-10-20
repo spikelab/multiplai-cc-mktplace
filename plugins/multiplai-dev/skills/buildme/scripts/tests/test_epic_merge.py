@@ -648,6 +648,38 @@ def test_a_stopped_review_of_a_new_head_is_not_waited_on_as_passed(tmp_path, mon
     assert e.child_status("a")["status"] == "built" and len(e.reviews("a")) == 2
 
 
+def test_a_pr_head_no_review_finished_on_never_ends_the_run_with_0(tmp_path, monkeypatch, capsys):
+    """Both PRs' reviews were clean; each then gets a new head, whose review is
+    killed (C.S3). No PR passed review at its head, so nothing is waited on,
+    yet both still need a review: the run exits 1 naming each on stderr, and
+    the next run reviews them."""
+    from .test_epic_review import Epic
+
+    e = Epic(tmp_path, monkeypatch, reviews={str(pr_number(ch)): [{}, {"exit": 137}] for ch in ("e-a", "e-b")})
+    assert e.run() == 3
+    for ch in ("e-a", "e-b"):
+        e.fakes.set_head(ch, "1" * 40)
+    capsys.readouterr()
+    assert e.run() == 1 and merge_waiting() is None
+    err = capsys.readouterr().err
+    for cid in ("a", "b"):
+        assert e.child_status(cid)["status"] == "built"
+        assert (f"EPIC: child {cid} built: its PR's head 111111111111 has no finished review; "
+                f"the next run reviews it") in err
+
+
+def test_a_pr_head_with_a_finished_review_is_never_named_as_unreviewed(tmp_path, monkeypatch, capsys):
+    """Each PR's review at its head left a blocker, and its fixer exited 0
+    without a new head: the PRs have not passed review, yet their heads have a
+    finished review, so the run names neither as having none."""
+    from .test_epic_review import Epic, high
+
+    e = Epic(tmp_path, monkeypatch, reviews={str(pr_number(ch)): [{"findings": [high()]}] for ch in ("e-a", "e-b")})
+    assert e.run() == 0 and merge_waiting() is None
+    assert "has no finished review" not in capsys.readouterr().err
+    assert e.child_status("a")["status"] == e.child_status("b")["status"] == "built"
+
+
 def test_40_1_parks_a_worktree_behind_the_reviewed_head_naming_what_to_run(tmp_path, monkeypatch):
     """40.1 (E.S25): the review passed at a head pushed from another clone,
     which <W> lacks; its HEAD, older, is on `origin/<branch>`. Parks, nothing
