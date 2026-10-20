@@ -445,8 +445,10 @@ MODEL_STAGES: tuple[str, ...] = ("spec", "agent", "review")
 # calls are named for what they do; `review_fix` is the fix agent the review
 # loop runs (it charges the budget as `implementer`); and
 # `integration_fix_escalated` is the last integration-fix attempt, which has
-# always run on the review model. A stage's `[buildme.<stage>] EFFORT=` and
-# `efforts.<stage>` apply to every step in it.
+# always run on the review model, and `review_fix_escalated` is the review
+# loop's last fix, which questions the block's approach on the same model. A
+# stage's `[buildme.<stage>] EFFORT=` and `efforts.<stage>` apply to every
+# step in it.
 STEP_STAGES: dict[str, str] = {
     "spec_artifact": "spec",
     "rubric": "spec",
@@ -474,6 +476,7 @@ STEP_STAGES: dict[str, str] = {
     "test_quality_audit": "review",
     "plan_review": "review",
     "integration_fix_escalated": "review",
+    "review_fix_escalated": "review",
     "findings_triage": "review",
     "findings_self_check": "review",
 }

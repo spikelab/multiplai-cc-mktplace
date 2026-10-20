@@ -292,6 +292,33 @@ blocks were already consistent" is a valid and useful result.
 """
 
 
+# Put before the brief of the review loop's last fix, after earlier fixes did
+# not pass review (`tdd_engine._run_integration_and_review`). A template: its
+# one placeholder is `{findings}`, every finding of every round of the block
+# with its id and what each round said about it. `gates.parse_recurring` puts
+# the RECURRING: slot in the round record.
+REVIEW_FIX_ESCALATION = """\
+## Last review fix for this block: question the approach
+
+The earlier review fixes of this block did not pass the review. These are
+all the findings its review rounds have raised, each with its id and what
+each round said about it:
+
+{findings}
+
+Read them together before you edit anything. When several of them share a
+cause, fix the cause. Question the block's approach, not only the last edit:
+if the way the block is built keeps producing these findings, change the way
+it is built, keeping to the spec and the tests.
+
+End your report with a `RECURRING:` line naming the ids of the findings that
+share a cause, and the cause, or `none` when no two of them share one. For
+example:
+
+RECURRING: B01-R1-F1, B01-R2-F1 — add() never validates its inputs
+"""
+
+
 # Appended to every review-fix brief (`tdd_engine._review_fix_brief`): the
 # failing-score fix and the fix on a block that passed. Not a template — it
 # carries no placeholders and is concatenated, so it never meets `.format()`.

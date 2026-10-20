@@ -38,6 +38,7 @@ from .gates import (
     final_verification,
     parse_diff_paths,
     parse_implementation_note,
+    parse_recurring,
     parse_searched,
     red_expected_note,
     red_gate,
@@ -72,7 +73,7 @@ from .models import (
 from .mutation import changed_source_files, mutation_applies, render_report, run_mutation, score_text
 from .narrow_tests import agent_test_command, narrow_test_command
 from .progress import ProgressWriter
-from .prompts.implementation import REVIEW_FIX_SELF_CHECK
+from .prompts.implementation import REVIEW_FIX_ESCALATION, REVIEW_FIX_SELF_CHECK
 from .prompts.review import (
     ADJUDICATION_ROUND_MEMORY,
     ADJUDICATION_SCOPE_FIELD,
@@ -1776,6 +1777,7 @@ async def _run_integration_and_review(
     review_passed = False
     fixes_run = fixes_completed = 0
     round_path: Path | None = None
+    recurring: str | None = None
     for iteration in range(MAX_REVIEW_ITERATIONS):
         iter_gate = review_iteration_gate(iteration, MAX_REVIEW_ITERATIONS)
         if not iter_gate.passed:
@@ -1865,20 +1867,36 @@ async def _run_integration_and_review(
             fix_brief += f"\n\n## Adjudicated findings (accepted — fix these)\n{accepted_text}"
         if any(f.other_locations for f in block.review_scores.findings):
             fix_brief += "\n\nFix every listed location, and cover each one with a test."
-        review_rounds.update_round(round_path, fix_brief=_review_fix_description(fix_brief))
+        # The last fix (its review is the loop's last) questions the approach,
+        # on the review model, with every finding of every round in front of
+        # it — as the integration gate's last fix does. Counted per process.
+        escalated = iteration == MAX_REVIEW_ITERATIONS - 2
+        fix_step = "review_fix_escalated" if escalated else "review_fix"
+        fix_model = config.model_for(fix_step)
+        description = _review_fix_description(fix_brief)
+        if escalated:
+            progress.log_agent("ReviewFix", block.name, "ESCALATED — questioning the approach")
+            description = (REVIEW_FIX_ESCALATION.format(
+                findings=review_rounds.history_text(config.change_dir, block.number))
+                + "\n" + description)
+        review_rounds.update_round(round_path, fix_brief=description)
         context = assemble_context(block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None)
         fix = await run_implementer(
             block_name=block.name,
-            block_description=_review_fix_description(fix_brief),
+            block_description=description,
             failing_tests=fix_brief,
             context_bundle=context,
             test_command=config.test_command,
             prompt_style=config.implementer_prompt_style,
-            model=config.model_for("review_fix"),
-            effort=config.effort_for("review_fix"),
+            model=fix_model,
+            effort=config.effort_for(fix_step),
             cwd=str(config.project_dir),
         )
-        _record_fix(round_path, block, fix)
+        if escalated:
+            recurring = parse_recurring(fix.output or "")
+            _record_fix(round_path, block, fix, escalated=True, recurring=recurring)
+        else:
+            _record_fix(round_path, block, fix)
         fixes_run += 1
         fixes_completed += bool(fix.success)
         if not fix.success:
@@ -1925,6 +1943,7 @@ async def _run_integration_and_review(
             log.error("FAIL block=%d name=%s phase=REVIEW reason=review-exhausted "
                       "after %d iterations", block.number, block.name, MAX_REVIEW_ITERATIONS)
             progress.log_block(block.number, total, block.name, "FAILED — review exhausted")
+            progress.log_diagnosis(block.name, _review_exhausted_diagnosis(config, block, recurring))
             print(f"BLOCK:{block.number}/{total}:{block.name}:REVIEW_EXHAUSTED")
             # Every review fix errored: the findings were never worked on.
             block.resumable = fixes_run > 0 and fixes_completed == 0
@@ -2004,6 +2023,20 @@ def _scope_diff(config: BuildConfig, last: dict) -> str | None:
     if len(diff) > MAX_REVIEW_DIFF_CHARS:
         diff = diff[:MAX_REVIEW_DIFF_CHARS] + "\n... (diff truncated)"
     return diff
+
+
+def _review_exhausted_diagnosis(config: BuildConfig, block: BlockInfo,
+                                recurring: str | None) -> str:
+    """Why the review loop ran out: the findings still present or partly
+    resolved in two or more round records, and the last fix's RECURRING:
+    answer when it gave one."""
+    ids = review_rounds.recurring_ids(config.change_dir, block.number)
+    lines = [f"Review exhausted after {MAX_REVIEW_ITERATIONS} iterations.",
+             "Findings still present or partly resolved in two or more rounds: "
+             + (", ".join(ids) if ids else "none")]
+    if recurring is not None:
+        lines.append(f"RECURRING (from the last fix): {recurring}")
+    return "\n".join(lines)
 
 
 def _round_of(round_path: Path | None, last: dict | None) -> int:

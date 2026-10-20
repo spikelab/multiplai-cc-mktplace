@@ -749,7 +749,7 @@ TEST_CHANGE_MARKER = "TEST CHANGE REQUIRED:"
 # Every REQUIRED slot label an agent report can carry — used as the stop
 # boundary when reading the free-text SURPRISES and SEARCHED slots, together
 # with `_TEST_CHANGE_LINE` below.
-_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|RED_EXPECTED|SURPRISES|SPEC_IMPACT|SEARCHED"
+_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|RED_EXPECTED|SURPRISES|SPEC_IMPACT|SEARCHED|RECURRING"
 
 # The colon after a slot label is MANDATORY — every legitimate slot form
 # carries one (`SURPRISES: x`, `- **SURPRISES:** x`, `**SURPRISES**: x`).
@@ -886,6 +886,25 @@ def parse_searched(output: str) -> list[str] | None:
         if text:
             entries.append(text)
     return entries
+
+
+# --- Escalated review fix: findings that share a cause (RECURRING: slot) ---
+
+# The review loop's last fix (`prompts.implementation.REVIEW_FIX_ESCALATION`)
+# ends with `RECURRING: <ids that share a cause, and the cause> | none`. Same
+# label grammar as SEARCHED; the slot is the rest of its line.
+_RECURRING_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?RECURRING" + _SLOT_COLON + r"[ \t]*(.*?)[ \t]*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def parse_recurring(output: str) -> str | None:
+    """The escalated fix's `RECURRING:` answer (``none`` included), or None
+    when its report has no such slot. The last slot wins. Recorded, not
+    gated, like `SEARCHED:`."""
+    matches = [m.strip("`").strip() for m in _RECURRING_RE.findall(output or "")]
+    return matches[-1] if matches and matches[-1] else None
 
 
 # --- Test writer: which tests must fail (RED_EXPECTED: slot) ---

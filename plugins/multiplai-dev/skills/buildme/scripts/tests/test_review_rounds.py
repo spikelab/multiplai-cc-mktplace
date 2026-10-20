@@ -1064,6 +1064,12 @@ def _ids(entries) -> list[str]:
     return [e["finding_id"] for e in entries]
 
 
+def _brief(record: dict) -> str:
+    """A round's fix brief without the escalation's finding history before
+    it (round 2's fix is the loop's last, so it is escalated)."""
+    return "Fix review issues:" + record["fix_brief"].split("Fix review issues:", 1)[1]
+
+
 class TestRoundMemory:
     @pytest.mark.asyncio
     async def test_round_one_is_reviewed_and_judged_as_today(self, project):
@@ -1114,15 +1120,15 @@ class TestRoundMemory:
             p, _assess(_failing([_finding("Major", NEW)]), ("B01-R1-F1", "resolved")),
             FindingAdjudication())
         assert _ids(rounds[2]["open_findings"]) == ["B01-R2-F1"]
-        assert OFF_BY_ONE not in rounds[2]["fix_brief"]
-        assert NEW in rounds[2]["fix_brief"]
+        assert OFF_BY_ONE not in _brief(rounds[2])
+        assert NEW in _brief(rounds[2])
 
     @pytest.mark.asyncio
     async def test_a_finding_still_present_is_in_the_brief_with_its_status(self, project):
         p = project
         _, rounds, *_ = await _two_rounds(
             p, _assess(_failing(), ("B01-R1-F1", "still_present")), FindingAdjudication())
-        brief = rounds[2]["fix_brief"]
+        brief = _brief(rounds[2])
         section = brief.split("## Findings still open from earlier rounds", 1)[1]
         assert "B01-R1-F1" in section and OFF_BY_ONE in section and "still_present" in section
 
@@ -1137,7 +1143,7 @@ class TestRoundMemory:
         assert rounds[2]["accepted"][0]["duplicate_of"] == "B01-R1-F1"
         assert _ids(rounds[2]["open_findings"]) == ["B01-R1-F1"]
         assert "line 2 adds 1" in rounds[2]["open_findings"][0]["evidence"]
-        adjudicated = rounds[2]["fix_brief"].split("## Adjudicated findings", 1)
+        adjudicated = _brief(rounds[2]).split("## Adjudicated findings", 1)
         assert len(adjudicated) == 1 or "one too many" not in adjudicated[1]
 
     @pytest.mark.asyncio
@@ -1150,7 +1156,7 @@ class TestRoundMemory:
         assert entry["duplicate_of"] == "B01-R1-X1"
         assert entry["earlier_judge_reason"] == "the spec names them"
         assert "B01-R2-F1" in _ids(rounds[2]["open_findings"])
-        assert "the names are still unclear" in rounds[2]["fix_brief"]
+        assert "the names are still unclear" in _brief(rounds[2])
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("duplicate_of", [None, "B07-R9-F9"], ids=["missing", "unknown"])
@@ -1161,7 +1167,7 @@ class TestRoundMemory:
             _verdicts(FindingVerdict(index=0, accepted=True, duplicate_of=duplicate_of)))
         assert rounds[2]["accepted"][0]["duplicate_of"] is None
         assert "B01-R2-F1" in _ids(rounds[2]["open_findings"])
-        assert NEW in rounds[2]["fix_brief"]
+        assert NEW in _brief(rounds[2])
 
     @pytest.mark.asyncio
     async def test_a_finding_outside_the_fix_scope_is_recorded_not_fixed(self, project):
@@ -1171,7 +1177,7 @@ class TestRoundMemory:
             _verdicts(FindingVerdict(index=0, accepted=True, in_fix_scope=False)))
         assert [f["claim"] for f in rounds[2]["outside_fix_scope"]] == [NEW]
         assert "B01-R2-F1" not in _ids(rounds[2]["open_findings"])
-        assert NEW not in rounds[2]["fix_brief"]
+        assert NEW not in _brief(rounds[2])
         unfixed = _unfixed(p)
         assert NEW in unfixed and "outside the last fix's scope (round 2)" in unfixed
 
@@ -1183,7 +1189,7 @@ class TestRoundMemory:
             _verdicts(FindingVerdict(index=0, accepted=True, in_fix_scope=False)))
         assert rounds[2]["outside_fix_scope"] == []
         assert "B01-R2-F1" in _ids(rounds[2]["open_findings"])
-        assert NEW in rounds[2]["fix_brief"]
+        assert NEW in _brief(rounds[2])
         assert "outside the last fix's scope" not in _unfixed(p)
 
     @pytest.mark.asyncio
@@ -1193,7 +1199,7 @@ class TestRoundMemory:
             p, _failing([_finding("Minor", NEW)]),
             _verdicts(FindingVerdict(index=0, accepted=True)))
         assert rounds[2]["outside_fix_scope"] == []
-        assert NEW in rounds[2]["fix_brief"]
+        assert NEW in _brief(rounds[2])
 
     @pytest.mark.asyncio
     async def test_an_adjudicator_error_in_round_two_keeps_everything_open(self, project):
@@ -1212,7 +1218,7 @@ class TestRoundMemory:
         entry = rounds[2]["accepted"][0]
         assert entry["finding_id"] == "B01-R2-F1"
         assert entry["duplicate_of"] is None and entry["in_fix_scope"] is None
-        assert NEW in rounds[2]["fix_brief"]
+        assert NEW in _brief(rounds[2])
 
     @pytest.mark.asyncio
     async def test_the_fix_on_pass_works_on_the_open_set_not_the_out_of_scope(self, project):
@@ -1264,3 +1270,97 @@ class TestDefectClass:
         brief = fix.await_args.kwargs["block_description"]
         assert "also at: app.py:9" in brief
         assert "Fix every listed location, and cover each one with a test." in brief
+
+
+# B3: the last fix questions the approach, and an exhausted loop says which
+# findings kept coming back.
+
+from build_pipeline.gates import parse_recurring  # noqa: E402
+from build_pipeline.prompts.implementation import REVIEW_FIX_ESCALATION  # noqa: E402
+
+ESCALATION_HEAD = REVIEW_FIX_ESCALATION.split("\n", 1)[0]
+RECURRING_REPORT = ("fixed\nRECURRING: B01-R1-F1, B01-R2-F1 — add() never checks its inputs\n"
+                    "SEARCHED:\n- add(): both branches\n")
+
+
+async def _three_failing_rounds(p, reports=("fixed", RECURRING_REPORT)):
+    """Three failing reviews, two fixes. Round 2 keeps B01-R1-F1 and adds
+    one; round 3 keeps both. Returns (records, fix mock)."""
+    p.config.review_model = "claude-haiku-4-5"
+    reviews = [
+        _failing([_finding()]),
+        _assess(_failing([_finding("Major", NEW)]), ("B01-R1-F1", "still_present")),
+        _assess(_failing(), ("B01-R1-F1", "still_present"), ("B01-R2-F1", "partially_resolved")),
+    ]
+    outputs = iter(reports)
+
+    def fixer(**kwargs):
+        (p.dir / "app.py").write_text(FIXED if kwargs["block_description"].startswith(
+            "Fix review") else "def add(a, b):\n    return b + a\n")
+        return AgentResult(success=True, output=next(outputs))
+
+    stack, _, fix, _ = _memory_engine(reviews, fixer, [FindingAdjudication()] * 3)
+    with stack:
+        assert not await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+    return _rounds(p), fix
+
+
+class TestEscalation:
+    @pytest.mark.asyncio
+    async def test_the_last_fix_runs_escalated_on_the_review_model(self, project):
+        p = project
+        rounds, fix = await _three_failing_rounds(p)
+        first, last = (c.kwargs for c in fix.await_args_list)
+        assert first["model"] == p.config.model_for("review_fix")
+        assert last["model"] == p.config.model_for("review_fix_escalated") == "claude-haiku-4-5"
+        assert last["effort"] == p.config.effort_for("review_fix_escalated")
+        assert not first["block_description"].startswith(ESCALATION_HEAD)
+        assert last["block_description"].startswith(ESCALATION_HEAD)
+
+    @pytest.mark.asyncio
+    async def test_the_escalation_lists_every_finding_with_its_history(self, project):
+        p = project
+        _, fix = await _three_failing_rounds(p)
+        brief = fix.await_args_list[1].kwargs["block_description"]
+        history = brief.split("Fix review issues:", 1)[0]
+        assert f"B01-R1-F1 [Major] {OFF_BY_ONE}" in history
+        assert "round 1: raised; round 2: still_present" in history
+        assert f"B01-R2-F1 [Major] {NEW}" in history
+        assert "RECURRING:" in history and "question" in history.lower()
+        # The ordinary brief still follows, self-check included.
+        assert "SEARCHED:" in brief
+
+    @pytest.mark.asyncio
+    async def test_the_round_record_marks_the_escalated_fix(self, project):
+        p = project
+        rounds, _ = await _three_failing_rounds(p)
+        assert "escalated" not in rounds[1]["fix"]
+        assert rounds[2]["fix"]["escalated"] is True
+        assert rounds[2]["fix"]["recurring"] == "B01-R1-F1, B01-R2-F1 — add() never checks its inputs"
+        assert rounds[2]["fix"]["searched"] == ["add(): both branches"]
+        assert rounds[2]["fix_brief"].startswith(ESCALATION_HEAD)
+
+    @pytest.mark.asyncio
+    async def test_a_missing_recurring_slot_is_null(self, project):
+        p = project
+        rounds, _ = await _three_failing_rounds(p, reports=("fixed", "fixed, no slot"))
+        assert rounds[2]["fix"]["escalated"] is True and rounds[2]["fix"]["recurring"] is None
+
+    @pytest.mark.asyncio
+    async def test_exhaustion_names_the_findings_that_kept_coming_back(self, project):
+        p = project
+        await _three_failing_rounds(p)
+        progress = p.progress.path.read_text()
+        diagnosis = progress.split("DIAGNOSIS (Adder)", 1)[1]
+        assert "B01-R1-F1" in diagnosis           # still_present in rounds 2 and 3
+        assert "B01-R2-F1" not in diagnosis.split("RECURRING", 1)[0]  # only once
+        assert "add() never checks its inputs" in diagnosis
+
+    def test_recurring_is_parsed(self):
+        assert parse_recurring("STATUS: DONE\nRECURRING: none\n") == "none"
+        assert parse_recurring("**RECURRING:** A, B — same cause\nSEARCHED:\n- x\n") == (
+            "A, B — same cause")
+        assert parse_recurring("STATUS: DONE") is None
+
+    def test_searched_stops_at_a_recurring_slot(self):
+        assert parse_searched("SEARCHED:\n- add()\nRECURRING: none\n") == ["add()"]
