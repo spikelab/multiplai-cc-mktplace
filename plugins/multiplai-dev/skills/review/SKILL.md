@@ -870,3 +870,17 @@ stage runs on the session's model.
   archive) is copied to `<name>~<6 hex>/`. Files directly under `<dir>`
   (rollups) are not copied, except `review.yaml`, which is copied to
   `<out>/review.yaml` when there is none there yet.
+
+- `round-metrics [<out>] [--repo DIR ...]` prints, for every review under
+  `<out>/<repo>/<object>/` (default: `--out`, else the default reviews
+  directory), a Markdown table of its rounds: the findings each round listed
+  and its `repeat`, `still-open` and `low-value` labels, and, for each finding
+  listed in round 2 or later, whether its first cited line was already there
+  at round 1's head (`present at first review`) or was written since, from
+  `git blame` and `git merge-base --is-ancestor` in the round's recorded
+  repository (`unknown` when git cannot tell or the repository is gone). A
+  totals line gives the mean rounds per review with two or more, and both
+  shares with their counts. `--repo` names a checkout to use for a round
+  whose recorded repository (a deleted worktree) is gone, when its `origin`
+  is the same repository. It writes nothing, calls no model and needs no
+  `--trust-repo`. Reviews migrated into `legacy/` are not read.

@@ -15,6 +15,9 @@
   migrate — copy review directories written elsewhere (INBOX/reviews before
             multiplai-dev 0.46) into <out>/legacy/, with a ledger line per findings.json;
             the source is never changed
+  round-metrics — print, per target under <out>, its rounds, the findings each listed,
+            and where each later round's findings were written (writes nothing,
+            calls no model)
 
 stdout contract: progress summary lines, a `summary: <path>` line per finished
 target, then for review/batch/resume a `findings: <path>[ <path>...]` line
@@ -52,7 +55,7 @@ from .models import MODES
 
 log = logging.getLogger("review_pipeline")
 
-SUBCOMMANDS = ("review", "batch", "rollup", "resume", "post", "assess-only", "migrate")
+SUBCOMMANDS = ("review", "batch", "rollup", "resume", "post", "assess-only", "migrate", "round-metrics")
 
 
 def default_out() -> Path:
@@ -186,7 +189,29 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Copy review directories from another place into <out>/legacy/, never changing the source")
     mg.add_argument("--from", dest="source", required=True,
                     help="The directory holding review directories (e.g. <workspace>/INBOX/reviews)")
+
+    rm = sub.add_parser("round-metrics", parents=[common],
+                        help="Print each review's rounds and where its later findings were written; "
+                             "writes nothing")
+    rm.add_argument("reviews", nargs="?", metavar="OUT",
+                    help="The reviews directory to read (default: --out, else <data_dir>/reviews)")
+    rm.add_argument("--repo", action="append", default=[], metavar="DIR",
+                    help="A checkout to run git in for a round whose recorded repository is gone, "
+                         "when its origin is the round's remote (repeatable)")
     return parser
+
+
+def _round_metrics(args: argparse.Namespace) -> int:
+    """`round-metrics`: before logging is set up, so it writes nothing at all."""
+    from .round_metrics import measure, render
+
+    raw = args.reviews or args.out
+    out = Path(raw).expanduser().resolve() if raw else default_out().resolve()
+    if not out.is_dir():
+        print(f"ERROR: not a directory: {out}", file=sys.stderr)
+        return 2
+    sys.stdout.write(render(measure(out, [Path(r).expanduser() for r in args.repo]), out))
+    return 0
 
 
 TRUST_MESSAGE = (
@@ -197,6 +222,8 @@ TRUST_MESSAGE = (
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "round-metrics":
+        return _round_metrics(args)
 
     from multiplai_core.env import load_env
     from multiplai_core.log_utils import setup_logging
