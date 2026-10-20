@@ -8,7 +8,9 @@ Round numbers continue across resumes: a new round takes the next free
 number and never replaces an earlier file.
 
 ``unfixed-findings.md`` lists the accepted findings a block that passed kept
-unfixed: the fix on pass was not kept, or not attempted. PUBLISH hands it to
+unfixed (the fix on pass was not kept, or not attempted), and, from a block's
+second review round on, the new findings outside the last fix's reach that
+were recorded and not fixed. PUBLISH hands it to
 the pr skill as a PR-body section (``orchestrator.unfixed_findings_section``).
 
 Both files are committed with the block's commits, like the change
@@ -443,7 +445,7 @@ def append_unfixed(
         with path.open("a") as fh:
             if new:
                 fh.write(f"{UNFIXED_HEADING}\n\nAccepted review findings that buildme left "
-                         "unfixed on a block that passed review.\n\n")
+                         "unfixed, each with the reason.\n\n")
             fh.writelines(lines)
         return path
     except OSError as e:

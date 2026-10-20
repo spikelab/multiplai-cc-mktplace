@@ -1594,7 +1594,8 @@ def _spec_paths(config: BuildConfig) -> list[str]:
 def unfixed_findings_section(config: BuildConfig, state: BuildState, docs_dir: Path) -> Path | None:
     """The change's `unfixed-findings.md`, when the TDD engine wrote one: the
     accepted review findings a block that passed kept unfixed (its fix on pass
-    was not kept, or not attempted). The file starts with its own heading."""
+    was not kept, or not attempted), and those a later review round found
+    outside the last fix's reach. The file starts with its own heading."""
     path = Path(docs_dir) / review_rounds.UNFIXED_FINDINGS_FILE
     return path if path.is_file() else None
 

@@ -989,6 +989,41 @@ parsed into the round record. A missing one is recorded as `searched: null`
 with a warning, not a failure: code cannot check that a search happened, so it
 records the claim.
 
+From a block's second review round on, the loop remembers the earlier rounds:
+
+- **Ids and open findings.** Every accepted finding gets an id in its round
+  record (`B01-R1-F1`: block 1, round 1, first finding), and each record lists
+  the findings still open after it (`open_findings`). The next round reads the
+  latest record back from disk, so a resumed build picks it up too.
+- **The reviewer gives a status for each open finding**: `resolved`,
+  `still_present`, `partially_resolved` or `cannot_verify`, recorded as
+  `prior_assessments`. One it gives no status is `cannot_verify` and stays open.
+  The review prompt asks for the status and tells the reviewer nothing about
+  what to leave out.
+- **The judge decides restatements and reach.** Given the open findings, the
+  earlier-rejected ones with their reasons, and `git diff <previous review's
+  head> HEAD`, it marks a finding that restates one of them (`duplicate_of`)
+  and whether it lies in code that diff changed or in its callers
+  (`in_fix_scope`). A restated open finding is merged into it, not counted as
+  new; a restated rejected one stays accepted with the earlier reason
+  (`earlier_judge_reason`). A new finding outside that reach, unless Critical,
+  goes to `outside_fix_scope` and `unfixed-findings.md` instead of the fix
+  agent. A missing answer means "not a restatement" and "within reach".
+- **The last fix questions the approach.** The fix before the loop's last
+  review runs on the review model (step `review_fix_escalated`), sees every
+  finding of every round with what each round said about it, and ends with a
+  `RECURRING:` line naming the findings that share a cause, which its round
+  record keeps (`fix.escalated`, `fix.recurring`). When review is exhausted,
+  `build-progress.md` lists the findings still present in two or more rounds
+  and that answer.
+- **Each finding names its kind of defect** (`defect_class`) and every other
+  place in the diff with the same defect (`other_locations`); the fix agent is
+  asked to fix every listed location and cover each one with a test.
+
+The review still passes or fails on its scores and the spec verdict alone, and
+round 1 runs exactly as before. A passing round from 2 on hands the fix on pass
+the open findings plus the new ones within reach.
+
 ### Budget
 
 Every other loop bound in the pipeline is an iteration count, which does not

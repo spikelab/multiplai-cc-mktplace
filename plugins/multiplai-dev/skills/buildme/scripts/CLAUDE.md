@@ -369,7 +369,7 @@ specs/
 │   ├── prototype/                    — NOTES.md + the cheap shape proof
 │   ├── implementation-notes.md       — agent SURPRISES/SPEC_IMPACT, appended live
 │   ├── reviews/block-<NN>-round-<k>.json — one per review round of each block
-│   ├── unfixed-findings.md           — accepted findings a passing block left unfixed
+│   ├── unfixed-findings.md           — accepted findings buildme left unfixed, with the reason
 │   ├── respec.md                     — proposed spec delta (never auto-applied)
 │   └── requirements/<capability>.md  — BDD scenarios (one per capability)
 ├── registry/<capability>.md          — main spec registry (merged from archives; a first baseline from spec-extract)
