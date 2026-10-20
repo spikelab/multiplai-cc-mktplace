@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from test_reported_finders import git, mapped, model, review, saved  # noqa: F401
 
+from review_pipeline import checks
 from review_pipeline import target as target_mod
 from review_pipeline.models import CoverageRecord
 from review_pipeline.prompts import find as find_prompt
@@ -254,6 +255,18 @@ def test_binding_docs_come_first_then_first_seen_order(tmp_path):
                             "docs/mustard.md"]
 
 
+def test_a_line_saying_binds_on_marks_its_link_binding():
+    """The root CLAUDE.md says "**binds on** any skill"; that line's link is binding."""
+    text = "- [notes](docs/notes.md)\n- [`docs/u.md`](docs/u.md) — **binds on** any skill\n"
+    assert linked().links(text) == [("docs/notes.md", False), ("docs/u.md", True)]
+
+
+def test_a_doc_linked_from_a_binds_on_line_comes_before_earlier_links(tmp_path):
+    claude = "[readme](docs/readme.md)\n\n- [`docs/u.md`](docs/u.md) — **binds on** any skill\n"
+    target = make(tmp_path, {"CLAUDE.md": claude, "docs/readme.md": "R.\n", "docs/u.md": "U.\n"})
+    assert docs(target) == ["docs/u.md", "docs/readme.md"]
+
+
 def test_the_sources_read_order_decides_first_seen(tmp_path):
     target = make(tmp_path, {"CLAUDE.md": "[a](docs/a.md)\n", "coding-standards.md": "[b](docs/b.md)\n",
                              "docs/a.md": "A.\n", "docs/b.md": "B.\n"})
@@ -289,6 +302,28 @@ def test_the_conventions_text_never_passes_the_cap(tmp_path, monkeypatch):
     assert content <= 3_000
     assert len(docs(target)) == 3
     assert skipped(target) == [(f"docs/d{i}.md", "budget") for i in (3, 4, 5)]
+
+
+def not_included(path: str) -> str:
+    return f"Not included for length; open it if it applies: `{path}`"
+
+
+def test_a_doc_over_the_remaining_budget_is_named_in_one_line_and_its_body_left_out(tmp_path, monkeypatch):
+    monkeypatch.setattr(find_stage, "CONVENTIONS_MAX_CHARS", 3_000)
+    big, small = sized("docs/big.md", 5_000), "Small rule.\n"
+    target = make(tmp_path, {"CLAUDE.md": "[b](docs/big.md) [s](docs/small.md)\n", "docs/big.md": big,
+                             "docs/small.md": small})
+    chain = find_stage.conventions_chain(target)
+    assert chain.count(not_included("docs/big.md")) == 1
+    assert big not in chain and "xxxxxxxxxx" not in chain
+    assert not_included("docs/small.md") not in chain and "Small rule." in chain
+    assert skipped(target) == [("docs/big.md", "budget")]
+
+
+def test_a_doc_skipped_for_a_reason_other_than_length_gets_no_line(tmp_path):
+    target = make(tmp_path, {"CLAUDE.md": "[g](docs/gone.md)\n"})
+    assert "Not included for length" not in find_stage.conventions_chain(target)
+    assert skipped(target) == [("docs/gone.md", "missing")]
 
 
 # --- the prompt ---------------------------------------------------------------------------------------------------
@@ -349,3 +384,44 @@ def test_a_review_gives_the_conventions_finder_the_docs_and_records_the_skips(tm
     assert not any("gone.md" in e for e in state.errors)
     check = next(c for c in state.checks if c.subject == "conventions")
     assert "rules: docs/u.md" in check.given and "rules skipped: docs/gone.md" in check.given
+
+
+# --- PR #295: the doc sizes the paths-review benchmark saw ---------------------------------------------------------
+
+# The fenced or `### path` block size of each doc at PR #295's head (c714fd6), as r1-r3 measured them.
+PR295_SIZES = {"CLAUDE.md": 15_060, "plugins/multiplai-dev/skills/buildme/scripts/CLAUDE.md": 32_846,
+               "plugins/multiplai-dev/skills/pr/scripts/CLAUDE.md": 3_581, "README.md": 12_290,
+               "CHANGELOG.md": 2_263, "docs/untrusted-content.md": 4_732, "docs/degradation-contract.md": 4_790}
+# The root CLAUDE.md's four Markdown links at c714fd6, each line as written there, in file order.
+PR295_LINK_LINES = (
+    "[`README.md`](README.md) is written for the person *installing* these plugins,\n"
+    "The root [`CHANGELOG.md`](CHANGELOG.md) is an **index only** — eight\n"
+    "- [`docs/untrusted-content.md`](docs/untrusted-content.md) — **binds on any\n"
+    "- [`docs/degradation-contract.md`](docs/degradation-contract.md) — **binds on\n"
+)
+
+
+def rules_file(path: str, size: int, lead: str = "") -> str:
+    """A CLAUDE.md starting with *lead* whose `### path` block is exactly *size* characters."""
+    text = lead + "y" * (size - len(f"### {path}\n\n{lead}\n"))
+    assert len(f"### {path}\n\n{text.strip()}\n") == size
+    return text
+
+
+def test_pr295_doc_sizes_give_the_conventions_finder_both_binding_docs(tmp_path):
+    """The `given` labels are built as `run_find` builds them, from the blocks `conventions_blocks` returns."""
+    buildme, pr = "plugins/multiplai-dev/skills/buildme/scripts", "plugins/multiplai-dev/skills/pr/scripts"
+    files = {"CLAUDE.md": rules_file("CLAUDE.md", PR295_SIZES["CLAUDE.md"], PR295_LINK_LINES),
+             **{f"{d}/CLAUDE.md": rules_file(f"{d}/CLAUDE.md", PR295_SIZES[f"{d}/CLAUDE.md"]) for d in (buildme, pr)},
+             **{p: sized(p, PR295_SIZES[p]) for p in ("README.md", "CHANGELOG.md", "docs/untrusted-content.md",
+                                                       "docs/degradation-contract.md")},
+             f"{buildme}/b.py": "B = 1\n", f"{pr}/p.py": "P = 1\n"}
+    target = make(tmp_path, files, {f"{buildme}/b.py": "B = 2\n", f"{pr}/p.py": "P = 2\n"})
+    rules = blocks(target)
+    given = checks.prompt_labels(target, rules=[(path, included) for path, included, _ in rules])
+    assert "rules: docs/degradation-contract.md" in given and "rules: docs/untrusted-content.md" in given
+    assert given == [
+        "rules: CLAUDE.md", f"rules skipped: {buildme}/CLAUDE.md", f"rules: {pr}/CLAUDE.md",
+        "rules: docs/untrusted-content.md", "rules: docs/degradation-contract.md", "rules: CHANGELOG.md",
+        "rules skipped: README.md"]
+    assert not_included("README.md") in find_stage.conventions_chain(target)

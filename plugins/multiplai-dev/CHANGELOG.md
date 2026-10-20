@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.84.1] - 2026-10-18
+## [0.85.2] - 2026-10-20
 
 ### Fixed
 - buildme: an implementer's `TEST CHANGE REQUIRED:` declaration now counts
@@ -44,6 +44,72 @@ time, not derived from a tag.
 - buildme-findings: the fixer's brief asks for the `SEARCHED:` section after
   the other report slots and before any test-change declaration, which is the
   order the declaration prompt already asks for.
+
+## [0.85.1] - 2026-10-20
+
+### Fixed
+- buildme: when the tasks.md rewrite after the shape audit fails, the first
+  pass stands as before, and the log now names any block in it that adds no
+  behaviour (`PHASE: no_behaviour_blocks_remain`), so a TDD RED-gate failure
+  on that block is no longer a surprise.
+- buildme: a block that says "no new code changes to the core" or "no new
+  code needed in the core" (scoped to another part of the code) is no longer
+  flagged as a block that adds no behaviour, so it no longer costs a
+  tasks.md rewrite.
+- buildme: a block of test steps such as "Update `tests/test_words.py` with
+  tab cases" or "Add a case for an empty string" is flagged again as a block
+  that adds no behaviour, and gets its tasks.md rewrite before the TDD RED
+  gate fails it. A test-first block whose code step ends "so the tests pass",
+  or is "Make the failing tests pass", is not flagged, nor is one whose code
+  step is "Add case-insensitive matching".
+- buildme: the README and SKILL.md now give the right number of tasks.md
+  rewrites the plan review can cause.
+- buildme: the plan review now rates a block that adds no behaviour from its
+  severity scale, as every other finding, instead of being told it is
+  critical; the tasks audit, which rewrites on any finding, no longer asks for
+  a fixed severity either. The tasks prompt now says where criteria that
+  only confirm earlier behaviour belong, instead of forbidding such blocks.
+
+## [0.85.0] - 2026-10-20
+
+### Fixed
+- `/multiplai-dev:review`: a link on a `CLAUDE.md` or `coding-standards.md`
+  line that says `binds` (as in "**binds on** any skill") now counts as
+  binding, so that doc goes to the conventions finder before the
+  non-binding ones. On a multiplai-dev change this puts
+  `docs/untrusted-content.md` and `docs/degradation-contract.md` in the
+  prompt, where `docs/degradation-contract.md` used to be cut for length.
+- `/multiplai-dev:review`: a linked doc left out of the conventions finder's
+  prompt for length is now named there, one line each ("Not included for
+  length; open it if it applies: `<path>`"), so the finder can open it
+  itself. Before, it left no trace in the prompt.
+
+## [0.84.2] - 2026-10-20
+
+### Fixed
+- buildme: an epic child's command now carries `--epic-child`, so running a
+  child's saved command again by hand still skips spec-extract and still opens
+  the PR against the default branch. Before, such a re-run could start
+  spec-extract and target a sibling child's branch once that sibling had
+  pushed.
+- buildme SKILL.md: the `--base-ref` row says that an epic child's PR targets
+  the default branch, and the `EPIC:MERGE_WAITING` row names the two cases
+  under `epic.merge: auto` where buildme left the PR open itself (checks
+  pending after an hour, or a merge queue only queued it). In those cases the
+  next step is a re-run, not a merge by hand: at once for pending checks, and
+  once the queue has merged the PR for a queued one.
+- buildme SKILL.md: the `--epic-child` row says that `BUILDME_EPIC_CHILD=1`
+  does the same, for a child's command saved before this release.
+
+## [0.84.1] - 2026-10-18
+
+### Changed
+- review: a test now checks that a `## Critical paths` list kept in a
+  subdirectory's `coding-standards.md` (for example `billing/coding-standards.md`)
+  still marks a trim suggestion on that path's tests as important. Review
+  behaves as before; a change that made it read only the root
+  `coding-standards.md` would now fail the test suite instead of quietly
+  suggesting the removal of tests on a critical path.
 
 ## [0.84.0] - 2026-10-18
 
