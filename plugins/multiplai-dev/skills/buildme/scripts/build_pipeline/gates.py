@@ -280,7 +280,8 @@ def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "p
              project_dir: Path | None = None) -> GateResult:
     """RED-phase gate: prove the freshly written tests fail for the right reason.
 
-    Direct pytest requires failure paths in the changed tests and exit 1.
+    Direct pytest requires exit 1. Failure paths must belong to the changed
+    tests when present; suppressed summaries are accepted as unverified RED.
     Pytest/Jest collection and setup failures are rejected. Attributable pytest
     assertion failures are behavioral evidence. Unparsed runners and opaque
     wrappers whose pytest paths cannot be attributed retain unverified RED.
@@ -331,6 +332,9 @@ def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "p
         )
     if pytest_output:
         failed_paths = set(re.findall(r"^FAILED\s+(.+?)::", test_output, re.M))
+        if direct_pytest and exit_code == 1 and not failed_paths:
+            return GateResult(passed=True, reason="Pytest exited 1 without failure paths; RED is unverified",
+                              metadata={"exit_code": exit_code, "classification": "unverified"})
         if not failed_paths or (direct_pytest and exit_code != 1):
             return GateResult(passed=False, reason=f"RED gate failed: pytest supplied no usable test failures (exit {exit_code}): {tail}",
                               action="fix_tests", metadata={"exit_code": exit_code})
@@ -1297,7 +1301,8 @@ def final_verification(test_command: str, project_dir: Path, *, parallel: str = 
                           if before[field].get(name) != after[field].get(name)})
         details = ", ".join(changed) or "Git HEAD or verification configuration"
         return GateResult(passed=False, reason=f"Inputs changed during final verification: {details}. "
-                          "Add untracked test reports to .gitignore before retrying. "
+                          "If a listed file is a generated report, run git rm --cached <path>, "
+                          "add it to .gitignore, and commit. "
                           "Inspect changes to tracked files and source inputs.",
                           metadata={**gate.metadata, "changed_files": changed})
     return gate

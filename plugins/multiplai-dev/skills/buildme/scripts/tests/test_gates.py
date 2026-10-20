@@ -177,10 +177,10 @@ class TestRedGate:
         assert not result.passed
         assert result.action == "fix_tests"
 
-    def test_unrecognized_failure_means_fix_tests(self):
+    def test_unrecognized_pytest_exit_one_is_unverified(self):
         result = red_gate("something exploded unrecognizably", 1)
-        assert not result.passed
-        assert result.action == "fix_tests"
+        assert result.passed
+        assert result.metadata["classification"] == "unverified"
 
     def test_unrunnable_suite_means_fix_tests(self):
         """exit_code=None (untrusted repo / missing binary) is not RED proof."""
@@ -190,7 +190,9 @@ class TestRedGate:
 
     def test_passes_on_terse_lowercase_summary(self):
         """pytest -q --tb=no emits only a summary count — no FAILED lines."""
-        assert not red_gate("1 failed, 3 passed in 0.12s", 1).passed
+        result = red_gate("1 failed, 3 passed in 0.12s", 1)
+        assert result.passed
+        assert result.metadata["classification"] == "unverified"
 
     def test_passes_on_jest_style_output(self):
         """Jest/Vitest print `FAIL <file>` and a lowercase `N failed` summary —
@@ -204,16 +206,16 @@ class TestRedGate:
         assert result.passed
         assert result.metadata["classification"] == "unverified"
 
-    def test_zero_failed_summary_is_not_red_proof(self):
+    def test_zero_failed_summary_with_exit_one_is_only_unverified(self):
         result = red_gate("0 failed, 5 passed", 1)
-        assert not result.passed
-        assert result.action == "fix_tests"
+        assert result.passed
+        assert result.metadata["classification"] == "unverified"
 
-    def test_lowercase_fail_in_prose_is_not_red_proof(self):
-        """`fail` in ordinary prose (vs the uppercase FAIL marker) proves nothing."""
+    def test_lowercase_fail_in_prose_with_exit_one_is_only_unverified(self):
+        """Prose supplies no behavioral evidence; exit 1 permits only unverified RED."""
         result = red_gate("warning: flaky tests may fail intermittently", 1)
-        assert not result.passed
-        assert result.action == "fix_tests"
+        assert result.passed
+        assert result.metadata["classification"] == "unverified"
 
 
 class TestRunTestSuite:

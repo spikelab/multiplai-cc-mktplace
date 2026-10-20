@@ -60,7 +60,9 @@ time, not derived from a tag.
 - Generated test reports belong in the project's `.gitignore`; final verification
   names changed files and provides that remedy. Commits never run the test suite.
   Direct pytest RED rejects empty collection, usage errors and failures outside
-  the changed tests; opaque wrappers with unmatched failure paths remain unverified.
+  the changed tests; exit 1 with a suppressed failure summary is unverified.
+  Opaque wrappers with unmatched failure paths remain unverified. Recovery guidance
+  covers reports already tracked by a block commit: untrack, ignore and commit.
 
 ### Added
 - A paired evaluation harness with held-out checks, timeout and recovery measurement.

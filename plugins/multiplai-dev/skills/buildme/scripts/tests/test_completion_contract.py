@@ -386,3 +386,39 @@ def test_agent_pytest_reports_are_ignored_through_block_commit(accepted_build):
     assert (root / 'test-results/junit.xml').is_file()
     assert final_verification(config.test_command, root).passed
     assert git_ops.tree_is_clean(root)
+
+
+def test_committed_junit_report_can_be_recovered_using_verification_remedy(accepted_build):
+    import shlex
+    from build_pipeline.gates import run_test_suite
+
+    config, _, _, _ = accepted_build
+    root = config.project_dir
+    (root / 'test_value.py').write_text('from app import value\ndef test_value():\n    assert value == 2\n')
+    # Keep interpreter caches out so the assertions isolate report recovery.
+    (root / '.gitignore').write_text('__pycache__/\n.pytest_cache/\n')
+    command = f'{shlex.quote(sys.executable)} -m pytest -q --junitxml=junit.xml'
+    assert run_test_suite(command, root)[0] == 1
+    assert git_ops.commit_tree(root, 'test: RED and generated report')
+    assert git(root, 'ls-files', '--', 'junit.xml') == 'junit.xml'
+    (root / 'app.py').write_text('value = 2  # implemented\n')
+    assert git_ops.commit_tree(root, 'impl: return two')
+    failed = final_verification(command, root)
+    assert not failed.passed and 'junit.xml' in failed.reason
+    assert '1 passed' in failed.metadata['output']
+    (root / '.gitignore').write_text('__pycache__/\n.pytest_cache/\njunit.xml\n')
+    git(root, 'add', '.gitignore')
+    git(root, 'commit', '-qm', 'ignore report without untracking')
+    still_failed = final_verification(command, root)
+    assert not still_failed.passed and 'junit.xml' in still_failed.reason
+    assert '1 passed' in still_failed.metadata['output']
+    assert 'git rm --cached <path>' in still_failed.reason
+    assert 'add it to .gitignore, and commit' in still_failed.reason
+    # Follow the remedy: the working report is preserved, and HEAD stops tracking it.
+    git(root, 'rm', '--cached', 'junit.xml')
+    assert (root / 'junit.xml').exists()
+    git(root, 'add', '.gitignore')
+    git(root, 'commit', '-qm', 'stop tracking generated report')
+    assert final_verification(command, root).passed
+    assert git_ops.tree_is_clean(root)
+    assert not git(root, 'ls-files', '--', 'junit.xml')

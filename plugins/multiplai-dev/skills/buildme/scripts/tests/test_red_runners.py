@@ -156,3 +156,30 @@ def test_direct_pytest_rejects_runs_without_changed_test_failures(tmp_path, monk
     gate = red_gate(output, code, runner=runner_of(command, tmp_path), expected_tests=expected,
                     test_command=command, project_dir=tmp_path)
     assert not gate.passed and gate.action == 'fix_tests', gate.reason
+
+
+@pytest.mark.parametrize('flags', ['-rs', '-rN', '--no-summary', '-p no:terminal'])
+@pytest.mark.parametrize('in_addopts', [False, True], ids=['argv', 'addopts'])
+def test_direct_pytest_without_failure_summary_is_unverified(tmp_path, monkeypatch, flags, in_addopts):
+    from build_pipeline.config import BuildConfig
+    from build_pipeline.models import BlockInfo
+    from build_pipeline.narrow_tests import runner_of
+    from build_pipeline.tdd_engine import _block_test_command
+
+    monkeypatch.setenv('BUILDME_TRUST_REPO', '1')
+    (tmp_path / 'test_new.py').write_text('def test_new():\n    assert 1 == 2\n')
+    command = f'{shlex.quote(sys.executable)} -m pytest'
+    if in_addopts:
+        (tmp_path / 'pytest.ini').write_text(f'[pytest]\naddopts = {flags}\n')
+    else:
+        command += f' {flags}'
+    config = BuildConfig(project_dir=tmp_path, test_command=command)
+    block = BlockInfo(number=1, name='New behavior', description='new behavior')
+    command = _block_test_command(config, block)
+    code, output = run_test_suite(command, tmp_path)
+    assert code == 1, output
+    assert not any(line.startswith('FAILED ') for line in output.splitlines()), output
+    gate = red_gate(output, code, runner=runner_of(command, tmp_path), expected_tests=['test_new.py'],
+                    test_command=command, project_dir=tmp_path)
+    assert gate.passed, gate.reason
+    assert gate.metadata['classification'] == 'unverified'

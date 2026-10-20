@@ -1142,7 +1142,10 @@ Add generated test reports (for example, `test-results/` or `.coverage`) to the
 project's `.gitignore` before building. Gitignored files stay out of commits,
 clean-tree checks and final verification. Tracked files remain protected inputs.
 If tests change an input or create an untracked report during final verification,
-Buildme names the changed paths and asks you to inspect inputs or ignore reports.
+Buildme names the changed paths. If a listed file is a generated report that a
+block commit already tracked, run `git rm --cached <path>`, add it to `.gitignore`,
+and commit before retrying. For an untracked report, add it to `.gitignore` and
+commit the ignore rule. Inspect changes to source inputs.
 Commits do not run tests.
 
 Legacy checkpoints without planning revision evidence load for inspection. Those
