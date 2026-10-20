@@ -117,7 +117,7 @@ def _require_trusted_repo() -> None:
         )
 
 
-def _record_partial(error: AgentRunError, label: str) -> None:
+def _record_partial(error: BaseException, label: str) -> None:
     """Charge the budget for tokens a *failed* call already burned.
 
     The runaway spend this ledger guards against is made of exactly these:
@@ -128,6 +128,10 @@ def _record_partial(error: AgentRunError, label: str) -> None:
     partial = getattr(error, "partial", None)
     if partial is not None:
         budget.record(partial.usage, label=label)
+    elif isinstance(error, asyncio.CancelledError):
+        # Core/providers do not always expose partial usage on cancellation.
+        # Preserve that uncertainty rather than reporting the call as free.
+        budget.record_unaccounted(label)
 
 
 async def llm_call(
@@ -160,6 +164,7 @@ async def llm_call(
     log.info("START sdk_call=llm prompt_bytes=%d model=%s timeout=%.0fs",
              len(prompt.encode("utf-8")), model or "default", call_timeout)
     async with _get_semaphore():
+        budget.check(phase=budget_label or "sdk")
         try:
             result = await run_agent(
                 prompt,
@@ -172,6 +177,9 @@ async def llm_call(
                 label="llm",
                 component="buildme",
             )
+        except asyncio.CancelledError as e:
+            _record_partial(e, budget_label or "llm")
+            raise
         except AgentRunTimeout as e:
             # A call that dies after burning a 150k-char review prompt is
             # exactly the spend the budget exists to catch, so account for the
@@ -190,7 +198,7 @@ async def llm_call(
                 f"SDK query failed: {e.reason}\n--- CLI stderr ---\n{e.stderr_tail}"
             ) from e
 
-    budget.record(result.usage, label=budget_label or "llm")
+        budget.record(result.usage, label=budget_label or "llm")
     log.info("DONE sdk_call=llm result_chars=%d", len(result.text))
     return result.text
 
@@ -220,46 +228,56 @@ async def agent_call(
     start = time.monotonic()
 
     async with _get_semaphore():
-        try:
-            result = await run_agent(
-                prompt,
-                allowed_tools=allowed_tools,
-                max_turns=max_turns,
-                model=model,
-                effort=effort,
-                cwd=cwd,  # None → run_agent's isolated hook-sessions dir
-                timeout_s=call_timeout,
-                label="agent",
-                component="buildme",
-            )
-        except AgentRunError as e:
-            # Degrade to partial output instead of raising — the TDD engine
-            # decides whether a failed agent aborts the block or retries.
-            elapsed = time.monotonic() - start
-            partial = e.partial
-            timed_out = isinstance(e, AgentRunTimeout)
-            # A failed agent still burned tokens up to the failure point.
-            _record_partial(e, budget_label or "agent")
-            log.error("FAIL sdk_call=agent reason=%s elapsed=%.0fs turns=%d\n--- CLI stderr ---\n%s",
-                      "timeout" if timed_out else e.reason, elapsed,
-                      partial.turns if partial else 0, e.stderr_tail)
-            error_msg = (
-                f"Agent timed out after {elapsed:.0f}s\nCLI stderr:\n{e.stderr_tail}"
-                if timed_out
-                else f"{e.reason}\nCLI stderr:\n{e.stderr_tail}"
-            )
-            return AgentResult(
-                success=False,
-                output=partial.text if partial else "",
-                error=error_msg,
-                timed_out=timed_out,
-                turns_used=partial.turns if partial else 0,
-                elapsed_seconds=elapsed,
-                files_changed=partial.files_changed if partial else [],
-            )
+        budget.check(phase=budget_label or "sdk")
+        from . import git_ops
+        from contextlib import nullcontext
+        writable = bool(set(allowed_tools) & {"Write", "Edit", "Bash", "NotebookEdit"})
+        window = git_ops.agent_write_window(cwd) if writable else nullcontext()
+        with window:
+            try:
+                result = await run_agent(
+                    prompt,
+                    allowed_tools=allowed_tools,
+                    max_turns=max_turns,
+                    model=model,
+                    effort=effort,
+                    cwd=cwd,  # None → run_agent's isolated hook-sessions dir
+                    timeout_s=call_timeout,
+                    label="agent",
+                    component="buildme",
+                )
+            except asyncio.CancelledError as e:
+                _record_partial(e, budget_label or "agent")
+                raise
+            except AgentRunError as e:
+                # Degrade to partial output instead of raising — the TDD engine
+                # decides whether a failed agent aborts the block or retries.
+                elapsed = time.monotonic() - start
+                partial = e.partial
+                timed_out = isinstance(e, AgentRunTimeout)
+                # A failed agent still burned tokens up to the failure point.
+                _record_partial(e, budget_label or "agent")
+                log.error("FAIL sdk_call=agent reason=%s elapsed=%.0fs turns=%d\n--- CLI stderr ---\n%s",
+                          "timeout" if timed_out else e.reason, elapsed,
+                          partial.turns if partial else 0, e.stderr_tail)
+                error_msg = (
+                    f"Agent timed out after {elapsed:.0f}s\nCLI stderr:\n{e.stderr_tail}"
+                    if timed_out
+                    else f"{e.reason}\nCLI stderr:\n{e.stderr_tail}"
+                )
+                return AgentResult(
+                    success=False,
+                    output=partial.text if partial else "",
+                    error=error_msg,
+                    timed_out=timed_out,
+                    turns_used=partial.turns if partial else 0,
+                    elapsed_seconds=elapsed,
+                    files_changed=partial.files_changed if partial else [],
+                )
+
+            budget.record(result.usage, label=budget_label or "agent")
 
     elapsed = time.monotonic() - start
-    budget.record(result.usage, label=budget_label or "agent")
     log.info("DONE sdk_call=agent turns=%d elapsed=%.0fs files_changed=%d",
              result.turns, elapsed, len(result.files_changed))
     return AgentResult(

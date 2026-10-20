@@ -53,6 +53,8 @@ again with its share recomputed once the others end.
 
 from __future__ import annotations
 
+from build_pipeline.budget import BudgetExceededError
+
 import asyncio
 import contextlib
 import json
@@ -490,6 +492,8 @@ class Coordinator:
                  "--project-dir", str(self.children[cid].project.absolute())]
         if base:
             argv += ["--base-ref", base]
+        if getattr(self.config, "accept_unknown_spend", False):
+            argv.append("--accept-unknown-spend")
         return argv
 
     # -- reading the records ----------------------------------------------------
@@ -711,6 +715,11 @@ class Coordinator:
                 self._save()
                 return False
             argv = self.new_argv(c.id, base)
+        # A saved command must use this invocation's explicit acceptance, not
+        # a stale flag from a previous epic run.
+        argv = [arg for arg in argv if arg != "--accept-unknown-spend"]
+        if getattr(self.config, "accept_unknown_spend", False):
+            argv.append("--accept-unknown-spend")
         plan = _plan_of(argv)
         head = argv[argv.index("--base-ref") + 1] if "--base-ref" in argv[:-1] else None
         c.attempt = records.start(self.epic_dir, "build", c.id, argv, head_sha=head)
@@ -1055,7 +1064,7 @@ class Coordinator:
             await CLOCK.sleep(POLL)           # D2.S18: wait for the fixers that hold it
             left = self._left(c.id)
         argv = fix.fix_argv(getattr(self.args, "session_id", "") or "", number, change, project, rounds, left,
-                            final=final)
+                            final=final, accept_unknown_spend=getattr(self.config, "accept_unknown_spend", False))
         attempt = records.start(self.epic_dir, "fix", c.id, argv, head_sha=head, pr_round=c.pr_round)
         if left is not None:
             self.shares[c.id] = Share(max(left, 0.0), self._pr_reviews(c))
@@ -1473,6 +1482,8 @@ class Coordinator:
         before, staged = budget.process_spend().cost_usd, merge.index(w)
         try:
             result = await merge.run_merge_agent(self.config, w, files, name, default)
+        except BudgetExceededError:
+            raise
         except Exception as exc:   # an ordinary error, not a stop: the call failed, and its spend is known
             result = AgentResult(success=False, error=f"{type(exc).__name__}: {exc}")
         except BaseException:      # a cancelled call records no usage: its spend is unknown
@@ -1513,13 +1524,15 @@ class Coordinator:
             log.info("EPIC child %s: merge tests skipped: no test command", c.id)
             return True
         try:
-            argv, bad = shlex.split(command), None
+            from ..gates import _test_invocation
+            argv, directory = _test_invocation(command, project)
+            bad = None
         except ValueError as e:
             argv, bad = [command], f"cannot split the test command: {e}"
         attempt = records.start(self.epic_dir, "merge-tests", c.id, argv, head_sha=head, pr_round=c.pr_round)
         try:
             code, out = (None, bad) if bad else await self._run_step(
-                c, attempt, project, env={**os.environ, "BUILDME_TRUST_REPO": "1"}, timeout=TESTS_TIMEOUT)
+                c, attempt, directory, env={**os.environ, "BUILDME_TRUST_REPO": "1"}, timeout=TESTS_TIMEOUT)
         except OSError as e:          # it could not start (a missing binary): a failed run
             code, out, c.rattempt = None, str(e), None
         except BaseException:      # stopped, SIGHUP included: the tests end with the step (E.S23)

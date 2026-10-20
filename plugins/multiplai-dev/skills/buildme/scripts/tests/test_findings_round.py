@@ -628,9 +628,9 @@ class TestResume:
         assert any(line == f"FINDINGS:WIP:{ref}" for line in lines)
 
     @pytest.mark.asyncio
-    async def test_a_rejected_wip_commit_leaves_the_edits_in_the_tree(
+    async def test_a_failed_wip_snapshot_leaves_the_edits_in_the_tree(
             self, built, fake_pr, monkeypatch):
-        """When a hook rejects the WIP commit, no ref holds the edits, so the
+        """When the isolated snapshot cannot be created, no ref holds the edits, so the
         step must not discard them and must not report them as kept."""
         repo, change, config = built
         fake_pr.add_thread("alice", "None should be refused", fid="5e1")
@@ -639,11 +639,9 @@ class TestResume:
 
         async def spec_call(prompt, **kw):
             (repo / "half-written.txt").write_text("agent edit\n")
-            hook = repo / ".git" / "hooks" / "pre-commit"
-            hook.write_text("#!/bin/sh\nexit 1\n")
-            hook.chmod(0o755)
             raise RuntimeError("agent failed mid-turn")
 
+        monkeypatch.setattr(git_ops, "save_wip_ref", lambda *a, **k: None)
         discarded: list[str] = []
         monkeypatch.setattr(git_ops, "discard_to",
                             lambda repo_, sha, label="": discarded.append(sha) or True)
@@ -1042,10 +1040,7 @@ class TestRoundKilledDuringAFixOnPass:
 
 
 class TestRoundBudget:
-    """`--auto` runs several rounds in one process. Each round's engine is held
-    to `budget.max_usd` on its own spend, the same as when that round runs
-    alone in a fresh process: an earlier round's engine spend, and triage's,
-    must not count against it."""
+    """Automatic findings rounds share the run cap, including triage spend."""
 
     @pytest.fixture(autouse=True)
     def fresh_process_budget(self):
@@ -1055,7 +1050,7 @@ class TestRoundBudget:
         budget.reset()
 
     @pytest.mark.asyncio
-    async def test_the_second_rounds_engine_starts_at_zero_spend(self, built, fake_pr):
+    async def test_second_round_reuses_spend_and_stops_when_cap_exhausted(self, built, fake_pr):
         from types import SimpleNamespace
 
         from build_pipeline import budget
@@ -1092,19 +1087,21 @@ class TestRoundBudget:
             at_entry.append(budget.get_budget().cost_usd)
             return await run_tdd_engine(rc, args, standalone=standalone)
 
-        replaced = {"run_test_writer", "run_implementer"}
+        replaced = {"run_test_writer", "run_implementer", "run_test_suite"}
         stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") not in replaced]
         stubs += [patch("build_pipeline.tdd_engine.run_test_writer", side_effect=test_writer),
-                  patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer)]
+                  patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer),
+                  patch("build_pipeline.tdd_engine.run_test_suite", side_effect=lambda *_a, **_kw:
+                        (1, f"FAILED tests/test_r{calls['n']}.py::test_r{calls['n']} - AssertionError\n1 failed"))]
         run, lines = _run(config, change, triage_call=triage_call, review=review, engine=engine)
         with _Stubs(stubs):
             exit_code = await loop.run_findings(run)
 
-        assert exit_code == 0, lines
-        assert lines[-1] == "FINDINGS:MAX_ROUNDS:2"
-        assert at_entry == [0.0, 0.0]
+        assert exit_code == 1, lines
+        assert at_entry == pytest.approx([0.1, 0.8])
         r2 = BuildState.load(change / code.engine_state_name(2))
-        assert r2.budget["cost_usd"] == pytest.approx(0.6)
+        assert r2.budget["cost_usd"] == pytest.approx(1.4)
+        assert any(line.startswith("FINDINGS:FAILED:code:") for line in lines)
 
     @pytest.mark.asyncio
     async def test_the_process_total_holds_both_rounds(self, built, fake_pr, monkeypatch):
@@ -1148,17 +1145,19 @@ class TestRoundBudget:
         async def engine(rc, args, standalone):
             return await run_tdd_engine(rc, args, standalone=standalone)
 
-        replaced = {"run_test_writer", "run_implementer"}
+        replaced = {"run_test_writer", "run_implementer", "run_test_suite"}
         stubs = [p for p in engine_stubs(repo) if getattr(p, "attribute", "") not in replaced]
         stubs += [patch("build_pipeline.tdd_engine.run_test_writer", side_effect=test_writer),
-                  patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer)]
+                  patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer),
+                  patch("build_pipeline.tdd_engine.run_test_suite", side_effect=lambda *_a, **_kw:
+                        (1, f"FAILED tests/test_r{calls['n']}.py::test_r{calls['n']} - AssertionError\n1 failed"))]
         run, lines = _run(config, change, triage_call=triage_call, review=review, engine=engine)
         with _Stubs(stubs):
             exit_code = await loop.run_findings(run)
 
         assert exit_code == 0, lines
         assert spent.count(0.6) == 2                     # one implementer per round
-        assert budget.get_budget().cost_usd < sum(spent)  # the last reset dropped round 1
+        assert budget.get_budget().cost_usd == pytest.approx(sum(spent))
         assert budget.process_spend().cost_usd == pytest.approx(sum(spent))
         assert budget.process_spend().tokens == 10 * len(spent)
 
@@ -1169,7 +1168,7 @@ class TestStoppedAfterTheBlocks:
     back fixes that every block gate already passed."""
 
     @pytest.mark.asyncio
-    async def test_a_mutation_failure_after_every_block_is_done_still_publishes(
+    async def test_failed_post_block_check_prevents_publication(
             self, built, fake_pr):
         repo, change, config = built
         fix_thread = fake_pr.add_thread("alice", "add subtracts", fid="ab12")
@@ -1189,18 +1188,11 @@ class TestStoppedAfterTheBlocks:
         with _Stubs(stubs):
             exit_code = await loop.run_findings(run)
 
-        assert exit_code == 0, lines
-        assert lines[-1] == "FINDINGS:DONE:1"
-        assert any(ln.startswith("FINDINGS:CODE_CHECK_FAILED:") and "mutation" in ln
-                   for ln in lines), lines
-        assert not [ln for ln in lines if ln.startswith("FINDINGS:FAILED")]
-        impl = _git(repo, "log", "--format=%H", "-1", "--grep", "^impl(block-1)").strip()
-        kinds = [e[0] for e in fake_pr.events]
-        assert kinds.index("push") < kinds.index("reply")
-        replies = {r[1]: r[2] for r in fake_pr.replies()}
-        assert impl[:12] in replies[fix_thread]
-        assert "mutation" in replies[fix_thread]
-        assert review.calls == 1
+        assert exit_code == 1, lines
+        assert any(ln.startswith("FINDINGS:CODE_CHECK_FAILED:") and "mutation" in ln for ln in lines)
+        assert any(ln.startswith("FINDINGS:FAILED:code:") for ln in lines)
+        assert not any(e[0] in {"push", "reply"} for e in fake_pr.events)
+        assert review.calls == 0
 
     def test_a_skipped_failed_block_still_counts_as_past_the_blocks(self, tmp_path):
         """Block 1 failed and was skipped, block 2 is done, then mutation
@@ -1742,7 +1734,8 @@ class TestKilledInsideADiscard:
         s.stop_with = RuntimeError("model call failed")
         _Rows.stop(s, how, "restore")
         s.stop_with = None
-        assert "the spec step's own edit" in _git(repo, "show", ":calc.py")
+        assert _git(repo, "show", ":calc.py") == _git(repo, "show", "HEAD:calc.py")
+        assert "the spec step's own edit" in (repo / "calc.py").read_text()
 
         _Rows._assert_refused(s, "spec", "uncommitted")
 
@@ -1781,7 +1774,7 @@ class TestKilledInsideADiscard:
         _Rows.stop(s, "kill", "restore")
 
         if case != "spec":
-            _Rows._assert_refused(s, step, "uncommitted")
+            _Rows._assert_refused(s, step, "commits were added")
             return
         clean_exit, clean_repo = _Rows.unstopped(tmp_path / "unstopped", monkeypatch, step)
         assert asyncio.run(s.run()) == clean_exit, s.lines

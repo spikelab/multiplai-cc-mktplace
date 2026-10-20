@@ -1475,3 +1475,16 @@ def test_real_cosmic_ray_scores_only_the_changed_lines(tmp_path):
     assert r.candidates > 0 and r.killed + r.survived > 0
     assert all(s.line >= 4 for s in r.survivors)
     assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_cosmic_test_command_honors_cd_and_literal_arguments(tmp_path):
+    import tomllib
+    import subprocess
+    import sys
+    import shlex
+    (tmp_path / 'api').mkdir()
+    command = f'cd api && {sys.executable} -c "from pathlib import Path; import sys; assert Path.cwd().name == chr(97)+chr(112)+chr(105); assert sys.argv[1] == chr(35)" #'
+    text = mutation.cosmic_ray_config(['app.py'], command, 30, 'abc123', project_dir=tmp_path)
+    argv = shlex.split(tomllib.loads(text)['cosmic-ray']['test-command'])
+    result = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

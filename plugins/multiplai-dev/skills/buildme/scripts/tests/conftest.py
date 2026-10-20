@@ -91,3 +91,19 @@ def _no_session_defaults(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr("multiplai_core.session.load_multiplai_conf",
                         lambda: {"_sections": {}})
+
+
+@pytest.fixture(autouse=True)
+def no_real_model_provider(monkeypatch):
+    """Correctness tests must never dispatch paid model calls."""
+    async def refuse(*args, **kwargs):
+        raise AssertionError("Test attempted an unstubbed model provider call")
+    monkeypatch.setattr("build_pipeline.sdk.run_agent", refuse)
+
+
+@pytest.fixture(autouse=True)
+def isolated_budget():
+    from build_pipeline import budget
+    budget.reset()
+    yield
+    budget.reset()

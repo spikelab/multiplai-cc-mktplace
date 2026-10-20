@@ -139,6 +139,16 @@ def run(state: State, run_dir: Path, registry: Path) -> tuple[int, list[str]]:
     reason = uncommitted_work(registry, state.apply_stop)
     if reason is not None:
         raise ApplyRefused(f"--apply refused, nothing was written: {reason}")
+    initial_stop = state.apply_stop
+    if initial_stop is None:
+        staged = git(registry, "ls-files", "--stage", "-z", "--", ".", check=False)
+        if staged.returncode:
+            raise ApplyRefused("--apply cannot read the index; nothing was written")
+        entries: dict[str, str] = {}
+        for entry in filter(None, staged.stdout.split("\0")):
+            identity, name = entry.split("\t", 1)
+            entries[name] = entries.get(name, "") + identity + "\n"
+        initial_stop = ApplyStop(index=entries)
     tmp_dir = registry / APPLY_TMP
     if resumed:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -151,8 +161,9 @@ def run(state: State, run_dir: Path, registry: Path) -> tuple[int, list[str]]:
             else:
                 skipped.append(f"SPEC_EXTRACT:SKIPPED_EXISTING {src.stem} {src}")
             continue
-        stop = state.apply_stop = state.apply_stop or ApplyStop()
-        stop.edits[src.name] = "sha256:" + hashlib.sha256(data).hexdigest()
+        stop = state.apply_stop = state.apply_stop or initial_stop
+        assert stop is not None
+        stop.edits[src.name] = "mode:0:sha256:" + hashlib.sha256(data).hexdigest()
         state_mod.save(state, run_dir)
         tmp_dir.mkdir(exist_ok=True)
         _put(tmp_dir / src.name, dest, data)

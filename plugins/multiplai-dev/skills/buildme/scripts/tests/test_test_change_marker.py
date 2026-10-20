@@ -109,7 +109,9 @@ TEST_FILE = "tests/test_a.py"
 
 
 @pytest.fixture
-def setup(tmp_path):
+def setup(tmp_path, monkeypatch):
+    # These prompt/report unit tests use no Git repository.
+    monkeypatch.setattr("build_pipeline.tdd_engine.git_ops.commit_tree", lambda *a, **kw: None)
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     specs_root = project_dir / "specs"

@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from tests.planning_fakes import accepted_planning
 import pytest
 
 from build_pipeline import board, git_ops

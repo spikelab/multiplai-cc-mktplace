@@ -1893,3 +1893,17 @@ def test_behind_with_nothing_new_to_merge_parks_with_the_refusal(tmp_path, monke
     assert r.run() == 0
     assert r.status()["reason"] == f"gh pr merge refused: {refusal} (mergeStateStatus BEHIND)"
     assert _merged_prs(r) == ["e-a"] and len(r.step_pushes()) == 1
+
+
+def test_epic_merge_tests_honor_cd_command(tmp_path, monkeypatch):
+    import sys
+    import shlex
+    r = MergeRoot(tmp_path, monkeypatch)
+    # Create an api directory in the actual merge worktree immediately before the suite.
+    def command(project):
+        (project / 'api').mkdir(exist_ok=True)
+        return f'cd api && {shlex.quote(sys.executable)} -c "from pathlib import Path; assert Path.cwd().name == chr(97)+chr(112)+chr(105)"'
+    monkeypatch.setattr(merge, 'suite_command', command)
+    assert r.run() == 0 and r.merged()
+    [tests] = r.tries('merge-tests')
+    assert tests.started['argv'][0] == sys.executable

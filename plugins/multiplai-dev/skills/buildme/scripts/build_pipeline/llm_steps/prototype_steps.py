@@ -36,9 +36,8 @@ MAX_PROTOTYPE_ATTEMPTS = 2  # first pass + one retry, then the phase fails
 async def run_prototype(config) -> GateResult:
     """Produce the prototype artifact + NOTES.md. Returns the gate's verdict.
 
-    Failure is the *phase's* failure, never the build's — the caller logs a
-    diagnosis and continues. One retry, then stop (a second failing attempt is
-    evidence the change is not prototypable, not a reason to loop).
+    One retry is allowed. A failed writer blocks the build because it may
+    have left partial edits; the caller preserves the checkpoint for resume.
     """
     prototype_dir = config.prototype_dir
     prototype_dir.mkdir(parents=True, exist_ok=True)
@@ -73,9 +72,7 @@ async def run_prototype(config) -> GateResult:
             )
 
         if not agent.success:
-            log.warning(
-                "Prototype agent call failed (attempt %d): %s", attempt, agent.error,
-            )
+            return GateResult(passed=False, reason=f"Prototype writer failed: {agent.error}")
 
         result = prototype_gate(prototype_dir)
         if result.passed:
@@ -181,108 +178,13 @@ def primary_prototype_artifact(prototype_dir: Path) -> Path | None:
     return files[0]
 
 
-async def apply_prototype_findings(config) -> int:
-    """Regenerate design.md and tasks.md ONCE from the prototype's notes.
-
-    Returns the number of artifacts regenerated (0 when the notes carry nothing
-    actionable). No re-audit loop: one pass, then the documents stand. A
-    regeneration failure is non-fatal — the existing artifact stays.
-    """
-    from .spec_steps import generate_artifact
-
-    notes = read_prototype_notes(config.prototype_dir)
-    findings_text = prototype_findings_text(notes)
-    if not findings_text:
-        log.info("SKIP step=PROTOTYPE_FEEDBACK reason=no-actionable-findings")
+async def apply_prototype_findings(config, state=None) -> int:
+    """Send prototype feedback to the planning owner for one coherent revision."""
+    from ..spec_generator import rewrite_plan, _load_or_create_state
+    findings = prototype_findings_text(read_prototype_notes(config.prototype_dir))
+    if not findings:
         return 0
-
-    cm = ChangeManager(config.specs_dir)
-    change_dir = config.change_dir
-    regenerated = 0
-
-    # Read back what the first pass was written against. This function has no
-    # BuildState, so the phase's report is re-read from disk; without it the
-    # regenerated design would silently lose its codebase grounding.
-    analysis_path = config.codebase_analysis_path
-    codebase_analysis = analysis_path.read_text() if analysis_path.exists() else ""
-
-    for artifact_id in ("design", "tasks"):
-        context = cm.artifact_context(change_dir, artifact_id)
-        output_path = change_dir / context["output_path"]
-        if not output_path.exists():
-            log.warning(
-                "SKIP prototype feedback for %s — %s does not exist",
-                artifact_id, output_path,
-            )
-            continue
-        try:
-            content = await generate_artifact(
-                artifact_id, context, config,
-                # Same grounding the first pass had: a regeneration that
-                # dropped it would quietly rewrite the design away from the
-                # project's conventions and its existing structure.
-                codebase_analysis=codebase_analysis,
-                reference_docs=config.reference_docs_text(),
-                audit_findings=findings_text,
-            )
-        except Exception as regen_err:  # non-fatal: first pass stands
-            log.warning(
-                "Prototype feedback regeneration of %s failed (non-fatal): %s",
-                artifact_id, regen_err,
-            )
-            continue
-        output_path.write_text(content)
-        regenerated += 1
-        log.info("Rewrote %s from prototype findings", output_path)
-        if artifact_id == "tasks":
-            await _rewrite_no_behaviour_blocks(
-                output_path, context, config, findings_text, codebase_analysis,
-            )
-
-    print(f"PHASE: prototype_feedback_applied — {regenerated} artifact(s)", flush=True)
-    return regenerated
-
-
-async def _rewrite_no_behaviour_blocks(
-    output_path: Path, context: dict, config, findings_text: str,
-    codebase_analysis: str,
-) -> None:
-    """Scan the tasks.md this pass wrote; on a no-behaviour block, rewrite ONCE.
-
-    This pass runs after the plan review, so it is the last writer of tasks.md
-    before TDD, and nothing else checks what it writes. The rewrite carries the
-    prototype's findings too, so it does not undo them. Non-fatal like the pass
-    itself; whatever the scan still flags afterwards is named in the log.
-    """
-    from ..spec_generator import (
-        report_no_behaviour_blocks_left,
-        scan_no_behaviour_blocks,
-        tasks_findings_text,
-    )
-    from .spec_steps import generate_artifact
-
-    blocks = scan_no_behaviour_blocks(output_path)
-    if not blocks:
-        return
-    log.warning(
-        "Prototype rewrite of tasks.md has %d no-behaviour block(s) — one more "
-        "rewrite", len(blocks),
-    )
-    try:
-        content = await generate_artifact(
-            "tasks", context, config,
-            codebase_analysis=codebase_analysis,
-            reference_docs=config.reference_docs_text(),
-            audit_findings=f"{findings_text}\n{tasks_findings_text(blocks)}",
-        )
-    except Exception as regen_err:  # non-fatal: the prototype's rewrite stands
-        log.warning(
-            "No-behaviour rewrite of tasks.md failed (non-fatal): %s", regen_err,
-        )
-    else:
-        output_path.write_text(content)
-        log.info("Rewrote %s for no-behaviour blocks", output_path)
-    report_no_behaviour_blocks_left(output_path)
+    return await rewrite_plan(config, state or _load_or_create_state(config), findings, design=True)
 
 
 def _read(path: Path) -> str:

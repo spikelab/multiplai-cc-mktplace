@@ -550,6 +550,7 @@ class FixOnPassState(BaseModel):
     # may have been killed mid-edit) or when git could not be asked.
     stop_head: str | None = None
     stop_edits: dict[str, str] | None = None
+    stop_index: dict[str, str] | None = None
 
 
 class BlockInfo(BaseModel):

@@ -265,11 +265,14 @@ def sample_out(jobs: list[tuple[str, str]], max_mutants: int) -> list[str]:
 
 
 def cosmic_ray_config(paths: list[str], test_command: str, timeout: float,
-                      baseline_sha: str) -> str:
+                      baseline_sha: str, *, project_dir: Path = Path(".")) -> str:
     """The cosmic-ray TOML for one run. Every value is JSON-encoded, which is
     valid TOML for strings, numbers and arrays of strings."""
-    wrapped = shlex.join(
-        ["env", f"PATH={os.environ.get('PATH', '')}", *shlex.split(test_command)])
+    from .gates import _test_invocation
+    argv, directory = _test_invocation(test_command, project_dir)
+    wrapped = shlex.join(["env", f"PATH={os.environ.get('PATH', '')}", *argv])
+    if directory != project_dir:
+        wrapped = shlex.join(["sh", "-c", f"cd {shlex.quote(str(directory))} && exec {wrapped}"])
     return "\n".join([
         "[cosmic-ray]",
         f"module-path = {json.dumps(paths)}",
@@ -461,10 +464,10 @@ def _run_cosmic_ray(config, baseline_sha: str, paths: list[str], project_dir: Pa
         cfg = tmp_dir / "cosmic-ray.toml"
         session = tmp_dir / "session.sqlite"
         cfg.write_text(cosmic_ray_config(paths, config.test_command,
-                                         settings.timeout, baseline_sha))
+                                         settings.timeout, baseline_sha, project_dir=project_dir))
         baseline_cfg = tmp_dir / "baseline.toml"
         baseline_cfg.write_text(cosmic_ray_config(paths, config.test_command,
-                                                  _SETUP_TIMEOUT, baseline_sha))
+                                                  _SETUP_TIMEOUT, baseline_sha, project_dir=project_dir))
         try:
             _run_tool([*_UVX, "cosmic-ray", "init", str(cfg), str(session)],
                       project_dir, _SETUP_TIMEOUT)
@@ -492,7 +495,7 @@ def _run_cosmic_ray(config, baseline_sha: str, paths: list[str], project_dir: Pa
                 test_timeout = mutant_timeout(
                     settings.timeout, time.monotonic() - baseline_started)
                 cfg.write_text(cosmic_ray_config(paths, config.test_command,
-                                                 test_timeout, baseline_sha))
+                                                 test_timeout, baseline_sha, project_dir=project_dir))
                 _run_tool([*_UVX, "cosmic-ray", "exec", str(cfg), str(session)],
                           project_dir, test_timeout * (to_run + 1) + _EXEC_SLACK)
             dump = _run_tool([*_UVX, "cosmic-ray", "dump", str(session)],

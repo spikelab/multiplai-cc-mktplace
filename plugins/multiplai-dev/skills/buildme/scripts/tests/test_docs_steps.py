@@ -1,4 +1,4 @@
-"""Tests for the documentation phase step — prompt inputs, tools, non-fatality."""
+"""Tests for the documentation phase step — prompt inputs, tools, failed-writer handling."""
 
 import pytest
 from unittest.mock import AsyncMock, patch
@@ -93,32 +93,22 @@ class TestRunDocsUpdate:
         assert "no implementation notes were recorded" in agent.await_args.args[0]
 
     @pytest.mark.asyncio
-    async def test_llm_failure_is_non_fatal_and_still_reaches_the_gate(self, tmp_path):
-        """The code is already built — a docs failure must not raise, and the
-        deterministic warning is exactly what should fire in that case."""
+    async def test_llm_failure_blocks_completion(self, tmp_path):
         config = make_config(tmp_path)
-        (tmp_path / "CHANGELOG.md").write_text("# Changelog\n")
         with patch("build_pipeline.llm_steps.docs_steps.agent_call",
                    AsyncMock(side_effect=RuntimeError("model down"))), \
-             patch("build_pipeline.tdd_engine.capture_build_diff",
-                   return_value=DIFF):
-            files, gate = await run_docs_update(config, make_state())
-
-        assert files == []
-        assert gate.passed is True
-        assert gate.action == "docs_may_be_stale"
+             patch("build_pipeline.tdd_engine.capture_build_diff", return_value=DIFF):
+            with pytest.raises(RuntimeError, match="model down"):
+                await run_docs_update(config, make_state())
 
     @pytest.mark.asyncio
-    async def test_failed_agent_result_is_non_fatal(self, tmp_path):
+    async def test_failed_agent_result_blocks_completion(self, tmp_path):
         config = make_config(tmp_path)
         with patch("build_pipeline.llm_steps.docs_steps.agent_call",
-                   AsyncMock(return_value=AgentResult(
-                       success=False, output="", error="timed out"))), \
+                   AsyncMock(return_value=AgentResult(success=False, error="timed out"))), \
              patch("build_pipeline.tdd_engine.capture_build_diff", return_value=""):
-            files, gate = await run_docs_update(config, make_state())
-
-        assert files == []
-        assert gate.passed is True
+            with pytest.raises(RuntimeError, match="timed out"):
+                await run_docs_update(config, make_state())
 
     @pytest.mark.asyncio
     async def test_no_state_means_no_diff_capture(self, tmp_path):

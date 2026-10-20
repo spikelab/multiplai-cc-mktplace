@@ -30,7 +30,7 @@ def _folder(root: Path) -> Path:
 
 
 def _sha(data: bytes) -> str:
-    return "sha256:" + hashlib.sha256(data).hexdigest()
+    return "mode:0:sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def _lines(out: str) -> list[str]:
@@ -115,7 +115,9 @@ def test_apply_copies_new_files_and_commits_nothing(tmp_path, capsys):
     assert not (registry / apply_mod.APPLY_TMP).exists()
     state = read_state(run_dir)
     assert state["steps_done"][-2:] == ["render", "apply"]
-    assert state["apply_stop"] == {"head": None, "edits": {
+    expected_index = {entry.split("\t", 1)[1]: entry.split("\t", 1)[0] + "\n"
+                      for entry in git(registry, "ls-files", "--stage", "-z").split("\0") if entry}
+    assert state["apply_stop"] == {"head": None, "index": expected_index, "edits": {
         n: _sha((run_dir / "registry" / n).read_bytes()) for n in ["one.md", "two.md"]}}
 
 

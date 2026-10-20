@@ -146,115 +146,37 @@ class TestRunPrototype:
 
 class TestPrototypeFeedback:
     @pytest.mark.asyncio
-    async def test_disproves_triggers_exactly_one_regeneration_each(self, tmp_path):
-        """Done-means #6: non-empty DISPROVES regenerates design.md and tasks.md
-        once — one call per artifact, no re-audit loop."""
+    @pytest.mark.parametrize("notes,expected", [(NOTES_WITH_DISPROVES, 2), (NOTES_WITH_QUESTIONS, 2), (NOTES_CLEAN, 0)])
+    async def test_feedback_uses_the_shared_planning_owner(self, tmp_path, notes, expected):
         config = make_config(tmp_path)
         config.prototype_dir.mkdir(parents=True, exist_ok=True)
-        (config.prototype_dir / "NOTES.md").write_text(NOTES_WITH_DISPROVES)
-        (config.prototype_dir / "sample-output.md").write_text("| a | b |")
-
-        mock_gen = AsyncMock(return_value="# regenerated\n")
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", mock_gen):
-            regenerated = await apply_prototype_findings(config)
-
-        assert regenerated == 2
-        assert mock_gen.await_count == 2
-        assert [c.args[0] for c in mock_gen.await_args_list] == ["design", "tasks"]
-        # The notes reach the regeneration as audit findings.
-        findings = mock_gen.await_args_list[0].kwargs["audit_findings"]
-        assert "tax rate" in findings
-        assert config.design_path.read_text() == "# regenerated\n"
-        assert config.tasks_path.read_text() == "# regenerated\n"
+        (config.prototype_dir / "NOTES.md").write_text(notes)
+        owner = AsyncMock(return_value=2)
+        with patch("build_pipeline.spec_generator.rewrite_plan", owner):
+            assert await apply_prototype_findings(config) == expected
+        if expected:
+            owner.assert_awaited_once()
+            assert owner.await_args.kwargs["design"] is True
+            assert owner.await_args.args[2]
+        else:
+            owner.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_open_questions_alone_trigger_regeneration(self, tmp_path):
-        config = make_config(tmp_path)
-        config.prototype_dir.mkdir(parents=True, exist_ok=True)
-        (config.prototype_dir / "NOTES.md").write_text(NOTES_WITH_QUESTIONS)
-
-        mock_gen = AsyncMock(return_value="# regenerated\n")
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", mock_gen):
-            regenerated = await apply_prototype_findings(config)
-
-        assert regenerated == 2
-        assert mock_gen.await_count == 2
-
-    @pytest.mark.asyncio
-    async def test_clean_notes_regenerate_nothing(self, tmp_path):
-        config = make_config(tmp_path)
-        config.prototype_dir.mkdir(parents=True, exist_ok=True)
-        (config.prototype_dir / "NOTES.md").write_text(NOTES_CLEAN)
-        before = config.design_path.read_text()
-
-        mock_gen = AsyncMock(return_value="# regenerated\n")
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", mock_gen):
-            regenerated = await apply_prototype_findings(config)
-
-        assert regenerated == 0
-        assert mock_gen.await_count == 0
-        assert config.design_path.read_text() == before
-
-    @pytest.mark.asyncio
-    async def test_regeneration_failure_is_non_fatal(self, tmp_path):
+    async def test_feedback_owner_failure_is_propagated(self, tmp_path):
         config = make_config(tmp_path)
         config.prototype_dir.mkdir(parents=True, exist_ok=True)
         (config.prototype_dir / "NOTES.md").write_text(NOTES_WITH_DISPROVES)
         before = config.design_path.read_text()
-
-        mock_gen = AsyncMock(side_effect=RuntimeError("LLM down"))
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", mock_gen):
-            regenerated = await apply_prototype_findings(config)
-
-        assert regenerated == 0
+        with patch("build_pipeline.spec_generator.rewrite_plan", AsyncMock(side_effect=RuntimeError("blocked"))):
+            with pytest.raises(RuntimeError, match="blocked"):
+                await apply_prototype_findings(config)
         assert config.design_path.read_text() == before
 
-    @pytest.mark.asyncio
-    async def test_a_no_behaviour_block_the_rewrite_writes_is_rewritten_once(
-        self, tmp_path, capsys,
-    ):
-        """The prototype rewrite runs after the plan review, so it is the
-        last writer of tasks.md before TDD: the live epic's Confirm/Verify
-        blocks came from it. The scan runs on what it wrote and drives one
-        more tasks rewrite, which keeps the prototype's findings."""
-        config = make_config(tmp_path)
-        config.prototype_dir.mkdir(parents=True, exist_ok=True)
-        (config.prototype_dir / "NOTES.md").write_text(NOTES_WITH_DISPROVES)
-        fixed = "## 1. Summarize\n\nAll of it.\n"
 
-        mock_gen = AsyncMock(side_effect=["# design\n", NO_BEHAVIOUR_TASKS, fixed])
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", mock_gen):
-            regenerated = await apply_prototype_findings(config)
 
-        assert regenerated == 2
-        assert [c.args[0] for c in mock_gen.await_args_list] == ["design", "tasks", "tasks"]
-        findings = mock_gen.await_args_list[2].kwargs["audit_findings"]
-        assert "tax rate" in findings
-        assert "Block 2" in findings and "Block 3" in findings
-        assert "adds no behaviour" in findings
-        assert config.tasks_path.read_text() == fixed
-        assert "no_behaviour_blocks_remain" not in capsys.readouterr().out
 
-    @pytest.mark.asyncio
-    async def test_a_failed_no_behaviour_rewrite_leaves_the_plan_and_says_so(
-        self, tmp_path, capsys,
-    ):
-        config = make_config(tmp_path)
-        config.prototype_dir.mkdir(parents=True, exist_ok=True)
-        (config.prototype_dir / "NOTES.md").write_text(NOTES_WITH_DISPROVES)
 
-        mock_gen = AsyncMock(side_effect=[
-            "# design\n", NO_BEHAVIOUR_TASKS, RuntimeError("LLM down"),
-        ])
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", mock_gen):
-            regenerated = await apply_prototype_findings(config)
 
-        assert regenerated == 2
-        assert config.tasks_path.read_text() == NO_BEHAVIOUR_TASKS
-        assert (
-            "PHASE: no_behaviour_blocks_remain — Block 2, Block 3"
-            in capsys.readouterr().out
-        )
 
     def test_findings_text_is_empty_for_clean_notes(self, tmp_path):
         proto = tmp_path / "prototype"

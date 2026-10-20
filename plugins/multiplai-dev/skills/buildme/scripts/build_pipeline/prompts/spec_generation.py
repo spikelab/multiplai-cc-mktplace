@@ -126,6 +126,9 @@ You are generating a task breakdown for an spec-driven change.
 ## Proposal
 {proposal_content}
 
+## Use cases
+{use_cases_content}
+
 ## Specs
 {specs_content}
 

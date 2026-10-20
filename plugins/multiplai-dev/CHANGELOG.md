@@ -15,6 +15,63 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.86.0] - 2026-10-20
+
+### Fixed
+- buildme verifies the final revision after review fixes, documentation and
+  archive preparation. Failed checks or partial writers cannot publish a build;
+  publication failures remain separately resumable after successful verification.
+- Recovery preserves staged and working versions independently, including nested
+  projects. Legacy stop records without index evidence refuse destructive recovery.
+- Planning resumes missing capability requirements, includes proposal and use cases
+  in task prompts, and invalidates dependent artifacts and reviews after edits.
+  Shared, bounded plan repair stops when blocking findings remain.
+- Planning, retries and resumed calls obey the same budget admission policy as
+  implementation; queued calls cannot dispatch after exhaustion. Admission is
+  checked before every provider call, including mid-block; committed RED tests
+  and cumulative spend survive resume. Findings rounds now share one run budget.
+  Cancellation without provider usage is recorded as unknown and blocks capped
+  admission until the user resumes with `--accept-unknown-spend`; the unknown
+  records remain and the cap then covers known spend only. Available partial
+  usage is charged.
+- Required design and plan audits revalidate after each bounded repair. Completed
+  prototypes do not rerun after downstream repairs or during implementation resume.
+  A failed prototype writer now stops the build at a resumable checkpoint.
+  Proposal edits before implementation invalidate a prior prototype skip.
+  Blocked audit findings remain in the checkpoint and progress log; unchanged
+  blocked plans do not pay for the same audit on each resume.
+  Outcomes and repair admission share one revision ledger. Task-audit repairs stage
+  the full plan before publishing. Legacy implementation checkpoints without
+  revision evidence refuse continuation while preserving code and block state.
+- RED checks reject setup/collection errors through command wrappers and accept
+  assertion failures whose tracebacks quote exception names. Other runners retain
+  an explicitly unverified nonzero fallback, including compiler/setup exits.
+  Opaque wrappers with unmatched pytest paths also pass as unverified; pytest and
+  Jest collection/setup failures remain blocked. Pytest paths follow literal `cd`
+  wrappers. New Python package/function tests can reach RED without import errors.
+  Nested review diffs
+  use project-relative paths and exclude sibling changes.
+- Commits recognize staging created within agent write windows while preserving
+  divergent user staging. Commit failures raise instead of appearing as no-ops.
+- Epic builds forward explicit unknown-spend acceptance to new/resumed children
+  and capped fixers; historical commands cannot silently reuse that acceptance.
+- Test commands preserve literal `#`, `|` and other argument punctuation. Mutation
+  and epic merge tests share the build runner's literal `cd DIR &&` handling.
+- Generated test reports belong in the project's `.gitignore`; final verification
+  names changed files and provides that remedy. Commits never run the test suite.
+  Direct pytest RED rejects empty collection, usage errors and failures outside
+  the changed tests; exit 1 with a suppressed failure summary is unverified.
+  Opaque wrappers with unmatched failure paths remain unverified. Recovery guidance
+  covers reports already tracked by a block commit: untrack, ignore and commit.
+- A tasks-audit finding that a block adds no new behaviour now drives the plan
+  repair, and blocks a repaired plan, whatever severity the model gives it.
+
+### Added
+- A paired evaluation harness with held-out checks, timeout and recovery measurement.
+  The saved dry run validates scoring only. An offline worker regression exercises
+  clean bootstrap and provider admission before checking staged-user-work preservation.
+  Live effectiveness is pending and optional stage defaults remain unchanged.
+
 ## [0.85.5] - 2026-10-20
 
 ### Fixed

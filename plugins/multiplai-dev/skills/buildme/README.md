@@ -120,7 +120,7 @@ that explicitly rather than being skipped silently.
 
 `unknowns_gate` then fails any dependency whose section has an empty Edge cases
 or Assumptions list, triggering exactly **one** regeneration pass for the missing
-sections. Completion is recorded as `spec_gen.explainers_done` so a resume does
+sections. Completion is recorded as `spec_gen.steps.explainers` so a resume does
 not re-run it.
 
 `unknowns.md` is threaded into the `tasks` generation context and into the
@@ -142,21 +142,13 @@ review, decisions with nothing a test can assert on, and edge cases no scenario
 covers.
 
 The gaps are not just logged. Every gap at **critical** or **major** severity is
-fed back into **one** regeneration pass of `design.md` and then `tasks.md`, which
-is committed as its own `docs(specs): regenerate design.md and tasks.md after
-design audit`. The audit then runs once more, **report-only**, so the build log
-records whether the critique landed:
-
-```
-PHASE: design_audit_feedback_applied — 2 artifact(s)
-PHASE: design_audit_recheck — clean
-```
-
-There is no loop. Documents that still have gaps after one pass stand as they
-are — a stubborn gap costs one extra audit call, not an unbounded number. Minor
-gaps are reported and left to the review checkpoint. The pass is recorded in the
-checkpoint (`spec_gen.design_audit_regen_done`), so a resumed build audits and
-reports but never regenerates a second time.
+fed back into **one** staged repair of design, tasks and rubric. The repaired
+set must pass deterministic checks and the required re-audit before implementation.
+Minor findings are reported; unresolved critical or major findings stop planning.
+Repair admission and outcomes live together in `spec_gen.steps.design_audit`.
+An unchanged accepted revision skips the model call on resume. If a later plan
+review repairs tasks, the design audit revalidates those new inputs; each stage
+retains its one-repair allowance, so validation cannot become an unbounded loop.
 
 > Note: the multi-agent codebase-analysis step (`run_codebase_analysis`) **is**
 > wired — see [Phase 2.5](#phase-25-codebase-analysis).
@@ -178,18 +170,11 @@ findings under seven categories:
 | `no-new-behaviour` | A block adds nothing an earlier block has not built, so its tests pass before it is built and the TDD RED gate fails it |
 | `oversized-plan` | The change should be several changes |
 
-Critical and major findings drive **one** regeneration of `tasks.md`, then the
-review runs once more report-only and the plan stands — the same
-one-pass rule as the design audit, recorded in
-`spec_gen.plan_review_regen_done`, with the stage itself recorded as
-`plan_review_done` and checked before the model call so a resume costs nothing.
-A failed review call records neither, so a resume asks the model again. The
-`no-new-behaviour` blocks a model-free scan finds still get one rewrite of
-`tasks.md` in that case, recorded as `spec_gen.plan_review_scan_regen_done`, so
-the review rewrites `tasks.md` at most twice per build: once for that scan after
-a failed call, once for a completed review. The shape audit runs on each of
-those rewrites and may rewrite `tasks.md` once more after each, so `tasks.md`
-is written at most four times in this stage.
+Critical and major findings request one staged owner repair, shared with the
+model-free checks. The required recheck must pass; failed calls and unresolved
+findings record a blocked outcome and stop planning. The step's `repair_attempts`
+and revision-bound outcome live in `spec_gen.steps.plan_review`. A passing outcome
+skips repeat calls only while its inputs remain current.
 
 `oversized-plan` is deliberately excluded from that regeneration. It names a
 proposed cut and the signature boundary the cut crosses, and stops there:
@@ -224,14 +209,15 @@ only in the prompt.
   `STATUS:`.
 - **`prototype_gate`:** at least one artifact file besides `NOTES.md`, and
   non-empty `PROVES:` and `OPEN_QUESTIONS:`. Failure → one retry, then the
-  *phase* fails with a diagnosis in `build-progress.md` — never the build.
+  build stops with a diagnosis and a resumable checkpoint, because the writer
+  may have left partial edits.
 - **Feedback into the spec:** non-empty `DISPROVES:` / `OPEN_QUESTIONS:` triggers
   exactly **one** regeneration pass of `design.md` and `tasks.md` with the notes
-  injected as audit findings. Recorded as `spec_gen.prototype_done` for resume.
-  This pass is the last writer of `tasks.md` before the build, so the
-  `no-new-behaviour` scan runs on what it writes: a flagged block gets one
-  more `tasks.md` rewrite, and a block still flagged after it is named in the
-  log (`PHASE: no_behaviour_blocks_remain`).
+  injected as audit findings. Recorded as `spec_gen.steps.prototype` for resume.
+  The owner validates the staged set, including placeholders and no-behaviour
+  blocks, before publishing. Required design and plan audits run afterward and
+  may request their own bounded repairs. Completed prototypes do not rerun after
+  those repairs or during implementation resume.
 
 ### Phase 6: Review Checkpoint
 
@@ -312,8 +298,8 @@ staged with an explicit pathspec — and the files are named in the PR body unde
 **Documentation**.
 
 **Always on.** There is no flag and no `config.yaml` toggle: shipping code with
-stale docs is what this phase exists to prevent. It is **non-fatal** (an LLM
-failure logs and the build still completes) and it never pads: the agent closes
+stale docs is what this phase exists to prevent. A failed writer stops completion
+and leaves a resumable checkpoint. The agent closes
 with a REQUIRED `DOCS_IMPACT:` slot, and `none` is a legitimate answer for a
 change with no user-visible delta.
 
@@ -871,7 +857,7 @@ WORKTREE:/Users/me/knowhere/.worktrees/buildme-password-reset
 ```
 
 Other lines: `DOCS_WARNING:<reason>` (documentation may be stale — a warning,
-never a failure), `PHASE:DOCS_UPDATE:FAILED:<reason>` (non-fatal),
+never a failure), `PHASE:DOCS_UPDATE:FAILED:<reason>` (blocks completion),
 `PHASE:ARCHIVE:PENDING:<change>` (non-`--auto` runs),
 `PHASE:PUBLISH:SKIPPED:<branch>` (`--no-push`),
 `PHASE:PUBLISH:FAILED:{no-remote|push|pr}` with `PUBLISH_DIAGNOSIS:<reason>`
@@ -886,7 +872,7 @@ Gates are pure functions (no LLM calls) that return pass/fail decisions:
 |------|------|-------------|
 | `unknowns_gate` | After `unknowns.md` is written | One regeneration pass for the missing sections only (no loop) |
 | `prototype_required` | Before the prototype stage | Not a pass/fail gate — decides whether the stage runs, and logs the reason either way |
-| `prototype_gate` | After the prototype agent | One retry, then the *phase* fails with a diagnosis — never the build |
+| `prototype_gate` | After the prototype agent | One retry, then stop the build with a resumable checkpoint |
 | `docs_freshness_gate` | After the documentation phase | **Never fails.** Prints `DOCS_WARNING:<reason>` when source changed, a changelog exists, and nothing was documented |
 | Baseline test | Before block 1 | Abort (existing tests broken) |
 | Weak test detection | After test writer | Retry with feedback |
@@ -894,7 +880,7 @@ Gates are pure functions (no LLM calls) that return pass/fail decisions:
 | Quality review (graded, panel-merged) | After implementer | Fix agent on the failing dimensions and every accepted finding, then review again (max 3 reviews). Every round is recorded in `reviews/` |
 | Fix on pass (`code_review.fix_on_pass`, on by default) | A block passed review with accepted Critical/Major/Minor findings | One fix pass on those findings, then suite + test integrity + one more review. Kept only if the suite is green and the block still passes; otherwise rolled back and listed in `unfixed-findings.md`. Never fails the block |
 | Integration | After block done | Integration fix agent (max 2) |
-| Budget | Each block boundary | Stop with a per-phase spend diagnosis |
+| Budget | Before each provider dispatch, inside the concurrency slot | Stop with persisted spend; unknown cancelled usage requires explicit acceptance before capped resume |
 | Entry point | Post-TDD | Warn (manual step needed) |
 
 `gates.py` also carries two parsers used by the loop back to the spec:
@@ -1008,9 +994,11 @@ records the claim.
 Every other loop bound in the pipeline is an iteration count, which does not
 bound spend: three review iterations over a huge diff with a three-member
 panel costs an order of magnitude more than three over a small one. The
-`budget:` ceilings add the missing axis. Spend is checked at block boundaries
-(nothing is half-done there), warns once at 80%, and stops with a
-per-phase breakdown of where the tokens went. The 80% warning also prints
+`budget:` ceilings add the missing axis. Spend is checked before every provider
+dispatch, inside the concurrency slot, warns once at 80%, and stops with a
+per-phase breakdown. An admitted call can finish above the cap; the next call
+stops even midway through a block. Committed RED tests and spend survive resume.
+Findings rounds share the run budget. The 80% warning also prints
 `BUDGET:WARN:<percent>:<usd>` and writes a `BUDGET_WARNING` section to
 `build-progress.md`. The spend is checkpointed into `.build-state.json`, and a
 resume in any phase loads it, so a resumed build does not get a fresh budget.
@@ -1071,9 +1059,13 @@ State is checkpointed to `.build-state.json` after every phase transition:
   "pr_url": null,
   "spec_gen": {
     "completed_artifacts": ["proposal", "use-cases", "requirements", "design", "unknowns", "tasks", "rubric"],
-    "explainers_done": true,
-    "plan_review_done": true,
-    "prototype_done": true
+    "revision": "<plan-content-hash>",
+    "steps": {
+      "explainers": {"revision": "<explainer-input-hash>", "outcome": "skipped", "repair_attempts": 0},
+      "design_audit": {"revision": "<audit-input-hash>", "outcome": "passed", "repair_attempts": 1},
+      "plan_review": {"revision": "<plan-content-hash>", "outcome": "passed", "repair_attempts": 0},
+      "prototype": {"revision": "<prototype-input-hash>", "outcome": "passed", "repair_attempts": 0}
+    }
   },
   "tdd": {
     "blocks": [
@@ -1140,8 +1132,58 @@ cd skills/buildme/scripts
 PYTHONPATH=. python -m pytest tests/ -xvs
 ```
 
-1335 tests covering config, state, models, gates, change manager, dependency
+The test suite covers config, state, models, gates, change manager, dependency
 detection, spec generator, plan review and its split assessment, vendored-prompt
 pins, prototype/docs/respec steps, git lifecycle, board seam, and the TDD
 engine. All tests mock LLM calls (and `gh`) — no API keys
 needed.
+
+Add generated test reports (for example, `test-results/` or `.coverage`) to the
+project's `.gitignore` before building. Gitignored files stay out of commits,
+clean-tree checks and final verification. Tracked files remain protected inputs.
+If tests change an input or create an untracked report during final verification,
+Buildme names the changed paths. If a listed file is a generated report that a
+block commit already tracked, run `git rm --cached <path>`, add it to `.gitignore`,
+and commit before retrying. For an untracked report, add it to `.gitignore` and
+commit the ignore rule. Inspect changes to source inputs.
+Commits do not run tests.
+
+Legacy checkpoints without planning revision evidence load for inspection. Those
+already in TDD, review, or publication deliberately refuse automatic continuation:
+old booleans cannot establish which documents the implementation accepted. The
+orchestrator keeps their implementation and block state intact and does not call
+models or publish. Preserve that checkout; start a reviewed build in a separate
+clean checkout. Earlier planning checkpoints revalidate, and current-format
+checkpoints resume from their recorded revision. Repair allowances from legacy
+flags migrate into the step ledger; legacy done flags do not become passing evidence.
+
+The budget is cumulative across findings rounds and is checked before each
+provider dispatch, inside the concurrency slot. This intentionally replaces the
+older block-boundary-only admission policy: an admitted call can finish above the
+cap, and the next call stops even midway through a block. Committed RED tests and
+spend survive that stop; raising the cap resumes from the saved evidence.
+
+Cancellation is counted from partial usage when the provider exposes it. The
+shared runner can cancel without returning usage; Buildme records those calls in
+`budget.unaccounted_calls`, marks process spend incomplete, and refuses further
+provider admission for a capped run. Reported amounts are then lower bounds.
+To resume after an interruption, rerun the same command with
+`--accept-unknown-spend` (available on `build`, `tdd`, `spec-generate`, and
+`findings`). Epic builds forward the flag to new/resumed children and capped
+fixers. Historical child argv does not authorize acceptance on later epic runs;
+repeat the flag when needed. This explicitly accepts the prior unknown calls; it
+preserves their record and the known totals. The cap then applies to known spend only, so total
+actual spend can exceed it by the unknown amount. Acceptance is saved in the
+checkpoint. A later interrupted call needs a new explicit acceptance. Raising
+the cap alone does not accept unknown usage; no JSON editing is required.
+
+Required audits retain blocking findings in the checkpoint and `build-progress.md`.
+An unchanged blocked revision stops without another paid review; edit the plan to
+address those findings before resuming. Prototype evidence remains revision-bound
+before implementation: a changed proposal invalidates a prior skip. Repairs made
+by the planning publisher retain the completed prototype while updating design.
+
+If a hard interruption loses staging-ownership evidence, the commit refusal names
+the paths. Inspect `git diff` and `git diff --cached`, save both versions, then
+explicitly stage the chosen working version with `git add -- <paths>` or unstage
+with `git restore --staged -- <paths>`. Buildme cannot infer which version to keep.

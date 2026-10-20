@@ -39,13 +39,15 @@ class ApplyStop(BaseModel):
     """What `--apply` wrote into `<registry>`, in the shape of buildme's
     `stop_record.StepStop`, which the uncommitted-work check validates it as
     (plan, item 21). `edits` maps each file name, relative to `<registry>`, to
-    `"sha256:"` plus the SHA-256 of the bytes written there; it is saved before
-    each write. `head` stays None: the check compares no HEAD."""
+    a mode/content fingerprint, saved before each write. `index` records the
+    independent staged entries. Missing legacy evidence cannot authorize resume.
+    `head` stays None: the check compares no HEAD."""
 
     model_config = ConfigDict(extra="forbid")
 
     head: str | None = None
     edits: dict[str, str] = {}
+    index: dict[str, str] | None = None
 
 
 class State(BaseModel):

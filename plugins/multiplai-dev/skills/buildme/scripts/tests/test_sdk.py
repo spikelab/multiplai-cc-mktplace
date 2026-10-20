@@ -378,3 +378,93 @@ class TestAgentCallStructured:
                     "review it", self.Answer, allowed_tools=["Read"],
                 )
         run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_queued_calls_and_parse_retries_obey_budget(monkeypatch):
+    import asyncio
+    from build_pipeline import sdk
+    budget_mod.reset()
+    budget_mod.configure(max_usd=1)
+    monkeypatch.setattr(sdk, "_sdk_semaphore", asyncio.Semaphore(1))
+    async def provider(*args, **kwargs):
+        await asyncio.sleep(0)
+        return SimpleNamespace(text="invalid json", usage=SimpleNamespace(cost_usd=2), turns=1, files_changed=[])
+    run = AsyncMock(side_effect=provider)
+    monkeypatch.setattr(sdk, "run_agent", run)
+    try:
+        outcomes = await asyncio.gather(llm_call("one"), llm_call("two"), return_exceptions=True)
+        assert run.await_count == 1
+        assert sum(isinstance(x, budget_mod.BudgetExceededError) for x in outcomes) == 1
+        with pytest.raises(budget_mod.BudgetExceededError):
+            await llm_call_structured("retry", BaseModel)
+        assert run.await_count == 1
+        assert budget_mod.get_budget().cost_usd == 2
+    finally:
+        budget_mod.reset()
+
+@pytest.mark.asyncio
+async def test_real_core_cancellation_without_usage_stays_unknown_on_resume(monkeypatch):
+    import asyncio
+    import claude_agent_sdk as provider
+    from build_pipeline import sdk
+    from multiplai_core import agent_runner
+    entered = asyncio.Event()
+    async def stream(**_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+        yield  # async generator; cancellation supplies no final usage
+    monkeypatch.setattr(provider, 'query', stream)
+    monkeypatch.setenv('MULTIPLAI_SDK_DEBUG_LOG', 'off')
+    monkeypatch.setenv('MULTIPLAI_AGENT_HEARTBEAT_S', '0')
+    monkeypatch.setattr(sdk, 'run_agent', agent_runner.run_agent)
+    budget_mod.reset()
+    budget_mod.configure(max_usd=1)
+    task = asyncio.create_task(sdk.llm_call('offline cancellation', model='anthropic:claude-test', budget_label='planning'))
+    await asyncio.wait_for(entered.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    saved = budget_mod.get_budget().to_state()
+    assert saved['unaccounted_calls'] == ['planning']
+    assert saved['cost_usd'] == 0  # unknown is not fabricated into a charge
+    budget_mod.reset().load_state(saved)
+    budget_mod.configure(max_usd=10)
+    with pytest.raises(budget_mod.BudgetExceededError, match='unknown'):
+        await sdk.llm_call('must not start another request', model='anthropic:claude-test')
+    budget_mod.reset()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('result_kind', ['success', 'partial_error', 'cancel'])
+async def test_evidence_write_failure_cannot_hide_provider_spend(tmp_path, monkeypatch, result_kind):
+    import asyncio
+    import subprocess
+    from build_pipeline import sdk, io_utils
+    def git(*args):
+        subprocess.run(['git', *args], cwd=tmp_path, check=True, capture_output=True)
+    git('init', '-q')
+    (tmp_path / 'app.py').write_text('base\n')
+    git('add', '.')
+    git('commit', '-qm', 'base')
+    monkeypatch.setenv('BUILDME_TRUST_REPO', '1')
+    usage = SimpleNamespace(cost_usd=.2, input_tokens=20)
+    partial = SimpleNamespace(text='partial', turns=1, files_changed=[], usage=usage)
+    async def provider(*a, **kw):
+        (tmp_path / 'app.py').write_text('agent\n')
+        git('add', 'app.py')
+        if result_kind == 'partial_error':
+            raise AgentRunError('provider failed', reason='failure', partial=partial)
+        if result_kind == 'cancel':
+            raise asyncio.CancelledError()
+        return partial
+    monkeypatch.setattr(sdk, 'run_agent', provider)
+    def no_space(*a, **kw):
+        raise OSError('no space for ownership evidence')
+    monkeypatch.setattr(io_utils, 'atomic_write', no_space)
+    with pytest.raises(OSError, match='ownership evidence'):
+        await sdk.agent_call('write', allowed_tools=['Write'], cwd=str(tmp_path))
+    if result_kind == 'cancel':
+        assert budget_mod.get_budget().unaccounted_calls == ['agent']
+    else:
+        assert budget_mod.get_budget().cost_usd == .2
+        assert budget_mod.get_budget().calls == 1

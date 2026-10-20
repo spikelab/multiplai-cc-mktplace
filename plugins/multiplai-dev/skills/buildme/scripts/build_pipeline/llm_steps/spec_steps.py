@@ -8,7 +8,6 @@ structured output.
 from __future__ import annotations
 
 import functools
-import json
 import logging
 import re
 from pathlib import Path
@@ -63,11 +62,8 @@ REGISTRY_PLAN_RULE = (
 async def _audit_agent_text(prompt: str, config, *, budget_label: str) -> str:
     """Run one audit as a read-only subagent, returning its raw text.
 
-    The audits read a JSON list rather than a Pydantic model, so this is the
-    `agent_call` twin of the `llm_call` they used to make: same
-    return-the-text contract, same non-fatal degradation (a failed agent hands
-    back its partial output, which the caller's JSON parse then rejects with
-    the warning it already had).
+    A failed agent cannot provide completed audit evidence, even if its
+    partial output happens to contain an empty findings list.
     """
     result = await agent_call(
         prompt,
@@ -79,8 +75,27 @@ async def _audit_agent_text(prompt: str, config, *, budget_label: str) -> str:
         budget_label=budget_label,
     )
     if not result.success:
-        log.warning("%s subagent failed: %s", budget_label, result.error)
+        raise LLMCallError(f"{budget_label} audit failed: {result.error or result.output}")
     return result.output or ""
+
+
+def _audit_findings(raw: str, label: str) -> list[dict]:
+    """Require the complete findings schema before accepting audit evidence."""
+    try:
+        findings = extract_json(raw)
+    except ValueError as exc:
+        raise LLMCallError(f"{label} audit returned invalid JSON") from exc
+    if not isinstance(findings, list):
+        raise LLMCallError(f"{label} audit must return a findings list")
+    for finding in findings:
+        if not isinstance(finding, dict) or any(
+            not isinstance(finding.get(key), str) or not finding[key].strip()
+            for key in ("category", "severity", "description", "suggestion")
+        ) or finding["severity"].lower() not in {"critical", "major", "minor"}:
+            raise LLMCallError(f"{label} audit returned an invalid finding")
+        finding["severity"] = finding["severity"].lower()
+    log.info("%s audit found %d findings", label, len(findings))
+    return findings
 
 
 async def generate_artifact(
@@ -203,6 +218,7 @@ def _build_prompt(
             proposal_content=proposal_content,
             specs_content=specs_content,
             design_content=design_content,
+            use_cases_content=_read_dep(context, "use-cases", config),
             granularity=config.task_granularity,
             unknowns_content=context.get("unknowns_content") or "(none detected)",
             reference_docs=reference_docs or "(none available)",
@@ -373,15 +389,7 @@ async def run_design_audit(change_dir: Path, config) -> list[dict]:
     log.info("Running design audit on %s", change_dir.name)
     raw = await _audit_agent_text(prompt, config, budget_label="design_audit")
 
-    try:
-        gaps = extract_json(raw)
-        if isinstance(gaps, list):
-            log.info("Design audit found %d gaps", len(gaps))
-            return gaps
-        return []
-    except (ValueError, json.JSONDecodeError):
-        log.warning("Design audit returned non-JSON response")
-        return []
+    return _audit_findings(raw, "Design")
 
 
 async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
@@ -413,29 +421,7 @@ async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
     log.info("Running tasks shape audit on %s", change_dir.name)
     raw = await _audit_agent_text(prompt, config, budget_label="tasks_audit")
 
-    try:
-        findings = extract_json(raw)
-        if isinstance(findings, list):
-            dict_findings = [f for f in findings if isinstance(f, dict)]
-            if len(dict_findings) != len(findings):
-                log.warning(
-                    "Tasks shape audit dropped %d non-dict findings",
-                    len(findings) - len(dict_findings),
-                )
-            log.info("Tasks shape audit found %d findings", len(dict_findings))
-            return dict_findings
-        # A non-list JSON payload (e.g. the model wrapped the findings in an
-        # object) would previously pass silently as "no findings" — warn so
-        # the drop is visible in the log.
-        log.warning(
-            "Tasks shape audit returned JSON %s instead of a list — "
-            "treating as no findings",
-            type(findings).__name__,
-        )
-        return []
-    except (ValueError, json.JSONDecodeError):
-        log.warning("Tasks shape audit returned non-JSON response")
-        return []
+    return _audit_findings(raw, "Tasks shape")
 
 
 async def _codebase_analysis_call(prompt: str, schema, *, config, budget_label: str = "", **kwargs):

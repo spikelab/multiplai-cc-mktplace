@@ -132,11 +132,11 @@ class TestArtifactStatus:
 
     def test_all_done(self, cm, specs_dir):
         change = cm.create_change("test")
-        (change / "proposal.md").write_text("x")
+        (change / "proposal.md").write_text("## Capabilities\n- `cap1`\n")
         (change / "use-cases.md").write_text("x")
         (change / "design.md").write_text("x")
         (change / "requirements").mkdir(exist_ok=True)
-        (change / "requirements" / "cap1.md").write_text("x")
+        (change / "requirements" / "cap1.md").write_text("### Requirement: A\n#### Scenario: A\nWHEN invoked\nTHEN returns A\n")
         (change / "unknowns.md").write_text("x")
         (change / "tasks.md").write_text("x")
         (change / "rubric.md").write_text("x")
@@ -145,7 +145,7 @@ class TestArtifactStatus:
 
     def test_tasks_blocked_without_requirements(self, cm, specs_dir):
         change = cm.create_change("test")
-        (change / "proposal.md").write_text("x")
+        (change / "proposal.md").write_text("## Capabilities\n- `cap1`\n")
         (change / "design.md").write_text("x")
         status = cm.artifact_status(change)
         assert status["tasks"] == ArtifactStatus.BLOCKED
@@ -154,10 +154,10 @@ class TestArtifactStatus:
         """The explainer gate is a hard DAG dependency: tasks cannot be written
         before the edge cases of anything new are on disk."""
         change = cm.create_change("test")
-        (change / "proposal.md").write_text("x")
+        (change / "proposal.md").write_text("## Capabilities\n- `cap1`\n")
         (change / "design.md").write_text("x")
         (change / "requirements").mkdir(exist_ok=True)
-        (change / "requirements" / "cap1.md").write_text("x")
+        (change / "requirements" / "cap1.md").write_text("### Requirement: A\n#### Scenario: A\nWHEN invoked\nTHEN returns A\n")
         status = cm.artifact_status(change)
         assert status["unknowns"] == ArtifactStatus.READY
         assert status["tasks"] == ArtifactStatus.BLOCKED
@@ -166,18 +166,18 @@ class TestArtifactStatus:
         self, cm, specs_dir,
     ):
         change = cm.create_change("test")
-        (change / "proposal.md").write_text("x")
+        (change / "proposal.md").write_text("## Capabilities\n- `cap1`\n")
         (change / "use-cases.md").write_text("x")
         (change / "design.md").write_text("x")
         (change / "requirements").mkdir(exist_ok=True)
-        (change / "requirements" / "cap1.md").write_text("x")
+        (change / "requirements" / "cap1.md").write_text("### Requirement: A\n#### Scenario: A\nWHEN invoked\nTHEN returns A\n")
         (change / "unknowns.md").write_text("x")
         status = cm.artifact_status(change)
         assert status["tasks"] == ArtifactStatus.READY
 
     def test_unknowns_requires_design(self, cm, specs_dir):
         change = cm.create_change("test")
-        (change / "proposal.md").write_text("x")
+        (change / "proposal.md").write_text("## Capabilities\n- `cap1`\n")
         status = cm.artifact_status(change)
         assert status["unknowns"] == ArtifactStatus.BLOCKED
 
@@ -186,7 +186,7 @@ class TestArtifactStatus:
         node sits alongside requirements and design, not behind them."""
         change = cm.create_change("test")
         assert cm.artifact_status(change)["use-cases"] == ArtifactStatus.BLOCKED
-        (change / "proposal.md").write_text("x")
+        (change / "proposal.md").write_text("## Capabilities\n- `cap1`\n")
         status = cm.artifact_status(change)
         assert status["use-cases"] == ArtifactStatus.READY
 
@@ -194,10 +194,10 @@ class TestArtifactStatus:
         """A use case is delivered by a block or by nothing at all, so the
         breakdown is not written until the use cases are on disk."""
         change = cm.create_change("test")
-        (change / "proposal.md").write_text("x")
+        (change / "proposal.md").write_text("## Capabilities\n- `cap1`\n")
         (change / "design.md").write_text("x")
         (change / "requirements").mkdir(exist_ok=True)
-        (change / "requirements" / "cap1.md").write_text("x")
+        (change / "requirements" / "cap1.md").write_text("### Requirement: A\n#### Scenario: A\nWHEN invoked\nTHEN returns A\n")
         (change / "unknowns.md").write_text("x")
         status = cm.artifact_status(change)
         assert status["use-cases"] == ArtifactStatus.READY
@@ -212,7 +212,7 @@ class TestReadyArtifacts:
 
     def test_after_proposal(self, cm):
         change = cm.create_change("test")
-        (change / "proposal.md").write_text("x")
+        (change / "proposal.md").write_text("## Capabilities\n- `cap1`\n")
         ready = cm.ready_artifacts(change)
         assert "requirements" in ready
         assert "design" in ready
@@ -237,7 +237,7 @@ class TestArtifactContext:
 
     def test_includes_dependency_paths(self, cm):
         change = cm.create_change("test")
-        (change / "proposal.md").write_text("x")
+        (change / "proposal.md").write_text("## Capabilities\n- `cap1`\n")
         ctx = cm.artifact_context(change, "design")
         assert "proposal" in ctx["dependencies"]
 
@@ -310,7 +310,7 @@ class TestListChanges:
 class TestArchiveChange:
     def test_moves_to_archive(self, cm):
         change = cm.create_change("done")
-        (change / "proposal.md").write_text("x")
+        (change / "proposal.md").write_text("## Capabilities\n- `cap1`\n")
         dest = cm.archive_change(change, merge_specs=False)
         assert dest.exists()
         assert not change.exists()
@@ -318,7 +318,7 @@ class TestArchiveChange:
 
     def test_merges_delta_requirements(self, cm, specs_dir):
         change = cm.create_change("done")
-        (change / "proposal.md").write_text("x")
+        (change / "proposal.md").write_text("## Capabilities\n- `cap1`\n")
         # Create delta requirement
         (change / "requirements").mkdir(parents=True)
         (change / "requirements" / "auth.md").write_text(
@@ -452,3 +452,28 @@ def test_findings_edit_on_spec_extract_registry_file():
     # The other requirement, with its CITES and EVIDENCE lines, is untouched.
     adds = text.split("### Requirement: Subtracts two numbers")[0]
     assert edited.startswith(adds)
+
+
+def test_requirements_need_every_proposed_capability(tmp_path):
+    from build_pipeline.change_manager import ChangeManager
+    from build_pipeline.models import ArtifactStatus
+    cm = ChangeManager(tmp_path / "specs")
+    change = cm.create_change("two-caps")
+    (change / "proposal.md").write_text("## Capabilities\n- `one`\n- `two`\n")
+    (change / "requirements").mkdir()
+    (change / "requirements" / "one.md").write_text(
+        "## ADDED Requirements\n### Requirement: One\nRequired.\n#### Scenario: Works\n- **WHEN** called\n- **THEN** succeeds\n")
+    (change / "tasks.md").write_text("## 1. Both\nImplement both capabilities")
+    status = cm.artifact_status(change)
+    assert status["requirements"] == ArtifactStatus.READY
+    assert status["tasks"] == ArtifactStatus.BLOCKED
+
+
+def test_requirements_validate_every_requirement_and_allow_removal_deltas():
+    from build_pipeline.change_manager import valid_requirement_text
+    valid = "### Requirement: Works\n#### Scenario: Normal\nWHEN called\nTHEN succeeds\n"
+    assert valid_requirement_text(valid)
+    assert not valid_requirement_text(valid + "### Requirement: Missing scenarios\n")
+    assert not valid_requirement_text(valid + "#### Scenario: Incomplete\nWHEN called\n")
+    assert valid_requirement_text("## REMOVED Requirements\n### Requirement: Old behavior\n")
+    assert not valid_requirement_text("## ADDED Requirements\n### Requirement: <!-- name -->\n")

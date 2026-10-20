@@ -161,7 +161,7 @@ def test_a_recorded_path_now_staged_with_the_same_content_passes(repo):
     (repo / "app.py").write_text("x = 2\n")
     stop = stop_record.record(repo)
     _git(repo, "add", "app.py")
-    assert stop_record.others_work(repo, stop, head=stop.head) is None
+    assert "index changed" in stop_record.others_work(repo, stop, head=stop.head)
 
 
 # --- rule 5: HEAD --------------------------------------------------------------
@@ -172,7 +172,7 @@ def test_head_equal_passes_and_none_is_not_checked(repo):
     (repo / "lib.py").write_text("y = 2\n")
     _git(repo, "commit", "-qam", "the user's commit")
     assert stop_record.others_work(repo, stop, head=None) is None
-    assert stop_record.others_work(repo, StepStop(head=_head(repo)), head=_head(repo)) is None
+    assert stop_record.others_work(repo, stop_record.record(repo), head=_head(repo)) is None
 
 
 def test_a_commit_after_the_stop_is_refused(repo):
@@ -216,3 +216,33 @@ def test_only_stop_record_compares_stop_records():
 def test_state_still_exports_stepstop():
     from build_pipeline.state import StepStop as FromState
     assert FromState is StepStop
+
+
+def test_staged_user_blob_hidden_by_restored_worktree_is_refused(repo):
+    (repo / "app.py").write_text("agent\n")
+    stop = stop_record.record(repo)
+    (repo / "app.py").write_text("user\n")
+    _git(repo, "add", "app.py")
+    (repo / "app.py").write_text("agent\n")
+    before = _git(repo, "ls-files", "--stage")
+    assert "index" in stop_record.others_work(repo, stop)
+    assert _git(repo, "ls-files", "--stage") == before
+    assert _git(repo, "show", ":app.py") == "user"
+    assert (repo / "app.py").read_text() == "agent\n"
+
+
+def test_legacy_record_cannot_authorize_discard(repo):
+    stop = StepStop(head=_head(repo), edits={})
+    assert "legacy" in stop_record.others_work(repo, stop)
+
+
+def test_wip_keeps_index_and_worktree_without_staging(repo):
+    (repo / "app.py").write_text("staged\n")
+    _git(repo, "add", "app.py")
+    (repo / "app.py").write_text("working\n")
+    before = (_head(repo), _git(repo, "ls-files", "--stage"))
+    ref = git_ops.save_wip_ref(repo, "refs/buildme/wip/test/stop", "save")
+    assert ref
+    assert (_head(repo), _git(repo, "ls-files", "--stage")) == before
+    assert _git(repo, "show", f"{ref}:app.py") == "working"
+    assert _git(repo, "show", f"{ref}^2:app.py") == "staged"

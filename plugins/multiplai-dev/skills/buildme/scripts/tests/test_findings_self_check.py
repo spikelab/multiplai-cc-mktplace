@@ -101,12 +101,18 @@ def block_stubs(repo: Path, log: Path | None = None, *, searched: str = "calc.py
         hit("review", block.name)
         return ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])
 
-    red = (1, "FAILED tests/test_calc.py::test_add - AssertionError")
+    def red(*_a, **_kw):
+        # The engine committed the current writer's tests before running RED.
+        # Read that commit so replacement writers in resume cases also work.
+        names = _git(repo, "show", "--pretty=", "--name-only", "HEAD").splitlines()
+        failures = [f"FAILED {name}::test_add - AssertionError"
+                    for name in names if name.startswith("tests/") and name.endswith(".py")]
+        return 1, "\n".join([*failures, f"{len(failures)} failed"])
     return [
         patch("build_pipeline.tdd_engine.run_test_writer", side_effect=test_writer),
         patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer),
         patch("build_pipeline.tdd_engine.run_refactorer", side_effect=refactorer),
-        patch("build_pipeline.tdd_engine.run_test_suite", return_value=red),
+        patch("build_pipeline.tdd_engine.run_test_suite", side_effect=red),
         patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
               return_value=QualityAudit(passed=True)),
         patch("build_pipeline.tdd_engine._run_quality_review", side_effect=review),

@@ -122,7 +122,7 @@ def _change_dir(tmp_path, *, use_cases: bool = True) -> Path:
     change_dir.mkdir(parents=True)
     (change_dir / "proposal.md").write_text("## Why\nBecause.\n")
     (change_dir / "design.md").write_text("## Decisions\nOne.\n")
-    (change_dir / "tasks.md").write_text("## Block 1\n- [ ] do it\n")
+    (change_dir / "tasks.md").write_text("## 1. Behavior\n- [ ] do it\n")
     (change_dir / "rubric.md").write_text("## Criteria\n- correctness\n")
     if use_cases:
         (change_dir / "use-cases.md").write_text(
@@ -519,14 +519,26 @@ def _stage_setup(tmp_path, change="plan-c"):
     cm.create_change(change)
     (config.change_dir / "proposal.md").write_text("## Why\nBecause.\n")
     (config.change_dir / "design.md").write_text("## Decisions\nOne.\n")
-    (config.change_dir / "tasks.md").write_text("## Block 1\n- [ ] do it\n")
+    (config.change_dir / "tasks.md").write_text("## 1. Behavior\n- [ ] do it\n")
     (config.change_dir / "rubric.md").write_text("## Criteria\n- correctness\n")
     state_path = tmp_path / "state.json"
     state = BuildState(
         change_name=change, mode="only", tier="advanced",
         phase=BuildPhase.DESIGN_AUDIT, state_file=str(state_path),
     )
+    (config.change_dir / "proposal.md").write_text("## Capabilities\n- `cap-a`\n")
+    (config.change_dir / "requirements").mkdir(exist_ok=True)
+    (config.change_dir / "requirements" / "cap-a.md").write_text("### Requirement: A\n#### Scenario: A\nWHEN invoked\nTHEN returns A\n")
+    from build_pipeline.spec_generator import reconcile_plan
+    reconcile_plan(config, state)
     return config, state, state_path
+
+
+@pytest.fixture(autouse=True)
+def stage_followup_models():
+    with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Current rubric")), \
+         patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", AsyncMock(return_value=[])):
+        yield
 
 
 class TestPlanReviewStage:
@@ -543,8 +555,8 @@ class TestPlanReviewStage:
                 config.change_dir, config, state, state_path)
 
         assert findings == []
-        assert state.spec_gen.plan_review_done is True
-        assert state.spec_gen.plan_review_regen_done is False
+        assert state.spec_gen.step_passed("plan_review") is True
+        assert state.spec_gen.repair_attempts("plan_review") == 0
         regen.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -556,20 +568,20 @@ class TestPlanReviewStage:
             PlanReviewResult(findings=[_finding(severity="critical")]),
             PlanReviewResult(findings=[]),  # the report-only re-check
         ])
-        regen = AsyncMock(return_value="## Block 1\n- [ ] do it properly\n")
+        regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
         with patch.object(plan_review_steps, "run_plan_review", review), \
                 patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen):
             findings = await run_plan_review_stage(
                 config.change_dir, config, state, state_path)
 
-        assert len(findings) == 1
+        assert findings == []
         assert regen.await_count == 1
         assert regen.await_args.args[0] == "tasks"
         assert "do it properly" in (config.change_dir / "tasks.md").read_text()
         # One regeneration, then ONE report-only re-check. No loop.
         assert review.await_count == 2
-        assert state.spec_gen.plan_review_regen_done is True
-        assert state.spec_gen.plan_review_done is True
+        assert state.spec_gen.repair_attempts("plan_review") == 1
+        assert state.spec_gen.step_passed("plan_review") is True
 
     @pytest.mark.asyncio
     async def test_the_rewritten_plan_is_re_audited_for_shape(self, tmp_path):
@@ -581,7 +593,7 @@ class TestPlanReviewStage:
             PlanReviewResult(findings=[_finding(severity="critical")]),
             PlanReviewResult(findings=[]),
         ])
-        regen = AsyncMock(return_value="## Block 1\n- [ ] do it properly\n")
+        regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
         shape_audit = AsyncMock(return_value=[])
         with patch.object(plan_review_steps, "run_plan_review", review), \
                 patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen), \
@@ -605,7 +617,7 @@ class TestPlanReviewStage:
             PlanReviewResult(findings=[_finding(severity="critical")]),
             PlanReviewResult(findings=[]),
         ])
-        regen = AsyncMock(return_value="## Block 1\n- [ ] do it properly\n")
+        regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
         rubric = AsyncMock(return_value="## Criteria\n- covers the new blocks\n")
         with patch.object(plan_review_steps, "run_plan_review", review), \
                 patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen), \
@@ -627,19 +639,19 @@ class TestPlanReviewStage:
             PlanReviewResult(findings=[_finding(severity="critical")]),
             PlanReviewResult(findings=[]),
         ])
-        regen = AsyncMock(return_value="## Block 1\n- [ ] do it properly\n")
+        regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
         with patch.object(plan_review_steps, "run_plan_review", review), \
                 patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen), \
                 patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit",
                       AsyncMock(side_effect=RuntimeError("audit exploded"))), \
                 patch("build_pipeline.spec_generator.generate_rubric",
                       AsyncMock(side_effect=RuntimeError("rubric exploded"))):
-            findings = await run_plan_review_stage(
-                config.change_dir, config, state, state_path)
+            with pytest.raises((RuntimeError, ValueError)):
+                await run_plan_review_stage(
+                    config.change_dir, config, state, state_path)
 
-        assert len(findings) == 1
-        assert "do it properly" in (config.change_dir / "tasks.md").read_text()
-        assert state.spec_gen.plan_review_done is True
+        assert "do it properly" not in (config.change_dir / "tasks.md").read_text()
+        assert state.spec_gen.step_passed("plan_review") is False
 
     @pytest.mark.asyncio
     async def test_a_recorded_regeneration_is_report_only_on_resume(self, tmp_path):
@@ -650,17 +662,18 @@ class TestPlanReviewStage:
         regen = AsyncMock()
         with patch.object(plan_review_steps, "run_plan_review", review), \
                 patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen):
-            await run_plan_review_stage(
-                config.change_dir, config, state, state_path)
+            with pytest.raises(RuntimeError):
+                await run_plan_review_stage(
+                    config.change_dir, config, state, state_path)
 
         regen.assert_not_awaited()
         assert review.await_count == 1
-        assert state.spec_gen.plan_review_done is True
+        assert state.spec_gen.step_passed("plan_review") is False
 
     @pytest.mark.asyncio
     async def test_a_spent_stage_is_checked_before_the_model_call(self, tmp_path):
         config, state, state_path = _stage_setup(tmp_path)
-        state.spec_gen = SpecGenState(plan_review_done=True)
+        state.spec_gen.record_step("plan_review", "passed")
         review = AsyncMock()
         with patch.object(plan_review_steps, "run_plan_review", review):
             findings = await run_plan_review_stage(
@@ -676,11 +689,11 @@ class TestPlanReviewStage:
         config, state, state_path = _stage_setup(tmp_path)
         review = AsyncMock(side_effect=RuntimeError("model exploded"))
         with patch.object(plan_review_steps, "run_plan_review", review):
-            findings = await run_plan_review_stage(
-                config.change_dir, config, state, state_path)
+            with pytest.raises(RuntimeError):
+                await run_plan_review_stage(
+                    config.change_dir, config, state, state_path)
 
-        assert findings == []
-        assert state.spec_gen.plan_review_done is False
+        assert state.spec_gen.step_passed("plan_review") is False
 
     @pytest.mark.asyncio
     async def test_a_failed_regeneration_leaves_the_reviewed_plan_standing(
@@ -693,14 +706,15 @@ class TestPlanReviewStage:
         regen = AsyncMock(side_effect=RuntimeError("generation exploded"))
         with patch.object(plan_review_steps, "run_plan_review", review), \
                 patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen):
-            await run_plan_review_stage(
-                config.change_dir, config, state, state_path)
+            with pytest.raises(RuntimeError):
+                await run_plan_review_stage(
+                    config.change_dir, config, state, state_path)
 
         assert (config.change_dir / "tasks.md").read_text() == before
         # The pass has been spent — a failed regeneration is not a reason to
         # try again later.
-        assert state.spec_gen.plan_review_regen_done is True
-        assert state.spec_gen.plan_review_done is True
+        assert state.spec_gen.repair_attempts("plan_review") == 1
+        assert state.spec_gen.step_passed("plan_review") is False
 
     @pytest.mark.asyncio
     async def test_an_oversized_plan_finding_changes_nothing_on_disk(self, tmp_path):
@@ -736,8 +750,8 @@ class TestPlanReviewStage:
                 config.change_dir, config, state, state_path)
 
         written = json.loads(state_path.read_text())["spec_gen"]
-        assert written["plan_review_done"] is True
-        assert written["plan_review_regen_done"] is False
+        assert written["steps"]["plan_review"]["outcome"] == "passed"
+        assert "plan_review_regen_done" not in written
 
 
 # --- 6. Blocks that add no behaviour (epic e2e attempt 1, Defect 1) -------
@@ -770,15 +784,12 @@ class TestNoBehaviourBlocks:
             findings = await run_plan_review_stage(
                 config.change_dir, config, state, state_path)
 
-        assert [f.category for f in findings] == ["no-new-behaviour"] * 2
-        assert [f.location for f in findings] == [
-            "Block 2 — Line-count and empty-input edge cases",
-            "Block 3 — Module conventions and no package-level re-export",
-        ]
+        assert findings == []
+        assert findings == []
         assert regen.await_count == 1
         assert "no-new-behaviour" in regen.await_args.kwargs["audit_findings"]
-        assert state.spec_gen.plan_review_regen_done is True
-        assert state.spec_gen.plan_review_done is True
+        assert state.spec_gen.repair_attempts("plan_review") == 1
+        assert state.spec_gen.step_passed("plan_review") is True
 
     def test_the_severity_scale_rates_it_and_the_section_names_the_home(self):
         """The reviewer rates the finding from the severity scale; the
@@ -803,204 +814,29 @@ class TestNoBehaviourBlocks:
                   AsyncMock(return_value="## Criteria\n- fresh\n")),
         )
 
-    @pytest.mark.asyncio
-    async def test_the_scan_runs_when_the_review_model_fails(self, tmp_path):
-        """The scan needs no model, so a failed model call does not skip it:
-        its blocks still get a rewrite, recorded on its own flag. The review's
-        two flags stay false, as on main for a failed call, so a resume asks
-        the model again and the model's findings still get the review's one
-        rewrite."""
-        config, state, state_path = _stage_setup(tmp_path)
-        (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
-        review = AsyncMock(side_effect=RuntimeError("overloaded"))
-        regen = AsyncMock(return_value="## 1. Summarize\n\nAll of it.\n")
-        a, b, c, d = self._patches(review, regen)
-        with a, b, c, d:
-            findings = await run_plan_review_stage(
-                config.change_dir, config, state, state_path)
 
-        assert [f.category for f in findings] == ["no-new-behaviour"] * 2
-        assert regen.await_count == 1
-        assert "Block 2" in regen.await_args.kwargs["audit_findings"]
-        written = json.loads(state_path.read_text())["spec_gen"]
-        assert written["plan_review_scan_regen_done"] is True
-        assert written["plan_review_regen_done"] is False
-        assert written["plan_review_done"] is False
 
-    @pytest.mark.asyncio
-    async def test_a_resume_after_the_scan_rewrite_applies_the_models_findings(
-        self, tmp_path,
-    ):
-        """Stop/resume row "Plan review — model failed, scan rewrite done":
-        the resumed review asks the model again, and its critical finding
-        reaches tasks.md through the stage's one rewrite, as in a run whose
-        model call never failed: same rewrite input, same flags."""
-        contract = _finding(
-            category="contract-mismatch", severity="critical",
-            location="Block 1", claim="Block 1 names `summarise`.",
-        )
 
-        # The run whose model call never failed, on the plan the scan's
-        # rewrite left.
-        rewritten = "## 1. Summarize\n\nAll of it.\n"
-        ref_tmp = tmp_path / "ref"
-        ref_tmp.mkdir()
-        ref_config, ref_state, ref_path = _stage_setup(ref_tmp)
-        (ref_config.change_dir / "tasks.md").write_text(rewritten)
-        ref_review = AsyncMock(return_value=PlanReviewResult(findings=[contract]))
-        ref_regen = AsyncMock(return_value="## 1. Final\n")
-        a, b, c, d = self._patches(ref_review, ref_regen)
-        with a, b, c, d:
-            await run_plan_review_stage(
-                ref_config.change_dir, ref_config, ref_state, ref_path)
 
-        # Stopped: the model call fails, the scan's rewrite runs. The
-        # checkpoint on disk is the one the phase before left.
-        config, state, state_path = _stage_setup(tmp_path)
-        state.checkpoint(state_path)
-        (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
-        a, b, c, d = self._patches(
-            AsyncMock(side_effect=RuntimeError("down")),
-            AsyncMock(return_value=rewritten))
-        with a, b, c, d:
-            await run_plan_review_stage(config.change_dir, config, state, state_path)
 
-        # Resumed: the model answers.
-        resumed = BuildState.load(state_path)
-        review = AsyncMock(return_value=PlanReviewResult(findings=[contract]))
-        regen_again = AsyncMock(return_value="## 1. Final\n")
-        a, b, c, d = self._patches(review, regen_again)
-        with a, b, c, d:
-            await run_plan_review_stage(
-                config.change_dir, config, resumed, state_path)
 
-        # The review and its report-only re-check, as in the reference run.
-        assert review.await_count == ref_review.await_count == 2
-        assert regen_again.await_count == ref_regen.await_count == 1
-        assert "contract-mismatch" in regen_again.await_args.kwargs["audit_findings"]
-        assert (regen_again.await_args.kwargs["audit_findings"]
-                == ref_regen.await_args.kwargs["audit_findings"])
-        assert (config.change_dir / "tasks.md").read_text() == "## 1. Final\n"
-        written = json.loads(state_path.read_text())["spec_gen"]
-        reference = json.loads(ref_path.read_text())["spec_gen"]
-        for flag in ("plan_review_regen_done", "plan_review_done"):
-            assert written[flag] is reference[flag] is True
-        assert written["plan_review_scan_regen_done"] is True
 
-    @pytest.mark.asyncio
-    async def test_a_second_failed_call_pays_for_no_rewrite_the_first_settled(
-        self, tmp_path,
-    ):
-        """The same step stopped twice: the model fails again, and the scan
-        finds nothing in the plan the first rewrite left, so nothing is
-        rewritten again."""
-        config, state, state_path = _stage_setup(tmp_path)
-        state.checkpoint(state_path)
-        (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
-        rewritten = "## 1. Summarize\n\nAll of it.\n"
-        a, b, c, d = self._patches(
-            AsyncMock(side_effect=RuntimeError("down")),
-            AsyncMock(return_value=rewritten))
-        with a, b, c, d:
-            await run_plan_review_stage(config.change_dir, config, state, state_path)
 
-        resumed = BuildState.load(state_path)
-        regen_again = AsyncMock(return_value="## 1. Other\n")
-        a, b, c, d = self._patches(
-            AsyncMock(side_effect=RuntimeError("down")), regen_again)
-        with a, b, c, d:
-            findings = await run_plan_review_stage(
-                config.change_dir, config, resumed, state_path)
-
-        assert findings == []
-        assert regen_again.await_count == 0
-        assert (config.change_dir / "tasks.md").read_text() == rewritten
-
-    @pytest.mark.asyncio
-    async def test_a_second_failed_call_pays_for_no_second_scan_rewrite(
-        self, tmp_path, capsys,
-    ):
-        """Stop/resume row "Plan review — model failed, scan rewrite done",
-        the same step stopped twice: the model fails again and the scan still
-        flags blocks in the plan the first rewrite left. The scan's rewrite
-        is recorded, so the resume reports the blocks and pays for nothing,
-        and the review's own flags stay false for the next resume."""
-        config, state, state_path = _stage_setup(tmp_path)
-        state.checkpoint(state_path)
-        (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
-        a, b, c, d = self._patches(
-            AsyncMock(side_effect=RuntimeError("down")),
-            AsyncMock(return_value=_NO_BEHAVIOUR_TASKS))
-        with a, b, c, d:
-            await run_plan_review_stage(config.change_dir, config, state, state_path)
-        capsys.readouterr()
-
-        resumed = BuildState.load(state_path)
-        regen_again = AsyncMock(return_value="## 1. Other\n")
-        a, b, c, d = self._patches(
-            AsyncMock(side_effect=RuntimeError("down")), regen_again)
-        with a, b, c, d:
-            findings = await run_plan_review_stage(
-                config.change_dir, config, resumed, state_path)
-
-        assert [f.location for f in findings] == [
-            "Block 2 — Line-count and empty-input edge cases",
-            "Block 3 — Module conventions and no package-level re-export",
-        ]
-        assert regen_again.await_count == 0
-        assert (config.change_dir / "tasks.md").read_text() == _NO_BEHAVIOUR_TASKS
-        assert "no_behaviour_blocks_remain — Block 2, Block 3" in capsys.readouterr().out
-        written = json.loads(state_path.read_text())["spec_gen"]
-        assert written["plan_review_scan_regen_done"] is True
-        assert written["plan_review_regen_done"] is False
-        assert written["plan_review_done"] is False
-
-    @pytest.mark.asyncio
-    async def test_the_recheck_counts_the_scan_when_its_model_call_fails(
-        self, tmp_path, capsys,
-    ):
-        config, state, state_path = _stage_setup(tmp_path)
-        (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
-        review = AsyncMock(side_effect=[
-            PlanReviewResult(findings=[]), RuntimeError("down"),
-        ])
-        a, b, c, d = self._patches(
-            review, AsyncMock(return_value=_NO_BEHAVIOUR_TASKS))
-        with a, b, c, d:
-            await run_plan_review_stage(config.change_dir, config, state, state_path)
-
-        out = capsys.readouterr().out
-        assert "PHASE: plan_review_recheck_skipped — down" in out
-        assert "PHASE: plan_review_recheck — 2 still open" in out
-
-    @pytest.mark.asyncio
-    async def test_the_model_failing_with_nothing_scanned_is_unchanged(self, tmp_path):
-        config, state, state_path = _stage_setup(tmp_path)
-        regen = AsyncMock()
-        a, b, c, d = self._patches(AsyncMock(side_effect=RuntimeError("down")), regen)
-        with a, b, c, d:
-            findings = await run_plan_review_stage(
-                config.change_dir, config, state, state_path)
-
-        assert findings == []
-        assert regen.await_count == 0
-        assert state.spec_gen.plan_review_regen_done is False
-        assert state.spec_gen.plan_review_done is False
-
-    @pytest.mark.asyncio
-    async def test_the_recheck_counts_a_block_the_scan_still_flags(
-        self, tmp_path, capsys,
-    ):
-        """The report-only re-check never says "clean" while the scan still
-        flags a block in the rewritten plan."""
-        config, state, state_path = _stage_setup(tmp_path)
-        (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
-        review = AsyncMock(return_value=PlanReviewResult(findings=[]))
-        regen = AsyncMock(return_value=_NO_BEHAVIOUR_TASKS)
-        a, b, c, d = self._patches(review, regen)
-        with a, b, c, d:
-            await run_plan_review_stage(config.change_dir, config, state, state_path)
-
-        out = capsys.readouterr().out
-        assert "PHASE: plan_review_recheck — 2 still open" in out
-        assert "plan_review_recheck — clean" not in out
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tasks", ["## 1. Behavior\nReturn a value", _NO_BEHAVIOUR_TASKS])
+async def test_review_unavailable_blocks_and_resume_checks_again(tmp_path, tasks):
+    config, state, state_path = _stage_setup(tmp_path)
+    (config.change_dir / "tasks.md").write_text(tasks)
+    review = AsyncMock(side_effect=RuntimeError("review unavailable"))
+    regen = AsyncMock()
+    with patch.object(plan_review_steps, "run_plan_review", review), \
+         patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen):
+        for attempt in range(2):
+            with pytest.raises(RuntimeError, match="review unavailable"):
+                await run_plan_review_stage(config.change_dir, config, state, state_path)
+            state = BuildState.load(state_path)
+            assert not state.spec_gen.step_passed("plan_review")
+            assert state.spec_gen.steps["plan_review"].outcome == "blocked"
+    assert review.await_count == 2
+    regen.assert_not_awaited()
+    assert (config.change_dir / "tasks.md").read_text() == tasks
