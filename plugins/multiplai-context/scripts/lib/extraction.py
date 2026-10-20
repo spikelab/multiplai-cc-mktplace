@@ -272,6 +272,9 @@ action: what to add/change in that file (one sentence, single line)
 it entirely if the unit has none (diary-only units are valid).
 - trust: "verified" (confirmed via code/logs/tests) | "high" (strong \
 evidence) | "medium" (inference)
+- provenance: exactly one of RESEARCH, EMPIRICAL, CORRECTION, DECLARATION, \
+INFERENCE — never a `kind` value (FACT, RULE, DECISION, INTENTION go on the \
+kind line).
 - If the entire session is trivial, output exactly: <no-units/>
 
 ## Provenance and kind — two separate questions
@@ -638,6 +641,13 @@ def _parse_learning(block: str) -> Optional[dict]:
     label, which would be a fabricated statement about where the knowledge came
     from. The description survives either way — the label is the doubtful part,
     not the learning.
+
+    One misfiling is recovered rather than dropped: a **kind** value written in
+    the ``provenance`` field (``provenance: DECISION``, six times in the week
+    to 2026-10-18). Which kind was meant is not in doubt, so it fills ``kind``
+    when that is absent or itself out of set; an explicit valid ``kind`` always
+    wins. Provenance is left absent, because where the knowledge came from was
+    never stated, and absent is what the record honestly has.
     """
     entry: dict = {}
     for line in block.strip().splitlines():
@@ -647,6 +657,18 @@ def _parse_learning(block: str) -> Optional[dict]:
         key = key.strip().lower()
         if key in _LEARNING_KEYS:
             entry[key] = value.strip()
+    misfiled_kind = None
+    if (
+        "provenance" in entry
+        and taxonomy.normalize_provenance(entry["provenance"]) is None
+    ):
+        misfiled_kind = taxonomy.normalize_kind(entry["provenance"])
+        if misfiled_kind is not None:
+            logger.info(
+                "Learning provenance=%r is a kind value — recovered as kind; "
+                "provenance left unstated", entry["provenance"],
+            )
+            del entry["provenance"]
     for key, normalize in (
         ("provenance", taxonomy.normalize_provenance),
         ("kind", taxonomy.normalize_kind),
@@ -662,6 +684,8 @@ def _parse_learning(block: str) -> Optional[dict]:
             del entry[key]
         else:
             entry[key] = normalized
+    if misfiled_kind is not None and "kind" not in entry:
+        entry["kind"] = misfiled_kind
     return entry if entry.get("description") else None
 
 

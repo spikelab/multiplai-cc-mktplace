@@ -688,3 +688,10 @@ class TestExtractionThinking:
         old core rejects the *name*, whatever its value."""
         client = self._run(monkeypatch, supported=False)
         assert "thinking" not in client.query.call_args.kwargs
+
+
+def test_extraction_prompt_states_provenance_never_takes_a_kind_value():
+    """The model wrote provenance: DECISION six times; the prompt must say no."""
+    from lib.extraction import EXTRACTION_PROMPT
+
+    assert "never a `kind` value" in EXTRACTION_PROMPT
