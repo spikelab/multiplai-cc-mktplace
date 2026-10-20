@@ -2131,7 +2131,8 @@ async def _fix_on_pass(
     `_enforce_test_integrity` → one more review and adjudication. The fix is
     kept only when the suite is green and `review_score_gate` still passes;
     otherwise the tree goes back to the checkpoint. Findings left unfixed go
-    to `unfixed-findings.md`. Returns False only when a rollback was refused,
+    to `unfixed-findings.md`. That review is given the open findings like any
+    later round, and `plan_round` keeps each one it does not call resolved. Returns False only when a rollback was refused,
     which leaves an unverified fix in the tree.
     """
     review = block.review_scores
@@ -2224,36 +2225,70 @@ async def _run_fix_on_pass(
             reason = "test files changed during the fix"
 
     new_review: ReviewResult | None = None
+    plan: review_rounds.RoundPlan | None = None
     if not reason:
         _record_fix_pass_stop(config, fp)
         fp.step = "review"
         state.checkpoint(state_path)
+        # The findings the block's review rounds left open, with their ids
+        # from the round records, as the review loop reads them. Only when the
+        # latest review record is the one the pass started from: with that
+        # record missing (not written, or unreadable), an older one would not
+        # hold what the pass worked on, so no memory is used and every finding
+        # of the pass stays open below.
+        open_, earlier_rejected, last = review_rounds.open_state(config.change_dir, block.number)
+        if last is None or fp.round_path is None or Path(fp.round_path).name != (
+                f"block-{block.number:02d}-round-{last.get('round')}.json"):
+            open_, last = [], None
         try:
-            new_review = await _run_quality_review(block, config)
+            new_review = await _run_quality_review(
+                block, config, **({"open_findings": open_} if open_ else {}))
         except BudgetExceededError:
             raise
         except Exception as e:
             log.warning("Review after the fix on pass of block %d failed: %s", block.number, e)
             reason = f"the review after the fix failed: {e}"
         else:
+            # The fix is not committed yet, so `_scope_diff` (last head to
+            # HEAD) would not show it: the scope is unknown, which leaves
+            # every finding in scope.
+            memory = None if last is None else review_rounds.RoundMemory(
+                open=open_, rejected=earlier_rejected, scope_diff=None)
             new_review = await _adjudicate_review_findings(
                 new_review, block, config, _capture_block_diff(config, block),
-                build_context=_global_constraints_text(config),
+                build_context=_global_constraints_text(config), memory=memory,
             )
+            plan = None if memory is None else review_rounds.plan_round(
+                new_review.findings, open_, new_review.prior_assessments)
             gate = review_score_gate(new_review, config.review_gate)
             progress.log_review(block.name, block.review_iterations + 1,
                                 new_review.weighted_average, gate.passed)
-            _record_review_round(config, block, new_review, gate, kind="fix_on_pass_review")
+            _record_review_round(config, block, new_review, gate, kind="fix_on_pass_review",
+                                 plan=plan)
             if not gate.passed:
                 reason = f"the block no longer passes review: {gate.reason}"
 
     if not reason and new_review is not None:
         sha = _git_commit_block_phase(config, "fix", block)
         review_rounds.amend_fix(fp.round_path, commit=sha, kept=True)
-        block.review_scores = new_review
+        if plan is not None:
+            still = [(f, plan.status(f.finding_id)) for f in plan.carried]
+            raised = [new_review.findings[i] for i in plan.new_open]
+            block.review_scores = new_review.model_copy(update={"findings": plan.to_fix})
+        else:
+            # No round record to match the review's statuses to: missing
+            # history is not a resolution, so what the pass worked on stays.
+            still = [(f, "no round record to check it against") for f in fp.findings]
+            raised = new_review.findings
+            block.review_scores = new_review.model_copy(update={"findings": [*fp.findings, *raised]})
         block.fix_on_pass_kept = True
+        for f, status in still:
+            if review_rounds.fixable_on_pass([f]):
+                review_rounds.append_unfixed(
+                    config.change_dir, block, [f],
+                    f"still open after the fix on pass ({status}; one fix pass per block)")
         review_rounds.append_unfixed(
-            config.change_dir, block, review_rounds.fixable_on_pass(new_review.findings),
+            config.change_dir, block, review_rounds.fixable_on_pass(raised),
             "not attempted (raised by the review after the kept fix; one fix pass per block)",
         )
         log.info("Fix on pass of block %d kept (%s)", block.number, (sha or "no commit")[:8])
