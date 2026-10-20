@@ -43,12 +43,13 @@ failing tests that define the expected behavior for a block of work.
 import importlib
 
 def test_new_api():
+    module_name = "new_pkg.feature"
     try:
-        feature = importlib.import_module("new_pkg.feature")
+        feature = importlib.import_module(module_name)
     except ModuleNotFoundError as error:
-        if error.name not in ("new_pkg", "new_pkg.feature"):
+        if error.name != module_name and not module_name.startswith((error.name or "") + "."):
             raise
-        raise AssertionError("Implement new_pkg.feature") from None
+        raise AssertionError("Implement " + module_name) from None
     assert callable(getattr(feature, "answer", None)), "Implement answer"
     assert feature.answer() == 42
 ```

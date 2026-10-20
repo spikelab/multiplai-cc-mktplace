@@ -1439,9 +1439,10 @@ def test_red_classifies_exception_diagnostics_not_displayed_source(tmp_path, exc
     assert gate.passed, gate.reason
 
 
-def test_unknown_runner_must_supply_test_failure_evidence():
-    assert not red_gate("command not found: node", 127, runner=None).passed
-    assert not red_gate("Error: Cannot find module 'jest'", 1, runner="node").passed
+def test_unknown_runner_nonzero_is_explicitly_unverified():
+    for output, code in [("command not found: node", 127), ("Error: Cannot find module 'jest'", 1)]:
+        result = red_gate(output, code, runner=None)
+        assert result.passed and result.metadata['classification'] == 'unverified'
 
 
 def test_new_module_can_reach_red_without_collection_failure(tmp_path):

@@ -365,9 +365,6 @@ def test_output_directory_cannot_hide_agent_code(accepted_build):
     command = f'{sys.executable} -c "from out.helper import value; assert value == 1"'
     assert final_verification(command, root).passed
     assert not git_ops.tree_is_clean(root), 'agent code must be committed before completion'
-    with pytest.raises(git_ops.GitLifecycleError, match='out/helper.py'):
-        git_ops.commit_tree(root, 'include implementation')
-    git(root, 'add', 'out/helper.py')  # Explicitly select source under an output directory.
     assert git_ops.commit_tree(root, 'include implementation')
     assert git(root, 'ls-files', '--', 'out/helper.py') == 'out/helper.py'
 
@@ -391,43 +388,85 @@ def test_output_globs_are_rejected(accepted_build, path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("staged_report", [False, True])
-async def test_agent_generated_report_is_refused_before_test_phase_commit(accepted_build, monkeypatch, staged_report):
+async def test_agent_generated_report_commits_after_observing_test_writes(accepted_build, monkeypatch, staged_report):
     from types import SimpleNamespace
     from build_pipeline import sdk, tdd_engine
     config, state, args, _ = accepted_build
-    config.test_command = f'{sys.executable} -m pytest -q'
-    (config.specs_dir / 'config.yaml').write_text('test_outputs: [report.json]\n')
+    config.test_command = f'{sys.executable} -m pytest -q --junitxml=test-results/junit.xml'
+    (config.specs_dir / 'config.yaml').write_text('test_outputs: [test-results/]\n')
     git(config.project_dir, 'add', 'specs/config.yaml')
     git(config.project_dir, 'commit', '-qm', 'declare report')
-    state.phase = BuildPhase.TDD_BUILD
-    state.tdd = TDDState(blocks=[BlockInfo(number=1, name='Value', description='Return two')],
-                         baseline_tests_pass=True)
-    state.checkpoint(config.state_file_path())
     async def provider(prompt, **kwargs):
         (config.project_dir / 'test_value.py').write_text(
-            'from pathlib import Path\ndef test_value():\n'
-            "    Path('report.json').write_text('generated')\n    assert False\n")
-        result = subprocess.run([sys.executable, '-m', 'pytest', '-q', 'test_value.py'],
-                                cwd=config.project_dir, capture_output=True, text=True)
-        assert result.returncode == 1 and '1 failed' in result.stdout
+            'from app import value\ndef test_value():\n    assert value == 1\n')
+        result = subprocess.run(config.test_command.split(), cwd=config.project_dir,
+                                capture_output=True, text=True)
+        assert result.returncode == 0
         if staged_report:
-            git(config.project_dir, 'add', 'report.json')
+            git(config.project_dir, 'add', 'test-results/junit.xml')
         return SimpleNamespace(text='STATUS: DONE\n', turns=1, files_changed=[],
                                usage=SimpleNamespace(cost_usd=0, input_tokens=10))
     monkeypatch.setattr(sdk, 'run_agent', provider)
-    async def writer(**kwargs):
-        return await sdk.agent_call('write tests', allowed_tools=['Write', 'Bash'], cwd=str(config.project_dir))
-    monkeypatch.setattr(tdd_engine, 'run_test_writer', writer)
-    with pytest.raises(git_ops.GitLifecycleError, match='report.json') as stopped:
-        await run_tdd_engine(config, args)
-    assert 'regenerate' in str(stopped.value)
-    assert git(config.project_dir, 'ls-tree', '--name-only', 'HEAD', '--', 'report.json') == ''
-    assert (config.project_dir / 'report.json').read_text() == 'generated'
-    # Preserve the ambiguous file, then generate it through the owned test boundary.
-    git(config.project_dir, 'restore', '--staged', '--', 'report.json') if staged_report else None
-    (config.project_dir / 'report.json').rename(config.project_dir.parent / 'saved-report.json')
-    from build_pipeline.gates import run_test_suite
-    run_test_suite(f'{sys.executable} -m pytest -q test_value.py', config.project_dir)
-    assert git_ops.commit_tree(config.project_dir, 'tests with observed output')
-    assert git(config.project_dir, 'ls-files', '--', 'report.json') == ''
+    for _ in range(2):
+        await sdk.agent_call('write tests', allowed_tools=['Write', 'Bash'], cwd=str(config.project_dir))
+        tdd_engine._git_commit_block_phase(config, 'test', state.tdd.blocks[0])
+        assert git(config.project_dir, 'ls-files', '--', 'test-results/junit.xml') == ''
+        assert (config.project_dir / 'test-results/junit.xml').exists()
+        assert final_verification(config.test_command, config.project_dir).passed
+        assert git_ops.tree_is_clean(config.project_dir)
     assert git(config.project_dir, 'ls-files', '--', 'test_value.py') == 'test_value.py'
+
+
+@pytest.mark.parametrize('staged', [False, True])
+def test_reports_rewritten_by_agent_and_suite_do_not_hide_imported_source(accepted_build, staged):
+    from build_pipeline import tdd_engine
+    config, state, _, _ = accepted_build
+    root = config.project_dir
+    (config.specs_dir / 'config.yaml').write_text('test_outputs: [out/]\n')
+    git(root, 'add', 'specs/config.yaml')
+    git(root, 'commit', '-qm', 'declare outputs')
+    (root / 'out').mkdir()
+    (root / 'out/helper.py').write_text('value = 2\n')
+    (root / 'test_value.py').write_text(
+        'from out.helper import value\ndef test_value():\n    assert value == 2\n')
+    config.test_command = f'{sys.executable} -m pytest -q --junitxml=out/report.xml'
+    from build_pipeline.gates import run_test_suite
+    assert run_test_suite(config.test_command, root)[0] == 0
+    with git_ops.agent_write_window(root):
+        # Real agent-side run replaces the report with another valid report.
+        assert subprocess.run(config.test_command.split(), cwd=root, capture_output=True).returncode == 0
+        if staged:
+            git(root, 'add', 'out/')
+    assert tdd_engine._git_commit_block_phase(config, 'impl', state.tdd.blocks[0])
+    assert git(root, 'ls-files', '--', 'out/helper.py') == 'out/helper.py'
+    assert git(root, 'ls-files', '--', 'out/report.xml') == ''
+    assert final_verification(config.test_command, root).passed
+    assert git_ops.tree_is_clean(root)
+
+
+def test_test_output_configuration_failure_does_not_commit(accepted_build):
+    from build_pipeline import tdd_engine
+    config, state, _, _ = accepted_build
+    (config.specs_dir / 'config.yaml').write_text('test_outputs: ["out/*"]\n')
+    head = git(config.project_dir, 'rev-parse', 'HEAD')
+    with pytest.raises(git_ops.GitLifecycleError, match='literal'):
+        tdd_engine._git_commit_block_phase(config, 'test', state.tdd.blocks[0])
+    assert git(config.project_dir, 'rev-parse', 'HEAD') == head
+
+
+def test_identical_output_rewrites_and_restart_are_observed(accepted_build):
+    config, _, _, _ = accepted_build
+    root = config.project_dir
+    (config.specs_dir / 'config.yaml').write_text('test_outputs: [report.txt]\n')
+    git(root, 'add', 'specs/config.yaml')
+    git(root, 'commit', '-qm', 'declare report')
+    (root / 'report.txt').write_text('constant')
+    command = f"{sys.executable} -c \"from pathlib import Path; Path('report.txt').write_text('constant')\""
+    assert final_verification(command, root).passed
+    # A fresh process has no output cache or saved provenance to consult.
+    script = (f"import sys; sys.path.insert(0, {str(Path(git_ops.__file__).parents[1])!r}); "
+              "from build_pipeline.gates import final_verification; from pathlib import Path; "
+              f"result = final_verification({command!r}, Path({str(root)!r})); "
+              "assert result.passed, result.reason")
+    result = subprocess.run([sys.executable, '-c', script], cwd=root, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

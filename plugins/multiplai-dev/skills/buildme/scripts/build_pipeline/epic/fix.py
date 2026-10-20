@@ -162,12 +162,15 @@ def budget_stopped(text: str) -> bool:
 
 
 def fix_argv(session_id: str, number: int, change: str, project: Path, max_rounds: int,
-             max_usd: float | None = None, *, final: bool = False) -> list[str]:
+             max_usd: float | None = None, *, final: bool = False,
+             accept_unknown_spend: bool = False) -> list[str]:
     """*final*: the final fix (`--no-review`), whose round gets no review."""
     argv = ["python", "-m", "build_pipeline", "--session-id", session_id, "findings", "--pr", str(number),
             "--change", change, "--project-dir", str(project), "--auto", "--trust-repo",
             "--max-rounds", str(max_rounds), "--severities", ",".join(review.BLOCKING_SEVERITIES),
             "--code-only"]
+    if accept_unknown_spend:
+        argv.append("--accept-unknown-spend")
     if final:
         argv.append(FINAL_FLAG)
     if max_usd is not None:

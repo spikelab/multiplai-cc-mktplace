@@ -104,7 +104,7 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
     return git_ops.commit_tree(
         config.project_dir,
         f"{phase}(block-{block.number}): {block.name}",
-        f"block={block.number} phase={phase}",
+        f"block={block.number} phase={phase}", test_command=config.test_command,
     )
 
 
@@ -2545,7 +2545,7 @@ async def _run_refactor_all(
     rewind_to = git_ops.commit_tree(
         config.project_dir,
         "chore: checkpoint before whole-change refactor",
-        "pre-refactor checkpoint",
+        "pre-refactor checkpoint", test_command=config.test_command,
     )
     if rewind_to is None and git_ops.tree_is_clean(config.project_dir):
         # Nothing to commit and the tree is clean: HEAD already holds
@@ -2629,7 +2629,7 @@ async def _run_refactor_all(
     else:
         sha = git_ops.commit_tree(
             config.project_dir, "refactor: simplify across blocks",
-            "whole-change refactor",
+            "whole-change refactor", test_command=config.test_command,
         )
         log.info("DONE phase=REFACTOR_ALL result=committed sha=%s",
                  sha[:8] if sha else "(no changes)")
@@ -2860,7 +2860,7 @@ def _write_mutation_report(config: BuildConfig, text: str) -> str | None:
         log.warning("Could not write %s: %s", path, e)
         return None
     return git_ops.commit_tree(config.project_dir, "test(mutation): record mutation score",
-                               "mutation report")
+                               "mutation report", test_command=config.test_command)
 
 
 class _RoundOutcome(NamedTuple):
@@ -2960,7 +2960,7 @@ async def _run_mutation_round(
             "NOT discarded.")
 
     sha = git_ops.commit_tree(config.project_dir, "test(mutation): kill surviving mutants",
-                              "mutation survivor round")
+                              "mutation survivor round", test_command=config.test_command)
     if sha is None:
         if git_ops.tree_is_clean(config.project_dir):
             return _RoundOutcome("The test writer changed no files; the first-run score stands.")

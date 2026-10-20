@@ -674,54 +674,57 @@ def _test_output_candidates(repo: Path | str) -> list[str]:
     others = _run(["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=repo)
     if not all(r.ok for r in (tracked, head, others)):
         raise GitLifecycleError("Cannot establish tracked files for test_outputs")
-    protected = set(tracked.stdout.split("\0")) | set(head.stdout.split("\0"))
-    return [p for p in others.stdout.split("\0")
+    _, evidence = _agent_index_evidence(repo)
+    record = evidence.get(str(Path(repo).resolve()), {})
+    owned = record.get("entries", {}) if record.get("head") == rev_parse_head(repo) else {}
+    entries = index_entries(repo) or {}
+    agent_staged = {p for p, entry in owned.items()
+                    if isinstance(entry, dict) and entry.get("index") == entries.get(p)
+                    and entry.get("working") == _working_identity(Path(repo) / p)}
+    protected = (set(tracked.stdout.split("\0")) - agent_staged) | set(head.stdout.split("\0"))
+    return [p for p in set(others.stdout.split("\0")) | agent_staged
             if p and p not in protected and any(p == r or p.startswith(r + "/") for r in roots)]
 
 
-def _test_output_evidence(repo: Path | str) -> tuple[Path, dict]:
-    result = _run(["git", "rev-parse", "--git-path", "buildme-test-outputs.json"], cwd=repo)
-    if not result.ok:
-        raise GitLifecycleError("Cannot locate test-output evidence")
-    path = Path(result.stdout.strip())
-    if not path.is_absolute():
-        path = Path(repo) / path
-    data = json.loads(path.read_text()) if path.exists() else {}
-    return path, data
+# Observations are local to this process. Resume observes a new test run; there
+# is no persistent provenance ledger to repair when an agent regenerates reports.
+_test_outputs: dict[Path, dict[str, object]] = {}
 
 
 def test_output_excludes(repo: Path | str) -> list[str]:
-    """Exclude only declared outputs observed being created by test commands."""
+    """Only files actually written by the last test run, still unchanged since."""
     candidates = _test_output_candidates(repo)
-    if not candidates:
-        return []
-    _, evidence = _test_output_evidence(repo)
-    known = evidence.get(str(Path(repo).resolve()), {})
+    known = _test_outputs.get(Path(repo).resolve(), {})
     return [f":(exclude,literal){p}" for p in candidates
-            if known.get(p) == _working_identity(Path(repo) / p)]
+            if p in known and known[p] == _working_identity(Path(repo) / p)]
 
 
 @contextlib.contextmanager
 def test_output_window(repo: Path | str):
-    """Track generated files without adopting code that preceded the test run.
-
-    A later agent/user edit invalidates output ownership. Existing outputs may
-    change during subsequent test runs, but unproven existing files stay inputs.
-    """
+    """Observe declared test writes; unchanged source remains an input."""
+    key = Path(repo).resolve()
+    _test_outputs.pop(key, None)
     if not _declared_test_outputs(repo):
         yield
         return
-    before = {p: _working_identity(Path(repo) / p) for p in _test_output_candidates(repo)}
-    path, evidence = _test_output_evidence(repo)
-    key = str(Path(repo).resolve())
-    known = evidence.get(key, {})
+    def identity(name):
+        path = Path(repo) / name
+        stat = path.lstat()
+        return (_working_identity(path), stat.st_mtime_ns, stat.st_ctime_ns)
+    before = {p: identity(p) for p in _test_output_candidates(repo)}
+    before_index = index_entries(repo) or {}
     try:
         yield
     finally:
-        evidence[key] = {p: _working_identity(Path(repo) / p) for p in _test_output_candidates(repo)
-                         if p not in before or known.get(p) == before[p]}
-        from .io_utils import atomic_write
-        atomic_write(path, json.dumps(evidence, sort_keys=True))
+        # Previously eligible agent-staged files may have new working contents
+        # now. They stay eligible for this observation, but never HEAD files.
+        candidates = set(_test_output_candidates(repo)) | before.keys()
+        changed = {p for p in candidates if os.path.lexists(Path(repo) / p)
+                   and before.get(p) != identity(p)}
+        staged = [p for p in changed if p in before_index]
+        if staged and not _run(["git", "reset", "-q", "HEAD", "--", *staged], cwd=repo).ok:
+            raise GitLifecycleError("Cannot unstage agent-generated test outputs: " + ", ".join(staged))
+        _test_outputs[key] = {p: _working_identity(Path(repo) / p) for p in changed}
 
 
 def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | None:
@@ -755,29 +758,6 @@ def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | 
     _, evidence = _agent_index_evidence(worktree)
     record = evidence.get(str(Path(worktree).resolve()), {})
     owned = record.get("entries", {}) if record.get("head") == rev_parse_head(worktree) else {}
-    roots = _declared_test_outputs(worktree)
-    if roots:
-        selected = _run(["git", "ls-files", "--others", "--exclude-standard", "-z",
-                         "--", *paths], cwd=worktree)
-        head_files = _run(["git", "ls-tree", "--name-only", "-r", "-z", "HEAD", "--", "."], cwd=worktree)
-        if not selected.ok or not head_files.ok:
-            raise GitLifecycleError("Cannot inspect declared output commit paths")
-        unproven = set(_test_output_candidates(worktree)) & set(selected.stdout.split("\0"))
-        # Agent staging is not the user's explicit choice to track source under
-        # an output directory. Do not silently adopt those new files either.
-        for name in set(staged_paths.stdout.split("\0")) - set(head_files.stdout.split("\0")):
-            if (any(name == root or name.startswith(root + "/") for root in roots)
-                    and isinstance(owned.get(name), dict)
-                    and owned[name].get("index") == (before_index or {}).get(name)):
-                unproven.add(name)
-        if unproven:
-            raise GitLifecycleError(
-                "Declared test outputs lack observed test-run provenance: " + ", ".join(sorted(unproven))
-                + ". Preserve these files outside the project, unstage their new index entries if "
-                "present, then regenerate outputs through build_pipeline.gates.run_test_suite before "
-                "retrying. For source files, narrow test_outputs; untracked source without agent "
-                "staging can also be explicitly selected with git add. Agent-internal test runs "
-                "are not observed output windows.")
     conflicts = divergent | recreated
     if any(not isinstance(owned.get(p), dict)
            or owned[p].get("index") != (before_index or {}).get(p)
@@ -895,12 +875,18 @@ def commit_stage(config, message: str, paths: list[str]) -> str | None:
 # branch pointer and restores files under `.`.
 
 
-def commit_tree(repo: Path | str, message: str, label: str = "") -> str | None:
+def commit_tree(repo: Path | str, message: str, label: str = "", *,
+                test_command: str = "") -> str | None:
     """Commit everything under *repo* except buildme's bookkeeping.
 
     Returns the new SHA or None for no changes. Commit refusals/failures raise
     GitLifecycleError. *label* is retained for caller compatibility.
     """
+    if test_command and _test_output_candidates(repo):
+        from .gates import run_test_suite
+        code, output = run_test_suite(test_command, Path(repo))
+        if code is None:
+            raise GitLifecycleError("Cannot observe test outputs before commit: " + output)
     return commit_paths(repo, message, [".", *BOOKKEEPING_EXCLUDES])
 
 
