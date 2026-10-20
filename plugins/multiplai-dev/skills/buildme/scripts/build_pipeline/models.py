@@ -592,6 +592,10 @@ class BlockInfo(BaseModel):
     # feed the reviewer (as evidence to verify, not trust) and build-progress.md.
     red_evidence: str = ""
     green_evidence: str = ""
+    # The test writer's `RED_EXPECTED:` slot and whether the RED run bore it
+    # out (`gates.red_expected_note`), set with red_evidence (whose first
+    # lines it is) when the RED gate passes. Never a verdict.
+    red_expected: str = ""
     # {test file path: sha256} snapshotted the moment the RED gate passed.
     # The test files stay writable for the whole implement phase AND for every
     # review-fix iteration, so this is the only way to tell afterwards whether

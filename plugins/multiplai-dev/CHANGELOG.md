@@ -31,6 +31,23 @@ time, not derived from a tag.
   blocks passing at round 1 and the share of round-2+ findings present at the
   first review. It writes nothing, uses no network and makes no model calls.
 
+## [0.87.0] - 2026-10-20
+
+### Added
+- buildme's test writer now names the tests it expects to fail before the
+  implementation exists, and what is missing that makes them fail (a
+  `RED_EXPECTED:` line in its report). When the RED gate passes, buildme checks
+  those names against pytest's failures and records the statement and the
+  result (`named tests failed`, `named tests not among the failures: <ids>`,
+  `not stated`, or `cannot check for this runner`) at the top of the RED
+  evidence that the reviewer and `build-progress.md` see. It never changes
+  whether the RED gate passes.
+
+### Changed
+- The RED gate's decisions now come from one ordered table in the code, so
+  each decision is one row with one test. Every decision it makes is the same
+  as before.
+
 ## [0.86.0] - 2026-10-20
 
 ### Fixed

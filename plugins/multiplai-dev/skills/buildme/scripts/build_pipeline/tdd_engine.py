@@ -39,6 +39,7 @@ from .gates import (
     parse_diff_paths,
     parse_implementation_note,
     parse_searched,
+    red_expected_note,
     red_gate,
     review_iteration_gate,
     review_score_gate,
@@ -983,6 +984,7 @@ async def _enforce_red_gate(
     specs: str,
     context: str,
     block_idx: int,
+    test_report: str | None = None,
 ) -> bool:
     """Prove the block's tests fail for the right reason before implementing.
 
@@ -991,6 +993,13 @@ async def _enforce_red_gate(
     On pass: stores trimmed RED output as evidence in block state and the
     progress log. Returns True when RED is confirmed (or unverifiable
     because no test command is configured).
+
+    *test_report* is the test writer's report (None when no test writer ran
+    in this process); after a retry, the retry's report replaces it. On a
+    pass its `RED_EXPECTED:` slot and the check against the run
+    (`red_expected_note`) become `block.red_expected` and the first lines of
+    `block.red_evidence`, set together so one checkpoint saves both. It
+    changes no verdict.
     """
     if not config.test_command:
         log.info("RED gate skipped for block %s: no test command configured", block.name)
@@ -1003,11 +1012,15 @@ async def _enforce_red_gate(
         command = _block_test_command(config, block)
         exit_code, output = run_test_suite(command, config.project_dir)
         from .narrow_tests import runner_of
-        gate = red_gate(output, exit_code, runner=runner_of(command, config.project_dir),
-                        expected_tests=_list_block_test_files(config, block),
+        runner = runner_of(command, config.project_dir)
+        expected = _list_block_test_files(config, block)
+        gate = red_gate(output, exit_code, runner=runner, expected_tests=expected,
                         test_command=command, project_dir=config.project_dir)
         if gate.passed:
-            block.red_evidence = _trim_evidence(gate.reason + "\n" + output)
+            block.red_expected = red_expected_note(
+                test_report, output, exit_code, runner=runner, expected_tests=expected,
+                test_command=command, project_dir=config.project_dir)
+            block.red_evidence = block.red_expected + "\n" + _trim_evidence(gate.reason + "\n" + output)
             # Freeze the bar the moment it is proven to be a bar. Everything
             # after this point — the implement phase and every review-fix
             # iteration — can write to these files, so this hash map is the
@@ -1061,6 +1074,7 @@ async def _enforce_red_gate(
                 progress.log_agent("TestWriter", block.name, "TIMEOUT" if retry.timed_out else "FAILED")
                 _mark_block(state, block_idx, BlockStatus.FAILED, config)
                 return False
+            test_report = retry.output
             sha = _git_commit_block_phase(config, "test", block)
             if sha:
                 block.test_commit = sha
@@ -1342,7 +1356,8 @@ async def run_block_tdd(
             return False
 
         # --- Phase A.6: RED gate — prove tests fail before implementing ---
-        red_ok = await _enforce_red_gate(block, config, state, progress, specs, context, block_idx)
+        red_ok = await _enforce_red_gate(block, config, state, progress, specs, context, block_idx,
+                                         test_report=test_report)
         if not red_ok:
             return False
     failing_tests = test_report if test_report is not None else _unreported_tests(block)
