@@ -133,6 +133,18 @@ def render_section(fs: FindingsState) -> str:
                 link = f"[{ident}]({c.url})" if c.url else ident
                 out.append(f"| {link} | {r.triage.verdict.value} | "
                            f"{outcome(rnd, r, searched=False).replace('|', '/')} |")
+        check = rnd.self_check or {}
+        if check.get("block"):
+            # Not a comment, so no reply answers it: this is where it shows.
+            fix = rnd.fixes.get(f"block:{check['block']}") or {}
+            if fix.get("impl"):
+                done = f"Fixed in `{_short(fix['impl'])}`."
+            elif fix.get("failed"):
+                done = f"Not fixed: {fix['failed']}."
+            else:
+                done = "Not fixed: the fix did not produce a commit."
+            out += ["", f"The check of this round's fixes found: "
+                        f"{_line(check.get('report', ''), 600)} {done}"]
         skipped = len(records) - len(acted)
         if skipped:
             out += ["", f"{skipped} comment(s) not acted on; `findings-r{rnd.number}.md` "

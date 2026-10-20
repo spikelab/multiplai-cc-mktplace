@@ -478,7 +478,7 @@ class Coordinator:
             argv += ["--research-path", str(research)]
         else:
             argv += ["--skip-research"]
-        argv += ["--auto", "--trust-repo", "--no-epic-split", "--pr-ready",
+        argv += ["--auto", "--trust-repo", "--no-epic-split", "--epic-child", "--pr-ready",
                  "--project-dir", str(self.children[cid].project.absolute())]
         if base:
             argv += ["--base-ref", base]
