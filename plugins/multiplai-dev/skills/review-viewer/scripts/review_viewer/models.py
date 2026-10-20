@@ -437,7 +437,7 @@ AssessmentTopic = Literal["commits", "tests", "size", "design", "risk", "other"]
 ASSESSMENT_TITLE_MAX = 32
 
 
-class Assessment(_Strict):
+class WalkthroughAssessment(_Strict):
     """The session's judgment on one quality question, shown as a badge beside
     the measured ones. `commits` (does anything say why the change is made?)
     and `tests` (would a test fail if the changed behaviour broke?) are
@@ -474,7 +474,7 @@ class Walkthrough(_Strict):
     overview_md: str
     steps: list[Step]
     skipped: list[Skipped] = Field(default_factory=list)
-    assessments: list[Assessment] = Field(default_factory=list)
+    assessments: list[WalkthroughAssessment] = Field(default_factory=list)
     risk: RiskInput | None = None
     complete: bool
 

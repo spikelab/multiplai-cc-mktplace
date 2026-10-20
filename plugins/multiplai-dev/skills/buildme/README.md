@@ -188,8 +188,7 @@ why they are knobs.
 
 The phase prints `PHASE:PLAN_REVIEW:COMPLETE` and keeps the card in the
 Planning column: this review *is* the work Planning stands for, so it does not
-move the card. It is best-effort — a failed plan review never fails the build,
-and leaves the reviewed plan standing unless the scan above flagged a block.
+move the card.
 
 ### Phase 5: Prototype
 

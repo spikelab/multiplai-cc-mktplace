@@ -550,9 +550,9 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
                     return
                 continue
             # A step the engine runs after its blocks (the whole-change
-            # refactor's budget stop, mutation testing) fails the same way on
-            # every re-run. Every fix has passed its block's gates and is
-            # committed, so publish them and say what failed after them.
+            # refactor's budget stop, mutation testing) failed. Every fix has
+            # passed its block's gates and is committed, but the round is not
+            # published until that step passes.
             after = code.stopped_after_blocks(engine_state)
             if after:
                 rnd.code_check_failed = after
