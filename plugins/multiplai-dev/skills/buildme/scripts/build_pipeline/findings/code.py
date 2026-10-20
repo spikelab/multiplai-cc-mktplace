@@ -33,10 +33,11 @@ from multiplai_core.untrusted import defang, fence
 
 from .. import budget, git_ops
 from ..config import BuildConfig
-from ..gates import parse_searched
+from ..gates import parse_recurring, parse_searched
 from ..llm_steps.spec_steps import AUDITOR_MAX_TURNS, AUDITOR_TOOLS
 from ..models import BlockInfo, BlockStatus
 from ..prompts.findings import SELF_CHECK_PROMPT
+from ..prompts.implementation import REVIEW_FIX_ESCALATION, REVIEW_FIX_LOCATIONS
 from ..sdk import agent_call
 from ..state import BuildState
 from .models import TriageRecord, Verdict
@@ -73,11 +74,24 @@ def block_ident(record: TriageRecord) -> str:
     return f"finding {c.finding_id}" if c.finding_id else c.label
 
 
+def escalation_task(history: str) -> str:
+    """`REVIEW_FIX_ESCALATION` filled with *history* (`history.history_text`),
+    flattened to one task line: `parse_blocks` keeps only a block's checkbox
+    lines, and its heading must not start a line."""
+    return " ".join(REVIEW_FIX_ESCALATION.format(findings=history).split())
+
+
 def render_tasks(round_n: int, records: list[TriageRecord],
-                 self_check: dict | None = None) -> tuple[str, dict[int, str]]:
+                 self_check: dict | None = None, *,
+                 other_locations: dict[str, list[str]] | None = None,
+                 escalation: str = "") -> tuple[str, dict[int, str]]:
     """(`findings-r<N>-tasks.md` text, block number → the finding's row key).
     When *self_check* (`FindingsRound.self_check`) names a block, the check's
-    report is that block, after the last fix, keyed `block:<k>`."""
+    report is that block, after the last fix, keyed `block:<k>`.
+    *other_locations* (finding id → the review's `other_locations` for it)
+    are listed in the fix task, and task `.4` then asks for every listed
+    location to be fixed and tested (`REVIEW_FIX_LOCATIONS`). With *escalation* (`escalation_task`), every
+    block starts with it, as task `.0`."""
     out = [
         f"# Review findings, round {round_n}: code fixes",
         "",
@@ -92,17 +106,22 @@ def render_tasks(round_n: int, records: list[TriageRecord],
         blocks[i] = r.comment.key
         failing = _line(t.failing_test) or _line(t.reason)
         where = ", ".join(_line(loc, 200) for loc in t.locations) or "see the reason"
+        others = (other_locations or {}).get(r.comment.finding_id or "") or []
+        also = (" The review found the same defect at: "
+                + ", ".join(_line(loc, 200) for loc in others)) if others else ""
         out += [
             f"## {i}. Fix {block_ident(r)}",
             "",
+            *([f"- [ ] {i}.0 {_line(escalation, 20_000)}"] if escalation else []),
             f"- [ ] {i}.1 Write a failing test that shows the defect: {failing}",
             f"- [ ] {i}.2 Change the code so that test passes. "
-            f"Why it is a defect: {_line(t.reason)} Code involved: {where}",
+            f"Why it is a defect: {_line(t.reason)} Code involved: {where}{also}",
             f"- [ ] {i}.3 Search the same function, its other branches, its callers and the "
             "rest of the PR's diff for the same mistake, and fix each one you find; change "
             "nothing else. Close your report with a `SEARCHED:` section, after the other "
             "slots and before any test-change declaration: one line per finding "
             "saying where you looked and what you found.",
+            *([f"- [ ] {i}.4 {REVIEW_FIX_LOCATIONS}"] if others else []),
             "",
         ]
     k = (self_check or {}).get("block")
@@ -112,6 +131,7 @@ def render_tasks(round_n: int, records: list[TriageRecord],
         out += [
             f"## {k}. Fix what the check of this round's fixes found",
             "",
+            *([f"- [ ] {k}.0 {_line(escalation, 20_000)}"] if escalation else []),
             f"- [ ] {k}.1 Write a failing test that shows each problem the check found: {report}",
             f"- [ ] {k}.2 Change the code so those tests pass, and nothing else.",
             "",
@@ -126,18 +146,26 @@ class CodeResult:
     fixes: dict[str, dict[str, str]] = field(default_factory=dict)  # row key → {test, impl}
 
 
-def round_config(config: BuildConfig, change_dir: Path, round_n: int) -> BuildConfig:
-    """A copy of *config* whose engine paths are the round's own."""
+def round_config(config: BuildConfig, change_dir: Path, round_n: int,
+                 escalated: bool = False) -> BuildConfig:
+    """A copy of *config* whose engine paths are the round's own. In an
+    *escalated* round the implementer runs on `review_fix_escalated`'s model
+    and effort."""
     rc = copy.copy(config)
     rc.change_dir = change_dir
     rc.tasks_file = tasks_file_name(round_n)
     rc.state_file = engine_state_name(round_n)
+    if escalated:
+        rc.step_aliases = {**config.step_aliases, "implementer": "review_fix_escalated"}
     return rc
 
 
 def write_tasks(change_dir: Path, round_n: int, records: list[TriageRecord],
-                self_check: dict | None = None) -> tuple[Path, dict[int, str]]:
-    text, blocks = render_tasks(round_n, records, self_check)
+                self_check: dict | None = None, *,
+                other_locations: dict[str, list[str]] | None = None,
+                escalation: str = "") -> tuple[Path, dict[int, str]]:
+    text, blocks = render_tasks(round_n, records, self_check,
+                                other_locations=other_locations, escalation=escalation)
     path = Path(change_dir) / tasks_file_name(round_n)
     path.write_text(text)
     return path, blocks
@@ -163,6 +191,26 @@ def write_self_check(change_dir: Path, round_n: int, self_check: dict | None) ->
 _LATER_AGENT = re.compile(r"\n\[(review-fix (\d+)|fix on pass)\]\n")
 
 
+def fixer_part(report: str, first_later: str | None = None) -> str | None:
+    """The fixer's own part of a block's implementer report: what comes
+    before the first later agent's marker, or None when the engine's trim
+    may have cut it away (see `searched_text`)."""
+    from ..tdd_engine import MAX_EVIDENCE_CHARS
+
+    report = report or ""
+    first = _LATER_AGENT.search(report)
+    lost = (first_later is not None and len(report) >= MAX_EVIDENCE_CHARS
+            and (first is None or first.group(1) != first_later))
+    return None if lost else (report[:first.start()] if first else report)
+
+
+def _first_later(block: BlockInfo) -> str | None:
+    """The marker of the first later agent that ran on *block*, if any."""
+    # A review fix ran when a second review did.
+    return ("review-fix 1" if block.review_iterations > 1
+            else "fix on pass" if block.fix_on_pass_kept else None)
+
+
 def searched_text(report: str, first_later: str | None = None) -> str:
     """The fixer's own `SEARCHED:` section (the last one before any later
     agent's part) of a block's implementer report, as one line
@@ -175,13 +223,8 @@ def searched_text(report: str, first_later: str | None = None) -> str:
     another agent's search. With no later agent, the trim kept the end of the
     fixer's own output, where its section is. Recorded, never checked: code
     cannot tell whether a search happened."""
-    from ..tdd_engine import MAX_EVIDENCE_CHARS
-
-    report = report or ""
-    first = _LATER_AGENT.search(report)
-    lost = (first_later is not None and len(report) >= MAX_EVIDENCE_CHARS
-            and (first is None or first.group(1) != first_later))
-    entries = None if lost else parse_searched(report[:first.start()] if first else report)
+    own = fixer_part(report, first_later)
+    entries = None if own is None else parse_searched(own)
     if entries is None:
         log.warning("the fixer's report has no SEARCHED: section")
         return ""
@@ -199,18 +242,32 @@ def fixes_from_state(state_path: Path, blocks: dict[int, str]) -> dict[str, dict
     for b in (state.tdd.blocks if state.tdd else []):
         key = blocks.get(b.number)
         if key and b.impl_commit and b.status == BlockStatus.DONE:
-            # A review fix ran when a second review did.
-            first_later = ("review-fix 1" if b.review_iterations > 1
-                           else "fix on pass" if b.fix_on_pass_kept else None)
             out[key] = {"test": b.test_commit or "", "impl": b.impl_commit,
                         "status": b.status.value,
-                        "searched": searched_text(b.implementer_report, first_later)}
+                        "searched": searched_text(b.implementer_report, _first_later(b))}
+    return out
+
+
+def recurring_from_state(state_path: Path) -> dict[int, str]:
+    """Block number → the `RECURRING:` slot of its fixer's own report
+    (`gates.parse_recurring`), for each block of the round's engine
+    checkpoint whose fixer gave one. A later agent's slot (the engine's own
+    escalated review fix answers one about the block's review) is not read."""
+    if not Path(state_path).exists():
+        return {}
+    state = BuildState.load(state_path)
+    out: dict[int, str] = {}
+    for b in (state.tdd.blocks if state.tdd else []):
+        own = fixer_part(b.implementer_report, _first_later(b))
+        slot = parse_recurring(own) if own else None
+        if slot:
+            out[b.number] = " ".join(slot.split())
     return out
 
 
 async def run_code_step(config: BuildConfig, change_dir: Path, round_n: int,
                         records: list[TriageRecord], *, blocks: dict[int, str] | None = None,
-                        engine: Engine | None = None) -> CodeResult:
+                        engine: Engine | None = None, escalated: bool = False) -> CodeResult:
     """Run the round's code-fix blocks through `run_tdd_engine` (standalone=False,
     so the round's checkpoint is kept for a resume and the fixing commits are
     read back from it). The tasks file must already exist; *blocks* is what
@@ -221,7 +278,7 @@ async def run_code_step(config: BuildConfig, change_dir: Path, round_n: int,
         return CodeResult(exit_code=0)
     if engine is None:
         from ..tdd_engine import run_tdd_engine as engine
-    rc = round_config(config, change_dir, round_n)
+    rc = round_config(config, change_dir, round_n, escalated)
     log.info("START findings_code round=%d blocks=%d tasks=%s state=%s",
              round_n, len(blocks), rc.tasks_path, rc.state_file_path())
     code = await engine(rc, SimpleNamespace(block=None), standalone=False)

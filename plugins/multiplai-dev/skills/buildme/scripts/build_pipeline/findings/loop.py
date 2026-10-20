@@ -59,7 +59,7 @@ from ..config import BuildConfig
 from ..models import BlockStatus, BuildPhase
 from ..progress import ProgressWriter
 from ..state import BuildState, FindingsRound, FindingsState
-from . import code, fetch, publish, spec, triage
+from . import code, fetch, history, publish, spec, triage
 from .decisions import write_decisions
 from .models import TriageRecord
 
@@ -113,6 +113,9 @@ class Seams:
     post: ReviewPoster | None = None
     self_check: SelfCheck | None = None
     decisions: Callable[[str], Path] | None = None
+    # The review target directories the ledger holds for this PR
+    # (`history.ledger_dirs`).
+    review_dirs: Callable[["FindingsRun"], list[str]] | None = None
 
 
 @dataclass
@@ -172,6 +175,26 @@ def all_records(fs: FindingsState) -> list[TriageRecord]:
     out: list[TriageRecord] = []
     for r in fs.rounds:
         out += publish.records_of(r)
+    return out
+
+
+def review_files(run: FindingsRun, fs: FindingsState) -> list[dict]:
+    """Every review of the PR, oldest first: those in the target
+    directories the ledger records for it and in each round's
+    `review_run_dir` (`history.review_files`)."""
+    ledger = (run.seams.review_dirs or (lambda r: history.ledger_dirs(r.project_dir, r.pr)))(run)
+    return history.review_files([*ledger, *(r.review_run_dir for r in fs.rounds)])
+
+
+def recurring_lines(run: FindingsRun, fs: FindingsState) -> list[str]:
+    """What follows `FINDINGS:MAX_ROUNDS`: one `FINDINGS_RECURRING:<lineage>:<rounds>`
+    per lineage open in two or more of the PR's reviews, then one
+    `FINDINGS_RECURRING_SLOT:<block>:<answer>` per `RECURRING:` answer the
+    last round saved."""
+    out = [f"FINDINGS_RECURRING:{lin}:{n}" for lin, n in history.recurring(review_files(run, fs))]
+    last = fs.rounds[-1] if fs.rounds else None
+    for block, slot in sorted((last.recurring if last else {}).items()):
+        out.append(f"FINDINGS_RECURRING_SLOT:{block}:{' '.join(slot.split())}")
     return out
 
 
@@ -417,9 +440,14 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
     n = rnd.number
 
     async def do_triage() -> None:
+        # Rebuilt from the saved rounds and the review files on every run, so
+        # a resumed triage gives each comment the same earlier rows.
+        earlier = history.earlier_rows(
+            [r for m in fs.rounds if m.number < n for r in publish.records_of(m)],
+            rnd.comments, review_files(run, fs))
         await triage.triage_round(run.config, run.change_dir, n, rnd.comments,
                                   done=rnd.triaged, on_triaged=lambda *_: save(),
-                                  call=seams.triage_call)
+                                  call=seams.triage_call, earlier=earlier)
         _write_findings_file(run, fs, rnd)
 
     async def do_spec() -> None:
@@ -432,6 +460,16 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         if changes:
             rnd.delta_path = str(spec.delta_path(run.change_dir, n))
         _write_findings_file(run, fs, rnd)
+
+    def task_options(records: list[TriageRecord]) -> dict:
+        """What `code.write_tasks` lists beyond the triage: each fix's
+        `other_locations` from the review, and in an escalated round the
+        escalation text over every lineage of the PR's reviews."""
+        files = review_files(run, fs)
+        others = {r.comment.finding_id: history.other_locations(files, r.comment.finding_id)
+                  for r in code.code_fixes(records) if r.comment.finding_id}
+        escalation = code.escalation_task(history.history_text(files)) if rnd.escalated else ""
+        return {"other_locations": others, "escalation": escalation}
 
     async def check_own_commits(records: list[TriageRecord], engine_state: Path) -> bool:
         """The self-check: one read-only agent over `code_base..HEAD`. Its
@@ -456,7 +494,8 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         if k is None:
             return False
         report_path = code.write_self_check(run.change_dir, n, rnd.self_check)
-        tasks, rnd.blocks = code.write_tasks(run.change_dir, n, records, rnd.self_check)
+        tasks, rnd.blocks = code.write_tasks(run.change_dir, n, records, rnd.self_check,
+                                             **task_options(records))
         if code.commit_round_files(run.project_dir, n, [report_path, tasks]) is None:
             left = git_ops.status_of(run.project_dir, [report_path, tasks])
             if left is None or left.strip():
@@ -472,7 +511,8 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         if report_path is not None:
             paths.append(report_path)
         if code.code_fixes(records):
-            tasks, blocks = code.write_tasks(run.change_dir, n, records, rnd.self_check)
+            tasks, blocks = code.write_tasks(run.change_dir, n, records, rnd.self_check,
+                                             **task_options(records))
             rnd.tasks_path, rnd.blocks = str(tasks), blocks
             rnd.engine_state_path = str(Path(run.change_dir) / code.engine_state_name(n))
             save()
@@ -494,9 +534,12 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         # two more for a block the self-check adds.
         for _ in range(len(rnd.blocks) + 3):
             result = await code.run_code_step(run.config, run.change_dir, n, records,
-                                              blocks=rnd.blocks, engine=seams.engine)
+                                              blocks=rnd.blocks, engine=seams.engine,
+                                              escalated=rnd.escalated)
             failed = {k: v for k, v in rnd.fixes.items() if v.get("failed")}
             rnd.fixes = {**failed, **result.fixes}
+            if rnd.escalated:
+                rnd.recurring = code.recurring_from_state(engine_state)
             save()
             if result.exit_code == 0:
                 if rnd.self_check is not None or not await check_own_commits(records, engine_state):
@@ -704,6 +747,8 @@ async def _run_findings(run: FindingsRun) -> int:
             done = len(fs.rounds)
             if done >= max_rounds:
                 run.emit(f"FINDINGS:MAX_ROUNDS:{done}")
+                for line in recurring_lines(run, fs):
+                    run.emit(line)
                 return EXIT_OK
             if not git_ops.tree_is_clean(run.project_dir):
                 # A failed step keeps the tree's edits under a wip ref and
@@ -740,8 +785,11 @@ async def _run_findings(run: FindingsRun) -> int:
                             usd, run.max_usd, done + 1)
                 run.emit(f"FINDINGS:BUDGET:{done}:{usd:.2f}")
                 return EXIT_OK
+            # Saved with the round, so a resume keeps it whatever
+            # `--max-rounds` says then.
             rnd = FindingsRound(number=done + 1, since=since, fetched_at=fetched_at,
-                                comments=new, started=["fetch"], finished=["fetch"])
+                                comments=new, started=["fetch"], finished=["fetch"],
+                                escalated=done + 1 == max_rounds and done + 1 >= 2)
             fs.rounds.append(rnd)
             st.checkpoint(run.state_path)
             acted = sum(1 for c in new if triage.should_triage(c)[0])
