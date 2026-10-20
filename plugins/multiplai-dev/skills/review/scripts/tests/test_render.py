@@ -274,3 +274,79 @@ def test_a_dependency_citation_is_not_linked_into_the_reviewed_repository():
 
     path = f".review-deps/lib@{'a' * 12}/lib/runner.py"
     assert code_link("https://github.com/o/r", "f" * 40, path, 3, 4) == f"`{path}:3-4`"
+
+
+# --- earlier rounds: statuses, Recurring, the summary line ---------------------------------
+
+PAST = "1" * 40
+PAST2 = "2" * 40
+
+
+def _status(fid: str, status: str, lineage: str | None = None, **kw):
+    from review_pipeline.models import Citation, EarlierStatus
+
+    cited = [Citation(path="rateplan_service.py", line_start=1, line_end=1, quote="KEYWORD = 'dolcebot'")]
+    return EarlierStatus(earlier_id=fid, lineage=lineage or fid, round=PAST, status=status,
+                         reason=kw.pop("reason", f"{status} at head"), citations=cited, **kw)
+
+
+def _round(head: str, when: str, findings: list[dict], earlier: list[dict] | None = None) -> dict:
+    data = {"generated_at": when, "target": {"head_sha": head}, "findings": findings, "mode": "full"}
+    return {**data, "earlier": earlier} if earlier is not None else data
+
+
+def _listed(fid: str, claim: str, file: str = "a.py", **extra) -> dict:
+    return {"id": fid, "status": "confirmed", "severity": "MEDIUM", "claim": claim, "file": file, **extra}
+
+
+def test_the_review_lists_each_earlier_status_with_its_lines_and_counts_new_apart_from_still_open(canned_state):
+    canned_state.earlier_status = [_status("aaaaaaaaaa", "still_present"),
+                                   _status("bbbbbbbbbb", "cannot_verify", reason="not rechecked")]
+    past = [_round(PAST, "2026-01-01T00:00:00Z", [_listed("aaaaaaaaaa", "the keyword is hardcoded"),
+                                                    _listed("bbbbbbbbbb", "the helper is never called")])]
+    review = render_review(canned_state, earlier_rounds=past)
+    section = review[review.index("## Findings from earlier rounds"):review.index("## Appendix")]
+    assert "- **still_present** `aaaaaaaaaa` (round 111111111111) — the keyword is hardcoded" in section
+    assert "- **cannot_verify** `bbbbbbbbbb` (round 111111111111) — the helper is never called" in section
+    assert "  not rechecked" in section
+    assert "rateplan_service.py:1" in section
+    assert "## Recurring" not in review  # two rounds only
+    line = "2 new, 1 still open, 0 earlier resolved, 1 earlier cannot verify"
+    assert f"- **Against earlier rounds:** {line}" in review
+    assert f"Against earlier rounds: {line}." in render_summary(canned_state)
+    # The count line is unchanged.
+    assert "- **Findings:** Code 1 HIGH, 0 MEDIUM, 1 LOW; Tests none; Docs none" in review
+
+
+def test_a_first_round_has_no_earlier_sections_or_line(canned_state):
+    review = render_review(canned_state)
+    assert "## Findings from earlier rounds" not in review and "Against earlier rounds" not in review
+    assert "Against earlier rounds" not in render_summary(canned_state)
+
+
+def test_recurring_names_a_lineage_open_in_exactly_three_rounds(canned_state):
+    first = _round(PAST2, "2026-01-01T00:00:00Z", [_listed("cccccccccc", "the keyword is hardcoded")])
+    second = _round(PAST, "2026-01-02T00:00:00Z",
+                    [_listed("dddddddddd", "the literal keyword again", file="b.py", lineage="cccccccccc")])
+    canned_state.earlier_status = [_status("dddddddddd", "partially_resolved", lineage="cccccccccc")]
+    review = render_review(canned_state, earlier_rounds=[first, second])
+    section = review[review.index("## Recurring"):review.index("## Appendix")]
+    assert "- `cccccccccc` open in 3 rounds (`222222222222`, `111111111111`, " in section
+    assert "Files: `a.py`, `b.py`, `rateplan_service.py`" in section
+    assert "the literal keyword again" in section
+    assert "fix" not in section.lower()  # it states what recurred; it proposes nothing
+    # Two rounds are not enough, and a resolved status does not count as open.
+    assert "## Recurring" not in render_review(canned_state, earlier_rounds=[second])
+    canned_state.earlier_status = [_status("dddddddddd", "resolved", lineage="cccccccccc")]
+    assert "## Recurring" not in render_review(canned_state, earlier_rounds=[first, second])
+
+
+def test_write_review_reads_the_kept_rounds_for_recurring(canned_state, tmp_path):
+    for i, head in enumerate((PAST2, PAST), 1):
+        d = tmp_path / "rounds" / f"0{i}-{head[:12]}"
+        d.mkdir(parents=True)
+        (d / "findings.json").write_text(json.dumps(_round(head, f"2026-01-0{i}T00:00:00Z",
+                                                           [_listed("eeeeeeeeee", "the same defect")])))
+    canned_state.earlier_status = [_status("eeeeeeeeee", "still_present")]
+    path = write_review(canned_state, tmp_path)
+    assert "- `eeeeeeeeee` open in 3 rounds" in path.read_text()

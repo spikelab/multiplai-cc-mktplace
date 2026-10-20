@@ -311,7 +311,8 @@
         "gate": {
           "enum": [
             "finding_gate",
-            "verdict_gate"
+            "verdict_gate",
+            "earlier_status_gate"
           ],
           "title": "Gate",
           "type": "string"

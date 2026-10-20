@@ -19,13 +19,23 @@ reason naming a rule. A finding left out, or a label that fails, becomes
 
 The agent may also name duplicates; they are merged with the merge stage's
 `usable_sets` and `merge_set`, so a duplicate keeps every citation and
-finder. The stage never deletes a finding and never changes a verdict or a
+finder. Only members whose anchors `anchors_near` chains together are merged
+(`anchored_sets`): the agent sees every finding at once and can set a root
+bug with a weaker finding in another file, and the survivor's claim would
+hide it. The stage never deletes a finding and never changes a verdict or a
 severity. It is skipped when fewer than two findings are shown and there are
 no earlier rounds.
 
 Trim findings (`models.is_trim`) are never sent to the agent and get no label
 from it: they sit in their own advisory section. The `important` labels the
 verify stage gives some of them are recomputed and kept.
+
+Once the labels are final, `reconcile_earlier` sets, in code, each finding's
+`lineage` (the id of its first appearance, through a `still-open` or `repeat`
+label) and the final status of each earlier finding the recheck stage was
+given: the worst of its recheck status and `still_present` when a finding of
+this round is `still-open` against it. An open earlier finding with no
+recheck answer is `cannot_verify`, reason `not rechecked`.
 """
 
 from __future__ import annotations
@@ -34,10 +44,12 @@ import logging
 import re
 
 from .. import checks, rounds, sdk
-from ..models import AgentCheck, AssessItem, AssessOutput, Assessment, Finding, ReviewState, is_trim
+from ..models import (AgentCheck, AssessItem, AssessOutput, Assessment, DuplicateSet, EarlierStatus, Finding,
+                      ReviewState, is_trim, worst_status)
 from ..prompts import assess as prompt
 from . import RunContext
-from .merge import apply_duplicate_sets, mark_merged
+from .merge import MERGE_LINE_GAP, anchors_near, apply_duplicate_sets, link_groups, mark_merged
+from .recheck import open_set
 from .repeats import earlier_findings, shown_findings
 from .verify import important_assessments
 
@@ -91,11 +103,67 @@ def gate_assessments(items: list[AssessItem], candidates: list[Finding],
     return out, errors
 
 
+def anchored_sets(sets: list[DuplicateSet], candidates: list[Finding]) -> list[DuplicateSet]:
+    """Each set split into the runs of members `anchors_near` chains together; members in no run are dropped.
+
+    Logs one line per set that loses a member, with the ids kept and dropped.
+    """
+    by_id = {f.id: f for f in candidates}
+    out: list[DuplicateSet] = []
+    for s in sets:
+        members = [by_id[i] for i in dict.fromkeys(s.finding_ids) if i in by_id]
+        groups = link_groups(members, anchors_near)
+        kept = [f.id for g in groups for f in g]
+        dropped = [f.id for f in members if f.id not in kept]
+        if dropped:
+            log.info("assess: duplicate set %s: dropped %s, anchored more than %d lines from every other "
+                     "member's anchor in its file%s", ", ".join(f.id for f in members), ", ".join(dropped),
+                     MERGE_LINE_GAP, f"; kept {', '.join(kept)}" if kept else "; set dropped")
+        out.extend(DuplicateSet(finding_ids=[f.id for f in g], reason=s.reason) for g in groups)
+    return out
+
+
 def _repeat_assessments(state: ReviewState) -> dict[str, Assessment]:
     shown = {f.id for f in shown_findings(state)}
     return {fid: Assessment(label="repeat", reason=r.reason, earlier_id=r.rejected_id, earlier_round=r.round,
                             earlier_decision="reject", earlier_note=r.note)
             for fid, r in state.repeats.items() if fid in shown}
+
+
+def reconcile_earlier(state: ReviewState, ctx: RunContext,
+                      earlier: list[rounds.EarlierFinding] | None = None) -> None:
+    """Set `state.lineage` and `state.earlier_status` from the final labels and the stored recheck answers.
+
+    Code only, so running it again on the same state and rounds gives the same result.
+    """
+    by_earlier = {e.id: e for e in (earlier_findings(state, ctx) if earlier is None else earlier)}
+    lineage: dict[str, str] = {}
+    against: dict[str, list[Finding]] = {}
+    for f in state.findings:
+        a = state.assessments.get(f.id)
+        lineage[f.id] = f.id
+        if a is not None and a.label in ("still-open", "repeat") and a.earlier_id:
+            e = by_earlier.get(a.earlier_id)
+            lineage[f.id] = str((e.finding.get("lineage") if e else "") or a.earlier_id)
+            if a.label == "still-open":
+                against.setdefault(a.earlier_id, []).append(f)
+    state.lineage = lineage
+
+    statuses: list[EarlierStatus] = []
+    for o in open_set(state, ctx):
+        status = state.recheck_answers.get(o.id) or EarlierStatus(
+            earlier_id=o.id, lineage=o.lineage, round=o.head_sha, status="cannot_verify", reason="not rechecked")
+        still = against.get(o.id, [])
+        if still:
+            cited = list(status.citations)
+            for f in still:
+                cited += [c for c in f.citations if not c.is_web and not c.is_dependency and c not in cited]
+            ids = ", ".join(f.id for f in still)
+            status = status.model_copy(update={
+                "status": worst_status(status.status, "still_present"), "citations": cited,
+                "reason": f"{status.reason.rstrip('. ')}. Still open in this round as {ids}.".lstrip(". ")})
+        statuses.append(status)
+    state.earlier_status = statuses
 
 
 async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
@@ -109,6 +177,7 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     if not candidates or (len(candidates) < 2 and not earlier):
         state.assessments = {**{f.id: Assessment(label="useful") for f in candidates}, **repeats, **important}
+        reconcile_earlier(state, ctx, earlier)
         ctx.counts = {"skipped": 1, "repeats": len(repeats)}
         state.stage = "assess"
         return state
@@ -154,7 +223,8 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
         labels, errors = gate_assessments(answer.assessments, candidates, prior)
         state.errors.extend(f"assess: {line}" for line in errors)
 
-    removed = apply_duplicate_sets(state, [(candidates, answer.duplicate_sets)], by="assess")
+    sets = anchored_sets(answer.duplicate_sets, candidates)
+    removed = apply_duplicate_sets(state, [(candidates, sets)], by="assess")
     state.assessments = {**{k: v for k, v in labels.items() if k not in removed}, **repeats, **important}
     mark_merged(state)
     if check is not None and not check.error:
@@ -166,6 +236,7 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
         parts += [f"merged {m.finding.id} into {m.into}" for m in state.merged if m.finding.id in removed]
         check.outcome = "; ".join(parts) or "no labels"
 
+    reconcile_earlier(state, ctx, earlier)
     values = [a.label for a in state.assessments.values()]
     ctx.counts = {"useful": values.count("useful"), "still_open": values.count("still-open"),
                   "low_value": values.count("low-value"), "repeats": values.count("repeat"),

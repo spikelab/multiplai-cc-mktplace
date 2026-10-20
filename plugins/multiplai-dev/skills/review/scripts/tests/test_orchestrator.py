@@ -12,8 +12,8 @@ from conftest import DEF_CITATION, KEYWORD_CITATION, SCHEMA, high_finding
 from review_pipeline import budget, orchestrator, sdk
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS
-from review_pipeline.models import (AssessOutput, DuplicateSet, FinderOutput, MergeOutput, RepeatsOutput,
-                                    ReviewState, Verdict)
+from review_pipeline.models import (AssessOutput, DuplicateSet, FinderOutput, MergeOutput, RecheckOutput,
+                                    RepeatsOutput, ReviewState, Verdict)
 
 
 def reworded_finding():
@@ -83,6 +83,8 @@ class FakeAgents:
             return self.assess_answer or AssessOutput()
         if stage == "repeats":
             return self.repeats_answer or RepeatsOutput()
+        if stage == "recheck":  # an earlier round's open finding: this fake reads no code
+            return RecheckOutput(status="cannot_verify", reason="the fake reads no code")
         raise AssertionError(budget_label)
 
 
@@ -165,7 +167,8 @@ def test_resume_after_a_kill_following_verify(fixture_repo, tmp_path, agents, ca
         main(_review_args(repo, base, head, out))
     target_dir = out / "booking-engine" / f"range-{base}..{head}"
     state = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
-    assert state.stage == "verify" and not (target_dir / "findings.json").exists()
+    # recheck, the stage before merge, ran and had no earlier round to ask about.
+    assert state.stage == "recheck" and not (target_dir / "findings.json").exists()
     first_run = list(fake.calls)
     capsys.readouterr()
 
@@ -175,7 +178,7 @@ def test_resume_after_a_kill_following_verify(fixture_repo, tmp_path, agents, ca
     resumed = fake.calls[len(first_run):]
     assert not [c for c in resumed if c.startswith(("find", "verify"))]  # finished stages are not repeated
     assert resumed == ["merge"]
-    assert "RESUMED after verify" in (target_dir / "progress.log").read_text()
+    assert "RESUMED after recheck" in (target_dir / "progress.log").read_text()
 
 
 def test_batch_reviews_every_target_and_writes_rollups(fixture_repo, tmp_path, agents, capsys):
@@ -296,7 +299,7 @@ def test_a_budget_stop_during_merge_keeps_the_answers_and_resume_asks_only_the_r
     saved, before, resumed = _stop_then_resume(fixture_repo, tmp_path, agents, capsys, stop_at=12,
                                                two_groups=True)
     assert before[-1] == "merge" and before.count("merge") == 1
-    assert saved.stage == "verify" and len(saved.merge_answers) == 1
+    assert saved.stage == "recheck" and len(saved.merge_answers) == 1
     assert resumed == ["merge", "assess"]  # three findings remain, so assess runs once
 
 

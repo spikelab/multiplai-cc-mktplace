@@ -6,6 +6,7 @@ Every agent call is replaced. All data is made up.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from review_pipeline.render import render_review, render_summary
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.assess import gate_assessments, run_assess
 from review_pipeline.stages.repeats import gate_matches, run_repeats
+from review_pipeline.state import load_state, save_state
 
 OLD_HEAD = "1" * 40
 OLDER_HEAD = "2" * 40
@@ -349,8 +351,16 @@ async def test_a_finding_left_out_is_useful_with_an_error(target_info, ctx, fake
     assert state.errors == [f"assess: no label for {b.id}, {c.id}; labelled useful"]
 
 
+def near_pair(target_info) -> tuple[ReviewState, Finding, Finding, Finding]:
+    """`three`, but b is anchored a line below a in a's file (still citing settings.py), so assess may merge them."""
+    a = at("a", cite("rateplan_service.py", 1, "q"))
+    b = at("b", cite("settings.py", 3, "q"), line=2)
+    c = at("c", cite("direct_booking.py", 5, "q"), file="direct_booking.py", line=5)
+    return state_with(target_info, a, b, c, stage="repeats"), a, b, c
+
+
 async def test_assess_duplicates_are_merged_keeping_every_citation(target_info, ctx, fake):
-    state, a, b, c = three(target_info)
+    state, a, b, c = near_pair(target_info)
     fake(assess=[AssessOutput(assessments=[AssessItem(id=i, label="useful") for i in (a.id, b.id, c.id)],
                               duplicate_sets=[DuplicateSet(finding_ids=[a.id, b.id], reason="one defect")])])
     state = await run_assess(state, ctx)
@@ -376,6 +386,168 @@ async def test_a_resumed_assess_stage_reuses_the_stored_answer(target_info, ctx,
     calls = fake()
     state = await run_assess(state, ctx)
     assert calls.calls == [] and state.assessments[a.id].label == "low-value"
+
+
+# --- which assess duplicates are merged --------------------------------------------
+
+BENCHMARK = Path(__file__).parent / "fixtures" / "assess_merges"
+
+
+def benchmark_case(target_info, name: str) -> tuple[ReviewState, AssessOutput]:
+    """One assess duplicate set from a PR #295 benchmark run, with its findings and their verdicts.
+
+    Copied from that run's `review-state.json`: `.findings` (the survivor, with
+    the citations it took over), `.merged[].finding`, `.verdicts` and
+    `.assess_answer.duplicate_sets`.
+    """
+    data = json.loads((BENCHMARK / name).read_text(encoding="utf-8"))
+    findings = [Finding.model_validate(f) for f in data["findings"]]
+    assert [f.id for f in findings] == [f["id"] for f in data["findings"]]  # the ids the run gave them
+    state = ReviewState(target=target_info, stage="repeats", findings=findings,
+                        verdicts={k: Verdict.model_validate(v) for k, v in data["verdicts"].items()})
+    answer = AssessOutput(assessments=[AssessItem(id=f.id, label="useful") for f in findings],
+                          duplicate_sets=[DuplicateSet.model_validate(s) for s in data["duplicate_sets"]])
+    return state, answer
+
+
+@pytest.mark.parametrize("name, root", [
+    ("r1-r004.json", "157cbadf24"),  # R-004, the slug collision in template.py, set with fill.py and markers.py
+    ("r2-r017.json", "312895fb3f"),  # R-017, `--head` reaching `git push`, set with a github.py finding
+])
+async def test_assess_does_not_merge_a_root_bug_into_a_finding_in_another_file(target_info, ctx, fake, caplog,
+                                                                              name, root):
+    state, answer = benchmark_case(target_info, name)
+    ids = [f.id for f in state.findings]
+    fake(assess=[answer])
+    with caplog.at_level("INFO", logger="review_pipeline.stages.assess"):
+        state = await run_assess(state, ctx)
+    assert [f.id for f in state.findings] == ids and state.merged == []
+    assert root in {f.id for f in state.findings}
+    dropped = [r.getMessage() for r in caplog.records if "duplicate set" in r.getMessage()]
+    assert len(dropped) == 1 and all(i in dropped[0] for i in ids), dropped
+
+
+async def test_assess_merges_two_findings_anchored_within_two_lines_in_one_file(target_info, ctx, fake):
+    a = at("a", cite("rateplan_service.py", 10, "q"), line=10)
+    b = at("b", cite("rateplan_service.py", 12, "q"), line=12)
+    state = state_with(target_info, a, b, stage="repeats")
+    fake(assess=[AssessOutput(assessments=[AssessItem(id=a.id, label="useful"), AssessItem(id=b.id, label="useful")],
+                              duplicate_sets=[DuplicateSet(finding_ids=[b.id, a.id], reason="one defect")])])
+    state = await run_assess(state, ctx)
+    assert [f.id for f in state.findings] == [a.id]
+    assert [(m.finding.id, m.into) for m in state.merged] == [(b.id, a.id)]
+
+
+async def test_assess_drops_only_the_set_members_anchored_away_from_the_others(target_info, ctx, fake, caplog):
+    a = at("a", line=10)
+    b = at("b", line=11)
+    far = at("far, same file", line=40)
+    other = at("other file", file="settings.py", line=10)
+    c = at("c", file="direct_booking.py", line=5)
+    d = at("d", file="direct_booking.py", line=7)
+    state = state_with(target_info, a, b, far, other, c, d, stage="repeats")
+    fake(assess=[AssessOutput(
+        assessments=[AssessItem(id=f.id, label="useful") for f in (a, b, far, other, c, d)],
+        duplicate_sets=[DuplicateSet(finding_ids=[a.id, far.id, b.id, other.id, c.id, d.id], reason="one")])])
+    with caplog.at_level("INFO", logger="review_pipeline.stages.assess"):
+        state = await run_assess(state, ctx)
+    # Each run of members within two lines of each other in one file is merged on its own.
+    assert sorted((m.finding.id, m.into) for m in state.merged) == sorted([(b.id, a.id), (d.id, c.id)])
+    assert [f.id for f in state.findings] == [a.id, far.id, other.id, c.id]
+    line, = [r.getMessage() for r in caplog.records if "duplicate set" in r.getMessage()]
+    assert far.id in line and other.id in line
+
+
+def test_findings_json_lists_the_findings_merged_into_each_survivor(target_info):
+    import jsonschema
+
+    from review_pipeline.models import Merged
+
+    a, b, c, d = at("a", line=1), at("b", line=2), at("c", line=3), at("d", file="settings.py", line=9)
+    state = state_with(target_info, c, d)
+    # b went into a at merge, then a into c at assess: c carries both.
+    state.merged = [Merged(finding=b, into=a.id, reason="r"), Merged(finding=a, into=c.id, reason="assess: r")]
+    data = to_findings_file(state)
+    jsonschema.validate(data, json.loads(SCHEMA.read_text(encoding="utf-8")))
+    rows = {r["id"]: r for r in data["findings"]}
+    assert rows[c.id]["absorbed"] == [{"id": b.id, "claim": "b"}, {"id": a.id, "claim": "a"}]
+    assert "absorbed" not in rows[d.id]  # written only when there are some
+
+
+# --- assess resume (the plan's S1-S3) ----------------------------------------------
+
+
+def resume_case(target_info) -> tuple[ReviewState, AssessOutput]:
+    """Three findings; the agent sets all three as one defect, but only a and b are anchored together."""
+    a = at("a", line=10)
+    b = at("b", line=11)
+    c = at("c", file="settings.py", line=40)
+    state = state_with(target_info, a, b, c, stage="repeats")
+    answer = AssessOutput(assessments=[AssessItem(id=a.id, label="useful"), AssessItem(id=b.id, label="useful"),
+                                       AssessItem(id=c.id, label="low-value", reason="[covered] by a")],
+                          duplicate_sets=[DuplicateSet(finding_ids=[a.id, b.id, c.id], reason="one defect")])
+    return state, answer
+
+
+def outcome(state: ReviewState) -> tuple:
+    return ([f.model_dump() for f in state.findings], [m.model_dump() for m in state.merged],
+            {k: v.model_dump() for k, v in state.assessments.items()}, state.stage, state.errors)
+
+
+async def never_stopped(target_info, ctx, fake) -> ReviewState:
+    state, answer = resume_case(target_info)
+    fake(assess=[answer])
+    return await run_assess(state, ctx)
+
+
+def saved_at_s1(target_info, ctx) -> Path:
+    """review-state.json as a run leaves it once the assess answer is stored and before its sets are applied."""
+    state, answer = resume_case(target_info)
+    state.assess_answer = answer
+    ctx.target_dir.mkdir(parents=True, exist_ok=True)
+    return save_state(state, ctx.target_dir)
+
+
+async def test_assess_resume_s1_applies_the_saved_answer_under_the_link_check(target_info, ctx, fake):
+    expected = outcome(await never_stopped(target_info, ctx, fake))
+    path = saved_at_s1(target_info, ctx)
+    calls = fake()
+    resumed = await run_assess(load_state(path), ctx)
+    assert calls.calls == []
+    assert outcome(resumed) == expected
+    a, b, c = resume_case(target_info)[0].findings
+    assert [(m.finding.id, m.into) for m in resumed.merged] == [(b.id, a.id)]
+    assert [f.id for f in resumed.findings] == [a.id, c.id]
+
+
+async def test_assess_resume_s2_keeps_merges_made_before_the_link_check(target_info, ctx, fake):
+    from review_pipeline.stages.merge import apply_duplicate_sets
+
+    state, answer = resume_case(target_info)
+    a, b, c = state.findings
+    # What a finished assess stage left before the link check: all three merged into a.
+    apply_duplicate_sets(state, [(list(state.findings), answer.duplicate_sets)], by="assess")
+    state.stage = "assess"
+    ctx.target_dir.mkdir(parents=True, exist_ok=True)
+    path = save_state(state, ctx.target_dir)
+    calls = fake()
+    resumed = await run_assess(load_state(path), ctx)
+    assert calls.calls == []
+    assert resumed.model_dump() == state.model_dump()
+    when = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert to_findings_file(resumed, generated_at=when) == to_findings_file(state, generated_at=when)
+    row, = to_findings_file(resumed)["findings"]
+    assert row["id"] == a.id and row["absorbed"] == [{"id": b.id, "claim": "b"}, {"id": c.id, "claim": "c"}]
+
+
+async def test_assess_resume_s3_stopping_twice_at_s1_gives_the_same_result(target_info, ctx, fake):
+    expected = outcome(await never_stopped(target_info, ctx, fake))
+    path = saved_at_s1(target_info, ctx)
+    calls = fake()
+    await run_assess(load_state(path), ctx)  # stops again before anything is saved: the file is still at S1
+    resumed = await run_assess(load_state(path), ctx)
+    assert calls.calls == []
+    assert outcome(resumed) == expected
 
 
 async def test_assess_is_skipped_for_one_finding_and_no_earlier_rounds(target_info, ctx, fake):
@@ -480,6 +652,86 @@ def test_post_leaves_out_repeats_unless_accepted(target_info):
     medium = medium_finding().id
     assert medium not in [f["id"] for f in select(data["findings"], None)]
     assert medium in [f["id"] for f in select(data["findings"], {medium: {"decision": "accept"}})]
+
+
+# --- lineage and the earlier statuses ------------------------------------------------
+
+
+def _round_rows(target_dir: Path, name: str, head: str, rows: list[dict], when: str) -> None:
+    d = target_dir / "rounds" / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "findings.json").write_text(json.dumps({"schema_version": 1, "generated_at": when, "producer": "test",
+                                                 "target": {"head_sha": head}, "findings": rows}))
+
+
+async def test_lineage_follows_still_open_and_repeat_to_the_first_appearance(target_info, ctx, fake):
+    from review_pipeline.models import Repeat
+
+    first = at("first said in round one", file="settings.py", line=9)
+    reworded = at("said again in round two", file="settings.py", line=9)
+    plain = at("listed once", file="settings.py", line=20)
+    rejected = at("rejected in round two", file="settings.py", line=30)
+    _round_rows(ctx.target_dir, OLDER_HEAD[:12], OLDER_HEAD, [_finding(first, "confirmed", "r", "e")],
+                "2026-01-01T00:00:00Z")
+    _round_rows(ctx.target_dir, OLD_HEAD[:12], OLD_HEAD,
+                [{**_finding(reworded, "confirmed", "r", "e"), "lineage": first.id},
+                 _finding(plain, "confirmed", "r", "e"),
+                 {**_finding(rejected, "confirmed", "r", "e"), "lineage": first.id}], "2026-01-02T00:00:00Z")
+    decide(ctx.target_dir, **{rejected.id: ("reject", "")})
+    a = at("still open against the reworded one", line=2)
+    b = at("still open against the plain one", line=4)
+    c = at("repeats the rejected one", line=8)
+    d = at("new", line=10)
+    state = state_with(target_info, a, b, c, d, stage="repeats")
+    state.repeats = {c.id: Repeat(rejected_id=rejected.id, reason="same", round=OLD_HEAD)}
+    fake(assess=[AssessOutput(assessments=[
+        AssessItem(id=a.id, label="still-open", reason="r", earlier_id=reworded.id),
+        AssessItem(id=b.id, label="still-open", reason="r", earlier_id=plain.id),
+        AssessItem(id=d.id, label="useful")])])
+    state = await run_assess(state, ctx)
+    assert state.lineage == {a.id: first.id, b.id: plain.id, c.id: first.id, d.id: d.id}
+    rows = {f["id"]: f for f in to_findings_file(state)["findings"]}
+    assert [rows[i].get("lineage") for i in (a.id, b.id, c.id, d.id)] == [first.id, plain.id, first.id, None]
+
+
+async def test_the_earlier_status_is_the_worst_of_the_recheck_and_still_open(target_info, ctx, fake):
+    from review_pipeline.models import EarlierStatus
+
+    e1 = at("fixed, says the recheck", file="settings.py", line=9)
+    e2 = at("half fixed", file="settings.py", line=20)
+    e3 = at("not rechecked", file="settings.py", line=30)
+    write_round(ctx.target_dir, OLD_HEAD, [e1, e2, e3])
+    state = state_with(target_info, at("still open against e1", KEYWORD_USE_CITATION, line=6),
+                       at("other", line=1), stage="repeats")
+    a = state.findings[0]
+    state.recheck_answers = {
+        e1.id: EarlierStatus(earlier_id=e1.id, lineage=e1.id, round=OLD_HEAD, status="resolved",
+                             reason="it reads the setting now.", citations=[KEYWORD_CITATION]),
+        e2.id: EarlierStatus(earlier_id=e2.id, lineage=e2.id, round=OLD_HEAD, status="partially_resolved",
+                             reason="one of two", citations=[KEYWORD_CITATION]),
+    }
+    fake(assess=[AssessOutput(assessments=[AssessItem(id=a.id, label="still-open", reason="r", earlier_id=e1.id),
+                                           AssessItem(id=state.findings[1].id, label="useful")])])
+    state = await run_assess(state, ctx)
+    by_id = {e.earlier_id: e for e in state.earlier_status}
+    assert [e.earlier_id for e in state.earlier_status] == [e1.id, e2.id, e3.id]
+    assert by_id[e1.id].status == "still_present"
+    assert by_id[e1.id].reason == f"it reads the setting now. Still open in this round as {a.id}."
+    assert by_id[e1.id].citations == [KEYWORD_CITATION, KEYWORD_USE_CITATION]
+    assert (by_id[e2.id].status, by_id[e2.id].reason) == ("partially_resolved", "one of two")
+    assert (by_id[e3.id].status, by_id[e3.id].reason) == ("cannot_verify", "not rechecked")
+    exported = to_findings_file(state)["earlier"]
+    assert [(e["earlier_id"], e["status"]) for e in exported] == [
+        (e1.id, "still_present"), (e2.id, "partially_resolved"), (e3.id, "cannot_verify")]
+
+
+async def test_a_skipped_assess_stage_still_sets_lineage_and_the_earlier_statuses(target_info, ctx, fake):
+    earlier = at("listed last round", file="settings.py", line=9)
+    write_round(ctx.target_dir, OLD_HEAD, [earlier])
+    calls = fake()
+    state = await run_assess(state_with(target_info, stage="repeats"), ctx)  # nothing shown: skipped
+    assert calls.calls == []
+    assert [(e.earlier_id, e.status) for e in state.earlier_status] == [(earlier.id, "cannot_verify")]
 
 
 # --- two rounds through the CLI ----------------------------------------------------
@@ -755,7 +1007,7 @@ async def test_an_exact_id_repeat_makes_no_call_and_records_none(target_info, ct
 async def test_assess_records_its_labels_and_merges_and_marks_the_finder_entry(target_info, ctx, fake):
     from review_pipeline.models import AgentCheck
 
-    state, a, b, c = three(target_info)
+    state, a, b, c = near_pair(target_info)
     state.checks.append(AgentCheck(stage="find", subject="diff-bugs", findings=[
         {"id": i, "fate": "kept"} for i in (a.id, b.id, c.id)]))
     fake(assess=[AssessOutput(

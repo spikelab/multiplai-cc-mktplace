@@ -1,0 +1,290 @@
+{
+  "source": "INBOX/review-benchmark-pr295-2026-10-16/paths-review-r1 review-state.json",
+  "findings": [
+    {
+      "id": "f828dd2061",
+      "claim": "Template section keys and tail keys are used as marker keys without reserving the `written` key.",
+      "severity": "LOW",
+      "dimension": "piece",
+      "file": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/fill.py",
+      "line_start": 432,
+      "line_end": 439,
+      "failure_scenario": "A template heading titled exactly \"Written\" gets the slug `written`, so assemble emits a second `written` marker pair. edit then refuses the body (\"appears twice\"), or read_written reads that section's content as the key list.",
+      "citations": [
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/fill.py",
+          "line_start": 437,
+          "line_end": 439,
+          "quote": "    for t in tails:\n        owned[t.key] = t.content\n        parts.append(f\"{t.heading}\\n{markers.wrap(t.key, t.content)}\")"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/markers.py",
+          "line_start": 23,
+          "line_end": 23,
+          "quote": "WRITTEN = \"written\""
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/markers.py",
+          "line_start": 71,
+          "line_end": 71,
+          "quote": "                raise MarkerError(f\"marker `{key}` appears twice\")"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/gates.py",
+          "line_start": 122,
+          "line_end": 122,
+          "quote": "        rest = re.sub(re.escape(a) + r\".*?\" + re.escape(b), \"\", rest, flags=re.DOTALL)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line_start": 279,
+          "line_end": 281,
+          "quote": "        markers.spans(current)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/template.py",
+          "line_start": 281,
+          "line_end": 285,
+          "quote": "    seen: dict[str, int] = {}\n    for s in sections[1:]:\n        base = slug(s.title)\n        seen[base] = seen.get(base, 0) + 1\n        s.key = base if seen[base] == 1 else f\"{base}-{seen[base]}\""
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/template.py",
+          "line_start": 184,
+          "line_end": 184,
+          "quote": "    key: str  # unique slug of the title; \"\" for the preamble"
+        }
+      ],
+      "finder": "piece",
+      "finders": [
+        "piece"
+      ]
+    },
+    {
+      "id": "4ef87a631a",
+      "claim": "A template heading whose slug is `written` collides with the reserved WRITTEN key, and nothing reserves the key or renames a colliding slug.",
+      "severity": "LOW",
+      "dimension": "piece",
+      "file": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/markers.py",
+      "line_start": 23,
+      "line_end": 23,
+      "failure_scenario": "Trigger: a template heading such as `## Written`, which template.parse gives the key `written`. Consequence: fill.assemble writes `<!-- pr:begin written -->` twice. `open` succeeds because it never calls spans, but open_word_counts' non-greedy re.sub removes only the header pair, so the section's words are counted under both `written` and `template text`. Every later `edit` fails, because spans raises `marker `written` appears twice` and commands.py:279-281 refuses the PR.",
+      "citations": [
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/markers.py",
+          "line_start": 23,
+          "line_end": 23,
+          "quote": "WRITTEN = \"written\""
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/markers.py",
+          "line_start": 71,
+          "line_end": 71,
+          "quote": "                raise MarkerError(f\"marker `{key}` appears twice\")"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/gates.py",
+          "line_start": 122,
+          "line_end": 122,
+          "quote": "        rest = re.sub(re.escape(a) + r\".*?\" + re.escape(b), \"\", rest, flags=re.DOTALL)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line_start": 279,
+          "line_end": 281,
+          "quote": "        markers.spans(current)"
+        }
+      ],
+      "finder": "piece",
+      "finders": [
+        "piece"
+      ]
+    },
+    {
+      "id": "157cbadf24",
+      "claim": "Section keys are not unique: the n-th copy of a slug gets `{base}-{n}` without checking that this key is free, and a heading can take a key that markers.py reserves, such as `written`.",
+      "severity": "LOW",
+      "dimension": "piece",
+      "file": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/template.py",
+      "line_start": 281,
+      "line_end": 285,
+      "failure_scenario": "A template with `## Notes`, `## Notes` and `## Notes 2` gives the second and third headings the same key `notes-2`. A heading titled `Written` gets the reserved key `written`. Because fill.assemble keeps one owned[key] dict, one section's text is lost and one model answer fills both sections. The body that `open` writes then has two `<!-- pr:begin notes-2 -->` markers, so every later `edit` is refused because markers.spans raises 'marker appears twice'.",
+      "citations": [
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/template.py",
+          "line_start": 281,
+          "line_end": 285,
+          "quote": "    seen: dict[str, int] = {}\n    for s in sections[1:]:\n        base = slug(s.title)\n        seen[base] = seen.get(base, 0) + 1\n        s.key = base if seen[base] == 1 else f\"{base}-{seen[base]}\""
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/template.py",
+          "line_start": 184,
+          "line_end": 184,
+          "quote": "    key: str  # unique slug of the title; \"\" for the preamble"
+        }
+      ],
+      "finder": "piece",
+      "finders": [
+        "piece"
+      ]
+    }
+  ],
+  "verdicts": {
+    "f828dd2061": {
+      "finding_id": "f828dd2061",
+      "status": "confirmed",
+      "reason": "Nothing reserves the marker key `written` for the header pair. In template.py lines 281-285, every heading's key is just `slug(title)`, so a heading `## Written` gets the key `written`. In fill.py, `plan_sections` (lines 242-248) marks a section that has text, or is empty, as `model`. `assemble` then sets `owned[s.key]` and wraps that section's content with `markers.wrap(s.key, content)` (lines 418-421). Lines 437-439 do the same for tail keys, and the extras in `src.extras` are not filtered either. Line 442 still writes the header pair `markers.written_line(written)` using the reserved key `WRITTEN = \"written\"` (markers.py lines 23 and 44-45). The body therefore holds two `<!-- pr:begin written -->` pairs. On the next `edit`, commands.py line 279 calls `markers.spans(current)`. That raises `marker `written` appears twice` (markers.py lines 70-71), and lines 280-281 turn it into a `Refused` error. So the PR body this skill created can never be edited by the skill. The scenario only happens when a template has a heading that slugs to `written`. That is an unusual template; neither the defaults nor the documented workflow produce one.",
+      "citations": [
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/fill.py",
+          "line_start": 437,
+          "line_end": 439,
+          "quote": "    for t in tails:\n        owned[t.key] = t.content\n        parts.append(f\"{t.heading}\\n{markers.wrap(t.key, t.content)}\")"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/fill.py",
+          "line_start": 418,
+          "line_end": 421,
+          "quote": "        if content is not None:\n            owned[s.key] = content\n            template_keys.add(s.key)\n            body = _place(s.blocks, ticks, markers.wrap(s.key, content))"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/fill.py",
+          "line_start": 441,
+          "line_end": 442,
+          "quote": "    written = list(owned)\n    header = [markers.MANAGED, markers.written_line(written)] if managed_header else []"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/template.py",
+          "line_start": 281,
+          "line_end": 285,
+          "quote": "    seen: dict[str, int] = {}\n    for s in sections[1:]:\n        base = slug(s.title)\n        seen[base] = seen.get(base, 0) + 1\n        s.key = base if seen[base] == 1 else f\"{base}-{seen[base]}\""
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/markers.py",
+          "line_start": 70,
+          "line_end": 71,
+          "quote": "            if key in out:\n                raise MarkerError(f\"marker `{key}` appears twice\")"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line_start": 278,
+          "line_end": 281,
+          "quote": "    try:\n        markers.spans(current)\n    except markers.MarkerError as e:\n        raise Refused(f\"PR {number}'s body has markers this skill cannot edit safely: {e}\") from e"
+        }
+      ],
+      "expected_behaviour": "A template section or appended section whose slug is `written` gets a marker key different from the reserved `written` header key, so the skill can still edit the body it generated.",
+      "needs": [],
+      "topic": "code",
+      "impact": "correctness-only"
+    },
+    "4ef87a631a": {
+      "finding_id": "4ef87a631a",
+      "status": "confirmed",
+      "reason": "The main failure happens as described. One detail of the scenario is wrong. template.parse keys each heading by its plain slug, and nothing reserves `written`: `## Written` gets key `written` (template.py 283-285, slug at 198-199). A titled section that is not a code section becomes a model section (fill.py 242-243 / 248). assemble then wraps its content with markers.wrap(s.key, ...) (fill.py 421) and also puts markers.written_line on top (fill.py 442), so the body holds `<!-- pr:begin written -->` twice. On the `open` path render_body only runs run_open_gates (commands.py 98-99), and none of those gates calls spans, so the PR is created. Every later `edit` calls markers.spans(current) (commands.py 279). spans raises `marker `written` appears twice` (markers.py 70-71), which commands.py 280-281 turns into a Refused. The wrong detail is the word count: re.sub has no count limit, so gates.py 122 removes both `written` pairs, not just the header pair. The section's words are therefore counted once, under `written`, not twice. That only affects the side note about counts, not the refusal of `edit`. The trigger is a repo template with a heading whose slug is `written`. That is legal but unusual, and nothing in the repo's docs presents it as normal use, so the impact is correctness-only.",
+      "citations": [
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/markers.py",
+          "line_start": 23,
+          "line_end": 23,
+          "quote": "WRITTEN = \"written\""
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/template.py",
+          "line_start": 283,
+          "line_end": 285,
+          "quote": "        base = slug(s.title)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/fill.py",
+          "line_start": 421,
+          "line_end": 421,
+          "quote": "            body = _place(s.blocks, ticks, markers.wrap(s.key, content))"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/fill.py",
+          "line_start": 442,
+          "line_end": 442,
+          "quote": "    header = [markers.MANAGED, markers.written_line(written)] if managed_header else []"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line_start": 98,
+          "line_end": 99,
+          "quote": "        done = fill.assemble(sections, plans, src, model_text, ticks)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/markers.py",
+          "line_start": 70,
+          "line_end": 71,
+          "quote": "                raise MarkerError(f\"marker `{key}` appears twice\")"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/commands.py",
+          "line_start": 279,
+          "line_end": 281,
+          "quote": "        markers.spans(current)"
+        }
+      ],
+      "expected_behaviour": "A template section whose slug matches the reserved `written` key gets a marker key that cannot collide, so a body opened by `open` can still be edited by `edit`.",
+      "needs": [],
+      "topic": "code",
+      "impact": "correctness-only"
+    },
+    "157cbadf24": {
+      "finding_id": "157cbadf24",
+      "status": "confirmed",
+      "reason": "In template.parse (lines 281-285) a heading's key is its slug, or `{slug}-{n}` for the n-th copy, and nothing checks whether that key is already taken. Headings `Notes`, `Notes`, `Notes 2` get the keys notes, notes-2, notes-2. A heading `Written` gets the slug `written`, the key markers.py reserves for its own list (WRITTEN = \"written\"). Heading-only or text sections are planned as `model` (fill.py 242-248). fill.assemble stores the content in owned[s.key], so the later section overwrites the earlier one, and both sections read model_text.get(s.key). It still wraps each section in its own markers.wrap(s.key, ...), so the body holds two `pr:begin notes-2` markers, or two `written` pairs next to the managed header. The open gates (gates.run_open_gates) check headings, checkboxes, fill and word counts, but never call markers.spans, so `open` returns and writes the body. Any later parse goes through markers.spans, which raises 'marker ... appears twice'. That blocks edit/merge on this body. Impact is correctness-only: the failure needs a template with colliding headings (`X`, `X`, `X 2`) or a section titled `Written`, which is unusual for a repository PR template.",
+      "citations": [
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/template.py",
+          "line_start": 281,
+          "line_end": 285,
+          "quote": "    seen: dict[str, int] = {}\n    for s in sections[1:]:\n        base = slug(s.title)\n        seen[base] = seen.get(base, 0) + 1\n        s.key = base if seen[base] == 1 else f\"{base}-{seen[base]}\""
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/template.py",
+          "line_start": 184,
+          "line_end": 184,
+          "quote": "    key: str  # unique slug of the title; \"\" for the preamble"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/markers.py",
+          "line_start": 23,
+          "line_end": 23,
+          "quote": "WRITTEN = \"written\""
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/fill.py",
+          "line_start": 415,
+          "line_end": 421,
+          "quote": "        elif p.kind == \"model\":\n            content = model_text.get(s.key, \"\")\n            model_keys.append(s.key)\n        if content is not None:\n            owned[s.key] = content\n            template_keys.add(s.key)\n            body = _place(s.blocks, ticks, markers.wrap(s.key, content))"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/gates.py",
+          "line_start": 131,
+          "line_end": 137,
+          "quote": "def run_open_gates(sections: list[Section], body: str, owned: dict[str, str], ticks: set[str],\n                   model_text: dict[str, str], model_keys: list[str]) -> GateResult:\n    errors = check_headings(sections, body)\n    errors += check_checkboxes(sections, body, ticks)\n    errors += check_filled(model_text, model_keys)\n    errors += check_words(open_word_counts(body, owned))\n    return GateResult(errors)"
+        },
+        {
+          "path": "plugins/multiplai-dev/skills/pr/scripts/pr_pipeline/markers.py",
+          "line_start": 70,
+          "line_end": 71,
+          "quote": "            if key in out:\n                raise MarkerError(f\"marker `{key}` appears twice\")"
+        }
+      ],
+      "expected_behaviour": "Every template section gets a marker key that no other section uses and that is not the reserved `written` key, so each section keeps its own content and the opened body can be edited later.",
+      "needs": [],
+      "topic": "code",
+      "impact": "correctness-only"
+    }
+  },
+  "duplicate_sets": [
+    {
+      "finding_ids": [
+        "157cbadf24",
+        "f828dd2061",
+        "4ef87a631a"
+      ],
+      "reason": "All three say template.parse can give a heading the reserved `written` key, producing duplicate `written` markers that make edit refuse the PR; reserving the key and making keys unique fixes all three."
+    }
+  ]
+}

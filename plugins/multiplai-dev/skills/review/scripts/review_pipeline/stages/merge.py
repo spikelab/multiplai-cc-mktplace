@@ -44,6 +44,11 @@ def _near(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start <= b_end + MERGE_LINE_GAP and b_start <= a_end + MERGE_LINE_GAP
 
 
+def anchors_near(a: Finding, b: Finding) -> bool:
+    """The two findings' anchors are in one file and overlap or are at most MERGE_LINE_GAP lines apart."""
+    return a.file == b.file and _near(a.line_start, a.line_end, b.line_start, b.line_end)
+
+
 def linked(a: Finding, b: Finding) -> bool:
     """Two findings may be one defect: their anchors overlap in one file, or any
     repository citation of one overlaps any repository citation of the other.
@@ -55,15 +60,15 @@ def linked(a: Finding, b: Finding) -> bool:
     """
     if is_trim(a) != is_trim(b):
         return False
-    if a.file == b.file and _near(a.line_start, a.line_end, b.line_start, b.line_end):
+    if anchors_near(a, b):
         return True
     return any(ca.path == cb.path and _near(ca.line_start, ca.line_end, cb.line_start, cb.line_end)
                for ca in a.citations if not ca.is_web
                for cb in b.citations if not cb.is_web)
 
 
-def link_groups(findings: list[Finding]) -> list[list[Finding]]:
-    """Groups of 2+ of *findings*, chained by `linked`.
+def link_groups(findings: list[Finding], link=linked) -> list[list[Finding]]:
+    """Groups of 2+ of *findings*, chained by *link* (`linked` unless given).
 
     A group is every finding reachable from another by one link. Groups come
     in the order their first member appears in *findings*; members are in
@@ -79,7 +84,7 @@ def link_groups(findings: list[Finding]) -> list[list[Finding]]:
 
     for i in range(len(findings)):
         for j in range(i + 1, len(findings)):
-            if linked(findings[i], findings[j]):
+            if link(findings[i], findings[j]):
                 parent[root(j)] = root(i)
     members: dict[int, list[int]] = {}
     for i in range(len(findings)):

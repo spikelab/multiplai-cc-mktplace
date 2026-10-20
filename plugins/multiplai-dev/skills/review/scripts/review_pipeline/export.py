@@ -11,8 +11,11 @@ and the pipeline's models carry more than it allows.
 | refuted                              | `refuted`      |
 | gate-rejected                        | `rejected`     |
 
-A finding merged into another by the merge stage is not exported: it is gone
-from `state.findings`, and the finding it went into carries its citations.
+A finding merged into another by the merge or assess stage is not exported:
+it is gone from `state.findings`, and the finding it went into carries its
+citations. That finding's `absorbed` (optional, 0.94+) lists the id and claim
+of every finding merged into it, also through a finding merged into it in
+turn, in `state.merged` order; it is written only when there are some.
 `expected_behaviour` comes from the verifier and is written for confirmed and
 unverifiable findings only; a refuted or rejected finding has none. The same
 goes for `assessment`, the assess stage's label (`useful`, `still-open`,
@@ -33,6 +36,12 @@ written before it have none, and readers fall back to the topic rule.
 `checks.json` (the `checks.v1` contract beside it) is the record of every
 agent call: `AgentCheck` and `GateCheck` from the state, mapped the same way.
 
+`lineage` (optional, 0.94+) is the id of the finding's first appearance in an
+earlier round, through a `still-open` or `repeat` label; it is written only
+when it differs from `id`. `earlier` (top level, optional, 0.94+) lists the
+final status of each finding an earlier round left open
+(`state.earlier_status`), written only when there are some.
+
 `needs` (what the review could not get, each with a command for a person) is
 written only when there are some: at the top level every need, and on each
 finding the needs that block it. A need that blocked a finding merged away
@@ -50,7 +59,8 @@ from pathlib import Path
 from . import timings
 from .budget import TOKEN_FIELDS, empty_stage
 from .config import DIMENSIONS
-from .models import SEVERITIES, STAGES, AgentCheck, Assessment, Citation, Finding, Need, ReviewState, section_of
+from .models import (SEVERITIES, STAGES, AgentCheck, Assessment, Citation, EarlierStatus, Finding, Need,
+                     ReviewState, section_of)
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +99,18 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
         "expected_behaviour": expected or None,
         **on_paths,
     }
+
+
+def absorbed(state: ReviewState) -> dict[str, list[dict]]:
+    """The id and claim of every finding merged away, by the id of the finding it ended up in."""
+    into = {m.finding.id: m.into for m in state.merged}
+    out: dict[str, list[dict]] = {}
+    for m in state.merged:
+        top = m.into
+        while top in into:
+            top = into[top]
+        out.setdefault(top, []).append({"id": m.finding.id, "claim": m.finding.claim})
+    return out
 
 
 def _need(n: Need) -> dict:
@@ -196,6 +218,11 @@ def _assessment(a: Assessment) -> dict:
     }
 
 
+def _earlier(e: EarlierStatus) -> dict:
+    return {"earlier_id": e.earlier_id, "lineage": e.lineage, "round": e.round, "status": e.status,
+            "reason": e.reason, "citations": [_citation(c) for c in e.citations], "error": e.error}
+
+
 def _target(state: ReviewState) -> dict:
     t = state.target
     return {
@@ -216,6 +243,7 @@ def _timestamp(generated_at: datetime | None) -> str:
 
 def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None) -> dict:
     rows: list[dict] = []
+    merged_into = absorbed(state)
     for f in state.findings:
         verdict = state.verdicts.get(f.id)
         status = verdict.status if verdict else "unverifiable"
@@ -229,6 +257,10 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
             if verdict.impact and status in ("confirmed", "unverifiable"):
                 row["impact"] = verdict.impact
         row["section"] = section_of(verdict.topic if verdict else None, f.finders)
+        if f.id in merged_into:
+            row["absorbed"] = merged_into[f.id]
+        if state.lineage.get(f.id, f.id) != f.id:
+            row["lineage"] = state.lineage[f.id]
         assessment = state.assessments.get(f.id)
         if assessment is not None and status in ("confirmed", "unverifiable"):
             row["assessment"] = _assessment(assessment)
@@ -264,6 +296,8 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
     }
     if needs:
         data["needs"] = [_need(n) for n in needs]
+    if state.earlier_status:
+        data["earlier"] = [_earlier(e) for e in state.earlier_status]
     return data
 
 

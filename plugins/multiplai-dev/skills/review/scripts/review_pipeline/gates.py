@@ -14,7 +14,7 @@ import re
 
 from multiplai_core.citations import check_quote, file_at, lines_at
 
-from .models import DEPS_DIR, SEVERITIES, Citation, Finding, GateResult, Need, TargetInfo, Verdict
+from .models import DEPS_DIR, SEVERITIES, Citation, EarlierStatus, Finding, GateResult, Need, TargetInfo, Verdict
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ _REASON_KINDS = (
     "quote not at cited lines", "path not at head", "empty quote", "is not a changed file",
     "unknown severity", "no citations", "first citation is a web source", "confirmed without citing",
     "none of its citations reproduce", "dependency not in manifest", "first citation is a dependency",
-    "path not at commit",
+    "path not at commit", "status without citing",
 )
 
 
@@ -128,6 +128,27 @@ def verdict_gate(target: TargetInfo, verdict: Verdict) -> GateResult:
         reasons.append(f"{citation.path}:{citation.line_start}: {result.reason}")
     return GateResult(passed=False, action="downgrade",
                       reason="verifier confirmed, but none of its citations reproduce (" + "; ".join(reasons) + ")")
+
+
+def earlier_status_gate(target: TargetInfo, status: EarlierStatus) -> GateResult:
+    """Any status but `cannot_verify` must show at least one repository citation that reproduces at head.
+
+    Web and dependency citations do not count. On failure the caller records `cannot_verify`.
+    """
+    if status.status == "cannot_verify":
+        return GateResult(passed=True)
+    repo = [c for c in status.citations if not c.is_web and not c.is_dependency]
+    if not repo:
+        return GateResult(passed=False, action="downgrade",
+                          reason=f"{status.status}: status without citing a line of the repository at head")
+    reasons = []
+    for citation in repo:
+        result = citation_gate(target, citation)
+        if result.passed:
+            return GateResult(passed=True)
+        reasons.append(f"{citation.path}:{citation.line_start}: {result.reason}")
+    return GateResult(passed=False, action="downgrade",
+                      reason=f"{status.status}: none of its citations reproduce (" + "; ".join(reasons) + ")")
 
 
 # --- needs --------------------------------------------------------------------

@@ -30,7 +30,24 @@ paths through the change from each entry point (see "The paths stage" below).
    a finding still without a verdict stops the run (exit `5`) instead of
    reaching the review unverified. A hit Claude usage limit is never tried
    again: it stops the run at once (exit `6`).
-3. **merge** — the finders work independently, so one defect is often
+3. **recheck** — on a later round of the same change (not a tree review),
+   each finding the last kept round listed, or left with an earlier status
+   other than `resolved`, and that nobody rejected goes to a fresh agent with
+   the verifier's tools. It reads the earlier finding and the diff of the
+   files it cites since that round, never this round's findings, and answers
+   `resolved`, `still_present`, `partially_resolved` or `cannot_verify`,
+   citing lines at head. Python re-reads those lines: any status but
+   `cannot_verify` without a citation that is there becomes `cannot_verify`,
+   and so does a finding whose three tries all fail (the run goes on, with a
+   line under agent failures). After step 6, an earlier finding that a finding
+   of this round is `still-open` against is `still_present`, and one nothing
+   rechecked is `cannot_verify`, never resolved. The review lists them under
+   **Findings from earlier rounds**; **Recurring** names each defect open in
+   three or more rounds, followed across rewordings by its `lineage` (the id
+   of its first appearance, through `still-open` and `repeat`); and the
+   header and the summary count new findings apart from those still open.
+   The finders never see earlier rounds. Skipped when nothing is open.
+4. **merge** — the finders work independently, so one defect is often
    reported several times in different words. Confirmed and unverifiable
    findings are grouped when their lines overlap (or come within two lines)
    in one file, or when they cite overlapping lines of any file, and one agent
@@ -38,7 +55,7 @@ paths through the change from each entry point (see "The paths stage" below).
    finding with the highest severity, every citation and every finder that
    reported it. The findings merged away are listed in the review's appendix
    with the finding they went into.
-4. **repeats** — when this PR (or branch) was reviewed before, each earlier
+5. **repeats** — when this PR (or branch) was reviewed before, each earlier
    round is kept in full (its findings, review, `progress.log`,
    `review-state.json`, `diff.patch`, ...) in
    `<out>/<repo>/<object>/rounds/<NN>-<head sha, 12 chars>/`, where `<NN>` is the
@@ -60,12 +77,14 @@ paths through the change from each entry point (see "The paths stage" below).
    new wording, so the next round matches it by id. A repeat is not listed or
    counted in the review or the viewer. Skipped when nothing was rejected
    before.
-5. **assess** — one agent reads the remaining findings together, with the PR
+6. **assess** — one agent reads the remaining findings together, with the PR
    description, the earlier rounds' accepted and undecided findings and the
    user's notes, and labels each `useful`, `still-open` (the same defect as an
    earlier finding that was accepted, deferred or not decided, so not fixed yet) or
    `low-value` (true but not worth acting on, for one named rule: context,
-   covered or speculative). It may name more duplicates, merged as in step 3.
+   covered or speculative). It may name more duplicates; only those whose
+   lines overlap or come within two lines in one file are merged as in
+   step 4, and the rest stay separate findings.
    Python checks every label; a bad one becomes `useful`. Skipped when fewer
    than two findings remain and there are no earlier rounds.
 
@@ -621,7 +640,11 @@ head commit, or `web`) and `seen` (`read`, `searched`, `diff`, `prompt`, `fetche
 or `not-seen` when the agent cites lines it never read, searched or was shown).
 `checks-<slug>.md` beside it is the same record as markdown, and review-viewer
 shows it on its Checked tab. `findings.json` also carries each finding's
-`verifier_citations`.
+`verifier_citations`, and, on a finding others were merged into, their ids
+and claims (`absorbed`). On a later round, a finding whose first appearance
+was in an earlier round carries that finding's id as `lineage`, and the
+top-level `earlier` list holds each earlier finding's status, reason and
+citations (step 3).
 
 Then, when the summary has a **Needs you** section, ask the user about each
 need explicitly, one by one:
@@ -769,7 +792,7 @@ state when it finishes:
   adds a new interval, so the gap before it is not counted.
 - `calls`, `tokens` (`input`, `output`, `cache_read`, `cache_write`,
   `total`), `cost_usd`, `max_usd` (the ceiling) and `stopped_by_budget`.
-- `stages`: one row per finder (`find:<dimension>`), `verify`, `merge`,
+- `stages`: one row per finder (`find:<dimension>`), `verify`, `recheck`, `merge`,
   `repeats` and `assess`, each with its calls, tokens, cost, wall time, and the configured model and
   effort (`session default` when none is set). The model the SDK actually ran
   is not recorded.

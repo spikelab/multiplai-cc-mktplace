@@ -27,7 +27,8 @@ SEVERITIES: tuple[str, ...] = ("HIGH", "MEDIUM", "LOW")
 
 # Stage names in run order. `ReviewState.stage` holds the last one completed.
 STAGES: tuple[str, ...] = (
-    "target", "explain", "paths", "find", "verify", "merge", "repeats", "assess", "export", "render", "done",
+    "target", "explain", "paths", "find", "verify", "recheck", "merge", "repeats", "assess", "export", "render",
+    "done",
 )
 # Stages a checkpoint written before 0.22 can name. Both ran after verify, so
 # a resumed review of that age continues with merge.
@@ -376,6 +377,31 @@ class Assessment(BaseModel):
     earlier_note: str = ""
 
 
+# What became of an earlier round's open finding, worst first: the order the
+# assess stage's reconcile uses to pick the final status. buildme's
+# `PRIOR_STATUSES` holds the same words best first; copied, not imported
+# (buildme does not import this package), and `test_recheck.py` pins the two.
+EARLIER_STATUSES: tuple[str, ...] = ("still_present", "partially_resolved", "cannot_verify", "resolved")
+EarlierStatusWord = Literal["still_present", "partially_resolved", "cannot_verify", "resolved"]
+
+
+class EarlierStatus(BaseModel):
+    """The status of a finding an earlier round listed and nobody rejected, at this round's head.
+
+    Given by the recheck stage (`stages/recheck.py`), checked by `earlier_status_gate`,
+    and made final by the assess stage's reconcile. `round` is the head of the round
+    the finding was listed in, the commit its citations are at; `citations` are at
+    this round's head. `error` is set when every recheck try failed.
+    """
+    earlier_id: str
+    lineage: str
+    round: str
+    status: EarlierStatusWord
+    reason: str = ""
+    citations: list[Citation] = Field(default_factory=list)
+    error: str = ""
+
+
 class ExplainedFacts(BaseModel):
     """The explain stage's checked facts (`code_facts`), as `facts.json` holds them."""
     facts: list[Fact] = Field(default_factory=list)
@@ -487,6 +513,13 @@ class ReviewState(BaseModel):
     # resume does not ask twice.
     assessments: dict[str, Assessment] = Field(default_factory=dict)
     assess_answer: "AssessOutput | None" = None
+    # The recheck stage's status per open earlier finding, by earlier id, stored as
+    # each answer arrives (the first one per id stands), so a resume asks only for
+    # the rest. `earlier_status` is the final list the assess stage's reconcile
+    # writes; `lineage` maps a finding id to the id of its first appearance.
+    recheck_answers: dict[str, EarlierStatus] = Field(default_factory=dict)
+    earlier_status: list[EarlierStatus] = Field(default_factory=list)
+    lineage: dict[str, str] = Field(default_factory=dict)
     original_severity: dict[str, str] = Field(default_factory=dict)  # lowered findings only
     errors: list[str] = Field(default_factory=list)  # agent failures, shown in the review header
     # Information the review could not get, each with a command for a person.
@@ -551,6 +584,26 @@ class RepeatMatch(_Model):
 
 class RepeatsOutput(_Model):
     matches: list[RepeatMatch] = Field(default_factory=list)
+
+
+def worst_status(*statuses: str) -> str:
+    """The worst of *statuses* in `EARLIER_STATUSES` order."""
+    return min(statuses, key=EARLIER_STATUSES.index)
+
+
+class RecheckOutput(_Model):
+    """The recheck agent's answer about one earlier finding."""
+    status: EarlierStatusWord
+    reason: str = ""
+    citations: list[Citation] = Field(default_factory=list)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _known_status(cls, value):
+        """An unknown status is `cannot_verify`, never `resolved` (buildme's `PriorAssessment` rule):
+        an agent that answers in its own words must not close a finding, nor fail the parse."""
+        text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        return text if text in EARLIER_STATUSES else "cannot_verify"
 
 
 class AssessItem(_Model):

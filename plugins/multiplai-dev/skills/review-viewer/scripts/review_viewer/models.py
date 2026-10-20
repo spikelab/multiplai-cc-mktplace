@@ -89,8 +89,16 @@ class Assessment(_Strict):
     earlier_note: str | None = None
 
 
+class Absorbed(_Strict):
+    """A finding the review merged into this one, at its merge or assess stage: its id and claim."""
+    id: str = Field(pattern=r"^[0-9a-f]{10}$")
+    claim: str
+
+
 # `Finding.paths` as the schema states it: optional, but never null when present.
 PATH_IDS_SCHEMA = {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": True}
+# `Finding.lineage` as the schema states it: optional, but never null when present.
+LINEAGE_SCHEMA = {"type": "string", "pattern": r"^[0-9a-f]{10}$"}
 
 
 class Finding(_Strict):
@@ -129,6 +137,13 @@ class Finding(_Strict):
     # The ids of the mapped paths (review's `paths.json`) the finding lies on, in that file's
     # order (multiplai-dev 0.82+). Absent when it lies on none; never null or empty.
     paths: Annotated[list[str] | None, WithJsonSchema(PATH_IDS_SCHEMA)] = None
+    # The findings merged into this one, also through a finding merged into it in
+    # turn (multiplai-dev 0.94+). Absent when there are none, and in older files.
+    absorbed: list[Absorbed] = Field(default_factory=list)
+    # The id of this finding's first appearance in an earlier round, through a
+    # `still-open` or `repeat` assessment (multiplai-dev 0.94+). Absent when it is
+    # the finding's own id, and in older files.
+    lineage: Annotated[str | None, WithJsonSchema(LINEAGE_SCHEMA)] = None
 
     @field_validator("paths")
     @classmethod
@@ -200,7 +215,30 @@ class Run(_Strict):
     errors: int = Field(ge=0)  # lines in the review's error list
 
 
+class EarlierStatus(_Strict):
+    """What became of a finding an earlier round listed and nobody rejected, at this round's head
+    (multiplai-dev 0.94+).
+
+    `round` is the head of the round that listed it (its citations are at that
+    commit); `citations` are at this round's head and back the status. A finding
+    no agent could assess is `cannot_verify`, never `resolved`; `error` says why
+    when every recheck call failed.
+    """
+    earlier_id: str = Field(pattern=r"^[0-9a-f]{10}$")
+    lineage: str = Field(pattern=r"^[0-9a-f]{10}$")
+    round: str
+    status: Literal["resolved", "still_present", "partially_resolved", "cannot_verify"]
+    reason: str = ""
+    citations: list[Citation] = Field(default_factory=list)
+    error: str = ""
+
+
 class FindingsFile(_Strict):
+    """One review's findings, for review-viewer and the other readers of `findings.json`.
+
+    Additive changes keep the version: a new optional field is added under
+    `schema_version` 1, and a file written before it still validates.
+    """
     schema_version: Literal[1]
     generated_at: datetime
     producer: str
@@ -211,6 +249,9 @@ class FindingsFile(_Strict):
     run: Run | None = None  # absent in files written before multiplai-dev 0.28
     # The mode the review ran in (multiplai-dev 0.32+); absent means `full`.
     mode: Literal["full", "critical"] | None = None
+    # The status of each finding the last round left open (multiplai-dev 0.94+).
+    # Absent when there are none, and in older files.
+    earlier: list[EarlierStatus] = Field(default_factory=list)
 
 
 # --- checks.json v1 ------------------------------------------------------------------
@@ -278,7 +319,7 @@ class AgentEntry(_Strict):
 
 class GateEntry(_Strict):
     finding_id: str
-    gate: Literal["finding_gate", "verdict_gate"]
+    gate: Literal["finding_gate", "verdict_gate", "earlier_status_gate"]
     passed: bool
     rule: str = ""
 

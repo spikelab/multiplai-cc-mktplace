@@ -15,6 +15,47 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.94.0] - 2026-10-20
+
+### Fixed
+- review: the assess stage no longer merges a finding into one anchored in
+  another file, or more than two lines away in the same file. The assess
+  agent reads every finding at once and could fold a root bug into a weaker
+  finding elsewhere, whose claim then hid it (on PR #295 it lost the
+  template slug collision and `--head` reaching `git push`). The members of
+  a duplicate set it names are merged only where their lines overlap or
+  come within two lines in one file; the rest stay separate findings, and
+  each dropped set is logged with its ids. Duplicates across files are left
+  to the merge stage, which already groups findings that cite the same lines.
+
+### Added
+- review: a review run again on the same PR or branch now says what became
+  of each finding the last round listed and nobody rejected. A new recheck
+  step, after verification, gives each one to a fresh agent with the diff of
+  the files it cites since that round (never this round's findings, and the
+  finders still see nothing of earlier rounds), which answers `resolved`,
+  `still_present`, `partially_resolved` or `cannot_verify` with lines at the
+  new head. A status other than `cannot_verify` stands only when its cited
+  lines are there; an earlier finding no agent could check, or that a stopped
+  run's resume did not recheck, is `cannot_verify`, never resolved; one a
+  finding of this round is `still-open` against is `still_present`. The
+  review lists them under "Findings from earlier rounds". Every finding
+  carries a `lineage`, the id of its first appearance, kept across rewordings
+  through `still-open` and `repeat`; a "Recurring" section names each one open
+  in three or more rounds, and the header and summary count new findings
+  apart from those still open ("2 new, 1 still open, 3 earlier resolved, 0
+  earlier cannot verify"). `findings.json` gains the optional `lineage` per
+  finding and a top-level `earlier` list (`findings.v1`, `schema_version`
+  still 1), and `checks.json` the `earlier_status_gate` results. A review of
+  a tree, or one with nothing open from before, makes no recheck call.
+- review: in `findings.json`, a finding that others were merged into lists
+  their ids and claims under the new optional `absorbed` field
+  (`findings.v1`, `schema_version` still 1; the schema now says additive
+  changes keep the version). Reviews whose assess stage finished before this
+  version keep their merges and get the field when they are exported.
+- review-viewer: a finding's page shows the findings merged into it, by id
+  and claim, under "Merged into this finding" after the verdict.
+
 ## [0.93.0] - 2026-10-20
 
 ### Added

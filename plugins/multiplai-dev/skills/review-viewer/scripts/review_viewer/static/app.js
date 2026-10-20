@@ -1467,8 +1467,9 @@
   }
 
   /* The blocks under a finding's claim, in the order L.findingParts gives:
-   * the failure scenario, the expected behaviour, the verdict, the cited code,
-   * what it needs and the verifier's citations, each only when it applies.
+   * the failure scenario, the expected behaviour, the verdict, the findings
+   * merged into it, the cited code, what it needs and the verifier's
+   * citations, each only when it applies.
    * Shown on the Findings tab and under each walkthrough step that links the
    * finding. */
   function findingFacts(f, parts) {
@@ -1480,6 +1481,11 @@
         out.push(el("div", { class: "label", text: "Expected behaviour" }), el("p", { text: f.expected_behaviour }));
       } else if (part === "verdict") {
         out.push(el("div", { class: "label", text: "Verdict" }), el("p", { text: f.verdict_reason }));
+      } else if (part === "absorbed") {
+        out.push(el("div", { class: "label", text: "Merged into this finding" }));
+        for (const a of f.absorbed) {
+          out.push(el("p", { class: "small" }, [el("span", { class: "mono muted", text: a.id }), " " + a.claim]));
+        }
       } else if (part === "cited") {
         out.push(el("div", { class: "label", text: "Cited code" }));
         for (const c of f.citations) out.push(citationLink(c));

@@ -190,3 +190,26 @@ def test_impact_is_exported_for_shown_findings_and_mode_defaults_to_full(canned_
     jsonschema.validate(data, json.loads(SCHEMA.read_text()))
     canned_state.mode = "critical"
     assert to_findings_file(canned_state)["mode"] == "critical"
+
+
+def test_lineage_and_earlier_statuses_are_exported_and_validate(canned_state):
+    from review_pipeline.models import Citation, EarlierStatus
+
+    high, medium = canned_state.findings[0], canned_state.findings[1]
+    data = to_findings_file(canned_state)
+    assert "earlier" not in data and all("lineage" not in f for f in data["findings"])
+    canned_state.lineage = {high.id: "0123456789", medium.id: medium.id}
+    canned_state.earlier_status = [EarlierStatus(
+        earlier_id="0123456789", lineage="0123456789", round="1" * 40, status="still_present", reason="still there",
+        citations=[Citation(path="rateplan_service.py", line_start=1, line_end=1, quote="KEYWORD = 'dolcebot'")])]
+    data = to_findings_file(canned_state)
+    jsonschema.validate(data, _schema())
+    rows = {f["id"]: f for f in data["findings"]}
+    assert rows[high.id]["lineage"] == "0123456789" and "lineage" not in rows[medium.id]
+    assert data["earlier"] == [{"earlier_id": "0123456789", "lineage": "0123456789", "round": "1" * 40,
+                                "status": "still_present", "reason": "still there", "error": "",
+                                "citations": [{"path": "rateplan_service.py", "line_start": 1, "line_end": 1,
+                                               "quote": "KEYWORD = 'dolcebot'"}]}]
+    data["earlier"][0]["status"] = "fixed"
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(data, _schema())

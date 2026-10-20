@@ -76,6 +76,16 @@ entry) keeps the lists. `logic.findingParts(finding, checks, context)` makes
 that choice and the order of the blocks under the claim; `app.js` renders
 what it returns.
 
+`findings.json` may carry `absorbed` per finding (multiplai-dev 0.94+): the id
+and claim of each finding the review merged into it. `findingParts` adds an
+`absorbed` block after the verdict when the list is not empty.
+
+From multiplai-dev 0.94 it may also carry `lineage` per finding (the id of its
+first appearance in an earlier round, absent when it is the finding's own id)
+and a top-level `earlier` list (`EarlierStatus`: each finding the last round
+left open, with its status at this head, reason and citations). `models.py`
+and the schema accept both; the page does not show them yet.
+
 ## Protocol 1a: `checks.json` v1 (optional)
 
 The review writes it beside `findings.json`: `agents` (each agent call's

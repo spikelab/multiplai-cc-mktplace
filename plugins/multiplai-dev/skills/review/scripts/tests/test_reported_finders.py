@@ -31,6 +31,7 @@ from review_pipeline.models import (
     FinderOutput,
     MergeOutput,
     Piece,
+    RecheckOutput,
     RepeatsOutput,
     ReviewState,
     Verdict,
@@ -199,7 +200,8 @@ class Model:
                            impact="correctness-only", expected_behaviour="It is 3.",
                            citations=[Citation(path=f"{package}/m.py", line_start=2, line_end=2,
                                                quote=f"{package}_2 = 2")])
-        outputs = {"merge": MergeOutput, "assess": AssessOutput, "repeats": RepeatsOutput}
+        outputs = {"merge": MergeOutput, "assess": AssessOutput, "repeats": RepeatsOutput,
+                   "recheck": lambda: RecheckOutput(status="cannot_verify")}
         if stage in outputs:
             return outputs[stage]()
         raise AssertionError(budget_label)
