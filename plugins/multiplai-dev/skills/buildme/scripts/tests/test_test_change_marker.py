@@ -234,6 +234,11 @@ NOT_DECLARATIONS = {
     "marker alone in a fence": f"STATUS: DONE\n```\n{TEST_CHANGE_MARKER}\n```\n",
     "marker alone, template on the next line": (
         f"STATUS: DONE\n{TEST_CHANGE_MARKER}\n<reason>\n"),
+    # Inline code that does not hold the whole line is a mention.
+    "inline code mention at the start of a line": (
+        f"`{TEST_CHANGE_MARKER}` lines are not needed: no test changed.\n"),
+    "echoed template in inline code": f"STATUS: DONE\n`{TEST_CHANGE_MARKER} <reason>`\n",
+    "heading that says none": f"STATUS: DONE\n## {TEST_CHANGE_MARKER} none\n",
 }
 
 
@@ -254,6 +259,8 @@ def test_an_empty_answer_is_not_a_declaration(value):
 @pytest.mark.parametrize("reason", [
     "None of the old assertions could pass: tests/test_a.py asserted the wrong default",
     "no longer valid: tests/test_a.py asserted the wrong default",
+    "(tests/test_a.py asserted the wrong default)",
+    "(tests/test_a.py asserted the wrong default) (see the spec)",
 ])
 def test_a_reason_that_starts_like_an_empty_answer_still_counts(reason):
     assert parse_test_change_claims(f"STATUS: DONE\n{TEST_CHANGE_MARKER} {reason}\n") == [
@@ -273,6 +280,10 @@ def test_a_reason_that_starts_like_an_empty_answer_still_counts(reason):
     # Bold closed before the colon, a label form `_SLOT_COLON` accepts.
     f"**{_LABEL}**: tests/test_a.py asserted the wrong default",
     f"- **{_LABEL}**: tests/test_a.py asserted the wrong default",
+    # A markdown heading, or the whole line in inline code.
+    f"### {TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default",
+    f"`{TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default`",
+    f"- `{TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default`",
 ])
 def test_a_line_that_starts_with_the_marker_is_a_declaration(line):
     assert parse_test_change_claims(f"STATUS: DONE\n{line}\n") == [
@@ -300,13 +311,27 @@ def test_a_reason_on_the_next_line_is_read(after):
         "tests/test_a.py asserted the wrong default"]
 
 
+@pytest.mark.parametrize("marker", [f"`{TEST_CHANGE_MARKER}`", f"### {TEST_CHANGE_MARKER}"])
+def test_a_reason_on_the_next_line_is_read_after_a_formatted_marker(marker):
+    report = f"STATUS: DONE\n{marker}\ntests/test_a.py asserted the wrong default\n"
+    assert parse_test_change_claims(report) == [
+        "tests/test_a.py asserted the wrong default"]
+
+
+def test_a_reason_that_ends_in_inline_code_keeps_it():
+    reason = "tests/test_a.py asserted the old name of `parse`"
+    assert parse_test_change_claims(f"STATUS: DONE\n{TEST_CHANGE_MARKER} {reason}\n") == [
+        reason]
+
+
 # --- The declaration ends a report without joining the slot before it ---
 
 DECLARATION = f"{TEST_CHANGE_MARKER} tests/test_a.py asserted the wrong default"
 
 
 DECLARATIONS = [DECLARATION, f"1. {DECLARATION}", f"> {DECLARATION}",
-                f"**{_LABEL}**: tests/test_a.py asserted the wrong default"]
+                f"**{_LABEL}**: tests/test_a.py asserted the wrong default",
+                f"### {DECLARATION}", f"`{DECLARATION}`"]
 
 
 @pytest.mark.parametrize("declaration", DECLARATIONS)
