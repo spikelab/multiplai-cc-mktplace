@@ -99,7 +99,8 @@ MEDIUM earns one (`epic.round_worth: breaks`: the verifier rated it
 `breaks-users`/`breaks-business` or did not rate it; `any`: every one);
 `final_fix` when only Code MEDIUMs are left and none earns a round, or at
 the cap; `park` for an open HIGH at the cap. A park, or any other failure,
-parks the child. A review counts against `epic.max_parallel` and
+parks the child, except a failed read (`READ_FAILED`) and a review, resume or
+post that cannot start, which leave it `unknown`. A review counts against `epic.max_parallel` and
 `epic.max_usd` like a build. `final_fix` runs one fixer round with
 `--no-review` and `--max-rounds <rounds in its findings state, finished or
 not, + 1>` (kept on a relaunch);
@@ -132,9 +133,13 @@ stopped by SIGKILL, SIGTERM or SIGHUP (a negative exit, or 137, 143 or 129,
 `fix.stopped`); one whose log holds `FINDINGS:FAILED` parks instead. A post
 or review stopped the same way (`uv run` reports 128 + signal) gets an
 `interrupted` result, and the next run posts or reviews again. `FINDINGS:FAILED`, another failing exit, or a failed post parks the
-child. A PR whose last review left no blockers is waited on as a
-dependency's is (`Coordinator._waited_on`), so every run with one open exits
-3 with `EPIC:MERGE_WAITING` (1 beside a failed or `unknown` child when no child waits on a dependency's PR). Under `epic.merge: auto` the merge step runs
+child. A PR whose review at its current head left no blockers is waited on
+as a dependency's is (`Coordinator._waited_on`, `_passed`), so every run with
+one open exits 3 with `EPIC:MERGE_WAITING` (1 beside a failed or `unknown`
+child when no child waits on a dependency's PR). One whose current head no
+review finished on is waited on only as a dependency's, is named on stderr,
+and makes the run exit 1 when it prints neither `EPIC:MERGE_WAITING` nor
+`EPIC:BUDGET` (`_unreviewed`). Under `epic.merge: auto` the merge step runs
 first (PRs E1 and E2, `epic/merge.py`, `Coordinator._merge`), under one
 `asyncio.Lock` per repository and on the worktree root: a merge commit made
 and not pushed, holding only what `merge.merges_onto` accepts, is checked (`stop_record.others_work`), tested and pushed; a
@@ -273,9 +278,13 @@ The whole command runs instead when:
 - the project sets pytest's `python_files`, or its pytest config cannot be read;
 - a selected pytest file sits below another pytest config file or `setup.py`
   than the one the whole run uses, because pytest finds its config from the
-  paths it is given; or under a `conftest.py` that sets `collect_ignore`,
-  `collect_ignore_glob` or `pytest_ignore_collect`, because pytest skips those
-  for paths it is given;
+  paths it is given; or under a `conftest.py` pytest loads (none above the
+  directory of the whole run's config) whose `collect_ignore` or
+  `collect_ignore_glob` could name it or a directory above it, or that has a
+  `pytest_ignore_collect` hook, because pytest does not apply them to a path
+  named on its command line. A list that is not written out as strings, or a
+  conftest that does not parse, counts as one that names it; a mention in a
+  comment or a string does not;
 - the selection would make the command longer than 20,000 characters.
 
 So RED never passes on a run that left out the block's own tests. The agents'
@@ -462,7 +471,7 @@ An unknown key or effort name is dropped with a warning.
 
 | Stage | Steps |
 |---|---|
-| `spec` | `spec_artifact` (every spec artifact, use-cases included), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `interview`, `research`, `findings_spec` (the findings stage's spec delta) |
+| `spec` | `spec_artifact` (every spec artifact, use-cases included), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `interview`, `research`, `findings_spec` (the findings stage's spec delta), `epic_split` |
 | `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `prototype`, `merge` |
 | `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt), `findings_triage` (the findings stage's one read-only agent per PR comment), `findings_self_check` (the findings stage's one read-only check of a round's fix commits) |
 

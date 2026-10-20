@@ -1334,6 +1334,47 @@ class TestFailedBuildRetry:
         assert BuildState.load(Path(state.state_file)).phase == BuildPhase.BOOTSTRAP
 
     @pytest.mark.asyncio
+    async def test_an_interview_written_before_its_checkpoint_stops_the_resume(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """The re-run stops between writing `interview.md` and its
+        INTERVIEW_DONE checkpoint, so the file is outside the tree its
+        bootstrap recorded. The resume refuses it, naming the file, and keeps
+        it."""
+        from build_pipeline import intake
+
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        state = await self._fail(repo)
+        worktree = Path(state.worktree_path)
+        for path in (tmp_path / "ws" / ".worktrees").glob("*/specs/changes/csv/.build-state.json"):
+            earlier = BuildState.load(path)
+            earlier.interview_summary = None
+            earlier.checkpoint(path)
+
+        async def write_then_stop(config, state, args, state_path, progress):
+            intake.write_interview(Path(config.change_dir), "# Interview\n\nS\n")
+            raise RuntimeError("stopped before the checkpoint")
+
+        config = _config(repo, "csv")
+        with patch("build_pipeline.intake.run_interview_phase",
+                   AsyncMock(side_effect=write_then_stop)):
+            rc = await run_orchestrator(config, _args(repo, "csv", interview_summary="S"))
+        assert rc == 1
+        interview = Path(config.change_dir) / "interview.md"
+        assert interview.read_text() == "# Interview\n\nS\n"
+        head = _sh(worktree, "rev-parse", "HEAD")
+        capsys.readouterr()
+
+        rc, _ = await self._run(repo)
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert "interview.md" in err and "stash them first" in err
+        assert interview.read_text() == "# Interview\n\nS\n"
+        assert _sh(worktree, "rev-parse", "HEAD") == head
+        assert BuildState.load(Path(state.state_file)).phase == BuildPhase.BOOTSTRAP
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("moved_by", ["no-record", "stop-at-bootstrap"])
     async def test_a_build_moved_to_a_new_worktree_reruns_there_after_it_fails(
         self, tmp_path, monkeypatch, capsys, moved_by,

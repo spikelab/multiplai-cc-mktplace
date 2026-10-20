@@ -96,7 +96,8 @@ fixture runs establish harness behavior, not model quality.
 | `--force` | Start a new build even if this change already published. The new build gets the next free branch (`buildme/<change>-2`, …) and leaves the published one alone. Pass it only after the user said yes to the `BUILD:COMPLETE` question (below). A stopped build with a `.build-state.json` resumes with or without it. |
 | `--approve-split` | Approve the epic split the build printed as `EPIC:SPLIT:<split.md>`, as `split.md` and `plans/` are on disk now. See [Epic mode](#epic-mode-one-input-several-changes). |
 | `--no-epic-split` | Build the input as one change: no `EPIC_SPLIT` decision, no model call. An epic's child builds pass it. |
-| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch, or the parent's commit that holds its `specs/registry` baseline (below); a build that re-binds to its worktree ignores it. When the commit is not on the default branch, the PR targets the branch that holds it (`--base`). Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
+| `--epic-child` | Build as an epic's child: no spec-extract (the parent ran it), and the PR targets the default branch. The epic's build passes it to every child, so the child's saved command keeps it when run again by hand. `BUILDME_EPIC_CHILD=1` in the environment does the same: a child's command saved before 0.84.2 lacks the flag, so pass one of them when running it by hand. |
+| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch, or the parent's commit that holds its `specs/registry` baseline (below); a build that re-binds to its worktree ignores it. When the commit is not on the default branch, the PR targets the branch that holds it (`--base`), except under `--epic-child` (or `BUILDME_EPIC_CHILD=1`), where the PR targets the default branch. Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
 | `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. An approved epic vouches for its own repo: it passes `--trust-repo` to each child build, review and fixer, and its merge step's one agent call (under `epic.merge: auto`) runs trusted for that call only. |
 
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: false}` (the default; #375),
@@ -541,11 +542,13 @@ and merges in different repositories never wait on each other. A child that
 depends on a child in another repository waits for that PR to merge. A
 checkout that is gone when a run starts, or before its child launches, parks
 that child with `repo <path> not found`, and it stays parked on later runs;
-the reviews its PR already had still count toward `epic.max_usd`.
+the reviews its PR already had still count toward `epic.max_usd`. When `git`
+times out or does not start there, nothing parks: the child is `unknown` for
+that run, and the next run asks again.
 
 **Running the children.** The approved build runs each child as its own
 `build --mode brief --change <epic>-<id> --plan-file <epic dir>/plans/<id>.md`
-subprocess with `--auto --trust-repo --no-epic-split --pr-ready`, in the
+subprocess with `--auto --trust-repo --no-epic-split --epic-child --pr-ready`, in the
 parent's project directory (or the child's own `repo`, above), from origin's default branch (`--base-ref`), so
 each child gets its own worktree, branch and ready PR. When the parent's
 codebase analysis committed a `specs/registry` baseline (spec-extract), a
@@ -605,12 +608,15 @@ walkthrough regeneration included (the pr skill and the walkthrough print
 their own `SPEND:` line, which the build adds), so a resumed build reports only
 its own spend and a several-round `findings` reports every round. When one of
 those skills printed none (killed or timed out), the line ends `:incomplete`.
-The epic's spend is each child attempt's `SPEND:` plus the reviews of the
+The epic's spend is each child attempt's `SPEND:`, plus what each merge
+agent call spent, plus the reviews of the
 children's PRs in the review ledger (`<data_dir>/reviews/ledger.jsonl`: each
 review run once, its resumes in it, a fresh review of the same head added);
 `epic.json` and each summary hold it as `spent_usd`, with
 `spend_complete: false` when an attempt was killed before it printed `SPEND:`,
-its `SPEND:` ends `:incomplete`, or a review has not finished. Before each launch, once
+its `SPEND:` ends `:incomplete`, a merge agent call was interrupted, a review
+has not finished, or a review was killed and then run again fresh instead of
+resumed. Before each launch, once
 `epic.max_usd` is reached, nothing more is launched: the run waits for the
 children already running and exits `3` with `EPIC:BUDGET:<spent>`. A fixer
 runs several rounds in one launch, so it is given what is left of
@@ -618,7 +624,11 @@ runs several rounds in one launch, so it is given what is left of
 less what the other fixers still running were given and have not yet spent
 on their PRs' reviews. While running fixers hold all that is left, another
 fixer waits for them, and no build, review, review resume or merge agent
-starts; once they end, their real spend decides. A fixer stops before a
+starts; once they end, their real spend decides. A fixer still running from
+an earlier run (one killed outright, or a fixer that outlived its stop) holds
+nothing in this run: this run waits for it only before that child's next fix,
+so the epic can spend past `epic.max_usd` by up to that fixer's own
+`--max-usd`, and `spend_complete` is false. A fixer stops before a
 round with something to act on once its own spend and its reviews' reach
 its share. If the epic's spend is still under the cap, other fixers held the
 rest: it runs again with its share recomputed once they end. Once the spend
@@ -652,8 +662,13 @@ again and uses that review. The epic's budget is checked before each of these
 launches. When the review cannot read git or GitHub before reviewing anything
 (exit `2`: its `git fetch` or `gh pr view` failed, or the PR's head or base is
 not in the clone after its fetch), nothing parks: the child is `unknown`, as
-when the coordinator's own read fails, and the next run asks again. A child
-whose worktree was removed is reviewed from the source repo.
+when the coordinator's own read fails, and the next run asks again. So is a
+child whose review, or whose post of the review's findings, cannot start
+(`uv` is not on PATH, or its worktree was removed as it starts). When another child depends on it, the same run reads
+its PR again and waits on it as an open PR, so the run ends with
+`EPIC:MERGE_WAITING` (exit 3) rather than naming it `unknown`; the next run
+still reviews it. A child whose worktree was removed is reviewed from the
+source repo.
 Any other failure parks the child with the end of the review's output. Each
 review writes `agents/<NNN>-review-<id>.{started.json,result.json,log}`; the
 result holds `head_sha`, `base_sha`, `review_dir`, `cost_usd`, `pr_round` (the
@@ -740,8 +755,14 @@ started by hand without `--change` included. The post and the
 fixer count against `epic.max_parallel` and `epic.max_usd` like a build, and
 Ctrl-C or SIGTERM stops a fixer this run started.
 
-**Merging the children's PRs.** A PR whose last review left no blockers is
-waited on as a dependency's PR is. Under `epic.merge: manual` (the default)
+**Merging the children's PRs.** A PR whose review at its current head left
+no blockers is waited on as a dependency's PR is. A PR whose current head no
+review finished on (its review was stopped, or it got a new head after a
+clean review) is waited on only when another child depends on it. The run
+names it on stderr (`EPIC: child <id> built: its PR's head <first 12
+characters of the sha> has no finished review; the next run reviews it`)
+and exits `1`, unless it exits `3` with `EPIC:MERGE_WAITING` or
+`EPIC:BUDGET`. Under `epic.merge: manual` (the default)
 nothing more happens: the run exits `3` with `EPIC:MERGE_WAITING:<urls>`
 naming every such PR still open, and a re-run once a person merged them goes
 on. Under `auto`, the default branch is first merged into each such PR, in its
@@ -925,7 +946,7 @@ Parse pipeline stdout for progress lines:
   them, or set `spec_extract: false`, and re-run
 - `RESULT:SUCCESS` — build complete
 - `EPIC:APPROVED:<epic.json>` — the epic split is approved; the children build next
-- `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown` (`3` while a child waits on a dependency's open PR); `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
+- `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown` (`3` while a child waits on a dependency's open PR), and when a child's PR head has no finished review and neither `EPIC:MERGE_WAITING` nor `EPIC:BUDGET` is printed; `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
 - `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent, the pr skill, a walkthrough run and spec-extract included (`:incomplete` follows when one of them printed no spend)
 - `ERROR:<message>` — failure
 
@@ -942,7 +963,7 @@ change the flags to get past it), `4` an agent timed out
 | `RESEARCH:NEEDED:<path>` | the research decision asked for research; topics in `<path>` | Run `/deep-research` on them and re-run with `--research-path <output>` — or, without `multiplai-research`, say so and re-run with `--skip-research`. |
 | `SPLIT:REQUIRED:<path>` | the size gate wants the plan split; proposal in `<path>` | Post `<path>` on the ticket (plane `comment` / `gh issue comment --body-file`), or show it to the user for a prompt, and stop. Re-run with `--accept-size` only when the user chooses to build it as one PR. |
 | `BUILD:COMPLETE:<path>` | this change already published; `<path>` is its kept checkpoint, and stderr names its branch and PR. Nothing was written | Ask the user with AskUserQuestion whether to start a new build of it on a new branch. On yes, re-run the same command with `--force`; on no, stop. Never add `--force` without the user's yes. |
-| `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge, or a PR passed review and waits for a person to merge it (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and any child the `EPIC: child` lines on stderr name, and stop. Re-run the same command once they are merged; a PR closed without a merge parks the children that wait on it. |
+| `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge, or a PR passed review and waits for a person to merge it under `epic.merge: manual`, or, under `epic.merge: auto`, buildme left a PR open itself: its checks were still pending after an hour, or a merge queue only queued it (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and any child the `EPIC: child` lines on stderr name, and stop. Under `manual`, re-run the same command once they are merged. Under `auto`, do not ask the user to merge by hand. Checks still pending: re-run the same command, which reads them again and merges. A queued PR: re-run once the queue has merged it, since a re-run while it is still queued runs the merge step again, which merges origin's default branch in and pushes when that branch has moved (see [Merging the children's PRs](#epic-mode-one-input-several-changes)). A PR closed without a merge parks the children that wait on it. |
 | `EPIC:BUDGET:<spent>` | the epic's spend (USD) reached `epic.max_usd`; nothing more was launched | Tell the user what was spent and which children did not start (the `EPIC:SUMMARY` file), and stop. A re-run stops again until the user raises `epic.max_usd` in `specs/config.yaml`; never raise it yourself. |
 | `EPIC:SPLIT:<path>` | the input is several changes; the split is in `<path>` (`split.md`), one plan per child in `plans/` beside it | For a GitHub ticket, post **one** comment whose body is the line `<!-- buildme-epic-split:<sha256 of split.md> -->` (`shasum -a 256 <path>`) followed by the content of `<path>`, and only when no comment on the issue already starts with that line (`gh issue view <n> --json comments --jq '.comments[].body'`): a re-run prints the same line for the same `split.md`, so it never posts twice. For any other input, show `<path>` to the user. Then stop. Re-run with `--approve-split` only when the user approves the split. Never create, close or edit a ticket for a child. |
 

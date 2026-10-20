@@ -1708,6 +1708,24 @@ class TestScanNoBehaviourBlocks:
 
         assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
 
+    @pytest.mark.parametrize("says", ["Covered", "Satisfied", "Delivered"])
+    def test_a_sentence_that_opens_with_covered_by_block_n_is_flagged(
+        self, tmp_path, says,
+    ):
+        """The rule's second form on its own: no pronoun names the block, and
+        the block names no file."""
+        path = _tasks_file(tmp_path, (
+            "## 1. Count words\n\nAdd `count(s: str) -> int`.\n\n"
+            "Interfaces:\n- Produces: `count(s: str) -> int`\n\n"
+            f"## 2. Tabs\n\nAdd tests for tabs. {says} by Block 1.\n\n"
+            "Interfaces:\n- Produces: (none)\n"
+        ))
+
+        findings = scan_no_behaviour_blocks(path)
+
+        assert [f["block"] for f in findings] == [2]
+        assert "an earlier block already satisfies it" in findings[0]["description"]
+
     def test_a_behaviour_block_with_no_produces_is_not_flagged(self, tmp_path):
         """`Produces: (none)` alone is legitimate: a last slice nobody calls."""
         path = _tasks_file(tmp_path, (
@@ -1761,6 +1779,7 @@ class TestScanNoBehaviourBlocks:
 
     @pytest.mark.parametrize("says", [
         "no code change is needed", "there is no code change in this block",
+        "there are no new code changes",
     ])
     def test_a_block_that_says_it_needs_no_code_is_flagged(self, tmp_path, says):
         """The no-code rule on its own: no earlier block is named, and no file."""
@@ -1815,6 +1834,29 @@ class TestScanNoBehaviourBlocks:
         "- [ ] 2.4 Make sure the suite passes\n\n",
         # Only its heading says it is test work.
         "## 2. Tests for tabs\n\nCover tabs in `tests/test_words.py`.\n\n",
+        # Only its heading names a file, and that file is a test file.
+        "## 2. Tab cases in `tests/test_words.py`\n\nCover tabs and runs "
+        "of spaces.\n\n",
+        # A step whose verb changes code, and whose object is a test file.
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Update `tests/test_words.py` with "
+        "tab cases\n\n",
+        # An "add" step whose object is a case, with no test word.
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Cover tabs in `tests/test_words.py`"
+        "\n- [ ] 2.2 Add a case for an empty string\n\n",
+        # "Change nothing" is not a change.
+        "## 2. Tabs\n\n- [ ] 2.1 Write failing tests in `tests/test_words.py`"
+        "\n- [ ] 2.2 Change nothing else\n\n",
+        # An "add" step whose test file has no standalone test word.
+        "## 2. Tabs\n\n- [ ] 2.1 Add `__tests__/words.js` covering tabs\n\n",
+        # ... named after the first few words of the step.
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Add coverage of tabs and spaces "
+        "to `__tests__/words.js`\n\n",
+        # A step whose verb changes code, and whose object is a test, named
+        # with no file.
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Cover tabs in `tests/test_words.py`"
+        "\n- [ ] 2.2 Update the fixtures for tabs\n\n",
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Cover tabs in `tests/test_words.py`"
+        "\n- [ ] 2.2 Fix the flaky test\n\n",
     ])
     def test_a_test_block_whose_steps_write_no_code_is_flagged(
         self, tmp_path, block,
@@ -1866,6 +1908,12 @@ class TestScanNoBehaviourBlocks:
         "`src/api/limits.py`, with no code change to the core.\n\n",
         "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
         "with no code change to the core.\n\n",
+        "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
+        "with no new code changes to the core.\n\n",
+        "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
+        "with no new code needed in the core.\n\n",
+        "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
+        "with no production code required outside the module.\n\n",
         # Test-first leaf blocks that name only their test file: the tests
         # come first, and a later step writes the code.
         "## 2. Webhook signatures\n\n- [ ] 2.1 Write failing tests in "
@@ -1878,6 +1926,24 @@ class TestScanNoBehaviourBlocks:
         "## 2. Tab splitting\n\n- [ ] 2.1 Write failing tests for tab "
         "splitting in `tests/test_words.py`\n- [ ] 2.2 Make count split on "
         "tabs\n\n",
+        # The code step names the tests only as its purpose.
+        "## 2. Webhook signatures\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_webhook.py`\n- [ ] 2.2 Add HMAC verification to the "
+        "upload handler so the tests pass\n\n",
+        # A code step whose object is a case of the behaviour, not a test.
+        "## 2. Empty input\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_words.py`\n- [ ] 2.2 Handle the empty-string case in "
+        "`count`\n\n",
+        # The code step is to make the failing tests pass.
+        "## 2. Tab splitting\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_words.py`\n- [ ] 2.2 Make the failing tests pass\n\n",
+        "## 2. Tab splitting\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_words.py`\n- [ ] 2.2 Fix the failing tests\n\n",
+        # An "add" step whose object only starts with the word "case".
+        "## 2. Case-insensitive search\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_search.py`\n- [ ] 2.2 Add case-insensitive matching\n\n",
+        "## 2. Snake case\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_names.py`\n- [ ] 2.2 Add snake case conversion\n\n",
         # A feature whose heading opens with a test word.
         "## 2. Coverage report subcommand\n\nAdd a `report` subcommand that "
         "prints line coverage. Tests in `tests/test_cli.py`.\n\n",
@@ -2036,6 +2102,8 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
         assert mock_gen.call_count == 2
         assert not state.spec_gen.step_passed("tasks_audit")
         assert state.spec_gen.repair_attempts("tasks_audit")
+
+
 
 
 def test_plan_rewrite_invalidates_review_and_rubric(tmp_path):

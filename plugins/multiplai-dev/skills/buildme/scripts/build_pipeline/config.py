@@ -785,6 +785,9 @@ class BuildConfig:
     # `build --base-ref`: the commit a new worktree branches from (an epic's
     # coordinator passes origin's default branch). Empty: the source HEAD.
     base_ref: str = ""
+    # `build --epic-child`: an epic's coordinator started this build (or its
+    # saved command was run again). `orchestrator._epic_child` reads it.
+    epic_child: bool = False
     # `models:` from specs/config.yaml: step, stage or `default` → a model spec
     # as written. `model_for` resolves it.
     model_specs: dict[str, str] = field(default_factory=dict)
@@ -1370,6 +1373,7 @@ class BuildConfig:
         if getattr(args, "pr_ready", False):
             self.git.pr = "ready"
         self.base_ref = getattr(args, "base_ref", "") or ""
+        self.epic_child = bool(getattr(args, "epic_child", False))
 
     def rebind_project_dir(self, new_project_dir: Path) -> None:
         """Point the whole config at a different checkout of the same project.

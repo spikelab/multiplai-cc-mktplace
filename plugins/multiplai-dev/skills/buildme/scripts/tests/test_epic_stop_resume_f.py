@@ -7,6 +7,10 @@ files in that child's own worktree, which belongs to the second repo. As
 B1.S13, the coordinator touches nothing, relaunches with the same argv and
 compares with a run that never stopped; as E.S12, 40.1 refuses on the
 child's `<W>`, the child parks and `row_helpers.repo_state` is unchanged.
+
+B1.S15 and D2.S4 for a child in the second repository (#342) check that a
+stopped child's PR is looked for, and its leftover fixer recognised, in that
+repository rather than the epic's.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from build_pipeline.epic.split import EpicSplitAnswer
 from .epic_row_helpers import (
     CallLog,
     Fakes,
+    alive,
     approve,
     child,
     commit_names,
@@ -36,6 +41,7 @@ from .epic_row_helpers import (
     make_project,
     merge_waiting,
     name_commits,
+    pr_number,
     pr_url,
     records_snapshot,
     use_workspace,
@@ -217,3 +223,75 @@ def test_F_S11_review_spend_of_a_child_approved_on_0_65_still_counts(tmp_path, m
     assert after["child_status"]["a"]["repo_park"] == f"repo {r.project / 'o' / 'r2'} not found"
     assert after["child_status"]["a"]["slug"] == "o-r"
     assert after["spent_usd"] == 6.5 and after["spend_complete"] is True
+
+
+def test_an_interrupted_child_in_repo_2_has_its_pr_found_in_its_own_repo(tmp_path, monkeypatch):
+    """B1.S15 for a child in the second repo (#342): its build opened the PR
+    and died before printing `PR:`, and the coordinator was killed. `gh pr
+    list --head` runs in the second repo's checkout, the only one whose
+    `gh` lists that PR, so a is `built` and is not launched again."""
+    r = FRoot(tmp_path, monkeypatch, {"a": [{"block": True, "die_before_pr_line": True}]})
+    r.killed(die_at(coordinator, "_tick"))
+    r.wait_blocked("a")
+    r.fakes.release("a")                                     # opens the PR, dies before PR:
+    r.wait_gone("a")
+    assert list(r.fakes.prs()) == [url2("e-a")]
+    assert r.run(_release_all(r)) == 3 and merge_waiting() == [url2("e-a"), pr_url("e-b")]
+    assert r.fakes.attempts("a") == 1
+    a = json.loads((r.dir / "epic.json").read_text())["child_status"]["a"]
+    assert (a["status"], a["pr"]) == ("built", url2("e-a"))
+
+
+def test_a_fixer_of_a_child_in_repo_2_left_by_a_killed_run_is_waited_for(tmp_path, monkeypatch):
+    """D2.S4 for a child in the second repo (#342): the coordinator dies while
+    a's fixer runs in a's worktree, which belongs to the second repo. The next
+    run sees that fixer as a's (`fix_pid` against a's own repo root) and
+    launches no second one while it lives."""
+    n = pr_number("e-a")
+    high = {"id": "f1", "severity": "HIGH", "status": "confirmed", "claim": "f1 is wrong",
+            "file": "src/app.py", "line_start": 3}
+    r = FRoot(tmp_path, monkeypatch, {})
+    (r.root / "reviews.json").write_text(json.dumps({str(n): [{"findings": [high]}]}))
+    (r.root / "fixes.json").write_text(json.dumps({str(n): [{"block": True, "rounds": [{}]}, {"spend": 0}]}))
+
+    def setup():
+        def die_while_fixing(coord):
+            c = coord.children["a"]
+            if c.rattempt is not None and c.rattempt.kind == "fix":
+                os._exit(137)
+
+        coordinator._tick = die_while_fixing
+
+    r.killed(setup)
+    pid = None
+    for _ in range(500):
+        pid = coordinator.fix_pid(n, r.repo2)
+        if pid:
+            break
+        time.sleep(0.02)
+    assert pid and alive(pid)                                # the fixer outlived its coordinator
+    real_start = records.start
+
+    def start(epic_dir, kind, cid, argv, **kw):
+        assert kind != "fix" or not alive(pid), "a second fixer started while the first runs"
+        return real_start(epic_dir, kind, cid, argv, **kw)
+
+    monkeypatch.setattr(records, "start", start)
+    looks = []
+
+    def tick(coord):
+        if alive(pid):
+            looks.append(1)
+            assert len(r.fakes.fix_launches()) == 1          # never a second fixer
+            if len(looks) == 5:
+                r.fakes.release_fix("e-a")
+                for _ in range(500):
+                    if not alive(pid):
+                        break
+                    time.sleep(0.02)
+
+    try:
+        r.run(tick)
+    finally:
+        r.fakes.release_fix("e-a")
+    assert len(looks) == 5

@@ -2042,7 +2042,7 @@ class TestReviewInterrupted:
         outcome = loop.run_review(self._run(config, change), None)
         assert outcome.ok and outcome.run_dir == self.TARGET
         assert calls[0][calls[0].index("review_pipeline") + 1:] == [
-            "review", "--repo", str(repo), "--pr", str(PR), "--trust-repo"]
+            "review", "--repo", str(repo), "--pr", str(PR), "--fetch", "--trust-repo"]
         assert calls[1][calls[1].index("review_pipeline") + 1:] == ["resume", self.TARGET, "--trust-repo"]
 
     def test_a_review_still_running_is_not_resumed(self, built, monkeypatch):

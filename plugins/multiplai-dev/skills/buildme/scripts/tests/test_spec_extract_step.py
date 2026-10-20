@@ -550,6 +550,15 @@ class TestEpicChildren:
         config = _config(_repo(tmp_path / "p"))
         TestSkips()._skipped(config, _state(config), tmp_path, monkeypatch, caplog, "epic-child")
 
+    def test_a_child_run_again_by_hand_skips_spec_extract(self, tmp_path, monkeypatch, caplog):
+        """#347: the child's saved command carries `--epic-child`, so a run of it
+        without the coordinator's environment still skips spec-extract."""
+        from build_pipeline.epic import CHILD_ENV
+
+        monkeypatch.delenv(CHILD_ENV, raising=False)
+        config = _config(_repo(tmp_path / "p"), epic_child=True)
+        TestSkips()._skipped(config, _state(config), tmp_path, monkeypatch, caplog, "epic-child")
+
     def test_the_coordinator_marks_each_child_it_starts(self, tmp_path, monkeypatch):
         from build_pipeline.epic import CHILD_ENV, coordinator
 
@@ -782,7 +791,10 @@ class TestSiblingsOpenTheirPrsAgainstMain:
     origin branch holding the commit; the second child's PR must still target
     main, never its sibling's branch (`_pr_base_branch` would pick it)."""
 
-    def test_two_siblings_publish_in_turn(self, tmp_path, monkeypatch):
+    # "flag": the child's saved command run again by hand, without the
+    # coordinator's environment (#347).
+    @pytest.mark.parametrize("marked_by", ["env", "flag"])
+    def test_two_siblings_publish_in_turn(self, tmp_path, monkeypatch, marked_by):
         import asyncio
 
         from build_pipeline.epic import CHILD_ENV
@@ -806,12 +818,16 @@ class TestSiblingsOpenTheirPrsAgainstMain:
             return git_ops.GitResult(argv, 0, f"PR:https://github.com/o/r/pull/{len(opened)}\n", "")
 
         monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
-        monkeypatch.setenv(CHILD_ENV, "1")
+        if marked_by == "env":
+            monkeypatch.setenv(CHILD_ENV, "1")
+        else:
+            monkeypatch.delenv(CHILD_ENV, raising=False)
         trees = {}
         for cid in ("api", "ui"):
             config = BuildConfig(project_dir=project, change_name=f"e-{cid}")
             config.specs_dir = project / "specs"
             config.base_ref = registry
+            config.epic_child = marked_by == "flag"
             state = BuildState(change_name=config.change_name, mode="brief", tier="advanced",
                                state_file=str(config.state_file_path()))
             asyncio.run(orchestrator._run_bootstrap(config, state, ChangeManager(config.specs_dir),

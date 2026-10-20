@@ -300,16 +300,20 @@ class TestEveryBlockAddsBehaviour:
         assert "Every block MUST add behaviour" in TASKS_PROMPT
         assert "RED gate" in TASKS_PROMPT
 
-    def test_the_tasks_prompt_forbids_confirm_and_verify_blocks(self):
-        assert "Never write a block that only confirms, verifies" in TASKS_PROMPT
+    def test_the_tasks_prompt_puts_confirm_and_verify_criteria_in_the_building_block(self):
+        assert "Never write a block" not in TASKS_PROMPT
+        assert (
+            "Put criteria that confirm, verify, pin or re-test what an earlier "
+            "block delivers"
+        ) in " ".join(TASKS_PROMPT.split())
 
     @pytest.mark.asyncio
     async def test_the_shape_audit_asks_for_and_returns_no_new_behaviour(
         self, tmp_path,
     ):
-        """The audit's prompt carries the rule with its severity and remedy,
-        and a finding the model reports under it comes back to the caller,
-        which turns every finding into the one rewrite."""
+        """The audit's prompt carries the rule and its remedy, leaving the
+        severity to the model, and a finding the model reports under it comes
+        back to the caller, which turns every finding into the one rewrite."""
         change_dir = tmp_path / "changes" / "feat"
         change_dir.mkdir(parents=True)
         (change_dir / "design.md").write_text("# Design")
@@ -328,7 +332,8 @@ class TestEveryBlockAddsBehaviour:
         prompt = mock_llm.call_args[0][0]
         section = prompt[prompt.index("## Blocks That Add No Behaviour"):]
         section = section[:section.index("\n## ", 1)]
-        assert '(category "no-new-behaviour", severity "critical")' in section
+        assert '(category "no-new-behaviour")' in section
+        assert "critical" not in section
         assert "tests would pass" in section
         assert "into the block that builds the behaviour" in section
         assert [f["category"] for f in findings] == ["no-new-behaviour"]

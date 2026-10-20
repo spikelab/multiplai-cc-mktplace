@@ -228,6 +228,25 @@ def test_a_checkout_gone_just_before_its_launch_parks_its_child(tmp_path, monkey
     assert [Path(_opt(x, "--plan-file")).stem for x in e.launches()] == ["a"]
 
 
+def test_a_git_that_cannot_answer_leaves_the_child_unknown_not_parked(tmp_path, monkeypatch):
+    """F.S5 parks only a checkout git says is gone. When git timed out or did
+    not start, the child is `unknown` for this run, nothing is launched for
+    it, and no `repo_park` keeps it parked: the next run asks again."""
+    q = tmp_path / "q"
+    q.mkdir()
+    coord = object.__new__(coordinator.Coordinator)
+    monkeypatch.setattr(coordinator.Coordinator, "_save", lambda self: None)
+    c = coordinator.Child(id="b", depends_on=[], repo=REPO2, project=q)
+
+    def unreadable(path):
+        raise store.GitUnreadable("git timed out after 60s")
+
+    monkeypatch.setattr(store, "checkout_root", unreadable)
+    assert coord._park_missing(c) is True
+    assert (c.status, c.repo_park) == ("unknown", "")
+    assert "git timed out after 60s" in c.reason
+
+
 @pytest.mark.parametrize("key", ["worktree", "push"])
 def test_a_child_s_own_repo_config_never_builds_it_in_place(tmp_path, monkeypatch, capsys, key):
     """B1.S23 for a child in another repo: that checkout's specs/config.yaml,
@@ -274,3 +293,29 @@ def test_tracked_changes_in_the_second_repo_are_refused_by_the_child_build(tmp_p
     assert e.run() == 1
     assert e.status() == {"a": "built", "b": "failed"}
     assert (tmp_path / "q" / "README.md").read_text() == "# a tracked change\n"
+
+
+def test_a_child_in_another_repo_whose_worktree_is_gone_parks_at_the_merge_step(tmp_path, monkeypatch):
+    """#342: under `auto`, b's worktree (in the second repo) is removed before
+    its review step. Its review runs from the second repo's checkout, and the
+    merge step finds no worktree there: b parks, and nothing is merged in
+    either repo for it."""
+    steps = {"a": [{"commit": {"a.txt": "a\n"}}], "b": [{"commit": {"b.txt": "b\n"}}]}
+    e = TwoRepos(tmp_path, monkeypatch, answer=APART, steps=steps, merge_mode="auto")
+    tree = tmp_path / "ws" / ".worktrees" / "buildme-e-b"
+    main_before = {r: git(tmp_path / r, "rev-parse", "HEAD").strip() for r in ("p", "q")}
+    real = coordinator.Coordinator._review
+
+    async def review_(self, c):
+        if c.id == "b" and tree.exists():
+            git(tmp_path / "q", "worktree", "remove", "--force", str(tree))
+        return await real(self, c)
+
+    monkeypatch.setattr(coordinator.Coordinator, "_review", review_)
+    e.run()
+    st = e.child_status()["b"]
+    assert (st["status"], st["reason"]) == ("parked", "its worktree is gone, so the merge step has nowhere to merge")
+    [rev] = e.tries("b", "review")
+    assert _opt(rev.started["argv"], "--repo") == str(tmp_path / "q")
+    assert [m for m in e.fakes.merges() if url2("e-b") in m["argv"]] == []
+    assert {r: git(tmp_path / r, "rev-parse", "HEAD").strip() for r in ("p", "q")} == main_before

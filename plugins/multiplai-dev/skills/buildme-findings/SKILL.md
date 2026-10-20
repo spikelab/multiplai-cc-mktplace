@@ -103,11 +103,14 @@ never removed. A PR whose branch lives in a fork is refused.
    one more block through the same engine. That block skips the whole-change
    refactor and mutation testing, which already ran for the round.
 5. **Publish.** Push, then the PR description's "Review rounds" section
-   through `/multiplai-dev:pr edit`, then one reply per acted-on thread (the
+   through `/multiplai-dev:pr edit` (it also quotes a problem the check of
+   the round's fixes found, and whether that block fixed it), then one reply per acted-on thread (the
    fixing commit, or why nothing changed) and one reply for the round's
    top-level comments and review bodies. Replies go out only after the push succeeded. Threads
    are never resolved.
-6. **Review.** `/multiplai-dev:review --pr <number>` runs on the new head.
+6. **Review.** `/multiplai-dev:review --pr <number> --fetch` runs on the new head. `--fetch`
+   runs `git fetch origin` first, so the PR's head and a base that moved on GitHub are in the
+   clone.
 
 The loop stops when a round finds no new comment to act on, after
 `findings.max_rounds` rounds (default 3, or `--max-rounds`), or before a round
