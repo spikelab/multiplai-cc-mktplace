@@ -724,7 +724,8 @@ async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *,
 
     After a target hits the Claude usage limit, no target that has not started
     yet is started: each would fail the same way. They are listed as failures,
-    and the first `sdk.UsageLimitError` is raised once the running ones end.
+    and the first `sdk.UsageLimitError` is raised once the running ones end,
+    with `stopped_dirs` naming every target directory the limit stopped.
     """
     sem = asyncio.Semaphore(max(1, parallel))
     results: list[Path | None] = [None] * len(specs)
@@ -736,7 +737,7 @@ async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *,
             label = f"{Path(spec.repo).name} {spec.branch or spec.pr or spec.range}"
             if limits:
                 failures.append(f"{label}: not started: {limits[0]}")
-                print(f"NOT STARTED {label}: not started: {limits[0]}", flush=True)
+                print(f"FAILED {label}: not started: {limits[0]}", flush=True)
                 return
             try:
                 # Each task has its own context, so budget.start() gives this
@@ -762,6 +763,8 @@ async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *,
         # not drop the lines of reviews it did not run.
         write_runs(out_dir)
     if limits:
-        limits[0].written, limits[0].failures = written, failures
-        raise limits[0]
+        first = limits[0]
+        first.written, first.failures = written, failures
+        first.stopped_dirs = [d for e in limits if (d := getattr(e, "target_dir", None)) is not None]
+        raise first
     return written, failures

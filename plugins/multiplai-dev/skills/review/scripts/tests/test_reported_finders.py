@@ -576,6 +576,8 @@ def test_a_usage_limit_from_a_piece_call_stops_the_review_and_resume_asks_only_t
     assert resume(target_dir) == 0
     again = {c["package"] for c in fake.text_calls[texts:]}
     assert not again & done
+    if where == "convert":  # piece 2's report was stored before its convert hit the limit
+        assert name(2) not in again
     _, finished = saved(tmp_path / "out")
     assert len(piece_reports(finished)) == 3 and all(r.converted for r in piece_reports(finished).values())
 

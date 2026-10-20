@@ -106,14 +106,9 @@ class RepoTrustError(AgentCallError):
 
 
 class UsageLimitError(AgentCallError):
-    """The Claude usage limit (session, weekly, ...) was hit, so no call can succeed until it resets.
-
-    Never retried or re-asked. Like `RepoTrustError`, every stage lets it
-    escape; the orchestrator then saves the checkpoint, as for a budget stop,
-    so `resume` after the reset asks only for what is missing. `limit` and
-    `resets` are what multiplai-core's `UsageLimitError` read from the CLI's
-    message (`"session"`, `"9:40am (UTC)"`), or `""`.
-    """
+    """The Claude usage limit was hit: no call can succeed until it resets, so it is never retried or
+    re-asked. `limit` and `resets` come from multiplai-core's `UsageLimitError` (`"session"`, `"9:40am (UTC)"`,
+    or `""`)."""
 
     def __init__(self, message: str, *, limit: str = "", resets: str = "") -> None:
         super().__init__(message)

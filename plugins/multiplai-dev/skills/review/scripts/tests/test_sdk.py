@@ -184,6 +184,14 @@ async def test_a_usage_limit_stops_at_once_with_no_reask(trusted, fake_run, call
     assert ledger.cost_usd == pytest.approx(0.25)  # the failed call was still paid for
 
 
+async def test_a_usage_limit_with_no_kind_or_reset_time_says_only_that(trusted, fake_run):
+    calls, replies = fake_run
+    replies += [UsageLimitError("You've hit your limit", reason="failed: You've hit your limit")]
+    with pytest.raises(sdk.UsageLimitError) as exc:
+        await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.FINDER_TOOLS)
+    assert str(exc.value) == "the Claude usage limit was hit"
+
+
 async def test_a_usage_limit_on_the_reask_also_stops(trusted, fake_run):
     calls, replies = fake_run
     replies += [_result("not json"), _limit_error()]

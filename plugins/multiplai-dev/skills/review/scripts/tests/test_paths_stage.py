@@ -455,8 +455,9 @@ def _limit_stop(monkeypatch):
 @pytest.mark.parametrize("route", ["raised", "from-a-call"])
 async def test_trust_budget_and_usage_limit_stops_propagate_and_record_nothing(change_review, mapper, monkeypatch, stop,
                                                                    route):
-    """Raised by map_paths itself, or by a mapping call: map_paths catches only `recoverable`, so neither stop
-    may be in it (RepoTrustError is an AgentCallError)."""
+    """Raised by map_paths itself, or by a mapping call: map_paths catches only `recoverable`, so none of the
+    three stops may be in it (RepoTrustError and UsageLimitError are AgentCallErrors, so `_call` re-raises them
+    before turning other agent failures into `_CallFailed`)."""
     state, ctx = change_review
     error = stop(monkeypatch)
 

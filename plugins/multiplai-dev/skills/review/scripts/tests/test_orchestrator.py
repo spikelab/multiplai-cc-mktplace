@@ -304,22 +304,24 @@ def test_a_usage_limit_during_verify_saves_the_checkpoint_exits_6_and_resume_ask
         fixture_repo, tmp_path, agents, capsys):
     repo, base, head = fixture_repo
     out = tmp_path / "out"
-    fake = agents(limit_at=8)  # 6 finders, one verdict, then the limit
-    assert main(_review_args(repo, base, head, out)) == 6
+    fake = agents(limit_at=8, cost=1.0)  # 6 finders, one verdict, then the limit
+    assert main(_review_args(repo, base, head, out, "--max-cost-usd", "100", "--no-deps")) == 6
     target_dir = out / "booking-engine" / f"range-{base}..{head}"
     err = capsys.readouterr().err
     assert "STOPPED: the Claude session usage limit was hit; it resets 9:40am (UTC)" in err
-    assert f"python -m review_pipeline resume {target_dir} --trust-repo" in err
+    # The run's own budget and deps flags, so the copied command continues it as it was.
+    assert f"python -m review_pipeline resume {target_dir} --trust-repo --max-cost-usd 100 --no-deps" in err
     # The limit stops every call at once: one failed verify call, no second or third try.
     assert fake.calls.count("verify") == 2 and len(fake.calls) == 8
     saved = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
     assert saved.stage == "find" and list(saved.verdicts) == [high_finding().id]
+    assert saved.budget["cost_usd"] == pytest.approx(7.0)  # the verdict paid for during verify is kept
     assert "FAILED the Claude session usage limit was hit" in (target_dir / "progress.log").read_text()
     assert not (target_dir / "findings.json").exists()
 
     fake.limit_at = None  # the limit reset
     first_run = len(fake.calls)
-    assert main(["--session-id", "sess-test", "resume", str(target_dir), "--trust-repo"]) == 0
+    assert main(["--session-id", "sess-test", "resume", str(target_dir), "--trust-repo", "--max-cost-usd", "100"]) == 0
     assert fake.calls[first_run:] == ["verify", "merge"]
 
 
@@ -334,6 +336,20 @@ def test_a_usage_limit_stops_a_batch_before_its_next_target(fixture_repo, tmp_pa
     assert fake.calls.count("find:diff-bugs") == 1  # the second target never started
     assert "not started: the Claude session usage limit was hit" in stdout
     assert not (out / "booking-engine" / "branch-feature_db-2038").exists()
+
+
+def test_a_batch_names_the_resume_command_of_every_target_the_limit_stopped(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    batch_file = tmp_path / "batch.yaml"
+    batch_file.write_text(f"- repo: {repo}\n  range: {base}..{head}\n- repo: {repo}\n  branch: feature/db-2038\n")
+    agents(limit_at=1)
+    assert main(["--out", str(out), "batch", str(batch_file), "--parallel", "2", "--trust-repo"]) == 6
+    captured = capsys.readouterr()
+    stopped = [line for line in captured.out.splitlines() if line.startswith("STOPPED ")]
+    assert len(stopped) == 2  # both started before either hit the limit
+    for name in (f"range-{base}..{head}", "branch-feature_db-2038"):
+        assert f"python -m review_pipeline resume {out / 'booking-engine' / name} --trust-repo" in captured.err
 
 
 def test_rollup_subcommand(fixture_repo, tmp_path, agents, capsys):

@@ -26,12 +26,15 @@ time, not derived from a tag.
   the first call that reports `You've hit your session limit` (or `weekly`)
   stops the run: no stage retries or re-asks that call or starts another,
   and the checkpoint keeps every answer that came back. The run exits `6`
-  with the reset time and the exact command to continue, `python -m
-  review_pipeline resume <target_dir> --trust-repo`, which after the reset
-  asks only for what is missing. The ledger's `finished` line says
-  `stopped: usage-limit`. A batch starts no further target after the limit
-  and lists those as `not started`; `assess-only` does the same and still
-  writes its report. Needs multiplai-core 0.25.0, which this release locks.
+  with the reset time (when the CLI gives one) and, for each target it
+  stopped, the command to continue: `python -m review_pipeline resume
+  <target_dir> --trust-repo`, with the run's `--max-cost-usd` and
+  `--no-deps`. After the reset that resume asks only for what is missing; a
+  plain `review` of the same target would start over. The ledger's
+  `finished` line says `stopped: usage-limit`. A batch starts no further
+  target after the limit and lists those as `not started`; `assess-only`
+  does the same and still writes its report. Needs multiplai-core 0.25.0,
+  which this release locks.
 
 ## [0.88.0] - 2026-10-20
 

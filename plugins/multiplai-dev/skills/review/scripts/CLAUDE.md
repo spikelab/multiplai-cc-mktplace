@@ -245,7 +245,7 @@ must never be read as `code`: buildme's epic merge blocks on Code HIGH/MEDIUM.
 writes `review-pipeline-YYYY-MM-DD.log` (one file per UTC day, never deleted
 or truncated), holding every INFO+ record from those packages and
 `multiplai_core`. `log_event("review", …)` fires `start`, `stage`,
-`gate_reject`, `budget_stop`, `verify_incomplete`, `done`, `post`. No field
+`gate_reject`, `budget_stop`, `verify_incomplete`, `usage_limit`, `done`, `post`. No field
 holds finding or prompt text: `gate_reject` records which rule fired
 (`gates.reason_kind`), not the reason string. The record of what was checked goes to `checks.json` and
 `checks-<slug>.md` only, never to a log line.

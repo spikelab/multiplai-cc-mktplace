@@ -16,7 +16,8 @@ budget stop keeps the paid answers and `resume` asks only for the rest.
 What the mapping could not do is recorded with `checks.add_coverage`: scoping
 drops as `info`, a failed trace, a cut trace or a failed model fallback as an
 `error`. Any other failure of the mapping is recorded and the review goes on
-without paths; a trust or budget stop ends the run, as in every stage.
+without paths; a trust stop, a hit usage limit or a budget stop ends the run,
+as in every stage.
 """
 
 from __future__ import annotations
