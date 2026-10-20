@@ -770,7 +770,9 @@ and merges in different repositories never wait on each other. A child that
 depends on a child in another repository waits for that PR to merge. A
 checkout that is gone when a run starts, or before its child launches, parks
 that child with `repo <path> not found`, and it stays parked on later runs;
-the reviews its PR already had still count toward `epic.max_usd`.
+the reviews its PR already had still count toward `epic.max_usd`. When `git`
+times out or does not start there, nothing parks: the child is `unknown` for
+that run, and the next run asks again.
 
 **Running the children.** The approved build runs each child as its own
 `build --mode brief --change <epic>-<id> --plan-file <epic dir>/plans/<id>.md`
@@ -840,8 +842,9 @@ children's PRs in the review ledger (`<data_dir>/reviews/ledger.jsonl`: each
 review run once, its resumes in it, a fresh review of the same head added);
 `epic.json` and each summary hold it as `spent_usd`, with
 `spend_complete: false` when an attempt was killed before it printed `SPEND:`,
-its `SPEND:` ends `:incomplete`, a merge agent call was interrupted, or a
-review has not finished. Before each launch, once
+its `SPEND:` ends `:incomplete`, a merge agent call was interrupted, a review
+has not finished, or a review was killed and then run again fresh instead of
+resumed. Before each launch, once
 `epic.max_usd` is reached, nothing more is launched: the run waits for the
 children already running and exits `3` with `EPIC:BUDGET:<spent>`. A fixer
 runs several rounds in one launch, so it is given what is left of
@@ -849,7 +852,11 @@ runs several rounds in one launch, so it is given what is left of
 less what the other fixers still running were given and have not yet spent
 on their PRs' reviews. While running fixers hold all that is left, another
 fixer waits for them, and no build, review, review resume or merge agent
-starts; once they end, their real spend decides. A fixer stops before a
+starts; once they end, their real spend decides. A fixer still running from
+an earlier run (one killed outright, or a fixer that outlived its stop) holds
+nothing in this run: this run waits for it only before that child's next fix,
+so the epic can spend past `epic.max_usd` by up to that fixer's own
+`--max-usd`, and `spend_complete` is false. A fixer stops before a
 round with something to act on once its own spend and its reviews' reach
 its share. If the epic's spend is still under the cap, other fixers held the
 rest: it runs again with its share recomputed once they end. Once the spend

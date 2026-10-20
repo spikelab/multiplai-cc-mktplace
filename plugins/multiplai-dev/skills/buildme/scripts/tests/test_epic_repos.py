@@ -228,6 +228,25 @@ def test_a_checkout_gone_just_before_its_launch_parks_its_child(tmp_path, monkey
     assert [Path(_opt(x, "--plan-file")).stem for x in e.launches()] == ["a"]
 
 
+def test_a_git_that_cannot_answer_leaves_the_child_unknown_not_parked(tmp_path, monkeypatch):
+    """F.S5 parks only a checkout git says is gone. When git timed out or did
+    not start, the child is `unknown` for this run, nothing is launched for
+    it, and no `repo_park` keeps it parked: the next run asks again."""
+    q = tmp_path / "q"
+    q.mkdir()
+    coord = object.__new__(coordinator.Coordinator)
+    monkeypatch.setattr(coordinator.Coordinator, "_save", lambda self: None)
+    c = coordinator.Child(id="b", depends_on=[], repo=REPO2, project=q)
+
+    def unreadable(path):
+        raise store.GitUnreadable("git timed out after 60s")
+
+    monkeypatch.setattr(store, "checkout_root", unreadable)
+    assert coord._park_missing(c) is True
+    assert (c.status, c.repo_park) == ("unknown", "")
+    assert "git timed out after 60s" in c.reason
+
+
 @pytest.mark.parametrize("key", ["worktree", "push"])
 def test_a_child_s_own_repo_config_never_builds_it_in_place(tmp_path, monkeypatch, capsys, key):
     """B1.S23 for a child in another repo: that checkout's specs/config.yaml,

@@ -15,6 +15,32 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.85.5] - 2026-10-20
+
+### Fixed
+- buildme epic: `epic.json`'s `spend_complete` is now false when a review of
+  a child's PR was killed and then run again fresh instead of resumed. Before,
+  the fresh run's `finished` line made the spend look complete though the
+  killed run's spend was never counted. A review that ended with no run
+  record and was then resumed now counts as complete; before, it stayed
+  incomplete for good.
+- buildme epic: reading a child's repository slug and checkout root runs git
+  with buildme's git timeout, so a hung `git` no longer stalls the
+  coordinator. A `git` that times out or does not start there leaves the
+  child `unknown` for that run instead of parking it as "not a git checkout",
+  and approval names it as a git error.
+- buildme findings: `--max-usd` no longer allows one more paid round when the
+  spend equals the ceiling. Adding the run's own spend and its reviews' costs
+  as floats could come out a hair under the ceiling ($0.10 + $0.70 gave
+  0.7999999999999999 under $0.80); the spend is now rounded to 6 decimals
+  first, as the epic rounds its own.
+
+### Changed
+- buildme epic: the skill's instructions now say that a fixer still running
+  from an earlier run that was killed holds no share of `epic.max_usd` in the
+  new run, so the epic can spend past the cap by up to that fixer's own
+  `--max-usd`.
+
 ## [0.85.4] - 2026-10-20
 
 ### Fixed
