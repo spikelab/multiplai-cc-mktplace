@@ -35,9 +35,12 @@ from .gates import (
     agent_status_gate,
     baseline_test_gate,
     integration_gate,
+    final_verification,
     parse_diff_paths,
     parse_implementation_note,
+    parse_recurring,
     parse_searched,
+    red_expected_note,
     red_gate,
     review_iteration_gate,
     review_score_gate,
@@ -63,14 +66,20 @@ from .models import (
     FixOnPassState,
     GateResult,
     MutationResult,
+    ReviewFinding,
     ReviewResult,
     TestQualityAudit,
 )
 from .mutation import changed_source_files, mutation_applies, render_report, run_mutation, score_text
 from .narrow_tests import agent_test_command, narrow_test_command
 from .progress import ProgressWriter
-from .prompts.implementation import REVIEW_FIX_SELF_CHECK
-from .prompts.review import FINDING_ADJUDICATION_PROMPT
+from .prompts.implementation import REVIEW_FIX_ESCALATION, REVIEW_FIX_SELF_CHECK
+from .prompts.review import (
+    ADJUDICATION_ROUND_MEMORY,
+    ADJUDICATION_SCOPE_FIELD,
+    ADJUDICATION_SCOPE_SECTION,
+    FINDING_ADJUDICATION_PROMPT,
+)
 from .prompts.test_writing import DRAFTS_SECTION, TEST_QUALITY_PROMPT
 from .sdk import llm_call_structured
 from .state import BuildState, TDDState
@@ -98,8 +107,7 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
     """Commit the block phase's changes in the project repo.
 
     phase: "test", "impl", "refactor" or "fix" (used for the conventional-commit
-    prefix). Returns the new commit's SHA, or None if there was nothing to
-    commit or the commit failed (logged as a warning — never raises).
+    prefix). Returns the new SHA or None for no changes; commit failures raise.
     """
     return git_ops.commit_tree(
         config.project_dir,
@@ -170,26 +178,15 @@ def _read_block_test_files(config: BuildConfig, block: BlockInfo) -> str:
     gate fail every block on "No test functions found". Returns "" when git
     cannot tell us what changed; the caller falls back to the agent output.
     """
-    target = block.baseline_commit or "HEAD"
-    try:
-        proc = subprocess.run(
-            ["git", "diff", "--name-only", target],
-            cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
-        )
-        if proc.returncode != 0:
-            log.warning("Could not list changed files for block %d: %s",
-                        block.number, proc.stderr.strip())
-            return ""
-        names = proc.stdout.splitlines()
-    except Exception as e:
-        log.warning("Could not list changed files for block %d: %s", block.number, e)
+    names = _list_block_test_files(config, block)
+    if names is None:
         return ""
 
     parts: list[str] = []
     for name in names:
         if not _TEST_FILE_RE.search(name.strip()):
             continue
-        path = config.project_dir / name.strip()
+        path = config.project_dir / name
         try:
             parts.append(f"# --- {name.strip()} ---\n{path.read_text()}")
         except OSError as e:
@@ -200,7 +197,7 @@ def _read_block_test_files(config: BuildConfig, block: BlockInfo) -> str:
 
 
 def _list_block_test_files(config: BuildConfig, block: BlockInfo) -> list[str] | None:
-    """Repo-relative paths of the test files this block added or modified.
+    """Project-relative paths of the test files this block added or modified.
 
     Returns None when git could not be asked (non-zero exit, timeout, not a
     repo) — distinct from `[]`, which means "asked, and this block touched no
@@ -210,22 +207,27 @@ def _list_block_test_files(config: BuildConfig, block: BlockInfo) -> list[str] |
     target = block.baseline_commit or "HEAD"
     try:
         proc = subprocess.run(
-            ["git", "diff", "--name-only", target],
+            ["git", "diff", "--name-only", "--relative", "-z", target, "--", ".", *git_ops.BOOKKEEPING_EXCLUDES],
             cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
         )
         if proc.returncode != 0:
             log.warning("Could not list changed files for block %d: %s",
                         block.number, proc.stderr.strip())
             return None
-        names = proc.stdout.splitlines()
+        names = proc.stdout.split("\0")
+        untracked = subprocess.run(["git", "ls-files", "--others", "--exclude-standard", "-z", "--", ".", *git_ops.BOOKKEEPING_EXCLUDES],
+                                   cwd=str(config.project_dir), capture_output=True, text=True, timeout=60)
+        if untracked.returncode:
+            return None
+        names += untracked.stdout.split("\0")
     except Exception as e:
         log.warning("Could not list changed files for block %d: %s", block.number, e)
         return None
-    return [n.strip() for n in names if _TEST_PATH_RE.search(n.strip())]
+    return [n for n in names if n and _TEST_PATH_RE.search(n)]
 
 
 def _snapshot_test_files(config: BuildConfig, block: BlockInfo) -> dict[str, str] | None:
-    """{repo-relative path: sha256} for the block's test files, right now.
+    """{project-relative path: sha256} for the block's test files, right now.
 
     Taken the moment the RED gate passes and re-taken at each later checkpoint;
     comparing the two is how `unchanged_tests_gate` sees a moved bar. Content
@@ -248,8 +250,11 @@ def _snapshot_test_files(config: BuildConfig, block: BlockInfo) -> dict[str, str
         path = config.project_dir / name
         try:
             snapshot[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except FileNotFoundError:
+            continue
         except OSError as e:
-            log.debug("Could not hash test file %s: %s", name, e)
+            log.warning("Could not hash test file %s: %s", name, e)
+            return None
     return snapshot
 
 
@@ -280,6 +285,8 @@ def _uncommitted_test_files(config: BuildConfig) -> list[str] | None:
         try:
             proc = subprocess.run([*argv, *pathspec], cwd=str(config.project_dir),
                                   capture_output=True, text=True, timeout=60)
+        except BudgetExceededError:
+            raise
         except Exception as e:
             log.warning("Could not list uncommitted test files: %s", e)
             return None
@@ -352,7 +359,7 @@ def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
     target = block.baseline_commit or "HEAD"
     try:
         proc = subprocess.run(
-            ["git", "diff", target, *_without_review_records(config)],
+            ["git", "diff", "--relative", target, *_without_review_records(config)],
             cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
         )
         if proc.returncode != 0:
@@ -789,12 +796,50 @@ async def _audit_test_quality(test_files_content: str, contracts: str, config: B
                                      budget_label="test_quality_audit")
 
 
+def _finding_lines(findings: list[ReviewFinding]) -> str:
+    """Open findings, by id, for the adjudicator."""
+    return "\n".join(
+        f"- {f.finding_id} [{f.severity}] {f.claim}"
+        + (f" ({f.file_path}:{f.line})" if f.file_path else "")
+        for f in findings) or "(none)"
+
+
+def _rejected_lines(rejected: list[dict]) -> str:
+    """Earlier-rejected findings, by id, each with the judge's reason."""
+    return "\n".join(
+        f"- {r.get('finding_id')} [{r.get('severity', '')}] {r.get('claim', '')}"
+        + (f" ({r['file_path']}:{r.get('line')})" if r.get("file_path") else "")
+        + f" — rejected: {r.get('judge_reason') or '(no reason recorded)'}"
+        for r in rejected) or "(none)"
+
+
+def _round_memory_text(memory: review_rounds.RoundMemory) -> str:
+    """FINDING_ADJUDICATION_PROMPT's `{round_memory}` for a round from 2 on."""
+    scoped = memory.scope_diff is not None
+    return ADJUDICATION_ROUND_MEMORY.format(
+        open_findings=_finding_lines(memory.open),
+        rejected_findings=_rejected_lines(memory.rejected),
+        scope_section=(ADJUDICATION_SCOPE_SECTION.format(
+            scope_diff=memory.scope_diff or "(no changes since the previous review)")
+            if scoped else ""),
+        scope_title=" and scope" if scoped else "",
+        scope_field=ADJUDICATION_SCOPE_FIELD if scoped else "",
+        scope_example=', "in_fix_scope": true' if scoped else "",
+    )
+
+
+# What only the adjudicator sets on a finding; a reviewer's value is cleared.
+_JUDGE_FIELDS = {"finding_id": "", "duplicate_of": None, "in_fix_scope": None,
+                 "earlier_judge_reason": ""}
+
+
 async def _adjudicate_review_findings(
     review: ReviewResult,
     block: BlockInfo,
     config: BuildConfig,
     diff: str,
     build_context: str = "",
+    memory: review_rounds.RoundMemory | None = None,
 ) -> ReviewResult:
     """Accept or reject each reviewer finding before anything acts on it.
 
@@ -816,8 +861,14 @@ async def _adjudicate_review_findings(
     finding stays accepted. The alternative — dropping findings when the judge
     is unavailable — would silently weaken review exactly when something is
     already going wrong.
+
+    *memory* (from round 2 of a block on) adds the open findings, the
+    earlier-rejected ones and the scope diff to the prompt, and each accepted
+    finding gets the verdict's `duplicate_of` (only an id the memory knows)
+    and `in_fix_scope`. Missing values mean "not a duplicate" and "in scope",
+    the same fail-open direction.
     """
-    candidates = review.findings_or_derived()
+    candidates = [f.model_copy(update=_JUDGE_FIELDS) for f in review.findings_or_derived()]
     if not candidates:
         return review.model_copy(update={"findings": []})
     if not config.adjudicate_findings:
@@ -841,6 +892,7 @@ async def _adjudicate_review_findings(
         diff=diff or "(no diff captured)",
         build_context=build_context or "(no additional build context)",
         findings=findings_text,
+        round_memory=_round_memory_text(memory) if memory else "",
     )
     try:
         adjudication = await llm_call_structured(
@@ -848,6 +900,8 @@ async def _adjudicate_review_findings(
             effort=config.effort_for("adjudication"), max_retries=1,
             budget_label="adjudication",
         )
+    except BudgetExceededError:
+        raise
     except Exception as e:
         log.warning(
             "Finding adjudication failed for block %d (%s) — keeping all %d findings",
@@ -857,9 +911,21 @@ async def _adjudicate_review_findings(
 
     accepted_idx = adjudication.accepted_indices(len(candidates))
     reasons = {v.index: v.reason for v in adjudication.verdicts}
+    verdicts = {v.index: v for v in adjudication.verdicts}
+    open_ids = {f.finding_id for f in memory.open} if memory else set()
+    earlier = {r.get("finding_id"): r for r in memory.rejected} if memory else {}
     accepted, rejected = [], []
     for i, finding in enumerate(candidates):
         if i in accepted_idx:
+            v = verdicts.get(i)
+            if memory and v is not None:
+                dup = v.duplicate_of if v.duplicate_of in open_ids | set(earlier) else None
+                finding = finding.model_copy(update={
+                    "duplicate_of": dup,
+                    "in_fix_scope": v.in_fix_scope if memory.scope_diff is not None else None,
+                    "earlier_judge_reason": (earlier[dup].get("judge_reason") or ""
+                                             if dup in earlier else ""),
+                })
             accepted.append(finding)
         else:
             rejected.append(finding.model_copy(
@@ -900,6 +966,8 @@ async def _enforce_test_quality(
     )
     try:
         audit = await _audit_test_quality(test_files_content, specs, config)
+    except BudgetExceededError:
+        raise
     except Exception as e:
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_AUDIT error=%s",
                   block.number, block.name, e)
@@ -953,6 +1021,8 @@ async def _enforce_test_quality(
         return True
     try:
         re_audit = await _audit_test_quality(retry_source, specs, config)
+    except BudgetExceededError:
+        raise
     except Exception as e:
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_REAUDIT error=%s",
                   block.number, block.name, e)
@@ -978,6 +1048,7 @@ async def _enforce_red_gate(
     specs: str,
     context: str,
     block_idx: int,
+    test_report: str | None = None,
 ) -> bool:
     """Prove the block's tests fail for the right reason before implementing.
 
@@ -986,6 +1057,13 @@ async def _enforce_red_gate(
     On pass: stores trimmed RED output as evidence in block state and the
     progress log. Returns True when RED is confirmed (or unverifiable
     because no test command is configured).
+
+    *test_report* is the test writer's report (None when no test writer ran
+    in this process); after a retry, the retry's report replaces it. On a
+    pass its `RED_EXPECTED:` slot and the check against the run
+    (`red_expected_note`) become `block.red_expected` and the first lines of
+    `block.red_evidence`, set together so one checkpoint saves both. It
+    changes no verdict.
     """
     if not config.test_command:
         log.info("RED gate skipped for block %s: no test command configured", block.name)
@@ -997,20 +1075,27 @@ async def _enforce_red_gate(
         # run that selected nothing.
         command = _block_test_command(config, block)
         exit_code, output = run_test_suite(command, config.project_dir)
-        gate = red_gate(output, exit_code)
+        from .narrow_tests import runner_of
+        runner = runner_of(command, config.project_dir)
+        expected = _list_block_test_files(config, block)
+        gate = red_gate(output, exit_code, runner=runner, expected_tests=expected,
+                        test_command=command, project_dir=config.project_dir)
         if gate.passed:
-            block.red_evidence = _trim_evidence(output)
+            block.red_expected = red_expected_note(
+                test_report, output, exit_code, runner=runner, expected_tests=expected,
+                test_command=command, project_dir=config.project_dir)
+            block.red_evidence = block.red_expected + "\n" + _trim_evidence(gate.reason + "\n" + output)
             # Freeze the bar the moment it is proven to be a bar. Everything
             # after this point — the implement phase and every review-fix
             # iteration — can write to these files, so this hash map is the
             # only later evidence of whether they did.
-            # None (git unavailable) degrades to {}, which `unchanged_tests_gate`
-            # reads as "no snapshot → gate could not run". Storing None would
-            # violate the model's dict contract and crash the len() below.
-            block.test_file_hashes = _snapshot_test_files(config, block) or {}
-            if not block.test_file_hashes:
-                log.warning("Test integrity: no snapshot for block %d — the gate will "
-                            "report 'not checked' for this block", block.number)
+            # Missing or empty changed-test evidence cannot establish RED.
+            snapshot = _snapshot_test_files(config, block)
+            if snapshot is None or not snapshot:
+                progress.log_agent("RedGate", block.name, "FAILED: changed test evidence unavailable")
+                _mark_block(state, block_idx, BlockStatus.FAILED, config)
+                return False
+            block.test_file_hashes = snapshot
             log.info("Test integrity: snapshotted %d test file(s) for block %d",
                      len(block.test_file_hashes), block.number)
             state.checkpoint(config.state_file_path())
@@ -1053,6 +1138,7 @@ async def _enforce_red_gate(
                 progress.log_agent("TestWriter", block.name, "TIMEOUT" if retry.timed_out else "FAILED")
                 _mark_block(state, block_idx, BlockStatus.FAILED, config)
                 return False
+            test_report = retry.output
             sha = _git_commit_block_phase(config, "test", block)
             if sha:
                 block.test_commit = sha
@@ -1334,7 +1420,8 @@ async def run_block_tdd(
             return False
 
         # --- Phase A.6: RED gate — prove tests fail before implementing ---
-        red_ok = await _enforce_red_gate(block, config, state, progress, specs, context, block_idx)
+        red_ok = await _enforce_red_gate(block, config, state, progress, specs, context, block_idx,
+                                         test_report=test_report)
         if not red_ok:
             return False
     failing_tests = test_report if test_report is not None else _unreported_tests(block)
@@ -1435,11 +1522,19 @@ async def run_block_tdd(
             reason = "timeout" if refactor_result.timed_out else refactor_result.error
             log.warning("FAIL block=%d name=%s phase=REFACTOR reason=%s (non-fatal)", block.number, block.name, reason)
             progress.log_agent("Refactorer", block.name, "TIMEOUT" if refactor_result.timed_out else "FAILED")
+            if not rewind_to or not git_ops.discard_to(config.project_dir, rewind_to, "failed block refactor"):
+                _mark_block(state, block_idx, BlockStatus.FAILED, config)
+                return False
+            if not integration_gate(config.test_command, config.project_dir, parallel=config.parallel_tests).passed:
+                _mark_block(state, block_idx, BlockStatus.FAILED, config)
+                return False
         elif not _verify_block_refactor(block, config, state, progress, rewind_to,
                                         pre_refactor_hashes):
-            # Verification failed and the diff was discarded (or could not be):
-            # the block keeps the implementation it had. Already logged.
-            pass
+            if (not rewind_to or git_ops.rev_parse_head(config.project_dir) != rewind_to
+                    or not git_ops.tree_is_clean(config.project_dir)
+                    or not integration_gate(config.test_command, config.project_dir, parallel=config.parallel_tests).passed):
+                _mark_block(state, block_idx, BlockStatus.FAILED, config)
+                return False
         else:
             log.info("DONE block=%d name=%s phase=REFACTOR", block.number, block.name)
             progress.log_agent("Refactorer", block.name, "COMPLETE")
@@ -1496,6 +1591,7 @@ def _verify_block_refactor(
             log.warning("Test integrity could not run after refactor for block %d: "
                         "test file list unavailable", block.number)
             progress.log_agent("TestIntegrity", block.name, "NOT CHECKED (refactor)")
+            detail = "test integrity evidence unavailable"
         else:
             # No report argument, deliberately — see the docstring.
             tests_gate = unchanged_tests_gate(before, after, "")
@@ -1559,13 +1655,9 @@ def _enforce_test_integrity(
     """
     after = _snapshot_test_files(config, block)
     if after is None:
-        # Git could not be asked. Comparing a populated `before` against an
-        # absent `after` would report every test file as deleted and fail the
-        # block on a git hiccup, so report the gate as unrun instead.
-        log.warning("Test integrity could not run after %s for block %d: "
-                    "test file list unavailable", window, block.number)
-        progress.log_agent("TestIntegrity", block.name, f"NOT CHECKED ({window})")
-        return True
+        progress.log_agent("TestIntegrity", block.name, f"FAILED: evidence unavailable ({window})")
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
+        return False
     gate = unchanged_tests_gate(block.test_file_hashes, after, report)
     if gate.metadata.get("flagged"):
         for claim in gate.metadata.get("claims", []):
@@ -1631,7 +1723,7 @@ async def _run_integration_and_review(
                                    "ESCALATED — questioning the architecture")
             context = assemble_context(block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None)
             fix_result = await run_integration_fix(
-                failure_output=gate.metadata.get("stderr", "") + gate.metadata.get("stdout", ""),
+                failure_output=gate.metadata.get("output", gate.reason),
                 test_command=config.test_command,
                 context_bundle=context,
                 escalate=escalated,
@@ -1674,7 +1766,7 @@ async def _run_integration_and_review(
 
     # GREEN evidence: the suite passing with the implementation in place —
     # the counterpart to the RED evidence captured before implementation.
-    block.green_evidence = _trim_evidence(gate.metadata.get("stdout", "") or gate.reason)
+    block.green_evidence = _trim_evidence(gate.metadata.get("output", "") or gate.reason)
     state.checkpoint(config.state_file_path())
     progress.log_evidence("GREEN", block.name, block.green_evidence)
 
@@ -1685,6 +1777,7 @@ async def _run_integration_and_review(
     review_passed = False
     fixes_run = fixes_completed = 0
     round_path: Path | None = None
+    recurring: str | None = None
     for iteration in range(MAX_REVIEW_ITERATIONS):
         iter_gate = review_iteration_gate(iteration, MAX_REVIEW_ITERATIONS)
         if not iter_gate.passed:
@@ -1704,10 +1797,18 @@ async def _run_integration_and_review(
             state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
             return False
 
+        # What the block's earlier review rounds left open, read from the
+        # round records on disk (so a resumed loop picks it up too). Round 1
+        # has no earlier record and runs exactly as it always has.
+        open_, earlier_rejected, last = review_rounds.open_state(config.change_dir, block.number)
+
         # Run review (via llm_call_structured). Propagates SDK failures —
         # no silent fallback to fabricated passing scores.
         try:
-            review = await _run_quality_review(block, config)
+            review = await _run_quality_review(
+                block, config, **({"open_findings": open_} if open_ else {}))
+        except BudgetExceededError:
+            raise
         except Exception as e:
             log.error(
                 "FAIL block=%d name=%s phase=REVIEW iteration=%d error=%s",
@@ -1720,16 +1821,26 @@ async def _run_integration_and_review(
 
         # Reviewers propose; the orchestrator disposes. THE core invariant:
         # no reviewer suggestion may reach a fix agent unadjudicated.
+        memory = None if last is None else review_rounds.RoundMemory(
+            open=open_, rejected=earlier_rejected, scope_diff=_scope_diff(config, last))
         review = await _adjudicate_review_findings(
             review, block, config, _capture_block_diff(config, block),
-            build_context=_global_constraints_text(config),
+            build_context=_global_constraints_text(config), memory=memory,
         )
-        block.review_scores = review
+        # From round 2: restatements of open findings merge into them. New
+        # findings outside the last fix's reach are labelled in the round
+        # record and fixed like the rest. The fix agent, and the fix on pass,
+        # get the open and new findings; every one of them was accepted by
+        # the adjudicator.
+        plan = None if memory is None else review_rounds.plan_round(
+            review.findings, open_, review.prior_assessments)
+        block.review_scores = review if plan is None else review.model_copy(
+            update={"findings": plan.to_fix})
         block.review_iterations = iteration + 1
 
         score_gate = review_score_gate(review, config.review_gate)
         progress.log_review(block.name, iteration + 1, review.weighted_average, score_gate.passed)
-        round_path = _record_review_round(config, block, review, score_gate)
+        round_path = _record_review_round(config, block, review, score_gate, plan=plan)
 
         if score_gate.passed:
             review_passed = True
@@ -1740,28 +1851,60 @@ async def _run_integration_and_review(
             break  # no fix agent after the last review — its work would go unreviewed
         # Spawn fix agent for the failing dimensions PLUS the findings that
         # survived adjudication. Rejected findings are absent by construction.
-        accepted_text = review.findings_text()
         fix_brief = score_gate.reason
+        if plan is None:
+            new_findings = review.findings
+        else:
+            new_findings = [review.findings[i] for i in plan.new_open]
+            open_text = review_rounds.open_findings_text(plan)
+            if open_text:
+                fix_brief += f"\n\n## Findings still open from earlier rounds (fix these)\n{open_text}"
+        accepted_text = ReviewResult(scores=[], findings=new_findings).findings_text()
         if accepted_text:
             fix_brief += f"\n\n## Adjudicated findings (accepted — fix these)\n{accepted_text}"
-        review_rounds.update_round(round_path, fix_brief=_review_fix_description(fix_brief))
+        if any(f.other_locations for f in block.review_scores.findings):
+            fix_brief += "\n\nFix every listed location, and cover each one with a test."
+        # The last fix (its review is the loop's last) questions the approach,
+        # on the review model, with every finding of every round in front of
+        # it — as the integration gate's last fix does. Counted per process.
+        escalated = iteration == MAX_REVIEW_ITERATIONS - 2
+        fix_step = "review_fix_escalated" if escalated else "review_fix"
+        fix_model = config.model_for(fix_step)
+        description = _review_fix_description(fix_brief)
+        if escalated:
+            progress.log_agent("ReviewFix", block.name, "ESCALATED — questioning the approach")
+            description = (REVIEW_FIX_ESCALATION.format(
+                findings=review_rounds.history_text(config.change_dir, block.number))
+                + "\n" + description)
+        review_rounds.update_round(round_path, fix_brief=description)
         context = assemble_context(block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None)
         fix = await run_implementer(
             block_name=block.name,
-            block_description=_review_fix_description(fix_brief),
+            block_description=description,
             failing_tests=fix_brief,
             context_bundle=context,
             test_command=config.test_command,
             prompt_style=config.implementer_prompt_style,
-            model=config.model_for("review_fix"),
-            effort=config.effort_for("review_fix"),
+            model=fix_model,
+            effort=config.effort_for(fix_step),
             cwd=str(config.project_dir),
         )
-        _record_fix(round_path, block, fix)
+        if escalated:
+            recurring = parse_recurring(fix.output or "")
+            _record_fix(round_path, block, fix, escalated=True, recurring=recurring)
+        else:
+            _record_fix(round_path, block, fix)
         fixes_run += 1
         fixes_completed += bool(fix.success)
-        if not fix.success and fix.timed_out:
-            log.warning("Fix agent timed out during review iteration %d", iteration + 1)
+        if not fix.success:
+            block.resumable = True
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
+            return False
+        gate = integration_gate(config.test_command, config.project_dir, parallel=config.parallel_tests)
+        if not gate.passed:
+            progress.log_diagnosis(block.name, gate.metadata.get("output", gate.reason))
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
+            return False
         if fix.output:
             # The fix agent is an implementer too — its report is where a
             # TEST CHANGE REQUIRED declaration for this window would appear.
@@ -1797,6 +1940,7 @@ async def _run_integration_and_review(
             log.error("FAIL block=%d name=%s phase=REVIEW reason=review-exhausted "
                       "after %d iterations", block.number, block.name, MAX_REVIEW_ITERATIONS)
             progress.log_block(block.number, total, block.name, "FAILED — review exhausted")
+            progress.log_diagnosis(block.name, _review_exhausted_diagnosis(config, block, recurring))
             print(f"BLOCK:{block.number}/{total}:{block.name}:REVIEW_EXHAUSTED")
             # Every review fix errored: the findings were never worked on.
             block.resumable = fixes_run > 0 and fixes_completed == 0
@@ -1832,9 +1976,15 @@ def _finish_block(
 
 def _record_review_round(
     config: BuildConfig, block: BlockInfo, review: ReviewResult, gate: GateResult,
-    kind: str = "review",
+    kind: str = "review", plan: review_rounds.RoundPlan | None = None,
 ) -> Path | None:
-    """Write this round's record under the change dir's `reviews/`."""
+    """Write this round's record under the change dir's `reviews/`. With a
+    *plan* (round 2 on), its open list, assessments and the labels of the
+    findings outside the last fix's reach go in the record too."""
+    memory = {} if plan is None else {
+        "carried_open": plan.carried, "new_open": plan.new_open,
+        "outside": plan.outside, "prior_assessments": plan.assessments,
+    }
     return review_rounds.record_round(
         config.change_dir, block,
         head_sha=git_ops.rev_parse_head(config.project_dir),
@@ -1843,7 +1993,47 @@ def _record_review_round(
         gate_reason=gate.reason,
         weighted_average=review.weighted_average_with(config.review_gate),
         kind=kind,
+        **memory,
     )
+
+
+def _scope_diff(config: BuildConfig, last: dict) -> str | None:
+    """`git diff <last head_sha> HEAD`: every change committed since the
+    previous review ran, the round records left out as in the review diff.
+    None when the record has no head or git cannot give the diff."""
+    sha = last.get("head_sha")
+    if not sha:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--relative", sha, "HEAD", *_without_review_records(config)],
+            cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
+        )
+    except Exception as e:
+        log.warning("Could not diff %s..HEAD for the review scope: %s", sha[:8], e)
+        return None
+    if proc.returncode != 0:
+        log.warning("Could not diff %s..HEAD for the review scope: %s", sha[:8],
+                    proc.stderr.strip())
+        return None
+    diff = proc.stdout
+    if len(diff) > MAX_REVIEW_DIFF_CHARS:
+        diff = diff[:MAX_REVIEW_DIFF_CHARS] + "\n... (diff truncated)"
+    return diff
+
+
+def _review_exhausted_diagnosis(config: BuildConfig, block: BlockInfo,
+                                recurring: str | None) -> str:
+    """Why the review loop ran out: the findings still present or partly
+    resolved in two or more round records, and the last fix's RECURRING:
+    answer when it gave one."""
+    ids = review_rounds.recurring_ids(config.change_dir, block.number)
+    lines = [f"Review exhausted after {MAX_REVIEW_ITERATIONS} iterations.",
+             "Findings still present or partly resolved in two or more rounds: "
+             + (", ".join(ids) if ids else "none")]
+    if recurring is not None:
+        lines.append(f"RECURRING (from the last fix): {recurring}")
+    return "\n".join(lines)
 
 
 def _review_fix_description(brief: str) -> str:
@@ -1899,6 +2089,7 @@ def _record_fix_pass_stop(config: BuildConfig, fp: FixOnPassState) -> None:
     stop = stop_record.record(config.project_dir, ignore=_records_dir_in_project(config))
     fp.stop_head = stop.head if stop else None
     fp.stop_edits = stop.edits if stop else None
+    fp.stop_index = stop.index if stop else None
 
 
 def _others_work_in_fix_pass(config: BuildConfig, fp: FixOnPassState) -> str | None:
@@ -1910,7 +2101,7 @@ def _others_work_in_fix_pass(config: BuildConfig, fp: FixOnPassState) -> str | N
     uncommitted change and HEAD must be at the checkpoint. The round records
     are the pass's own and are not checked."""
     recorded = fp.step != "fix_agent" and fp.stop_edits is not None and fp.stop_head
-    stop = stop_record.StepStop(head=fp.stop_head, edits=fp.stop_edits) if recorded else None
+    stop = stop_record.StepStop(head=fp.stop_head, edits=fp.stop_edits, index=fp.stop_index) if recorded else None
     return stop_record.others_work(
         config.project_dir, stop, ignore=_records_dir_in_project(config),
         head=fp.stop_head if recorded else fp.checkpoint)
@@ -1955,12 +2146,7 @@ async def _fix_on_pass(
     if checkpoint is None or not git_ops.tree_is_clean(config.project_dir):
         return _skip_fix_on_pass(config, block, progress, findings,
                                  "not attempted (no clean commit to roll back to)")
-    try:
-        budget_mod.check(phase=f"fix on pass of block {block.number}")
-    except BudgetExceededError as e:
-        log.warning("Fix on pass of block %d skipped: %s", block.number, e)
-        return _skip_fix_on_pass(config, block, progress, findings,
-                                 "not attempted (budget ceiling reached)")
+    budget_mod.check(phase=f"fix on pass of block {block.number}")
 
     block.fix_pass = FixOnPassState(
         checkpoint=checkpoint,
@@ -2044,6 +2230,8 @@ async def _run_fix_on_pass(
         state.checkpoint(state_path)
         try:
             new_review = await _run_quality_review(block, config)
+        except BudgetExceededError:
+            raise
         except Exception as e:
             log.warning("Review after the fix on pass of block %d failed: %s", block.number, e)
             reason = f"the review after the fix failed: {e}"
@@ -2101,6 +2289,7 @@ async def _resume_fix_on_pass(
     block_idx = state.tdd.current_block if state.tdd else 0
     total = len(state.tdd.blocks) if state.tdd else 0
     fp = block.fix_pass
+    assert fp is not None, "Resuming a fix requires its saved recovery record"
     refusal = _others_work_in_fix_pass(config, fp)
     if refusal:
         log.error("FAIL block=%d name=%s phase=FIX_ON_PASS reason=resume-refused: %s",
@@ -2128,14 +2317,16 @@ async def _resume_fix_on_pass(
         return False
     _restore_block(block, fp)
     fp.step = "fix_agent"
-    fp.stop_head = fp.stop_edits = None
+    fp.stop_head = fp.stop_edits = fp.stop_index = None
     state.checkpoint(config.state_file_path())
     if not await _run_fix_on_pass(block, config, state, progress, block_idx):
         return False
     return _finish_block(block, config, state, progress, block_idx, total)
 
 
-async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewResult:
+async def _run_quality_review(
+    block: BlockInfo, config: BuildConfig, open_findings: list[ReviewFinding] | None = None,
+) -> ReviewResult:
     """Run an evidence-based quality review of the block's implementation.
 
     Reviews the block's ACTUAL diff (pre-block baseline → working tree), with
@@ -2145,6 +2336,10 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
     Propagates LLMCallError / LLMCallTimeoutError on failure. Callers must
     handle the exception and fail the block — silently fabricating passing
     scores is worse than a loud failure (the old fallback was a real bug).
+
+    *open_findings* (round 2 of a block on) are listed after the RED/GREEN
+    evidence, for the reviewer to give each a status. Nothing there tells the
+    reviewer what to leave out ("Review prompts stay unbiased").
     """
     rubric = ""
     if config.rubric_path.exists():
@@ -2182,6 +2377,11 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
     if block.green_evidence:
         report_parts.append(f"### GREEN evidence (suite after implementation)\n"
                             f"```\n{block.green_evidence}\n```")
+    if open_findings:
+        report_parts.append("### Findings still open from earlier rounds\n" + "\n".join(
+            f"- {f.finding_id} [{f.severity}] {f.claim}"
+            + (f" ({f.file_path}:{f.line})" if f.file_path else "")
+            for f in open_findings))
     if block.test_change_claims:
         # Same treatment as RED/GREEN: the implementer said the test had to
         # change, and that assertion is exactly what needs checking. A green
@@ -2209,6 +2409,20 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
 
 
 async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) -> int:
+    """Run TDD and retain current spend if a provider or process interrupts it."""
+    try:
+        return await _run_tdd_engine(config, args, standalone=standalone)
+    except BaseException:
+        path = config.state_file_path()
+        if path.exists():
+            # The last atomic checkpoint owns block progress; attach the latest
+            # incurred usage without treating the interrupted operation as done.
+            saved = BuildState.load(path)
+            saved.checkpoint(path)
+        raise
+
+
+async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) -> int:
     """Main entry point for the TDD engine.
 
     Orchestrates: parse blocks → baseline gate → per-block TDD → whole-change
@@ -2232,6 +2446,8 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
     progress = ProgressWriter(config.progress_file_path())
 
     # Ceilings first, so every call below is accounted against them.
+    if standalone:
+        budget_mod.reset()
     budget_mod.configure(
         max_tokens=config.budget_max_tokens,
         max_usd=config.budget_max_usd,
@@ -2243,7 +2459,8 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
         state = BuildState.load(state_path)
         # A resumed build inherits what the earlier run already spent —
         # a fresh budget on resume would make the ceiling unenforceable.
-        budget_mod.get_budget().load_state(state.budget)
+        if standalone:
+            budget_mod.get_budget().load_state(state.budget, accept_unknown_spend=config.accept_unknown_spend)
         log.info("START phase=TDD_ENGINE resumed=true block=%d spent=%d tokens",
                  state.tdd.current_block if state.tdd else 0,
                  budget_mod.get_budget().total_tokens)
@@ -2377,6 +2594,15 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
             log.info("DONE phase=E2E_CHECK result=passed")
             progress.log_phase("E2E_CHECK", "PASSED")
 
+    if standalone:
+        gate = final_verification(config.test_command, config.project_dir, parallel=config.parallel_tests,
+                                  plan_revision=state.spec_gen.revision if state.spec_gen else "")
+        state.verification = gate.model_dump()
+        state.checkpoint(state_path)
+        if not gate.passed:
+            progress.log_phase("VERIFY", gate.reason)
+            return EXIT_BUILD_FAILURE
+
     # Success. Persist the finished TDD sub-state; the phase pointer stays at
     # TDD_BUILD (for the orchestrator to advance, or as a standalone run's
     # completed phase).
@@ -2403,7 +2629,7 @@ def capture_build_diff(config: BuildConfig, state: BuildState) -> str:
     target = baseline or "HEAD"
     try:
         proc = subprocess.run(
-            ["git", "diff", target, *_without_review_records(config)],
+            ["git", "diff", "--relative", target, *_without_review_records(config)],
             cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
         )
         if proc.returncode != 0:
@@ -2487,18 +2713,9 @@ async def _run_refactor_all(
     # destroy — so: no reset, no checkpoint, no refactor pass.
     pre_gate = integration_gate(config.test_command, config.project_dir, parallel=config.parallel_tests)
     if not pre_gate.passed:
-        log.error(
-            "SKIP phase=REFACTOR_ALL reason=suite-red-before-refactor: %s — "
-            "the tree holds unverified edits (crashed refactor pass or a "
-            "breaking review fix); NOT checkpointing them as a rewind "
-            "baseline. The suite is RED — review before shipping.",
-            pre_gate.reason,
-        )
-        progress.log_phase("REFACTOR_ALL",
-                           f"SKIPPED — suite red before refactor: {pre_gate.reason}")
-        state.tdd.refactor_all_done = True
+        progress.log_phase("REFACTOR_ALL", f"FAILED — suite red before refactor: {pre_gate.reason}")
         state.checkpoint(config.state_file_path())
-        return True
+        return False
 
     # Review-fix edits are left uncommitted by the block loop, so "the last
     # commit" is only a faithful pre-refactor snapshot once they are in it.
@@ -2564,6 +2781,7 @@ async def _run_refactor_all(
             log.warning("Test integrity could not run after the whole-change "
                         "refactor: test file list unavailable")
             progress.log_phase("REFACTOR_ALL", "test integrity NOT CHECKED")
+            detail = "test integrity evidence unavailable"
         else:
             # No report argument, deliberately: no escape hatch in this window.
             tests_gate = unchanged_tests_gate(before, after, "")
@@ -2574,6 +2792,8 @@ async def _run_refactor_all(
         if rewind_to and git_ops.discard_to(config.project_dir, rewind_to, "whole-change refactor"):
             log.warning("DONE phase=REFACTOR_ALL result=discarded reason=%s", detail)
             progress.log_phase("REFACTOR_ALL", f"REVERTED — {detail}")
+            if not integration_gate(config.test_command, config.project_dir, parallel=config.parallel_tests).passed:
+                return False
         else:
             # The refactor's edits failed verification AND could not be
             # discarded — they stay in the tree, and nothing downstream
@@ -2583,6 +2803,8 @@ async def _run_refactor_all(
                       "reason=%s — UNVERIFIED refactor edits remain in the tree "
                       "and will ship unless reviewed", detail)
             progress.log_phase("REFACTOR_ALL", f"REVERT FAILED — {detail}")
+            state.checkpoint(config.state_file_path())
+            return False
     else:
         sha = git_ops.commit_tree(
             config.project_dir, "refactor: simplify across blocks",

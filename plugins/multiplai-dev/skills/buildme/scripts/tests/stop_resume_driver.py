@@ -54,7 +54,7 @@ def main() -> int:
 
     from build_pipeline import budget, git_ops
     from build_pipeline.config import BuildConfig
-    from build_pipeline.models import BlockInfo, BlockStatus
+    from build_pipeline.models import BlockInfo, BlockStatus, PlanReviewResult
     from build_pipeline.orchestrator import run_orchestrator
     from build_pipeline.progress import ProgressWriter
     from build_pipeline.state import BuildState, TDDState
@@ -72,7 +72,10 @@ def main() -> int:
         os.kill(os.getpid(), signal.SIGKILL if how == "kill" else signal.SIGTERM)
         time.sleep(30)  # the handler raises here; a kill never returns
 
-    async def fake_spec_generator(config, args):
+    async def fake_spec_generator(config, args, **kwargs):
+        from tests.planning_fakes import _plan_fixture
+        state = BuildState.load(config.state_file_path())
+        _plan_fixture(config, state)
         budget.record(_usage(SPEC_USD), label="spec_generation")
         return 0
 
@@ -115,6 +118,8 @@ def main() -> int:
                          mode=spec.get("mode", "scratch"), spec_only=spec.get("spec_only", False),
                          skip_research=True)
     config.specs_dir = project / "specs"
+    config.test_command = "true"
+    os.environ["BUILDME_TRUST_REPO"] = "1"
     args = argparse.Namespace(
         mode=config.mode, change=spec["change"], project_dir=str(project), auto=True,
         spec_only=config.spec_only, skip_research=True, interview_summary="an idea",
@@ -123,8 +128,8 @@ def main() -> int:
     )
     with patch("build_pipeline.spec_generator.run_spec_generator", fake_spec_generator), \
          patch("build_pipeline.llm_steps.spec_steps.run_design_audit", fake_design_audit), \
-         patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review_stage",
-               new_callable=AsyncMock, return_value=[]), \
+         patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+               new_callable=AsyncMock, return_value=PlanReviewResult(findings=[])), \
          patch("build_pipeline.tdd_engine.run_tdd_engine", fake_tdd), \
          patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
                new_callable=AsyncMock, return_value=None), \

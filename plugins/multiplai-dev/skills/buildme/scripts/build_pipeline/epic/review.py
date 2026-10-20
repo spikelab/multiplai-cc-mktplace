@@ -110,6 +110,18 @@ def finished_line(lines: list[dict], repo_slug: str, number: int, head: str) -> 
     return hits[-1] if hits else None
 
 
+def review_folder(line: dict) -> str:
+    """The folder holding the review a `finished` ledger *line* records. A
+    later run in the same `target_dir` first copies it to
+    `rounds/<round>-<head_sha[:12]>/` (`review_pipeline/rounds.py`,
+    `keep_round`) and then writes its own files on top, so it is that kept
+    round once there is one; else `target_dir`."""
+    target = str(line.get("target_dir"))
+    rnd, head = line.get("round"), str(line.get("head_sha") or "")
+    kept = Path(target) / "rounds" / f"{rnd}-{head[:12]}"
+    return str(kept) if rnd and head and (kept / "findings.json").is_file() else target
+
+
 def running_dir(lines: list[dict], repo_slug: str, head: str) -> str | None:
     """The `target_dir` of a review of this repo at *head* whose last ledger
     line is `started`: one that is running now, or was killed. None without one."""

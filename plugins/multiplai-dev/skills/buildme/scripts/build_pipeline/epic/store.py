@@ -20,7 +20,6 @@ import hashlib
 import logging
 import os
 import re
-import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +29,7 @@ from multiplai_core import checkpoint
 from multiplai_core.paths import get_paths
 from pydantic import BaseModel, Field
 
+from .. import git_ops
 from ..stop_record import StepStop
 from .split import EpicChild, check_children, waves
 
@@ -102,9 +102,21 @@ def origin_owner_repo(url: str | None) -> tuple[str, str] | None:
     return parts[-2], parts[-1]
 
 
+class GitUnreadable(Exception):
+    """git timed out or did not start, so it said nothing about the checkout."""
+
+
+def _git(argv: list[str], cwd: Path) -> git_ops.GitResult:
+    """`git_ops._run`, raising GitUnreadable for its timeout (124) and for a
+    git that did not start (127), which say nothing about *cwd*."""
+    proc = git_ops._run(argv, cwd=cwd)
+    if proc.returncode in (124, 127):
+        raise GitUnreadable(f"{proc.command} in {cwd}: {proc.stderr.strip()}")
+    return proc
+
+
 def _remote_url(repo: Path) -> str | None:
-    proc = subprocess.run(["git", "remote", "get-url", "origin"], cwd=repo,
-                          capture_output=True, text=True, check=False)
+    proc = _git(["git", "remote", "get-url", "origin"], cwd=repo)
     url = proc.stdout.strip()
     return url if proc.returncode == 0 and url else None
 
@@ -145,8 +157,7 @@ def checkout_root(path: Path) -> Path | None:
     find the repository above it)."""
     if not Path(path).is_dir():
         return None
-    proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=path,
-                          capture_output=True, text=True, check=False)
+    proc = _git(["git", "rev-parse", "--show-toplevel"], cwd=path)
     top = Path(proc.stdout.strip()) if proc.returncode == 0 and proc.stdout.strip() else None
     return top if top is not None and top.resolve() == Path(path).resolve() else None
 
@@ -159,12 +170,15 @@ def repo_errors(children: list[EpicChild], base: Path) -> list[str]:
         if not c.repo:
             continue
         path = checkout_path(c.repo, base)
-        if not path.is_dir():
-            errors.append(f"child {c.id}: repo {c.repo} not found ({path})")
-        elif checkout_root(path) is None:
-            errors.append(f"child {c.id}: repo {c.repo} is not a git checkout ({path})")
-        elif _remote_url(path) is None:
-            errors.append(f"child {c.id}: repo {c.repo} has no origin remote ({path})")
+        try:
+            if not path.is_dir():
+                errors.append(f"child {c.id}: repo {c.repo} not found ({path})")
+            elif checkout_root(path) is None:
+                errors.append(f"child {c.id}: repo {c.repo} is not a git checkout ({path})")
+            elif _remote_url(path) is None:
+                errors.append(f"child {c.id}: repo {c.repo} has no origin remote ({path})")
+        except GitUnreadable as e:
+            errors.append(f"child {c.id}: cannot read repo {c.repo} with git: {e}")
     return errors
 
 

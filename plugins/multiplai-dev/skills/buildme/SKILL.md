@@ -7,17 +7,52 @@ when_to_use: 'Triggers: build me, buildme, bootstrap, full build, /buildme'
 # BuildMe
 
 Orchestrate the complete journey from idea to working code via a deterministic
-Python pipeline. Interview → Research → Codebase Analysis → Specs →
-Design Audit → Prototype → Review → TDD Build → Respec → Publish (branch
-pushed + draft PR).
+Python pipeline: understand the request → generate a complete plan → optional
+prototype → audit and review the final plan → implement/test and review fixes →
+prepare docs and archive → verify the final revision → publish.
 
 Before any spec is written, the pipeline reads the repo it is about to change
 (architecture, patterns, integration points) and resolves the reference docs
 for the detected stack and framework, so `design.md` extends the code that
 exists and follows the conventions the project already builds to.
 
-Every build runs **inside its own git worktree on its own branch** and ends by
-pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycle).
+Builds use an isolated worktree and branch by default. `--no-worktree` and
+`--no-push` remain supported — see [Git lifecycle](#git-lifecycle). Publication
+consumes the revision that passed final checks.
+
+
+## Completion and recovery contract
+
+- `RESULT:SUCCESS` means the configured test command passed after the last
+  content writer. The checkpoint records the command, parallel-test setting,
+  planning revision, Git HEAD, index and content fingerprint. Missing commands,
+  unavailable evidence, timeouts, or tests that change tracked inputs fail the build.
+- `RESULT:SUCCESS:spec-only` means planning completed; it says nothing about code
+  verification. `VERIFICATION:passed` and `PUBLICATION:published|skipped|failed`
+  distinguish verified code from push/PR delivery. A publication failure keeps a
+  resumable checkpoint and does not repeat paid implementation when inputs agree.
+- A completed historical checkpoint never republishes. Old in-progress plans
+  revalidate their documents and reviews; a phase ordinal or old completion flag
+  alone cannot prove review. Future checkpoint versions require an upgrade.
+- Recovery compares staged blobs/modes and working files separately. An old stop
+  record without index evidence cannot authorize discard. Preserve both versions
+  in a stash or backup, inspect them, then restart in a clean checkout. WIP refs
+  keep working files in their own tree and the index in their second parent;
+  saving one leaves the caller's HEAD and index intact.
+- Every proposal capability needs a valid Requirement/Scenario/WHEN/THEN document.
+  Interrupted planning retries missing members. Rewrites invalidate dependent
+  tasks, rubric, sizing and reviews; unresolved blocking findings stop the build.
+- For pytest, RED requires a behavioral failure attributable to changed tests,
+  after a healthy baseline. Collection/import/setup/environment errors do not
+  count. Other runners remain usable and report RED classification as unverified.
+- Budget limits apply before every provider attempt, including planning and
+  retries, inside the concurrency slot. Resumes retain incurred usage. Already
+  admitted calls can finish above the cap; no further calls are admitted once it
+  is exhausted. Child-skill and epic aggregate spend remain separately accounted.
+
+Optional-stage defaults are unchanged. The paired evaluation harness and its
+pending live decision are in [evals/README.md](scripts/evals/README.md); deterministic
+fixture runs establish harness behavior, not model quality.
 
 ## Prerequisites
 
@@ -47,6 +82,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--lenient-review` | Accept-and-continue when a block exhausts its review iterations without passing, instead of failing the build. Unattended overnight runs only — the default is to fail, so low-scoring work is never silently marked done. |
 | `--skip-explainers` | Skip the unknowns/edge-case explainer pass for dependencies new to this project. `unknowns.md` is still written, recording the skip. The pass is **off by default**: its dependency scan flags spec words such as `assert` or `followed` as dependencies (#375), so the flag only matters when `explainers: {enabled: true}` turns it on. |
 | `--prototype` | Force the prototype stage on, whatever the change type. |
+| `--accept-unknown-spend` | Resume after interrupted calls whose usage is unknown. Preserves the unknown records; the cap covers known spend only. Epic builds forward it to children and fixers for this invocation. Pass only when the user explicitly accepts that uncertainty. |
 | `--no-prototype` | Skip the prototype stage (the skip and its reason are logged). |
 | `--no-worktree` | Build in the project dir on the current branch instead of creating a worktree + branch. **Required when the calling session is already inside a worktree** — see [Git lifecycle](#git-lifecycle). Also disables push and PR (they only ever act on a branch the pipeline created). |
 | `--no-push` | Do not push the build's branch to `origin`. |
@@ -60,7 +96,8 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--force` | Start a new build even if this change already published. The new build gets the next free branch (`buildme/<change>-2`, …) and leaves the published one alone. Pass it only after the user said yes to the `BUILD:COMPLETE` question (below). A stopped build with a `.build-state.json` resumes with or without it. |
 | `--approve-split` | Approve the epic split the build printed as `EPIC:SPLIT:<split.md>`, as `split.md` and `plans/` are on disk now. See [Epic mode](#epic-mode-one-input-several-changes). |
 | `--no-epic-split` | Build the input as one change: no `EPIC_SPLIT` decision, no model call. An epic's child builds pass it. |
-| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch, or the parent's commit that holds its `specs/registry` baseline (below); a build that re-binds to its worktree ignores it. When the commit is not on the default branch, the PR targets the branch that holds it (`--base`). Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
+| `--epic-child` | Build as an epic's child: no spec-extract (the parent ran it), and the PR targets the default branch. The epic's build passes it to every child, so the child's saved command keeps it when run again by hand. `BUILDME_EPIC_CHILD=1` in the environment does the same: a child's command saved before 0.84.2 lacks the flag, so pass one of them when running it by hand. |
+| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child builds get origin's default branch, or the parent's commit that holds its `specs/registry` baseline (below); a build that re-binds to its worktree ignores it. When the commit is not on the default branch, the PR targets the branch that holds it (`--base`), except under `--epic-child` (or `BUILDME_EPIC_CHILD=1`), where the PR targets the default branch. Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
 | `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. An approved epic vouches for its own repo: it passes `--trust-repo` to each child build, review and fixer, and its merge step's one agent call (under `epic.merge: auto`) runs trusted for that call only. |
 
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: false}` (the default; #375),
@@ -268,271 +305,12 @@ deliberately, plus the PR URL (or, on `PUBLISH_DIAGNOSIS:<reason>`, the manual
 push/PR commands from `build-progress.md`). The PR's description comes from the
 pr skill and follows the repo's PR template; these lines are unchanged by it.
 
-## Which tests a block runs
+## Test and model settings
 
-Inside each block's TDD loop, buildme runs a **narrow test command** instead of
-the project's whole test command. The RED check, and the block's test writer,
-implementer and refactorer, run:
-
-1. the test files the block added or changed (its git diff since the block
-   started, untracked files included);
-2. for each source file the block changed, the test file named after it:
-   `test_<module>.py` or `<module>_test.py` for pytest, `<name>.test.<ext>` or
-   `<name>.spec.<ext>` for jest and vitest. When several packages have a test
-   file of that name, the one nearest the source file is taken.
-
-Only files the whole command collects are taken: never one under `.venv`,
-`venv`, `node_modules` or another tool directory, and for pytest only one under
-the config's `testpaths` (when pytest runs in the config's own directory) and
-outside its `norecursedirs` and any `--ignore` / `--ignore-glob`, because pytest
-runs any file named on its command line even when the whole run skips it.
-
-Tests are never picked by what they import. The paths are appended to the test
-command (`tdd.test_command`, else the discovered one) only when its runner
-accepts them: pytest, or jest or vitest run directly or through an `npm test`
-script that is a single jest or vitest command (the paths go after `--`).
-The whole command runs instead when:
-
-- the command is anything else, including a task runner such as tox or nox,
-  even behind `uv run` or `python -m`, or a chain (`pytest && ruff check .`);
-- the block selects no test file;
-- the block changed a file in tests that this naming cannot pick out (Django's
-  `tests.py`, a file under `__tests__/`, a helper module under `tests/`), so its
-  own tests are never left out;
-- the run collects coverage (`--cov` in the command, `PYTEST_ADDOPTS` or the
-  pytest config; for Node, `coverage` in the command, the `npm test` script,
-  package.json's `jest` key or a jest, vitest or vite config), because a narrow
-  run can miss a coverage floor the whole suite meets;
-- a Node test path holds a character jest reads as a regex (`[id]`, `(auth)`);
-- the command already names what to run: a path in the command, in pytest's
-  `addopts` or in `PYTEST_ADDOPTS`, a jest or vitest filter (`jest src/unit`,
-  `vitest run unit`, `--testPathPattern`, `--findRelatedTests`), or a pytest
-  option that points at another config or root (`-c`, `--rootdir`,
-  `--config-file`, `--pyargs`), because appended paths would only add to it;
-- the project sets pytest's `python_files`, or its pytest config cannot be read;
-- a selected pytest file sits below another pytest config file or `setup.py`
-  than the one the whole run uses, because pytest finds its config from the
-  paths it is given; or under a `conftest.py` that sets `collect_ignore`,
-  `collect_ignore_glob` or `pytest_ignore_collect`, because pytest skips those
-  for paths it is given;
-- the selection would make the command longer than 20,000 characters.
-
-So RED never passes on a run that left out the block's own tests. The agents'
-command is fixed before they change anything, so each agent is also told to
-add the test files it writes and the test file named after each module it
-changes.
-
-The checks that decide whether work is done still run the **whole** command:
-the baseline gate, the integration gate after each block (which also checks a
-block's refactor), the whole-change refactor, mutation testing and epic mode's
-merge step.
-
-The baseline gate, the integration gate and epic mode's merge tests run a
-pytest command with `-n auto` (pytest-xdist, one worker per CPU) when
-`python -c "import xdist"` succeeds in the environment pytest runs in: the
-Python beside the `pytest` script, the one before `-m pytest`, or `python`
-under the same `uv run` / `poetry run` / `pdm run` / `hatch run` /
-`pipenv run` / `rye run`. A command buildme cannot place in an environment
-(`env X=1 pytest`, a task runner) runs as written, and so does one that
-already chooses its workers (`-n`, `--numprocesses`, `--dist`, `-p no:xdist`,
-`--pdb`, in the command, `addopts` or `PYTEST_ADDOPTS`), or where pytest will
-not load xdist (`PYTEST_DISABLE_PLUGIN_AUTOLOAD` or `--disable-plugin-autoload`
-with no `-p xdist` or `PYTEST_PLUGINS=xdist.plugin`). The narrow runs in
-the loop never add it. jest and vitest already run test files in parallel,
-so Node commands are unchanged.
-
-| Key | Values | Default |
-|---|---|---|
-| `tdd.narrow_tests` | `true` / `false` | `true`; `false` runs the whole command in the loop too |
-| `tdd.parallel` | `auto` / `off` | `auto`; `off` runs the full suite serially |
-| `tdd.test_writer_max_turns` | positive integer | `30`; the block test writer's turn cap, stated in its prompt |
-| `tdd.mutation_test_writer_max_turns` | positive integer | `30`; the mutation round's test writer's turn cap |
-
-## Mutation testing
-
-Python projects only: one of `pyproject.toml`, `setup.py`, `setup.cfg`,
-`pytest.ini`, `tox.ini` or `requirements.txt` sits at the project root. A
-Python project whose manifest lives in a subdirectory is not detected and
-skips the step. The test command must run Python too: a `tdd.test_command` in
-`specs/config.yaml` is used as given, and a discovered one must be the pytest
-command found from `pytest.ini`, `pyproject.toml` or `setup.py`. A Node project
-with a helper `requirements.txt` discovers `npm test` and skips the step.
-Right after the whole-change refactor, buildme runs
-[cosmic-ray](https://pypi.org/project/cosmic-ray/) 8.7.0 over the **non-test
-`.py` lines the build added or modified** since its first block, using the
-project's own test command. Files the test suite runs but never imports are
-left out: `setup.py`, `noxfile.py`, `fabfile.py` and `manage.py` at any depth,
-`docs/` and `doc/` at the project root, and anything under a `migrations/` or
-`alembic/` directory. Every mutant on them would survive, and the survivor
-round may only edit tests. cosmic-ray runs as a pinned tool
-(`uvx --from cosmic-ray==8.7.0`), so `uv` must be installed; it is not added
-to the project or to buildme's dependencies. The first run downloads it.
-
-If any mutant survives, one fresh test-writer agent gets the survivors (file,
-line, operator, the line as it is now, and the mutation's diff) and may add or
-edit **tests only**. The implementer is not called. buildme then checks the
-round:
-
-- a changed non-test file discards the round and **fails the build**. Files
-  the suite writes when it runs (caches, reports, a test database, a golden
-  file it writes back to the same bytes) do not count, and Django's
-  `<app>/tests.py` is a test;
-- a red suite discards the round, and the first score stands;
-- a green round is committed as `test(mutation): kill surviving mutants` and
-  cosmic-ray runs again for the final score. If the agent committed its own
-  tests, buildme moves the branch back to where the round started, keeping the
-  files, and checks and commits them the same way.
-
-`specs/config.yaml` keys (all optional):
-
-| Key | Default | Meaning |
-|---|---|---|
-| `mutation.enabled` | `true` | Turn the step off for this project. |
-| `mutation.min_score` | `0.8` | Minimum killed / (killed + survived). Timed-out test runs count as killed. **The default is a starting point:** nobody has measured mutation scores on buildme output yet, so it will be adjusted from measured runs. |
-| `mutation.timeout` | `30` | Seconds allowed per test-suite run under one mutant. When the unmutated suite takes longer than a third of this, each mutant gets three times its measured run instead. The unmutated (baseline) run itself is allowed 15 minutes. |
-| `mutation.max_mutants` | `300` | Cap on mutants run. Above it, a deterministic sample runs, and `mutation.md` says so. |
-
-What fails a build (`EXIT_BUILD_FAILURE`, step not marked done, so a resume
-runs it again): a final score below `min_score`, a survivor round that edited
-or added a non-test file (any extension, so a new `pytest.ini` counts; caches
-such as `__pycache__` or `.pytest_cache`, coverage and junit reports such as
-`coverage.xml`, `htmlcov/` or `junit.xml`, and `*.egg-info` do not), cosmic-ray
-failing to produce a score (`uv` not installed, cosmic-ray not fetchable
-offline or from a private index, red baseline, crash, timeout, or every mutant
-on the changed lines erroring; the error says to set `mutation.enabled: false`
-to build without the step), uncommitted changes in the tree when the step
-starts, or a discard git refused — a survivor round or a
-mutated file that could not be thrown away. In that last case buildme commits
-nothing more, `mutation.md` included, and the tree is left as it is for you to
-inspect. A bad config value keeps its default and logs a
-warning. When no mutant lands on a changed line, there is no score and the step
-passes. A non-Python project, `enabled: false` or a build that changed no
-Python source the test suite imports logs one `SKIP phase=MUTATION` line and
-moves on.
-
-Every run that scores writes `specs/changes/<name>/mutation.md`: the score
-before and after the survivor round, the threshold and verdict, the files
-mutated, what the survivor round did, and every surviving mutant (file, line,
-operator). It is committed onto the build branch.
-
-cosmic-ray edits source files in place while it runs, so the tree must be
-committed when the step starts. Every verified path leaves it committed, so
-uncommitted changes at that point are edits nothing checked: a whole-change
-refactor whose verification failed and could not be undone, one skipped on a
-red suite or a failed checkpoint, a refactor agent that stopped mid-edit, or a
-survivor round that could not be discarded. buildme then fails the step
-without committing or resetting anything; review the changes, commit or
-discard them, and resume. If a mutated file is still in the tree after a run,
-buildme discards back to the starting commit; if that discard fails, the build
-stops.
-
-## Tuning model and effort (multiplai.conf)
-
-Model and effort are two axes of one decision. With nothing configured, every
-step runs on `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT` (environment, then
-`multiplai.conf`), and otherwise on the model and effort of the Claude Code
-session that started the build. With none of those, the CLI picks. Each
-step's model and effort can be set in `specs/config.yaml` under `models:` and
-`efforts:`; `multiplai.conf` sets per-stage models and efforts without a code
-edit. Nothing caps a configured model or effort.
-
-### `models:` in specs/config.yaml
-
-```yaml
-models:
-  default: opus            # any spec: haiku | sonnet | opus | fable | claude:<x> | pi:<model>@<provider>
-  spec: sonnet             # stage defaults
-  agent: opus
-  review: fable
-  test_writer: opus        # step keys
-  implementer: pi:deepseek/deepseek-v4-flash@fireworks
-```
-
-A value is a model spec:
-
-- a Claude model: `haiku`, `sonnet`, `opus`, `fable`, a `claude-…` ID, or
-  either one prefixed `claude:` (or `anthropic:`). A family name runs on its
-  current model.
-- a Pi model: `pi:<model-id>@<provider>`. It runs through
-  `multiplai-core`'s Pi backend, so it **needs Pi installed and configured;
-  not covered here**. A missing `pi` binary fails that step; it does not fall
-  back to Claude.
-
-An unknown key, or a value that is neither, is dropped with a warning.
-
-Each step resolves its model through this chain, and the first one set wins:
-
-1. `models.<step>`
-2. `models.<stage>` (the step's stage, below)
-3. the stage's `multiplai.conf` model: `[buildme.spec]`, `[buildme.agent]`
-   or `[buildme.review] MODEL=` (`review_model`, which `code_review.model` and
-   `BUILDME_REVIEW_MODEL` also set); `[buildme.plan_review] MODEL=` for
-   `plan_review`, and none for `adjudication`
-4. `models.default`
-5. `[buildme] MODEL=` (the whole pipeline's model)
-6. `MULTIPLAI_MODEL` (environment, then `multiplai.conf`)
-7. the session's model
-
-A stage model reaches every step of its stage.
-
-### `efforts:` in specs/config.yaml
-
-```yaml
-efforts:
-  default: medium          # low | medium | high | xhigh | max
-  review: high             # stage
-  implementer: max         # step
-```
-
-The keys are the same as `models:`. Each step resolves its effort through this
-chain, and the first one set wins:
-
-1. `efforts.<step>`
-2. `efforts.<stage>`
-3. the stage's `multiplai.conf` effort: `[buildme.spec]`, `[buildme.agent]` or
-   `[buildme.review] EFFORT=`; `[buildme.plan_review]`, then
-   `[buildme.review]`, for `plan_review`
-4. `efforts.default`
-5. `[buildme] EFFORT=`
-6. `MULTIPLAI_EFFORT` (environment, then `multiplai.conf`)
-7. the session's effort
-
-An unknown key or effort name is dropped with a warning.
-
-| Stage | Steps |
-|---|---|
-| `spec` | `spec_artifact` (every spec artifact, use-cases included), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `interview`, `research`, `findings_spec` (the findings stage's spec delta) |
-| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `prototype`, `merge` |
-| `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt), `findings_triage` (the findings stage's one read-only agent per PR comment), `findings_self_check` (the findings stage's one read-only check of a round's fix commits) |
-
-The tier (advanced or standard) comes from the default model: `models.default`,
-then `[buildme] MODEL=`, then `MULTIPLAI_MODEL`, then the session's model.
-Fable, or Opus 4.5 and later, is advanced; a bare `opus` or `fable` counts as
-its current model. With no model anywhere the tier is standard. A Pi model's version says nothing about the tier,
-so when `models.default` is a `pi:` spec the tier comes from `BUILDME_TIER`
-(env) or `tier:` in specs/config.yaml, and is `standard` when neither is set.
-
-### multiplai.conf
-
-| Section | Tunes |
-|---|---|
-| `[buildme]` | `MODEL=` and `EFFORT=` for the whole pipeline |
-| `[buildme.spec]` | `MODEL=` and `EFFORT=` for spec generation, audits, rubric |
-| `[buildme.review]` | `MODEL=` and `EFFORT=` for code review, test-quality audit |
-| `[buildme.agent]` | `MODEL=` and `EFFORT=` for the agent stage (test writer, implementer, refactorers, fixers, docs update, prototype, merge) |
-
-```ini
-[buildme]
-MODEL=opus
-EFFORT=medium
-
-[buildme.review]
-EFFORT=high
-```
-
-A stage section's `MODEL=` takes a Claude model or a `pi:` spec. A stage
-section falls back to `models.default` / `efforts.default`, then `[buildme]`,
-then `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT`, then the session.
+The normal path uses the configured suite, block TDD, independent review and a
+final verification after all writers. See the [test, mutation and model reference](scripts/README.md#test-and-model-reference)
+for `tdd.narrow_tests`, `tdd.parallel`, mutation settings, `models:`, `efforts:`
+and multiplai.conf examples. These defaults have not changed in this repair.
 
 ## Scale Assessment (MANDATORY)
 
@@ -693,7 +471,7 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
   [--interview-replies "{replies_md}"] [--accept-size] \
   [--approve-split] [--no-epic-split] \
   [--auto] [--spec-only] [--skip-research] [--lenient-review] \
-  [--skip-explainers] [--prototype|--no-prototype] \
+  [--skip-explainers] [--prototype|--no-prototype] [--accept-unknown-spend] \
   [--no-worktree] [--no-push] [--no-pr] [--pr-ready]
 ```
 
@@ -717,10 +495,10 @@ generation (via change_manager) including the unknowns/explainer pass, the
 design audit — which critiques the specs for consistency *and* plan quality
 (over-engineering, task granularity, testability, uncovered edge cases) and
 folds every critical/major gap back into one regeneration pass of `design.md`
-and `tasks.md` before re-auditing once, report-only — the plan review, which
+and `tasks.md` before re-auditing once; unresolved blockers stop the run. The plan review
 reads `tasks.md` against the rubric, the constraints and the use cases and
-regenerates `tasks.md` at most once, the
-prototype stage, TDD implementation (test-writer + implementer agents per block),
+regenerates `tasks.md` at most once. Prototype feedback precedes these final
+checks. TDD implementation (test-writer + implementer agents per block),
 integration gates, scored quality reviews, entry point verification, the
 documentation update, the respec proposal, and publishing (push + draft PR).
 
@@ -764,11 +542,13 @@ and merges in different repositories never wait on each other. A child that
 depends on a child in another repository waits for that PR to merge. A
 checkout that is gone when a run starts, or before its child launches, parks
 that child with `repo <path> not found`, and it stays parked on later runs;
-the reviews its PR already had still count toward `epic.max_usd`.
+the reviews its PR already had still count toward `epic.max_usd`. When `git`
+times out or does not start there, nothing parks: the child is `unknown` for
+that run, and the next run asks again.
 
 **Running the children.** The approved build runs each child as its own
 `build --mode brief --change <epic>-<id> --plan-file <epic dir>/plans/<id>.md`
-subprocess with `--auto --trust-repo --no-epic-split --pr-ready`, in the
+subprocess with `--auto --trust-repo --no-epic-split --epic-child --pr-ready`, in the
 parent's project directory (or the child's own `repo`, above), from origin's default branch (`--base-ref`), so
 each child gets its own worktree, branch and ready PR. When the parent's
 codebase analysis committed a `specs/registry` baseline (spec-extract), a
@@ -828,12 +608,15 @@ walkthrough regeneration included (the pr skill and the walkthrough print
 their own `SPEND:` line, which the build adds), so a resumed build reports only
 its own spend and a several-round `findings` reports every round. When one of
 those skills printed none (killed or timed out), the line ends `:incomplete`.
-The epic's spend is each child attempt's `SPEND:` plus the reviews of the
+The epic's spend is each child attempt's `SPEND:`, plus what each merge
+agent call spent, plus the reviews of the
 children's PRs in the review ledger (`<data_dir>/reviews/ledger.jsonl`: each
 review run once, its resumes in it, a fresh review of the same head added);
 `epic.json` and each summary hold it as `spent_usd`, with
 `spend_complete: false` when an attempt was killed before it printed `SPEND:`,
-its `SPEND:` ends `:incomplete`, or a review has not finished. Before each launch, once
+its `SPEND:` ends `:incomplete`, a merge agent call was interrupted, a review
+has not finished, or a review was killed and then run again fresh instead of
+resumed. Before each launch, once
 `epic.max_usd` is reached, nothing more is launched: the run waits for the
 children already running and exits `3` with `EPIC:BUDGET:<spent>`. A fixer
 runs several rounds in one launch, so it is given what is left of
@@ -841,7 +624,11 @@ runs several rounds in one launch, so it is given what is left of
 less what the other fixers still running were given and have not yet spent
 on their PRs' reviews. While running fixers hold all that is left, another
 fixer waits for them, and no build, review, review resume or merge agent
-starts; once they end, their real spend decides. A fixer stops before a
+starts; once they end, their real spend decides. A fixer still running from
+an earlier run (one killed outright, or a fixer that outlived its stop) holds
+nothing in this run: this run waits for it only before that child's next fix,
+so the epic can spend past `epic.max_usd` by up to that fixer's own
+`--max-usd`, and `spend_complete` is false. A fixer stops before a
 round with something to act on once its own spend and its reviews' reach
 its share. If the epic's spend is still under the cap, other fixers held the
 rest: it runs again with its share recomputed once they end. Once the spend
@@ -875,8 +662,13 @@ again and uses that review. The epic's budget is checked before each of these
 launches. When the review cannot read git or GitHub before reviewing anything
 (exit `2`: its `git fetch` or `gh pr view` failed, or the PR's head or base is
 not in the clone after its fetch), nothing parks: the child is `unknown`, as
-when the coordinator's own read fails, and the next run asks again. A child
-whose worktree was removed is reviewed from the source repo.
+when the coordinator's own read fails, and the next run asks again. So is a
+child whose review, or whose post of the review's findings, cannot start
+(`uv` is not on PATH, or its worktree was removed as it starts). When another child depends on it, the same run reads
+its PR again and waits on it as an open PR, so the run ends with
+`EPIC:MERGE_WAITING` (exit 3) rather than naming it `unknown`; the next run
+still reviews it. A child whose worktree was removed is reviewed from the
+source repo.
 Any other failure parks the child with the end of the review's output. Each
 review writes `agents/<NNN>-review-<id>.{started.json,result.json,log}`; the
 result holds `head_sha`, `base_sha`, `review_dir`, `cost_usd`, `pr_round` (the
@@ -963,8 +755,14 @@ started by hand without `--change` included. The post and the
 fixer count against `epic.max_parallel` and `epic.max_usd` like a build, and
 Ctrl-C or SIGTERM stops a fixer this run started.
 
-**Merging the children's PRs.** A PR whose last review left no blockers is
-waited on as a dependency's PR is. Under `epic.merge: manual` (the default)
+**Merging the children's PRs.** A PR whose review at its current head left
+no blockers is waited on as a dependency's PR is. A PR whose current head no
+review finished on (its review was stopped, or it got a new head after a
+clean review) is waited on only when another child depends on it. The run
+names it on stderr (`EPIC: child <id> built: its PR's head <first 12
+characters of the sha> has no finished review; the next run reviews it`)
+and exits `1`, unless it exits `3` with `EPIC:MERGE_WAITING` or
+`EPIC:BUDGET`. Under `epic.merge: manual` (the default)
 nothing more happens: the run exits `3` with `EPIC:MERGE_WAITING:<urls>`
 naming every such PR still open, and a re-run once a person merged them goes
 on. Under `auto`, the default branch is first merged into each such PR, in its
@@ -1036,8 +834,8 @@ documentation lands **in the same PR as the code it describes** instead of being
 left for the reviewer to write.
 
 There is no flag and no config toggle: a build that ships code with stale docs
-is the thing this phase exists to prevent. It is non-fatal — a failure here logs
-and the build still succeeds — and it never invents features: `DOCS_IMPACT:
+is the thing this phase exists to prevent. A failed writer blocks the build
+because it may have left partial edits. The agent never invents features: `DOCS_IMPACT:
 none` is a legitimate outcome for a change with no user-visible delta. When the
 build changed source, the project keeps a changelog, and nothing was documented,
 the pipeline prints `DOCS_WARNING:<reason>`; relay it, it is a warning and never
@@ -1148,7 +946,7 @@ Parse pipeline stdout for progress lines:
   them, or set `spec_extract: false`, and re-run
 - `RESULT:SUCCESS` — build complete
 - `EPIC:APPROVED:<epic.json>` — the epic split is approved; the children build next
-- `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown` (`3` while a child waits on a dependency's open PR); `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
+- `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown` (`3` while a child waits on a dependency's open PR), and when a child's PR head has no finished review and neither `EPIC:MERGE_WAITING` nor `EPIC:BUDGET` is printed; `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
 - `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent, the pr skill, a walkthrough run and spec-extract included (`:incomplete` follows when one of them printed no spend)
 - `ERROR:<message>` — failure
 
@@ -1165,7 +963,7 @@ change the flags to get past it), `4` an agent timed out
 | `RESEARCH:NEEDED:<path>` | the research decision asked for research; topics in `<path>` | Run `/deep-research` on them and re-run with `--research-path <output>` — or, without `multiplai-research`, say so and re-run with `--skip-research`. |
 | `SPLIT:REQUIRED:<path>` | the size gate wants the plan split; proposal in `<path>` | Post `<path>` on the ticket (plane `comment` / `gh issue comment --body-file`), or show it to the user for a prompt, and stop. Re-run with `--accept-size` only when the user chooses to build it as one PR. |
 | `BUILD:COMPLETE:<path>` | this change already published; `<path>` is its kept checkpoint, and stderr names its branch and PR. Nothing was written | Ask the user with AskUserQuestion whether to start a new build of it on a new branch. On yes, re-run the same command with `--force`; on no, stop. Never add `--force` without the user's yes. |
-| `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge, or a PR passed review and waits for a person to merge it (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and any child the `EPIC: child` lines on stderr name, and stop. Re-run the same command once they are merged; a PR closed without a merge parks the children that wait on it. |
+| `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge, or a PR passed review and waits for a person to merge it under `epic.merge: manual`, or, under `epic.merge: auto`, buildme left a PR open itself: its checks were still pending after an hour, or a merge queue only queued it (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and any child the `EPIC: child` lines on stderr name, and stop. Under `manual`, re-run the same command once they are merged. Under `auto`, do not ask the user to merge by hand. Checks still pending: re-run the same command, which reads them again and merges. A queued PR: re-run once the queue has merged it, since a re-run while it is still queued runs the merge step again, which merges origin's default branch in and pushes when that branch has moved (see [Merging the children's PRs](#epic-mode-one-input-several-changes)). A PR closed without a merge parks the children that wait on it. |
 | `EPIC:BUDGET:<spent>` | the epic's spend (USD) reached `epic.max_usd`; nothing more was launched | Tell the user what was spent and which children did not start (the `EPIC:SUMMARY` file), and stop. A re-run stops again until the user raises `epic.max_usd` in `specs/config.yaml`; never raise it yourself. |
 | `EPIC:SPLIT:<path>` | the input is several changes; the split is in `<path>` (`split.md`), one plan per child in `plans/` beside it | For a GitHub ticket, post **one** comment whose body is the line `<!-- buildme-epic-split:<sha256 of split.md> -->` (`shasum -a 256 <path>`) followed by the content of `<path>`, and only when no comment on the issue already starts with that line (`gh issue view <n> --json comments --jq '.comments[].body'`): a re-run prints the same line for the same `split.md`, so it never posts twice. For any other input, show `<path>` to the user. Then stop. Re-run with `--approve-split` only when the user approves the split. Never create, close or edit a ticket for a child. |
 

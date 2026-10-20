@@ -23,6 +23,8 @@ wherever they are written or inlined into a prompt.
 
 from __future__ import annotations
 
+from build_pipeline.budget import BudgetExceededError
+
 import logging
 import subprocess
 from pathlib import Path
@@ -401,6 +403,8 @@ async def run_interview_phase(config, state, args, state_path: Path, progress) -
         from .llm_steps.interview_steps import run_self_interview
         try:
             questions, answers = await run_self_interview(config, inputs)
+        except BudgetExceededError:
+            raise
         except Exception as e:
             # Best-effort, like codebase analysis: the spec is still written
             # from the ticket, context and summary — only the Q&A is missing.
@@ -499,6 +503,8 @@ async def _ticket_interview(config, state, args, state_path, progress, contexts,
         inputs = interview_inputs(change_dir, summary, contexts)
         try:
             questions = await ask_questions(config, inputs)
+        except BudgetExceededError:
+            raise
         except Exception as e:
             log.error("FAILED phase=INTERVIEW reason=%s", e)
             _progress_note(progress, "INTERVIEW", f"Questioner failed: {e}")
@@ -575,6 +581,8 @@ async def run_research_phase(config, state, args, state_path: Path, progress) ->
     from .llm_steps.interview_steps import decide_research
     try:
         decision = await decide_research(config, state.interview_summary or "")
+    except BudgetExceededError:
+        raise
     except Exception as e:
         log.warning("FAILED phase=RESEARCH reason=%s — continuing without research", e)
         dest.write_text(

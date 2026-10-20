@@ -37,7 +37,7 @@ import re
 import sys
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -54,6 +54,7 @@ from lib.banks import (
 )
 from lib.banks import resolve_ref as resolve_bank_ref
 from lib.banks import split_ref as split_bank_pick
+from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
 from lib.hook_watchdog import make_on_watchdog
 from lib.memory_router import create_router
@@ -65,10 +66,14 @@ from lib.section_loader import (
     load_picked_content,
     parse_section_ref,
     preamble as section_preamble,
+    resolve_section_name,
 )
 from lib.transcript_helper import read_last_assistant_response
 from generators.base import CATALOG_SCHEMA_VERSION
-from generators.config import load_catalog_config
+from generators.config import (
+    DEFAULT_WHOLE_FILE_MAX_BYTES,
+    load_catalog_config,
+)
 
 # Forward the router's (lib.*) and generators.* loggers into the
 # context_manager log; multiplai_core is always included. Without this, every
@@ -93,10 +98,15 @@ _KNOWN_CATALOG_TYPES = frozenset({"memory", "banks", "diary", "skills"})
 # truncation site in _assemble_and_emit for why (P7).
 _LAST_RESPONSE_MAX_CHARS = 2000
 
-# Once-per-session warning deduplication (Decision 8).
-# Keyed by full catalog file path to correctly dedup across
-# different data directories.
+# In-process layer of the warn-once dedup (see _warn_once for the
+# cross-process layer). Keyed by full catalog file path to correctly dedup
+# across different data directories.
 _catalog_warnings_emitted: set[str] = set()
+
+_WARN_ONCE_FILE = "warn_once.json"
+# A persisted warning is repeated after this long even when nothing changed,
+# so a condition left unfixed still shows up in each day's log.
+_WARN_ONCE_WINDOW_S = 24 * 3600
 
 
 @dataclass
@@ -157,8 +167,9 @@ def _read_top_memory_files(
     memory_dir: Path,
     *,
     max_files: int = 5,
-    max_bytes: int = 40_000,
+    max_bytes: int | None = 40_000,
     exclude: set[str] | None = None,
+    whole_file_max_bytes: int = DEFAULT_WHOLE_FILE_MAX_BYTES,
 ) -> dict[str, str]:
     """Rank memory files by metadata, then read only the top candidates.
 
@@ -168,7 +179,10 @@ def _read_top_memory_files(
     from dumping the whole memory corpus each turn:
       - ``exclude`` skips files still within the re-recommendation cooldown,
         so the fallback doesn't re-inject what a recent turn already sent.
-      - ``max_bytes`` caps the total injected payload.
+      - ``max_bytes`` caps the total injected payload, the first file
+        included (``None`` or 0: no cap beyond ``max_files``).
+      - a file over ``whole_file_max_bytes`` is skipped: this path has no
+        section picks to load it by (0 disables).
     """
     exclude = exclude or set()
     ranked = _rank_memory_files(memory_dir)
@@ -184,10 +198,13 @@ def _read_top_memory_files(
         except Exception:
             logger.warning("Failed to read ranked memory file: %s", item.path)
             continue
-        if total + len(content.encode("utf-8")) > max_bytes and result:
+        size = len(content.encode("utf-8"))
+        if 0 < whole_file_max_bytes < size:
+            continue
+        if max_bytes and total + size > max_bytes:
             break
         result[item.path.name] = content
-        total += len(content.encode("utf-8"))
+        total += size
     return result
 
 
@@ -222,6 +239,7 @@ def _read_catalog_or_scan(catalog_type: str, ttl_hours: float | None = None) -> 
 
     catalog_file = _resolve_catalog_path(catalog_type)
     warn_key = str(catalog_file)
+    sig = _file_sig(catalog_file)
 
     try:
         if not catalog_file.exists():
@@ -229,16 +247,18 @@ def _read_catalog_or_scan(catalog_type: str, ttl_hours: float | None = None) -> 
             return []
 
         data = json.loads(catalog_file.read_text(encoding="utf-8"))
-        return _validate_catalog(data, catalog_type, warn_key, ttl_hours)
+        return _validate_catalog(data, catalog_type, warn_key, ttl_hours, sig=sig)
 
     except json.JSONDecodeError as e:
-        _warn_once(warn_key, f"Catalog {catalog_type} contains invalid JSON: {e}")
+        _warn_once(warn_key, f"Catalog {catalog_type} contains invalid JSON: {e}", sig=sig)
         return []
     except OSError as e:
-        _warn_once(warn_key, f"Error reading catalog {catalog_type}: {e}")
+        _warn_once(warn_key, f"Error reading catalog {catalog_type}: {e}", sig=sig)
         return []
     except Exception as e:
-        _warn_once(warn_key, f"Unexpected error reading catalog {catalog_type}: {e}")
+        _warn_once(
+            warn_key, f"Unexpected error reading catalog {catalog_type}: {e}", sig=sig
+        )
         return []
 
 
@@ -257,6 +277,8 @@ def _validate_catalog(
     catalog_type: str,
     warn_key: str,
     ttl_hours: float | None = None,
+    *,
+    sig: str = "",
 ) -> list[dict]:
     """Validate parsed catalog JSON and return entries, or ``[]`` on failure.
 
@@ -272,12 +294,18 @@ def _validate_catalog(
     action (``/refresh-catalogs``), never inline on the hook path.
     """
     if not isinstance(data, dict):
-        _warn_once(warn_key, f"Catalog {catalog_type} is not a JSON object, falling back")
+        _warn_once(
+            warn_key, f"Catalog {catalog_type} is not a JSON object, falling back", sig=sig
+        )
         return []
 
     schema_version = data.get("schema_version")
     if schema_version is None:
-        _warn_once(warn_key, f"Catalog {catalog_type} missing schema_version field, falling back")
+        _warn_once(
+            warn_key,
+            f"Catalog {catalog_type} missing schema_version field, falling back",
+            sig=sig,
+        )
         return []
 
     if schema_version != CATALOG_SCHEMA_VERSION:
@@ -285,24 +313,27 @@ def _validate_catalog(
             warn_key,
             f"Catalog {catalog_type} schema version mismatch: "
             f"expected {CATALOG_SCHEMA_VERSION}, got {schema_version}",
+            sig=sig,
         )
         return []
 
     if ttl_hours:
-        _warn_if_stale(data, catalog_type, warn_key, ttl_hours)
+        _warn_if_stale(data, catalog_type, warn_key, ttl_hours, sig=sig)
 
     entries = data.get("entries")
     if entries is None:
         return []
     if not isinstance(entries, list):
-        _warn_once(warn_key, f"Catalog {catalog_type} entries is not a list, falling back")
+        _warn_once(
+            warn_key, f"Catalog {catalog_type} entries is not a list, falling back", sig=sig
+        )
         return []
 
     return entries
 
 
 def _warn_if_stale(
-    data: dict, catalog_type: str, warn_key: str, ttl_hours: float
+    data: dict, catalog_type: str, warn_key: str, ttl_hours: float, *, sig: str = ""
 ) -> None:
     """Warn once when a catalog's ``generated_at`` exceeds *ttl_hours*.
 
@@ -324,24 +355,91 @@ def _warn_if_stale(
         gen = gen.replace(tzinfo=timezone.utc)
     age_hours = (datetime.now(timezone.utc) - gen).total_seconds() / 3600.0
     if age_hours > ttl_hours:
+        # `--only <type>` and not the bare skill: an explicit --only runs the
+        # generator even when its enable_* option is missing from the shell
+        # the skill runs in, which is how a bare refresh silently skipped
+        # skills (generators/skills.py, force_enable).
         _warn_once(
             f"{warn_key}::stale",
             f"Catalog {catalog_type} is stale: generated {age_hours:.1f}h ago "
-            f"(TTL {ttl_hours:.0f}h). Run /refresh-catalogs to regenerate.",
+            f"(TTL {ttl_hours:.0f}h). Run /multiplai-context:refresh-catalogs "
+            f"--only {catalog_type} to regenerate.",
+            sig=sig,
         )
 
 
-def _warn_once(warn_key: str, message: str) -> None:
-    """Log *message* at WARNING level, but only once per session per *warn_key*.
+def _warn_once(warn_key: str, message: str, *, sig: str = "") -> None:
+    """Log *message* at WARNING level once per *warn_key* and *sig*.
 
-    Subsequent calls with the same key are demoted to DEBUG to avoid
-    log spam (Design Decision 8).
+    Repeats are demoted to DEBUG to avoid log spam (Design Decision 8):
+    within one process by ``_catalog_warnings_emitted``, and across the
+    per-prompt hook processes by the state file (``_warned_recently``), for
+    ``_WARN_ONCE_WINDOW_S``. *sig* identifies the thing being warned about,
+    such as the catalog file's mtime: when it changes (a regenerated catalog
+    that is still broken), the warning is new and logs again at once.
     """
     if warn_key in _catalog_warnings_emitted:
         logger.debug("Suppressed repeated warning for %s: %s", warn_key, message)
         return
     _catalog_warnings_emitted.add(warn_key)
+    if _warned_recently(warn_key, sig):
+        logger.debug(
+            "Suppressed warning already logged within %dh for %s: %s",
+            _WARN_ONCE_WINDOW_S // 3600, warn_key, message,
+        )
+        return
     logger.warning(message)
+
+
+def _warn_state_path() -> Path:
+    """Where the cross-process warn-once record lives."""
+    return get_paths().data_dir() / _WARN_ONCE_FILE
+
+
+def _warned_recently(warn_key: str, sig: str) -> bool:
+    """True when *warn_key* with *sig* was logged within the window.
+
+    Otherwise records it as logged now and returns False. Fail-open: an
+    unreadable or corrupt record means "not warned", so the warning is
+    logged; a failed write only costs a repeat next prompt. Two sessions
+    racing the read-modify-write can each log once, which is acceptable.
+    """
+    now = time.time()
+    try:
+        path = _warn_state_path()
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {}
+        if not isinstance(state, dict):
+            state = {}
+        entry = state.get(warn_key)
+        if (
+            isinstance(entry, dict)
+            and entry.get("sig") == sig
+            and isinstance(entry.get("at"), (int, float))
+            and now - entry["at"] < _WARN_ONCE_WINDOW_S
+        ):
+            return True
+        state = {
+            k: v for k, v in state.items()
+            if isinstance(v, dict)
+            and isinstance(v.get("at"), (int, float))
+            and now - v["at"] < _WARN_ONCE_WINDOW_S
+        }
+        state[warn_key] = {"sig": sig, "at": now}
+        atomic_write_json(path, state)
+    except Exception:
+        logger.debug("warn-once state unavailable for %s", warn_key, exc_info=True)
+    return False
+
+
+def _file_sig(path: Path) -> str:
+    """A change marker for *path* (its mtime), or "" when it cannot be read."""
+    try:
+        return str(path.stat().st_mtime_ns)
+    except OSError:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -401,50 +499,116 @@ def _memory_path_for(pick: str, memory_dir: Path, banks) -> Path | None:
     return resolved[2]
 
 
+@dataclass
+class MemoryLoadReport:
+    """What ``_load_memory_content`` did besides returning content.
+
+    * ``aliases`` — raw pick → the content key that answered it, for every
+      pick whose key is not the pick itself (a near anchor resolved to its
+      real heading, a bare pick of a large file answered by its sections).
+      ``_cooldown_keys`` stamps these picks so the router's next identical
+      pick is recognised as already in the conversation.
+    * ``pointers`` — content keys that hold a pointer to a file rather than
+      its content. ``_section_attribution`` leaves them out: utilisation reads
+      an empty section list as "the whole file was injected", which a pointer
+      is not.
+    * ``dropped_anchors`` — section picks whose fragment matched no heading
+      and were therefore not loaded at all.
+    * ``missing`` — picks whose file did not resolve or exists nowhere on
+      disk: catalog drift, which the recency fallback is there to cover.
+    """
+
+    aliases: dict[str, str] = field(default_factory=dict)
+    pointers: list[str] = field(default_factory=list)
+    dropped_anchors: list[str] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
+
+
+# A pointer stands in for content that was too large, so it must stay small
+# itself. Preambles measured 40-896 characters across the real corpus.
+_POINTER_PREAMBLE_MAX_CHARS = 1_000
+
+
+def _memory_pointer(
+    path: Path, text: str, reason: str, *, section: str | None = None
+) -> str:
+    """Injected in place of memory content that is too large to inject.
+
+    Gives the model what it needs to fetch the content itself: the absolute
+    path, the file's preamble (purpose statement and routing prose, small by
+    construction) and its section list, or the one section that was meant.
+    """
+    lines = [f"({reason})", f"Path: {path}"]
+    if section is not None:
+        lines.append(
+            f"Read the `## {section}` section of that file if it is relevant."
+        )
+        return "\n".join(lines) + "\n"
+    head = section_preamble(text).strip()
+    if len(head) > _POINTER_PREAMBLE_MAX_CHARS:
+        head = head[:_POINTER_PREAMBLE_MAX_CHARS].rstrip() + " …"
+    if head:
+        lines.append(head)
+    names = h2_names(text)
+    if names:
+        lines.append(
+            "Sections (Read the file at that path for the ones you need):"
+        )
+        lines.extend(f"- {name}" for name in names)
+    else:
+        lines.append("This file has no sections; Read it at that path if relevant.")
+    return "\n".join(lines) + "\n"
+
+
 def _load_memory_content(
-    memory_dir: Path, picks: list[str], banks=None
+    memory_dir: Path,
+    picks: list[str],
+    banks=None,
+    *,
+    whole_file_max_bytes: int = DEFAULT_WHOLE_FILE_MAX_BYTES,
+    report: MemoryLoadReport | None = None,
 ) -> dict[str, str]:
     """Read picked memory files; honor ``filename#Section`` for partial loads.
 
-    Returns ``{display_name: content}``. ``display_name`` is the raw pick
-    (``"file.md#Section"``, ``"team/file.md"``) so the assembled context shows
-    which slice, from which bank, was loaded — **except** when the whole file
-    was loaded, where the key is the canonical bare ref from
-    :func:`_whole_file_ref`. Several picks can collapse onto that one key, so
-    the keys are not the picks; :func:`_cooldown_keys` maps back.
+    Returns ``{display_name: content}``. ``display_name`` is
+    ``"file.md#Heading"`` for a section, with the file's real heading
+    (``"team/dev.md#Testing"`` for a bank file), and the canonical bare ref
+    from :func:`_whole_file_ref` for a whole file or a pointer. Several picks
+    can collapse onto one key, so the keys are not the picks;
+    :func:`_cooldown_keys` maps back, with *report*'s aliases.
 
     *banks* defaults to ``None``, which means "personal only" and is the
-    pre-banks behaviour verbatim — the parameter is additive so existing
-    callers and tests need no edit.
+    pre-banks behaviour verbatim.
 
-    Three things happen per **file** rather than per pick, because each is a
-    property of the file and none can be decided one pick at a time. They
-    apply to bank files exactly as they do to personal ones:
+    Decided per **file** rather than per pick, because each is a property of
+    the file. They apply to bank files exactly as they do to personal ones:
 
-    * **A whole-file pick absorbs that file's section picks.** The router may
-      legitimately emit ``["team/dev.md", "team/dev.md#Testing"]``; loading both
-      injected the section twice and made the byte attribution report more bytes
-      than the file has.
-    * **An unresolvable anchor absorbs the file's other picks too.** A stale
-      anchor still falls back to the whole file — that is the safety claim
-      ``TestWrongAnchorFallsBackToFullFile`` pins, and it does not change. What
-      changes is that the fallback now happens **once**. Per pick, two stale
-      anchors on one file injected that file twice: measured 2026-08-30 on the
-      real corpus, where two ``ai-agent-patterns.md`` section picks logged
-      64,817 B each against a ~65 KB file. Nothing upstream validates the
-      fragment against ``section_anchors``, so catalog↔file drift reaches here
-      unfiltered and used to be amplified by it rather than caught.
-    * **The file's pre-first-H2 preamble is prepended once.** No section slice
-      contains it, so without this a section pick silently returns less than the
-      whole file would have — including cross-file load instructions. Once per
-      file, not once per section, since several picks from one file are normal
-      for an anchored file.
+    * **A section fragment resolves to a real heading or is dropped.**
+      :func:`resolve_section_name` accepts an exact match ignoring case and
+      punctuation, then the nearest heading (a gloss pasted after the name, a
+      dropped qualifier, a close spelling). A fragment with no heading close
+      enough is dropped and named in a warning. It is **never** answered with
+      the whole file, which would load a large file for one section.
+    * **A file over *whole_file_max_bytes* loads only by section.** A bare
+      pick of it is answered by the file's section picks when there are any,
+      and otherwise by a pointer (:func:`_memory_pointer`): path, preamble and
+      section list; for a shared-bank file, by nothing (see the
+      ``WHOLE_FILE_DROPPED`` branch). 0 disables the limit.
+    * **A whole-file pick of a smaller file absorbs that file's section
+      picks**, so the router's legitimate ``["dev.md", "dev.md#Testing"]``
+      injects the file once, not the file plus the section again. A file with
+      no H2 at all has no sections to address, so a section pick of it counts
+      as a bare pick.
+    * **The file's pre-first-H2 preamble is prepended once** to its first
+      section. No section slice contains it, and it carries the date stamp and
+      cross-file load instructions.
     """
+    if report is None:
+        report = MemoryLoadReport()
     # Group by the ref the picks address, preserving first-appearance order.
     # A repeated pick is one pick: `memory_router._parse_llm_multi_selection`
     # de-duplicates, but this function is called with picks assembled by
-    # `expand_bundles` and by tests too, and a duplicate used to overwrite its
-    # own entry with the copy that skips the preamble.
+    # `expand_bundles` and by tests too.
     by_ref: dict[str, list[str]] = {}
     seen_picks: set[str] = set()
     for pick in picks:
@@ -458,9 +622,11 @@ def _load_memory_content(
     for ref_picks in by_ref.values():
         path = _memory_path_for(ref_picks[0], memory_dir, banks)
         if path is None:
+            report.missing.extend(ref_picks)
             continue
         if not path.exists():
             logger.debug("Picked memory file missing: %s", path)
+            report.missing.extend(ref_picks)
             continue
         try:
             text = path.read_text()
@@ -469,73 +635,227 @@ def _load_memory_content(
             continue
 
         whole_ref = _whole_file_ref(ref_picks[0])
-        whole = next(
-            (p for p in ref_picks if split_bank_pick(p)[2] is None), None
-        )
+        has_sections = bool(h2_names(text))
+        bare = [p for p in ref_picks if split_bank_pick(p)[2] is None]
+        if not has_sections:
+            # Nothing to address by section, so every pick is a bare pick.
+            bare = list(ref_picks)
 
-        # Which anchors this file can answer is a property of the file, so it
-        # is settled once, here, before either branch decides what to emit —
-        # including the whole-file branch, where a stale anchor riding along
-        # with a bare pick used to be absorbed without ever being named.
-        #
-        # `h2_names` is the single place both the catalog generator and
-        # `extract_section` learn a file's section names, so "the fragment is
-        # not in this list" is exactly what catalog↔file drift means. The
-        # earlier signal — `extract_section` returning the object it was handed
-        # — also fired for an empty file and for a file with no H2 at all,
-        # neither of which is drift and neither of which regenerating a catalog
-        # can fix.
-        names = {n.strip().lower() for n in h2_names(text)}
-        unresolved = [
-            p for p in ref_picks
-            if (frag := split_bank_pick(p)[2]) is not None
-            and frag.strip().lower() not in names
-        ]
-        if unresolved and names:
-            # Once per session per file+anchor set: the drift persists until
-            # someone regenerates the catalog, and this hook runs on every
-            # prompt, so an un-deduped warning is one WARNING per prompt for
-            # as long as the rename stands.
+        # Settle every fragment against the file's real headings before
+        # deciding what to emit, so a dropped one is named even when a bare
+        # pick of the same file would have covered it.
+        sections: list[tuple[str, str]] = []   # (pick, real heading)
+        unresolved: list[str] = []
+        if has_sections:
+            for p in ref_picks:
+                frag = split_bank_pick(p)[2]
+                if frag is None:
+                    continue
+                heading = resolve_section_name(text, frag)
+                if heading is None:
+                    unresolved.append(p)
+                    continue
+                if heading.strip().lower() != frag.strip().lower():
+                    logger.info(
+                        "ANCHOR_NEAREST %s -> %s#%s",
+                        _loggable(p), whole_ref, _loggable(heading),
+                    )
+                sections.append((p, heading))
+        if unresolved:
+            report.dropped_anchors.extend(unresolved)
             joined = ", ".join(_loggable(p) for p in unresolved)
             _warn_once(
                 f"anchor::{whole_ref}::{joined}",
                 f"Memory anchor(s) {joined} did not resolve in {whole_ref} — "
-                f"loading the whole file once. Run "
+                f"no heading close enough, so the pick(s) were dropped. Run "
                 f"/multiplai-context:refresh-catalogs --only memory if a "
                 f"section was renamed.",
-            )
-        elif unresolved:
-            logger.debug(
-                "Memory file %s has no H2 sections; %d section pick(s) load "
-                "the whole file", whole_ref, len(unresolved),
+                sig=_file_sig(path),
             )
 
-        if whole is not None or unresolved:
-            if whole is not None and len(ref_picks) > 1:
+        size = len(text.encode("utf-8"))
+        large = 0 < whole_file_max_bytes < size
+
+        if bare and not large:
+            if len(ref_picks) > 1:
                 logger.debug(
-                    "Memory pick %s covers %d section pick(s) of the same file — "
-                    "loading the file once", _loggable(whole), len(ref_picks) - 1,
+                    "Memory pick %s covers %d other pick(s) of the same file — "
+                    "loading the file once", _loggable(bare[0]), len(ref_picks) - 1,
                 )
             # The whole file answers every pick of it, so emit it once — under
             # the canonical **bare** ref, bank prefix intact. Keying it on a
             # fragment pick would make `_section_attribution` log a section
-            # list for a whole-file load, and an empty list there is precisely
-            # how a whole-file load is recorded. That mis-attribution is what
-            # let the duplicate hide: the log read as "two sections", not "the
-            # file, twice".
+            # list for a whole-file load.
             result[whole_ref] = text
             continue
 
-        # Only now is extraction worth doing: every anchor resolved, so no
-        # slice built here is about to be discarded for the whole file.
+        if bare and not sections and _is_shared_ref(whole_ref, banks):
+            # A pointer is an instruction to Read a path. Inside the shared
+            # bank's untrusted fence the model must ignore it; outside, it
+            # would pull teammate-written text in unfenced. Neither is right.
+            logger.info(
+                "WHOLE_FILE_DROPPED %s bytes=%d limit=%d (shared bank: no pointer)",
+                whole_ref, size, whole_file_max_bytes,
+            )
+            continue
+
+        if bare and not sections:
+            reason = (
+                f"not injected whole: {size:,} bytes is over the "
+                f"{whole_file_max_bytes:,}-byte limit for whole-file loads"
+            )
+            result[whole_ref] = _memory_pointer(path, text, reason)
+            report.pointers.append(whole_ref)
+            logger.info(
+                "WHOLE_FILE_POINTER %s bytes=%d limit=%d",
+                whole_ref, size, whole_file_max_bytes,
+            )
+            continue
+
+        if not sections:
+            continue
+
         head = section_preamble(text)
-        for index, pick in enumerate(ref_picks):
-            # load_picked_content returns (filename, content_or_section)
-            _, content = load_picked_content(_strip_bank(pick), text)
-            if head and index == 0 and not content.startswith(head):
-                content = f"{head}\n{content}"
-            result[pick] = content
-    return result
+        keys_by_heading: dict[str, str] = {}
+        for pick, heading in sections:
+            norm = heading.strip().lower()
+            key = keys_by_heading.get(norm)
+            if key is None:
+                key = f"{whole_ref}#{heading}"
+                keys_by_heading[norm] = key
+                _, filename, _ = split_bank_pick(pick)
+                _, content = load_picked_content(f"{filename}#{heading}", text)
+                if head and len(keys_by_heading) == 1 and not content.startswith(head):
+                    content = f"{head}\n{content}"
+                result[key] = content
+            if key != pick:
+                report.aliases[pick] = key
+        if bare:
+            # A large file's bare pick is answered by the sections the router
+            # also named; stamp it so the next turn does not re-pick it.
+            logger.debug(
+                "Bare pick of large file %s (%d bytes) answered by %d section "
+                "pick(s)", whole_ref, size, len(keys_by_heading),
+            )
+            first_key = next(iter(keys_by_heading.values()))
+            for p in bare:
+                report.aliases[p] = first_key
+    return _in_pick_order(result, picks, report.aliases)
+
+
+def _in_pick_order(
+    result: dict[str, str], picks: list[str], aliases: dict[str, str]
+) -> dict[str, str]:
+    """*result* reordered by the rank of the first pick each entry answers.
+
+    Grouping by file emits a file's entries together, at the file's first
+    pick, so ``[a#X, b, a#Y]`` came out ``a#X, a#Y, b`` and the budget, which
+    drops from the end, could drop ``b`` while keeping lower-ranked ``a#Y``.
+    Entries of one file keep their relative order, so the preamble stays on
+    that file's highest-ranked slice.
+    """
+    rank: dict[str, int] = {}
+    for index, pick in enumerate(picks):
+        for key in (pick, aliases.get(pick), _whole_file_ref(pick)):
+            if key in result and key not in rank:
+                rank[key] = index
+                break
+    last = len(picks)
+    return dict(sorted(result.items(), key=lambda kv: rank.get(kv[0], last)))
+
+
+def _is_shared_ref(ref: str, banks) -> bool:
+    """Does *ref* name a file in a shared (other people's) bank?"""
+    if not banks:
+        return False
+    resolved = resolve_bank_ref(ref, banks)
+    return resolved is not None and resolved[0].is_shared
+
+
+def _apply_memory_budget(
+    memory_dir: Path,
+    memory_content: dict[str, str],
+    budget_bytes: int,
+    banks=None,
+    pointers: list[str] | None = None,
+) -> tuple[dict[str, str], list[str]]:
+    """Hold *memory_content* to *budget_bytes*, dropping the lowest rank first.
+
+    *memory_content* is in rank order: the router's pick order, which
+    ``_load_memory_content`` preserves per file. Entries are kept from the top
+    while the running total of UTF-8 bytes fits; the first entry that does not
+    fit is dropped **with everything ranked below it**, even a small entry
+    that would still fit, because a lower-ranked pick must never displace a
+    higher-ranked one.
+
+    The top entry alone over the budget is not dropped: it becomes a pointer
+    to its file (``_memory_pointer``), added to *pointers*, so the best match
+    still reaches the model as a path to Read. ``budget_bytes <= 0`` disables
+    the budget. Returns ``(kept, dropped_keys)``.
+    """
+    if budget_bytes <= 0 or not memory_content:
+        return memory_content, []
+    kept: dict[str, str] = {}
+    dropped: list[str] = []
+    total = 0
+    overflowed = False
+    for key, content in memory_content.items():
+        if overflowed:
+            dropped.append(key)
+            continue
+        size = len(content.encode("utf-8"))
+        if total + size <= budget_bytes:
+            kept[key] = content
+            total += size
+            continue
+        if not kept:
+            pointer = _budget_pointer(memory_dir, key, size, budget_bytes, banks)
+            if pointer is not None:
+                kept[key] = pointer
+                total += len(pointer.encode("utf-8"))
+                if pointers is not None and key not in pointers:
+                    pointers.append(key)
+            else:
+                # Nothing to point at (the file vanished, or it is a shared
+                # bank's): drop it alone; it displaced nothing, so the entries
+                # below it still compete.
+                dropped.append(key)
+            continue
+        overflowed = True
+        dropped.append(key)
+    if dropped:
+        logger.info(
+            "MEMORY_BUDGET budget=%d kept_bytes=%d kept=%s dropped=%s",
+            budget_bytes, total,
+            json.dumps([_loggable(k) for k in kept]),
+            json.dumps([_loggable(k) for k in dropped]),
+        )
+    return kept, dropped
+
+
+def _budget_pointer(
+    memory_dir: Path, key: str, size: int, budget_bytes: int, banks
+) -> str | None:
+    """A pointer for the top entry that alone exceeds the budget, or None.
+
+    None for a shared-bank file: see the ``WHOLE_FILE_DROPPED`` branch of
+    ``_load_memory_content`` for why a pointer cannot help there.
+    """
+    if _is_shared_ref(key, banks):
+        return None
+    path = _memory_path_for(key, memory_dir, banks)
+    if path is None:
+        return None
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    _, _, section = split_bank_pick(key)
+    reason = (
+        f"not injected: {size:,} bytes is over the {budget_bytes:,}-byte "
+        f"memory budget for one prompt"
+    )
+    return _memory_pointer(path, text, reason, section=section)
 
 
 def _whole_file_ref(pick: str) -> str:
@@ -565,7 +885,11 @@ def _loggable(ref: str) -> str:
     return flat if len(flat) <= _LOGGABLE_REF_MAX else flat[:_LOGGABLE_REF_MAX] + "…"
 
 
-def _cooldown_keys(picks: list[str], content: dict[str, str]) -> list[str]:
+def _cooldown_keys(
+    picks: list[str],
+    content: dict[str, str],
+    aliases: dict[str, str] | None = None,
+) -> list[str]:
     """The cooldown keys for what *content* actually injected.
 
     ``_filter_cooldown`` looks a **raw pick** up in the cooldown map, so the
@@ -580,13 +904,23 @@ def _cooldown_keys(picks: list[str], content: dict[str, str]) -> list[str]:
     Content keys are stamped as well as picks, because the recency-net
     fallback (``_read_top_memory_files``) produces content for no pick at all.
 
-    A pick that resolved to nothing — missing file, unsubscribed bank — has no
-    key and is deliberately left unstamped: it was never in the conversation,
-    so it must stay eligible next turn.
+    *aliases* (``MemoryLoadReport.aliases``) maps a pick to the key that
+    answered it when that key is neither the pick nor its bare file: a near
+    anchor resolved to the real heading, or a large file's bare pick answered
+    by its sections.
+
+    A pick that resolved to nothing — missing file, unsubscribed bank, an
+    anchor dropped for matching no heading — has no key and is deliberately
+    left unstamped: it was never in the conversation, so it must stay
+    eligible next turn.
     """
     keys = set(content)
+    aliases = aliases or {}
     return sorted(
-        keys | {p for p in picks if p in keys or _whole_file_ref(p) in keys}
+        keys | {
+            p for p in picks
+            if p in keys or _whole_file_ref(p) in keys or aliases.get(p) in keys
+        }
     )
 
 
@@ -855,12 +1189,13 @@ def _stamp_memory_dates(
 
 def _section_attribution(
     memory_content: dict[str, str],
+    pointers: Iterable[str] = (),
 ) -> tuple[dict[str, list[str]], dict[str, int]]:
     """Attribute injected memory to ``(sections_by_file, bytes_by_file)``.
 
-    ``memory_content`` is keyed by the *raw pick*, so ``"dev.md"`` and
-    ``"dev.md#Testing"`` are different keys for the same file. Both
-    returned maps are keyed by the bare filename instead:
+    ``memory_content`` is keyed per entry (``"dev.md"`` for a whole file,
+    ``"dev.md#Testing"`` for a section), so one file can have several keys.
+    Both returned maps are keyed by the bare filename instead:
 
     * ``sections_by_file`` — the H2 names loaded from that file, in pick
       order. **An empty list means the whole file was injected**, which
@@ -872,10 +1207,17 @@ def _section_attribution(
 
     Together these are what makes a section pick measurable: ``files``
     alone cannot say whether ``multiplai.md`` cost 181 KB or 6 KB.
+
+    Keys in *pointers* are skipped: a pointer injects a path and a section
+    list, not the file, and recording it as ``[]`` would count it as a
+    whole-file load. The inject event lists them separately.
     """
     sections: dict[str, list[str]] = {}
     sizes: dict[str, int] = {}
+    skip = set(pointers)
     for pick, content in memory_content.items():
+        if pick in skip:
+            continue
         base, section = parse_section_ref(pick)
         bucket = sections.setdefault(base, [])
         if section and section not in bucket:
@@ -1520,9 +1862,17 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
     # Load content per corpus. Timed as one stage: this is where the picked
     # files are actually read off disk, so it is the stage that grows with the
     # size of what was picked rather than with the size of the catalog.
+    memory_report = MemoryLoadReport()
+    budget_dropped: list[str] = []
     with run.stage("content"):
         memory_content = _load_memory_content(
-            memory_dir, picks_by_corpus.get("memory") or [], banks
+            memory_dir, picks_by_corpus.get("memory") or [], banks,
+            whole_file_max_bytes=cfg.whole_file_max_bytes,
+            report=memory_report,
+        )
+        memory_content, budget_dropped = _apply_memory_budget(
+            memory_dir, memory_content, cfg.memory_budget_bytes, banks,
+            pointers=memory_report.pointers,
         )
         skills_content = _build_skills_recommendations(
             cfg, picks_by_corpus.get("skills") or [], corpora.get("skills") or []
@@ -1548,7 +1898,18 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
     # recency dump either.
     router_abstained = router_ran and not router_picked_memory
     mem_on_cooldown = bool(cooldown_suppressed.get("memory")) and not memory_content
-    if not memory_content and not router_abstained and not mem_on_cooldown:
+    # Picks dropped for naming no real heading are a decision, not a failure:
+    # the router did rank, and answering it with recency-ranked files would
+    # inject exactly the unrelated bulk the drop exists to avoid.
+    mem_anchor_dropped = (
+        bool(memory_report.dropped_anchors)
+        and not memory_report.missing
+        and not memory_content
+    )
+    if (
+        not memory_content and not router_abstained and not mem_on_cooldown
+        and not mem_anchor_dropped
+    ):
         # Don't re-inject files still within the cooldown window, and cap the
         # payload — the recency fallback fires every prompt when no catalog
         # exists yet, so an unbounded dump would flood each turn.
@@ -1557,7 +1918,11 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
             name for name, t in _mem_recent.items()
             if isinstance(t, int) and (turn_index - t) <= cooldown
         }
-        memory_content = _read_top_memory_files(memory_dir, exclude=on_cooldown)
+        memory_content = _read_top_memory_files(
+            memory_dir, exclude=on_cooldown,
+            max_bytes=cfg.memory_budget_bytes or None,
+            whole_file_max_bytes=cfg.whole_file_max_bytes,
+        )
         if memory_content:
             used_fallback = True
             logger.info("FALLBACK memory=%s", json.dumps(sorted(memory_content.keys())))
@@ -1595,6 +1960,12 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
                     f"all {_n} matched file(s) injected within the last "
                     f"{cooldown} turns — on cooldown, nothing injected"
                 )
+        elif mem_anchor_dropped:
+            _outcome = "anchor_miss"
+            _skip_msg = (
+                f"{len(memory_report.dropped_anchors)} section pick(s) matched "
+                f"no heading — dropped, nothing injected"
+            )
         elif router_abstained:
             _dm = (router_diag or {}).get("memory") or {}
             _ds = _dm.get("scored") or []
@@ -1667,7 +2038,10 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
     # whose catalog carries section_anchors. Added alongside `files` and
     # `files_by_corpus` rather than replacing them: the fleet and
     # log-doctor tooling reads those two by name.
-    sections_by_file, bytes_by_file = _section_attribution(memory_content)
+    sections_by_file, bytes_by_file = _section_attribution(
+        memory_content, pointers=memory_report.pointers
+    )
+    pointers = [p for p in memory_report.pointers if p in memory_content]
     file_groups = [
         f"{corpus}: {', '.join(names)}"
         for corpus, names in files_by_corpus.items()
@@ -1696,6 +2070,11 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
         files_by_corpus=files_by_corpus,
         sections_by_file=sections_by_file,
         bytes_by_file=bytes_by_file,
+        # Memory files injected as a pointer (path + section list) rather than
+        # content, and picks dropped to hold the memory budget. Kept out of
+        # sections_by_file, where an empty list means "the whole file".
+        pointers=pointers,
+        budget_dropped=budget_dropped,
         # Which turn this injection belongs to, so utilisation telemetry can
         # tell one injection from a re-injection later in the same session.
         # 0 whenever the cooldown is off — that path never advances the
@@ -1708,7 +2087,8 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
         _persist_turn_state(
             session_state, turn_index, recent,
             {"memory": _cooldown_keys(
-                picks_by_corpus.get("memory") or [], memory_content),
+                picks_by_corpus.get("memory") or [], memory_content,
+                memory_report.aliases),
              "skills": skills_content,
              "resources": resources_content},
             cooldown,

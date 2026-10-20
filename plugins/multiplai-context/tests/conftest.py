@@ -356,19 +356,45 @@ def _isolate_env(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", _isolated_config_dir(tmp_path_factory))
 
 
-@pytest.fixture(autouse=True)
-def _reset_warn_once():
-    """Empty ``context_manager``'s once-per-session warning set per test.
+_REAL_WARN_STATE_PATH: list = []
 
-    The set is module-global by design — a warning must not repeat on every
-    prompt of a session — which makes it leak across tests: a second test
-    asserting the same warning sees it demoted to DEBUG purely by collection
-    order. Skipped silently when the module has not been imported, so this
-    costs nothing in suites that never touch it.
+
+def _context_manager():
+    """Import ``context_manager`` (once) and remember its real state-path helper.
+
+    Imported eagerly rather than only when some test already has: most tests
+    import it inside their own body, after this fixture ran, so a lazy check
+    left the first warning test of a run writing the developer's real
+    ``warn_once.json``.
     """
-    module = sys.modules.get("context_manager")
-    if module is not None:
-        module._catalog_warnings_emitted.clear()
+    import context_manager
+
+    if not _REAL_WARN_STATE_PATH:
+        _REAL_WARN_STATE_PATH.append(context_manager._warn_state_path)
+    return context_manager
+
+
+def real_warn_state_path():
+    """The unpatched ``context_manager._warn_state_path``, for tests of it."""
+    _context_manager()
+    return _REAL_WARN_STATE_PATH[0]
+
+
+@pytest.fixture(autouse=True)
+def _reset_warn_once(tmp_path_factory, monkeypatch):
+    """Give each test a fresh ``context_manager`` warn-once state.
+
+    Two layers, both of which would otherwise leak across tests so that a
+    second test asserting the same warning sees it demoted to DEBUG purely by
+    collection order: the module-global set, and the cross-process state
+    file, which is pointed at a per-test temp path (left alone, it resolves
+    through the data dir, which in a unit test may be the shared import-time
+    workspace or the developer's real one).
+    """
+    module = _context_manager()
+    module._catalog_warnings_emitted.clear()
+    state = tmp_path_factory.mktemp("warn-once") / "warn_once.json"
+    monkeypatch.setattr(module, "_warn_state_path", lambda: state)
     yield
     module = sys.modules.get("context_manager")
     if module is not None:

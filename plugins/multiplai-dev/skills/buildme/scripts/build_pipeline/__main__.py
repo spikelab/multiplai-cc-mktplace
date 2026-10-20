@@ -184,6 +184,9 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--no-epic-split", action="store_true",
                        help="Build the input as one change: skip the EPIC_SPLIT decision "
                             "(an epic's child builds pass this)")
+    build.add_argument("--epic-child", action="store_true",
+                       help="This build is an epic's child (the coordinator passes it): "
+                            "no spec-extract, and the PR targets the default branch")
     build.add_argument("--base-ref", default="",
                        help="The commit a new worktree branches from (default: the source "
                             "checkout's HEAD); a build that re-binds to its worktree ignores it")
@@ -262,6 +265,10 @@ def build_parser() -> argparse.ArgumentParser:
     cget.add_argument("key", help="Dotted key, e.g. intake.provider or interview")
     cget.add_argument("--project-dir", default=".", help="Project directory")
 
+    for command in (build, spec, tdd, findings):
+        command.add_argument("--accept-unknown-spend", action="store_true",
+                             help="Resume despite prior interrupted calls with unknown usage; "
+                                  "totals remain lower bounds and the cap covers known spend only")
     return parser
 
 

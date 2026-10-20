@@ -36,6 +36,15 @@ DEFAULT_KEEP_RATIO = 0.30  # token_overlap relative-cutoff: drop memory
                            # (fewer, more-relevant files; less cap saturation).
                            # See memory_router.DEFAULT_KEEP_RATIO for the
                            # production-replay calibration. Clamped to (0, 1].
+DEFAULT_MEMORY_BUDGET_BYTES = 40_000  # Most memory content one prompt may
+                                      # inject, in UTF-8 bytes. Picks past it
+                                      # are dropped lowest-ranked first. Same
+                                      # figure the recency fallback always
+                                      # capped at. 0 disables the budget.
+DEFAULT_WHOLE_FILE_MAX_BYTES = 20_000  # Memory files larger than this load
+                                       # only by section; a bare pick gets a
+                                       # pointer (path + section list). 0
+                                       # disables the limit.
 
 # A resources corpus is retrieved through qmd and nothing else
 # (see scripts/qmd_retrieval.py). The catalog+router path that memory,
@@ -84,6 +93,8 @@ class CatalogConfig:
     catalog_concurrency: int = DEFAULT_CATALOG_CONCURRENCY
     recommend_cooldown_turns: int = DEFAULT_RECOMMEND_COOLDOWN_TURNS
     keep_ratio: float = DEFAULT_KEEP_RATIO
+    memory_budget_bytes: int = DEFAULT_MEMORY_BUDGET_BYTES
+    whole_file_max_bytes: int = DEFAULT_WHOLE_FILE_MAX_BYTES
     # When on, session_start fires a detached, flock-guarded cost collector
     # that prices the session-transcript corpus into the monthly ledger.
     # Local-only and cheap in steady state, but opt-in like the other flags.
@@ -113,6 +124,12 @@ class CatalogConfig:
 
         if self.recommend_cooldown_turns < 0:
             self.recommend_cooldown_turns = DEFAULT_RECOMMEND_COOLDOWN_TURNS
+
+        if self.memory_budget_bytes < 0:
+            self.memory_budget_bytes = DEFAULT_MEMORY_BUDGET_BYTES
+
+        if self.whole_file_max_bytes < 0:
+            self.whole_file_max_bytes = DEFAULT_WHOLE_FILE_MAX_BYTES
 
         # keep_ratio is a fraction of the top score; a value <= 0 would
         # admit everything (defeating the cutoff) and > 1 would keep only
@@ -159,6 +176,7 @@ _KNOWN_OPTIONS = (
     "qmd_candidate_limit", "qmd_min_score", "catalog_concurrency",
     "recommend_cooldown_turns", "keep_ratio", "enable_costs",
     "memory_conflict_preamble", "enable_dev_references", "memory_write_mode",
+    "memory_budget_bytes", "whole_file_max_bytes",
 )
 
 
@@ -217,6 +235,12 @@ def load_catalog_config() -> CatalogConfig:
         "recommend_cooldown_turns", DEFAULT_RECOMMEND_COOLDOWN_TURNS
     )
     keep_ratio = option_float("keep_ratio", DEFAULT_KEEP_RATIO)
+    memory_budget_bytes = option_int(
+        "memory_budget_bytes", DEFAULT_MEMORY_BUDGET_BYTES
+    )
+    whole_file_max_bytes = option_int(
+        "whole_file_max_bytes", DEFAULT_WHOLE_FILE_MAX_BYTES
+    )
     enable_costs = option_bool("enable_costs", False)
     memory_conflict_preamble = option_bool("memory_conflict_preamble", True)
     enable_dev_references = option_bool("enable_dev_references", True)
@@ -243,6 +267,8 @@ def load_catalog_config() -> CatalogConfig:
         catalog_concurrency=catalog_concurrency,
         recommend_cooldown_turns=recommend_cooldown_turns,
         keep_ratio=keep_ratio,
+        memory_budget_bytes=memory_budget_bytes,
+        whole_file_max_bytes=whole_file_max_bytes,
         enable_costs=enable_costs,
         memory_conflict_preamble=memory_conflict_preamble,
         enable_dev_references=enable_dev_references,

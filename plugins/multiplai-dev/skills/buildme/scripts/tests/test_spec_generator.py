@@ -89,6 +89,10 @@ class TestExtractCapabilities:
 class TestLoadOrCreateState:
     def test_creates_new_state(self, tmp_path):
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.state_file_path.return_value = tmp_path / "changes" / "test" / ".build-state.json"
         config.change_name = "test"
         config.mode = "scratch"
@@ -113,6 +117,10 @@ class TestLoadOrCreateState:
         state_path.write_text(existing.model_dump_json(indent=2))
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.state_file_path.return_value = state_path
         config.change_name = "test"
         config.mode = "scratch"
@@ -204,6 +212,10 @@ class TestResumeSkipsExisting:
         (change_dir / "proposal.md").write_text("# Proposal\n## Capabilities\n### New\n- `cap-a`: desc\n")
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
@@ -231,9 +243,10 @@ class TestResumeSkipsExisting:
     async def test_skips_completed_artifacts(self, change_setup):
         cm, change_dir, config, state = change_setup
 
-        mock_content = "# Generated Content\nSome content here."
+        mock_content = "## ADDED Requirements\n### Requirement: Works\nRequired.\n#### Scenario: Works\n- **WHEN** called\n- **THEN** succeeds\n## 1. Implement behavior\nImplement the capability."
 
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+        with patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", AsyncMock(return_value=[])), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.sdk.llm_call", new_callable=AsyncMock) as mock_llm, \
              patch("build_pipeline.spec_generator.generate_rubric", new_callable=AsyncMock) as mock_rubric:
             mock_gen.return_value = mock_content
@@ -264,7 +277,7 @@ class TestTasksAuditResumeDurability:
         change_dir = cm.create_change("test-feature")
         # Every artifact already on disk → DAG loop sees all DONE and never
         # re-enters _generate_single_artifact.
-        (change_dir / "proposal.md").write_text("# Proposal")
+        (change_dir / "proposal.md").write_text("# Proposal\n## Capabilities\n- `cap-a`\n")
         (change_dir / "use-cases.md").write_text("## Personas\n\n## Use cases\n")
         (change_dir / "design.md").write_text("# Design")
         (change_dir / "unknowns.md").write_text("# Unknowns\n\nNo dependencies new to this project.")
@@ -272,9 +285,13 @@ class TestTasksAuditResumeDurability:
         (change_dir / "rubric.md").write_text("# Rubric")
         req_dir = change_dir / "requirements"
         req_dir.mkdir(exist_ok=True)
-        (req_dir / "cap-a.md").write_text("# Req")
+        (req_dir / "cap-a.md").write_text("### Requirement: Works\nRequired.\n#### Scenario: Works\n- **WHEN** called\n- **THEN** succeeds\n")
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
@@ -300,6 +317,10 @@ class TestTasksAuditResumeDurability:
                 explainers_done=True,
             ),
         )
+        from build_pipeline.spec_generator import reconcile_plan
+        reconcile_plan(config, state)
+        state.spec_gen.record_step("tasks_audit", "passed" if audit_done else "blocked")
+        state.spec_gen.record_step("explainers", "passed")
         return cm, change_dir, config, state
 
     @pytest.mark.asyncio
@@ -314,12 +335,12 @@ class TestTasksAuditResumeDurability:
             await _generate_all_artifacts(cm, change_dir, config, state)
 
         assert mock_audit.await_count == 1
-        assert state.spec_gen.tasks_audit_done is True
+        assert state.spec_gen.step_passed("tasks_audit") is True
         # Completion is checkpointed so the NEXT resume skips it.
         saved = BuildState.model_validate_json(
             (change_dir / ".build-state.json").read_text()
         )
-        assert saved.spec_gen.tasks_audit_done is True
+        assert saved.spec_gen.step_passed("tasks_audit") is True
 
     @pytest.mark.asyncio
     async def test_resume_skips_audit_when_recorded_complete(self, tmp_path):
@@ -338,9 +359,9 @@ class TestTasksAuditResumeDurability:
         False → idempotent re-audit on resume, never a silent skip."""
         cm, change_dir, config, state = self._all_done_setup(tmp_path, audit_done=False)
         raw = state.model_dump()
-        del raw["spec_gen"]["tasks_audit_done"]
+        raw["spec_gen"].pop("tasks_audit_done", None)
         old_state = BuildState.model_validate(raw)
-        assert old_state.spec_gen.tasks_audit_done is False
+        assert old_state.spec_gen.step_passed("tasks_audit") is False
 
     @pytest.mark.asyncio
     async def test_fresh_generation_records_audit_done(self, tmp_path):
@@ -351,10 +372,14 @@ class TestTasksAuditResumeDurability:
         cm = ChangeManager(specs_dir)
         cm.init_specs()
         change_dir = cm.create_change("test-feature")
-        (change_dir / "proposal.md").write_text("# Proposal")
+        (change_dir / "proposal.md").write_text("# Proposal\n## Capabilities\n- `cap-a`\n")
         (change_dir / "design.md").write_text("# Design")
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
@@ -380,7 +405,7 @@ class TestTasksAuditResumeDurability:
             mock_audit.return_value = []
             await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
-        assert state.spec_gen.tasks_audit_done is True
+        assert state.spec_gen.step_passed("tasks_audit") is True
 
 
 # --- Tasks shape audit (B4: vertical slices) ---
@@ -404,10 +429,14 @@ class TestTasksShapeAudit:
         cm = ChangeManager(specs_dir)
         cm.init_specs()
         change_dir = cm.create_change("test-feature")
-        (change_dir / "proposal.md").write_text("# Proposal")
+        (change_dir / "proposal.md").write_text("# Proposal\n## Capabilities\n- `cap-a`\n")
         (change_dir / "design.md").write_text("# Design")
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
@@ -432,16 +461,21 @@ class TestTasksShapeAudit:
     async def test_regenerates_tasks_once_when_audit_reports_layering(self, tasks_setup):
         cm, change_dir, config, state = tasks_setup
 
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements/cap-a.md").write_text(
+            "### Requirement: Slice\n#### Scenario: Works\nWHEN used\nTHEN returns a result\n")
+        config.pipeline_branch = None
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
             mock_gen.side_effect = ["## 1. Schema layer", "## 1. Vertical slice A"]
-            mock_audit.return_value = [_LAYERING_FINDING]
+            mock_audit.side_effect = [[_LAYERING_FINDING], []]
 
             await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
-        # Exactly one regeneration pass: two generate calls, one audit call
+        # Exactly one repair followed by a required recheck
         assert mock_gen.call_count == 2
-        assert mock_audit.await_count == 1
+        assert mock_audit.await_count == 2
 
         # The regeneration prompt carries the audit findings
         regen_kwargs = mock_gen.call_args_list[1].kwargs
@@ -467,7 +501,7 @@ class TestTasksShapeAudit:
         assert (change_dir / "tasks.md").read_text() == "## 1. Vertical slice A"
 
     @pytest.mark.asyncio
-    async def test_audit_failure_is_non_fatal(self, tasks_setup):
+    async def test_audit_failure_blocks_completion(self, tasks_setup):
         cm, change_dir, config, state = tasks_setup
 
         with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
@@ -475,15 +509,17 @@ class TestTasksShapeAudit:
             mock_gen.return_value = "## 1. Vertical slice A"
             mock_audit.side_effect = RuntimeError("LLM down")
 
-            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+            with pytest.raises(RuntimeError, match="LLM down"):
+                await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
         # First-pass tasks.md stands; no regeneration attempted
         assert mock_gen.call_count == 1
         assert (change_dir / "tasks.md").read_text() == "## 1. Vertical slice A"
-        assert "tasks" in state.spec_gen.completed_artifacts
+        assert "tasks" not in state.spec_gen.completed_artifacts
+        assert not state.spec_gen.step_passed("tasks_audit")
 
     @pytest.mark.asyncio
-    async def test_regeneration_failure_is_non_fatal(self, tasks_setup):
+    async def test_regeneration_failure_blocks_completion(self, tasks_setup):
         cm, change_dir, config, state = tasks_setup
 
         with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
@@ -491,13 +527,15 @@ class TestTasksShapeAudit:
             mock_gen.side_effect = ["## 1. Schema layer", RuntimeError("LLM down")]
             mock_audit.return_value = [_LAYERING_FINDING]
 
-            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+            with pytest.raises(RuntimeError, match="LLM down"):
+                await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
-        # Regeneration was attempted once; its failure is swallowed
+        # The failed repair remains incomplete
         assert mock_gen.call_count == 2
-        # First-pass tasks.md stands and the artifact is still marked complete
+        # The first draft is preserved for recovery, without completion evidence
         assert (change_dir / "tasks.md").read_text() == "## 1. Schema layer"
-        assert "tasks" in state.spec_gen.completed_artifacts
+        assert "tasks" not in state.spec_gen.completed_artifacts
+        assert not state.spec_gen.step_passed("tasks_audit")
 
     @pytest.mark.asyncio
     async def test_non_tasks_artifacts_are_not_audited(self, tasks_setup):
@@ -536,17 +574,21 @@ class TestScanPlaceholders:
         assert scan_placeholders("call TODOS_LIST and tbdx_helper()\n") == []
 
     @pytest.mark.asyncio
-    async def test_placeholder_scan_forces_regeneration_without_llm_audit(self, tmp_path):
-        """The scan runs even when the LLM audit errors out."""
+    async def test_placeholder_scan_forces_regeneration_with_clean_model_audit(self, tmp_path):
+        """A clean model audit cannot overrule deterministic placeholder findings."""
         specs_dir = tmp_path / "specs"
         specs_dir.mkdir()
         cm = ChangeManager(specs_dir)
         cm.init_specs()
         change_dir = cm.create_change("ph")
-        (change_dir / "proposal.md").write_text("# Proposal")
+        (change_dir / "proposal.md").write_text("# Proposal\n## Capabilities\n- `cap-a`\n")
         (change_dir / "design.md").write_text("# Design")
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "ph"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
@@ -563,10 +605,15 @@ class TestScanPlaceholders:
             spec_gen=SpecGenState(),
         )
 
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements/cap-a.md").write_text(
+            "### Requirement: Slice\n#### Scenario: Works\nWHEN used\nTHEN returns a result\n")
+        config.pipeline_branch = None
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
             mock_gen.side_effect = ["## 1. Block\nError handling: TBD\n", "## 1. Block\nConcrete.\n"]
-            mock_audit.side_effect = RuntimeError("LLM down")
+            mock_audit.return_value = []
 
             await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
@@ -612,12 +659,16 @@ class TestDesignAuditFeedback:
         cm = ChangeManager(specs_dir)
         cm.init_specs()
         change_dir = cm.create_change("test-feature")
-        (change_dir / "proposal.md").write_text("# Proposal")
+        (change_dir / "proposal.md").write_text("# Proposal\n## Capabilities\n- `cap-a`\n")
         (change_dir / "design.md").write_text("# Design v1")
         (change_dir / "unknowns.md").write_text("# Unknowns\n\nNo dependencies new to this project.")
         (change_dir / "tasks.md").write_text("## 1. Block v1")
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
@@ -634,7 +685,12 @@ class TestDesignAuditFeedback:
             phase=BuildPhase.DESIGN_AUDIT,
             spec_gen=SpecGenState(),
         )
-        return change_dir, config, state
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements" / "cap-a.md").write_text("### Requirement: A\n#### Scenario: A\nWHEN invoked\nTHEN returns A\n")
+        (change_dir / "use-cases.md").write_text("# Use cases\nInvoke A")
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric v2")), \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", AsyncMock(return_value=[])):
+            yield change_dir, config, state
 
     @pytest.mark.asyncio
     async def test_critical_gaps_regenerate_design_and_tasks_once(self, audit_setup):
@@ -669,14 +725,14 @@ class TestDesignAuditFeedback:
         assert "design audit" in mock_commit.call_args.args[1]
 
         # The first-pass gaps are returned for the caller's log.
-        assert gaps == [_CRITICAL_GAP, _MINOR_GAP]
+        assert gaps == []  # the accepted revision has no blocking gaps
 
         # The pass is recorded AND checkpointed, so a resume never repeats it.
-        assert state.spec_gen.design_audit_regen_done is True
+        assert state.spec_gen.repair_attempts("design_audit") == 1
         saved = BuildState.model_validate_json(
             (change_dir / ".build-state.json").read_text()
         )
-        assert saved.spec_gen.design_audit_regen_done is True
+        assert saved.spec_gen.repair_attempts("design_audit") == 1
 
     @pytest.mark.asyncio
     async def test_major_gaps_also_regenerate(self, audit_setup):
@@ -713,7 +769,7 @@ class TestDesignAuditFeedback:
         assert mock_audit.await_count == 1
         mock_commit.assert_not_called()
         assert (change_dir / "design.md").read_text() == "# Design v1"
-        assert state.spec_gen.design_audit_regen_done is False
+        assert state.spec_gen.repair_attempts("design_audit") == 0
 
     @pytest.mark.asyncio
     async def test_minor_gaps_alone_do_not_regenerate(self, audit_setup):
@@ -737,18 +793,19 @@ class TestDesignAuditFeedback:
         documents already absorbed the critique, so the resume audits and
         reports but never regenerates a second time."""
         change_dir, config, state = audit_setup
-        state.spec_gen.design_audit_regen_done = True
+        state.spec_gen.admit_repair("design_audit")
 
         with patch("build_pipeline.llm_steps.spec_steps.run_design_audit", new_callable=AsyncMock) as mock_audit, \
              patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.git_ops.commit_stage") as mock_commit:
             mock_audit.return_value = [_CRITICAL_GAP]
+            with pytest.raises(RuntimeError):
 
-            gaps = await run_design_audit_stage(
-                change_dir, config, state, config.state_file_path(),
-            )
+                await run_design_audit_stage(
+                    change_dir, config, state, config.state_file_path(),
+                )
 
-        assert gaps == [_CRITICAL_GAP]
+        assert not state.spec_gen.step_passed("design_audit")
         mock_gen.assert_not_awaited()
         assert mock_audit.await_count == 1  # report only, no re-check either
         mock_commit.assert_not_called()
@@ -759,11 +816,11 @@ class TestDesignAuditFeedback:
         """A pre-upgrade checkpoint has no design_audit_regen_done key — it
         must still validate, and default to False (the pass has not run)."""
         _, _, state = audit_setup
-        assert SpecGenState().design_audit_regen_done is False
+        assert SpecGenState().repair_attempts("design_audit") == 0
         raw = state.model_dump()
-        del raw["spec_gen"]["design_audit_regen_done"]
+        raw["spec_gen"].pop("design_audit_regen_done", None)
         old_state = BuildState.model_validate(raw)
-        assert old_state.spec_gen.design_audit_regen_done is False
+        assert old_state.spec_gen.repair_attempts("design_audit") == 0
 
     @pytest.mark.asyncio
     async def test_audit_failure_is_non_fatal(self, audit_setup):
@@ -772,14 +829,15 @@ class TestDesignAuditFeedback:
         with patch("build_pipeline.llm_steps.spec_steps.run_design_audit", new_callable=AsyncMock) as mock_audit, \
              patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen:
             mock_audit.side_effect = RuntimeError("LLM down")
+            with pytest.raises(RuntimeError):
 
-            gaps = await run_design_audit_stage(
-                change_dir, config, state, config.state_file_path(),
-            )
+                await run_design_audit_stage(
+                    change_dir, config, state, config.state_file_path(),
+                )
 
-        assert gaps == []
+        assert not state.spec_gen.step_passed("design_audit")
         mock_gen.assert_not_awaited()
-        assert state.spec_gen.design_audit_regen_done is False
+        assert state.spec_gen.repair_attempts("design_audit") == 0
 
     @pytest.mark.asyncio
     async def test_regeneration_failure_is_non_fatal_and_spends_the_pass(self, audit_setup):
@@ -792,17 +850,18 @@ class TestDesignAuditFeedback:
              patch("build_pipeline.git_ops.commit_stage") as mock_commit:
             mock_audit.side_effect = [[_CRITICAL_GAP], []]
             mock_gen.side_effect = RuntimeError("LLM down")
+            with pytest.raises(RuntimeError):
 
-            await run_design_audit_stage(
-                change_dir, config, state, config.state_file_path(),
-            )
+                await run_design_audit_stage(
+                    change_dir, config, state, config.state_file_path(),
+                )
 
-        assert mock_gen.await_count == 2  # attempted once per artifact
+        assert mock_gen.await_count == 1  # abort staging at the first failed writer
         assert (change_dir / "design.md").read_text() == "# Design v1"
         assert (change_dir / "tasks.md").read_text() == "## 1. Block v1"
         mock_commit.assert_not_called()
         assert mock_audit.await_count == 1  # nothing changed → nothing to re-check
-        assert state.spec_gen.design_audit_regen_done is True
+        assert state.spec_gen.repair_attempts("design_audit") == 1
 
     @pytest.mark.asyncio
     async def test_recheck_reports_remaining_gaps_without_a_second_pass(self, audit_setup):
@@ -814,10 +873,11 @@ class TestDesignAuditFeedback:
             # The critique did NOT land — the re-check still sees a critical gap.
             mock_audit.side_effect = [[_CRITICAL_GAP], [_CRITICAL_GAP]]
             mock_gen.side_effect = ["# Design v2", "## 1. Block v2"]
+            with pytest.raises(RuntimeError):
 
-            await run_design_audit_stage(
-                change_dir, config, state, config.state_file_path(),
-            )
+                await run_design_audit_stage(
+                    change_dir, config, state, config.state_file_path(),
+                )
 
         assert mock_audit.await_count == 2
         assert mock_gen.await_count == 2  # no third generation pass
@@ -833,7 +893,7 @@ class TestDesignAuditFeedback:
         with patch("build_pipeline.llm_steps.spec_steps.run_design_audit", new_callable=AsyncMock) as mock_audit, \
              patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.git_ops.commit_stage"):
-            mock_audit.return_value = [_CRITICAL_GAP]
+            mock_audit.side_effect = [[_CRITICAL_GAP], []]
             mock_gen.side_effect = ["# Design v2", "## 1. Block v2"]
 
             await run_design_audit_stage(
@@ -866,7 +926,7 @@ class TestDesignAuditFeedback:
             await run_design_audit_stage(
                 change_dir, config, state, config.state_file_path(),
             )
-            assert state.spec_gen.design_audit_done is True
+            assert state.spec_gen.step_passed("design_audit") is True
             gaps = await run_design_audit_stage(
                 change_dir, config, state, config.state_file_path(),
             )
@@ -874,7 +934,7 @@ class TestDesignAuditFeedback:
         assert gaps == []
         assert mock_audit.await_count == 1  # not two
         mock_gen.assert_not_awaited()
-        assert state.spec_gen.design_audit_regen_done is False
+        assert state.spec_gen.repair_attempts("design_audit") == 0
 
     @pytest.mark.asyncio
     async def test_completion_survives_a_reload(self, audit_setup):
@@ -889,7 +949,7 @@ class TestDesignAuditFeedback:
             await run_design_audit_stage(change_dir, config, state, state_path)
 
             reloaded = BuildState.load(state_path)
-            assert reloaded.spec_gen.design_audit_done is True
+            assert reloaded.spec_gen.step_passed("design_audit") is True
             await run_design_audit_stage(change_dir, config, reloaded, state_path)
 
         assert mock_audit.await_count == 1
@@ -902,24 +962,25 @@ class TestDesignAuditFeedback:
         with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
                    new_callable=AsyncMock) as mock_audit:
             mock_audit.side_effect = [RuntimeError("LLM down"), []]
+            with pytest.raises(RuntimeError):
 
-            await run_design_audit_stage(
-                change_dir, config, state, config.state_file_path(),
-            )
-            assert state.spec_gen.design_audit_done is False
+                await run_design_audit_stage(
+                    change_dir, config, state, config.state_file_path(),
+                )
+            assert state.spec_gen.step_passed("design_audit") is False
             await run_design_audit_stage(
                 change_dir, config, state, config.state_file_path(),
             )
 
         assert mock_audit.await_count == 2  # the retry really happened
-        assert state.spec_gen.design_audit_done is True
+        assert state.spec_gen.step_passed("design_audit") is True
 
     def test_old_checkpoint_without_done_flag_defaults_to_not_done(self, audit_setup):
         _, _, state = audit_setup
-        assert SpecGenState().design_audit_done is False
+        assert SpecGenState().step_passed("design_audit") is False
         raw = state.model_dump()
-        del raw["spec_gen"]["design_audit_done"]
-        assert BuildState.model_validate(raw).spec_gen.design_audit_done is False
+        raw["spec_gen"].pop("design_audit_done", None)
+        assert BuildState.model_validate(raw).spec_gen.step_passed("design_audit") is False
 
     def test_findings_text_carries_severity_category_and_fix(self):
         text = design_audit_findings_text([_CRITICAL_GAP, _MINOR_GAP])
@@ -943,6 +1004,10 @@ class TestRunSpecGenerator:
         specs_dir = tmp_path / "specs"
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "test"
         config.specs_dir = specs_dir
         config.mode = "scratch"
@@ -964,6 +1029,10 @@ class TestRunSpecGenerator:
         specs_dir = tmp_path / "specs"
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "test"
         config.specs_dir = specs_dir
         config.mode = "scratch"
@@ -1000,6 +1069,10 @@ class TestGenerateUnknowns:
         (change_dir / "design.md").write_text("## Decisions\nNone.\n")
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
@@ -1015,6 +1088,19 @@ class TestGenerateUnknowns:
             phase=BuildPhase.SPEC_GENERATION, spec_gen=SpecGenState(),
         )
         return cm, change_dir, config, state
+
+    @pytest.mark.asyncio
+    async def test_explainer_budget_denial_stops_before_regeneration(self, tmp_path):
+        from build_pipeline.budget import BudgetExceededError
+        from build_pipeline.spec_generator import _generate_unknowns
+        cm, change_dir, config, state = self._setup(tmp_path, impact="Adds `polars` and `duckdb`.")
+        with patch("build_pipeline.llm_steps.spec_steps.run_explainer",
+                   AsyncMock(side_effect=[BudgetExceededError("cap"), "partial"])), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", AsyncMock()) as generate:
+            with pytest.raises(BudgetExceededError):
+                await _generate_unknowns(cm, change_dir, config, state)
+        generate.assert_not_awaited()
+        assert not state.spec_gen.step_passed("explainers")
 
     @pytest.mark.asyncio
     async def test_one_explainer_call_per_detected_dependency(self, tmp_path):
@@ -1040,7 +1126,7 @@ class TestGenerateUnknowns:
         assert mock_gen.await_count == 0
         text = (change_dir / "unknowns.md").read_text()
         assert "## duckdb" in text and "## polars" in text
-        assert state.spec_gen.explainers_done is True
+        assert state.spec_gen.step_passed("explainers") is True
 
     @pytest.mark.asyncio
     async def test_explainer_receives_design_decisions(self, tmp_path):
@@ -1085,7 +1171,7 @@ class TestGenerateUnknowns:
 
         assert mock_explain.await_count == 0
         assert NO_NEW_DEPENDENCIES_LINE in (change_dir / "unknowns.md").read_text()
-        assert state.spec_gen.explainers_done is True
+        assert state.spec_gen.step_passed("explainers") is True
 
     @pytest.mark.asyncio
     async def test_skip_explainers_still_writes_the_artifact(self, tmp_path):
@@ -1136,7 +1222,7 @@ class TestUnknownsGateResumeDurability:
         change_dir = cm.create_change("test-feature")
         project_dir = tmp_path / "proj"
         project_dir.mkdir()
-        (change_dir / "proposal.md").write_text("## Impact\nAdds `polars`.\n")
+        (change_dir / "proposal.md").write_text("## Capabilities\n- `cap-a`\n## Impact\nAdds `polars`.\n")
         (change_dir / "use-cases.md").write_text("## Personas\n\n## Use cases\n")
         (change_dir / "design.md").write_text("## Decisions\nNone.\n")
         (change_dir / "unknowns.md").write_text("# Unknowns\n\n## polars\n")
@@ -1144,9 +1230,13 @@ class TestUnknownsGateResumeDurability:
         (change_dir / "rubric.md").write_text("# Rubric")
         req_dir = change_dir / "requirements"
         req_dir.mkdir(exist_ok=True)
-        (req_dir / "cap-a.md").write_text("# Req")
+        (req_dir / "cap-a.md").write_text("### Requirement: Works\nRequired.\n#### Scenario: Works\n- **WHEN** called\n- **THEN** succeeds\n")
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
@@ -1170,6 +1260,10 @@ class TestUnknownsGateResumeDurability:
                 explainers_done=explainers_done,
             ),
         )
+        from build_pipeline.spec_generator import reconcile_plan
+        reconcile_plan(config, state)
+        state.spec_gen.record_step("tasks_audit", "passed")
+        state.spec_gen.record_step("explainers", "passed" if explainers_done else "blocked")
         return cm, change_dir, config, state
 
     @pytest.mark.asyncio
@@ -1181,11 +1275,11 @@ class TestUnknownsGateResumeDurability:
             await _generate_all_artifacts(cm, change_dir, config, state)
 
         assert mock_audit.await_count == 1
-        assert state.spec_gen.explainers_done is True
+        assert state.spec_gen.step_passed("explainers") is True
         saved = BuildState.model_validate_json(
             (change_dir / ".build-state.json").read_text()
         )
-        assert saved.spec_gen.explainers_done is True
+        assert saved.spec_gen.step_passed("explainers") is True
 
     @pytest.mark.asyncio
     async def test_resume_skips_gate_when_recorded_complete(self, tmp_path):
@@ -1212,7 +1306,7 @@ class TestUnknownsGateResumeDurability:
 
         assert mock_audit.await_count == 0
         mock_detect.assert_not_called()
-        assert state.spec_gen.explainers_done is True
+        assert state.spec_gen.step_passed("explainers") is True
 
     @pytest.mark.asyncio
     async def test_resume_with_skip_explainers_writes_the_marker_when_missing(
@@ -1228,18 +1322,20 @@ class TestUnknownsGateResumeDurability:
         (change_dir / "unknowns.md").unlink()
         with patch(
             "build_pipeline.spec_generator._audit_unknowns", new_callable=AsyncMock
-        ) as mock_audit:
+        ) as mock_audit, patch("build_pipeline.llm_steps.spec_steps.generate_artifact", AsyncMock(return_value="## 1. Slice\nImplement A")), \
+             patch("build_pipeline.spec_generator._audit_tasks_shape", AsyncMock()), \
+             patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")):
             await _generate_all_artifacts(cm, change_dir, config, state)
 
         assert mock_audit.await_count == 0
         assert EXPLAINERS_SKIPPED_LINE in (change_dir / "unknowns.md").read_text()
-        assert state.spec_gen.explainers_done is True
+        assert state.spec_gen.step_passed("explainers") is True
 
     def test_old_checkpoint_without_flag_defaults_to_rerun(self, tmp_path):
         cm, change_dir, config, state = self._setup(tmp_path, explainers_done=False)
         raw = state.model_dump()
-        del raw["spec_gen"]["explainers_done"]
-        assert BuildState.model_validate(raw).spec_gen.explainers_done is False
+        raw["spec_gen"].pop("explainers_done", None)
+        assert BuildState.model_validate(raw).spec_gen.step_passed("explainers") is False
 
 
 class TestUnknownsThreadedIntoTasks:
@@ -1259,9 +1355,13 @@ class TestUnknownsThreadedIntoTasks:
             "- empty frame raises SchemaError\n"
         )
         (change_dir / "requirements").mkdir(exist_ok=True)
-        (change_dir / "requirements" / "cap-a.md").write_text("# Req")
+        (change_dir / "requirements" / "cap-a.md").write_text("### Requirement: Works\nRequired.\n#### Scenario: Works\n- **WHEN** called\n- **THEN** succeeds\n")
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
@@ -1339,6 +1439,10 @@ class TestCodebaseAnalysisReachesTheDesign:
         report.write_text("## Architecture\nMODULE-MAP-MARKER")
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
@@ -1378,9 +1482,17 @@ class TestUseCasesGeneration:
         cm = ChangeManager(specs_dir)
         cm.init_specs()
         change_dir = cm.create_change("test-feature")
-        (change_dir / "proposal.md").write_text("## Why\nPROPOSAL-MARKER\n")
+        (change_dir / "proposal.md").write_text("## Why\nPROPOSAL-MARKER\n## Capabilities\n- `feature`\n")
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements" / "feature.md").write_text("### Requirement: Behavior\n#### Scenario: Works\nWHEN called\nTHEN succeeds\n")
+        (change_dir / "design.md").write_text("# Design\n")
+        (change_dir / "unknowns.md").write_text("# Unknowns\n")
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
@@ -1427,6 +1539,8 @@ class TestUseCasesGeneration:
         (change_dir / "tasks.md").write_text("## Block 1\n- [ ] the old plan\n")
         (change_dir / "rubric.md").write_text("## Criteria\n- the old rubric\n")
         config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
 
         tasks = AsyncMock(return_value="## Block 1\n- [ ] the new plan\n")
         rubric = AsyncMock(return_value="## Criteria\n- the new rubric\n")
@@ -1436,8 +1550,9 @@ class TestUseCasesGeneration:
                       AsyncMock(return_value=[])), \
                 patch("build_pipeline.spec_generator.generate_rubric", rubric):
             mock_llm.return_value = "## Personas\n\n## Use cases\n"
-            await _generate_single_artifact(cm, change_dir, "use-cases", config, state)
+            await _generate_all_artifacts(cm, change_dir, config, state)
 
+        assert tasks.await_count == 1
         assert tasks.await_args.args[0] == "tasks"
         assert "the new plan" in (change_dir / "tasks.md").read_text()
         assert "the new rubric" in (change_dir / "rubric.md").read_text()
@@ -1458,21 +1573,25 @@ class TestUseCasesGeneration:
         tasks.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_a_failed_backfill_leaves_the_existing_plan_standing(
+    async def test_a_failed_use_case_dependency_repair_leaves_tasks_stale(
         self, tmp_path,
     ):
         cm, change_dir, config, state = self._setup(tmp_path)
         (change_dir / "tasks.md").write_text("## Block 1\n- [ ] the old plan\n")
         config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
 
         with patch("build_pipeline.sdk.llm_call", new_callable=AsyncMock) as mock_llm, \
                 patch("build_pipeline.llm_steps.spec_steps.generate_artifact",
                       AsyncMock(side_effect=RuntimeError("model exploded"))):
             mock_llm.return_value = "## Personas\n\n## Use cases\n"
-            await _generate_single_artifact(cm, change_dir, "use-cases", config, state)
+            with pytest.raises(RuntimeError, match="model exploded"):
+                await _generate_all_artifacts(cm, change_dir, config, state)
 
         assert "the old plan" in (change_dir / "tasks.md").read_text()
         assert "use-cases" in state.spec_gen.completed_artifacts
+        assert "tasks" in state.spec_gen.stale_artifacts
 
     @pytest.mark.asyncio
     async def test_prompt_carries_proposal_template_and_the_outcome_bar(self, tmp_path):
@@ -1515,11 +1634,12 @@ class TestUseCasesGeneration:
         config.project_description = ""
         config.task_granularity = "checkboxes"
 
+        (change_dir / "proposal.md").write_text("## Capabilities\n- `cap-a`\n")
         order: list[str] = []
 
         async def _record(artifact_id, *_a, **_kw):
             order.append(artifact_id)
-            return "## 1. Slice"
+            return "### Requirement: A\n#### Scenario: A\nWHEN invoked\nTHEN returns A\n" if artifact_id == "requirements" else "## 1. Slice"
 
         with patch("build_pipeline.llm_steps.spec_steps.generate_artifact",
                    new_callable=AsyncMock) as mock_gen, \
@@ -1588,6 +1708,24 @@ class TestScanNoBehaviourBlocks:
 
         assert [f["block"] for f in scan_no_behaviour_blocks(path)] == [2]
 
+    @pytest.mark.parametrize("says", ["Covered", "Satisfied", "Delivered"])
+    def test_a_sentence_that_opens_with_covered_by_block_n_is_flagged(
+        self, tmp_path, says,
+    ):
+        """The rule's second form on its own: no pronoun names the block, and
+        the block names no file."""
+        path = _tasks_file(tmp_path, (
+            "## 1. Count words\n\nAdd `count(s: str) -> int`.\n\n"
+            "Interfaces:\n- Produces: `count(s: str) -> int`\n\n"
+            f"## 2. Tabs\n\nAdd tests for tabs. {says} by Block 1.\n\n"
+            "Interfaces:\n- Produces: (none)\n"
+        ))
+
+        findings = scan_no_behaviour_blocks(path)
+
+        assert [f["block"] for f in findings] == [2]
+        assert "an earlier block already satisfies it" in findings[0]["description"]
+
     def test_a_behaviour_block_with_no_produces_is_not_flagged(self, tmp_path):
         """`Produces: (none)` alone is legitimate: a last slice nobody calls."""
         path = _tasks_file(tmp_path, (
@@ -1641,6 +1779,7 @@ class TestScanNoBehaviourBlocks:
 
     @pytest.mark.parametrize("says", [
         "no code change is needed", "there is no code change in this block",
+        "there are no new code changes",
     ])
     def test_a_block_that_says_it_needs_no_code_is_flagged(self, tmp_path, says):
         """The no-code rule on its own: no earlier block is named, and no file."""
@@ -1695,6 +1834,29 @@ class TestScanNoBehaviourBlocks:
         "- [ ] 2.4 Make sure the suite passes\n\n",
         # Only its heading says it is test work.
         "## 2. Tests for tabs\n\nCover tabs in `tests/test_words.py`.\n\n",
+        # Only its heading names a file, and that file is a test file.
+        "## 2. Tab cases in `tests/test_words.py`\n\nCover tabs and runs "
+        "of spaces.\n\n",
+        # A step whose verb changes code, and whose object is a test file.
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Update `tests/test_words.py` with "
+        "tab cases\n\n",
+        # An "add" step whose object is a case, with no test word.
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Cover tabs in `tests/test_words.py`"
+        "\n- [ ] 2.2 Add a case for an empty string\n\n",
+        # "Change nothing" is not a change.
+        "## 2. Tabs\n\n- [ ] 2.1 Write failing tests in `tests/test_words.py`"
+        "\n- [ ] 2.2 Change nothing else\n\n",
+        # An "add" step whose test file has no standalone test word.
+        "## 2. Tabs\n\n- [ ] 2.1 Add `__tests__/words.js` covering tabs\n\n",
+        # ... named after the first few words of the step.
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Add coverage of tabs and spaces "
+        "to `__tests__/words.js`\n\n",
+        # A step whose verb changes code, and whose object is a test, named
+        # with no file.
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Cover tabs in `tests/test_words.py`"
+        "\n- [ ] 2.2 Update the fixtures for tabs\n\n",
+        "## 2. Tests for tabs\n\n- [ ] 2.1 Cover tabs in `tests/test_words.py`"
+        "\n- [ ] 2.2 Fix the flaky test\n\n",
     ])
     def test_a_test_block_whose_steps_write_no_code_is_flagged(
         self, tmp_path, block,
@@ -1746,6 +1908,12 @@ class TestScanNoBehaviourBlocks:
         "`src/api/limits.py`, with no code change to the core.\n\n",
         "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
         "with no code change to the core.\n\n",
+        "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
+        "with no new code changes to the core.\n\n",
+        "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
+        "with no new code needed in the core.\n\n",
+        "## 2. Rate limits\n\nAdd a token-bucket limiter that answers 429, "
+        "with no production code required outside the module.\n\n",
         # Test-first leaf blocks that name only their test file: the tests
         # come first, and a later step writes the code.
         "## 2. Webhook signatures\n\n- [ ] 2.1 Write failing tests in "
@@ -1758,6 +1926,24 @@ class TestScanNoBehaviourBlocks:
         "## 2. Tab splitting\n\n- [ ] 2.1 Write failing tests for tab "
         "splitting in `tests/test_words.py`\n- [ ] 2.2 Make count split on "
         "tabs\n\n",
+        # The code step names the tests only as its purpose.
+        "## 2. Webhook signatures\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_webhook.py`\n- [ ] 2.2 Add HMAC verification to the "
+        "upload handler so the tests pass\n\n",
+        # A code step whose object is a case of the behaviour, not a test.
+        "## 2. Empty input\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_words.py`\n- [ ] 2.2 Handle the empty-string case in "
+        "`count`\n\n",
+        # The code step is to make the failing tests pass.
+        "## 2. Tab splitting\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_words.py`\n- [ ] 2.2 Make the failing tests pass\n\n",
+        "## 2. Tab splitting\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_words.py`\n- [ ] 2.2 Fix the failing tests\n\n",
+        # An "add" step whose object only starts with the word "case".
+        "## 2. Case-insensitive search\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_search.py`\n- [ ] 2.2 Add case-insensitive matching\n\n",
+        "## 2. Snake case\n\n- [ ] 2.1 Write failing tests in "
+        "`tests/test_names.py`\n- [ ] 2.2 Add snake case conversion\n\n",
         # A feature whose heading opens with a test word.
         "## 2. Coverage report subcommand\n\nAdd a `report` subcommand that "
         "prints line coverage. Tests in `tests/test_cli.py`.\n\n",
@@ -1810,10 +1996,14 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
         cm = ChangeManager(specs_dir)
         cm.init_specs()
         change_dir = cm.create_change("nb")
-        (change_dir / "proposal.md").write_text("# Proposal")
+        (change_dir / "proposal.md").write_text("# Proposal\n## Capabilities\n- `cap-a`\n")
         (change_dir / "design.md").write_text("# Design")
 
         config = MagicMock()
+        config.reference_docs_text.return_value = ""
+        config.budget_max_tokens = None
+        config.budget_max_usd = None
+        config.task_granularity = "checkboxes"
         config.change_name = "nb"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
@@ -1836,7 +2026,12 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
         cm, change_dir, config, state = self._setup(tmp_path)
         rewritten = "## 1. Summarize\n\nBuilds it, edge cases included.\n"
 
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements/cap-a.md").write_text(
+            "### Requirement: Slice\n#### Scenario: Works\nWHEN used\nTHEN returns a result\n")
+        config.pipeline_branch = None
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
             mock_gen.side_effect = [_E2E_TASKS.read_text(), rewritten]
             mock_audit.return_value = []
@@ -1848,7 +2043,7 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
         regen_findings = mock_gen.call_args_list[1].kwargs["audit_findings"]
         assert "Block 2" in regen_findings
         assert "Block 3" in regen_findings
-        assert state.spec_gen.tasks_audit_done is True
+        assert state.spec_gen.step_passed("tasks_audit") is True
 
     @pytest.mark.asyncio
     async def test_the_model_audits_no_new_behaviour_finding_reaches_the_regeneration(
@@ -1870,10 +2065,15 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
             "suggestion": "Move its criteria into Block 1",
         }
 
-        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements/cap-a.md").write_text(
+            "### Requirement: Slice\n#### Scenario: Works\nWHEN used\nTHEN returns a result\n")
+        config.pipeline_branch = None
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
             mock_gen.side_effect = [first, rewritten]
-            mock_audit.return_value = [model_finding]
+            mock_audit.side_effect = [[model_finding], []]
 
             await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
@@ -1882,8 +2082,63 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
         assert "Block 2 only pins what Block 1 builds" in regen_findings
         assert (change_dir / "tasks.md").read_text() == rewritten
 
+    @staticmethod
+    def _minor_model_case(tmp_path):
+        """A plan the deterministic scan passes, and a model finding under the
+        no-new-behaviour category that the model rated minor."""
+        cm, change_dir, config, state = TestTasksShapeAuditRejectsNoBehaviourBlocks._setup(tmp_path)
+        first = (
+            "## 1. Summarize\n\nCreate `src/summary.py`.\n\n"
+            "Interfaces:\n- Produces: `summarize(text: str) -> str`\n\n"
+            "## 2. Pin plurals\n\nPin the plural nouns.\n\n"
+            "Interfaces:\n- Produces: (none)\n"
+        )
+        finding = {
+            "category": "no-new-behaviour", "severity": "minor",
+            "description": "Block 2 only pins what Block 1 builds",
+            "suggestion": "Move its criteria into Block 1",
+        }
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements/cap-a.md").write_text(
+            "### Requirement: Slice\n#### Scenario: Works\nWHEN used\nTHEN returns a result\n")
+        config.pipeline_branch = None
+        return cm, change_dir, config, state, first, finding
+
     @pytest.mark.asyncio
-    async def test_a_block_left_after_the_rewrite_is_named_in_the_log(
+    async def test_a_minor_no_new_behaviour_finding_still_drives_the_rewrite(self, tmp_path):
+        """The audit prompt leaves this category's severity to the model, so a
+        block it rates minor is still a block whose tests cannot fail first."""
+        cm, change_dir, config, state, first, finding = self._minor_model_case(tmp_path)
+        rewritten = "## 1. Summarize\n\nBuilds it, plurals included.\n"
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.side_effect = [first, rewritten]
+            mock_audit.side_effect = [[finding], []]
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        assert mock_gen.call_count == 2
+        assert "Block 2 only pins what Block 1 builds" in mock_gen.call_args_list[1].kwargs["audit_findings"]
+        assert (change_dir / "tasks.md").read_text() == rewritten
+
+    @pytest.mark.asyncio
+    async def test_a_minor_no_new_behaviour_finding_on_the_rewrite_blocks_it(self, tmp_path):
+        cm, change_dir, config, state, first, finding = self._minor_model_case(tmp_path)
+        with patch("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Rubric")), \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.side_effect = [first, first]
+            mock_audit.side_effect = [[finding], [finding]]
+
+            with pytest.raises(ValueError, match="blocking shape findings"):
+                await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        assert (change_dir / "tasks.md").read_text() == first
+        assert not state.spec_gen.step_passed("tasks_audit")
+
+    @pytest.mark.asyncio
+    async def test_a_block_left_after_the_rewrite_blocks_completion(
         self, tmp_path, capsys,
     ):
         """One rewrite, then the plan stands, as every audit here: but a
@@ -1896,7 +2151,30 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
             mock_gen.side_effect = [_E2E_TASKS.read_text(), _E2E_TASKS.read_text()]
             mock_audit.return_value = []
 
-            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+            with pytest.raises(ValueError, match="no behavior"):
+                await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
         assert mock_gen.call_count == 2
-        assert "PHASE: no_behaviour_blocks_remain — Block 2, Block 3" in capsys.readouterr().out
+        assert not state.spec_gen.step_passed("tasks_audit")
+        assert state.spec_gen.repair_attempts("tasks_audit")
+
+
+
+
+def test_plan_rewrite_invalidates_review_and_rubric(tmp_path):
+    from build_pipeline.spec_generator import reconcile_plan
+    from build_pipeline.state import BuildState, SpecGenState, StepOutcome
+    from build_pipeline.config import BuildConfig
+    config = BuildConfig(project_dir=tmp_path, change_name="revision")
+    config.specs_dir = tmp_path / "specs"
+    config.change_dir.mkdir(parents=True)
+    (config.change_dir / "tasks.md").write_text("## 1. Original\nImplement original behavior\n")
+    (config.change_dir / "design.md").write_text("Original design")
+    (config.change_dir / "rubric.md").write_text("Old rubric")
+    state = BuildState(change_name="revision", mode="brief", tier="standard", spec_gen=SpecGenState())
+    reconcile_plan(config, state)
+    state.spec_gen.steps["plan_review"] = StepOutcome(revision=state.spec_gen.revision, outcome="passed")
+    (config.change_dir / "tasks.md").write_text("## 1. Changed\nImplement changed behavior\n")
+    reconcile_plan(config, state)
+    assert not state.spec_gen.step_passed("plan_review")
+    assert "rubric" in state.spec_gen.stale_artifacts

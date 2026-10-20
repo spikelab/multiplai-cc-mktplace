@@ -101,12 +101,18 @@ def block_stubs(repo: Path, log: Path | None = None, *, searched: str = "calc.py
         hit("review", block.name)
         return ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])
 
-    red = (1, "FAILED tests/test_calc.py::test_add - AssertionError")
+    def red(*_a, **_kw):
+        # The engine committed the current writer's tests before running RED.
+        # Read that commit so replacement writers in resume cases also work.
+        names = _git(repo, "show", "--pretty=", "--name-only", "HEAD").splitlines()
+        failures = [f"FAILED {name}::test_add - AssertionError"
+                    for name in names if name.startswith("tests/") and name.endswith(".py")]
+        return 1, "\n".join([*failures, f"{len(failures)} failed"])
     return [
         patch("build_pipeline.tdd_engine.run_test_writer", side_effect=test_writer),
         patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer),
         patch("build_pipeline.tdd_engine.run_refactorer", side_effect=refactorer),
-        patch("build_pipeline.tdd_engine.run_test_suite", return_value=red),
+        patch("build_pipeline.tdd_engine.run_test_suite", side_effect=red),
         patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
               return_value=QualityAudit(passed=True)),
         patch("build_pipeline.tdd_engine._run_quality_review", side_effect=review),
@@ -281,6 +287,46 @@ class TestSameMistake:
             rnd, publish.records_of(rnd)[0])
 
 
+def _section_with_check(check_fix: dict | None, block: int | None = 2) -> str:
+    """The PR body's section for one round whose self-check found PROBLEM
+    (block *block*) and whose block 2 ended as *check_fix*."""
+    from build_pipeline.state import FindingsState
+    r = _fix_record()
+    fixes = {r.comment.key: {"test": "a" * 40, "impl": "b" * 40, "status": "done"}}
+    if check_fix is not None:
+        fixes["block:2"] = check_fix
+    rnd = FindingsRound(number=1, comments=[r.comment], triaged={r.comment.id: r.triage},
+                        fixes=fixes, blocks={1: r.comment.key, 2: "block:2"},
+                        self_check={"head": "c" * 40, "report": PROBLEM if block else "",
+                                    "block": block})
+    return publish.render_section(FindingsState(pr=PR, repo=REPO, branch="buildme/calc",
+                                                change_dir="c", rounds=[rnd]))
+
+
+class TestTheCheckOnThePR:
+    """What the check of a round's fixes found is not a comment, so no reply
+    answers it; the PR body's section says what it found and what became of it."""
+
+    def test_a_failed_check_block_is_shown_with_the_problem(self):
+        section = _section_with_check({"failed": "the TDD engine could not complete block 2"})
+        assert PROBLEM in section
+        assert "Not fixed: the TDD engine could not complete block 2." in section
+
+    def test_a_fixed_check_block_names_its_commit(self):
+        section = _section_with_check({"test": "d" * 40, "impl": "e" * 40, "status": "done"})
+        assert PROBLEM in section
+        assert f"Fixed in `{'e' * 12}`" in section
+
+    def test_a_check_block_with_no_commit_is_not_fixed(self):
+        section = _section_with_check(None)
+        assert PROBLEM in section
+        assert "Not fixed: the fix did not produce a commit." in section
+
+    def test_a_check_that_found_nothing_adds_nothing(self):
+        section = _section_with_check(None, block=None)
+        assert "check of this round" not in section.lower()
+
+
 # --- item 27: check the round's own commits once ---------------------------------
 
 
@@ -435,6 +481,31 @@ class TestSelfCheck:
         assert not [s for s in _subjects(repo) if "block-2" in s]
 
     @pytest.mark.asyncio
+    async def test_block_k_skips_the_whole_change_refactor_and_mutation(self, built, fake_pr):
+        """The engine's run for block k finds both whole-change steps already
+        done in its checkpoint, so each does its work once per round."""
+        repo, change, config = built
+        found_undone = {"refactor": [], "mutation": []}
+
+        def whole_change_step(name, flag):
+            async def step(config_, state, progress):
+                found_undone[name].append(not getattr(state.tdd, flag))
+                setattr(state.tdd, flag, True)
+                state.checkpoint(config_.state_file_path())
+                return True
+            return step
+
+        stubs = [p for p in block_stubs(repo) if p.attribute != "_run_refactor_all"] + [
+            patch("build_pipeline.tdd_engine._run_refactor_all",
+                  side_effect=whole_change_step("refactor", "refactor_all_done")),
+            patch("build_pipeline.tdd_engine._run_mutation",
+                  side_effect=whole_change_step("mutation", "mutation_done"))]
+        exit_code, lines = await _one_round(built, fake_pr, FakeCheck([PROBLEM]), stubs=stubs)
+        assert exit_code == 0, lines
+        assert _state(change).findings.rounds[0].fixes["block:2"]["impl"]
+        assert found_undone == {"refactor": [True, False], "mutation": [True, False]}
+
+    @pytest.mark.asyncio
     async def test_git_failing_to_show_the_diff_fails_the_step(self, built, fake_pr, monkeypatch):
         repo, change, config = built
         monkeypatch.setattr(git_ops, "diff_range", lambda *a, **k: None)
@@ -549,6 +620,8 @@ class TestTheCheckAgent:
         "## NO PROBLEMS",
         "PROBLEMS:\n- none",
         "PROBLEMS: Nothing.",
+        "PROBLEMS: None found.",
+        "PROBLEMS:\n- Nothing found",
     ])
     @pytest.mark.asyncio
     async def test_a_marked_none_is_none(self, built, answer):
@@ -556,6 +629,16 @@ class TestTheCheckAgent:
         with patch("build_pipeline.findings.code.agent_call", new_callable=AsyncMock,
                    return_value=AgentResult(success=True, output=answer)):
             assert await code.run_self_check(config, "d") == ""
+
+    @pytest.mark.asyncio
+    async def test_a_problems_marker_with_nothing_after_it_keeps_the_whole_answer(self, built):
+        """The agent wrote something and listed nothing: dropping the answer
+        could drop a problem it described before the marker."""
+        repo, change, config = built
+        answer = "Checked every caller. sub() still subtracts twice.\n\nPROBLEMS:"
+        with patch("build_pipeline.findings.code.agent_call", new_callable=AsyncMock,
+                   return_value=AgentResult(success=True, output=answer)):
+            assert await code.run_self_check(config, "d") == answer
 
     @pytest.mark.asyncio
     async def test_the_brief_asks_for_a_marked_last_answer(self, built):
@@ -569,6 +652,18 @@ class TestTheCheckAgent:
         with patch("build_pipeline.findings.code.agent_call", side_effect=agent_call):
             await code.run_self_check(config, "d")
         assert "`PROBLEMS:`" in seen["prompt"] and "`NO PROBLEMS`" in seen["prompt"]
+
+    def test_the_markers_the_brief_asks_for_are_the_ones_the_parser_reads(self):
+        """Each marker the brief's closing instruction shows, written as the
+        agent's last line, is read as the brief says: the list marker keeps
+        the item after it, the none marker gives none."""
+        from build_pipeline.prompts.findings import SELF_CHECK_PROMPT
+        closing = SELF_CHECK_PROMPT[SELF_CHECK_PROMPT.index("End your answer with"):]
+        markers = re.findall(r"`([^`]+)`", closing)
+        assert len(markers) == 2, markers
+        listed, none = sorted(markers, key=lambda m: not m.endswith(":"))
+        assert code._check_report(f"I read calc.py.\n\n{listed}\n- {PROBLEM}") == f"- {PROBLEM}"
+        assert code._check_report(f"I read calc.py.\n\n{none}") == ""
 
     @pytest.mark.asyncio
     async def test_a_long_diff_is_cut_at_the_limit(self, built):
@@ -664,6 +759,29 @@ class TestDecisions:
             "c1": {"decision": "accept"}, "c2": {"decision": "accept"},
             "t1": {"decision": "accept"}}
 
+    def test_the_copied_listing_rule_matches_the_review_skill(self):
+        """buildme does not import review_pipeline, so it copies what
+        `render.listed` shows; this reads the review skill's source and fails
+        when the copy drifts."""
+        import ast
+        review = Path(__file__).resolve().parents[3] / "review" / "scripts" / "review_pipeline"
+
+        def constants(path: Path) -> dict:
+            out = {}
+            for node in ast.parse(path.read_text()).body:
+                target = getattr(node, "target", None) or (getattr(node, "targets", None) or [None])[0]
+                if isinstance(target, ast.Name) and getattr(node, "value", None) is not None:
+                    try:
+                        out[target.id] = ast.literal_eval(node.value)
+                    except ValueError:
+                        pass
+            return out
+
+        render, models = constants(review / "render.py"), constants(review / "models.py")
+        assert decisions._SHOWN_STATUSES == render["SHOWN_STATUSES"]
+        assert decisions._HIDDEN_LABELS == render["HIDDEN_LABELS"]
+        assert decisions._CRITICAL_IMPACTS == models["CRITICAL_IMPACTS"]
+
     @pytest.mark.parametrize("mode", [None, "full", "critical"])
     def test_what_the_review_hides_is_never_accepted(self, tmp_path, mode):
         """`review_pipeline.render.listed`: a repeat of a finding the person
@@ -695,6 +813,8 @@ class TestDecisions:
         "pkg/calc_test.py", "pkg/calc_test.go", "src/calc.test.ts", "src/calc.spec.ts",
         "test/calc.js", "src/__tests__/calc.js", "Sources/CalcTests.swift",
         "src/test/java/CalcTest.java", "app/CalcTests.kt", "spec/calc_spec.rb", "conftest.py",
+        # Only `_MORE_TEST_PATHS` names these, outside any test directory.
+        "Calc/CalcTests.cs", "app/CalcTest.php", "lib/calc_test.exs", "src/it/java/CalcIT.java",
     ])
     def test_a_tests_finding_on_a_test_file_in_any_language_is_not_accepted(self, tmp_path, path):
         (tmp_path / "findings.json").write_text(json.dumps({"findings": [

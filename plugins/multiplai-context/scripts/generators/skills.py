@@ -10,6 +10,8 @@ Design Decision 10: Gated on enable_skills config flag (default: false).
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from generators.base import GenerationResult, GeneratorBase
 from lib.plugin_skills import plugin_skills
 
@@ -20,6 +22,32 @@ _HAND_AUTHORED_FIELDS = (
     "intent_domains",
     "anti_domains",
 )
+
+
+def model_invocation_disabled(path: Path) -> bool:
+    """True when *path*'s YAML frontmatter sets ``disable-model-invocation: true``.
+
+    Such a skill runs only when the user types it; the ``Skill`` tool refuses
+    it. Cataloging one made the router suggest skills the model could never
+    call (55 suggestions in 30 days, memory-health 2026-10-20). An unreadable
+    file or malformed frontmatter counts as not disabled: the skill stays in
+    the catalog, as it did before this check existed.
+    """
+    try:
+        # utf-8-sig: a leading byte-order mark would otherwise hide the "---".
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return False
+    if not text.startswith("---"):
+        return False
+    end = text.find("\n---", 3)
+    if end == -1:
+        return False
+    try:
+        meta = yaml.safe_load(text[3:end])
+    except yaml.YAMLError:
+        return False
+    return isinstance(meta, dict) and meta.get("disable-model-invocation") is True
 
 
 class SkillsGenerator(GeneratorBase):
@@ -49,6 +77,12 @@ class SkillsGenerator(GeneratorBase):
         identifier used by /<name> invocation). On a name collision the
         explicit skills_dir entry wins — a local skill overrides a
         plugin-shipped one of the same name.
+
+        A skill whose frontmatter sets ``disable-model-invocation: true`` is
+        left out (see :func:`model_invocation_disabled`), so an entry
+        cataloged before it was disabled is pruned on the next run. A local
+        skill that is disabled still takes its name: the plugin skill it
+        overrides is not cataloged in its place.
         """
         sources: dict[str, Any] = {}
         skills_dir = Path(self._config.skills_dir).expanduser()
@@ -59,7 +93,10 @@ class SkillsGenerator(GeneratorBase):
 
         for name, path in self._discover_plugin_skills().items():
             sources.setdefault(name, path)
-        return sources
+        return {
+            name: path for name, path in sources.items()
+            if not model_invocation_disabled(path)
+        }
 
     def _discover_plugin_skills(self) -> dict[str, Path]:
         """Skills shipped by installed Claude Code plugins.

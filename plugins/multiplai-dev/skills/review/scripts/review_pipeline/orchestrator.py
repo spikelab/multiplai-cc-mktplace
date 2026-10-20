@@ -22,7 +22,7 @@ import yaml
 
 from multiplai_core.log_utils import log_event
 
-from . import budget, deps, ledger as review_ledger, rounds, runlock, target as target_mod, timings
+from . import budget, deps, ledger as review_ledger, rounds, runlock, sdk, target as target_mod, timings
 from .chunks import split_pieces
 from .config import ReviewConfig, run_config
 from .costs import cost_lines, kept_line
@@ -130,7 +130,8 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
     Saves this run's state, then appends a `started` line to the review
     ledger, so `resume` of a run that stops at once reads this run's state,
     not the last round's. Appends a `finished` line when the run ends
-    (`stopped` names a budget stop, a verify stop or a failure). A run that is
+    (`stopped` names a budget stop, a verify stop, a usage-limit stop or a
+    failure). A run that is
     stopped rather than failing writes no end line, which is how the ledger
     marks an interrupted run: a process killed outright, Ctrl-C or a
     cancelled task (`KeyboardInterrupt`, `asyncio.CancelledError`), or an
@@ -151,6 +152,9 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
         raise
     except VerifyIncomplete:
         stopped = "verify-incomplete"
+        raise
+    except sdk.UsageLimitError:
+        stopped = "usage-limit"
         raise
     except INTERRUPTIONS:
         interrupted = True
@@ -238,6 +242,17 @@ async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig
             progress.failed(str(e))
             log_event("review", "verify_incomplete", f"verify stopped: {len(e.finding_ids)} findings have no verdict",
                       session_id=session_id, level="WARNING", target=t.slug, findings=e.finding_ids)
+            raise
+        except sdk.UsageLimitError as e:
+            # Every answer that came back is in the state; `resume` after the reset asks for the rest.
+            timings.close_interval(state, name)
+            timings.close_interval(state, "run")
+            state.budget = ledger.to_state()
+            save_state(state, target_dir)
+            progress.failed(str(e))
+            log_event("review", "usage_limit", str(e), session_id=session_id, level="WARNING",
+                      target=t.slug, stage=name, resets=e.resets)
+            e.target_dir = target_dir  # for the STOPPED message's resume command
             raise
         timings.close_interval(state, name)
         timings.close_interval(state, "run")  # moved forward at each checkpoint; see timings.py
@@ -705,14 +720,25 @@ def load_batch(path: Path, default_mode: str = "full") -> list[TargetSpec]:
 
 async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *, parallel: int = 2,
                 session_id: str = "") -> tuple[list[Path], list[str]]:
-    """Review every target, at most *parallel* at once. Returns (findings paths in order, failures)."""
+    """Review every target, at most *parallel* at once. Returns (findings paths in order, failures).
+
+    After a target hits the Claude usage limit, no target that has not started
+    yet is started: each would fail the same way. They are listed as failures,
+    and the first `sdk.UsageLimitError` is raised once the running ones end,
+    with `stopped_dirs` naming every target directory the limit stopped.
+    """
     sem = asyncio.Semaphore(max(1, parallel))
     results: list[Path | None] = [None] * len(specs)
     failures: list[str] = []
+    limits: list[sdk.UsageLimitError] = []
 
     async def one(i: int, spec: TargetSpec) -> None:
         async with sem:
             label = f"{Path(spec.repo).name} {spec.branch or spec.pr or spec.range}"
+            if limits:
+                failures.append(f"{label}: not started: {limits[0]}")
+                print(f"FAILED {label}: not started: {limits[0]}", flush=True)
+                return
             try:
                 # Each task has its own context, so budget.start() gives this
                 # target its own ledger.
@@ -720,6 +746,10 @@ async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *,
             except (ReviewError, budget.BudgetExceededError, VerifyIncomplete) as e:
                 failures.append(f"{label}: {e}")
                 print(f"FAILED {label}: {e}", flush=True)
+            except sdk.UsageLimitError as e:
+                limits.append(e)
+                failures.append(f"{label}: {e}")
+                print(f"STOPPED {label}: {e}", flush=True)
             except Exception as e:  # one broken target must not take the batch down
                 log.error("review of %s failed", label, exc_info=True)
                 failures.append(f"{label}: {e}")
@@ -732,4 +762,9 @@ async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *,
         # Every review in out_dir, as after `review` and `resume`: a batch must
         # not drop the lines of reviews it did not run.
         write_runs(out_dir)
+    if limits:
+        first = limits[0]
+        first.written, first.failures = written, failures
+        first.stopped_dirs = [d for e in limits if (d := getattr(e, "target_dir", None)) is not None]
+        raise first
     return written, failures

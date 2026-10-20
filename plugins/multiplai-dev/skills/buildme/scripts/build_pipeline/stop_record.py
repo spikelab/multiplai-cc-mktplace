@@ -50,6 +50,7 @@ class StepStop(BaseModel):
 
     head: str | None = None
     edits: dict[str, str] = Field(default_factory=dict)
+    index: dict[str, str] | None = None
 
 
 def record(project_dir: Path | str, ignore: Path | str | None = None) -> StepStop | None:
@@ -64,7 +65,10 @@ def record(project_dir: Path | str, ignore: Path | str | None = None) -> StepSto
         head = git_ops.rev_parse_head(project_dir)
         if not head:
             return None
-        return StepStop(head=head, edits=edits)
+        index = git_ops.index_entries(project_dir, ignore=ignore)
+        if index is None:
+            return None
+        return StepStop(head=head, edits=edits, index=index)
     except Exception:
         log.exception("could not record the stop in %s", project_dir)
         return None
@@ -90,6 +94,16 @@ def others_work(project_dir: Path | str, stop: StepStop | None, *,
 
 
 def _others_work(project_dir, stop, *, ignore, head, origin_ref) -> str | None:
+    on_origin = False
+    if head is not None:
+        now = git_ops.rev_parse_head(project_dir)
+        if not now:
+            return f"git could not read HEAD in {project_dir}; inspect it before re-running"
+        if now != head:
+            on_origin = bool(origin_ref and git_ops.merge_base(project_dir, now, origin_ref) == now)
+            if not on_origin:
+                return (f"commits were added after the step stopped at {head[:12]}; resuming would "
+                        "discard them, so move those commits to another branch first")
     edits = git_ops.dirty_files(project_dir, ignore=ignore)
     if edits is None:
         return f"git could not list the changes in {project_dir}; inspect it before re-running"
@@ -99,19 +113,25 @@ def _others_work(project_dir, stop, *, ignore, head, origin_ref) -> str | None:
                     "step recorded none of its own edits, so they cannot be told apart from "
                     "anyone else's; stash them first")
     else:
+        if stop.index is None:
+            return ("legacy stop record has no index evidence; inspect and save the index and "
+                    "working tree separately before restarting in a clean checkout")
+        index = git_ops.index_entries(project_dir, ignore=ignore)
+        if index is None:
+            return f"git could not read the index in {project_dir}; inspect it before re-running"
+        # A wholly published HEAD may advance the index with it, but never
+        # excuse staged work that differs from that current HEAD.
+        # Callers omitting a HEAD constraint keep committed work rather than
+        # rewinding it. They may accept an index that moved with a new commit.
+        kept_commit = head is None and stop.head and git_ops.rev_parse_head(project_dir) != stop.head
+        index_at_head = (on_origin or kept_commit) and git_ops._run(
+            ["git", "diff", "--cached", "--quiet", "HEAD", "--", ".", *git_ops.BOOKKEEPING_EXCLUDES],
+            cwd=project_dir).ok
+        if index != stop.index and not index_at_head:
+            paths = {p for p in index.keys() | stop.index.keys() if index.get(p) != stop.index.get(p)}
+            return f"index changed after the stopped step ({_names(paths)}); save staged work before re-running"
         theirs = [p for p, fp in edits.items() if stop.edits.get(p) != fp]
         if theirs:
             return (f"{project_dir} has uncommitted changes the stopped step did not leave "
                     f"({_names(theirs)}); stash them first")
-    if head is None:
-        return None
-    now = git_ops.rev_parse_head(project_dir)
-    if not now:
-        return f"git could not read HEAD in {project_dir}; inspect it before re-running"
-    if now == head:
-        return None
-    if origin_ref and git_ops.merge_base(project_dir, now, origin_ref) == now:
-        return None
-    return (f"commits were added after the step stopped at {head[:12]}; resuming would "
-            "discard them back to where the step started, so move those commits to "
-            "another branch first")
+    return None

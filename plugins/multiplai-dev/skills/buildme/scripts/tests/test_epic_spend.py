@@ -207,8 +207,13 @@ def _ledger(path: Path, *lines: dict) -> Path:
     return path
 
 
-def _started(slug, head, target="/r/pr-1"):
-    return {"event": "started", "slug": slug, "target_dir": target, "head_sha": head}
+def _started(slug, head, target="/r/pr-1", at=None):
+    """A `started` line; *at* is its `generated_at`, which the review skill
+    writes to the second."""
+    line = {"event": "started", "slug": slug, "target_dir": target, "head_sha": head}
+    if at is not None:
+        line["generated_at"] = at
+    return line
 
 
 def _finished(slug, head, cost, target="/r/pr-1", stopped=None, started_at="2026-10-13T10:00:00.000Z"):
@@ -273,6 +278,54 @@ class TestReviewSpend:
                          _started("o-r--pr-1", "h2"))
         assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(1.0), False)
 
+    def test_a_killed_review_then_a_fresh_review_is_not_complete(self, tmp_path):
+        """A review killed at 10:00 (no `finished`), then a fresh `review` of
+        the same head (`--restart`) that began at 10:05 and finished: the
+        killed run's spend is not in any line, so the total is incomplete."""
+        ledger = _ledger(tmp_path / "ledger.jsonl",
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:00:00Z"),
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:05:00Z"),
+                         _finished("o-r--pr-1", "h1", 2.0, started_at="2026-10-13T10:05:00.300Z"))
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(2.0), False)
+
+    def test_a_killed_review_that_was_resumed_is_complete(self, tmp_path):
+        """The `resume` keeps the killed run's first start, which is before
+        the resume's own `started` line: its last line holds the whole run."""
+        ledger = _ledger(tmp_path / "ledger.jsonl",
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:00:00Z"),
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:05:00Z"),
+                         _finished("o-r--pr-1", "h1", 5.0, started_at="2026-10-13T10:00:00.200Z"))
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(5.0), True)
+
+    def test_a_killed_review_a_killed_rerun_and_the_reruns_resume_is_not_complete(self, tmp_path):
+        """The first killed run is never resumed: a fresh run replaced it."""
+        ledger = _ledger(tmp_path / "ledger.jsonl",
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:00:00Z"),
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:05:00Z"),
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:09:00Z"),
+                         _finished("o-r--pr-1", "h1", 3.0, started_at="2026-10-13T10:05:00.100Z"))
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(3.0), False)
+
+    def test_a_run_with_no_run_record_then_its_resume_is_complete(self, tmp_path):
+        """A `finished` line whose run record could not be built (`run: null`),
+        then a `resume` of that run: the resume's line holds the whole run."""
+        ledger = _ledger(tmp_path / "ledger.jsonl",
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:00:00Z"),
+                         {"event": "finished", "slug": "o-r--pr-1", "target_dir": "/r/pr-1", "head_sha": "h1",
+                          "round": "01", "stopped": "budget", "run": None},
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:05:00Z"),
+                         _finished("o-r--pr-1", "h1", 4.0, started_at="2026-10-13T10:00:00.200Z"))
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(4.0), True)
+
+    def test_a_run_with_no_run_record_then_a_fresh_review_is_not_complete(self, tmp_path):
+        ledger = _ledger(tmp_path / "ledger.jsonl",
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:00:00Z"),
+                         {"event": "finished", "slug": "o-r--pr-1", "target_dir": "/r/pr-1", "head_sha": "h1",
+                          "round": "01", "stopped": "budget", "run": None},
+                         _started("o-r--pr-1", "h1", at="2026-10-13T10:05:00Z"),
+                         _finished("o-r--pr-1", "h1", 2.0, started_at="2026-10-13T10:05:00.300Z"))
+        assert spend.review_spend(ledger, self.SLUGS) == (pytest.approx(2.0), False)
+
     def test_no_ledger_is_nothing_spent(self, tmp_path):
         assert spend.review_spend(tmp_path / "missing.jsonl", self.SLUGS) == (0.0, True)
 
@@ -327,6 +380,17 @@ def test_the_budget_stop_fires(tmp_path, monkeypatch, capsys):
     assert saved["child_status"]["c"]["status"] == "pending"
     summary = json.loads((e.dir / "runs" / "01" / "summary.json").read_text())
     assert summary["spent_usd"] == pytest.approx(8.0) and summary["spend_complete"] is True
+
+
+def test_the_budget_stop_fires_when_the_spend_equals_the_cap(tmp_path, monkeypatch, capsys):
+    """`epic.max_usd` is reached at the cap itself, not only past it: $2.50
+    and $2.50 make exactly $5, so c is not launched."""
+    each = [{"spend": 2.5}]
+    e = Epic(tmp_path, monkeypatch, {"a": each, "b": each, "c": each}, max_usd=5.0)
+    assert run_coordinator(e.config) == 3
+    assert e.launches() == ["a", "b"]           # 2.5 < 5 before b; 5 >= 5 before c
+    assert "EPIC:BUDGET:5.00" in capsys.readouterr().out.splitlines()
+    assert e.epic_json()["child_status"]["c"]["status"] == "pending"
 
 
 def test_the_budget_stop_waits_for_running_children(tmp_path, monkeypatch, capsys):
@@ -501,6 +565,49 @@ def test_a_sigterm_during_a_skill_wait_still_kills_the_skill(tmp_path, workspace
             pass
 
 
+@pytest.mark.parametrize("command", ["build", "findings"])
+def test_spend_is_printed_when_ctrl_c_stops_a_skill_wait(tmp_path, workspace, command):
+    """Ctrl-C (SIGINT) while `build` or `findings` waits on a skill: the
+    wait raises KeyboardInterrupt, kills the skill's group, and `main` still
+    prints `SPEND:` last."""
+    import signal
+
+    from .test_git_ops import _gone
+
+    argv = (["build", "--change", "x"] if command == "build" else ["findings", "--pr", "7"])
+    code, out, skill = _signalled(tmp_path, workspace, [*argv, "--project-dir", str(workspace)],
+                                  signal.SIGINT, skill=True)
+    try:
+        assert code == -signal.SIGINT          # Python ends on an uncaught KeyboardInterrupt by SIGINT
+        assert out.splitlines()[-1] == "SPEND:2.500000:100"
+        assert _gone(skill)
+    finally:
+        try:
+            import os
+            os.kill(skill, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def test_build_leaves_ctrl_c_to_asyncio_run(workspace, monkeypatch, capsys):
+    """`main` holds SIGTERM and SIGHUP for the whole build, but not SIGINT
+    (`_exit_on_termination(interrupt=False)`): `asyncio.run` installs its
+    own SIGINT handler only over Python's default one, so the build keeps
+    asyncio's Ctrl-C handling (the first cancels the main task)."""
+    import signal
+
+    seen = []
+
+    def body():
+        seen.append(signal.getsignal(signal.SIGINT))
+        return 0
+
+    _patch_build(monkeypatch, body)
+    assert cli.main(["build", "--change", "x", "--project-dir", str(workspace)]) == 0
+    [handler] = seen
+    assert getattr(getattr(handler, "func", None), "__name__", None) == "_on_sigint", handler
+
+
 @pytest.mark.parametrize("signame", ["SIGINT", "SIGTERM"])
 def test_children_stopped_with_the_epic_keep_their_spend(tmp_path, monkeypatch, signame):
     """B2.S11 end to end: the epic is stopped while a and b run; each
@@ -557,6 +664,20 @@ class TestSkillSpend:
         budget.record(_usage(1.0, 10))
         self._run(*argv, out="", code=-9 % 256)
         assert budget.spend_marker() == "SPEND:1.000000:10:incomplete"
+
+    def test_a_spend_line_it_cannot_read_makes_the_total_incomplete(self):
+        """Only the last `SPEND:` line is read: when it does not parse, an
+        earlier one is not taken instead, and what the skill spent is unknown."""
+        budget.record(_usage(1.0, 10))
+        self._run("pr_pipeline", "open", out="SPEND:0.250000:40\nSPEND:abc:40\n")
+        assert budget.spend_marker() == "SPEND:1.000000:10:incomplete"
+
+    def test_a_spend_line_marked_incomplete_is_added_and_makes_the_total_incomplete(self):
+        """A skill whose own spend is incomplete (`:incomplete`): its USD and
+        tokens count, and so does the gap."""
+        budget.record(_usage(1.0, 10))
+        self._run("walkthrough_pipeline", "run", "/m", out="SPEND:0.250000:40:incomplete\n")
+        assert budget.spend_marker() == "SPEND:1.250000:50:incomplete"
 
     def test_a_skill_that_times_out_makes_the_total_incomplete(self):
         """Row B2.S12, the timeout: the group is killed before its `SPEND:`."""

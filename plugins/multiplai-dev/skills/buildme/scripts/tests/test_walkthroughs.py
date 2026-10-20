@@ -15,7 +15,8 @@ from build_pipeline import git_ops, walkthroughs
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig
 from build_pipeline.git_ops import GitResult
-from build_pipeline.orchestrator import _run_bootstrap, _run_publish
+from build_pipeline.orchestrator import _run_bootstrap
+from tests.planning_fakes import _prepare_and_publish as _run_publish
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState
 from tests.test_git_ops import _git, make_bare_origin, make_repo
@@ -313,6 +314,19 @@ class TestRegenerate:
         assert len(self._runs(seen)) == 1, "a budget stop is reported, not retried"
         assert md.read_text() == before
         assert "spend limit ($3)" in path.read_text()
+
+    def test_a_failed_run_is_reported_with_its_last_line_before_its_spend(self, stale, monkeypatch, tmp_path):
+        """A run prints `SPEND:` last, even when it fails; the report quotes
+        the line before it, which says what went wrong."""
+        def fake(argv, cwd=None, timeout=None):
+            if argv[argv.index("walkthrough_pipeline") + 1] == "check":
+                out = "FAIL proj/src/calc.py:2-2: quote not at cited lines\ncheck: 1 checked, 1 failed\n"
+                return GitResult(argv, 1, out, "")
+            return GitResult(argv, 1, "ERROR: the model call failed\nSPEND:0.400000:1200\n", "")
+
+        monkeypatch.setattr(git_ops, "_run_walkthrough_skill", fake)
+        path = walkthroughs.pr_section(stale, None, tmp_path / "docs")
+        assert "not regenerated: the run failed (exit 1): ERROR: the model call failed" in path.read_text()
 
     def test_not_without_buildmes_trust(self, stale, monkeypatch, tmp_path):
         monkeypatch.delenv("BUILDME_TRUST_REPO")

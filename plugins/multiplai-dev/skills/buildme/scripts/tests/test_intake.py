@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from tests.planning_fakes import accepted_planning
 import pytest
 
 from build_pipeline.change_manager import ChangeManager
@@ -29,7 +30,7 @@ from build_pipeline.llm_steps.interview_steps import (
     ResearchDecision,
     run_self_interview,
 )
-from build_pipeline.models import BuildPhase
+from build_pipeline.models import BuildPhase, PlanReviewResult, GateResult
 from build_pipeline.orchestrator import run_orchestrator
 from build_pipeline.state import BuildState
 
@@ -82,10 +83,10 @@ def _spec_stage_mocks():
     return (
         patch("build_pipeline.spec_generator.run_spec_generator",
               AsyncMock(return_value=0)),
-        patch("build_pipeline.spec_generator.run_design_audit_stage",
+        patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
               AsyncMock(return_value=[])),
-        patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review_stage",
-              AsyncMock(return_value=[])),
+        patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+              AsyncMock(return_value=PlanReviewResult(findings=[]))),
     )
 
 
@@ -473,7 +474,7 @@ class TestPlanReachesTheSpec:
         config = _config(repo, "csv", interview_mode=mode)
         seen: list[str] = []
 
-        async def spec(config, args):
+        async def spec(config, args, **kwargs):
             seen.append(BuildState.load(config.state_file_path()).interview_summary or "")
             return 0
 
@@ -578,11 +579,11 @@ class TestResearch:
             return 0
 
         with patch("build_pipeline.spec_generator.run_spec_generator",
-                   lambda config, args: fake_generate(config, None, args)), \
-                patch("build_pipeline.spec_generator.run_design_audit_stage",
+                   lambda config, args, **kwargs: fake_generate(config, None, args)), \
+                patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
                       AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review_stage",
-                      AsyncMock(return_value=[])):
+                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                      AsyncMock(return_value=PlanReviewResult(findings=[]))):
             rc = await run_orchestrator(config, _args(
                 repo, "csv", skip_research=False, interview_summary="S",
                 research_path=str(src)))
@@ -749,12 +750,10 @@ class TestSizeGate:
         phase finished must not stop again on the re-run: the wrapper would
         post the split proposal on the ticket a second time."""
         config = self._config(tmp_path, _two_group_tasks(12))
-        with patch("build_pipeline.orchestrator._run_prototype_phase",
-                   AsyncMock(side_effect=RuntimeError("boom"))):
-            rc = await run_orchestrator(config, _args(tmp_path, "big", mode="only",
-                                                      auto=True, accept_size=True))
-        assert rc == 1
-        assert BuildState.load(config.state_file_path()).size_accepted is True
+        rc = await run_orchestrator(config, _args(tmp_path, "big", mode="only",
+                                                  auto=True, accept_size=True))
+        assert rc == 0
+        assert BuildState.load(config.state_file_path().with_name(".build-state.complete.json")).size_accepted is True
         capsys.readouterr()
 
         rc = await run_orchestrator(config, _args(tmp_path, "big", mode="only", auto=True))
@@ -890,7 +889,7 @@ class TestFailedBuildRetry:
     def _failing_spec_stage(*, commit: bool = True, leave: str = ""):
         """A spec stage that commits `work.txt` in the build's tree, leaves
         *leave* uncommitted, then fails."""
-        async def fail(config, args):
+        async def fail(config, args, **kwargs):
             project = Path(config.project_dir)
             if commit:
                 (project / "work.txt").write_text("x = 1\n")
@@ -1151,10 +1150,11 @@ class TestFailedBuildRetry:
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         repo = make_repo(tmp_path / "proj")
 
-        async def stage(config, args):
+        async def stage(config, args, **kwargs):
             saved = BuildState.load(config.state_file_path())
-            saved.spec_gen = SpecGenState(completed_artifacts=["proposal"],
-                                          explainers_done=True, tasks_audit_done=True)
+            saved.spec_gen = SpecGenState(completed_artifacts=["proposal"])
+            saved.spec_gen.record_step("explainers", "passed")
+            saved.spec_gen.record_step("tasks_audit", "passed")
             saved.checkpoint(config.state_file_path())
             return 1
 
@@ -1168,7 +1168,7 @@ class TestFailedBuildRetry:
         assert state.failed_stop is not None
         assert state.spec_gen is not None
         assert state.spec_gen.completed_artifacts == ["proposal"]
-        assert state.spec_gen.explainers_done and state.spec_gen.tasks_audit_done
+        assert state.spec_gen.step_passed("explainers") and state.spec_gen.step_passed("tasks_audit")
 
     @pytest.mark.asyncio
     async def test_a_rerun_keeps_the_codebase_analysis_it_already_wrote(
@@ -1334,6 +1334,47 @@ class TestFailedBuildRetry:
         assert BuildState.load(Path(state.state_file)).phase == BuildPhase.BOOTSTRAP
 
     @pytest.mark.asyncio
+    async def test_an_interview_written_before_its_checkpoint_stops_the_resume(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """The re-run stops between writing `interview.md` and its
+        INTERVIEW_DONE checkpoint, so the file is outside the tree its
+        bootstrap recorded. The resume refuses it, naming the file, and keeps
+        it."""
+        from build_pipeline import intake
+
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        state = await self._fail(repo)
+        worktree = Path(state.worktree_path)
+        for path in (tmp_path / "ws" / ".worktrees").glob("*/specs/changes/csv/.build-state.json"):
+            earlier = BuildState.load(path)
+            earlier.interview_summary = None
+            earlier.checkpoint(path)
+
+        async def write_then_stop(config, state, args, state_path, progress):
+            intake.write_interview(Path(config.change_dir), "# Interview\n\nS\n")
+            raise RuntimeError("stopped before the checkpoint")
+
+        config = _config(repo, "csv")
+        with patch("build_pipeline.intake.run_interview_phase",
+                   AsyncMock(side_effect=write_then_stop)):
+            rc = await run_orchestrator(config, _args(repo, "csv", interview_summary="S"))
+        assert rc == 1
+        interview = Path(config.change_dir) / "interview.md"
+        assert interview.read_text() == "# Interview\n\nS\n"
+        head = _sh(worktree, "rev-parse", "HEAD")
+        capsys.readouterr()
+
+        rc, _ = await self._run(repo)
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert "interview.md" in err and "stash them first" in err
+        assert interview.read_text() == "# Interview\n\nS\n"
+        assert _sh(worktree, "rev-parse", "HEAD") == head
+        assert BuildState.load(Path(state.state_file)).phase == BuildPhase.BOOTSTRAP
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("moved_by", ["no-record", "stop-at-bootstrap"])
     async def test_a_build_moved_to_a_new_worktree_reruns_there_after_it_fails(
         self, tmp_path, monkeypatch, capsys, moved_by,
@@ -1391,6 +1432,8 @@ class TestFailedBuildRetry:
                          half.read_text() if half.is_file() else None,
                          saved.tdd.current_block if saved.tdd else None))
             if len(seen) > 1:
+                _sh(project, "add", "half.py")
+                _sh(project, "commit", "-qm", "feat: complete fixture work")
                 return 0
             (project / "block1.py").write_text("x = 1\n")
             _sh(project, "add", "block1.py")
@@ -1407,7 +1450,7 @@ class TestFailedBuildRetry:
                     patch("build_pipeline.tdd_engine.run_tdd_engine",
                           AsyncMock(side_effect=engine)), \
                     patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
-                          AsyncMock(side_effect=RuntimeError("no model in tests"))), \
+                          AsyncMock(return_value=([], GateResult(passed=True, reason="fixture docs")))), \
                     patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
                           AsyncMock(return_value=None)), \
                     patch("build_pipeline.llm_steps.spec_steps.run_codebase_analysis",

@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.86.0] - 2026-10-18
+## [0.94.0] - 2026-10-20
 
 ### Fixed
 - review: the assess stage no longer merges a finding into one anchored in
@@ -36,6 +36,341 @@ time, not derived from a tag.
   version keep their merges and get the field when they are exported.
 - review-viewer: a finding's page shows the findings merged into it, by id
   and claim, under "Merged into this finding" after the verdict.
+
+## [0.93.0] - 2026-10-20
+
+### Added
+- The review skill has a `round-metrics` command, which reports how a PR's
+  repeated reviews went, from the rounds the review already keeps. Run
+  `python -m review_pipeline round-metrics [<reviews dir>]` from the review
+  scripts directory: it prints a Markdown table per review with each round's
+  head, the findings it listed, and how many were labelled `still-open`,
+  `repeat` and `low-value`. For each finding listed in round 2 or later it says
+  whether the cited line was already there at the first review or was written
+  since (from `git blame` and `git merge-base` in the reviewed repository;
+  `unknown` when git cannot tell). A totals line gives the mean rounds per
+  review with two or more rounds, and the share of later findings present at
+  the first review and the share still open, each with its counts. When a
+  review's worktree has been deleted, `--repo <checkout>` names another
+  checkout of the same repository to read. The command writes nothing, calls
+  no model and needs no `--trust-repo`.
+
+## [0.92.0] - 2026-10-20
+
+### Changed
+- buildme's per-block review loop now remembers its earlier rounds. Every
+  accepted finding gets an id in its round record
+  (`reviews/block-NN-round-K.json`, e.g. `B01-R1-F1`), and from the second
+  round on the reviewer is shown the findings still open and asked whether
+  each is resolved, still present, partly resolved, or cannot be verified. A
+  finding it gives no answer for stays open. The judge that accepts or
+  rejects findings now also says when a new finding restates an open or an
+  earlier-rejected one, and whether it lies within reach of what changed
+  since the previous review. A restatement of an open finding is merged into
+  it instead of counted as new; a restatement of a rejected one stays
+  accepted, with the earlier rejection reason recorded next to it.
+- From the second round on, a new finding outside the reach of the last fix
+  is listed in the round record's `outside_fix_scope`, and is fixed like any
+  other. The fix agent gets the findings still open, each with its status,
+  plus the new ones. Round 1 runs as before, and the review still passes or
+  fails on its scores alone.
+- The last fix of the loop now questions the block's approach: it runs on
+  the review model (new step `review_fix_escalated` under `models:` /
+  `efforts:`), sees every finding of every round with what each round said
+  about it, is told to fix only the findings in its brief, and ends its
+  report with a `RECURRING:` line naming the findings
+  that share a cause, which the round record keeps. When the loop runs out,
+  `build-progress.md` lists the findings still present in two or more rounds
+  and that `RECURRING:` answer.
+- Reviewers now name each finding's kind of defect and every other place in
+  the diff with the same defect; the fix agent is told to fix every listed
+  location and cover each one with a test.
+- On a block that passes at round 2 or later, the fix on pass works on the
+  findings still open plus the new ones, so a finding the
+  reviewer left unanswered is fixed there instead of dropped.
+
+## [0.91.0] - 2026-10-20
+
+### Fixed
+- `/multiplai-dev:review` stops as soon as the Claude usage limit is hit,
+  instead of calling the model until every finder and verifier has failed.
+  Before, each verify call was tried up to three times, each with a re-ask,
+  and the other stages carried on, so one run could make hundreds of calls
+  that each failed in seconds against a limit that resets hours later. Now
+  the first call that reports `You've hit your session limit` (or `weekly`)
+  stops the run: no stage retries or re-asks that call or starts another,
+  and the checkpoint keeps every answer that came back. The run exits `6`
+  with the reset time (when the CLI gives one) and, for each target it
+  stopped, the command to continue: `python -m review_pipeline resume
+  <target_dir> --trust-repo`, with the run's `--max-cost-usd` and
+  `--no-deps`. After the reset that resume asks only for what is missing; a
+  plain `review` of the same target would start over. The ledger's
+  `finished` line says `stopped: usage-limit`. A batch starts no further
+  target after the limit and lists those as `not started`; `assess-only`
+  does the same and still writes its report. Needs multiplai-core 0.25.0,
+  which this release locks.
+
+## [0.88.0] - 2026-10-20
+
+### Added
+- buildme ships `scripts/review_metrics.py`, which reports how a build's
+  per-block review loop went, from the round records buildme already writes
+  (`reviews/block-NN-round-K.json`). Run
+  `python3 review_metrics.py <project>/specs` from the buildme scripts
+  directory: it prints a Markdown table per change with each block's review
+  rounds, the round it passed at, and the accepted and rejected findings of
+  every round. For each finding accepted in round 2 or later it says whether
+  the flagged line was already there at the first review or was written by a
+  fix (from `git blame` and `git merge-base` in the project; `unknown` when
+  git cannot tell). A totals line gives the mean rounds-to-pass, the share of
+  blocks passing at round 1 and the share of round-2+ findings present at the
+  first review. It writes nothing, uses no network and makes no model calls.
+
+## [0.87.0] - 2026-10-20
+
+### Added
+- buildme's test writer now names the tests it expects to fail before the
+  implementation exists, and what is missing that makes them fail (a
+  `RED_EXPECTED:` line in its report). When the RED gate passes, buildme checks
+  those names against pytest's failures and records the statement and the
+  result (`named tests failed`, `named tests not among the failures: <ids>`,
+  `not stated`, or `cannot check for this runner`) at the top of the RED
+  evidence that the reviewer and `build-progress.md` see. It never changes
+  whether the RED gate passes.
+
+### Changed
+- The RED gate's decisions now come from one ordered table in the code, so
+  each decision is one row with one test. Every decision it makes is the same
+  as before.
+
+## [0.86.0] - 2026-10-20
+
+### Fixed
+- buildme verifies the final revision after review fixes, documentation and
+  archive preparation. Failed checks or partial writers cannot publish a build;
+  publication failures remain separately resumable after successful verification.
+- Recovery preserves staged and working versions independently, including nested
+  projects. Legacy stop records without index evidence refuse destructive recovery.
+- Planning resumes missing capability requirements, includes proposal and use cases
+  in task prompts, and invalidates dependent artifacts and reviews after edits.
+  Shared, bounded plan repair stops when blocking findings remain.
+- Planning, retries and resumed calls obey the same budget admission policy as
+  implementation; queued calls cannot dispatch after exhaustion. Admission is
+  checked before every provider call, including mid-block; committed RED tests
+  and cumulative spend survive resume. Findings rounds now share one run budget.
+  Cancellation without provider usage is recorded as unknown and blocks capped
+  admission until the user resumes with `--accept-unknown-spend`; the unknown
+  records remain and the cap then covers known spend only. Available partial
+  usage is charged.
+- Required design and plan audits revalidate after each bounded repair. Completed
+  prototypes do not rerun after downstream repairs or during implementation resume.
+  A failed prototype writer now stops the build at a resumable checkpoint.
+  Proposal edits before implementation invalidate a prior prototype skip.
+  Blocked audit findings remain in the checkpoint and progress log; unchanged
+  blocked plans do not pay for the same audit on each resume.
+  Outcomes and repair admission share one revision ledger. Task-audit repairs stage
+  the full plan before publishing. Legacy implementation checkpoints without
+  revision evidence refuse continuation while preserving code and block state.
+- RED checks reject setup/collection errors through command wrappers and accept
+  assertion failures whose tracebacks quote exception names. Other runners retain
+  an explicitly unverified nonzero fallback, including compiler/setup exits.
+  Opaque wrappers with unmatched pytest paths also pass as unverified; pytest and
+  Jest collection/setup failures remain blocked. Pytest paths follow literal `cd`
+  wrappers. New Python package/function tests can reach RED without import errors.
+  Nested review diffs
+  use project-relative paths and exclude sibling changes.
+- Commits recognize staging created within agent write windows while preserving
+  divergent user staging. Commit failures raise instead of appearing as no-ops.
+- Epic builds forward explicit unknown-spend acceptance to new/resumed children
+  and capped fixers; historical commands cannot silently reuse that acceptance.
+- Test commands preserve literal `#`, `|` and other argument punctuation. Mutation
+  and epic merge tests share the build runner's literal `cd DIR &&` handling.
+- Generated test reports belong in the project's `.gitignore`; final verification
+  names changed files and provides that remedy. Commits never run the test suite.
+  Direct pytest RED rejects empty collection, usage errors and failures outside
+  the changed tests; exit 1 with a suppressed failure summary is unverified.
+  Opaque wrappers with unmatched failure paths remain unverified. Recovery guidance
+  covers reports already tracked by a block commit: untrack, ignore and commit.
+- A tasks-audit finding that a block adds no new behaviour now drives the plan
+  repair, and blocks a repaired plan, whatever severity the model gives it.
+
+### Added
+- A paired evaluation harness with held-out checks, timeout and recovery measurement.
+  The saved dry run validates scoring only. An offline worker regression exercises
+  clean bootstrap and provider admission before checking staged-user-work preservation.
+  Live effectiveness is pending and optional stage defaults remain unchanged.
+
+## [0.85.5] - 2026-10-20
+
+### Fixed
+- buildme epic: `epic.json`'s `spend_complete` is now false when a review of
+  a child's PR was killed and then run again fresh instead of resumed. Before,
+  the fresh run's `finished` line made the spend look complete though the
+  killed run's spend was never counted. A review that ended with no run
+  record and was then resumed now counts as complete; before, it stayed
+  incomplete for good.
+- buildme epic: reading a child's repository slug and checkout root runs git
+  with buildme's git timeout, so a hung `git` no longer stalls the
+  coordinator. A `git` that times out or does not start there leaves the
+  child `unknown` for that run instead of parking it as "not a git checkout",
+  and approval names it as a git error.
+- buildme findings: `--max-usd` no longer allows one more paid round when the
+  spend equals the ceiling. Adding the run's own spend and its reviews' costs
+  as floats could come out a hair under the ceiling ($0.10 + $0.70 gave
+  0.7999999999999999 under $0.80); the spend is now rounded to 6 decimals
+  first, as the epic rounds its own.
+
+### Changed
+- buildme epic: the skill's instructions now say that a fixer still running
+  from an earlier run that was killed holds no share of `epic.max_usd` in the
+  new run, so the epic can spend past the cap by up to that fixer's own
+  `--max-usd`.
+
+## [0.85.4] - 2026-10-20
+
+### Fixed
+- buildme-findings: the review step now runs `/multiplai-dev:review` with
+  `--fetch`, so a PR whose base moved on GitHub since the last fetch is
+  reviewed instead of refused.
+- buildme epic mode: when a child's review or the post of its findings cannot
+  start (for example `uv` is not on PATH), that child is `unknown` and the
+  other children go on. The epic run no longer stops with a traceback, and
+  the next run starts the review, or posts the findings, again. Before, this
+  failed every later run.
+- buildme epic mode: a child whose earlier review is reused is judged on that
+  review's own findings, read from its kept round, rather than on the latest
+  run in the same review folder, which may be for another head.
+- buildme epic mode: a run no longer exits `0` while a child's PR is at a head
+  no review finished on (its review was stopped, or the PR got a new head
+  after a clean review). The run names that child on stderr and exits `1`,
+  or `3` when it also prints `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; the next
+  run reviews the new head.
+
+### Changed
+- buildme: SKILL.md says what happens when another child depends on a child
+  left `unknown` by its review: the same run reads its PR again and waits on
+  it, so the run ends with `EPIC:MERGE_WAITING`.
+
+## [0.85.3] - 2026-10-20
+
+### Fixed
+- buildme epic mode: when the merge step finds that main and a child raised
+  the version to the same value, and only the child edited its CHANGELOG, the
+  merge agent now moves the child's entry to the new version it writes. Before,
+  the entry stayed under main's version, and the merge commit was pushed with
+  it there.
+- buildme epic mode: the merge step no longer parks a child whose regenerated
+  uv.lock is correct when the project asks for a git dependency in its
+  `pyproject.toml`. It read the `git` URL in the project's own lock entry as a
+  pin and wanted that entry unchanged, so the version the merge wrote, or a
+  dependency list merged from both sides, failed the check.
+- buildme epic mode: the merge agent is now told to raise only the package's
+  own version, the one the merge step checks. Before, when main and a child
+  both raised a dependency's version alike (such as
+  `[dependencies.<name>]`), the agent raised that one too, the check refused
+  it, and the child parked. `[tool.commitizen]`'s `version` counts as the
+  package's own, so the agent raises it with `[project]`'s.
+
+### Changed
+- buildme docs: SKILL.md and the scripts' notes now say that an epic's spend
+  includes the merge agent's calls, and that an interrupted merge agent call
+  marks the spend incomplete.
+
+## [0.85.2] - 2026-10-20
+
+### Fixed
+- buildme: an implementer's `TEST CHANGE REQUIRED:` declaration now counts
+  when it is written as a markdown heading (`### TEST CHANGE REQUIRED: ...`)
+  or with the whole line in inline code. Before, the block failed although the
+  change was declared. A sentence that only mentions the marker in inline code
+  and goes on after it still declares nothing.
+- buildme: a `TEST CHANGE REQUIRED:` reason written wholly in parentheses
+  now counts as a declaration. Before, it was read as an empty answer and the
+  block failed.
+- buildme: a `conftest.py` no longer turns test narrowing off just by
+  mentioning `collect_ignore` or `pytest_ignore_collect` in a comment or a
+  string, by ignoring files no block selected (`collect_ignore =
+  ["setup.py"]`), or by sitting above the directory of the whole run's pytest
+  config, where pytest never loads it. A `pytest_ignore_collect` hook, or an
+  ignore list buildme cannot read, still runs the whole test command.
+- buildme-findings: when the check of a round's fixes finds a problem, the
+  PR description's round section now quotes it and says whether the extra
+  block fixed it (with the commit) or why not. Before, the problem appeared
+  only in the change directory, because no review thread answers it.
+- buildme-findings: a check that answers `PROBLEMS: None found.` or lists
+  `- Nothing found` is read as finding nothing. Before, that answer became a
+  problem and started a fix block with nothing to fix.
+
+### Changed
+- buildme-findings: the fixer's brief asks for the `SEARCHED:` section after
+  the other report slots and before any test-change declaration, which is the
+  order the declaration prompt already asks for.
+
+## [0.85.1] - 2026-10-20
+
+### Fixed
+- buildme: when the tasks.md rewrite after the shape audit fails, the first
+  pass stands as before, and the log now names any block in it that adds no
+  behaviour (`PHASE: no_behaviour_blocks_remain`), so a TDD RED-gate failure
+  on that block is no longer a surprise.
+- buildme: a block that says "no new code changes to the core" or "no new
+  code needed in the core" (scoped to another part of the code) is no longer
+  flagged as a block that adds no behaviour, so it no longer costs a
+  tasks.md rewrite.
+- buildme: a block of test steps such as "Update `tests/test_words.py` with
+  tab cases" or "Add a case for an empty string" is flagged again as a block
+  that adds no behaviour, and gets its tasks.md rewrite before the TDD RED
+  gate fails it. A test-first block whose code step ends "so the tests pass",
+  or is "Make the failing tests pass", is not flagged, nor is one whose code
+  step is "Add case-insensitive matching".
+- buildme: the README and SKILL.md now give the right number of tasks.md
+  rewrites the plan review can cause.
+- buildme: the plan review now rates a block that adds no behaviour from its
+  severity scale, as every other finding, instead of being told it is
+  critical; the tasks audit, which rewrites on any finding, no longer asks for
+  a fixed severity either. The tasks prompt now says where criteria that
+  only confirm earlier behaviour belong, instead of forbidding such blocks.
+
+## [0.85.0] - 2026-10-20
+
+### Fixed
+- `/multiplai-dev:review`: a link on a `CLAUDE.md` or `coding-standards.md`
+  line that says `binds` (as in "**binds on** any skill") now counts as
+  binding, so that doc goes to the conventions finder before the
+  non-binding ones. On a multiplai-dev change this puts
+  `docs/untrusted-content.md` and `docs/degradation-contract.md` in the
+  prompt, where `docs/degradation-contract.md` used to be cut for length.
+- `/multiplai-dev:review`: a linked doc left out of the conventions finder's
+  prompt for length is now named there, one line each ("Not included for
+  length; open it if it applies: `<path>`"), so the finder can open it
+  itself. Before, it left no trace in the prompt.
+
+## [0.84.2] - 2026-10-20
+
+### Fixed
+- buildme: an epic child's command now carries `--epic-child`, so running a
+  child's saved command again by hand still skips spec-extract and still opens
+  the PR against the default branch. Before, such a re-run could start
+  spec-extract and target a sibling child's branch once that sibling had
+  pushed.
+- buildme SKILL.md: the `--base-ref` row says that an epic child's PR targets
+  the default branch, and the `EPIC:MERGE_WAITING` row names the two cases
+  under `epic.merge: auto` where buildme left the PR open itself (checks
+  pending after an hour, or a merge queue only queued it). In those cases the
+  next step is a re-run, not a merge by hand: at once for pending checks, and
+  once the queue has merged the PR for a queued one.
+- buildme SKILL.md: the `--epic-child` row says that `BUILDME_EPIC_CHILD=1`
+  does the same, for a child's command saved before this release.
+
+## [0.84.1] - 2026-10-18
+
+### Changed
+- review: a test now checks that a `## Critical paths` list kept in a
+  subdirectory's `coding-standards.md` (for example `billing/coding-standards.md`)
+  still marks a trim suggestion on that path's tests as important. Review
+  behaves as before; a change that made it read only the root
+  `coding-standards.md` would now fail the test suite instead of quietly
+  suggesting the removal of tests on a critical path.
 
 ## [0.84.0] - 2026-10-18
 

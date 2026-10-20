@@ -228,7 +228,7 @@ async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
                     max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="merge",
                 )
                 error = ""
-            except sdk.RepoTrustError:
+            except (sdk.RepoTrustError, sdk.UsageLimitError):
                 raise
             except sdk.AgentCallError as e:
                 log.error("merge agent failed for %s", where, exc_info=True)

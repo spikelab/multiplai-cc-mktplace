@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import pytest
+from tests.planning_fakes import _prepare_and_publish
 
 from build_pipeline import git_ops, intake, orchestrator
 from build_pipeline.change_manager import ChangeManager
@@ -259,7 +260,7 @@ def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b"), pr_url("e-c")]
     argv = records.attempts(e.dir)[0].started["argv"]
     assert argv[:6] == ["python", "-m", "build_pipeline", "--session-id", "s", "build"]
-    for flag in ("--auto", "--trust-repo", "--no-epic-split", "--pr-ready"):
+    for flag in ("--auto", "--trust-repo", "--no-epic-split", "--epic-child", "--pr-ready"):
         assert flag in argv
     assert argv[argv.index("--mode") + 1] == "brief"
     assert argv[argv.index("--change") + 1] == "e-a"
@@ -272,6 +273,22 @@ def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
     for i, a in enumerate(argv):
         if a in ("--plan-file", "--project-dir", "--context-files", "--research-path"):
             assert Path(argv[i + 1]).is_absolute()
+
+
+def test_a_childs_saved_command_marks_it_an_epic_child(tmp_path, monkeypatch):
+    """#347: the command the coordinator builds for a child (`new_argv`), parsed
+    without the coordinator's environment, is still an epic child
+    (`--epic-child`). The saved argv holding the flag is
+    `test_the_argv_holds_the_flags_and_absolute_paths`."""
+    from build_pipeline.__main__ import build_parser
+
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
+    coord = coordinator.Coordinator(e.config, BuildState(change_name="e", mode="scratch", tier="advanced"),
+                                    None, e.dir, store.load_epic(e.dir))
+    argv = coord.new_argv("a", None)
+    assert BuildConfig.from_cli_args(build_parser().parse_args(argv[3:])).epic_child is True
+    plain = ["build", "--project-dir", str(e.project)]
+    assert BuildConfig.from_cli_args(build_parser().parse_args(plain)).epic_child is False
 
 
 def test_a_parent_that_skipped_research_skips_it_in_each_child(tmp_path, monkeypatch):
@@ -852,7 +869,7 @@ def test_the_pr_targets_the_branch_its_base_ref_is_on(tmp_path, monkeypatch, on_
         return GitResult(argv, 0, "PR:https://github.com/o/r/pull/9\n", "")
 
     monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
-    assert orchestrator._run_publish(config, state, ProgressWriter(config.progress_file_path())) is True
+    assert _prepare_and_publish(config, state, ProgressWriter(config.progress_file_path())) is True
     argv = seen["argv"]
     if on_main:
         assert "--base" not in argv
@@ -862,3 +879,45 @@ def test_the_pr_targets_the_branch_its_base_ref_is_on(tmp_path, monkeypatch, on_
         None if on_main else "feature")
     text = git_ops.manual_finish_commands(tmp_path, "b", "t", base="feature")
     assert "gh pr create --title t --body-file - --base feature --draft" in text
+
+
+@pytest.mark.parametrize('accept', [False, True])
+def test_epic_acceptance_reaches_new_and_saved_child_commands(tmp_path, monkeypatch, accept):
+    from types import SimpleNamespace
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
+    e.config.accept_unknown_spend = accept
+    state = BuildState(change_name='e', mode='scratch', tier='advanced')
+    coord = coordinator.Coordinator(e.config, state, None, e.dir, store.load_epic(e.dir))
+    argv = coord.new_argv('a', None)
+    assert ('--accept-unknown-spend' in argv) is accept
+    c = coord.children['a']
+    # Historical argv may carry the previous invocation's flag; current intent wins.
+    c.argv = [a for a in argv if a != '--accept-unknown-spend'] + ['--accept-unknown-spend']
+    observed = []
+    monkeypatch.setattr(coordinator, '_spawn', lambda argv, path: (
+        observed.append(argv) or SimpleNamespace(pid=987654321, poll=lambda: 0)))
+    assert asyncio.run(coord._launch(c))
+    assert ('--accept-unknown-spend' in observed[0]) is accept
+    assert observed[0].count('--accept-unknown-spend') == int(accept)
+
+
+@pytest.mark.parametrize('accept', [False, True])
+def test_epic_acceptance_reaches_capped_fixer(tmp_path, monkeypatch, accept):
+    from unittest.mock import AsyncMock
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
+    e.config.accept_unknown_spend = accept
+    e.config.epic.max_usd = 10
+    state = BuildState(change_name='e', mode='scratch', tier='advanced')
+    coord = coordinator.Coordinator(e.config, state, None, e.dir, store.load_epic(e.dir))
+    monkeypatch.setattr(coord, '_child_project', lambda c: e.project)
+    monkeypatch.setattr(coord, '_fixer_gone', AsyncMock(return_value=True))
+    monkeypatch.setattr(coord, '_left', lambda cid: 5)
+    monkeypatch.setattr(coord, '_pr_reviews', lambda c: [])
+    calls = []
+    async def run(c, attempt, project):
+        calls.append(attempt.started['argv'])
+        return 0, 'FINDINGS:DONE:0'
+    monkeypatch.setattr(coord, '_run_step', run)
+    assert asyncio.run(coord._run_fix(coord.children['a'], 'head', 1, 1))
+    assert ('--accept-unknown-spend' in calls[0]) is accept
+    assert '--max-usd' in calls[0]

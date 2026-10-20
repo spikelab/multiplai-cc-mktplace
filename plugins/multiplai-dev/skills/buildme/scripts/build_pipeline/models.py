@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from enum import Enum
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 
 # --- Build phases ---
@@ -184,6 +186,39 @@ class ReviewFinding(BaseModel):
     # Which panel members raised it. Independent confirmation is the strongest
     # signal a panel produces, so it is recorded rather than collapsed away.
     reviewers: list[str] = Field(default_factory=list)
+    # `B<block:02d>-R<round>-F<n>`, given by `review_rounds.record_round` to
+    # an accepted finding that has none. A finding carried open into a later
+    # round keeps its id, so rounds can say which earlier finding they mean.
+    finding_id: str = ""
+    # The kind of defect in a few words, and every other `path:line` in the
+    # diff with the same defect: the fix agent fixes all of them at once.
+    defect_class: str = ""
+    other_locations: list[str] = Field(default_factory=list)
+    # Set from round 2 of a block on, by the adjudicator's verdict and never
+    # by a reviewer (`_adjudicate_review_findings` clears what a reviewer
+    # wrote here): the open or earlier-rejected finding this one restates,
+    # whether it is within the reach of the changes since the last review
+    # (None reads as in scope), and, for a restated rejected finding, the
+    # reason that earlier round rejected it.
+    duplicate_of: str | None = None
+    in_fix_scope: bool | None = None
+    earlier_judge_reason: str = ""
+
+    @field_validator("defect_class", mode="before")
+    @classmethod
+    def _class_text(cls, value):
+        return "" if value is None else str(value)
+
+    @field_validator("other_locations", mode="before")
+    @classmethod
+    def _locations_list(cls, value):
+        """A reviewer that writes one location as a string, or a location as
+        an object, still parses: a parse failure would fail the review."""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        return [v if isinstance(v, str) else str(v) for v in value]
 
     def dedupe_key(self) -> tuple:
         """Identity for cross-reviewer dedupe: same place, same claim."""
@@ -197,6 +232,10 @@ class FindingVerdict(BaseModel):
     index: int
     accepted: bool
     reason: str = ""
+    # Asked for from round 2 of a block on. A missing value means "not a
+    # duplicate" and "in scope": adjudication fails open.
+    duplicate_of: str | None = None
+    in_fix_scope: bool | None = None
 
 
 class FindingAdjudication(BaseModel):
@@ -215,6 +254,27 @@ class FindingAdjudication(BaseModel):
         rejected = {v.index for v in self.verdicts if not v.accepted and 0 <= v.index < total}
         unjudged = set(range(total)) - judged
         return (judged - rejected) | unjudged
+
+
+PRIOR_STATUSES = ("resolved", "cannot_verify", "partially_resolved", "still_present")
+
+
+class PriorAssessment(BaseModel):
+    """A reviewer's status, from round 2 of a block on, for one finding left
+    open by an earlier round. `PRIOR_STATUSES` runs from best to worst."""
+
+    finding_id: str
+    status: Literal["resolved", "cannot_verify", "partially_resolved", "still_present"]
+    evidence: str = ""
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _known_status(cls, value):
+        """An unknown status is `cannot_verify`, never `resolved`: a reviewer
+        that answers in its own words must not close a finding, and must not
+        fail the review's parse either."""
+        text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        return text if text in PRIOR_STATUSES else "cannot_verify"
 
 
 class ReviewResult(BaseModel):
@@ -236,6 +296,9 @@ class ReviewResult(BaseModel):
     rejected_findings: list[ReviewFinding] = Field(default_factory=list)
     # Reviewer labels that produced this result (>1 after a panel merge).
     panel: list[str] = Field(default_factory=list)
+    # From round 2 of a block on: the status of each finding an earlier round
+    # left open (`review_rounds.open_state`).
+    prior_assessments: list[PriorAssessment] = Field(default_factory=list)
 
     def weighted_average_with(self, policy: ReviewGatePolicy | None = None) -> float:
         """Confidence-discounted weighted average (see ReviewScore.effective_score)."""
@@ -337,8 +400,19 @@ class ReviewResult(BaseModel):
             f"- [{f.severity}] {f.claim}"
             + (f" ({f.file_path}:{f.line})" if f.file_path else "")
             + (f"\n  evidence: {f.evidence}" if f.evidence else "")
+            + class_line(f)
             for f in self.findings
         )
+
+
+def class_line(f: ReviewFinding) -> str:
+    """`class: <defect_class>; also at: <locations>`, the parts present."""
+    parts = []
+    if f.defect_class:
+        parts.append(f"class: {f.defect_class}")
+    if f.other_locations:
+        parts.append(f"also at: {', '.join(f.other_locations)}")
+    return f"\n  {'; '.join(parts)}" if parts else ""
 
 
 class WeakTestFinding(BaseModel):
@@ -550,6 +624,7 @@ class FixOnPassState(BaseModel):
     # may have been killed mid-edit) or when git could not be asked.
     stop_head: str | None = None
     stop_edits: dict[str, str] | None = None
+    stop_index: dict[str, str] | None = None
 
 
 class BlockInfo(BaseModel):
@@ -591,6 +666,10 @@ class BlockInfo(BaseModel):
     # feed the reviewer (as evidence to verify, not trust) and build-progress.md.
     red_evidence: str = ""
     green_evidence: str = ""
+    # The test writer's `RED_EXPECTED:` slot and whether the RED run bore it
+    # out (`gates.red_expected_note`), set with red_evidence (whose first
+    # lines it is) when the RED gate passes. Never a verdict.
+    red_expected: str = ""
     # {test file path: sha256} snapshotted the moment the RED gate passed.
     # The test files stay writable for the whole implement phase AND for every
     # review-fix iteration, so this is the only way to tell afterwards whether

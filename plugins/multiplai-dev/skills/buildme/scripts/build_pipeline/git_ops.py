@@ -31,12 +31,15 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import logging
 import os
 import shlex
 import signal
+import shutil
 import subprocess
 import threading
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -83,7 +86,7 @@ class GitResult:
 
 
 def _run(argv: list[str], cwd: Path | str | None = None, timeout: int = _GIT_TIMEOUT,
-         errors: str | None = None) -> GitResult:
+         errors: str | None = None, env: dict[str, str] | None = None) -> GitResult:
     """Run a fixed argv list. shell=False (the default) — never a string.
     *errors* is how undecodable output bytes are decoded (`subprocess.run`);
     None raises `UnicodeDecodeError`."""
@@ -94,6 +97,7 @@ def _run(argv: list[str], cwd: Path | str | None = None, timeout: int = _GIT_TIM
             capture_output=True,
             text=True,
             errors=errors,
+            env=env,
             timeout=timeout,
         )
         return GitResult(argv, proc.returncode, proc.stdout or "", proc.stderr or "")
@@ -580,52 +584,148 @@ def _positive_pathspec(exclude: str) -> str:
     return f":({','.join(kept)}){rest}" if kept else rest
 
 
-def commit_paths(worktree: Path, message: str, paths: list[str]) -> str | None:
-    """Stage exactly ``paths`` and commit them. Returns the new SHA, or None
-    when there was nothing to commit (or the commit failed — logged, never
-    raised: a bookkeeping commit must not kill a build).
+def _working_identity(path: Path) -> str:
+    """Fingerprint the working version independently from its staged blob."""
+    if path.is_symlink():
+        return "link:" + os.readlink(path)
+    if path.is_file():
+        return f"mode:{path.stat().st_mode & 0o111}:sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    return "other" if path.exists() else "deleted"
 
-    Explicit pathspecs only. This function never stages the whole tree.
-    The commit takes only ``paths`` and leaves anything else that is staged
-    staged.
 
-    Exclude pathspecs (``:(exclude…)``) are applied by staging the positive
-    paths and then resetting the excluded matches out of the index, not by
-    passing them to ``git add``. ``git add -- specs/changes/<name>
-    ':(exclude,glob)**/.board.json'`` stages *nothing* when that directory is
-    wholly untracked and directly holds an excluded file (seen with git
-    2.43), which is exactly the state of a new change directory at its first
-    spec-stage commit.
+def _agent_index_evidence(repo: Path | str) -> tuple[Path | None, dict]:
+    result = _run(["git", "rev-parse", "--git-path", "buildme-agent-index.json"], cwd=repo)
+    if not result.ok:
+        return None, {}
+    path = Path(result.stdout.strip())
+    if not path.is_absolute():
+        path = Path(repo) / path
+    try:
+        data = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, ValueError):
+        data = {}
+    return path, data if isinstance(data, dict) else {}
+
+
+@contextlib.contextmanager
+def agent_write_window(repo: Path | str | None):
+    """Remember staging introduced by this agent, never pre-existing user staging.
+
+    Evidence binds HEAD, project, index blobs and final working contents.
+    A hard kill before the exit record fails closed; normal cancellation records
+    the agent's index in finally. Callers must serialize writers to a project.
     """
-    if not paths:
-        return None
+    if repo is None or not Path(repo).is_dir():
+        yield
+        return
+    path, evidence = _agent_index_evidence(repo)
+    before = index_entries(repo) if path else None
+    staged = _run(["git", "diff", "--cached", "--name-only", "--relative", "-z", "--", "."], cwd=repo) if path else None
+    head = rev_parse_head(repo) if path else None
+    key = str(Path(repo).resolve())
+    prior = evidence.get(key, {})
+    entries = prior.get("entries", {}) if prior.get("head") == head else {}
+    owned = {p: item for p, item in entries.items() if isinstance(item, dict)
+             and item.get("index") == (before or {}).get(p)
+             and item.get("working") == _working_identity(Path(repo) / p)}
+    protected = {p for p in (staged.stdout.split("\0") if staged and staged.ok else [])
+                 if p and p not in owned}
+    try:
+        yield
+    finally:
+        if path and before is not None and staged and staged.ok and head == rev_parse_head(repo):
+            after = index_entries(repo)
+            if after is not None:
+                names = set(owned) | {p for p in before.keys() | after.keys()
+                                      if p not in protected and before.get(p) != after.get(p)}
+                owned = {p: {"index": after.get(p), "working": _working_identity(Path(repo) / p)}
+                         for p in names}
+                if owned:
+                    evidence[key] = {"head": head, "entries": owned}
+                    from .io_utils import atomic_write
+                    atomic_write(path, json.dumps(evidence, sort_keys=True))
+
+
+def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | None:
+    """Commit explicit paths using an isolated index, preserving other staging.
+
+    Divergent staged/working versions require exact agent ownership evidence. A failed commit leaves
+    the active index intact; successful commits reconcile only selected entries
+    if staging has not changed while hooks ran. Returns SHA, or None only for no changes. Refusals/failures raise
+    GitLifecycleError so callers retain their checkpoint without advancing.
+    """
     excludes = [p for p in paths if p.startswith(":(") and "exclude" in p[2:p.find(")")]]
     positives = [p for p in paths if p not in excludes]
     if not positives:
         return None
-    add = _run(["git", "add", "--", *positives], cwd=worktree)
-    if not add.ok:
-        log.warning("git add failed in %s: %s", worktree, add.stderr.strip())
-        return None
-    if excludes:
-        unstage = _run(["git", "reset", "-q", "--",
-                        *(_positive_pathspec(e) for e in excludes)], cwd=worktree)
-        if not unstage.ok:
-            log.warning("git reset of excluded paths failed in %s: %s — not committing",
-                        worktree, unstage.stderr.strip())
-            _run(["git", "reset", "-q", "--", *positives], cwd=worktree)
+    staged_paths = _run(["git", "diff", "--cached", "--name-only", "-z", "--relative",
+                         "--", *paths], cwd=worktree)
+    working_paths = _run(["git", "diff", "--name-only", "-z", "--relative",
+                          "--", *paths], cwd=worktree)
+    if not staged_paths.ok or not working_paths.ok:
+        raise GitLifecycleError("Cannot inspect commit paths")
+    # A staged deletion (including the old side of a rename) can still have
+    # a working file. It is now untracked, so plain `git diff` omits it.
+    deleted = _run(["git", "diff", "--cached", "--no-renames", "--diff-filter=D",
+                    "--name-only", "-z", "--relative", "--", *paths], cwd=worktree)
+    if not deleted.ok:
+        raise GitLifecycleError("Cannot inspect staged deletions")
+    recreated = {name for name in deleted.stdout.split("\0") if name and os.path.lexists(Path(worktree) / name)}
+    divergent = (set(staged_paths.stdout.split("\0")) & set(working_paths.stdout.split("\0"))) - {""}
+    before_index = index_entries(worktree)
+    _, evidence = _agent_index_evidence(worktree)
+    record = evidence.get(str(Path(worktree).resolve()), {})
+    owned = record.get("entries", {}) if record.get("head") == rev_parse_head(worktree) else {}
+    conflicts = divergent | recreated
+    if any(not isinstance(owned.get(p), dict)
+           or owned[p].get("index") != (before_index or {}).get(p)
+           or owned[p].get("working") != _working_identity(Path(worktree) / p) for p in conflicts):
+        raise GitLifecycleError(
+            f"Cannot commit {message}: staged and working versions differ: {', '.join(sorted(conflicts))}. "
+            "Inspect git diff and git diff --cached for these paths. Save both versions, then "
+            "git add the paths whose working version should be committed, or git restore --staged "
+            "the paths whose working version should remain unstaged. Missing agent ownership "
+            "after an interruption cannot be inferred safely.")
+    index_path = _run(["git", "rev-parse", "--git-path", "index"], cwd=worktree)
+    if before_index is None or not index_path.ok:
+        raise GitLifecycleError("Cannot inspect active index")
+    original = Path(index_path.stdout.strip())
+    if not original.is_absolute():
+        original = Path(worktree) / original
+    with tempfile.TemporaryDirectory(prefix="buildme-commit-index-") as directory:
+        temporary = Path(directory) / "index"
+        if original.exists():
+            shutil.copy2(original, temporary)
+        env = dict(os.environ, GIT_INDEX_FILE=str(temporary))
+        # Stage positive paths first: Git can skip a wholly untracked directory
+        # when its add pathspec also excludes a bookkeeping file inside it.
+        add = _run(["git", "add", "-A", "--", *positives], cwd=worktree, env=env)
+        if not add.ok:
+            raise GitLifecycleError("Cannot stage commit paths: " + add.stderr)
+        if excludes and not _run(["git", "reset", "-q", "--",
+                                  *(_positive_pathspec(p) for p in excludes)], cwd=worktree, env=env).ok:
+            raise GitLifecycleError("Cannot exclude bookkeeping from commit")
+        staged = _run(["git", "diff", "--cached", "--quiet", "--", *paths], cwd=worktree, env=env)
+        if staged.returncode == 0:
             return None
-    staged = _run(["git", "diff", "--cached", "--quiet", "--", *positives, *excludes], cwd=worktree)
-    if staged.returncode == 0:
-        log.info("Nothing staged to commit in %s (%s)", worktree, message)
-        return None
-    commit = _run(["git", "commit", "-m", message, "--", *positives, *excludes], cwd=worktree)
-    if not commit.ok:
-        log.warning("git commit failed in %s: %s", worktree, commit.stderr.strip())
-        return None
+        if staged.returncode != 1:
+            raise GitLifecycleError("Cannot compare commit index")
+        commit = _run(["git", "commit", "-m", message, "--", *paths], cwd=worktree, env=env)
+        if not commit.ok:
+            log.warning("Failed to commit %s: %s", message, commit.stderr.strip() or commit.stdout.strip())
+            raise GitLifecycleError("Commit failed: " + (commit.stderr or commit.stdout))
+    # Only reconcile entries we just committed, and only if no one changed
+    # their staging while hooks ran. Other project/sibling entries stay intact.
+    if index_entries(worktree) == before_index:
+        _run(["git", "reset", "-q", "HEAD", "--", *paths], cwd=worktree)
+    else:
+        log.warning("Index changed during commit; retained the caller's index unchanged")
     sha = _run(["git", "rev-parse", "HEAD"], cwd=worktree).stdout.strip()
-    log.info("COMMIT sha=%s msg=%s", sha[:8], message)
-    return sha or None
+    if not sha:
+        log.warning("Committed %s but could not read HEAD", message)
+        raise GitLifecycleError("Commit succeeded but HEAD is unreadable")
+    log.info("COMMIT %s sha=%s", message, sha[:8])
+    return sha
 
 
 # Buildme's own bookkeeping files must never be committed, from ANY commit
@@ -640,6 +740,8 @@ def commit_paths(worktree: Path, message: str, paths: list[str]) -> str | None:
 # files were bookkeeping (that one covered build-progress.md, this one did
 # not) — with a `git clean` on the other side of the disagreement.
 BOOKKEEPING_EXCLUDES = [
+    ":(exclude,glob)**/.plan-*.json",
+    ":(exclude,glob)**/.plan-*.tmp",
     ":(exclude,glob)**/.build-state.json",
     # A succeeded run's kept checkpoint (state.BuildState.complete).
     ":(exclude,glob)**/.build-state.complete.json",
@@ -694,65 +796,64 @@ def commit_stage(config, message: str, paths: list[str]) -> str | None:
 def commit_tree(repo: Path | str, message: str, label: str = "") -> str | None:
     """Commit everything under *repo* except buildme's bookkeeping.
 
-    Returns the new commit's SHA, or None when there was nothing to commit or
-    the commit failed (logged as a warning — never raises). *label* only names
-    the operation in log lines.
+    Returns the new SHA or None for no changes. Commit refusals/failures raise
+    GitLifecycleError. *label* is retained for caller compatibility.
     """
-    add = _run(["git", "add", "-A", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
-    if not add.ok:
-        log.warning("Failed to commit %s: %s", label, add.stderr.strip() or add.stdout.strip())
-        return None
-    staged = _run(["git", "diff", "--cached", "--quiet", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
-    if staged.returncode == 0:
-        log.info("No changes to commit for %s", label)
-        return None
-    commit = _run(["git", "commit", "-m", message, "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
-    if not commit.ok:
-        log.warning("Failed to commit %s: %s", label, commit.stderr.strip() or commit.stdout.strip())
-        return None
-    sha = _run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
-    if not sha:
-        log.warning("Committed %s but could not read HEAD", label)
-        return None
-    log.info("COMMIT %s sha=%s", label, sha[:8])
-    return sha
+    return commit_paths(repo, message, [".", *BOOKKEEPING_EXCLUDES])
 
 
 def save_wip_ref(repo: Path | str, ref: str, message: str) -> str | None:
-    """Keep the tree's current work under *ref* (``refs/buildme/wip/...``)
-    before a discard: commit whatever is uncommitted (``commit_tree``, so
-    bookkeeping stays out) and point a new ref at HEAD. Returns the ref
-    written, or None when no ref could be written (logged; never raises).
+    """Save working files and staging independently without changing HEAD/index.
 
-    An existing ref is never moved: a step that stops twice would otherwise
-    leave its first attempt's commit reachable from nothing. A later attempt
-    goes under ``<ref>-2``, ``<ref>-3``, and so on; a ref that already names
-    HEAD is returned as it is. The commit stays on the branch until the
-    caller's ``discard_to`` moves the branch back; the ref keeps it reachable
-    after that. When the WIP commit fails and the tree still holds
-    uncommitted work, no ref is written and None is returned, so the caller
-    never discards edits the ref does not hold."""
+    The ref's tree holds working files; its second parent's tree holds the
+    index. The first parent is the original HEAD. Existing refs are reused
+    only for identical snapshots, otherwise a numbered ref preserves both
+    attempts. Conflicts or any failed object/ref write refuse recovery.
+    """
     if not ref.startswith("refs/buildme/wip/") or not _run(
             ["git", "check-ref-format", ref], cwd=repo).ok:
         log.warning("Refusing to write wip ref %r", ref)
         return None
-    # commit_tree returns None both for "nothing to commit" and for "the
-    # commit failed" (a hook rejected it, signing failed). Only the first
-    # leaves HEAD holding the work; after the second, a ref at HEAD would keep
-    # nothing and the caller's discard would destroy the edits.
-    if commit_tree(repo, message, f"wip {ref}") is None and not tree_is_clean(repo):
-        log.warning("Refusing to write wip ref %r: the WIP commit failed and the tree "
-                    "still holds uncommitted work", ref)
+    if _run(["git", "rev-parse", "--verify", "-q", "MERGE_HEAD"], cwd=repo).ok:
         return None
-    head = rev_parse_head(repo)
-    if not head:
+    base = rev_parse_head(repo)
+    if not base:
         return None
+    # A stash-shaped commit: parent 1 is HEAD, parent 2 preserves the index,
+    # and the commit's own tree preserves working files (including untracked).
+    # Never stage into the caller's index, move HEAD, or run commit hooks.
+    index_tree = _run(["git", "write-tree"], cwd=repo)
+    if not index_tree.ok:  # An unmerged index cannot be represented by a tree.
+        log.warning("Cannot save WIP with an unmerged/unreadable index; preserve it manually")
+        return None
+    index_commit = _run(["git", "commit-tree", index_tree.stdout.strip(), "-p", base,
+                         "-m", "buildme: saved index"], cwd=repo)
+    if not index_commit.ok:
+        return None
+    with tempfile.TemporaryDirectory(prefix="buildme-index-") as directory:
+        env = dict(os.environ, GIT_INDEX_FILE=str(Path(directory) / "index"))
+        for argv in (["git", "read-tree", base],
+                     ["git", "add", "-A", "--", ".", *BOOKKEEPING_EXCLUDES]):
+            if not _run(argv, cwd=repo, env=env).ok:
+                return None
+        tree = _run(["git", "write-tree"], cwd=repo, env=env)
+        if not tree.ok:
+            return None
+    saved = _run(["git", "commit-tree", tree.stdout.strip(), "-p", base,
+                  "-p", index_commit.stdout.strip(), "-m", message], cwd=repo)
+    if not saved.ok:
+        return None
+    head = saved.stdout.strip()
     for attempt in range(1, 1000):
         name = ref if attempt == 1 else f"{ref}-{attempt}"
         held = _run(["git", "rev-parse", "--verify", "-q", name], cwd=repo)
         if held.ok:
-            if held.stdout.strip() == head:
-                log.info("WIP %s already names sha=%s", name, head[:8])
+            identical = all(
+                _run(["git", "rev-parse", name + suffix], cwd=repo).stdout.strip() == expected
+                for suffix, expected in (("^{tree}", tree.stdout.strip()), ("^1", base),
+                                         ("^2^{tree}", index_tree.stdout.strip())))
+            if identical:
+                log.info("WIP %s already preserves this HEAD, index and working tree", name)
                 return name
             continue
         # An empty old value makes update-ref create the ref only if it
@@ -844,6 +945,21 @@ def tree_is_clean(repo: Path | str, ignore: Path | str | None = None) -> bool:
     return not res.stdout.strip()
 
 
+def index_entries(repo: Path | str, ignore: Path | str | None = None) -> dict[str, str] | None:
+    """Project-relative index modes, blob IDs and conflict stages, read only."""
+    excludes = list(BOOKKEEPING_EXCLUDES)
+    if ignore is not None:
+        excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
+    result = _run(["git", "ls-files", "--stage", "-z", "--", ".", *excludes], cwd=repo)
+    if not result.ok:
+        return None
+    entries: dict[str, str] = {}
+    for entry in filter(None, result.stdout.split("\0")):
+        identity, name = entry.split("\t", 1)
+        entries[name] = entries.get(name, "") + identity + "\n"
+    return entries
+
+
 def dirty_files(repo: Path | str, ignore: Path | str | None = None) -> dict[str, str] | None:
     """Every path under *repo* whose content differs from HEAD (an edit, a
     deletion, a new file git does not ignore), relative to *repo*, mapped to
@@ -856,22 +972,19 @@ def dirty_files(repo: Path | str, ignore: Path | str | None = None) -> dict[str,
         excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
     changed = _run(["git", "diff", "HEAD", "--name-only", "-z", "--relative", "--no-renames",
                     "--", ".", *excludes], cwd=repo)
+    staged = _run(["git", "diff", "--cached", "HEAD", "--name-only", "-z", "--relative",
+                   "--no-renames", "--", ".", *excludes], cwd=repo)
     untracked = _run(["git", "ls-files", "--others", "--exclude-standard", "-z",
                       "--", ".", *excludes], cwd=repo)
-    if not (changed.ok and untracked.ok):
+    if not (changed.ok and staged.ok and untracked.ok):
         log.warning("git could not list the changed files: %s",
                     (changed.stderr or untracked.stderr).strip())
         return None
     out: dict[str, str] = {}
-    for rel in filter(None, (changed.stdout + untracked.stdout).split("\0")):
+    for rel in filter(None, (changed.stdout + staged.stdout + untracked.stdout).split("\0")):
         path = Path(repo) / rel
         try:
-            if path.is_symlink():
-                out[rel] = "link:" + os.readlink(path)
-            elif path.is_file():
-                out[rel] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
-            else:
-                out[rel] = "other" if path.exists() else "deleted"
+            out[rel] = _working_identity(path)
         except OSError as e:
             log.warning("Could not read %s: %s", path, e)
             return None

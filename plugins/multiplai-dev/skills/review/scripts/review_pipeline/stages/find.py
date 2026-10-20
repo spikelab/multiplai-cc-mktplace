@@ -13,8 +13,8 @@ last. Each writes a plain-text report
 (`sdk.agent_call_text`), stored in `state.finder_reports` and written as
 `report-piece-<id>.md` or `report-path-<id>.md` before a second call converts it into findings
 (`run_reported`). Its findings then go through the same dedupe and
-`finding_gate` as the dimension finders'. Only `RepoTrustError` and a budget
-stop end the stage; a failed report or convert call is recorded in coverage
+`finding_gate` as the dimension finders'. Only `RepoTrustError`, a hit usage
+limit and a budget stop end the stage; a failed report or convert call is recorded in coverage
 and the others go on, and `resume` asks only for the missing report or convert.
 """
 
@@ -35,7 +35,7 @@ from ..checks import add_coverage, drop_coverage
 from ..chunks import piece_diff_text
 from ..config import TRIM_DIMENSION, ReviewConfig
 from ..gates import file_at_head, finding_gate, gated_need, reason_kind
-from ..linked_docs import LinkSource, linked_docs
+from ..linked_docs import LinkSource, linked_docs, not_included_line
 from ..models import (AgentCheck, ConvertedItem, ConvertOutput, CoverageRecord, Finding, FinderOutput,
                       FinderReport, FinderResult, GateCheck, Need, Rejected, ReviewState, TargetInfo)
 from ..paths_io import load_paths, views
@@ -147,7 +147,8 @@ def conventions_blocks(target: TargetInfo, files: list[str] | None = None, *,
     come first: when the text passes CONVENTIONS_MAX_CHARS, CLAUDE.md is skipped first.
     The linked docs share what is left of CONVENTIONS_MAX_CHARS; the first one
     included carries `binding_instruction`, and one left out is a
-    (path, False, "") entry and a record appended to *coverage*.
+    (path, False, block) entry and a record appended to *coverage*: the block
+    is `not_included_line` when it was left out for length, else "".
     """
     chain = _dir_chain(target, files)
     blocks, total = [], 0
@@ -173,7 +174,8 @@ def conventions_blocks(target: TargetInfo, files: list[str] | None = None, *,
     lead = binding_instruction(docs.included)
     for i, (path, block) in enumerate(zip(docs.included, docs.blocks)):
         blocks.append((path, True, lead + block if i == 0 else block))
-    blocks += [(record.subject, False, "") for record in docs.skipped]
+    blocks += [(record.subject, False, not_included_line(record.subject) if record.reason == "budget" else "")
+               for record in docs.skipped]
     if coverage is not None:
         coverage.extend(docs.skipped)
     return blocks
@@ -334,7 +336,7 @@ async def run_reported(key: str, prompt_text: str, state: ReviewState, ctx: RunC
             try:
                 text = await sdk.agent_call_text(prompt_text, cwd=ctx.snapshot, budget_label=label,
                                                  call_timeout=sdk.DEFAULT_CALL_TIMEOUT_S, **common)
-            except (sdk.RepoTrustError, budget.BudgetExceededError):
+            except (sdk.RepoTrustError, sdk.UsageLimitError, budget.BudgetExceededError):
                 raise
             except Exception as e:  # noqa: BLE001 — one failed finder must not stop the others
                 log.error("finder %s failed for %s", key, target.slug, exc_info=True)
@@ -376,7 +378,7 @@ async def run_reported(key: str, prompt_text: str, state: ReviewState, ctx: RunC
         try:
             out = await sdk.agent_call_structured(build_convert(key, rep.text), ConvertOutput,
                                                   cwd=str(ctx.snapshot), budget_label=label, **common)
-        except (sdk.RepoTrustError, budget.BudgetExceededError):
+        except (sdk.RepoTrustError, sdk.UsageLimitError, budget.BudgetExceededError):
             raise
         except Exception as e:  # noqa: BLE001 — the report is kept and the convert left for resume
             log.error("convert %s failed for %s", key, target.slug, exc_info=True)
@@ -503,7 +505,7 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
                     max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label=f"find:{dimension}",
                 )
                 error = ""
-            except sdk.RepoTrustError:
+            except (sdk.RepoTrustError, sdk.UsageLimitError):
                 raise
             except sdk.AgentCallError as e:
                 log.error("finder %s failed for %s", key, target.slug, exc_info=True)

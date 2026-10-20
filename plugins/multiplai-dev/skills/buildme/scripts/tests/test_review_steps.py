@@ -274,6 +274,15 @@ class TestPanelResilience:
             with pytest.raises(LLMCallError, match="every member"):
                 await run_code_review("diff", "rubric", config)
 
+    @pytest.mark.asyncio
+    async def test_budget_denial_cannot_be_dropped_as_a_degraded_panel(self):
+        from build_pipeline.budget import BudgetExceededError
+        config = self._panel_config("model-a", "model-b")
+        with patch("build_pipeline.llm_steps.review_steps.agent_call_structured",
+                   new_callable=AsyncMock, side_effect=[BudgetExceededError("cap"), REVIEW_OK]):
+            with pytest.raises(BudgetExceededError):
+                await run_code_review("diff", "rubric", config)
+
 
 class TestPanelDispatch:
     @pytest.mark.asyncio
@@ -377,3 +386,58 @@ class TestReviewersAreReadOnlySubagents:
             assert not WRITE_CAPABLE_TOOLS.intersection(kwargs["allowed_tools"])
             assert kwargs["cwd"] == str(tmp_path)
             assert kwargs["budget_label"] == label
+
+
+# --- PR B: prior assessments and defect locations across a panel ------------
+
+from build_pipeline.models import PriorAssessment  # noqa: E402
+
+
+def _assessed(*pairs) -> ReviewResult:
+    return ReviewResult(scores=REVIEW_OK.scores, prior_assessments=[
+        PriorAssessment(finding_id=fid, status=status) for fid, status in pairs])
+
+
+class TestPriorAssessmentMerge:
+    @pytest.mark.parametrize("statuses, worst", [
+        (["resolved", "cannot_verify"], "cannot_verify"),
+        (["cannot_verify", "partially_resolved"], "partially_resolved"),
+        (["partially_resolved", "still_present"], "still_present"),
+        (["still_present", "resolved"], "still_present"),
+        (["resolved", "resolved"], "resolved"),
+    ])
+    def test_the_worst_status_per_finding_wins(self, statuses, worst):
+        merged = merge_panel_results([_assessed(("B01-R1-F1", s)) for s in statuses],
+                                     [f"m{i}" for i in range(len(statuses))])
+        assert [(a.finding_id, a.status) for a in merged.prior_assessments] == [
+            ("B01-R1-F1", worst)]
+
+    def test_one_reviewer_listing_an_id_twice_is_merged_too(self):
+        merged = merge_panel_results(
+            [_assessed(("B01-R1-F1", "resolved"), ("B01-R1-F1", "still_present"))], ["m"])
+        assert [(a.finding_id, a.status) for a in merged.prior_assessments] == [
+            ("B01-R1-F1", "still_present")]
+
+    def test_ids_keep_the_order_they_were_first_given(self):
+        merged = merge_panel_results(
+            [_assessed(("B", "resolved"), ("A", "resolved")), _assessed(("A", "still_present"))],
+            ["m1", "m2"])
+        assert [(a.finding_id, a.status) for a in merged.prior_assessments] == [
+            ("B", "resolved"), ("A", "still_present")]
+
+    def test_an_unknown_status_reads_as_cannot_verify(self):
+        assert PriorAssessment(finding_id="x", status="Fixed!").status == "cannot_verify"
+        assert PriorAssessment(finding_id="x", status="Still Present").status == "still_present"
+
+
+class TestOtherLocationsMerge:
+    def test_a_shared_finding_takes_the_union_of_its_locations(self):
+        f = ReviewFinding(claim="same bug", file_path="a.py", line=1, defect_class="off-by-one",
+                          other_locations=["b.py:2"])
+        g = f.model_copy(update={"other_locations": ["b.py:2", "c.py:3"], "defect_class": ""})
+        merged = merge_panel_results([_result(findings=[f]), _result(findings=[g])], ["m1", "m2"])
+        assert [x.other_locations for x in merged.findings] == [["b.py:2", "c.py:3"]]
+        assert merged.findings[0].defect_class == "off-by-one"
+
+    def test_a_location_given_as_a_string_still_parses(self):
+        assert ReviewFinding(claim="c", other_locations="a.py:1").other_locations == ["a.py:1"]

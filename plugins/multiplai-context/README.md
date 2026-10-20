@@ -220,6 +220,8 @@ over the anchor:
 | `catalog_thinking` | `false` | Extended thinking on catalog-generation calls (memory, banks, skills, diary generators). Set `true`/`1` to restore it. Same old-dependency behaviour as `router_thinking`. |
 | `recommend_cooldown_turns` | `4` | After a file is injected, suppress re-injecting it for this many turns (it's already in the conversation). `0` disables. See [Re-recommendation cooldown](#re-recommendation-cooldown). |
 | `keep_ratio` | `0.30` | `token_overlap` relevance cutoff: keep a memory file only if it scores ≥ this fraction of the top match (0–1). Higher = stricter (fewer, more-relevant files, less 10-file cap saturation); lower admits more of the weaker tail. Ignored under `llm`. See [Routing relevance cutoff](#routing-relevance-cutoff). |
+| `memory_budget_bytes` | `40000` | Most memory content one prompt may inject, in bytes. Past it, the router's lowest-ranked picks are dropped first (logged as `MEMORY_BUDGET`); a top pick that alone exceeds it is replaced by a pointer to its file. Also caps the recency fallback. `0` disables. |
+| `whole_file_max_bytes` | `20000` | Memory files larger than this are never injected whole. A pick naming such a file without a section is answered by that file's section picks if the router made any, otherwise by a pointer: the file's path, its opening lines and its section list (logged as `WHOLE_FILE_POINTER`). A shared-bank file gets no pointer, since its fence forbids acting on a Read instruction; the pick is dropped (`WHOLE_FILE_DROPPED`). The recency fallback skips such files. `0` disables. |
 | `memory_conflict_preamble` | `true` | Conflict-surfacing directive + per-file last-updated stamps above every injected MEMORY block, so the model flags memory-vs-session disagreements. ~90 tokens per memory-carrying turn; turn off to save them. |
 | `enable_skills` / `skills_dir` | `false` / `~/.claude/skills` | Optionally catalog skills for routing |
 | `enable_resources` / `resources_dir` | `false` / `""` | Optionally retrieve a research/reference corpus per prompt, through qmd. There is no resources catalog and no generator — the index is qmd's, built on the host. See [Resources retrieval via qmd](#resources-retrieval-via-qmd). |
@@ -768,13 +770,16 @@ Four things keep it safe:
   only the filename half of `file.md#Section` is checked against the catalog —
   so a fragment naming a section that has since been renamed does reach the
   loader. That is the case the next bullet covers.
-- **A wrong anchor costs one whole-file load, and says so.** If a name matches
-  no header — a stale catalog, a section you renamed — the loader returns the
-  **whole file**, which is what happened before this existed. No prompt comes
-  out with less context than it would have had. Several stale anchors on one
-  file still load it once, and the loader logs a warning naming each anchor
-  that did not resolve; run
-  `/multiplai-context:refresh-catalogs --only memory` after renaming a section.
+- **A wrong anchor loads the nearest heading or nothing, and says so.** If a
+  name matches no header exactly, the loader takes the nearest one: the same
+  words ignoring case and punctuation, the name with a pasted description cut
+  off after a dash, a header the name ends (`Tooling & UI Preferences` for
+  `Code Quality — Tooling & UI Preferences`), or a close spelling. It logs
+  `ANCHOR_NEAREST` when it does. If nothing is close — a stale catalog, a
+  section moved to another file — the pick is dropped and a warning names it;
+  run `/multiplai-context:refresh-catalogs --only memory` after renaming a
+  section. Until 0.58.0 a miss loaded the **whole file** instead, which put
+  54-132 KB files into prompts for one section.
 - **Anchors are regenerated, not remembered.** Unlike `sections`, `bundle` and
   `co_retrieve_for`, they are re-derived whenever the file's content changes.
   Hand-editing them is pointless: your edit is replaced on the next rebuild of
@@ -790,9 +795,10 @@ Four things keep it safe:
 ### Bundles and co-retrieval pull *whole* files
 
 `expand_bundles` and `expand_co_retrieve` add a companion by bare filename, so a
-companion is injected whole even when it has anchors of its own. On a corpus
-where the largest companion is 140 KB with 38 sections, that undoes anchoring for
-every turn it fires. Measure before you author these fields: on one 514-turn
+companion is injected whole even when it has anchors of its own — unless it is
+over `whole_file_max_bytes` (default 20 KB), when it becomes a pointer: path,
+opening lines and section list. Under a higher limit, a 140 KB companion with 38
+sections undoes anchoring for every turn it fires. Measure before you author these fields: on one 514-turn
 sample, the four documented `bundle: writing` members plus three `co_retrieve_for`
 pairs would have added **3.7 MB** of whole-file injections — against 32.8 MB of
 whole-file bytes in the same window. Bundle a set of *small* files, or leave the
@@ -1069,7 +1075,7 @@ fetch at session start. Eight passes — seven daily, one weekly:
 |---|---|---|
 | 1. Memory lint | `lib/memory_lint` — expired `review by` dates, unannotated volatile facts, duplicate `##` section names | no |
 | 2. Dream proposal | Only when the dream gate is open, a learnings backlog exists, **and** no un-archived proposal is already waiting | yes |
-| 3. Catalog refresh | Only when a memory file is newer than the catalog that indexes it | yes |
+| 3. Catalog refresh | Memory: only when a memory file is newer than the catalog that indexes it. Skills (with `enable_skills` on): only when the skills catalog is older than `catalog_ttl_hours` or `installed_plugins.json` changed after it was generated | yes |
 | 4. `now/` rebuild | `synthesize_now` for the **active project only**, on a **Haiku** tier | yes (cheap) |
 | 5. Utilisation retention | Collapses `utilisation.jsonl` records older than 90 days into per-section totals | no |
 | 6. Utilisation judge | Rules on a sample of un-judged sessions (`utilisation_judge_sample`, default 5), on a **Haiku** tier | yes (cheap) |
@@ -2096,6 +2102,8 @@ An `inject` record carries the attribution the human line has no room for:
 | `files_by_corpus` | the same names split by corpus |
 | `sections_by_file` | memory only, keyed by **bare filename**: which `##` sections were loaded. An **empty list means the whole file** — a file with nothing loaded has no key at all |
 | `bytes_by_file` | memory only, same keys: characters injected for that file, summed over its picks |
+| `pointers` | memory files injected as a pointer (path, opening lines, section list) instead of content — see `whole_file_max_bytes` and `memory_budget_bytes`. Not in `sections_by_file` |
+| `budget_dropped` | memory picks dropped to hold `memory_budget_bytes`, lowest-ranked first |
 | `bytes` | the whole assembled context block |
 
 `sections_by_file` and `bytes_by_file` are what let you answer "did that

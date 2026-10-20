@@ -21,7 +21,22 @@ from lib.memory_router import resolve_strategy
 
 # Machine-readable routing line emitted by context_manager:
 #   ... INFO: ROUTING_SCORES memory={"picked": [...], "capped": ..., ...}
-_ROUTING_RE = re.compile(r"ROUTING_SCORES memory=(\{.*\})\s*$")
+_ROUTING_RE = re.compile(r"^ROUTING_SCORES memory=(\{.*\})\s*$")
+# Written by context_manager for every routed prompt, whatever the strategy:
+#   ... INFO: Router llm picked: memory=2 skills=1
+# ROUTING_SCORES above is written only by routers that expose scores
+# (token_overlap, llm_hybrid), so for the llm router this line, plus the two
+# LLMRouter lines below, is the whole record of what it did.
+_PICKED_RE = re.compile(r"^Router (\S+) picked: memory=(\d+) skills=(\d+)\s*$")
+_LLM_ABSTAINED_RE = re.compile(r"^LLMRouter abstained")
+_LLM_DEGRADED_RE = re.compile(r"^LLMRouter .*degrading to ")
+# The multiplai-core line prefix: `[ts] [component] [session:x] LEVEL: msg`.
+# Every pattern above is anchored to the start of *msg*, because a
+# ROUTING_SCORES line quotes the user's prompt, and a prompt that contains
+# "Router llm picked: ..." must not read as a router record.
+_LINE_RE = re.compile(r"^\[([^\]]+)\] \[[^\]]*\] \[[^\]]*\] [A-Z]+: (.*)$")
+# Strategies whose router writes ROUTING_SCORES (``last_scores``).
+_SCORED_STRATEGIES = frozenset({"token_overlap", "llm_hybrid"})
 # Bound how much routing history we aggregate (logs have 7-day
 # retention; this also caps work on a busy log).
 _MAX_ROUTING_SAMPLES = 500
@@ -181,60 +196,40 @@ def _routing_status(paths) -> dict:
     except Exception:
         configured = "unknown"
     client = detect_client_type()
-    degraded = configured == "llm" and client.startswith("none")
+    # create_router() degrades both model-backed strategies without a client.
+    degraded = configured in ("llm", "llm_hybrid") and client.startswith("none")
     status["configured_strategy"] = configured
     status["effective_strategy"] = "token_overlap" if degraded else configured
     status["degraded_to_fallback"] = degraded
 
-    # Live aggregates from the machine routing log: one file per UTC day
+    # Live aggregates from the routing log: one file per UTC day
     # (context_manager-YYYY-MM-DD.log), read newest first until there are
     # enough samples. An undated context_manager.log from before multiplai-core
     # 0.21 holds lines older than any dated file, so it is read last.
-    logs_dir = paths.logs_dir()
-    log_files = sorted(logs_dir.glob("context_manager-*.log"), reverse=True)
-    log_files.append(logs_dir / "context_manager.log")
-    samples: list[dict] = []
-    for log_file in log_files:
-        if len(samples) >= _MAX_ROUTING_SAMPLES:
-            break
-        if not log_file.exists():
-            continue
-        found: list[dict] = []
-        try:
-            for ln in log_file.read_text(errors="replace").splitlines():
-                m = _ROUTING_RE.search(ln)
-                if not m:
-                    continue
-                try:
-                    found.append(json.loads(m.group(1)))
-                except (json.JSONDecodeError, ValueError):
-                    continue
-        except OSError:
-            continue
-        samples = found + samples
-    samples = samples[-_MAX_ROUTING_SAMPLES:]
-    if samples:
-        n = len(samples)
-        capped = sum(1 for s in samples if s.get("capped"))
-        picked_counts = [
-            s.get("n_picked", len(s.get("picked") or [])) for s in samples
-        ]
-        tops = [s["picked"][0][1] for s in samples if s.get("picked")]
-        floors = [s["picked"][-1][1] for s in samples if s.get("picked")]
-        status["live"] = {
-            "samples": n,
-            "cap_saturation_pct": round(100 * capped / n, 1),
-            "empty_pct": round(
-                100 * sum(1 for c in picked_counts if c == 0) / n, 1
-            ),
-            "mean_picked": round(sum(picked_counts) / n, 1),
-            "mean_top_score": round(sum(tops) / len(tops), 2) if tops else None,
-            "mean_floor_score": (
-                round(sum(floors) / len(floors), 2) if floors else None
-            ),
-        }
+    events = _read_routing_events(paths.logs_dir())
+
+    picks = [e for e in events if e[0] == "picked"]
+    logged = picks[-1] if picks else None
+    status["logged_strategy"] = logged[1] if logged else None
+    status["logged_strategy_at"] = logged[4] if logged else None
+    status["strategy_mismatch"] = bool(
+        logged and logged[1] != status["effective_strategy"]
+    )
+
+    # Describe what the hook actually ran: its logged strategy wins over the
+    # configured one, which this process may resolve differently. Score lines
+    # with no pick line to attribute them to (logs older than that line) are
+    # reported with strategy None rather than credited to any router.
+    if logged:
+        live_strategy = logged[1]
+    elif any(e[0] == "scores" for e in events):
+        live_strategy = None
     else:
-        status["live"] = {"samples": 0}
+        live_strategy = status["effective_strategy"]
+    if live_strategy is None or live_strategy in _SCORED_STRATEGIES:
+        status["live"] = _score_aggregates(events, live_strategy)
+    else:
+        status["live"] = _pick_aggregates(events, live_strategy)
 
     # Last offline eval snapshot (written by eval_router.py).
     snap = paths.data_dir() / "router-eval" / "latest.json"
@@ -263,6 +258,149 @@ def _routing_status(paths) -> dict:
         except (OSError, json.JSONDecodeError, ValueError):
             status["last_eval"] = None
     return status
+
+
+def _read_routing_events(logs_dir: Path) -> list:
+    """Router events from the context_manager logs, oldest first, bounded.
+
+    Each event is ``("picked", strategy, n_memory, n_skills, ts, abstained,
+    degraded)`` or ``("scores", dict, strategy)``. The llm router logs its
+    abstain/degrade line before the pick line of the same run, so those flags
+    ride on the next pick; a ROUTING_SCORES line follows its run's pick line,
+    so it takes the strategy of the pick before it (``None`` when there is
+    none). Concurrent runs interleaving in one file can misattribute a line;
+    that is accepted. Files are read newest first, and reading stops once
+    either kind of sample reaches ``_MAX_ROUTING_SAMPLES``.
+    """
+    log_files = sorted(logs_dir.glob("context_manager-*.log"), reverse=True)
+    log_files.append(logs_dir / "context_manager.log")
+    events: list = []
+    n_picked = n_scores = 0
+    for log_file in log_files:
+        if max(n_picked, n_scores) >= _MAX_ROUTING_SAMPLES:
+            break
+        if not log_file.exists():
+            continue
+        found: list = []
+        abstained = degraded = False
+        last_strategy = None
+        try:
+            lines = log_file.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for ln in lines:
+            line_m = _LINE_RE.match(ln)
+            if not line_m:
+                continue
+            ts, msg = line_m.group(1), line_m.group(2)
+            m = _ROUTING_RE.match(msg)
+            if m:
+                try:
+                    found.append(("scores", json.loads(m.group(1)), last_strategy))
+                    n_scores += 1
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                continue
+            m = _PICKED_RE.match(msg)
+            if m:
+                last_strategy = m.group(1)
+                found.append((
+                    "picked", last_strategy, int(m.group(2)), int(m.group(3)),
+                    ts, abstained, degraded,
+                ))
+                abstained = degraded = False
+                n_picked += 1
+            elif _LLM_ABSTAINED_RE.match(msg):
+                abstained = True
+            elif _LLM_DEGRADED_RE.match(msg):
+                degraded = True
+        events = found + events
+    return events
+
+
+def _score_aggregates(events: list, strategy: str | None) -> dict:
+    """Live stats from ROUTING_SCORES lines (token_overlap, llm_hybrid).
+
+    Only samples written by *strategy* count; with ``None`` (no pick line to
+    say which router wrote them) every sample counts.
+    """
+    samples = [
+        e[1] for e in events
+        if e[0] == "scores" and (strategy is None or e[2] == strategy)
+    ]
+    samples = samples[-_MAX_ROUTING_SAMPLES:]
+    if not samples:
+        return {"strategy": strategy, "source": "ROUTING_SCORES", "samples": 0}
+    n = len(samples)
+    capped = sum(1 for s in samples if s.get("capped"))
+    picked_counts = [
+        s.get("n_picked", len(s.get("picked") or [])) for s in samples
+    ]
+    tops = [s["picked"][0][1] for s in samples if s.get("picked")]
+    floors = [s["picked"][-1][1] for s in samples if s.get("picked")]
+    return {
+        "strategy": strategy,
+        "source": "ROUTING_SCORES",
+        "samples": n,
+        "cap_saturation_pct": round(100 * capped / n, 1),
+        "empty_pct": round(
+            100 * sum(1 for c in picked_counts if c == 0) / n, 1
+        ),
+        "mean_picked": round(sum(picked_counts) / n, 1),
+        "mean_top_score": round(sum(tops) / len(tops), 2) if tops else None,
+        "mean_floor_score": (
+            round(sum(floors) / len(floors), 2) if floors else None
+        ),
+    }
+
+
+def _pick_aggregates(events: list, strategy: str) -> dict:
+    """Live stats from ``Router <strategy> picked`` lines (the llm router).
+
+    Over the newest ``_MAX_ROUTING_SAMPLES`` runs of *strategy*:
+    ``memory_empty_pct`` is the share where the router picked no memory
+    (before cooldown; it includes runs that picked only skills);
+    ``abstained_pct`` the share where the model answered and picked nothing
+    in any corpus; ``degraded_pct`` the share where the llm call failed and
+    token_overlap picked instead.
+    """
+    picks = [e for e in events if e[0] == "picked" and e[1] == strategy]
+    picks = picks[-_MAX_ROUTING_SAMPLES:]
+    out: dict = {"strategy": strategy, "source": "router_picks",
+                 "samples": len(picks)}
+    if not picks:
+        return out
+    n = len(picks)
+    out["memory_empty_pct"] = round(
+        100 * sum(1 for e in picks if e[2] == 0) / n, 1
+    )
+    out["mean_picked_memory"] = round(sum(e[2] for e in picks) / n, 1)
+    if strategy == "llm":
+        out["abstained_pct"] = round(100 * sum(1 for e in picks if e[5]) / n, 1)
+        out["degraded_pct"] = round(100 * sum(1 for e in picks if e[6]) / n, 1)
+    return out
+
+
+def _routing_recommendations(routing: dict) -> list:
+    """Recommendations about which router is running."""
+    recs = []
+    if routing.get("degraded_to_fallback"):
+        recs.append(
+            "memory_router is explicitly set to llm but no model client "
+            "is available, so routing fell back to token_overlap. Unset "
+            "the option to use the default, or provide a model client."
+        )
+    if routing.get("strategy_mismatch"):
+        recs.append(
+            f"The context hook last routed with "
+            f"{routing.get('logged_strategy')} "
+            f"(at {routing.get('logged_strategy_at')}), but this check "
+            f"resolved the configured strategy as "
+            f"{routing.get('effective_strategy')}. Either the setting changed "
+            f"since, or this process cannot see the configuration the hook "
+            f"reads. The live stats describe the logged strategy."
+        )
+    return recs
 
 
 def run_health_check() -> dict:
@@ -430,12 +568,7 @@ def run_health_check() -> dict:
         )
 
     routing = report.get("routing") or {}
-    if routing.get("degraded_to_fallback"):
-        recommendations.append(
-            "memory_router is explicitly set to llm but no model client "
-            "is available, so routing fell back to token_overlap. Unset "
-            "the option to use the default, or provide a model client."
-        )
+    recommendations.extend(_routing_recommendations(routing))
     # eval_router needs user-supplied golden cases; only recommend it when some
     # are actually discoverable, otherwise the suggested command just SystemExits.
     try:

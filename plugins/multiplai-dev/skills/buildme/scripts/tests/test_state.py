@@ -222,8 +222,8 @@ class TestLegacyCheckpointResume:
         assert s.phase == BuildPhase.DESIGN_AUDIT
         assert s.change_name == "legacy-change"
         # Fields added after the checkpoint was written take their defaults.
-        assert s.spec_gen.prototype_done is False
-        assert s.spec_gen.tasks_audit_done is True
+        assert s.spec_gen.step_passed("prototype") is False
+        assert s.spec_gen.step_passed("tasks_audit") is False  # legacy booleans are not revision evidence
 
         # Everything before the design audit stays complete...
         assert s.is_phase_complete(BuildPhase.BOOTSTRAP)
@@ -259,7 +259,7 @@ class TestLegacyCheckpointResume:
         reloaded = BuildState.load(out)
         assert reloaded.phase == BuildPhase.DESIGN_AUDIT
         assert reloaded.spec_gen.completed_artifacts == s.spec_gen.completed_artifacts
-        assert json.loads(out.read_text())["spec_gen"]["prototype_done"] is False
+        assert "prototype" not in json.loads(out.read_text())["spec_gen"]["steps"]
 
 
 class TestPreCodebaseAnalysisCheckpointResume:
@@ -656,10 +656,10 @@ class TestPrePlanReviewCheckpointResume:
         assert s.change_name == "legacy-plan"
         # The two flags the new phase writes take their defaults on an old
         # checkpoint, so the phase runs once rather than being skipped.
-        assert s.spec_gen.plan_review_done is False
-        assert s.spec_gen.plan_review_regen_done is False
+        assert s.spec_gen.step_passed("plan_review") is False
+        assert s.spec_gen.repair_attempts("plan_review") == 0
         # A field that predates it keeps the value it was written with.
-        assert s.spec_gen.tasks_audit_done is True
+        assert s.spec_gen.step_passed("tasks_audit") is False  # legacy booleans are not revision evidence
 
         assert s.is_phase_complete(BuildPhase.SPEC_GENERATION)
         # The resume point is the design audit, with the new phase after it
@@ -690,8 +690,8 @@ class TestPrePlanReviewCheckpointResume:
         assert reloaded.phase == BuildPhase.DESIGN_AUDIT
         assert reloaded.spec_gen.completed_artifacts == s.spec_gen.completed_artifacts
         written = json.loads(out.read_text())["spec_gen"]
-        assert written["plan_review_done"] is False
-        assert written["plan_review_regen_done"] is False
+        assert "plan_review" not in written["steps"]
+        assert "plan_review_regen_done" not in written
 
 
 class TestPreFindingsCheckpoint:
@@ -849,3 +849,14 @@ class TestFailRecordsTheTree:
             "    return state.phase != 'failed'\n"
         )
         assert _failed_writes(source) == []
+
+
+def test_skipped_or_advisory_required_reviews_never_authorize_building():
+    from build_pipeline.state import SpecGenState
+    state = SpecGenState(revision="current")
+    for name in ("design_audit", "plan_review", "tasks_audit"):
+        for outcome in ("skipped", "advisory", "blocked"):
+            state.record_step(name, outcome)
+            assert not state.step_passed(name)
+        state.record_step(name, "passed")
+        assert state.step_passed(name)

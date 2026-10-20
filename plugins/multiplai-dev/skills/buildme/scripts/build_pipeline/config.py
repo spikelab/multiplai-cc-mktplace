@@ -445,8 +445,10 @@ MODEL_STAGES: tuple[str, ...] = ("spec", "agent", "review")
 # calls are named for what they do; `review_fix` is the fix agent the review
 # loop runs (it charges the budget as `implementer`); and
 # `integration_fix_escalated` is the last integration-fix attempt, which has
-# always run on the review model. A stage's `[buildme.<stage>] EFFORT=` and
-# `efforts.<stage>` apply to every step in it.
+# always run on the review model, and `review_fix_escalated` is the review
+# loop's last fix, which questions the block's approach on the same model. A
+# stage's `[buildme.<stage>] EFFORT=` and `efforts.<stage>` apply to every
+# step in it.
 STEP_STAGES: dict[str, str] = {
     "spec_artifact": "spec",
     "rubric": "spec",
@@ -474,6 +476,7 @@ STEP_STAGES: dict[str, str] = {
     "test_quality_audit": "review",
     "plan_review": "review",
     "integration_fix_escalated": "review",
+    "review_fix_escalated": "review",
     "findings_triage": "review",
     "findings_self_check": "review",
 }
@@ -785,6 +788,9 @@ class BuildConfig:
     # `build --base-ref`: the commit a new worktree branches from (an epic's
     # coordinator passes origin's default branch). Empty: the source HEAD.
     base_ref: str = ""
+    # `build --epic-child`: an epic's coordinator started this build (or its
+    # saved command was run again). `orchestrator._epic_child` reads it.
+    epic_child: bool = False
     # `models:` from specs/config.yaml: step, stage or `default` → a model spec
     # as written. `model_for` resolves it.
     model_specs: dict[str, str] = field(default_factory=dict)
@@ -949,6 +955,7 @@ class BuildConfig:
     # (the pre-budget behavior).
     budget_max_tokens: int | None = None
     budget_max_usd: float | None = None
+    accept_unknown_spend: bool = False
 
     def __post_init__(self) -> None:
         # `review_model` reads its conf section here rather than in a
@@ -1105,6 +1112,7 @@ class BuildConfig:
             skip_research=getattr(args, "skip_research", False),
             lenient_review=getattr(args, "lenient_review", False),
             skip_explainers=getattr(args, "skip_explainers", False),
+            accept_unknown_spend=getattr(args, "accept_unknown_spend", False),
         )
         config.specs_dir = config.project_dir / "specs"
         config._load_specs_config()
@@ -1368,6 +1376,7 @@ class BuildConfig:
         if getattr(args, "pr_ready", False):
             self.git.pr = "ready"
         self.base_ref = getattr(args, "base_ref", "") or ""
+        self.epic_child = bool(getattr(args, "epic_child", False))
 
     def rebind_project_dir(self, new_project_dir: Path) -> None:
         """Point the whole config at a different checkout of the same project.

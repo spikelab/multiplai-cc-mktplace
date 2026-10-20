@@ -31,7 +31,31 @@ failing tests that define the expected behavior for a block of work.
 9. **No `assert True`**, no `assert x is not None` as the sole assertion, no empty
    test bodies. Every test must assert a meaningful behavioral outcome.
 10. Run the test command after writing to confirm tests are syntactically valid
-   (they should fail, not error with ImportError/SyntaxError).
+   (they should fail, not error with ImportError/SyntaxError). For new Python
+   packages, modules, or functions, import the module inside the test. Convert
+   only absence of that expected module or its parent package into an assertion;
+   let unrelated dependency/import errors propagate. Then check the public
+   function and its behavior. Avoid `find_spec` on a missing subpackage and
+   `from module import new_function` before asserting the function exists.
+   Adapt this example's module names and behavioral assertion to the actual API:
+
+```python
+import importlib
+
+def test_new_api():
+    module_name = "new_pkg.feature"
+    try:
+        feature = importlib.import_module(module_name)
+    except ModuleNotFoundError as error:
+        if error.name != module_name and not module_name.startswith((error.name or "") + "."):
+            raise
+        raise AssertionError("Implement " + module_name) from None
+    assert callable(getattr(feature, "answer", None)), "Implement answer"
+    assert feature.answer() == 42
+```
+
+   The existence checks support collection-safe RED; the final behavior assertion
+   remains required. Do not let a missing implementation prevent collection.
 
 ## Quality Gates — check every test against these before finishing
 
@@ -84,6 +108,7 @@ STATUS: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
 TESTS_RUN: <the exact command you ran>
 FILES: <test files you created or modified, comma-separated>
 TEST_COUNT: <how many tests you wrote>
+RED_EXPECTED: <test ids that must fail, comma-separated> — <what is missing that makes them fail>
 SURPRISES: <what did not match the spec/design, or "none">
 SPEC_IMPACT: <none | clarify | contradicts>
 ```
@@ -91,6 +116,12 @@ SPEC_IMPACT: <none | clarify | contradicts>
 Use DONE when the tests are written and fail for the right reason;
 DONE_WITH_CONCERNS when they are written but something is worth flagging (state
 what under the slot); NEEDS_CONTEXT or BLOCKED per the section above.
+
+RED_EXPECTED names each test you expect to fail before the implementation
+exists, by the id the test command prints for it (for pytest,
+`path/to/test_file.py::test_name`), then what the code is missing that makes
+them fail. The pipeline compares it with the failures the RED run reports and
+gives both to the reviewer.
 
 SURPRISES and SPEC_IMPACT close the loop back to the spec. Write down anything
 the specs did not prepare you for — a scenario whose expected shape differs from

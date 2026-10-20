@@ -23,6 +23,8 @@ the build still completes.
 
 from __future__ import annotations
 
+from build_pipeline.budget import BudgetExceededError
+
 import logging
 from pathlib import Path
 
@@ -154,7 +156,8 @@ def _write_respec(change_dir: Path, change_name: str, body: str) -> Path:
         "modified by the build. Apply it deliberately (or fold it into the next "
         "change) using the ADDED/MODIFIED/REMOVED delta format.\n\n"
     )
-    path.write_text(header + ensure_delta_sections(body))
+    from ..spec_generator import atomic_write
+    atomic_write(path, header + ensure_delta_sections(body))
     return path
 
 
@@ -199,6 +202,8 @@ async def run_respec_audit(config, state=None) -> Path | None:
                 "tools, do not edit files. Everything you need is in the prompt."
             ),
         )
+    except BudgetExceededError:
+        raise
     except Exception as e:  # non-fatal by construction — the build still completes
         log.warning("Respec audit LLM call failed (non-fatal): %s", e)
         return None

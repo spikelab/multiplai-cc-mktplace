@@ -168,3 +168,26 @@ class TestModuleSingleton:
         budget_mod.reset()
         budget_mod.check()  # no ceiling, no spend → no raise
         assert budget_mod.get_budget().total_tokens == 0
+
+
+def test_resume_flag_accepts_only_existing_unknown_calls(tmp_path):
+    from build_pipeline.__main__ import build_parser
+    from build_pipeline.config import BuildConfig
+    from build_pipeline import budget
+    args = build_parser().parse_args(['build', '--project-dir', str(tmp_path), '--accept-unknown-spend'])
+    config = BuildConfig.from_cli_args(args)
+    assert config.accept_unknown_spend
+    saved = {'cost_usd': .5, 'unaccounted_calls': ['planning']}
+    tracker = budget.BuildBudget(max_usd=2)
+    tracker.load_state(saved, accept_unknown_spend=config.accept_unknown_spend)
+    tracker.check()
+    accepted = tracker.to_state()
+    assert accepted['unaccounted_calls'] == ['planning']
+    assert accepted['accepted_unknown_calls'] == 1
+    assert accepted['cost_usd'] == .5
+    resumed = budget.BuildBudget(max_usd=2)
+    resumed.load_state(accepted)
+    resumed.check()
+    resumed.unaccounted_calls.append('implementation')
+    with pytest.raises(budget.BudgetExceededError, match='--accept-unknown-spend'):
+        resumed.check()

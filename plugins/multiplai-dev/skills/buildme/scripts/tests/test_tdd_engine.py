@@ -3,6 +3,7 @@
 import os
 import re
 import sys
+import shlex
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -72,6 +73,23 @@ def _no_live_refactorer():
          patch("build_pipeline.tdd_engine.run_refactor_all", new_callable=AsyncMock,
                return_value=AgentResult(success=True, output="already consistent")):
         yield
+
+
+# These tests isolate agent orchestration: their agent doubles return reports
+# without writing files. Real Git/snapshot/rollback coverage lives in the
+# integrity, refactor-verification and nested-project tests below.
+@pytest.fixture(autouse=True)
+def _unit_agent_evidence(request, monkeypatch):
+    classes = {"TestRunBlockTDD", "TestRedGateWiring", "TestWeakTestEnforcement",
+               "TestReviewExhaustionEnforcement", "TestAgentStatusEnforcement",
+               "TestImplementationNotesLoop", "TestEvidenceBasedReview", "TestIntegrationFixCircuitBreaker",
+               "TestRefactorAllOrdering", "TestCheckpointLifecycleOwnership", "TestMutationStepPlacement"}
+    if request.cls and request.cls.__name__ in classes:
+        monkeypatch.setattr(git_ops, "commit_tree", lambda *a, **kw: None)
+        monkeypatch.setattr("build_pipeline.tdd_engine._list_block_test_files", lambda *a: ["tests/test_x.py"])
+        monkeypatch.setattr("build_pipeline.tdd_engine._snapshot_test_files", lambda *a: {"tests/test_x.py": "unchanged"})
+        monkeypatch.setattr("build_pipeline.tdd_engine.integration_gate", lambda *a, **kw: GateResult(passed=True, reason="unit suite"))
+    yield
 
 
 # --- Sample tasks.md content ---
@@ -911,8 +929,8 @@ RED_SUITE_RESULT = (1, "FAILED tests/test_x.py::test_a - AssertionError: not imp
 def red_gate_passes():
     """Make the RED gate see a properly failing suite (most engine tests
     exercise other phases and just need RED to be satisfied)."""
-    with patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT):
-        yield
+    with patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT) as run:
+        yield run
 
 
 @pytest.fixture
@@ -1177,6 +1195,7 @@ class TestBlockRefactorVerification:
 
     @pytest.fixture(autouse=True)
     def _red(self, red_gate_passes, quality_audit_overturns):
+        red_gate_passes.return_value = (1, "FAILED tests/test_thing.py::test_addition - AssertionError\n1 failed")
         yield
 
     @pytest.fixture
@@ -1259,7 +1278,7 @@ class TestBlockRefactorVerification:
         """A refactor that breaks the suite is discarded — the block keeps the
         green implementation and the build carries on."""
         config, state, progress, block = setup
-        config.test_command = "false"  # the post-refactor suite run fails
+        config.test_command = SUITE_RED_IF_BROKEN
         refactorer = self._agent_writing(
             config.project_dir, "module.py", "def add(a, b):\n    return a - b  # broken\n")
 
@@ -1275,7 +1294,7 @@ class TestBlockRefactorVerification:
         """`reset --hard` alone leaves new files behind, where the next
         whole-tree commit would sweep reverted work back into the build."""
         config, state, progress, block = setup
-        config.test_command = "false"
+        config.test_command = shlex.join([sys.executable, "-c", "import pathlib,sys; sys.exit(pathlib.Path('extracted.py').exists())"])
         refactorer = self._agent_writing(config.project_dir, "extracted.py", "# new helper\n")
 
         assert await self._run(config, state, progress, block, refactorer) is True
@@ -1589,7 +1608,8 @@ class TestNarrowTestCommandInTheBlockLoop:
 
         def _suite(command, _cwd, *_a, **_k):
             suite_calls.append(command)
-            return results.pop(0) if results else RED_SUITE_RESULT
+            result = results.pop(0) if results else RED_SUITE_RESULT
+            return result[0], result[1].replace("tests/test_x.py", "tests/test_new.py")
 
         def _gate(command, _cwd, **_kw):
             gate_calls.append(command)
@@ -2048,6 +2068,7 @@ def tdd_setup(tmp_path):
 
     args = MagicMock()
     args.block = None
+    _git_init_project(project_dir)
 
     return config, args
 
@@ -2582,7 +2603,7 @@ class TestIntegrationFixCircuitBreaker:
     async def test_fix_success_stops_before_escalation(self, setup):
         config, state, progress, block = setup
         gates = iter([
-            GateResult(passed=False, reason="failing", metadata={"stdout": "FAILED"}),
+            GateResult(passed=False, reason="failing", metadata={"output": "FAILED"}),
             GateResult(passed=True, reason="all green", metadata={"stdout": "3 passed"}),
         ])
         fix = AgentResult(success=True, output="fixed the import")
@@ -2942,7 +2963,7 @@ class TestEnforceTestIntegrity:
     def test_unavailable_snapshot_reports_not_checked_rather_than_failing(self, tmp_path):
         """A git hiccup must not read as 'the agent deleted every test file'."""
         config, block, state = self._fixtures(tmp_path, {"t.py": "h"}, None)
-        assert self._run(config, block, state, None) is True
+        assert self._run(config, block, state, None) is False
         # And it must not re-baseline away the frozen bar.
         assert block.test_file_hashes == {"t.py": "h"}
 
@@ -3148,7 +3169,7 @@ class TestWholeChangeRefactor:
         assert "# review fix" in (config.project_dir / "module.py").read_text()
 
     @pytest.mark.asyncio
-    async def test_failed_checkpoint_commit_with_dirty_tree_skips_the_pass(self, setup):
+    async def test_failed_checkpoint_commit_preserves_work_and_blocks_the_pass(self, setup):
         """`_git_commit_tree` returns None for "commit failed" too (failing
         hook, missing identity) — with the dirty work possibly all staged.
         HEAD is then NOT a faithful snapshot, and trusting it as the rewind
@@ -3168,7 +3189,8 @@ class TestWholeChangeRefactor:
 
         with patch("build_pipeline.tdd_engine.run_refactor_all",
                    new_callable=AsyncMock) as agent:
-            assert await _run_refactor_all(config, state, progress) is True
+            with pytest.raises(git_ops.GitLifecycleError, match="Commit failed"):
+                await _run_refactor_all(config, state, progress)
 
         agent.assert_not_awaited()
         # The uncommitted review fix survived, and HEAD never moved.
@@ -3177,7 +3199,7 @@ class TestWholeChangeRefactor:
             ["git", "rev-parse", "HEAD"], cwd=config.project_dir,
             capture_output=True, text=True, check=True).stdout.strip()
         assert head_after == head_before
-        assert state.tdd.refactor_all_done is True
+        assert state.tdd.refactor_all_done is False
 
     @pytest.mark.asyncio
     async def test_red_tree_on_resume_is_not_checkpointed_as_a_baseline(self, setup):
@@ -3195,14 +3217,14 @@ class TestWholeChangeRefactor:
 
         with patch("build_pipeline.tdd_engine.run_refactor_all",
                    new_callable=AsyncMock) as agent:
-            assert await _run_refactor_all(config, state, progress) is True
+            assert await _run_refactor_all(config, state, progress) is False
 
         agent.assert_not_awaited()
         # No checkpoint (or any other) commit swept the breakage in...
         assert _git_log_subjects(config.project_dir) == subjects_before
         # ...and the dirty edits were not destroyed either.
         assert "half-refactored" in (config.project_dir / "module.py").read_text()
-        assert state.tdd.refactor_all_done is True
+        assert state.tdd.refactor_all_done is False
 
     @pytest.mark.asyncio
     async def test_already_done_is_not_re_run_on_resume(self, setup):
@@ -3459,7 +3481,7 @@ class TestBudgetCircuitBreaker:
 
         with patch("build_pipeline.tdd_engine.run_test_writer",
                    new_callable=AsyncMock) as writer:
-            result = await run_tdd_engine(config, args)
+            result = await run_tdd_engine(config, args, standalone=False)
 
         assert result == EXIT_BUILD_FAILURE
         # Stopped at the boundary — no agent was spawned for the block.
@@ -3479,7 +3501,7 @@ class TestBudgetCircuitBreaker:
         budget_mod.configure(max_tokens=100)
         budget_mod.record(_Usage(), label="spec")
         with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock):
-            await run_tdd_engine(config, args)
+            await run_tdd_engine(config, args, standalone=False)
         assert config.state_file_path().exists()
 
         # Simulate a new process picking the build back up.
@@ -3798,3 +3820,282 @@ class TestMutationStepPlacement:
         assert seen == [False]
         tw.assert_not_awaited()
         ra.assert_not_awaited()
+
+
+def test_nested_test_evidence_uses_project_relative_paths(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    project = tmp_path / "services" / "api"
+    project.mkdir(parents=True)
+    path = project / "tests" / "test_with spaces.py"
+    path.parent.mkdir()
+    path.write_text("def test_it():\n    assert False\n")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+    baseline = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    path.write_text("def test_it():\n    assert True\n")
+    config = BuildConfig(project_dir=project)
+    block = BlockInfo(number=1, name="nested", description="Read nested tests", baseline_commit=baseline)
+    assert "assert True" in _read_block_test_files(config, block)
+    assert set(_snapshot_test_files(config, block)) == {"tests/test_with spaces.py"}
+
+
+def test_nested_review_diffs_have_project_relative_headers(tmp_path):
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    project = tmp_path / 'services/api'
+    project.mkdir(parents=True)
+    (project / 'app.py').write_text('value = 1\n')
+    (tmp_path / 'sibling.txt').write_text('untouched\n')
+    subprocess.run(['git', 'add', '.'], cwd=tmp_path, check=True)
+    subprocess.run(['git', 'commit', '-qm', 'base'], cwd=tmp_path, check=True)
+    (project / 'app.py').write_text('value = 2\n')
+    (tmp_path / 'sibling.txt').write_text('sibling secret\n')
+    config = BuildConfig(project_dir=project)
+    block = BlockInfo(number=1, name='nested', description='change value')
+    state = BuildState(change_name='nested', mode='only', tier='standard', tdd=TDDState(blocks=[block]))
+    for diff in (_capture_block_diff(config, block), capture_build_diff(config, state)):
+        assert '--- a/app.py' in diff
+        assert '+++ b/app.py' in diff
+        assert 'services/api' not in diff
+        assert 'sibling' not in diff
+
+
+# --- RED_EXPECTED: the test writer's statement of which tests must fail ---
+
+RX_TEST = "def test_add():\n    from module import add\n    assert add(2, 3) == 5\n"
+RX_RED = (1, "FAILED tests/test_new.py::test_add - AssertionError: not implemented\n1 failed")
+RX_OK = AgentResult(success=True, output="STATUS: DONE")
+
+
+def _rx_report(slot: str | None) -> str:
+    lines = ["STATUS: DONE", "TESTS_RUN: pytest", "FILES: tests/test_new.py", "TEST_COUNT: 1"]
+    if slot is not None:
+        lines.append(f"RED_EXPECTED: {slot}")
+    return "\n".join(lines + ["SURPRISES: none", "SPEC_IMPACT: none"]) + "\n"
+
+
+class _RxStop(Exception):
+    """Stands in for the process being killed at that point."""
+
+
+class TestRedExpected:
+    """`block.red_expected` records the test writer's `RED_EXPECTED:` slot and
+    the check against the RED run, and opens `block.red_evidence`. Agents are
+    faked; git and the files are real."""
+
+    @pytest.fixture(autouse=True)
+    def _agents(self):
+        from build_pipeline.models import GateResult
+        with patch("build_pipeline.tdd_engine.integration_gate",
+                   return_value=GateResult(passed=True, reason="fixture checks pass")), \
+             patch("build_pipeline.tdd_engine.run_refactorer", new_callable=AsyncMock, return_value=RX_OK), \
+             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
+                   return_value=QualityAudit(passed=True)):
+            yield
+
+    @staticmethod
+    def _project(root: Path, monkeypatch, test_command: str = "pytest"):
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        project = root / "project"
+        (project / "specs" / "changes" / "test").mkdir(parents=True)
+        (project / "specs" / "changes" / "test" / "design.md").write_text("# Design")
+        (project / "module.py").write_text("def add(a, b):\n    raise NotImplementedError\n")
+        (project / "tests").mkdir()
+        _git_init_project(project)
+        config = BuildConfig(project_dir=project, change_name="test", tier="advanced",
+                             test_command=test_command, config_dir=root / "config",
+                             core_memory_files=[], stack_memory_files=[], additional_memory_files=[])
+        config.specs_dir = project / "specs"
+        block = BlockInfo(number=1, name="Add", description="Add two numbers.")
+        state = BuildState(change_name="test", mode="only", tier="advanced",
+                           state_file=str(root / "state.json"), tdd=TDDState(blocks=[block]))
+        progress = ProgressWriter(root / "progress.md")
+        progress.initialize("test", "only", "advanced", 1)
+        return config, state, progress, block
+
+    @staticmethod
+    def _writer(project: Path, report: str):
+        async def writer(**_kw):
+            (project / "tests" / "test_new.py").write_text(RX_TEST)
+            return AgentResult(success=True, output=report)
+        return writer
+
+    @staticmethod
+    def _reload(config):
+        state = BuildState.load(config.state_file_path())
+        return state, state.tdd.blocks[state.tdd.current_block]
+
+    async def _run(self, config, state, progress, block, report, suite=RX_RED, implementer=None):
+        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=self._writer(config.project_dir, report)), \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=suite), \
+             patch("build_pipeline.tdd_engine.run_implementer",
+                   **({"side_effect": implementer} if implementer else
+                      {"new_callable": AsyncMock, "return_value": RX_OK})):
+            return await run_block_tdd(block, config, state, progress)
+
+    async def _unstopped(self, root: Path, monkeypatch, report: str):
+        config, state, progress, block = self._project(root, monkeypatch)
+        assert await self._run(config, state, progress, block, report) is True
+        return config, block
+
+    @staticmethod
+    def _same_apart_from_red_expected(resumed, resumed_config, unstopped, unstopped_config):
+        """Everything a resumed run leaves equals the unstopped run's, except
+        `red_expected` and the lines of `red_evidence` it opens."""
+        assert resumed.status == unstopped.status
+        assert resumed.test_file_hashes == unstopped.test_file_hashes
+        assert (resumed.red_evidence.removeprefix(resumed.red_expected)
+                == unstopped.red_evidence.removeprefix(unstopped.red_expected))
+        assert _git_log_subjects(resumed_config.project_dir) == _git_log_subjects(unstopped_config.project_dir)
+
+    # --- one engine test per result ---
+
+    @pytest.mark.asyncio
+    async def test_red_expected_named_tests_failed(self, tmp_path, monkeypatch):
+        config, state, progress, block = self._project(tmp_path, monkeypatch)
+        report = _rx_report("tests/test_new.py::test_add — add() raises NotImplementedError")
+        assert await self._run(config, state, progress, block, report) is True
+        assert block.red_expected == ("RED_EXPECTED: tests/test_new.py::test_add — add() raises "
+                                      "NotImplementedError\nRED_EXPECTED result: named tests failed")
+        assert block.red_evidence.startswith(block.red_expected + "\n")
+        assert "RED_EXPECTED result: named tests failed" in (tmp_path / "progress.md").read_text()
+        assert self._reload(config)[1].red_expected == block.red_expected
+
+    @pytest.mark.asyncio
+    async def test_red_expected_named_tests_not_among_the_failures(self, tmp_path, monkeypatch):
+        config, state, progress, block = self._project(tmp_path, monkeypatch)
+        report = _rx_report("tests/test_new.py::test_add, tests/test_new.py::test_sub — no add() or sub()")
+        assert await self._run(config, state, progress, block, report) is True
+        assert block.red_expected.splitlines()[-1] == (
+            "RED_EXPECTED result: named tests not among the failures: tests/test_new.py::test_sub")
+        assert block.red_evidence.startswith(block.red_expected + "\n")
+
+    @pytest.mark.asyncio
+    async def test_red_expected_not_stated(self, tmp_path, monkeypatch):
+        config, state, progress, block = self._project(tmp_path, monkeypatch)
+        assert await self._run(config, state, progress, block, _rx_report(None)) is True
+        assert block.red_expected == "RED_EXPECTED result: not stated"
+        assert block.red_evidence.startswith(block.red_expected + "\n")
+
+    @pytest.mark.asyncio
+    async def test_red_expected_cannot_check_for_this_runner(self, tmp_path, monkeypatch):
+        config, state, progress, block = self._project(tmp_path, monkeypatch, test_command="make test")
+        report = _rx_report("tests/test_new.py::test_add — add() raises NotImplementedError")
+        assert await self._run(config, state, progress, block, report, suite=(2, "make: *** [test] Error 1")) is True
+        assert block.red_expected.splitlines()[-1] == "RED_EXPECTED result: cannot check for this runner"
+        assert block.red_evidence.startswith(block.red_expected + "\n")
+
+    @pytest.mark.asyncio
+    async def test_red_expected_comes_from_the_retry_after_a_failed_red_gate(self, tmp_path, monkeypatch):
+        config, state, progress, block = self._project(tmp_path, monkeypatch)
+        first = self._writer(config.project_dir, _rx_report("tests/test_new.py::test_old — stale"))
+        retry = self._writer(config.project_dir, _rx_report("tests/test_new.py::test_add — no add()"))
+        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=[await first(), await retry()]), \
+             patch("build_pipeline.tdd_engine.run_test_suite", side_effect=[(0, "1 passed"), RX_RED]), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=RX_OK):
+            assert await run_block_tdd(block, config, state, progress) is True
+        assert block.red_expected == ("RED_EXPECTED: tests/test_new.py::test_add — no add()\n"
+                                      "RED_EXPECTED result: named tests failed")
+
+    # --- stop and resume rows S1-S3 ---
+
+    @pytest.mark.asyncio
+    async def test_red_expected_resume_s1_stop_before_red_gate_after_the_test_commit(self, tmp_path, monkeypatch):
+        """S1: stopped after the test writer returned and its tests were
+        committed, before red_gate ran. Resume does not run the test writer
+        again, so its report is unavailable: `not stated`."""
+        report = _rx_report("tests/test_new.py::test_add — no add()")
+        u_config, unstopped = await self._unstopped(tmp_path / "unstopped", monkeypatch, report)
+
+        config, state, progress, block = self._project(tmp_path / "stopped", monkeypatch)
+        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=self._writer(config.project_dir, report)), \
+             patch("build_pipeline.tdd_engine.run_test_suite", side_effect=_RxStop):
+            with pytest.raises(_RxStop):
+                await run_block_tdd(block, config, state, progress)
+        state, block = self._reload(config)
+        assert block.test_commit and not block.red_evidence and not block.red_expected
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=RX_OK) as tw, \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=RX_OK):
+            assert await run_block_tdd(block, config, state, progress) is True
+        tw.assert_not_awaited()
+        assert block.red_expected == "RED_EXPECTED result: not stated"
+        assert unstopped.red_expected.endswith("RED_EXPECTED result: named tests failed")
+        self._same_apart_from_red_expected(block, config, unstopped, u_config)
+
+    @pytest.mark.asyncio
+    async def test_red_expected_resume_s1_stop_before_the_test_commit(self, tmp_path, monkeypatch):
+        """S1: stopped after the test writer returned, before its tests were
+        committed. Resume runs the test writer again, so its report is there
+        and `red_expected` equals the unstopped run's."""
+        report = _rx_report("tests/test_new.py::test_add — no add()")
+        u_config, unstopped = await self._unstopped(tmp_path / "unstopped", monkeypatch, report)
+
+        config, state, progress, block = self._project(tmp_path / "stopped", monkeypatch)
+        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=self._writer(config.project_dir, report)), \
+             patch("build_pipeline.tdd_engine._git_commit_block_phase", side_effect=_RxStop):
+            with pytest.raises(_RxStop):
+                await run_block_tdd(block, config, state, progress)
+        state, block = self._reload(config)
+        assert not block.test_commit and not block.red_expected
+
+        with patch("build_pipeline.tdd_engine.run_test_writer",
+                   side_effect=self._writer(config.project_dir, report)) as tw, \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=RX_OK):
+            assert await run_block_tdd(block, config, state, progress) is True
+        assert tw.call_count == 1
+        assert block.red_expected == unstopped.red_expected
+        self._same_apart_from_red_expected(block, config, unstopped, u_config)
+
+    @pytest.mark.asyncio
+    async def test_red_expected_resume_s2_stop_after_red_gate_before_the_checkpoint(self, tmp_path, monkeypatch):
+        """S2: stopped after red_gate passed, before the checkpoint that saves
+        red_evidence. Neither red_evidence nor red_expected is on disk; resume
+        runs the RED gate again with no report: `not stated`."""
+        report = _rx_report("tests/test_new.py::test_add — no add()")
+        u_config, unstopped = await self._unstopped(tmp_path / "unstopped", monkeypatch, report)
+
+        config, state, progress, block = self._project(tmp_path / "stopped", monkeypatch)
+        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=self._writer(config.project_dir, report)), \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED), \
+             patch("build_pipeline.tdd_engine._snapshot_test_files", side_effect=_RxStop):
+            with pytest.raises(_RxStop):
+                await run_block_tdd(block, config, state, progress)
+        assert block.red_expected and block.red_evidence, "the gate passed in memory"
+        state, block = self._reload(config)
+        assert block.test_commit and not block.red_evidence and not block.red_expected
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=RX_OK) as tw, \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=RX_OK):
+            assert await run_block_tdd(block, config, state, progress) is True
+        tw.assert_not_awaited()
+        assert block.red_expected == "RED_EXPECTED result: not stated"
+        self._same_apart_from_red_expected(block, config, unstopped, u_config)
+
+    @pytest.mark.asyncio
+    async def test_red_expected_resume_s3_stop_after_the_checkpoint(self, tmp_path, monkeypatch):
+        """S3: stopped after the checkpoint. The block skips to the
+        implementer and keeps `red_expected`."""
+        from build_pipeline.gates import red_gate
+        report = _rx_report("tests/test_new.py::test_add — no add()")
+        u_config, unstopped = await self._unstopped(tmp_path / "unstopped", monkeypatch, report)
+
+        config, state, progress, block = self._project(tmp_path / "stopped", monkeypatch)
+        with pytest.raises(_RxStop):
+            await self._run(config, state, progress, block, report, implementer=_RxStop)
+        state, block = self._reload(config)
+        assert block.red_expected == unstopped.red_expected
+        assert block.red_evidence.startswith(block.red_expected + "\n")
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=RX_OK) as tw, \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED), \
+             patch("build_pipeline.tdd_engine.red_gate", wraps=red_gate) as gate, \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=RX_OK):
+            assert await run_block_tdd(block, config, state, progress) is True
+        tw.assert_not_awaited()
+        gate.assert_not_called()
+        assert block.red_expected == unstopped.red_expected
+        assert block.red_evidence == unstopped.red_evidence
+        self._same_apart_from_red_expected(block, config, unstopped, u_config)

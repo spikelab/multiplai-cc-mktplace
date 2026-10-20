@@ -149,7 +149,7 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
                     allowed_tools=sdk.MERGER_TOOLS, model=cfg.merger_model, effort=cfg.effort,
                     max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="assess",
                 )
-            except sdk.RepoTrustError:
+            except (sdk.RepoTrustError, sdk.UsageLimitError):
                 raise
             except sdk.AgentCallError as e:
                 log.error("assess agent failed for %s", target.slug, exc_info=True)

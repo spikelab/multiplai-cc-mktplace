@@ -28,7 +28,8 @@ paths through the change from each entry point (see "The paths stage" below).
    `correctness-only`. An answer without an impact, or without a topic from
    the list below, is re-asked; a verify call is tried up to three times, and
    a finding still without a verdict stops the run (exit `5`) instead of
-   reaching the review unverified.
+   reaching the review unverified. A hit Claude usage limit is never tried
+   again: it stops the run at once (exit `6`).
 3. **merge** — the finders work independently, so one defect is often
    reported several times in different words. Confirmed and unverifiable
    findings are grouped when their lines overlap (or come within two lines)
@@ -232,10 +233,12 @@ A target outside the repository, or a symlink pointing outside it, is never
 read. Each doc is read once, from the reviewed commit (on a change review, a
 link the change removed is still followed, and a doc the change deleted is
 read at base), never from the working tree. A doc whose linking line says
-`bind`, `binding`, `must` or `required` goes first. Docs share what is left of
+`bind`, `binds`, `binding`, `must` or `required` goes first. Docs share what is left of
 the 40 000 characters and go in whole or not at all; one that does not fit,
 is missing, cannot be read or points outside the repository is listed in
-`checks.json`'s `coverage` (`info`) and the review goes on. The prompt tells
+`checks.json`'s `coverage` (`info`) and the review goes on. A doc that does
+not fit is also named in the prompt, one line each ("Not included for length;
+open it if it applies: `<path>`"), so the finder can open it. The prompt tells
 the finder these docs are the repository's rules: a changed line that breaks
 one is a finding, citing the changed line and naming the doc. Each doc is
 fenced as untrusted text, since the change's author can edit it.
@@ -534,8 +537,8 @@ Every run appends to `<data_dir>/reviews/ledger.jsonl`, whatever `--out`
 says: a `started` line (`slug`, `target_dir`, `head_sha`, `session_id`) when
 it starts, and a `finished` line when it ends (`generated_at`, `producer`,
 `session_id`, `slug`, `target_dir`, `round` (the `<NN>`), `head_sha`,
-`base_sha`, `kind`, `pr`, `stopped`: `null`, `budget`, `verify-incomplete`
-or `failed: <error>`, and the whole `run` object). A resume and each target
+`base_sha`, `kind`, `pr`, `stopped`: `null`, `budget`, `verify-incomplete`,
+`usage-limit` or `failed: <error>`, and the whole `run` object). A resume and each target
 of a batch are runs too. The file is never rewritten. A `started` line with
 no later `finished` line for the same `target_dir` and `head_sha` is a run
 that was killed or stopped with Ctrl-C: a plain `review` of that target then makes no model call,
@@ -580,6 +583,19 @@ and the partial state; resume only if the user raises the ceiling:
 each; the message lists them, and the other verdicts are kept. Tell the user,
 then run `python -m review_pipeline resume <out>/<repo>/<object> --trust-repo`, which
 asks again only for those findings.
+`6` the Claude usage limit (session, weekly, ...) was hit. The first call that
+reports it stops the run: no stage tries that call again or starts another,
+and the checkpoint keeps every answer that came back. The message gives the
+reset time when the CLI gave one, and the `resume` command of each target it
+stopped, with the run's `--max-cost-usd` and `--no-deps`. Tell the user both,
+and **do not resume or start another review before the reset**: every call
+until then fails the same way. After the reset, run that `resume`: only
+`resume` continues the stopped run, and a plain `review` of the same target
+starts over and pays again. A batch starts no further target after the limit
+and lists those as `not started`; they have no checkpoint, so review them
+after the reset. `assess-only` stops the same way and still writes its
+report; run it again for the reviews the report lists as stopped or not
+started.
 
 ### 2. Report
 
@@ -826,6 +842,9 @@ stage runs on the session's model.
   costs one or two agent calls per review and changes nothing in the review
   directories. A review that goes over `--max-cost-usd` or fails is listed
   under "Skipped" with the reason, and the report still covers the others.
+  A hit Claude usage limit stops it instead: that review and every later one
+  are listed under "Skipped" as stopped or not started, the report is still
+  written, and it exits `6`.
   A decision counts for an earlier round only if it was made before the
   next round was generated, so a finding rejected while the current round
   was shown is not read back as an earlier rejection. Use it to check the
@@ -854,3 +873,17 @@ stage runs on the session's model.
   archive) is copied to `<name>~<6 hex>/`. Files directly under `<dir>`
   (rollups) are not copied, except `review.yaml`, which is copied to
   `<out>/review.yaml` when there is none there yet.
+
+- `round-metrics [<out>] [--repo DIR ...]` prints, for every review under
+  `<out>/<repo>/<object>/` (default: `--out`, else the default reviews
+  directory), a Markdown table of its rounds: the findings each round listed
+  and its `repeat`, `still-open` and `low-value` labels, and, for each finding
+  listed in round 2 or later, whether its first cited line was already there
+  at round 1's head (`present at first review`) or was written since, from
+  `git blame` and `git merge-base --is-ancestor` in the round's recorded
+  repository (`unknown` when git cannot tell or the repository is gone). A
+  totals line gives the mean rounds per review with two or more, and both
+  shares with their counts. `--repo` names a checkout to use for a round
+  whose recorded repository (a deleted worktree) is gone, when its `origin`
+  is the same repository. It writes nothing, calls no model and needs no
+  `--trust-repo`. Reviews migrated into `legacy/` are not read.

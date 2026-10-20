@@ -55,15 +55,15 @@ class CostlyReview(FakeReview):
     fixer's own calls in the round cost *own*. Each round also writes a
     review of another PR, which is not this fixer's spend."""
 
-    def __init__(self, pr, repo: Path, ledger: Path, *, cost: float, own: float):
+    def __init__(self, pr, repo: Path, ledger: Path, *, cost: float, own: float, slug: str = f"repo--pr-{PR}"):
         super().__init__(pr, new_threads_per_round=1)
-        self.repo, self.ledger, self.cost, self.own = repo, ledger, cost, own
+        self.repo, self.ledger, self.cost, self.own, self.slug = repo, ledger, cost, own, slug
 
     def review(self, run, rnd):
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.repo, capture_output=True,
                               text=True, check=True).stdout.strip()
         budget.add_process_spend(self.own, 10)
-        _ledger(self.ledger, f"repo--pr-{PR}", f"/reviews/r{rnd.number}", head, self.cost)
+        _ledger(self.ledger, self.slug, f"/reviews/r{rnd.number}", head, self.cost)
         _ledger(self.ledger, "repo--pr-999", f"/other/r{rnd.number}", head, 50.0)
         return super().review(run, rnd)
 
@@ -101,6 +101,41 @@ class TestSpendCeiling:
         assert lines[-1] == "FINDINGS:BUDGET:2:1.40"
         assert review.calls == 2
         assert [r.number for r in loop.load_state(run).findings.rounds] == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_with_an_origin_its_reviews_are_read_under_the_origins_slug(self, built, fake_pr, tmp_path):
+        """With an `origin` remote, the PR's reviews are in the ledger under
+        `<owner>-<repo>--pr-<n>` (here `o-r`), as the epic counts them, not
+        under the checkout's directory name, whose $50 line is not this
+        fixer's spend."""
+        repo, change, config = built
+        config.findings.max_rounds = 5
+        subprocess.run(["git", "init", "-q", "--bare", str(tmp_path / "o" / "r.git")], check=True)
+        subprocess.run(["git", "remote", "add", "origin", str(tmp_path / "o" / "r.git")], cwd=repo, check=True)
+        _ledger(self.ledger, f"repo--pr-{PR}", "/reviews/dir-name", "0" * 40, 50.0)
+        fake_pr.add_thread("alice", "first finding", fid="f0")
+        review = CostlyReview(fake_pr, repo, self.ledger, cost=0.6, own=0.1, slug=f"o-r--pr-{PR}")
+        run, lines = _run(config, change, triage_call=FakeTriage({}), review=review)
+        run.max_usd = 1.0
+        assert await loop.run_findings(run) == 0
+        assert lines[-1] == "FINDINGS:BUDGET:2:1.40"
+        assert review.calls == 2
+
+    @pytest.mark.asyncio
+    async def test_float_noise_does_not_buy_a_round_past_the_ceiling(self, built, fake_pr):
+        """$0.10 of its own and a $0.70 review make $0.80, the ceiling; added
+        as floats they make 0.7999999999999999. The spend is rounded to the 6
+        decimals `--max-usd` is passed with, as the epic rounds its own, so no
+        second round starts."""
+        repo, change, config = built
+        config.findings.max_rounds = 5
+        fake_pr.add_thread("alice", "first finding", fid="f0")
+        review = CostlyReview(fake_pr, repo, self.ledger, cost=0.7, own=0.1)
+        run, lines = _run(config, change, triage_call=FakeTriage({}), review=review)
+        run.max_usd = 0.8
+        assert await loop.run_findings(run) == 0
+        assert lines[-1] == "FINDINGS:BUDGET:1:0.80"
+        assert review.calls == 1
 
     @pytest.mark.asyncio
     async def test_a_round_that_leaves_nothing_to_act_on_ends_done_past_the_ceiling(self, built, fake_pr):
@@ -228,6 +263,10 @@ class TestCli:
         assert (args.max_usd, args.severities, args.code_only) == (3.5, ("HIGH", "MEDIUM"), True)
         args = build_parser().parse_args(["findings", "--pr", "1"])
         assert (args.max_usd, args.severities, args.code_only) == (None, None, False)
+
+    def test_severities_are_trimmed_upper_cased_and_kept_once(self):
+        args = build_parser().parse_args(["findings", "--pr", "1", "--severities", " high , MEDIUM,High,"])
+        assert args.severities == ("HIGH", "MEDIUM")
 
     @pytest.mark.parametrize("argv", [["--max-usd", "-1"], ["--max-usd", "abc"], ["--max-usd", "nan"],
                                       ["--severities", "CRITICAL"], ["--severities", ""]])
@@ -547,6 +586,28 @@ def test_float_noise_never_lifts_the_hold_or_gives_a_share_of_zero(monkeypatch):
     assert coord._held_back()
     assert coord._left("b") == 0.0
     assert not coord._over_budget()
+
+
+def test_a_running_fixer_holds_its_share_less_its_prs_reviews_since_launch(tmp_path, monkeypatch):
+    """`_held` with the real `_pr_reviews` and a real ledger. a's fixer was
+    given $10 when its PR (`o-r--pr-12`) had $3 of reviews; another $2.50
+    of them has finished since, so it holds $7.50. A review of another PR,
+    and one under the bare directory name, are not a's."""
+    from build_pipeline.epic import coordinator
+
+    ledger = use_workspace(monkeypatch, tmp_path) / "reviews" / "ledger.jsonl"
+    url = "https://github.com/o/r/pull/12"
+    _ledger(ledger, "o-r--pr-12", "/r/pr-12/1", "h1", 3.0)
+    coord = object.__new__(coordinator.Coordinator)
+    coord.children = {"a": coordinator.Child(id="a", depends_on=[], pr=url, slug="o-r"),
+                      "b": coordinator.Child(id="b", depends_on=[], slug="o-r")}
+    coord.shares = {"a": coordinator.Share(10.0, coord._pr_reviews(coord.children["a"]))}
+    assert coord._held("b") == 10.0
+    _ledger(ledger, "o-r--pr-12", "/r/pr-12/2", "h2", 2.5)
+    _ledger(ledger, "o-r--pr-99", "/r/pr-99", "h1", 40.0)
+    _ledger(ledger, "r--pr-12", "/r/dir-name", "h1", 40.0)
+    assert coord._held("b") == 7.5
+    assert coord._held("a") == 0.0
 
 
 def test_a_share_under_a_millionth_of_a_dollar_counts_as_none(monkeypatch):
