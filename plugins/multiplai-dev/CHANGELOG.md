@@ -15,6 +15,16 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.96.2] - 2026-10-20
+
+### Fixed
+- buildme: a finding the fix on pass did not fix no longer disappears when
+  the review after it passes without mentioning it. That review is now given
+  the block's open findings, like any later review round, and keeps each one
+  it does not call resolved; the block's findings and `unfixed-findings.md`
+  list it with its status. When the block's round records could not be
+  written or read, every finding the fix on pass worked on stays open.
+
 ## [0.96.1] - 2026-10-20
 
 ### Fixed
