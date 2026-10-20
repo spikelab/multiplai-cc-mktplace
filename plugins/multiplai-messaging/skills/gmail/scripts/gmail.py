@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html
 import json
 import logging
 import os
@@ -381,6 +382,17 @@ def _read_payload(input_file: str | None) -> dict:
     return payload
 
 
+def _body_html(body: str) -> str:
+    """Render a plain-text body as HTML: blank lines split paragraphs, single
+    newlines become ``<br>``. A text/plain-only draft opens in Gmail's plain-text
+    mode, which hard-wraps lines at about 78 columns; with an HTML part Gmail
+    opens the draft as rich text and paragraphs reflow to the window."""
+    paras = [p.strip("\n") for p in body.replace("\r\n", "\n").split("\n\n")]
+    return "".join(
+        "<p>" + html.escape(p).replace("\n", "<br>\n") + "</p>\n"
+        for p in paras if p.strip())
+
+
 def cmd_draft(svc, reply_to: str, input_file: str | None) -> "None":
     payload = _read_payload(input_file)
     to = (payload.get("to") or "").strip()
@@ -433,6 +445,7 @@ def cmd_draft(svc, reply_to: str, input_file: str | None) -> "None":
     if references:
         mime["References"] = references
     mime.set_content(body)
+    mime.add_alternative(_body_html(body), subtype="html")
 
     raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("utf-8")
     message: dict = {"raw": raw}

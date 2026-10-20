@@ -12,6 +12,15 @@ Recorded history starts at **0.1.2**; anything earlier is in `git log` only.
 
 `multiplai-messaging@0.1.1` predates this file and has no section here.
 
+## [0.4.1] - 2026-10-20
+
+### Fixed
+- `gmail` drafts no longer show up hard-wrapped at about 78 columns. A draft
+  used to carry only a plain-text body, so Gmail opened it in plain-text mode
+  and broke every long line. It now also carries an HTML copy of the body
+  (blank lines start a new paragraph, single newlines become line breaks), so
+  Gmail opens it as rich text and paragraphs reflow to the window.
+
 ## [0.4.0] - 2026-10-16
 
 ### Changed
