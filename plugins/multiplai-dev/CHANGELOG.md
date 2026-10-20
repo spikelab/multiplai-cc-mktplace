@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.85.0] - 2026-10-18
+## [0.85.0] - 2026-10-20
 
 ### Fixed
 - `/multiplai-dev:review`: a link on a `CLAUDE.md` or `coding-standards.md`
@@ -28,6 +28,33 @@ time, not derived from a tag.
   prompt for length is now named there, one line each ("Not included for
   length; open it if it applies: `<path>`"), so the finder can open it
   itself. Before, it left no trace in the prompt.
+
+## [0.84.2] - 2026-10-20
+
+### Fixed
+- buildme: an epic child's command now carries `--epic-child`, so running a
+  child's saved command again by hand still skips spec-extract and still opens
+  the PR against the default branch. Before, such a re-run could start
+  spec-extract and target a sibling child's branch once that sibling had
+  pushed.
+- buildme SKILL.md: the `--base-ref` row says that an epic child's PR targets
+  the default branch, and the `EPIC:MERGE_WAITING` row names the two cases
+  under `epic.merge: auto` where buildme left the PR open itself (checks
+  pending after an hour, or a merge queue only queued it). In those cases the
+  next step is a re-run, not a merge by hand: at once for pending checks, and
+  once the queue has merged the PR for a queued one.
+- buildme SKILL.md: the `--epic-child` row says that `BUILDME_EPIC_CHILD=1`
+  does the same, for a child's command saved before this release.
+
+## [0.84.1] - 2026-10-18
+
+### Changed
+- review: a test now checks that a `## Critical paths` list kept in a
+  subdirectory's `coding-standards.md` (for example `billing/coding-standards.md`)
+  still marks a trim suggestion on that path's tests as important. Review
+  behaves as before; a change that made it read only the root
+  `coding-standards.md` would now fail the test suite instead of quietly
+  suggesting the removal of tests on a critical path.
 
 ## [0.84.0] - 2026-10-18
 

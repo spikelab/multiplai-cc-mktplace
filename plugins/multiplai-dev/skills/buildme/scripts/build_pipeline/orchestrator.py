@@ -950,6 +950,15 @@ def _spec_extract_last_line(res: git_ops.GitResult) -> str:
     return lines[-1][:300] if lines else "no output"
 
 
+def _epic_child(config: BuildConfig) -> bool:
+    """True for an epic's child build: `--epic-child` in its command, which a
+    hand re-run of the child's saved command keeps (#347), or the coordinator's
+    `CHILD_ENV`, which a child started before the flag existed has instead."""
+    from .epic import CHILD_ENV
+
+    return config.epic_child or os.environ.get(CHILD_ENV) == "1"
+
+
 def _run_spec_extract_step(
     config: BuildConfig, state: BuildState, progress: ProgressWriter,
 ) -> int | None:
@@ -966,14 +975,13 @@ def _run_spec_extract_step(
     epic's child build.
     """
     from . import sdk, stop_record
-    from .epic import CHILD_ENV
 
     registry = Path(config.specs_dir) / "registry"
     saved = state.spec_gen.spec_extract_sha if state.spec_gen else None
     reason = None
     if config.mode == "only":
         reason = "only-mode"
-    elif os.environ.get(CHILD_ENV) == "1":
+    elif _epic_child(config):
         # The parent ran spec-extract, and a child with no dependency in the
         # epic's repo branches from the parent's registry commit
         # (`coordinator.registry_commit`); siblings at one commit would also
@@ -1670,9 +1678,7 @@ def _run_publish(
     # An epic's child opens its PR against the default branch. Its --base-ref is
     # origin's default sha, or the parent's registry commit, which no origin
     # branch holds until a sibling built on it pushes its own branch.
-    from .epic import CHILD_ENV
-
-    base = None if os.environ.get(CHILD_ENV) == "1" else _pr_base_branch(worktree, config.base_ref)
+    base = None if _epic_child(config) else _pr_base_branch(worktree, config.base_ref)
     pr_argv = _pr_open_argv(
         config.project_dir, docs_dir, state.branch, title, draft=draft, sections=sections,
         ticket_url=state.ticket_url, base=base,
