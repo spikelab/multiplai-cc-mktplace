@@ -15,6 +15,31 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.85.3] - 2026-10-20
+
+### Fixed
+- buildme epic mode: when the merge step finds that main and a child raised
+  the version to the same value, and only the child edited its CHANGELOG, the
+  merge agent now moves the child's entry to the new version it writes. Before,
+  the entry stayed under main's version, and the merge commit was pushed with
+  it there.
+- buildme epic mode: the merge step no longer parks a child whose regenerated
+  uv.lock is correct when the project asks for a git dependency in its
+  `pyproject.toml`. It read the `git` URL in the project's own lock entry as a
+  pin and wanted that entry unchanged, so the version the merge wrote, or a
+  dependency list merged from both sides, failed the check.
+- buildme epic mode: the merge agent is now told to raise only the package's
+  own version, the one the merge step checks. Before, when main and a child
+  both raised a dependency's version alike (such as
+  `[dependencies.<name>]`), the agent raised that one too, the check refused
+  it, and the child parked. `[tool.commitizen]`'s `version` counts as the
+  package's own, so the agent raises it with `[project]`'s.
+
+### Changed
+- buildme docs: SKILL.md and the scripts' notes now say that an epic's spend
+  includes the merge agent's calls, and that an interrupted merge agent call
+  marks the spend incomplete.
+
 ## [0.85.2] - 2026-10-20
 
 ### Fixed

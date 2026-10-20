@@ -821,6 +821,46 @@ def test_a_version_value_must_be_the_next_after_main_raising_the_child_s_part(tm
             assert s.beyond({"plugin.json": plugin(wrong)}) == ["plugin.json"], (main, wrong)
 
 
+def test_a_version_value_with_a_lowered_or_a_shorter_version(tmp_path):
+    """40.3, `_next` (finding 69b7b0329b): a child that lowered its version
+    has no version after main's, so any value is named. Versions with
+    different numbers of parts are padded with 0: base 1.0, child 1.1, main
+    1.0.1 gives 1.1.0; base 1.0, child 1.0.1, main 1.1 gives 1.1.1."""
+    s = Sides(tmp_path / "lowered", {"plugin.json": plugin("0.2.0")}, {"plugin.json": plugin("0.1.0")},
+              {"plugin.json": plugin("0.2.1")})
+    assert s.plan() == merge.Plan(["plugin.json"], [])
+    for value in ("0.1.0", "0.2.1", "0.2.2", "0.3.0"):
+        assert s.beyond({"plugin.json": plugin(value)}) == ["plugin.json"], value
+    for base, ours, main, want in (("1.0", "1.1", "1.0.1", "1.1.0"), ("1.0", "1.0.1", "1.1", "1.1.1")):
+        s = Sides(tmp_path / ours, {"plugin.json": plugin(base)}, {"plugin.json": plugin(ours)},
+                  {"plugin.json": plugin(main)})
+        assert s.beyond({"plugin.json": plugin(want)}) == [], (ours, want)
+        for wrong in {ours, main, "1.2"} - {want}:
+            assert s.beyond({"plugin.json": plugin(wrong)}) == ["plugin.json"], (ours, wrong)
+
+
+def test_a_version_in_each_package_table_is_the_package_s_own(tmp_path):
+    """40.3, `_PACKAGE_TABLES` (finding a586457d69): a version conflict under
+    Cargo's `[package]` or `[workspace.package]`, `[tool.poetry]` or
+    setup.cfg's `[metadata]` goes to the agent, which must write the next
+    version after main's there; the same field under `[dependencies]` is
+    refused."""
+    files = {"Cargo.toml": ("package", '"{}"'), "a/Cargo.toml": ("workspace.package", '"{}"'),
+             "pyproject.toml": ("tool.poetry", '"{}"'), "setup.cfg": ("metadata", "{}")}
+    for name, (table, value) in files.items():
+        def text(v: str, table: str = table) -> str:
+            return f'[{table}]\nname = "x"\nversion = {value.format(v)}\n'
+
+        s = Sides(tmp_path / name.replace("/", "-"), {name: text("0.1.0")}, {name: text("0.2.0")},
+                  {name: text("0.1.1")})
+        assert s.plan() == merge.Plan([name], []), name
+        assert s.beyond({name: text("0.2.0")}) == [], name
+        assert s.beyond({name: text("0.1.1")}) == [name], name
+        s = Sides(tmp_path / f"dep-{name.replace('/', '-')}", {name: text("0.1.0", "dependencies")},
+                  {name: text("0.2.0", "dependencies")}, {name: text("0.1.1", "dependencies")})
+        assert s.plan() == merge.Plan([], [name]), name
+
+
 def test_a_version_file_both_sides_added_and_a_lockfile_both_deleted(tmp_path):
     """A version file both sides added at different versions has no version
     after main's to write: any value is named (finding 890669a415). A
@@ -909,6 +949,42 @@ def test_a_changelog_takes_only_its_own_package_s_new_version(tmp_path):
     assert s.beyond(good) == []
     assert s.beyond({**good, "b/CHANGELOG.md": log("0.66.0:Child", "0.64.1:Main", "0.64.0:First")}) \
         == ["b/CHANGELOG.md"]
+
+
+def test_a_changelog_only_the_child_changed_is_given_when_its_entry_names_a_raised_version(tmp_path):
+    """40.3 (finding 54632ff87f): base 0.64.0, both sides at 0.65.0, and only
+    the child changed the CHANGELOG. The resolution writes 0.66.0, so the
+    child's entry must move from 0.65.0, main's release, to 0.66.0: the plan
+    gives the agent that CHANGELOG, and one left under 0.65.0 is named. A
+    child-only CHANGELOG whose added lines name no version the child raised
+    is not given."""
+    base = {"plugin.json": plugin("0.64.0"), "CHANGELOG.md": changelog(("0.64.0", "First."))}
+    ours = {"plugin.json": plugin("0.65.0"), "CHANGELOG.md": changelog(("0.65.0", "Child."), ("0.64.0", "First."))}
+    theirs = {"plugin.json": plugin("0.65.0"), "main.py": ""}
+    s = Sides(tmp_path / "named", base, ours, theirs)
+    assert s.plan() == merge.Plan(["plugin.json", "CHANGELOG.md"], [])
+    assert s.beyond({"plugin.json": plugin("0.66.0"), "main.py": ""}) == ["CHANGELOG.md"]
+    moved = changelog(("0.66.0", "Child."), ("0.64.0", "First."))
+    assert s.beyond({"plugin.json": plugin("0.66.0"), "CHANGELOG.md": moved, "main.py": ""}) == []
+    other = {**ours, "CHANGELOG.md": changelog(("0.64.0", "First."), ("0.63.0", "Older, fixed in 0.63.1."))}
+    s = Sides(tmp_path / "unnamed", base, other, theirs)
+    assert s.plan() == merge.Plan(["plugin.json"], [])
+
+
+def test_a_child_only_changelog_of_another_package_is_not_given(tmp_path):
+    """40.3 (PR #387 review, finding 9149e1b300): in a monorepo, both sides
+    raise a/ to 0.65.0, and only the child raises b/ to 0.65.0 with an entry
+    in b/CHANGELOG.md. The resolution writes 0.66.0 in a/ only, so b/'s
+    entry stays under 0.65.0: the plan does not give the agent b/'s
+    CHANGELOG, and a merge that leaves it as the child wrote it passes."""
+    base = {"a/plugin.json": plugin("0.64.0"), "b/plugin.json": plugin("0.64.0"),
+            "b/CHANGELOG.md": changelog(("0.64.0", "First."))}
+    ours = {"a/plugin.json": plugin("0.65.0"), "b/plugin.json": plugin("0.65.0"),
+            "b/CHANGELOG.md": changelog(("0.65.0", "Child b."), ("0.64.0", "First."))}
+    theirs = {"a/plugin.json": plugin("0.65.0"), "main.py": ""}
+    s = Sides(tmp_path, base, ours, theirs)
+    assert s.plan() == merge.Plan(["a/plugin.json"], [])
+    assert s.beyond({"a/plugin.json": plugin("0.66.0"), "main.py": ""}) == []
 
 
 def _uv(project: str, req: str, digest: str) -> str:
@@ -1022,13 +1098,22 @@ def _resolved(digest: str, *pins: tuple[str, str, str]) -> str:
          "state": {"revision": r * 40, "version": v}} for n, v, r in pins], "version": 2}, indent=2) + "\n"
 
 
+def _composer(digest: str, *pins: tuple[str, str, str]) -> str:
+    return json.dumps({"content-hash": digest, "packages": [
+        {"name": f"v/{n}", "version": v, "dist": {"type": "zip", "url": f"https://c/{n}.zip", "shasum": h * 40}}
+        for n, v, h in pins], "packages-dev": []}, indent=4) + "\n"
+
+
 def test_a_lockfile_package_is_one_side_s_entry_for_that_same_name(tmp_path):
-    """40.3, 'lockfiles (regenerate)' (finding f87b11faac): the child adds c,
-    main adds d. A regenerated lock (each manifest hash a new hex digest)
-    passes. One that files d's whole entry under c's name (package-lock.json's
-    `node_modules/c`, Pipfile.lock's `default.c`), or pairs c's version with
-    d's revision (Package.resolved, which pins by `revision`), is named."""
+    """40.3, 'lockfiles (regenerate)' (findings f87b11faac, 9817c93283): the
+    child adds c, main adds d. A regenerated lock (each manifest hash a new
+    hex digest) passes. One that files d's whole entry under c's name
+    (package-lock.json's `node_modules/c`, Pipfile.lock's `default.c`), pairs
+    c's version with d's revision (Package.resolved, which pins by
+    `revision`) or d's shasum (composer.lock), or holds a manifest hash that
+    is not one, is named."""
     h = {k: k * 64 for k in "0123"}
+    a, c, d = ("a", "1.0.0", "a"), ("c", "1.1.0", "c"), ("d", "1.2.0", "d")
     npm = json.loads(_npm("a", "c", "d"))
     npm["packages"]["node_modules/c"] = npm["packages"]["node_modules/d"]
     resolved = json.loads(_resolved(h["3"], ("a", "1.0.0", "a"), ("c", "1.1.0", "c"), ("d", "1.2.0", "d")))
@@ -1048,7 +1133,10 @@ def test_a_lockfile_package_is_one_side_s_entry_for_that_same_name(tmp_path):
                                   _resolved(h["3"], ("a", "1.0.0", "a"), ("c", "1.1.0", "c"), ("d", "1.2.0", "d")),
                                   [json.dumps(resolved, indent=2) + "\n", json.dumps(whole, indent=2) + "\n",
                                    _resolved("not a hash", ("a", "1.0.0", "a"), ("c", "1.1.0", "c"),
-                                             ("d", "1.2.0", "d"))])}
+                                             ("d", "1.2.0", "d"))]),
+             "composer.lock": (_composer(h["0"], a), _composer(h["1"], a, c), _composer(h["2"], a, d),
+                               _composer(h["3"], a, c, d),
+                               [_composer(h["3"], a, ("c", "1.1.0", "d"), d), _composer("not a hash", a, c, d)])}
     for name, (base, ours, theirs, good, bad) in cases.items():
         s = Sides(tmp_path / name, {name: base}, {name: ours}, {name: theirs})
         assert s.plan() == merge.Plan([name], []), name
@@ -1093,6 +1181,70 @@ def test_a_lockfile_package_pinned_by_a_git_revision_is_one_side_s_whole(tmp_pat
               {"Package.resolved": json.dumps({"pins": [pins[0], pins[2]], "version": 2}, indent=2) + "\n"})
     assert s.plan() == merge.Plan(["Package.resolved"], [])
     assert s.beyond({"Package.resolved": json.dumps({"pins": pins, "version": 2}, indent=2) + "\n"}) == []
+
+
+def _poetry_git(*pins: tuple[str, str, str]) -> str:
+    return "".join(f'[[package]]\nname = "{n}"\nversion = "{v}"\npython-versions = "*"\nfiles = []\n\n'
+                   f'[package.source]\ntype = "git"\nurl = "https://g/{n}"\nreference = "main"\n'
+                   f'resolved_reference = "{r * 40}"\n\n' for n, v, r in pins) \
+        + '[metadata]\nlock-version = "2.0"\ncontent-hash = "' + "0" * 64 + '"\n'
+
+
+def _resolved_v1(*pins: tuple[str, str, str]) -> str:
+    return json.dumps({"object": {"pins": [
+        {"package": n, "repositoryURL": f"https://g/{n}", "state": {"branch": None, "revision": r * 40, "version": v}}
+        for n, v, r in pins]}, "version": 1}, indent=2) + "\n"
+
+
+def test_a_poetry_git_package_and_a_version_1_package_resolved_pin_are_one_side_s_whole(tmp_path):
+    """40.3 (owed review of 5c8a5602..8165ed8a, findings cf3a1d5b0a and
+    95e5f9702a): a poetry.lock git package has no file hashes and is pinned
+    only by `[package.source] resolved_reference`; a version-1
+    Package.resolved nests its pins under `object`. The child adds c, main
+    adds d. A regenerated lock passes; c's version with d's source, or pin c
+    holding d's whole `state`, is named."""
+    a, c, d = ("a", "1.0.0", "a"), ("c", "1.1.0", "c"), ("d", "1.2.0", "d")
+    v1 = json.loads(_resolved_v1(a, c, d))
+    v1["object"]["pins"][1]["state"] = v1["object"]["pins"][2]["state"]
+    cases = {"poetry.lock": (_poetry_git(a), _poetry_git(a, c), _poetry_git(a, d), _poetry_git(a, c, d),
+                             _poetry_git(a, ("c", "1.1.0", "d"), d).replace("https://g/c", "https://g/d")),
+             "Package.resolved": (_resolved_v1(a), _resolved_v1(a, c), _resolved_v1(a, d), _resolved_v1(a, c, d),
+                                  json.dumps(v1, indent=2) + "\n")}
+    for name, (base, ours, theirs, good, bad) in cases.items():
+        s = Sides(tmp_path / name, {name: base}, {name: ours}, {name: theirs})
+        assert s.plan() == merge.Plan([name], []), name
+        assert s.beyond({name: good}) == [], name
+        assert s.beyond({name: bad}) == [name], name
+
+
+def _uv_requested(project: str, *deps: str) -> str:
+    """uv.lock with the project's editable entry asking for a git dependency in
+    `[package.metadata] requires-dist`, as this repository's own uv.lock does,
+    and each of *deps* a registry package with a hash."""
+    names = ["core", *deps]
+    return ('version = 1\n\n[[package]]\nname = "app"\nversion = "' + project + '"\nsource = { editable = "." }\n'
+            'dependencies = [\n' + "".join(f'    {{ name = "{n}" }},\n' for n in names) + ']\n\n'
+            '[package.metadata]\nrequires-dist = [\n    { name = "core", git = "https://g/core?branch=main" },\n'
+            + "".join(f'    {{ name = "{n}" }},\n' for n in deps) + ']\n'
+            + "".join(f'\n[[package]]\nname = "{n}"\nversion = "1.0"\nsource = {{ registry = "https://pypi.org/simple" }}\n'
+                      f'sdist = {{ url = "https://x/{n}-1.0.tar.gz", hash = "sha256:{n * 8}" }}\n' for n in deps))
+
+
+def test_a_git_dependency_a_project_asks_for_does_not_pin_the_project(tmp_path):
+    """40.3 (owed review of 5c8a5602..8165ed8a, finding 99f5110ddf): a `git`
+    key in uv.lock's `[package.metadata] requires-dist` is what the project
+    asks for, not a lock. Both sides raise the project 0.64.0 to 0.65.0, the
+    child adds dependency c and main adds d; the resolution writes 0.66.0. A
+    regenerated uv.lock, the editable entry at 0.66.0 with both dependencies,
+    passes."""
+    def project(v: str) -> str:
+        return f'[project]\nname = "app"\nversion = "{v}"\n'
+
+    s = Sides(tmp_path, {"pyproject.toml": project("0.64.0"), "uv.lock": _uv_requested("0.64.0")},
+              {"pyproject.toml": project("0.65.0"), "uv.lock": _uv_requested("0.65.0", "c")},
+              {"pyproject.toml": project("0.65.0"), "uv.lock": _uv_requested("0.65.0", "d")})
+    assert s.plan() == merge.Plan(["uv.lock", "pyproject.toml"], [])
+    assert s.beyond({"pyproject.toml": project("0.66.0"), "uv.lock": _uv_requested("0.66.0", "c", "d")}) == []
 
 
 def devcontainer(node: str) -> str:
@@ -1145,6 +1297,40 @@ def test_the_prompt_asks_for_the_new_version_only_where_the_check_accepts_it(tmp
     assert s.plan() == merge.Plan(["m.json"], [])
     assert s.beyond({"m.json": market("0.66.0", "0.65.0"), "main.py": ""}) == []
     assert s.beyond({"m.json": market("0.66.0", "0.66.0"), "main.py": ""}) == ["m.json"]
+
+
+def test_the_prompt_leaves_a_version_both_sides_raised_that_is_not_the_package_s_own(tmp_path):
+    """40.3 (owed review of 5c8a5602..8165ed8a, finding 4991ad04ec; PR #387
+    review, finding 320e2b1539): both sides raise Cargo's `[package]` and a
+    `[dependencies.<name>]` version alike. The check accepts the new version
+    only in the package's own field, so the prompt limits the rule to it and
+    names a dependency's version as one to leave as the merge left it.
+    `[tool.commitizen]`'s `version` is commitizen's copy of the project's
+    version, so it is the package's own and is raised with `[project]`'s."""
+    from build_pipeline.prompts.epic_merge import MERGE_PROMPT
+
+    text = " ".join(MERGE_PROMPT.split())
+    assert "The package's own version field" in text
+    assert "`[dependencies.<name>]`" in text
+
+    def cargo(own: str, dep: str) -> str:
+        return f'[package]\nname = "app"\nversion = "{own}"\n\n[dependencies.serde]\nversion = "{dep}"\n'
+
+    s = Sides(tmp_path / "cargo", {"Cargo.toml": cargo("0.64.0", "1.0.0")},
+              {"Cargo.toml": cargo("0.65.0", "1.1.0")}, {"Cargo.toml": cargo("0.65.0", "1.1.0"), "main.py": ""})
+    assert s.plan() == merge.Plan(["Cargo.toml"], [])
+    assert s.beyond({"Cargo.toml": cargo("0.66.0", "1.1.0"), "main.py": ""}) == []
+    assert s.beyond({"Cargo.toml": cargo("0.66.0", "1.2.0"), "main.py": ""}) == ["Cargo.toml"]
+
+    def pyproject(own: str, tool: str) -> str:
+        return f'[project]\nname = "app"\nversion = "{own}"\n\n[tool.commitizen]\nversion = "{tool}"\n'
+
+    s = Sides(tmp_path / "cz", {"pyproject.toml": pyproject("0.64.0", "0.64.0")},
+              {"pyproject.toml": pyproject("0.65.0", "0.65.0")},
+              {"pyproject.toml": pyproject("0.65.0", "0.65.0"), "main.py": ""})
+    assert s.plan() == merge.Plan(["pyproject.toml"], [])
+    assert s.beyond({"pyproject.toml": pyproject("0.66.0", "0.66.0"), "main.py": ""}) == []
+    assert s.beyond({"pyproject.toml": pyproject("0.66.0", "0.65.0"), "main.py": ""}) == ["pyproject.toml"]
 
 
 def test_a_conflict_without_markers_is_never_the_step_s_resolution(tmp_path):
