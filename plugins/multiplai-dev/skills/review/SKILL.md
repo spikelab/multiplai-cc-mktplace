@@ -534,8 +534,8 @@ Every run appends to `<data_dir>/reviews/ledger.jsonl`, whatever `--out`
 says: a `started` line (`slug`, `target_dir`, `head_sha`, `session_id`) when
 it starts, and a `finished` line when it ends (`generated_at`, `producer`,
 `session_id`, `slug`, `target_dir`, `round` (the `<NN>`), `head_sha`,
-`base_sha`, `kind`, `pr`, `stopped`: `null`, `budget`, `verify-incomplete`
-or `failed: <error>`, and the whole `run` object). A resume and each target
+`base_sha`, `kind`, `pr`, `stopped`: `null`, `budget`, `verify-incomplete`,
+`usage-limit` or `failed: <error>`, and the whole `run` object). A resume and each target
 of a batch are runs too. The file is never rewritten. A `started` line with
 no later `finished` line for the same `target_dir` and `head_sha` is a run
 that was killed or stopped with Ctrl-C: a plain `review` of that target then makes no model call,
@@ -580,6 +580,14 @@ and the partial state; resume only if the user raises the ceiling:
 each; the message lists them, and the other verdicts are kept. Tell the user,
 then run `python -m review_pipeline resume <out>/<repo>/<object> --trust-repo`, which
 asks again only for those findings.
+`6` the Claude usage limit (session, weekly, ...) was hit. The first call that
+reports it stops the run: no stage tries that call again or starts another,
+and the checkpoint keeps every answer that came back. The message gives the
+reset time and the exact `resume` command. Tell the user both, and **do not
+resume or start another review before the reset**: every call until then
+fails the same way. A batch starts no further target after the limit and
+lists those as `not started`; `assess-only` does the same and still writes
+its report.
 
 ### 2. Report
 

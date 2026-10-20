@@ -438,9 +438,22 @@ def _budget_stop(monkeypatch):
     return budget.BudgetExceededError
 
 
-@pytest.mark.parametrize("stop", [_trust_stop, _budget_stop], ids=["trust", "budget"])
+def _limit_stop(monkeypatch):
+    """multiplai-core reports a hit usage limit from the mapping call's run_agent."""
+    from multiplai_core import UsageLimitError
+
+    monkeypatch.setenv("REVIEW_TRUST_REPO", "1")
+
+    async def run_agent(prompt, **kwargs):
+        raise UsageLimitError("You've hit your session limit", limit="session")
+
+    monkeypatch.setattr(sdk, "run_agent", run_agent)
+    return sdk.UsageLimitError
+
+
+@pytest.mark.parametrize("stop", [_trust_stop, _budget_stop, _limit_stop], ids=["trust", "budget", "usage-limit"])
 @pytest.mark.parametrize("route", ["raised", "from-a-call"])
-async def test_trust_and_budget_stops_propagate_and_record_nothing(change_review, mapper, monkeypatch, stop,
+async def test_trust_budget_and_usage_limit_stops_propagate_and_record_nothing(change_review, mapper, monkeypatch, stop,
                                                                    route):
     """Raised by map_paths itself, or by a mapping call: map_paths catches only `recoverable`, so neither stop
     may be in it (RepoTrustError is an AgentCallError)."""

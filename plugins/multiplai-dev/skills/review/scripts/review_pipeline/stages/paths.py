@@ -47,9 +47,10 @@ class _CallFailed(Exception):
     """A mapping call that failed and that `map_paths` records as a drop.
 
     `map_paths` treats every exception in `recoverable` as a failed call, and
-    `sdk.RepoTrustError` is an `sdk.AgentCallError`, so passing
-    `AgentCallError` would turn a trust stop into a dropped entry. The call
-    function raises this instead for every other agent failure.
+    `sdk.RepoTrustError` and `sdk.UsageLimitError` are `sdk.AgentCallError`s,
+    so passing `AgentCallError` would turn a trust stop or a hit usage limit
+    into a dropped entry. The call function raises this instead for every
+    other agent failure.
     """
 
 
@@ -57,7 +58,7 @@ async def _call(prompt: str, schema, *, budget_label: str = "", **kwargs):
     """Review's call function under one budget label, `paths`, whatever code_facts names the task."""
     try:
         return await sdk.agent_call_structured(prompt, schema, budget_label=BUDGET_LABEL, **kwargs)
-    except sdk.RepoTrustError:
+    except (sdk.RepoTrustError, sdk.UsageLimitError):
         raise
     except sdk.AgentCallError as e:
         raise _CallFailed(str(e)) from e
@@ -112,7 +113,7 @@ async def run_paths(state: ReviewState, ctx: RunContext) -> ReviewState:
         )
         if ctx.target_dir is not None:
             write_paths_file(result, ctx.target_dir / PATHS_FILE)
-    except (sdk.RepoTrustError, budget.BudgetExceededError):
+    except (sdk.RepoTrustError, sdk.UsageLimitError, budget.BudgetExceededError):
         raise
     except Exception as e:  # noqa: BLE001 — a failed mapping must not stop the review; find runs without paths
         log.exception("paths: mapping failed")

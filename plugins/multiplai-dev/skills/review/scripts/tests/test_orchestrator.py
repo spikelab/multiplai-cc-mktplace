@@ -31,17 +31,20 @@ def settings_findings():
 
 class FakeAgents:
     """Canned answers by stage label. `kill_at` raises once at that stage;
-    `budget_stop_at` raises BudgetExceededError once, on that call (1-based).
+    `budget_stop_at` raises BudgetExceededError once, on that call (1-based);
+    `limit_at` raises a usage-limit stop on that call and on every call after
+    it, until `limit_at` is set back to None (the limit resets).
     `two_groups` adds two overlapping settings.py findings from `history`."""
 
     def __init__(self, kill_at: str | None = None, cost: float = 0.0, budget_stop_at: int | None = None,
-                 two_groups: bool = False):
+                 two_groups: bool = False, limit_at: int | None = None):
         self.calls: list[str] = []
         self.cwds: list[tuple[str, str | None]] = []
         self.kill_at = kill_at
         self.cost = cost
         self.budget_stop_at = budget_stop_at
         self.two_groups = two_groups
+        self.limit_at = limit_at
         self.assess_answer: AssessOutput | None = None
         self.repeats_answer: RepeatsOutput | None = None
 
@@ -53,6 +56,9 @@ class FakeAgents:
         if len(self.calls) == self.budget_stop_at:
             self.budget_stop_at = None
             raise budget.BudgetExceededError(f"circuit breaker stopped the run during {budget_label}")
+        if self.limit_at is not None and len(self.calls) >= self.limit_at:
+            raise sdk.UsageLimitError("the Claude session usage limit was hit; it resets 9:40am (UTC)",
+                                      limit="session", resets="9:40am (UTC)")
         if self.cost:
             budget.record(SimpleNamespace(cost_usd=self.cost), label=budget_label)
         stage = budget_label.split(":")[0]
@@ -292,6 +298,42 @@ def test_a_budget_stop_during_merge_keeps_the_answers_and_resume_asks_only_the_r
     assert before[-1] == "merge" and before.count("merge") == 1
     assert saved.stage == "verify" and len(saved.merge_answers) == 1
     assert resumed == ["merge", "assess"]  # three findings remain, so assess runs once
+
+
+def test_a_usage_limit_during_verify_saves_the_checkpoint_exits_6_and_resume_asks_only_the_rest(
+        fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    fake = agents(limit_at=8)  # 6 finders, one verdict, then the limit
+    assert main(_review_args(repo, base, head, out)) == 6
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
+    err = capsys.readouterr().err
+    assert "STOPPED: the Claude session usage limit was hit; it resets 9:40am (UTC)" in err
+    assert f"python -m review_pipeline resume {target_dir} --trust-repo" in err
+    # The limit stops every call at once: one failed verify call, no second or third try.
+    assert fake.calls.count("verify") == 2 and len(fake.calls) == 8
+    saved = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
+    assert saved.stage == "find" and list(saved.verdicts) == [high_finding().id]
+    assert "FAILED the Claude session usage limit was hit" in (target_dir / "progress.log").read_text()
+    assert not (target_dir / "findings.json").exists()
+
+    fake.limit_at = None  # the limit reset
+    first_run = len(fake.calls)
+    assert main(["--session-id", "sess-test", "resume", str(target_dir), "--trust-repo"]) == 0
+    assert fake.calls[first_run:] == ["verify", "merge"]
+
+
+def test_a_usage_limit_stops_a_batch_before_its_next_target(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    batch_file = tmp_path / "batch.yaml"
+    batch_file.write_text(f"- repo: {repo}\n  range: {base}..{head}\n- repo: {repo}\n  branch: feature/db-2038\n")
+    fake = agents(limit_at=1)
+    assert main(["--out", str(out), "batch", str(batch_file), "--parallel", "1", "--trust-repo"]) == 6
+    stdout = capsys.readouterr().out
+    assert fake.calls.count("find:diff-bugs") == 1  # the second target never started
+    assert "not started: the Claude session usage limit was hit" in stdout
+    assert not (out / "booking-engine" / "branch-feature_db-2038").exists()
 
 
 def test_rollup_subcommand(fixture_repo, tmp_path, agents, capsys):

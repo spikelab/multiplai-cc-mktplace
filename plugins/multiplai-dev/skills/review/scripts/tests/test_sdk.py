@@ -8,7 +8,7 @@ import pytest
 from pydantic import BaseModel
 
 from multiplai_core import deny_list
-from multiplai_core.agent_runner import AgentRunError
+from multiplai_core.agent_runner import AgentRunError, UsageLimitError
 from review_pipeline import budget, sdk
 from review_pipeline.config import STAGE_MODELS, load_config
 from review_pipeline.models import VerifierAnswer
@@ -152,6 +152,44 @@ async def test_failed_run_counts_as_a_failure_and_is_reasked(trusted, fake_run):
     # No answer came back, so there is nothing to reformat: the prompt runs again.
     assert calls[1]["prompt"].startswith("p\n\n---\n") and "boom" in calls[1]["prompt"]
     assert calls[1]["allowed_tools"] == sdk.MERGER_TOOLS
+
+
+def _limit_error(partial=None) -> UsageLimitError:
+    """What multiplai-core raises when the CLI reports a hit usage limit."""
+    return UsageLimitError(
+        "run_agent [verify] failed: Claude Code returned an error result: You've hit your session limit "
+        "\u00b7 resets 9:40am (UTC) (exit code: 1) after 1 attempt(s)",
+        limit="session", resets="9:40am (UTC)", reason="failed: You've hit your session limit", partial=partial)
+
+
+@pytest.mark.parametrize("call", ["structured", "text"])
+async def test_a_usage_limit_stops_at_once_with_no_reask(trusted, fake_run, call, monkeypatch):
+    import paths_stub
+
+    monkeypatch.setattr(sdk, "agent_call_text", paths_stub.REAL_AGENT_CALL_TEXT)  # conftest stubs it
+    calls, replies = fake_run
+    ledger = budget.start(10.0)
+    partial = SimpleNamespace(usage=SimpleNamespace(input_tokens=1, output_tokens=0, cost_usd=0.25), tool_calls=(),
+                              turns=0)
+    replies += [_limit_error(partial), _result('{"value": 1}')]
+    with pytest.raises(sdk.UsageLimitError) as exc:
+        if call == "structured":
+            await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.FINDER_TOOLS, budget_label="verify")
+        else:
+            await sdk.agent_call_text("p", allowed_tools=sdk.READ_ONLY_TOOLS, budget_label="find:piece")
+    assert len(calls) == 1
+    assert isinstance(exc.value, sdk.AgentCallError)
+    assert exc.value.limit == "session" and exc.value.resets == "9:40am (UTC)"
+    assert "usage limit" in str(exc.value) and "9:40am (UTC)" in str(exc.value)
+    assert ledger.cost_usd == pytest.approx(0.25)  # the failed call was still paid for
+
+
+async def test_a_usage_limit_on_the_reask_also_stops(trusted, fake_run):
+    calls, replies = fake_run
+    replies += [_result("not json"), _limit_error()]
+    with pytest.raises(sdk.UsageLimitError):
+        await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.FINDER_TOOLS)
+    assert len(calls) == 2
 
 
 async def test_spend_is_recorded_and_the_breaker_stops_the_next_call(trusted, fake_run):

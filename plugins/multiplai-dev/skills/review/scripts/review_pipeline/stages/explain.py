@@ -130,7 +130,7 @@ async def run_explain(state: ReviewState, ctx: RunContext) -> ReviewState:
     ask = dict(
         call_kwargs=dict(allowed_tools=sdk.READ_ONLY_TOOLS, model=cfg.finder_model, effort=cfg.effort,
                          max_turns=cfg.max_turns, cwd=str(ctx.snapshot)),
-        errors=[], recoverable=(sdk.AgentCallError,), fatal=(sdk.RepoTrustError,),
+        errors=[], recoverable=(sdk.AgentCallError,), fatal=(sdk.RepoTrustError, sdk.UsageLimitError),
         progress=ctx.progress.line if ctx.progress else None,
     )
     keep = keeper(t, ctx)
