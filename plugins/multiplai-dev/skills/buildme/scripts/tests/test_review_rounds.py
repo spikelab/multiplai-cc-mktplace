@@ -1970,6 +1970,17 @@ class TestReviewedRevision:
         reviewed, why = _reviewed_revision(self._config(repo), head)
         assert reviewed is None and "vendor/a.txt" in why
 
+    @pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+    def test_a_moved_submodule_git_is_told_not_to_check_makes_it_unknown(self, tmp_path, flag):
+        from build_pipeline.tdd_engine import _reviewed_revision
+        repo = self._repo(tmp_path)
+        self._sub(tmp_path, repo)
+        head = _git(repo, "rev-parse", "HEAD")
+        _git(repo, "update-index", flag, "vendor")
+        _git(repo / "vendor", "checkout", "-q", "--detach", "HEAD~1")
+        reviewed, why = _reviewed_revision(self._config(repo), head)
+        assert reviewed is None and "vendor" in why
+
     def test_a_moved_submodule_the_parent_ignores_makes_it_unknown(self, tmp_path):
         from build_pipeline.tdd_engine import _reviewed_revision
         repo = self._repo(tmp_path)

@@ -953,18 +953,24 @@ def tree_is_clean(repo: Path | str, ignore: Path | str | None = None,
 def unchecked_files(repo: Path | str, ignore: Path | str | None = None) -> list[str] | None:
     """The files under *repo* whose index entry tells git not to look at them
     (`assume-unchanged` or `skip-worktree`), so `git status` would not show an
-    edit to them, initialized submodules included (`vendor/a.py`). Bookkeeping
+    edit to them, in initialized submodules (`vendor/a.py`) and on a gitlink
+    entry itself (`vendor`). Bookkeeping
     and *ignore* are left out, as in `tree_is_clean`. None when git could not
     be asked."""
     excludes = list(BOOKKEEPING_EXCLUDES)
     if ignore is not None:
         excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
-    result = _run(["git", "ls-files", "-v", "-z", "--recurse-submodules", "--", ".", *excludes], cwd=repo)
-    if not result.ok:
-        return None
-    # `-v` writes a lowercase tag for assume-unchanged and S for skip-worktree.
-    return [entry[2:] for entry in filter(None, result.stdout.split("\0"))
-            if entry[:1].islower() or entry[:1] == "S"]
+    found: list[str] = []
+    # Once more without `--recurse-submodules`, which lists a submodule's own
+    # files in place of its gitlink entry and so drops that entry's flags.
+    for recurse in ([], ["--recurse-submodules"]):
+        result = _run(["git", "ls-files", "-v", "-z", *recurse, "--", ".", *excludes], cwd=repo)
+        if not result.ok:
+            return None
+        # `-v` writes a lowercase tag for assume-unchanged and S for skip-worktree.
+        found += [entry[2:] for entry in filter(None, result.stdout.split("\0"))
+                  if (entry[:1].islower() or entry[:1] == "S") and entry[2:] not in found]
+    return found
 
 
 def index_entries(repo: Path | str, ignore: Path | str | None = None) -> dict[str, str] | None:
