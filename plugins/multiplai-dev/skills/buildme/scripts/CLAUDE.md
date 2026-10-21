@@ -185,7 +185,13 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   the checkpoint only on a clean tree, checks the budget, saves
   `BlockInfo.fix_pass` (`FixOnPassState`) to the checkpoint file, then
   `_run_fix_on_pass` runs the fix agent, the suite, `_enforce_test_integrity`
-  and one more review. The fix is kept only when the suite is green and
+  and one more review. That review gets the round memory a later round gets
+  (`open_state`'s open findings and rejected ones, `scope_diff=None` because
+  the fix is not committed yet) and `plan_round` keeps every open finding it
+  does not call `resolved`; with no usable record for the round the pass
+  started from (`fp.round_path` is not the latest review record), every
+  finding of the pass stays open. Findings it keeps go to
+  `unfixed-findings.md` with their status. The fix is kept only when the suite is green and
   `review_score_gate` still passes; anything else goes back to the checkpoint
   through `_discard_keeping_records` (a `discard_to` that puts the round
   records back afterwards) and lands in `unfixed-findings.md`. On resume,

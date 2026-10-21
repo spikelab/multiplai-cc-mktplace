@@ -280,8 +280,12 @@ class TestRoundRecords:
 class TestFixOnPass:
     @pytest.mark.asyncio
     async def test_fix_on_pass_kept_when_tests_green_and_score_still_passes(self, project):
+        from build_pipeline.models import PriorAssessment
+
         p = project
-        stack, review, fix = _engine([_passing([_finding()]), _passing()],
+        resolved = _passing().model_copy(update={"prior_assessments": [
+            PriorAssessment(finding_id="B01-R1-F1", status="resolved")]})
+        stack, review, fix = _engine([_passing([_finding()]), resolved],
                                      _fixer(p.dir, {"app.py": FIXED}))
         with stack:
             assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
@@ -300,6 +304,112 @@ class TestFixOnPass:
         assert p.block.review_iterations == 1
         assert p.block.fix_pass is None
         assert p.block.fix_on_pass_kept is True
+
+    @pytest.mark.asyncio
+    async def test_a_finding_the_fix_on_pass_left_open_survives_its_review(self, project):
+        """Round 1 fails on a Major finding, the fix changes nothing, round 2
+        passes and says it is still present, the fix on pass changes nothing,
+        and the review after it passes with no findings and no assessment."""
+        from build_pipeline.models import PriorAssessment
+        from build_pipeline.state import BuildState as Loaded
+
+        p = project
+        still = _passing().model_copy(update={"prior_assessments": [
+            PriorAssessment(finding_id="B01-R1-F1", status="still_present")]})
+        stack, review, fix = _engine([_failing([_finding()]), still, _passing()], _fixer(p.dir))
+        with stack:
+            assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+
+        assert fix.await_count == 2
+        assert p.block.status == BlockStatus.DONE
+        assert (p.dir / "app.py").read_text() == BUGGY
+        # The review after the fix on pass is given the open finding, like any later round.
+        assert [f.finding_id for f in review.await_args_list[2].kwargs["open_findings"]] == ["B01-R1-F1"]
+        assert [f.finding_id for f in p.block.review_scores.findings] == ["B01-R1-F1"]
+        rounds = _rounds(p)
+        assert rounds[3]["kind"] == "fix_on_pass_review"
+        assert [f["finding_id"] for f in rounds[3]["open_findings"]] == ["B01-R1-F1"]
+        assert [(a["finding_id"], a["status"]) for a in rounds[3]["prior_assessments"]] == [
+            ("B01-R1-F1", "cannot_verify")]
+        unfixed = _unfixed(p)
+        assert "[Major] off-by-one in add()" in unfixed
+        assert "still open after the fix on pass (cannot_verify" in unfixed
+        saved = Loaded.load(p.config.state_file_path())
+        assert [f.finding_id for f in saved.tdd.blocks[0].review_scores.findings] == ["B01-R1-F1"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ["resolved", "still_present", "partially_resolved",
+                                        "cannot_verify", None])
+    async def test_the_review_after_the_fix_on_pass_retires_only_a_resolved_finding(
+            self, project, status):
+        from build_pipeline.models import PriorAssessment
+
+        p = project
+        final = _passing()
+        if status:
+            final = final.model_copy(update={"prior_assessments": [
+                PriorAssessment(finding_id="B01-R1-F1", status=status)]})
+        stack, review, fix = _engine([_passing([_finding()]), final], _fixer(p.dir, {"app.py": FIXED}))
+        with stack:
+            assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+
+        assert p.block.fix_on_pass_kept is True
+        assert [f.finding_id for f in review.await_args_list[1].kwargs["open_findings"]] == ["B01-R1-F1"]
+        left = [f.finding_id for f in p.block.review_scores.findings]
+        if status == "resolved":
+            assert left == [] and _unfixed(p) == ""
+        else:
+            assert left == ["B01-R1-F1"]
+            assert f"still open after the fix on pass ({status or 'cannot_verify'}" in _unfixed(p)
+        assert [a["status"] for a in _rounds(p)[2]["prior_assessments"]] == [status or "cannot_verify"]
+
+    @pytest.mark.asyncio
+    async def test_with_no_round_record_the_findings_of_the_fix_on_pass_stay_open(self, project):
+        """`reviews` is a file, so no round record can be written: a review
+        that passes with no assessment cannot retire what the pass worked on."""
+        p = project
+        (p.config.change_dir / "reviews").write_text("not a directory\n")
+        _git(p.dir, "add", "."); _git(p.dir, "commit", "-qm", "reviews is a file")
+        stack, review, _ = _engine([_passing([_finding()]), _passing()], _fixer(p.dir))
+        with stack:
+            assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+
+        assert p.block.status == BlockStatus.DONE
+        assert [f.claim for f in p.block.review_scores.findings] == ["off-by-one in add()"]
+        assert "off-by-one in add()" in _unfixed(p)
+        assert "still open after the fix on pass (no round record to check it against" in _unfixed(p)
+
+    @pytest.mark.asyncio
+    async def test_an_older_record_does_not_stand_in_for_the_one_that_failed(self, project):
+        """Round 1 is recorded; round 2's record cannot be written. The review
+        after the fix on pass must not take round 1's open list for round 2's."""
+        from build_pipeline.models import PriorAssessment
+
+        p = project
+        real = review_rounds.record_round
+        calls = []
+
+        def record(*args, **kwargs):
+            calls.append(kwargs.get("kind"))
+            return None if len(calls) == 2 else real(*args, **kwargs)
+
+        resolved_r1 = _passing([_finding("Major", "a second defect")]).model_copy(update={
+            "prior_assessments": [PriorAssessment(finding_id="B01-R1-F1", status="resolved")]})
+        stack, review, _ = _engine([_failing([_finding()]), resolved_r1, _passing()],
+                                   _fixer(p.dir, {"app.py": FIXED}))
+        with stack, patch("build_pipeline.review_rounds.record_round", side_effect=record):
+            assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+
+        assert "open_findings" not in review.await_args_list[2].kwargs
+        assert [f.claim for f in p.block.review_scores.findings] == ["a second defect"]
+        assert "a second defect" in _unfixed(p) and "off-by-one" not in _unfixed(p)
+        # The record of the review after the fix says the same as the block and the report.
+        terminal = max(_rounds(p).values(), key=lambda r: r["round"])
+        assert terminal["kind"] == "fix_on_pass_review"
+        assert [f["claim"] for f in terminal["open_findings"]] == ["a second defect"]
+        assert terminal["prior_assessments"] == []
+        saved = BuildState.load(p.config.state_file_path())
+        assert [f.claim for f in saved.tdd.blocks[0].review_scores.findings] == ["a second defect"]
 
     @pytest.mark.asyncio
     async def test_fix_on_pass_rolled_back_when_tests_go_red(self, project):
@@ -366,7 +476,7 @@ class TestFixOnPass:
         helper = "def helper():\n    return 'HELPER BODY'\n"
         reviewed, adjudicated = [], []
 
-        async def review(block, config):
+        async def review(block, config, **kwargs):
             from build_pipeline.tdd_engine import _capture_block_diff
             reviewed.append(_capture_block_diff(config, block))
             return _passing([_finding()])
