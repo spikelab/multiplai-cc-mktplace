@@ -31,7 +31,7 @@ from typing import Awaitable, Callable
 
 from multiplai_core.untrusted import defang, fence
 
-from .. import budget, git_ops
+from .. import git_ops
 from ..config import BuildConfig
 from ..gates import parse_recurring, parse_searched
 from ..llm_steps.spec_steps import AUDITOR_MAX_TURNS, AUDITOR_TOOLS

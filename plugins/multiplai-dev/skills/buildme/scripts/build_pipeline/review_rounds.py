@@ -125,7 +125,7 @@ def record_round(
     *reviewed_sha* is the commit whose tree the reviewer read, or None when
     that is not known (``reviewed_sha_unknown`` says why); *head_sha* is HEAD
     when the record was written, which may hold less than the reviewer saw.
-    A record written before 0.96.5 has no ``reviewed_sha`` key."""
+    A record written before 0.96.6 has no ``reviewed_sha`` key."""
     directory = reviews_dir(change_dir)
     try:
         directory.mkdir(parents=True, exist_ok=True)

@@ -272,6 +272,16 @@ class TestSameMistake:
     def test_no_searched_sentence_when_empty(self):
         assert "Searched" not in self._outcome("")
 
+    def test_the_reply_leaves_out_a_check_an_earlier_attempt_failed(self):
+        """A failed check after the blocks stops the round before it publishes,
+        so a round that publishes passed it on its last attempt."""
+        r = _fix_record()
+        rnd = FindingsRound(number=1, comments=[r.comment], triaged={r.comment.id: r.triage},
+                            fixes={r.comment.key: {"test": "a" * 40, "impl": "b" * 40,
+                                                   "status": "done"}},
+                            code_check_failed="mutation testing failed")
+        assert "mutation" not in publish.outcome(rnd, publish.records_of(rnd)[0])
+
     def test_the_pr_body_s_section_leaves_the_searched_sentence_out(self):
         """The body is under the pr skill's word limit and lists every round;
         the search is quoted in the thread's reply only."""
