@@ -74,11 +74,35 @@ def block_ident(record: TriageRecord) -> str:
     return f"finding {c.finding_id}" if c.finding_id else c.label
 
 
+# The longest task `.0` line `render_tasks` writes: `escalation_task` cuts
+# the history so that the whole template fits in it.
+ESCALATION_LIMIT = 20_000
+
+
 def escalation_task(history: str) -> str:
     """`REVIEW_FIX_ESCALATION` filled with *history* (`history.history_text`),
     flattened to one task line: `parse_blocks` keeps only a block's checkbox
-    lines, and its heading must not start a line."""
-    return " ".join(REVIEW_FIX_ESCALATION.format(findings=history).split())
+    lines, and its heading must not start a line.
+
+    The history comes before the template's instructions, so it is cut, never
+    the line: whole lines are kept while the filled template fits in
+    `ESCALATION_LIMIT`, and a cut history ends by saying how many it left
+    out. It is defanged here, before it is measured, so `render_tasks`'s
+    `_line` (which defangs again, changing nothing) neither grows nor cuts it."""
+    fixed = " ".join(REVIEW_FIX_ESCALATION.format(findings="").split())
+    room = ESCALATION_LIMIT - len(fixed) - 1
+    lines = [" ".join(line.split()) for line in defang(history or "").splitlines()]
+    lines = [line for line in lines if line]
+    body = " ".join(lines)
+    if len(body) > room:
+        def cut(kept: int) -> str:
+            return " ".join(lines[:kept] + [f"({len(lines) - kept} more findings are left out: "
+                                            "the history was cut to fit this task)"])
+        kept = 0
+        while kept < len(lines) and len(cut(kept + 1)) <= room:
+            kept += 1
+        body = cut(kept)
+    return " ".join(REVIEW_FIX_ESCALATION.format(findings=body).split())
 
 
 def render_tasks(round_n: int, records: list[TriageRecord],
@@ -112,7 +136,7 @@ def render_tasks(round_n: int, records: list[TriageRecord],
         out += [
             f"## {i}. Fix {block_ident(r)}",
             "",
-            *([f"- [ ] {i}.0 {_line(escalation, 20_000)}"] if escalation else []),
+            *([f"- [ ] {i}.0 {_line(escalation, ESCALATION_LIMIT)}"] if escalation else []),
             f"- [ ] {i}.1 Write a failing test that shows the defect: {failing}",
             f"- [ ] {i}.2 Change the code so that test passes. "
             f"Why it is a defect: {_line(t.reason)} Code involved: {where}{also}",
@@ -131,7 +155,7 @@ def render_tasks(round_n: int, records: list[TriageRecord],
         out += [
             f"## {k}. Fix what the check of this round's fixes found",
             "",
-            *([f"- [ ] {k}.0 {_line(escalation, 20_000)}"] if escalation else []),
+            *([f"- [ ] {k}.0 {_line(escalation, ESCALATION_LIMIT)}"] if escalation else []),
             f"- [ ] {k}.1 Write a failing test that shows each problem the check found: {report}",
             f"- [ ] {k}.2 Change the code so those tests pass, and nothing else.",
             "",

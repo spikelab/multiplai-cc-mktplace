@@ -15,6 +15,17 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.96.7] - 2026-10-21
+
+### Fixed
+- buildme-findings: on the last, escalated round, a pull request with a long
+  review history no longer loses the instructions that make it an
+  escalation. The history came first in the fix task and the task was cut at
+  20,000 characters, so "question the block's approach", "fix only the
+  findings in the brief" and the `RECURRING:` line it asks for were dropped.
+  The history is now cut instead, to whole findings, and says how many it
+  left out. A history that fits is unchanged.
+
 ## [0.96.6] - 2026-10-21
 
 ### Fixed
