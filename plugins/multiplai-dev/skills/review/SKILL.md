@@ -44,8 +44,9 @@ paths through the change from each entry point (see "The paths stage" below).
    `cannot_verify` without a citation that is there becomes `cannot_verify`,
    and so does a finding whose three tries all fail (the run goes on, with a
    line under agent failures). After step 6, an earlier finding that a finding
-   of this round is `still-open` against is `still_present`, and one nothing
-   rechecked is `cannot_verify`, never resolved. The review lists them under
+   of this round is `still-open` against is `still_present`, also when that
+   finding was merged into a duplicate, and one nothing rechecked is
+   `cannot_verify`, never resolved. The review lists them under
    **Findings from earlier rounds**; **Recurring** names each defect open in
    three or more rounds, followed across rewordings by its `lineage` (the id
    of its first appearance, through `still-open` and `repeat`); and the

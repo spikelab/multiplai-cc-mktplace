@@ -20,7 +20,7 @@ from review_pipeline.models import (AssessItem, AssessOutput, DuplicateSet, Find
 from review_pipeline.render import render_review, render_summary
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.assess import gate_assessments, run_assess
-from review_pipeline.stages.repeats import gate_matches, run_repeats
+from review_pipeline.stages.repeats import earlier_findings, gate_matches, run_repeats
 from review_pipeline.state import load_state, save_state
 
 OLD_HEAD = "1" * 40
@@ -723,6 +723,164 @@ async def test_the_earlier_status_is_the_worst_of_the_recheck_and_still_open(tar
     exported = to_findings_file(state)["earlier"]
     assert [(e["earlier_id"], e["status"]) for e in exported] == [
         (e1.id, "still_present"), (e2.id, "partially_resolved"), (e3.id, "cannot_verify")]
+
+
+def _merged_still_open_case(target_info, ctx, *, survivor: str, reverse: bool):
+    """Earlier finding e, rechecked as resolved; a (useful) and b (still-open against e) are one defect at app.py:1."""
+    from review_pipeline.models import EarlierStatus
+
+    e = at("listed last round", file="app.py", line=1)
+    write_round(ctx.target_dir, OLD_HEAD, [e])
+    a = at("the useful one", file="app.py", line=1, severity="HIGH" if survivor == "a" else "MEDIUM")
+    b = at("the still-open one", KEYWORD_USE_CITATION, file="app.py", line=1,
+           severity="MEDIUM" if survivor == "a" else "HIGH")
+    state = state_with(target_info, a, b, stage="repeats")
+    state.recheck_answers = {e.id: EarlierStatus(earlier_id=e.id, lineage=e.id, round=OLD_HEAD, status="resolved",
+                                                 reason="it reads the setting now.")}
+    ids = [b.id, a.id] if reverse else [a.id, b.id]
+    answer = AssessOutput(assessments=[AssessItem(id=a.id, label="useful"),
+                                       AssessItem(id=b.id, label="still-open", reason="same bug", earlier_id=e.id)],
+                          duplicate_sets=[DuplicateSet(finding_ids=ids, reason="one defect")])
+    return state, answer, e, a, b
+
+
+@pytest.mark.parametrize("survivor", ["a", "b"])
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_a_still_open_label_on_a_merged_duplicate_keeps_the_earlier_finding_open(target_info, ctx, fake,
+                                                                                       survivor, reverse):
+    state, answer, e, a, b = _merged_still_open_case(target_info, ctx, survivor=survivor, reverse=reverse)
+    fake(assess=[answer])
+    state = await run_assess(state, ctx)
+    kept, = state.findings
+    gone = b if kept.id == a.id else a
+    assert kept.id == (a.id if survivor == "a" else b.id)
+    assert [(s.earlier_id, s.status) for s in state.earlier_status] == [(e.id, "still_present")]
+    assert state.earlier_status[0].reason == f"it reads the setting now. Still open in this round as {kept.id}."
+    assert state.lineage == {kept.id: e.id}
+    assert (state.assessments[kept.id].label, state.assessments[kept.id].earlier_id) == ("still-open", e.id)
+    assert [(m.finding.id, m.assessment.label) for m in state.merged] == [
+        (gone.id, "useful" if gone.id == a.id else "still-open")]
+    data = to_findings_file(state)
+    row, = data["findings"]
+    assert (row["lineage"], row["assessment"]["label"], row["assessment"]["earlier_id"]) == (e.id, "still-open", e.id)
+    assert row["absorbed"] == [{"id": gone.id, "claim": gone.claim}]
+    assert [(x["earlier_id"], x["status"]) for x in data["earlier"]] == [(e.id, "still_present")]
+    assert "0 new, 1 still open" in render_summary(state)
+
+
+async def test_a_merged_still_open_label_survives_a_save_and_a_second_reconcile(target_info, ctx, fake):
+    from review_pipeline.stages.assess import reconcile_earlier
+
+    state, answer, e, a, b = _merged_still_open_case(target_info, ctx, survivor="a", reverse=False)
+    fake(assess=[answer])
+    state = await run_assess(state, ctx)
+    path = save_state(state, ctx.target_dir)
+    loaded = load_state(path)
+    reconcile_earlier(loaded, ctx)
+    assert loaded.model_dump() == state.model_dump()
+    resumed_at_s1, *_ = _merged_still_open_case(target_info, ctx, survivor="a", reverse=False)
+    resumed_at_s1.assess_answer = answer
+    calls = fake()
+    resumed = await run_assess(load_state(save_state(resumed_at_s1, ctx.target_dir)), ctx)
+    assert calls.calls == []
+    assert outcome(resumed) == outcome(state)
+    assert (resumed.lineage, resumed.earlier_status) == (state.lineage, state.earlier_status)
+
+
+async def _assessed_again(target_info, ctx, monkeypatch, decision: tuple[str, str] | None):
+    """The merged case run and saved, the earlier decision set to *decision*, then `assess_only` with a/useful."""
+    from review_pipeline import orchestrator
+
+    state, answer, e, a, b = _merged_still_open_case(target_info, ctx, survivor="a", reverse=False)
+    monkeypatch.setattr(sdk, "agent_call_structured", Fake({"assess": [answer]}))
+    state = await run_assess(state, ctx)
+    path = save_state(state, ctx.target_dir)
+    if decision:
+        decide(ctx.target_dir, **{e.id: decision})
+    before = path.read_bytes()
+    monkeypatch.setattr(sdk, "agent_call_structured", Fake({
+        "repeats": [RepeatsOutput(matches=[])], "assess": [AssessOutput(assessments=[AssessItem(id=a.id, label="useful")])]}))
+    monkeypatch.setattr(orchestrator.target_mod, "snapshot_head", lambda target, where: ctx.snapshot)
+    monkeypatch.setattr(orchestrator, "_with_deps", lambda *args: None)
+    result = await orchestrator.assess_only(ctx.target_dir, ReviewConfig())
+    assert path.read_bytes() == before
+    return result, e, a
+
+
+async def test_assessing_again_after_the_earlier_finding_is_rejected_drops_the_merged_still_open(
+        target_info, ctx, monkeypatch):
+    from review_pipeline.stages.assess import carry_still_open, reconcile_earlier
+
+    result, e, a = await _assessed_again(target_info, ctx, monkeypatch, ("reject", "intentional"))
+    assert [(r["id"], r["label"]) for r in result.rows] == [(a.id, "useful")]
+    # The same check holds for the code-only steps a resumed run repeats.
+    state = load_state(ctx.target_dir / "review-state.json")
+    state.assessments = {a.id: state.assessments[a.id].model_copy(update={"label": "useful", "earlier_id": ""})}
+    carry_still_open(state, earlier_findings(state, ctx))
+    reconcile_earlier(state, ctx)
+    assert state.assessments[a.id].label == "useful"
+    assert state.lineage == {a.id: a.id}
+
+
+@pytest.mark.parametrize("decision", [None, ("defer", "later"), ("accept", "")])
+async def test_assessing_again_with_the_earlier_finding_still_open_keeps_the_merged_still_open(
+        target_info, ctx, monkeypatch, decision):
+    result, e, a = await _assessed_again(target_info, ctx, monkeypatch, decision)
+    assert [(r["id"], r["label"]) for r in result.rows] == [(a.id, "still-open")]
+
+
+async def test_a_kept_still_open_label_takes_the_current_decision_and_note(target_info, ctx, fake):
+    from review_pipeline.stages.assess import carry_still_open
+
+    state, answer, e, a, b = _merged_still_open_case(target_info, ctx, survivor="a", reverse=False)
+    fake(assess=[answer])
+    state = await run_assess(state, ctx)
+    decide(ctx.target_dir, **{e.id: ("defer", "after the release")})
+    state.assessments = {a.id: state.assessments[a.id].model_copy(update={"label": "useful", "earlier_id": ""})}
+    carry_still_open(state, earlier_findings(state, ctx))
+    got = state.assessments[a.id]
+    assert (got.label, got.earlier_id, got.earlier_round, got.earlier_decision, got.earlier_note) == (
+        "still-open", e.id, OLD_HEAD, "defer", "after the release")
+
+
+async def test_a_duplicate_set_still_open_against_two_earlier_findings_keeps_both_open(target_info, ctx, fake):
+    from review_pipeline.models import EarlierStatus
+
+    e1 = at("first earlier", file="app.py", line=1)
+    e2 = at("second earlier", file="app.py", line=2)
+    write_round(ctx.target_dir, OLD_HEAD, [e1, e2])
+    a = at("useful", file="app.py", line=1, severity="HIGH")
+    b = at("open against e2", file="app.py", line=2, severity="MEDIUM")
+    c = at("open against e1", file="app.py", line=3, severity="LOW")
+    state = state_with(target_info, a, b, c, stage="repeats")
+    state.recheck_answers = {x.id: EarlierStatus(earlier_id=x.id, lineage=x.id, round=OLD_HEAD, status="resolved")
+                             for x in (e1, e2)}
+    fake(assess=[AssessOutput(assessments=[AssessItem(id=a.id, label="useful"),
+                                           AssessItem(id=b.id, label="still-open", reason="r", earlier_id=e2.id),
+                                           AssessItem(id=c.id, label="still-open", reason="r", earlier_id=e1.id)],
+                              duplicate_sets=[DuplicateSet(finding_ids=[c.id, b.id, a.id], reason="one defect")])])
+    state = await run_assess(state, ctx)
+    assert [f.id for f in state.findings] == [a.id]
+    assert sorted((s.earlier_id, s.status) for s in state.earlier_status) == sorted(
+        [(e1.id, "still_present"), (e2.id, "still_present")])
+    # b comes before c in the findings, so b's earlier finding is the survivor's lineage.
+    assert state.lineage == {a.id: e2.id}
+    assert state.assessments[a.id].earlier_id == e2.id
+
+
+async def test_a_duplicate_set_with_no_still_open_label_keeps_the_survivor_label(target_info, ctx, fake):
+    e = at("listed last round", file="app.py", line=1)
+    write_round(ctx.target_dir, OLD_HEAD, [e])
+    a = at("a", file="app.py", line=1, severity="HIGH")
+    b = at("b", file="app.py", line=1)
+    state = state_with(target_info, a, b, stage="repeats")
+    fake(assess=[AssessOutput(assessments=[AssessItem(id=a.id, label="low-value", reason="[covered] elsewhere"),
+                                           AssessItem(id=b.id, label="useful")],
+                              duplicate_sets=[DuplicateSet(finding_ids=[a.id, b.id], reason="one defect")])])
+    state = await run_assess(state, ctx)
+    assert state.assessments[a.id].label == "low-value"
+    assert state.lineage == {a.id: a.id}
+    assert [(s.earlier_id, s.status) for s in state.earlier_status] == [(e.id, "cannot_verify")]
 
 
 async def test_a_skipped_assess_stage_still_sets_lineage_and_the_earlier_statuses(target_info, ctx, fake):

@@ -30,12 +30,23 @@ Trim findings (`models.is_trim`) are never sent to the agent and get no label
 from it: they sit in their own advisory section. The `important` labels the
 verify stage gives some of them are recomputed and kept.
 
+A finding merged away keeps its label on its `Merged` entry. A survivor
+labelled `useful` or `low-value` that absorbed a `still-open` finding becomes
+`still-open` against the same earlier finding (`carry_still_open`): a confirmed
+duplicate of an open earlier defect means that defect is still there. With
+several such findings, the first in `state.findings` order gives the label, so
+neither the agent's member order nor which member survives changes it. A kept
+label counts only while its earlier finding is in `rounds/` with a decision
+the gate allows for `still-open`, and it takes that finding's current round,
+decision and note, so assessing a saved review again after the person rejects
+the earlier finding does not bring the label back.
+
 Once the labels are final, `reconcile_earlier` sets, in code, each finding's
 `lineage` (the id of its first appearance, through a `still-open` or `repeat`
 label) and the final status of each earlier finding the recheck stage was
 given: the worst of its recheck status and `still_present` when a finding of
-this round is `still-open` against it. An open earlier finding with no
-recheck answer is `cannot_verify`, reason `not rechecked`.
+this round, or one merged into it, is `still-open` against it. An open earlier
+finding with no recheck answer is `cannot_verify`, reason `not rechecked`.
 """
 
 from __future__ import annotations
@@ -130,6 +141,40 @@ def _repeat_assessments(state: ReviewState) -> dict[str, Assessment]:
             for fid, r in state.repeats.items() if fid in shown}
 
 
+def absorbed_still_open(state: ReviewState,
+                        earlier: list[rounds.EarlierFinding]) -> dict[str, list[tuple[str, Assessment]]]:
+    """(merged id, its `still-open` label) for each finding merged away with one, by the id it ended up in.
+
+    A label counts only when its earlier finding is in *earlier* with a decision in `OPEN_DECISIONS`; it
+    takes that finding's current round, decision and note.
+    """
+    by_earlier = {e.id: e for e in earlier}
+    into = {m.finding.id: m.into for m in state.merged}
+    out: dict[str, list[tuple[str, Assessment]]] = {}
+    for m in state.merged:
+        a = m.assessment
+        e = by_earlier.get(a.earlier_id) if a is not None and a.label == "still-open" else None
+        if e is None or e.decision not in OPEN_DECISIONS:
+            continue
+        top, seen = m.into, {m.finding.id}
+        while top in into and top not in seen:
+            seen.add(top)
+            top = into[top]
+        out.setdefault(top, []).append((m.finding.id, a.model_copy(update={
+            "earlier_round": e.head_sha, "earlier_decision": e.decision, "earlier_note": e.note})))
+    return out
+
+
+def carry_still_open(state: ReviewState, earlier: list[rounds.EarlierFinding]) -> None:
+    """Label `still-open` each `useful` or `low-value` survivor that absorbed a `still-open` finding."""
+    absorbed = absorbed_still_open(state, earlier)
+    for fid, a in list(state.assessments.items()):
+        if a.label in ("useful", "low-value") and absorbed.get(fid):
+            merged_id, carried = absorbed[fid][0]
+            state.assessments[fid] = carried.model_copy(update={
+                "reason": f"{merged_id}, merged into this finding: {carried.reason}".rstrip(": ")})
+
+
 def reconcile_earlier(state: ReviewState, ctx: RunContext,
                       earlier: list[rounds.EarlierFinding] | None = None) -> None:
     """Set `state.lineage` and `state.earlier_status` from the final labels and the stored recheck answers.
@@ -137,6 +182,7 @@ def reconcile_earlier(state: ReviewState, ctx: RunContext,
     Code only, so running it again on the same state and rounds gives the same result.
     """
     by_earlier = {e.id: e for e in (earlier_findings(state, ctx) if earlier is None else earlier)}
+    absorbed = absorbed_still_open(state, list(by_earlier.values()))
     lineage: dict[str, str] = {}
     against: dict[str, list[Finding]] = {}
     for f in state.findings:
@@ -145,8 +191,10 @@ def reconcile_earlier(state: ReviewState, ctx: RunContext,
         if a is not None and a.label in ("still-open", "repeat") and a.earlier_id:
             e = by_earlier.get(a.earlier_id)
             lineage[f.id] = str((e.finding.get("lineage") if e else "") or a.earlier_id)
-            if a.label == "still-open":
-                against.setdefault(a.earlier_id, []).append(f)
+        links = [a] if a is not None and a.label == "still-open" else []
+        for earlier_id in dict.fromkeys(x.earlier_id for x in links + [x for _, x in absorbed.get(f.id, [])]):
+            if earlier_id:
+                against.setdefault(earlier_id, []).append(f)
     state.lineage = lineage
 
     statuses: list[EarlierStatus] = []
@@ -177,6 +225,7 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     if not candidates or (len(candidates) < 2 and not earlier):
         state.assessments = {**{f.id: Assessment(label="useful") for f in candidates}, **repeats, **important}
+        carry_still_open(state, earlier)
         reconcile_earlier(state, ctx, earlier)
         ctx.counts = {"skipped": 1, "repeats": len(repeats)}
         state.stage = "assess"
@@ -225,13 +274,18 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     sets = anchored_sets(answer.duplicate_sets, candidates)
     removed = apply_duplicate_sets(state, [(candidates, sets)], by="assess")
+    for m in state.merged:
+        if m.finding.id in removed:
+            m.assessment = labels.get(m.finding.id)
     state.assessments = {**{k: v for k, v in labels.items() if k not in removed}, **repeats, **important}
+    carry_still_open(state, earlier)
     mark_merged(state)
     if check is not None and not check.error:
         counts = {}
-        for fid, a in labels.items():
+        for fid in labels:
             if fid not in removed:
-                counts[a.label] = counts.get(a.label, 0) + 1
+                label = state.assessments[fid].label
+                counts[label] = counts.get(label, 0) + 1
         parts = [f"{n} {label}" for label, n in sorted(counts.items())]
         parts += [f"merged {m.finding.id} into {m.into}" for m in state.merged if m.finding.id in removed]
         check.outcome = "; ".join(parts) or "no labels"
