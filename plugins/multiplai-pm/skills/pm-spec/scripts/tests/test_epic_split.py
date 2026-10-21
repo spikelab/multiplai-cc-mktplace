@@ -60,6 +60,18 @@ class TestCheckAnswer:
         assert any("T-9" in e for e in check_answer(answer(child("a", ref="T-9"), child("b")), ["T-1"]))
         assert check_answer(answer(child("a", ref="T-1"), child("b")), ["T-1"]) == []
 
+    def test_an_answer_that_drops_a_ticket_child_is_rejected(self):
+        errors = check_answer(answer(child("a", ref="T-1"), child("b")), ["T-1", "T-2"])
+        assert any("T-2" in e and "no child change" in e for e in errors)
+
+    def test_one_change_drops_two_or_more_ticket_children(self):
+        assert any("T-1" in e for e in check_answer(SplitAnswer(single=True), ["T-1", "T-2"]))
+        assert check_answer(SplitAnswer(single=True), ["T-1"]) == []
+
+    def test_a_ticket_child_given_to_two_children_is_rejected(self):
+        errors = check_answer(answer(child("a", ref="T-1"), child("b", ref="T-1")), ["T-1"])
+        assert any("T-1" in e and "twice" in e for e in errors)
+
     def test_waves_put_dependencies_first(self):
         kids = [EpicChild(**child("c", ["b"])), EpicChild(**child("b", ["a"])), EpicChild(**child("a"))]
         assert waves(kids) == ["a", "b", "c"]
@@ -110,7 +122,29 @@ def test_no_epic_split_makes_no_call(repo, model):
     assert "epic_split" not in model.labels()
 
 
+def test_a_split_that_drops_a_ticket_child_is_retried_then_stops(repo, model, capsys):
+    dropped = {"single": False, "reason": "", "children": [child("api", ref="T-1"), child("ui")]}
+    model["epic_split"] = [dropped, dropped]
+    assert run(repo, "new", "throttle", "--auto", "--ticket-ref", "EPIC-9", "--ticket-child", "T-1",
+               "--ticket-child", "T-2") == 1
+    assert model.calls_to("epic_split") == 2
+    assert "T-2" in model.prompts("epic_split")[1]
+    assert "rejected twice" in capsys.readouterr().out
+
+
+def test_a_child_starts_with_its_own_budget(repo, model):
+    model["epic_split"] = PLAIN_SPLIT
+    assert run(repo, "new", "throttle", "--auto") == 0
+    parent_calls = state(change_dir(repo))["budget"]["calls"]
+    assert parent_calls == len(model.calls) > 0
+    assert state(change_dir(repo, "throttle-api"))["budget"] is None
+    before = len(model.calls)
+    assert run(repo, "resume", "throttle-api") == 0
+    assert state(change_dir(repo, "throttle-api"))["budget"]["calls"] == len(model.calls) - before
+
+
 def test_the_split_follows_the_tickets_children_first(repo, model):
+    model["epic_split"] = SPLIT
     assert run(repo, "new", "throttle", "--auto", "--ticket-ref", "EPIC-9", "--ticket-child", "T-1",
                "--ticket-child", "T-2") == 0
     prompt = model.prompts("epic_split")[0]

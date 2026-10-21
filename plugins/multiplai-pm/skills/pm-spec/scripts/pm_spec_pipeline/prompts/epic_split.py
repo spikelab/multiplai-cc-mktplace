@@ -44,9 +44,11 @@ Return ONLY JSON matching this schema:
 """
 
 CHILDREN_RULE = """
-The ticket already lists these child items: {children}. When you answer
-several, make one child per listed item first, in that order, each with its
-`ticket_ref`; add a child of your own only for work none of them covers.
+The ticket already lists these child items: {children}. Make one child per
+listed item first, in that order, each with its `ticket_ref`; every listed
+item must be the `ticket_ref` of exactly one child. Add a child of your own
+only for work none of them covers. With two or more listed items the answer
+is several, never one change.
 """
 
 EPIC_SPLIT_RETRY = """

@@ -68,8 +68,8 @@ def test_the_registry_text_reaches_the_requirements_prompt(repo, model):
 
 def test_ticket_children_are_cited_in_sources(repo, model, tmp_path):
     ticket = write(tmp_path / "t.md", "Throttle the API.\n")
-    assert run(repo, "new", "throttle", "--auto", "--ticket-file", str(ticket), "--ticket-ref", "EPIC-9",
-               "--ticket-child", "T-1", "--ticket-child", "T-2") == 0
+    assert run(repo, "new", "throttle", "--auto", "--no-epic-split", "--ticket-file", str(ticket),
+               "--ticket-ref", "EPIC-9", "--ticket-child", "T-1", "--ticket-child", "T-2") == 0
     assert "ticket <ref>" in model.prompts("spec:proposal")[0]
     from pm_spec_pipeline.artifacts import sources
     cited = sources((change_dir(repo) / "proposal.md").read_text())

@@ -8,10 +8,13 @@ item has `id` (local and stable across runs: the change name for the epic,
 (repo-relative paths), plus `ref` for an item that came in as a ref.
 
 - The epic: the proposal's `# ` title (else the change name) and its `## Why`.
-  Its `ref` is the ticket ref the change came in with (`ticket_refs.epic`).
+  Its `ref` is the ticket ref the change came in with, as recorded in
+  `.change.yaml` (`ticket_refs.epic`): `--ticket-ref`, or for a child change of
+  an epic split, the `--ticket-child` ref the split gave it (checked in code).
 - One task per capability, under the epic: the requirement and scenario names
-  of `requirements/<cap>.md` as `acceptance`, a link to that file. Its `ref` is
-  a ticket child ref the proposal's `## Sources` names for that capability.
+  of `requirements/<cap>.md` as `acceptance`, a link to that file. A task has
+  no `ref`: no recorded ref maps to a capability, and a model-written line is
+  not a record.
 - Priority: a `Priority:` line in `prd.md`, else in `ticket.md`, else `none`;
   tasks take the epic's.
 - Labels: the change name, and on tasks the capability name.
@@ -28,7 +31,6 @@ from pathlib import Path
 from multiplai_core.specs import expected_capabilities, parse_requirements
 
 from . import intake
-from .artifacts import sources
 
 FILE = "tickets.json"
 PRIORITIES = ("none", "low", "medium", "high", "urgent")
@@ -85,7 +87,6 @@ def build(change_dir: Path, project_dir: Path) -> list[dict]:
     proposal = (change_dir / "proposal.md").read_text()
     refs = intake.ticket_refs(change_dir)
     priority = change_priority(change_dir)
-    cited = sources(proposal)
     epic = {
         "id": change, "type": "epic", "title": _title(proposal, change),
         "description": _section(proposal, "Why") or _section(proposal, "What Changes"),
@@ -106,9 +107,6 @@ def build(change_dir: Path, project_dir: Path) -> list[dict]:
             "priority": priority, "labels": [change, cap], "parent": change,
             "acceptance": acceptance(text), "links": [f"{rel_dir}/requirements/{cap}.md"],
         }
-        ref = next((r for r in cited.get(cap, {}).get("tickets", []) if r in refs["children"]), None)
-        if ref:
-            task["ref"] = ref
         items.append(task)
     return items
 

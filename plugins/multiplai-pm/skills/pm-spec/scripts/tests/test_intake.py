@@ -90,6 +90,8 @@ def test_without_a_prd_the_answerer_is_a_read_only_agent(repo, model):
 # --- the ticket and its children ----------------------------------------------------
 
 def test_ticket_file_and_children_write_ticket_md_and_ticket_refs(repo, model, tmp_path):
+    from test_epic_split import SPLIT
+    model["epic_split"] = SPLIT
     ticket = _ticket(tmp_path)
     assert run(repo, "new", "throttle", "--auto", "--ticket-file", str(ticket), "--ticket-ref", "EPIC-9",
                "--ticket-url", "https://tickets.example/EPIC-9", "--ticket-child", "T-1",
@@ -104,7 +106,7 @@ def test_ticket_file_and_children_write_ticket_md_and_ticket_refs(repo, model, t
     assert meta(cdir)["ticket_refs"] == {"epic": "EPIC-9", "children": ["T-1", "T-2"]}
     # The split prompt asks to follow the existing children first.
     assert "T-1, T-2" in model.prompts("epic_split")[0]
-    assert "make one child per listed item first" in model.prompts("epic_split")[0]
+    assert "must be the `ticket_ref` of exactly one child" in model.prompts("epic_split")[0]
 
 
 def test_ticket_refs_without_a_ticket_file_are_still_recorded(repo, model):

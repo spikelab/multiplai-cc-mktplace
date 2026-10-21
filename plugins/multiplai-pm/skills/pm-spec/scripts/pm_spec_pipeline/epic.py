@@ -4,8 +4,10 @@ One toolless structured call reads the ticket, the plan, the PRD and the
 interview, and answers one change or several children, each with a plan. The
 answer is checked in code (buildme's `epic/split.py` rules: unique lowercase
 hyphenated ids, every dependency names a child, no cycle, each plan holds
-`# Plan:` and `## Done means`, at least two children; plus: a `ticket_ref` is
-one of the ticket's child refs), with one retry that lists the problems.
+`# Plan:` and `## Done means`, at least two children; plus, for the ticket's
+recorded child refs: a `ticket_ref` is one of them, every one of them is the
+`ticket_ref` of exactly one child, and with two or more of them the answer
+cannot be one change), with one retry that lists the problems.
 
 The answer is saved in the run state with the hash of the inputs it read,
 before any child dir is written. A run that finds it, with the inputs
@@ -93,6 +95,9 @@ def _cycle(graph: dict[str, list[str]]) -> list[str] | None:
 
 def check_answer(answer: SplitAnswer, ticket_children: list[str]) -> list[str]:
     if answer.single:
+        if len(ticket_children) >= 2:
+            return [f"one change drops the ticket's child items {', '.join(ticket_children)}: answer several, "
+                    "with one child per listed item, each naming it as its `ticket_ref`"]
         return []
     children = answer.children
     if len(children) < 2:
@@ -108,6 +113,13 @@ def check_answer(answer: SplitAnswer, ticket_children: list[str]) -> list[str]:
         if c.ticket_ref and c.ticket_ref not in ticket_children:
             errors.append(f"child {c.id} names ticket_ref {c.ticket_ref!r}, which is not one of the ticket's "
                           f"child items ({', '.join(ticket_children) or 'none'})")
+    given = [c.ticket_ref for c in children if c.ticket_ref]
+    for ref in ticket_children:
+        if ref not in given:
+            errors.append(f"the ticket's child item {ref} has no child change: give it one, with "
+                          f"`ticket_ref` {ref!r}")
+        elif given.count(ref) > 1:
+            errors.append(f"the ticket's child item {ref} is given twice; it belongs to one child")
     for c in children:
         for dep in c.depends_on:
             if dep not in seen:
@@ -178,7 +190,7 @@ def create_children(run: Run, split: SplitRecord) -> list[str]:
         options = run.state.options.model_copy(update={
             "epic_split": False, "ticket_ref": child.ticket_ref, "ticket_url": "", "ticket_children": []})
         state_mod.save(RunState(change=name, options=options, parent=run.config.change_name, intake_done=True),
-                       run_dir)
+                       run_dir, ledger=False)
         log.info("Created child change %s", child_dir)
     return names
 

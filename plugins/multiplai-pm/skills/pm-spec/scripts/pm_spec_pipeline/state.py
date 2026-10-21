@@ -126,6 +126,9 @@ class RunState(BaseModel):
     steps: dict[str, StepOutcome] = Field(default_factory=dict)
     handoff: Handoff | None = None
     budget: dict | None = None
+    # A change whose specs pm-spec did not write, taken as they stand: only
+    # the consistency check and the handoff run on it.
+    adopted: bool = False
 
     def step(self, name: str) -> StepOutcome:
         return self.steps.setdefault(name, StepOutcome())
@@ -148,8 +151,11 @@ def load(run_dir: Path) -> RunState | None:
     return state
 
 
-def save(state: RunState, run_dir: Path) -> None:
+def save(state: RunState, run_dir: Path, *, ledger: bool = True) -> None:
+    """Save *state*, with the current run's spend unless *ledger* is False (a
+    child change's first state, which starts with a ledger of its own)."""
     from . import sdk
-    state.budget = sdk.ledger().to_state()
+    if ledger:
+        state.budget = sdk.ledger().to_state()
     ensure_run_dir(run_dir)
     checkpoint.save_model(state, run_dir, STATE_FILE)
