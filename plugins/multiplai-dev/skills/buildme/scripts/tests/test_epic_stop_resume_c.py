@@ -183,15 +183,18 @@ def _result(root: Root, i: int) -> dict:
     return root.reviews()[i].result
 
 
-def test_C_S2_coordinator_killed_with_the_review_alive_waits_for_it(tmp_path, monkeypatch):
+@pytest.mark.parametrize("start_delay", [0, 0.5], ids=["prompt", "slow-start"])
+def test_C_S2_coordinator_killed_with_the_review_alive_waits_for_it(tmp_path, monkeypatch, start_delay):
     """C.S2: the ledger's `started` line for this head and the review's run
     lock held: the coordinator launches nothing, waits 60 s and looks again
     until the lock is free, then reads the ledger and writes the killed
-    record's result from it. Never two reviews; no launch and no pair."""
-    reviews = {str(N): [{"block": True}, {}]}
+    record's result from it. Never two reviews; no launch and no pair.
+    The coordinator runs again only once the review has started (`slow-start`
+    widens the gap between its lock naming its pid and its `started` line)."""
+    reviews = {str(N): [{"block": True, "start_delay": start_delay}, {}]}
     stopped, clean = _roots(tmp_path, monkeypatch, reviews)
     stopped.killed(_kill_at_review)
-    pid = stopped.review_pid()
+    pid = stopped.started_review_pid()
     assert subprocess.run(["kill", "-0", str(pid)]).returncode == 0      # the review outlived it
     looks, launched = [], stopped.fakes.review_launches()
 
