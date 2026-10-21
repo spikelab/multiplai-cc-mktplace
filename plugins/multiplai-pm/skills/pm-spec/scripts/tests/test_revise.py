@@ -94,7 +94,31 @@ def test_from_respec_reads_each_requirement_block_as_an_issue(repo, model):
     # The ADDED block names no file: every file is rewritten.
     assert sorted(label for label in model.labels() if ":rewrite:" in label) == \
         [f"revise:rewrite:{c}" for c in CAPS]
-    assert (cdir / "respec.md").read_text() == RESPEC  # buildme's record stays
+    # Resolved, it is moved aside like spec-issues.md.
+    assert not (cdir / "respec.md").exists()
+    assert [p.read_text() for p in cdir.glob("respec.resolved-*.md")] == [RESPEC]
+
+
+def test_the_same_issue_raised_again_after_a_passed_revise_is_a_new_round(repo, model):
+    model["consistency"] = {"findings": [], "prior_assessments": [{"finding_id": "RV-F1", "status": "resolved"}]}
+    assert run(repo, "new", "throttle", "--auto") == 0
+    cdir = change_dir(repo)
+    for round_ in (1, 2):
+        write(cdir / "spec-issues.md", ISSUES)
+        set_spec_issues(cdir, cdir / "spec-issues.md")
+        assert run(repo, "revise", "throttle") == 0, round_
+        assert model.calls_to("revise:rewrite") == round_
+        assert meta(cdir)["spec_issues"] is None
+
+
+def test_a_second_respec_after_a_passed_one_is_a_new_round(repo, model):
+    assert run(repo, "new", "throttle", "--auto") == 0
+    cdir = change_dir(repo)
+    model["consistency"] = resolved(2)
+    for round_ in (1, 2):
+        write(cdir / "respec.md", RESPEC)
+        assert run(repo, "revise", "throttle", "--from-respec") == 0, round_
+        assert model.calls_to("revise:rewrite") == 2 * round_
 
 
 def test_parse_respec_skips_notes():

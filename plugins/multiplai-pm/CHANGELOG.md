@@ -35,19 +35,23 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
   the check passes it marks the specs ready, writes `tickets.json` (one epic
   and one task per capability, in a neutral format described by
   `references/tickets.schema.json`), commits only the change dir, and prints
-  `SPEC:READY:<change_dir>:<revision>` for `/multiplai-dev:buildme`.
+  `SPEC:READY:<change_dir>:<revision>` for `/multiplai-dev:buildme`. The ready
+  record covers only the files the check read: an edit made while it ran is
+  checked before the change is marked ready.
 - `pm-spec --prd FILE` makes a PRD the primary source: the interview asks only
   what it leaves open, and the proposal names the PRD section behind each
   capability.
 - `pm-spec` takes a ticket's text with `--ticket-ref` and one `--ticket-child`
-  per child item, records the refs in `.change.yaml`, follows the existing
-  children when it splits the work into several changes, and carries the
+  per child item, records the refs in `.change.yaml`, gives each existing
+  child its own change when it splits the work, and carries the recorded
   refs into `tickets.json`.
 - `pm-spec revise` fixes the requirements issues listed in `spec-issues.md`
   (or `respec.md` with `--from-respec`), rechecks them, clears `spec_issues`
-  and hands off again.
+  and hands off again. While issues are open, `pm-spec resume` refuses and
+  never reports the change ready.
 - Every stop can be resumed with `pm-spec resume <name>`, which pays for no
-  call whose result was saved.
+  call whose result was saved. On a change whose specs were written without
+  pm-spec, it runs only the consistency check and the handoff.
 
 ## [0.6.0] - 2026-10-16
 

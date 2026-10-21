@@ -9,8 +9,9 @@ It reads `spec-issues.md` in the change dir, or `respec.md` with
 2. the recheck: the consistency agent, shown the listed issues, gives each a
    status; each must be `resolved`, and a new finding blocks only when critical;
 3. then, with every issue resolved: `spec_issues` in `.change.yaml` is
-   cleared, `spec-issues.md` is moved to `spec-issues.resolved-<revision>.md`
-   (so a later issue starts a new file) and the change is handed off again.
+   cleared, the issues file is moved to `spec-issues.resolved-<revision>.md`
+   (or `respec.resolved-<revision>.md`), so a later issue starts a new file,
+   and the change is handed off again.
 
 `spec-issues.md` holds one issue per `## ` section (a file with none is one
 issue). An issue names its requirements file as `requirements/<cap>.md`, or
@@ -22,7 +23,8 @@ Row S9, stopped after the rewrite published and before the recheck: running
 `revise` again runs only the recheck against the listed issues; there is no
 second rewrite. A rewrite admitted and never published is spent too: the run
 stops on the listed issues until the files are edited (as the other steps).
-A new issues file (other text) starts a new revise. The step's `source` is
+A new issues file (other text), or any issues file after a passed revise,
+starts a new round with its one rewrite. The step's `source` is
 `<file name>:<sha256 of its text>`, which is also how `resume` knows a revise
 is in flight and which file it read.
 """
@@ -129,23 +131,23 @@ def read_issues(run: Run, from_respec: bool) -> tuple[Path, str, list[str]]:
     return path, text, issues
 
 
-def finish(run: Run, from_respec: bool) -> None:
-    """Every issue resolved: clear `spec_issues`, move the issues file aside, hand off."""
+async def finish(run: Run, from_respec: bool, checked: str) -> None:
+    """Every issue resolved at revision *checked*: clear `spec_issues`, move the
+    issues file aside, hand off (which checks again if the files changed since)."""
     change_dir = run.config.change_dir
-    revision = spec_revision(change_dir)
     path = issues_path(run, from_respec)
-    if not from_respec and path.is_file():
-        os.replace(path, change_dir / f"spec-issues.resolved-{revision[:12]}.md")
+    if path.is_file():
+        os.replace(path, change_dir / f"{path.stem}.resolved-{checked[:12]}.md")
     clear_spec_issues(change_dir)
-    # The recheck was the consistency agent over every spec file.
-    F.record_passed(run, consistency.NAME, revision, "Checked by revise")
+    # The recheck was the consistency agent over every spec file, at *checked*.
+    F.record_passed(run, consistency.NAME, checked, "Checked by revise")
     run.progress("REVISE_PASSED", "Every issue resolved.")
-    handoff.handoff(run)
+    await handoff.check_and_hand_off(run)
 
 
 async def recheck(run: Run, from_respec: bool) -> None:
-    await consistency.recheck(run, NAME, BLOCK_REASON)
-    finish(run, from_respec)
+    checked = await consistency.recheck(run, NAME, BLOCK_REASON)
+    await finish(run, from_respec, checked)
 
 
 async def run_revise(run: Run, *, from_respec: bool = False) -> None:
@@ -162,7 +164,9 @@ async def run_revise(run: Run, *, from_respec: bool = False) -> None:
     path, text, issues = read_issues(run, from_respec)
     source = f"{path.name}:{sha(text)}"
     step = run.state.steps.get(NAME)
-    if step and step.source != source and not F.rewrite_pending(run, NAME):
+    if step and (step.source != source or step.outcome == "passed") and not F.rewrite_pending(run, NAME):
+        # Another issues file, or one raised again after a passed revise: a new
+        # round, with its one rewrite.
         run.state.steps[NAME] = StepOutcome()
         run.save()
     revision = spec_revision(change_dir)

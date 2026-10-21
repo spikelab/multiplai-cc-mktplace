@@ -27,7 +27,10 @@ are not marked ready or were edited since.
      the replies come, run `resume` with `--interview-replies <file>`. Needs
      `--ticket-ref`; without one it runs as `self` under `--auto`, else `user`.
 3. **Epic split.** One call decides whether the work is one change or several.
-   It follows the ticket's existing child items before inventing its own.
+   It follows the ticket's existing child items before inventing its own:
+   each `--ticket-child` must become exactly one child change (with two or
+   more, the answer cannot be one change), checked in code, asked once more,
+   then the run fails.
    Several: each child becomes `specs/changes/<name>-<id>/` with its own plan
    (`plan.md`) as its interview input, the run prints `SPEC:SPLIT:<dir>` and
    one `SPEC:CHILD:<dir>` per child in dependency order, and exits 0. Specify
@@ -51,7 +54,9 @@ are not marked ready or were edited since.
    the findings printed and `spec_status` still `draft`. Running again with
    the files unchanged refuses with no model call; after you edit the files
    the check gets its one rewrite back.
-7. **Handoff.** Writes `tickets.json`, the ready record (`spec_status: ready`
+7. **Handoff.** Only for the files the check read: if they changed after the
+   check read them, the change goes back to `draft` and is checked again.
+   Writes `tickets.json`, the ready record (`spec_status: ready`
    and `spec_revision`, a hash of the proposal, use cases and requirements),
    commits `specs/changes/<name>/` and nothing else (other staged work is left
    staged), and prints `SPEC:READY:<change_dir>:<spec_revision>`. Next:
@@ -61,7 +66,10 @@ are not marked ready or were edited since.
 `--from-respec`), treats each issue as a finding for one rewrite of the
 requirements files it names, rechecks with the consistency agent, and once
 every issue is `resolved` clears `spec_issues` in `.change.yaml`, moves the
-file to `spec-issues.resolved-<revision>.md` and hands off again. In
+file to `spec-issues.resolved-<revision>.md` (or `respec.resolved-<revision>.md`)
+and hands off again. An issues file written after that is a new round, with
+its own rewrite. While `spec_issues` is set or a revise is blocked, `resume`
+refuses with exit 4 and never reports the change ready: run `revise`. In
 `spec-issues.md` each `## ` section is one issue; name the file it concerns as
 `requirements/<capability>.md` or quote the requirement's name (an issue that
 names neither goes to every requirements file).
@@ -122,8 +130,10 @@ from the skill's `scripts/` folder; other relative paths are read from
 
 `new` refuses a change that already has a run; `resume` continues it from
 where it stopped and pays for no call whose result was saved. `resume` on a
-change whose specs were written without pm-spec adopts them as they stand and
-runs the check and the handoff.
+change whose specs were written without pm-spec (for example by buildme before
+pm-spec existed) takes them as they stand and runs only the consistency check
+and the handoff: no interview, no split, no other model call, no new spec
+file.
 
 Models and efforts come from `specs/config.yaml`: `models:` and `efforts:`
 keyed by `interview`, `spec` (the artifacts, the split and the check),
@@ -146,8 +156,9 @@ and one `task` per capability under it (the requirement and scenario names as
 across runs), `type`, `title`, `description`, `priority` (from a `Priority:`
 line in the PRD or the ticket, else `none`; tasks take the epic's), `labels`
 (the change name, and the capability on tasks), `parent`, `acceptance`,
-`links` (repository-relative paths), and `ref` when it came in as
-`--ticket-ref` or `--ticket-child`. It names no ticket system: creating the
+`links` (repository-relative paths), and `ref` on the epic when the change
+came in with one: `--ticket-ref`, or for a child change of a split, the
+`--ticket-child` it was given. Tasks carry no `ref`. It names no ticket system: creating the
 items in one is the job of the project's ticket skill.
 
 ## Exit codes
@@ -161,5 +172,5 @@ calls cost.
 | 1 | Failed: a model call, an answer rejected twice, the prototype, the commit (the ready record is kept; `resume` retries only the commit while the files are unchanged), or the spend cap. |
 | 2 | Refused: an input file missing, an untrusted repository, a run that exists (`new`) or does not (`resume`), no issues to revise. |
 | 3 | Waiting for the ticket replies (`INTERVIEW:WAITING:<path>`). |
-| 4 | Blocked on findings (`SPEC:BLOCKED:<change_dir>`). Edit the files, then run again. |
+| 4 | Blocked on findings (`SPEC:BLOCKED:<change_dir>`). Edit the files, then run again. Also `resume` while requirements issues are open or a revise is blocked: run `revise`. |
 | 5 | Another process holds the change's lock; the message names its pid, host and start time. |

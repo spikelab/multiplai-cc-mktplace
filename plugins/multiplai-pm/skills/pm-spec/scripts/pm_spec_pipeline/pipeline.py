@@ -11,7 +11,12 @@ Stages, in order, each skipped when the run state says it is done:
    that, an edit is the user's and the check below judges it;
 6. the prototype (row S4);
 7. the consistency check (row S5);
-8. the handoff (row S6).
+8. the handoff (row S6), which checks again when the files changed after the
+   check read them.
+
+A change adopted as it stands (specs pm-spec did not write) runs only 7 and 8.
+While `spec_issues` is set or a revise is blocked, a resume refuses (exit 4)
+and hands nothing off; a revise whose rewrite is admitted is carried on.
 
 The run lock (row S8) is held for the whole command.
 """
@@ -24,10 +29,11 @@ from pathlib import Path
 
 from multiplai_core.specs import is_ready, mark_draft, write_change_meta
 
-from . import artifacts, consistency, epic, handoff, intake, interview, prototype, publish, revise, runlock, sdk
+from . import artifacts, epic, handoff, intake, interview, prototype, publish, revise, runlock, sdk
+from . import findings as F
 from . import state as state_mod
 from .config import SpecConfig
-from .run import EXIT_DONE, EXIT_REFUSED, MARKER_READY, Run, Stop
+from .run import EXIT_BLOCKED, EXIT_DONE, EXIT_REFUSED, MARKER_BLOCKED, MARKER_READY, Run, Stop
 from .state import ContextFile, Options, RunState
 
 log = logging.getLogger(__name__)
@@ -112,22 +118,35 @@ def _ready_again(run: Run) -> bool:
     return False
 
 
+def _refuse_while_issues_are_open(run: Run) -> None:
+    """While `spec_issues` is set or a revise is blocked, `resume` hands
+    nothing off: the issues are `revise`'s, under its own rules."""
+    handoff.refuse_open_issues(run)
+    step = run.state.steps.get(revise.NAME)
+    if step and step.outcome == "blocked":
+        print(F.refusal_text(revise.NAME, step), flush=True)
+        print(f"Fix the files, then run `revise {run.config.change_name}`.", flush=True)
+        print(f"{MARKER_BLOCKED}:{run.config.change_dir}", flush=True)
+        raise Stop(EXIT_BLOCKED, "revise blocked")
+
+
 async def advance(run: Run, *, replies_file: str = "") -> int:
     publish.finish(run)
     if (from_respec := revise.in_flight(run)) is not None:
         log.info("A revise is in flight; resuming it")
         await revise.run_revise(run, from_respec=from_respec)
         return EXIT_DONE
+    _refuse_while_issues_are_open(run)
     if _ready_again(run):
         return EXIT_DONE
-    await interview.run_interview(run, replies_file=replies_file)
-    if await epic.run_epic_split(run):
-        return EXIT_DONE
-    if prototype.NAME not in run.state.steps:
-        await artifacts.generate_artifacts(run)
-    await prototype.run_prototype_stage(run)
-    await consistency.run_consistency(run)
-    handoff.handoff(run)
+    if not run.state.adopted:
+        await interview.run_interview(run, replies_file=replies_file)
+        if await epic.run_epic_split(run):
+            return EXIT_DONE
+        if prototype.NAME not in run.state.steps:
+            await artifacts.generate_artifacts(run)
+        await prototype.run_prototype_stage(run)
+    await handoff.check_and_hand_off(run)
     return EXIT_DONE
 
 
@@ -172,13 +191,12 @@ def _start(config: SpecConfig, max_usd: float | None) -> Run:
 def _adopt(config: SpecConfig, max_usd: float | None) -> Run:
     """A run for a change whose specs were written without pm-spec (by hand, or
     by buildme before pm-spec existed — buildme's refusal for such a change
-    names `pm-spec resume`): its files adopted as they stand, no interview and
-    no prototype; the consistency check and the handoff run as usual."""
+    names `pm-spec resume`). Its files are taken as they stand: the run does
+    only the consistency check and the handoff (`RunState.adopted`), makes no
+    other model call and writes no spec or interview file."""
     sdk.start_budget(max_usd, None)
-    run = Run(config, RunState(change=config.change_name, intake_done=True, interview_done=True))
-    artifacts.record_current(run)
-    run.state.steps[prototype.NAME] = state_mod.StepOutcome(outcome="skipped",
-                                                            reason="specs written without pm-spec")
+    run = Run(config, RunState(change=config.change_name, options=Options(epic_split=False),
+                               intake_done=True, interview_done=True, adopted=True))
     run.save()
     run.progress("ADOPT", f"Adopted the specs in {config.change_dir} as they stand")
     return run

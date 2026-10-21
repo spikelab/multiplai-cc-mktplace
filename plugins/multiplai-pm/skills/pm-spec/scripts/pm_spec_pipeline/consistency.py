@@ -16,7 +16,9 @@ both places. The step follows the recheck rule in `findings.py`:
    files unchanged refuses with no model call and prints them; running after
    an edit gives the step its rewrite back.
 
-The step's revision is `multiplai_core.specs.spec_revision` of the change dir.
+The step's revision is `multiplai_core.specs.spec_revision` of the change dir,
+taken before each agent call (the first check and the recheck): it is the
+revision the check read, and the handoff marks ready only that revision.
 """
 
 from __future__ import annotations
@@ -86,22 +88,25 @@ async def check(run: Run, prior: list[dict] | None = None) -> ConsistencyAnswer:
                                       step="consistency", label="consistency", cwd=str(run.config.project_dir))
 
 
-async def recheck(run: Run, name: str, reason: str) -> None:
+async def recheck(run: Run, name: str, reason: str) -> str:
     """The recheck after a published rewrite: listed findings must be `resolved`,
-    a new finding blocks only when critical. Passes, or blocks with exit 4."""
+    a new finding blocks only when critical. Passes, or blocks with exit 4.
+    Returns the revision it passed at: the files' revision before the agent
+    read them, so an edit made while it reads is never counted as checked."""
     step = run.state.step(name)
     listed = step.repair_findings
+    revision = spec_revision(run.config.change_dir)
     answer = await check(run, prior=listed)
     blocking, advisory = F.recheck_verdict(listed, answer.prior_assessments, as_dicts(answer))
     step.repair_findings = F.saved_findings(F.assess_listed(listed, answer.prior_assessments))
     F.log_findings(name, "listed", step.repair_findings)
     F.record_advisory(run, name, advisory)
-    revision = spec_revision(run.config.change_dir)
     if blocking:
         F.block_on_findings(run, name, revision, reason, blocking)
     F.record_passed(run, name, revision, "Every listed finding resolved")
     run.progress(name.upper() + "_PASSED", "Recheck: every listed finding resolved.\n"
                  + F.findings_report(step.repair_findings))
+    return revision
 
 
 async def rewrite_and_publish(run: Run, name: str, listed: list[dict], caps: list[str], reason: str) -> None:
