@@ -147,6 +147,12 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   before publication. A failed writer requires verified rollback or build failure.
   Push rejects a changed fingerprint. `BuildState.result` derives the completion
   and publication view for adapters; it introduces no parallel state machine.
+  A directory Git lists as one path (a submodule, or a repository nested
+  untracked) is never read as a file: `_checkout_input` records its HEAD and a
+  hash of its index and of every path it lists (tracked, and untracked not
+  ignored), nested submodules included, with
+  read-only git commands; an empty gitlink directory is `gitlink:uninitialized`,
+  and a directory with files and no checkout raises, so the check is unavailable.
 - **Recovery preserves two versions.** Stop records contain independent index
   entries and worktree fingerprints. Missing index evidence refuses discard.
   `save_wip_ref` uses isolated indexes and stash-shaped commits; it does not move

@@ -1493,11 +1493,12 @@ def verification_inputs(test_command: str, project_dir: Path, *, parallel: str =
     """Exact inputs to the final check; unavailable Git/file evidence raises.
 
     Paths are project-relative. Bookkeeping and untracked interpreter/test caches
-    are not build inputs; tracked generated files always are.
+    are not build inputs; tracked generated files always are. A submodule, or a
+    repository nested untracked, is one input: its HEAD, its index and its
+    uncommitted paths (`_checkout_input`).
     """
     import hashlib
     import json
-    import os
     from . import git_ops
 
     head = git_ops.rev_parse_head(project_dir)
@@ -1508,24 +1509,69 @@ def verification_inputs(test_command: str, project_dir: Path, *, parallel: str =
                            "--", ".", *git_ops.BOOKKEEPING_EXCLUDES], cwd=project_dir)
     if not result.ok:
         raise RuntimeError("Cannot read final verification inputs: " + result.stderr)
-    files = {}
-    for name in sorted(set(filter(None, result.stdout.split("\0")))):
-        if name not in index and any(part in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
-                                     for part in Path(name).parts):
-            continue
-        path = project_dir / name
-        if path.is_symlink():
-            files[name] = "link:" + os.readlink(path)
-        elif path.exists():
-            files[name] = f"{path.stat().st_mode & 0o111}:" + hashlib.sha256(path.read_bytes()).hexdigest()
-        else:
-            files[name] = "deleted"
+    files = _path_inputs(project_dir, result.stdout.split("\0"), index)
     content = json.dumps({"files": files, "index": index}, sort_keys=True).encode()
     result = {"head": head, "content": hashlib.sha256(content).hexdigest(),
               "command": test_command, "parallel": parallel, "plan_revision": plan_revision}
     if include_files:
         result.update(files=files, index=index)
     return result
+
+
+def _path_inputs(root: Path, names: Sequence[str], index: dict[str, str]) -> dict[str, str]:
+    """Each listed path under *root* mapped to its content: a symlink's target, a
+    file's executable bits and hash, a checkout's `_checkout_input`, or "deleted".
+    Untracked interpreter/test caches are left out."""
+    import hashlib
+
+    files = {}
+    for name in sorted(set(filter(None, names))):
+        if name not in index and any(part in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+                                     for part in Path(name).parts):
+            continue
+        path = root / name
+        if path.is_symlink():
+            files[name] = "link:" + os.readlink(path)
+        elif path.is_dir():
+            files[name] = _checkout_input(path, name, index.get(name, ""))
+        elif path.exists():
+            files[name] = f"{path.stat().st_mode & 0o111}:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            files[name] = "deleted"
+    return files
+
+
+def _checkout_input(path: Path, name: str, index_entry: str) -> str:
+    """A directory Git lists as one path: a submodule, or a repository nested
+    untracked. A checkout gives its HEAD and a hash of its index and of the
+    content of every path it lists as the project's own check does, each nested
+    submodule included; nothing in it is written. An empty directory at a
+    gitlink (mode 160000) is "gitlink:uninitialized". Any other directory
+    raises: its content cannot be told apart from a checkout's."""
+    import hashlib
+    import json
+    from . import git_ops
+
+    def read(*args: str) -> str:
+        result = git_ops._run(["git", "--no-optional-locks", *args], cwd=path)
+        if not result.ok:
+            raise RuntimeError(f"{name} is a checkout Git cannot read: {result.stderr.strip()}")
+        return result.stdout
+
+    top = git_ops._run(["git", "rev-parse", "--show-toplevel"], cwd=path)
+    if not (top.ok and Path(top.stdout.strip()).resolve() == path.resolve()):
+        if index_entry.startswith("160000 ") and not any(path.iterdir()):
+            return "gitlink:uninitialized"
+        raise RuntimeError(f"{name} is a directory holding files but no checkout Git can read")
+    head = read("rev-parse", "--verify", "HEAD").strip()
+    index = git_ops.index_entries(path)
+    if index is None:
+        raise RuntimeError(f"{name} is a checkout whose index Git cannot read")
+    listed = read("ls-files", "--cached", "--others", "--exclude-standard", "-z",
+                  "--", ".", *git_ops.BOOKKEEPING_EXCLUDES)
+    files = _path_inputs(path, listed.split("\0"), index)
+    content = json.dumps({"files": files, "index": index}, sort_keys=True).encode()
+    return f"checkout:{head}:" + hashlib.sha256(content).hexdigest()
 
 
 def final_verification(test_command: str, project_dir: Path, *, parallel: str = "off",
@@ -1545,9 +1591,14 @@ def final_verification(test_command: str, project_dir: Path, *, parallel: str = 
                           for name in before[field].keys() | after[field].keys()
                           if before[field].get(name) != after[field].get(name)})
         details = ", ".join(changed) or "Git HEAD or verification configuration"
+        checkouts = "".join(
+            f" {name} is a submodule or nested repository: run git -C {name.rstrip('/')} status "
+            "to see what the command changed in it."
+            for name in changed
+            if any(side["files"].get(name, "").startswith(("checkout:", "gitlink:")) for side in (before, after)))
         return GateResult(passed=False, reason=f"Inputs changed during final verification: {details}. "
                           "If a listed file is a generated report, run git rm --cached <path>, "
                           "add it to .gitignore, and commit. "
-                          "Inspect changes to tracked files and source inputs.",
+                          "Inspect changes to tracked files and source inputs." + checkouts,
                           metadata={**gate.metadata, "changed_files": changed})
     return gate
