@@ -15,6 +15,23 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.97.1] - 2026-10-21
+
+### Fixed
+- codebase-walkthrough: `resume` no longer keeps an old run's path cap. A run
+  saved before the default `--scenarios` became 21 resumed with 6 paths; a
+  resume now uses the cap you passed with `--scenarios`, and 21 otherwise.
+- codebase-walkthrough: paths under `.github/` and other dot-directories are
+  traced again. A leading `.` was stripped with the `./`, so the file was not
+  found.
+- codebase-walkthrough: `check` fails a hop id named in backticks, such as
+  `` `p2h3` ``, that has no anchor on the page, as it already did for a hop
+  link.
+- codebase-walkthrough: the Paths section says when entry discovery was
+  incomplete because the model fallback failed.
+- codebase-walkthrough: the code quotes and agent notes in the path hops go to
+  the writer as fenced, untrusted repository text.
+
 ## [0.97.0] - 2026-10-21
 
 ### Added
