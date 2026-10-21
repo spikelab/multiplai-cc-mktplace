@@ -2032,7 +2032,7 @@ def _scope_diff(config: BuildConfig, last: dict) -> str | None:
     previous review ran, the round records left out as in the review diff.
     None when either end is not a commit whose tree its review read (the last
     record names none: an uncommitted tree, or a record written before
-    0.96.5; or the tree under review now is not HEAD) or git cannot give the
+    0.96.6; or the tree under review now is not HEAD) or git cannot give the
     diff."""
     sha = last.get("reviewed_sha")
     if not sha:

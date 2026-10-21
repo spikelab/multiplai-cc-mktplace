@@ -1256,7 +1256,7 @@ class TestRoundMemory:
         from build_pipeline.tdd_engine import _scope_diff
         p = project
         head = _git(p.dir, "rev-parse", "HEAD")
-        assert _scope_diff(p.config, {"head_sha": head}) is None  # written before 0.96.5
+        assert _scope_diff(p.config, {"head_sha": head}) is None  # written before 0.96.6
         assert _scope_diff(p.config, {"head_sha": head, "reviewed_sha": None}) is None
         assert _scope_diff(p.config, {"head_sha": head, "reviewed_sha": head}) == ""
 

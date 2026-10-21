@@ -17,7 +17,7 @@ For each change directory it reports, per block:
   otherwise it was ``written by a fix``. A failed git command, or a missing
   ``reviewed_sha``, gives ``unknown``: a reviewer that read uncommitted code
   has none, and neither has a record written before buildme checked that
-  (0.96.5), whose ``head_sha`` may name a tree other than the one reviewed.
+  (0.96.6), whose ``head_sha`` may name a tree other than the one reviewed.
 
 The totals line gives the mean rounds-to-pass, the share of blocks passing at
 round 1, and the share of round-2+ findings present at first review, over all

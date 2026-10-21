@@ -23,7 +23,6 @@ import os
 import tempfile
 import logging
 import re
-import sys
 from pathlib import Path
 
 from . import budget
@@ -32,7 +31,7 @@ from .dependencies import NewDependency, design_decisions_text, detect_new_depen
 from .gates import unknowns_gate
 from .io_utils import atomic_write
 from .models import ArtifactStatus, BuildPhase
-from .rubric import detect_change_type, generate_rubric
+from .rubric import generate_rubric
 from .state import BuildState, SpecGenState
 
 log = logging.getLogger(__name__)
@@ -103,8 +102,6 @@ async def _generate_all_artifacts(
     state: BuildState,
 ) -> None:
     """Generate all artifacts in dependency order, with resume support."""
-    from .llm_steps.spec_steps import generate_artifact
-
     reconcile_plan(config, state)
     max_iterations = len(ARTIFACT_DAG) * 2  # safety limit
     iteration = 0
@@ -972,23 +969,6 @@ def tasks_findings_text(findings: list[dict]) -> str:
         + (f" Fix: {f['suggestion']}" if f.get("suggestion") else "")
         for f in findings
     )
-
-
-def report_no_behaviour_blocks_left(tasks_path: Path) -> list[dict]:
-    """After a rewrite, or one that failed, name any block the scan flags.
-
-    Every audit here rewrites once and lets the plan stand, so this only
-    reports: a block named here will most likely fail the TDD RED gate.
-    """
-    left = scan_no_behaviour_blocks(tasks_path)
-    if left:
-        names = ", ".join(f"Block {f['block']}" for f in left)
-        log.warning(
-            "No-behaviour blocks remain in tasks.md (the TDD RED gate "
-            "will likely fail them): %s", names,
-        )
-        print(f"PHASE: no_behaviour_blocks_remain — {names}", flush=True)
-    return left
 
 
 def _blocks_plan(finding: dict, default: str | None = "major") -> bool:
