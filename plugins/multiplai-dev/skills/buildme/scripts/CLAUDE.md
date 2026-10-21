@@ -216,7 +216,8 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   prompt.** The reviewer is shown the open findings and asked for a status
   for each (a missing one is `cannot_verify`, never resolved); the
   adjudicator decides `duplicate_of` and `in_fix_scope` against the earlier
-  rounds and `git diff <last head_sha> HEAD`; code then merges restatements
+  rounds and `git diff <last reviewed_sha> HEAD` (`_scope_diff`; none when
+  either end's tree is not a commit, see below); code then merges restatements
   into the open finding, and lists out-of-scope findings in
   `outside_fix_scope` as a label while still sending them to the fix agent
   (a bug found is fixed wherever it is). Every missing value fails open: not
@@ -224,6 +225,18 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   runs as it always did. The loop's last fix (`review_fix_escalated`, on the
   review model) gets `REVIEW_FIX_ESCALATION` with every finding's history and
   records its `RECURRING:` answer, recorded, not gated.
+- **A round record names the commit the reviewer read only when it knows.**
+  `head_sha` is HEAD when the record is written; `reviewed_sha` is that HEAD
+  only when `_reviewed_revision` finds nothing else in the project
+  (`git_ops.tree_is_clean` with `every_submodule`, so a submodule's `ignore`
+  setting cannot hide it, and no file `git_ops.unchecked_files` lists as
+  assume-unchanged or skip-worktree; buildme's bookkeeping and the change
+  dir are left out). Otherwise it is null with `reviewed_sha_unknown`
+  saying why: a first review after an uncommitted integration fix, and the
+  review after the fix on pass, read code HEAD does not hold. `_scope_diff`
+  and `review_metrics.py` read `reviewed_sha` only, so such a record, or one
+  written before 0.96.5 with no `reviewed_sha` key, gives no scope diff and
+  an `unknown` line origin.
 - **`SEARCHED:` is recorded, not gated.** Every review-fix brief ends with
   `prompts.implementation.REVIEW_FIX_SELF_CHECK`. `parse_searched` puts the
   section in the round record; a missing one is `searched: null` and a

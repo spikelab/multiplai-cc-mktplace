@@ -15,6 +15,22 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.96.5] - 2026-10-21
+
+### Fixed
+- buildme: a review round record no longer claims the reviewer read HEAD
+  when it read uncommitted code, as the first review after an integration
+  fix and the review after the fix on pass do. Each record now has a
+  `reviewed_sha`, set only when nothing in the project differed from HEAD
+  (a submodule the parent's `ignore` setting hides and files marked
+  assume-unchanged or skip-worktree included), and otherwise null with the
+  reason in `reviewed_sha_unknown`. `review_metrics.py` traces a finding's
+  line only from those commits, so it no longer reports a line the fix wrote
+  as present at the first review, or the other way round; it reports
+  `unknown` instead, as it does for every record written before this
+  version. The diff a later review round's adjudicator is shown is left out
+  when either review read uncommitted code.
+
 ## [0.96.4] - 2026-10-21
 
 ### Fixed

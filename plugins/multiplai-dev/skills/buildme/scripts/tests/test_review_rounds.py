@@ -189,6 +189,8 @@ class TestRoundRecords:
         first = rounds[1]
         assert first["block"] == {"number": 1, "name": "Adder"}
         assert first["head_sha"] == head_at_review
+        # Nothing was uncommitted when it ran, so HEAD is the tree it read.
+        assert first["reviewed_sha"] == head_at_review and "reviewed_sha_unknown" not in first
         assert first["gate"]["passed"] is False and first["gate"]["reason"]
         assert first["weighted_average"] == pytest.approx(2.0)
         assert first["scores"][0]["dimension"] == "Q"
@@ -304,6 +306,18 @@ class TestFixOnPass:
         assert p.block.review_iterations == 1
         assert p.block.fix_pass is None
         assert p.block.fix_on_pass_kept is True
+
+    @pytest.mark.asyncio
+    async def test_the_review_after_an_uncommitted_fix_on_pass_names_no_reviewed_commit(self, project):
+        p = project
+        stack, _, _ = _engine([_passing([_finding("Minor", NAMES)]), _passing()],
+                              _fixer(p.dir, {"app.py": FIXED}))
+        with stack:
+            assert await _run_integration_and_review(p.block, p.config, p.state, p.progress)
+        terminal = _rounds(p)[2]
+        assert terminal["kind"] == "fix_on_pass_review"
+        assert terminal["head_sha"] and terminal["reviewed_sha"] is None
+        assert "uncommitted" in terminal["reviewed_sha_unknown"]
 
     @pytest.mark.asyncio
     async def test_a_finding_the_fix_on_pass_left_open_survives_its_review(self, project):
@@ -1217,6 +1231,34 @@ class TestRoundMemory:
         assert "duplicate_of" in prompt and "in_fix_scope" in prompt
 
     @pytest.mark.asyncio
+    async def test_a_first_review_of_uncommitted_code_gives_the_next_round_no_scope_diff(self, project):
+        p = project
+        # Code the integration fixer could have written: there when round 1 reads the tree, not in HEAD.
+        (p.dir / "app.py").write_text(BUGGY + "\n# uncommitted\n")
+        await_ = await _two_rounds(p, _failing([_finding("Major", NEW)]), FindingAdjudication())
+        first = await_[1][1]
+        assert first["reviewed_sha"] is None and "uncommitted" in first["reviewed_sha_unknown"]
+        prompt = await_[4].await_args_list[1].args[0]
+        assert "## Changes since the previous review" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_uncommitted_change_dir_files_leave_the_reviewed_commit_known(self, project):
+        p = project
+        head = _git(p.dir, "rev-parse", "HEAD")
+        (p.config.change_dir / "implementation-notes.md").write_text("a note written during the build\n")
+        (p.config.change_dir / "tasks.md").write_text("edited\n")
+        _, rounds, *_ = await _two_rounds(p, _failing([_finding("Major", NEW)]), FindingAdjudication())
+        assert rounds[1]["reviewed_sha"] == head
+
+    def test_a_record_with_no_reviewed_sha_gives_no_scope_diff(self, project):
+        from build_pipeline.tdd_engine import _scope_diff
+        p = project
+        head = _git(p.dir, "rev-parse", "HEAD")
+        assert _scope_diff(p.config, {"head_sha": head}) is None  # written before 0.96.5
+        assert _scope_diff(p.config, {"head_sha": head, "reviewed_sha": None}) is None
+        assert _scope_diff(p.config, {"head_sha": head, "reviewed_sha": head}) == ""
+
+    @pytest.mark.asyncio
     async def test_a_missing_assessment_is_cannot_verify_and_stays_open(self, project):
         p = project
         _, rounds, *_ = await _two_rounds(p, _failing([_finding("Major", NEW)]),
@@ -1859,3 +1901,69 @@ class TestReviewMemoryRows:
         reread, _, _ = review_rounds.open_state(p.config.change_dir, 1)
         assert {f.finding_id: f.earlier_judge_reason for f in reread}["B01-R2-F1"] == (
             "the spec names them")
+
+
+class TestReviewedRevision:
+    """`_reviewed_revision`: HEAD is the reviewed tree only when git shows nothing else in the project."""
+
+    @staticmethod
+    def _config(repo):
+        return SimpleNamespace(project_dir=repo, change_dir=repo / "specs" / "changes" / "c")
+
+    @staticmethod
+    def _repo(tmp_path):
+        repo = tmp_path / "r"
+        (repo / "specs" / "changes" / "c").mkdir(parents=True)
+        (repo / "app.py").write_text("x = 1\n")
+        (repo / "specs" / "changes" / "c" / "tasks.md").write_text("t\n")
+        _git(repo, "init", "-q")
+        _git(repo, "add", "-A")
+        _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "init")
+        return repo
+
+    def test_a_clean_tree_and_a_dirty_one(self, tmp_path):
+        from build_pipeline.tdd_engine import _reviewed_revision
+        repo = self._repo(tmp_path)
+        head = _git(repo, "rev-parse", "HEAD")
+        assert _reviewed_revision(self._config(repo), head) == (head, None)
+        (repo / "specs" / "changes" / "c" / "tasks.md").write_text("edited\n")
+        assert _reviewed_revision(self._config(repo), head) == (head, None)
+        (repo / "new.py").write_text("y = 2\n")
+        assert _reviewed_revision(self._config(repo), head)[0] is None
+        assert _reviewed_revision(self._config(repo), None) == (None, "git could not read HEAD")
+
+    @pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+    def test_a_file_git_is_told_not_to_check_makes_it_unknown(self, tmp_path, flag):
+        from build_pipeline.tdd_engine import _reviewed_revision
+        repo = self._repo(tmp_path)
+        head = _git(repo, "rev-parse", "HEAD")
+        _git(repo, "update-index", flag, "app.py")
+        (repo / "app.py").write_text("x = 2\n")
+        reviewed, why = _reviewed_revision(self._config(repo), head)
+        assert reviewed is None and "app.py" in why
+
+    def test_a_moved_submodule_the_parent_ignores_makes_it_unknown(self, tmp_path):
+        from build_pipeline.tdd_engine import _reviewed_revision
+        source = tmp_path / "source"
+        source.mkdir()
+        _git(source, "init", "-q")
+        for text in ("one\n", "two\n"):
+            (source / "a.txt").write_text(text)
+            _git(source, "add", "-A")
+            _git(source, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", text)
+        repo = self._repo(tmp_path)
+        _git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), "vendor")
+        _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "vendor")
+        _git(repo, "config", "submodule.vendor.ignore", "all")
+        head = _git(repo, "rev-parse", "HEAD")
+        assert _reviewed_revision(self._config(repo), head) == (head, None)
+        _git(repo / "vendor", "checkout", "-q", "--detach", "HEAD~1")
+        assert _reviewed_revision(self._config(repo), head)[0] is None
+
+
+def test_a_scope_diff_from_a_reviewed_commit_to_an_uncommitted_tree_is_none(project):
+    from build_pipeline.tdd_engine import _scope_diff
+    p = project
+    head = _git(p.dir, "rev-parse", "HEAD")
+    (p.dir / "app.py").write_text(FIXED)
+    assert _scope_diff(p.config, {"head_sha": head, "reviewed_sha": head}) is None

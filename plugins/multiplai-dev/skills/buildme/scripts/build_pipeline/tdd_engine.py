@@ -1985,9 +1985,13 @@ def _record_review_round(
         "carried_open": plan.carried, "new_open": plan.new_open,
         "outside": plan.outside, "prior_assessments": plan.assessments,
     }
+    head = git_ops.rev_parse_head(config.project_dir)
+    reviewed, unknown = _reviewed_revision(config, head)
     return review_rounds.record_round(
         config.change_dir, block,
-        head_sha=git_ops.rev_parse_head(config.project_dir),
+        head_sha=head,
+        reviewed_sha=reviewed,
+        reviewed_sha_unknown=unknown,
         review=review,
         gate_passed=gate.passed,
         gate_reason=gate.reason,
@@ -1997,12 +2001,44 @@ def _record_review_round(
     )
 
 
+def _reviewed_revision(config: BuildConfig, head: str | None) -> tuple[str | None, str | None]:
+    """(*head*, None) when *head* holds the code the reviewer just read:
+    nothing in the project differs from it but buildme's bookkeeping and the
+    change dir (its plan, notes and round records), a submodule the parent's
+    `ignore` setting hides included, and git is told to skip checking no
+    file. Otherwise (None, why)."""
+    if not head:
+        return None, "git could not read HEAD"
+    try:
+        change = config.change_dir.resolve().relative_to(Path(config.project_dir).resolve())
+    except ValueError:
+        change = None
+    unchecked = git_ops.unchecked_files(config.project_dir, ignore=change)
+    if unchecked is None:
+        return None, "git could not list the index"
+    if unchecked:
+        return None, ("git is told not to check " + ", ".join(unchecked[:5])
+                      + (" and others" if len(unchecked) > 5 else "")
+                      + " (assume-unchanged or skip-worktree), so an edit there would not show")
+    if not git_ops.tree_is_clean(config.project_dir, ignore=change, every_submodule=True):
+        return None, ("uncommitted changes in the project (or git status failed): "
+                      "HEAD is not the tree the reviewer read")
+    return head, None
+
+
 def _scope_diff(config: BuildConfig, last: dict) -> str | None:
-    """`git diff <last head_sha> HEAD`: every change committed since the
+    """`git diff <last reviewed_sha> HEAD`: every change committed since the
     previous review ran, the round records left out as in the review diff.
-    None when the record has no head or git cannot give the diff."""
-    sha = last.get("head_sha")
+    None when either end is not a commit whose tree its review read (the last
+    record names none: an uncommitted tree, or a record written before
+    0.96.5; or the tree under review now is not HEAD) or git cannot give the
+    diff."""
+    sha = last.get("reviewed_sha")
     if not sha:
+        return None
+    current, why = _reviewed_revision(config, git_ops.rev_parse_head(config.project_dir))
+    if current is None:
+        log.info("No review scope diff: the tree reviewed now is not HEAD (%s)", why)
         return None
     try:
         proc = subprocess.run(

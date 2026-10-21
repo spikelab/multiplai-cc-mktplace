@@ -927,22 +927,43 @@ def is_ancestor_of_head(repo: Path | str, sha: str) -> bool:
     return res.returncode == 0
 
 
-def tree_is_clean(repo: Path | str, ignore: Path | str | None = None) -> bool:
+def tree_is_clean(repo: Path | str, ignore: Path | str | None = None,
+                  every_submodule: bool = False) -> bool:
     """True when *repo* holds nothing but buildme's own bookkeeping.
 
     Used only to decide whether HEAD is a faithful snapshot to discard back
-    to. Returns False when git could not be asked — "unknown" must never be
+    to, and (`tdd_engine._reviewed_revision`) whether it is the tree a review
+    read. Returns False when git could not be asked — "unknown" must never be
     read as "safe to reset", because a reset over uncommitted work destroys it.
     *ignore*, a directory relative to *repo*, is left out of the check too.
+    With *every_submodule*, a submodule whose `ignore` setting hides it from
+    `git status` is checked too.
     """
     excludes = list(BOOKKEEPING_EXCLUDES)
     if ignore is not None:
         excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
-    res = _run(["git", "status", "--porcelain", "--", ".", *excludes], cwd=repo)
+    submodules = ["--ignore-submodules=none"] if every_submodule else []
+    res = _run(["git", "status", "--porcelain", *submodules, "--", ".", *excludes], cwd=repo)
     if not res.ok:
         log.warning("git status failed: %s", res.stderr.strip())
         return False
     return not res.stdout.strip()
+
+
+def unchecked_files(repo: Path | str, ignore: Path | str | None = None) -> list[str] | None:
+    """The files under *repo* whose index entry tells git not to look at them
+    (`assume-unchanged` or `skip-worktree`), so `git status` would not show an
+    edit to them. Bookkeeping and *ignore* are left out, as in `tree_is_clean`.
+    None when git could not be asked."""
+    excludes = list(BOOKKEEPING_EXCLUDES)
+    if ignore is not None:
+        excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
+    result = _run(["git", "ls-files", "-v", "-z", "--", ".", *excludes], cwd=repo)
+    if not result.ok:
+        return None
+    # `-v` writes a lowercase tag for assume-unchanged and S for skip-worktree.
+    return [entry[2:] for entry in filter(None, result.stdout.split("\0"))
+            if entry[:1].islower() or entry[:1] == "S"]
 
 
 def index_entries(repo: Path | str, ignore: Path | str | None = None) -> dict[str, str] | None:

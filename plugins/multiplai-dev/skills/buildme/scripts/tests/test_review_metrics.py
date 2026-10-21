@@ -28,7 +28,9 @@ def _commit(repo: Path, message: str) -> str:
 
 def _record(change_dir: Path, block: int, head_sha: str | None, passed: bool,
             accepted: list[ReviewFinding], rejected: int = 0,
-            kind: str = "review") -> None:
+            kind: str = "review", reviewed: bool = True) -> Path:
+    """A round record whose reviewer read *head_sha*'s tree, or (with *reviewed*
+    false) a tree with uncommitted changes on top of it."""
     review = ReviewResult(
         scores=[], findings=accepted,
         rejected_findings=[ReviewFinding(claim=f"wrong {i}", evidence="REJECTED: not so")
@@ -36,9 +38,12 @@ def _record(change_dir: Path, block: int, head_sha: str | None, passed: bool,
     )
     path = review_rounds.record_round(
         change_dir, BlockInfo(number=block, name=f"B{block}", description="d"),
-        head_sha=head_sha, review=review, gate_passed=passed,
+        head_sha=head_sha, reviewed_sha=head_sha if reviewed else None,
+        reviewed_sha_unknown=None if reviewed else "uncommitted changes",
+        review=review, gate_passed=passed,
         gate_reason="ok" if passed else "low score", weighted_average=4.0, kind=kind)
     assert path is not None
+    return path
 
 
 @pytest.fixture
@@ -171,3 +176,33 @@ def test_missing_directory_is_a_usage_error(tmp_path):
     with pytest.raises(SystemExit) as exc:
         review_metrics.main([str(tmp_path / "nope")])
     assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("which", ["first", "later"])
+def test_a_round_whose_reviewer_read_uncommitted_code_gives_unknown(project, which):
+    import json
+    change = project / "specs" / "changes" / "demo"
+    first = _git(project, "rev-list", "--max-parents=0", "HEAD")
+    head = _git(project, "rev-parse", "HEAD")
+    findings = [ReviewFinding(claim="old line", file_path="app.py", line=2),
+                ReviewFinding(claim="new line", file_path="app.py", line=6)]
+    _record(change, 4, first, False, [], reviewed=which != "first")
+    path = _record(change, 4, head, True, findings, reviewed=which != "later")
+    assert json.loads(path.read_text())["head_sha"] == head
+    changes, _ = review_metrics.measure([project / "specs"])
+    assert dict(_block(changes, 4).origins) == {review_metrics.UNKNOWN: 2}
+
+
+def test_a_record_written_before_the_reviewed_commit_was_checked_gives_unknown(project):
+    import json
+    change = project / "specs" / "changes" / "demo"
+    first = _git(project, "rev-list", "--max-parents=0", "HEAD")
+    head = _git(project, "rev-parse", "HEAD")
+    for path in (_record(change, 4, first, False, []),
+                 _record(change, 4, head, True, [ReviewFinding(claim="old", file_path="app.py", line=2)])):
+        data = json.loads(path.read_text())
+        del data["reviewed_sha"]
+        path.write_text(json.dumps(data))
+    changes, warnings = review_metrics.measure([project / "specs"])
+    assert warnings == []
+    assert dict(_block(changes, 4).origins) == {review_metrics.UNKNOWN: 1}
