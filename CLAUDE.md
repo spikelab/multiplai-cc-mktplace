@@ -80,7 +80,7 @@ the stdlib (media, pm, apple in the table below) — it skips installing the
 workspace environment just to run a linter or a stdlib test. Anything under
 `plugins/` that imports dependencies needs `--project`.
 
-CI additionally runs the twelve per-plugin test suites, each from its own
+CI additionally runs the thirteen per-plugin test suites, each from its own
 directory:
 
 | Suite | Command |
@@ -96,6 +96,7 @@ directory:
 | review-viewer | `cd plugins/multiplai-dev/skills/review-viewer/scripts && uv run --project ../../../../.. --package review-viewer --extra dev python -m pytest tests/ -q` |
 | pr | `cd plugins/multiplai-dev/skills/pr/scripts && uv run --project ../../../../.. --package pr-pipeline --extra dev python -m pytest tests/ -q` |
 | spec-extract | `cd plugins/multiplai-dev/skills/spec-extract/scripts && uv run --project ../../../../.. --package spec-extract-pipeline --extra dev python -m pytest tests/ -q` |
+| pm-spec | `cd plugins/multiplai-pm/skills/pm-spec/scripts && uv run --project ../../../../.. --package pm-spec-pipeline --extra dev python -m pytest tests/ -q` |
 | `multiplai-apple` | `cd plugins/multiplai-apple && uv run --no-project --with pytest python -m pytest tests/ -q` |
 
 An extra (`--extra dev`) belongs to a *member*, not to the workspace, so it
