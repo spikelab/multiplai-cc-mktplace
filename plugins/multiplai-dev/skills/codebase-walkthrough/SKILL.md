@@ -1,6 +1,6 @@
 ---
 name: codebase-walkthrough
-description: Explains a module end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and opens it in the review-viewer, or compact Markdown for coding agents.
+description: Explains a module end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and an HTML page (and a review-viewer file), or compact Markdown for coding agents.
 when_to_use: 'Triggers: walk me through this module, explain this codebase, onboard me, codebase tour, walkthrough, /multiplai-dev:codebase-walkthrough'
 disable-model-invocation: true
 ---
@@ -73,8 +73,10 @@ gates never ask a model.
   vendor's API.**
 - **Runs local programs**: `git`, `rg`, `ast-grep`, `pyright-langserver`.
 - **Writes files** to the run directory, the output directory and the log
-  files.
-- **Opens the walkthrough in the review-viewer** (human mode, step 2). That
+  files. The HTML page loads highlight.js and mermaid from
+  `cdnjs.cloudflare.com` when a browser opens it.
+- **Opens the walkthrough in the review-viewer only when the user asks for
+  it** (step 2). That
   is the multiplai-dev `review-viewer` skill: a local web server on a port in
   8765–8784 that reads the module's repository with git and calls no model.
   Its `SKILL.md` says what it does on the machine.
@@ -101,7 +103,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 |-----|---------|---------|
 | target | Directory of the module, inside a git repository | required |
 | `--depth` | `overview` (skips test files), `standard`, `deep` | `standard` |
-| `--mode` | `human` (Markdown and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or paths) | `human` |
+| `--mode` | `human` (Markdown, an HTML page and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or paths) | `human` |
 | `--name` | Base file name | the module directory, lower-cased |
 | `--output` | Directory for the walkthrough files | `INBOX/` if it exists, else the current directory |
 | `--search-root` / `--repos` | Where to look for references | the nearest ancestor holding several repositories |
@@ -155,8 +157,17 @@ cost (a resume counts only its own calls). Read the
 is, with the list of files that have no surviving fact. Then give the paths of
 the Markdown, `walkthrough.json` and `<name>-paths.json` files.
 
-Then, in human mode, open the walkthrough in the review-viewer. Start it in
-the background (Bash tool, `run_in_background: true`):
+Then, in human mode, give the user the HTML page as a `file://` URL:
+`file://` followed by the absolute path of `<name>-walkthrough.html` exactly
+as its `walkthrough:` line printed it, with each space written `%20`. The page
+opens straight from disk in a browser: a contents list down the side, one
+step per section, and every citation a link to the cited lines.
+
+Open the review-viewer only when the user asks for it.
+
+#### If the user asks for the review-viewer
+
+Start it in the background (Bash tool, `run_in_background: true`):
 
 ```bash
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review-viewer/scripts \
@@ -198,6 +209,26 @@ a hop cited in prose whose anchor is missing fails as `unresolved hop
 citation p4h1`, and when the file has path hops `check: N hops checked` is
 printed on stderr. It reads only the Markdown; walkthroughs with the older
 "End-to-end scenarios" section are checked as before.
+
+### 4. Re-render a finished run
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
+  python -m walkthrough_pipeline render <run dir> [--output /abs/out]
+```
+
+It rewrites the Markdown, `walkthrough.json`, `<name>-paths.json` and the
+HTML page from the run's `walkthrough-state.json`. It makes no model call and
+spends nothing: it prints the same `walkthrough: <path>` lines as `run`, then
+`SPEND:0.000000:0`. Use it to get the HTML page for a run that finished
+before the page existed, or to replace a deleted or edited output; it
+overwrites the files without asking. The files go to `--output`, else the
+run's own `--output`, else the run directory. It reads the cited repositories
+with `git show`, so they must still hold the commits in the "Commits read"
+table. It exits 1 with `render: <run dir> has not finished its write stage`
+for a run that has not got that far (resume it instead), and with
+`render: cannot read <repo> at <sha>: …` when a repository or its commit is
+gone; in both cases it writes nothing. Report as in step 2.
 
 ## Configuration
 

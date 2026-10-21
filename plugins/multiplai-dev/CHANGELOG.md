@@ -15,6 +15,25 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.97.0] - 2026-10-21
+
+### Added
+- codebase-walkthrough: human mode writes an HTML page,
+  `<name>-walkthrough.html`, beside the Markdown again. It opens straight
+  from disk in a browser, in light or dark theme and at phone width: a
+  contents list down the side, one step per section with Previous and Next,
+  every citation a link to the cited lines on GitHub, a link to a path hop
+  (`#p2h3`) opening the section that holds it, and Mermaid diagrams drawn.
+- codebase-walkthrough: `render <run dir>` rewrites a finished run's
+  Markdown, `walkthrough.json`, `<name>-paths.json` and HTML files from its
+  saved state, with no model call and no spend. It gives a run that finished
+  before the page existed its page.
+
+### Changed
+- codebase-walkthrough: at the end of a run the skill hands over the HTML
+  page as a `file://` link instead of opening the review-viewer; it opens
+  the viewer only when you ask for it. `walkthrough.json` is still written.
+
 ## [0.96.8] - 2026-10-21
 
 ### Fixed
