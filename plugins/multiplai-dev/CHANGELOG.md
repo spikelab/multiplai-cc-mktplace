@@ -15,6 +15,16 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.96.6] - 2026-10-21
+
+### Fixed
+- review: a finder or converter answer whose `other_locations` is `false`, a
+  number or an object no longer stops the find stage with a `TypeError`. The
+  finding is kept with no other locations. In a list, only the strings are
+  read as places, so an object's keys never become a location. A string or a
+  list of strings is read as before, and the location gate still checks each
+  place.
+
 ## [0.96.5] - 2026-10-21
 
 ### Fixed
