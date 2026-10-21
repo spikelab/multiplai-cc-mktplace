@@ -53,14 +53,17 @@ def lower_severity(severity: str) -> str:
 def locations_list(value) -> list[str]:
     """A finder's `other_locations` as a list of stripped strings: None is [], one string is a list of one.
 
-    A parse failure would lose the whole finding, so a malformed value is read
-    as best it can be; `gates.locations_gate` judges each location afterwards.
+    A parse failure would lose the whole finding, so any JSON value is read as
+    best it can be, and never raises: a value that is neither a string nor a
+    list (false, a number, an object) is [], and in a list only the strings
+    are kept, so an object's keys never become places.
+    `gates.locations_gate` judges each location afterwards.
     """
-    if value is None:
-        return []
     if isinstance(value, str):
         value = [value]
-    out = [(v if isinstance(v, str) else str(v)).strip() for v in value]
+    if not isinstance(value, (list, tuple)):
+        return []
+    out = [v.strip() for v in value if isinstance(v, str)]
     return [v for v in out if v]
 
 

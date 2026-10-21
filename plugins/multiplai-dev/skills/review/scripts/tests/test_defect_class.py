@@ -70,7 +70,7 @@ def test_defect_class_and_other_locations_default_empty_and_parse_loosely():
     loose = Finding.model_validate({**plain.model_dump(), "defect_class": None, "other_locations": " a.py:3 "})
     assert loose.defect_class == "" and loose.other_locations == ["a.py:3"]
     listed = Finding.model_validate({**plain.model_dump(), "other_locations": ["a.py:3", "", None, 7]})
-    assert listed.other_locations == ["a.py:3", "None", "7"]  # the gate judges each one
+    assert listed.other_locations == ["a.py:3"]  # a non-string is no place; the gate judges the rest
     assert loose.id == plain.id  # neither field is part of the v1 id
 
 
@@ -260,3 +260,60 @@ async def test_defect_class_s13_old_checkpoint_loads_empty_and_asks_nothing_agai
     assert [f.id for f in state.findings] == [high.id]
     assert state.findings[0].defect_class == "" and state.findings[0].other_locations == []
     assert not [e for e in state.errors if e.startswith("locations_gate")]
+
+
+# --- malformed other_locations in a raw model answer ------------------------------
+
+_MISSING = object()
+_PLACE = "direct_booking.py:5"
+
+
+@pytest.mark.parametrize("route", ["finder", "converter"])
+@pytest.mark.parametrize(("value", "expected"), [
+    (_MISSING, []), (None, []), (False, []), (True, []), (42, []), (1.25, []),
+    ({_PLACE: True}, []), ({}, []), ("  " + _PLACE + "  ", [_PLACE]),
+    ([None, False, 8, {_PLACE: True}, [_PLACE], " ", _PLACE], [_PLACE]),
+], ids=["missing", "null", "false", "true", "integer", "float", "object", "empty-object", "string", "mixed-list"])
+async def test_other_locations_of_any_json_type_keep_the_finding(tmp_path, route, value, expected):
+    """A model's answer is parsed by the real SDK path: only `sdk._run` is canned."""
+    from unittest.mock import patch
+
+    from fixture_repo import build
+    from review_pipeline.models import TargetInfo
+
+    repo = tmp_path / "repo"
+    base, head = build(repo)
+    target = TargetInfo(repo_path=str(repo), base_sha=base, head_sha=head, slug="test",
+                        files=["rateplan_service.py"])
+    original = high_finding()
+    data = original.model_dump()
+    data.pop("other_locations")
+    if value is not _MISSING:
+        data["other_locations"] = value
+    calls = []
+
+    async def answer(prompt, **kwargs):
+        calls.append(kwargs.get("budget_label"))
+        return json.dumps({("findings" if route == "finder" else "items"): [data]})
+
+    with patch.object(sdk, "_run", answer):
+        if route == "finder":
+            ctx = RunContext(config=ReviewConfig(concurrency=1, dimensions=("diff-bugs",), trim=False),
+                             snapshot=repo, diff="")
+            found = (await run_find(ReviewState(target=target), ctx)).findings
+        else:
+            out = await sdk.agent_call_structured("convert", ConvertOutput, allowed_tools=[], cwd=str(repo))
+            _, found = map_converted("piece@1", out)
+            found = [gated_locations(target, f)[0] for f in found]
+    assert len(calls) == 1
+    (kept,) = found
+    assert (kept.claim, kept.severity, kept.citations) == (original.claim, original.severity, original.citations)
+    if route == "finder":
+        assert kept.id == original.id
+    assert kept.other_locations == expected
+
+
+def test_other_locations_never_reads_an_object_key_as_a_place():
+    plain = high_finding().model_dump()
+    assert Finding.model_validate({**plain, "other_locations": {"a.py:3": "b.py:4"}}).other_locations == []
+    assert Finding.model_validate({**plain, "other_locations": [{"a.py:3": 1}, ["b.py:4"]]}).other_locations == []
