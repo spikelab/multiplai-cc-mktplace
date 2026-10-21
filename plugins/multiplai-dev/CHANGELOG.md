@@ -15,6 +15,18 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.96.5] - 2026-10-21
+
+### Fixed
+- review: a changed file whose name holds a space, a quote, a tab, a
+  backslash or, with `core.quotePath` on, a non-ASCII character is no longer
+  lost to the paths stage. Its changed lines were filed under the name as git
+  writes it in the diff header (with a trailing tab, or in quotes), so no path
+  through the file was found and its path finders never ran. The explain
+  stage's scope and the record of which cited lines were in the diff now read
+  those names the same way, and a name that starts or ends with a space keeps
+  it.
+
 ## [0.96.4] - 2026-10-21
 
 ### Fixed

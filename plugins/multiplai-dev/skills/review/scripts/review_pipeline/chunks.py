@@ -43,9 +43,9 @@ def _section_path(header: str, lines: list[str]) -> str:
         if line.startswith("@@"):
             break
         if line.startswith("--- "):
-            old = line[4:].strip()
+            old = header_path(line[4:].rstrip("\n"))
         elif line.startswith("+++ "):
-            new = line[4:].strip()
+            new = header_path(line[4:].rstrip("\n"))
     for name, prefix in ((new, "b/"), (old, "a/")):
         if name and name != "/dev/null":
             return name[len(prefix):] if name.startswith(prefix) else name
@@ -56,9 +56,15 @@ def _section_path(header: str, lines: list[str]) -> str:
 _ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
 
 
-def _unquote(name: str) -> str:
-    """A path as git wrote it in a header, with git's C-style quoting (`"a/caf\\303\\251"`) undone."""
-    name = name.strip()
+def header_path(name: str) -> str:
+    """A path as git wrote it in a header, with git's C-style quoting (`"a/caf\\303\\251"`) undone.
+
+    Git ends a `---` or `+++` name that holds a space with a tab, which is not
+    part of the name: a name git leaves unquoted never holds a tab. A space at
+    either end belongs to the name.
+    """
+    if name.endswith("\t"):
+        name = name[:-1]
     if not (len(name) >= 2 and name[0] == name[-1] == '"'):
         return name
     body, out, i = name[1:-1], bytearray(), 0
@@ -89,13 +95,13 @@ def _sides(header: str, lines: list[str]) -> tuple[str | None, str | None, str]:
             break
         text = line.rstrip("\n")
         if text.startswith("--- "):
-            old = _unquote(text[4:])
+            old = header_path(text[4:])
         elif text.startswith("+++ "):
-            new = _unquote(text[4:])
+            new = header_path(text[4:])
         elif text.startswith("rename from "):
-            rename_from = _unquote(text[len("rename from "):])
+            rename_from = header_path(text[len("rename from "):])
         elif text.startswith("rename to "):
-            rename_to = _unquote(text[len("rename to "):])
+            rename_to = header_path(text[len("rename to "):])
         elif text.startswith("new file mode"):
             added = True
         elif text.startswith("deleted file mode"):
@@ -186,7 +192,7 @@ def head_changed_lines(diff: str) -> dict[str, list[int]]:
         if line.startswith("diff --git "):
             path = None
         elif line.startswith("+++ ") and path is None:
-            name = line[4:].rstrip("\r")
+            name = header_path(line[4:].rstrip("\r"))
             path = "" if name == "/dev/null" else name[2:] if name.startswith("b/") else name
         elif (m := _HUNK.match(line)) and path is not None:
             old_left = int(m.group(1)) if m.group(1) is not None else 1
