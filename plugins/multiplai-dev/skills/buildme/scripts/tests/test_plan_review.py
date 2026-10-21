@@ -32,9 +32,13 @@ from build_pipeline.models import (
     PlanReviewCut,
     PlanReviewFinding,
     PlanReviewResult,
+    PriorAssessment,
 )
 from build_pipeline.prompts.plan_review import NO_USE_CASES, PLAN_REVIEW_PROMPT
 from build_pipeline.state import BuildState, SpecGenState
+
+# A recheck that calls the one listed finding fixed.
+_RESOLVED_PR_F1 = PriorAssessment(finding_id="PR-F1", status="resolved")
 
 CATEGORIES = (
     "rubric-conflict",
@@ -566,7 +570,7 @@ class TestPlanReviewStage:
         config, state, state_path = _stage_setup(tmp_path)
         review = AsyncMock(side_effect=[
             PlanReviewResult(findings=[_finding(severity="critical")]),
-            PlanReviewResult(findings=[]),  # the report-only re-check
+            PlanReviewResult(findings=[], prior_assessments=[_RESOLVED_PR_F1]),  # the report-only re-check
         ])
         regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
         with patch.object(plan_review_steps, "run_plan_review", review), \
@@ -591,7 +595,7 @@ class TestPlanReviewStage:
         config, state, state_path = _stage_setup(tmp_path)
         review = AsyncMock(side_effect=[
             PlanReviewResult(findings=[_finding(severity="critical")]),
-            PlanReviewResult(findings=[]),
+            PlanReviewResult(findings=[], prior_assessments=[_RESOLVED_PR_F1]),
         ])
         regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
         shape_audit = AsyncMock(return_value=[])
@@ -615,7 +619,7 @@ class TestPlanReviewStage:
         config, state, state_path = _stage_setup(tmp_path)
         review = AsyncMock(side_effect=[
             PlanReviewResult(findings=[_finding(severity="critical")]),
-            PlanReviewResult(findings=[]),
+            PlanReviewResult(findings=[], prior_assessments=[_RESOLVED_PR_F1]),
         ])
         regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
         rubric = AsyncMock(return_value="## Criteria\n- covers the new blocks\n")

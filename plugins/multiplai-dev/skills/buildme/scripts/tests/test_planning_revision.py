@@ -319,7 +319,8 @@ def test_proposal_edit_invalidates_preimplementation_prototype_skip(plan):
 @pytest.mark.parametrize('failure', ['audit', 'commit'])
 async def test_interrupted_post_repair_audit_resumes_on_the_new_revision(plan, monkeypatch, stage, failure):
     from build_pipeline.llm_steps import plan_review_steps
-    from build_pipeline.models import PlanReviewFinding, PlanReviewResult
+    from build_pipeline.llm_steps.spec_steps import AuditFindings
+    from build_pipeline.models import PlanReviewFinding, PlanReviewResult, PriorAssessment
     config, _, state = plan
     (config.change_dir / 'requirements').mkdir(exist_ok=True)
     for cap in ('one', 'two'):
@@ -337,13 +338,15 @@ async def test_interrupted_post_repair_audit_resumes_on_the_new_revision(plan, m
     if stage == 'design_audit':
         review = AsyncMock(side_effect=[
             [{'severity': 'critical', 'category': 'correctness', 'description': 'old gap'}],
-            *([RuntimeError('recheck interrupted')] if failure == 'audit' else []), []])
+            *([RuntimeError('recheck interrupted')] if failure == 'audit' else []),
+            AuditFindings([], [PriorAssessment(finding_id='DA-F1', status='resolved')])])
         monkeypatch.setattr(owner, '_run_audit', review)
         run = owner.run_design_audit_stage
     else:
         review = AsyncMock(side_effect=[PlanReviewResult(findings=[PlanReviewFinding(
             severity='critical', category='correctness', claim='old gap', reason='fix it')]),
-            *([RuntimeError('recheck interrupted')] if failure == 'audit' else []), PlanReviewResult()])
+            *([RuntimeError('recheck interrupted')] if failure == 'audit' else []),
+            PlanReviewResult(prior_assessments=[PriorAssessment(finding_id='PR-F1', status='resolved')])])
         monkeypatch.setattr(plan_review_steps, 'run_plan_review', review)
         run = plan_review_steps.run_plan_review_stage
     with pytest.raises(RuntimeError, match='interrupted'):
