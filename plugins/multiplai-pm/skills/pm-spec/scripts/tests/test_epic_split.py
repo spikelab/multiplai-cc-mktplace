@@ -32,7 +32,7 @@ class TestCheckAnswer:
     def test_a_valid_split_has_no_errors(self):
         assert check_answer(answer(child("a"), child("b", ["a"])), []) == []
 
-    def test_single_needs_no_children(self):
+    def test_one_change_needs_no_children(self):
         assert check_answer(SplitAnswer(single=True), []) == []
 
     @pytest.mark.parametrize("bad", ["Upper", "under_score", "-lead", "a--b"])
@@ -53,7 +53,7 @@ class TestCheckAnswer:
     def test_each_plan_has_a_title_and_done_means(self, plan, missing):
         assert any(missing in e for e in check_answer(answer(child("a", plan=plan), child("b")), []))
 
-    def test_several_needs_two_children(self):
+    def test_a_split_needs_two_children(self):
         assert any("at least two" in e for e in check_answer(answer(child("a")), []))
 
     def test_a_ticket_ref_must_be_one_of_the_tickets_children(self):

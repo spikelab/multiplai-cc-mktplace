@@ -131,7 +131,7 @@ def test_the_scratch_ticket_and_plan_are_not_needed_after_intake(repo, model, tm
 
 # --- interview modes ----------------------------------------------------------------
 
-def test_self_mode_separates_answers_from_assumptions(repo, model):
+def test_the_self_mode_separates_answers_from_assumptions(repo, model):
     assert run(repo, "new", "throttle", "--auto") == 0
     text = (change_dir(repo) / "interview.md").read_text()
     q, a, s = text.index("## Questions"), text.index("## Answers"), text.index("## Assumptions")

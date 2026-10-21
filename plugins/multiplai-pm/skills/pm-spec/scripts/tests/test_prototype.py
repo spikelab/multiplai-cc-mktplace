@@ -68,7 +68,7 @@ def test_prototype_forces_it_on(repo, model):
     assert model.calls_to("prototype") == 1
 
 
-def test_specs_config_can_force_it_on(repo, model):
+def test_the_specs_config_can_force_it_on(repo, model):
     write(repo / "specs" / "config.yaml", "prototype:\n  enabled: true\n")
     model["prototype"] = agent()
     assert run(repo, "new", "throttle", "--auto") == 0
@@ -135,7 +135,7 @@ class TestPrototypeRequired:
 
 
 class TestNotes:
-    def test_slots_are_parsed_with_markdown_decoration(self):
+    def test_the_slots_are_parsed_with_markdown_decoration(self):
         notes = P.parse_prototype_notes("**PROVES**: a\n## DISPROVES: b\nOPEN_QUESTIONS: c\nSTATUS: DONE")
         assert notes == {"proves": "a", "disproves": "b", "open_questions": "c", "status": "DONE"}
 

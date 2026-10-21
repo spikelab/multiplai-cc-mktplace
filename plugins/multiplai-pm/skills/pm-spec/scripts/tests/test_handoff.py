@@ -66,7 +66,7 @@ def test_priority_from_the_ticket_when_the_prd_states_none(repo, model, tmp_path
 
 @pytest.mark.parametrize("text,expected", [
     ("**Priority:** P1\n", "high"), ("priority = low\n", "low"), ("Priority: whenever\n", None), ("", None)])
-def test_stated_priority(text, expected):
+def test_the_priority_line(text, expected):
     assert tickets.stated_priority(text) == expected
 
 
