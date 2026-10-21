@@ -1981,6 +1981,27 @@ class TestReviewedRevision:
         reviewed, why = _reviewed_revision(self._config(repo), head)
         assert reviewed is None and "vendor" in why
 
+    @pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+    @pytest.mark.parametrize("hidden", ["gitlink", "file"])
+    def test_a_nested_submodule_entry_git_is_told_not_to_check_makes_it_unknown(self, tmp_path, flag, hidden):
+        from build_pipeline.tdd_engine import _reviewed_revision
+        repo = self._repo(tmp_path)
+        self._sub(tmp_path, repo)
+        vendor = repo / "vendor"
+        self._sub(tmp_path, vendor, "inner")
+        _git(repo, "add", "vendor")
+        _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "nest")
+        head = _git(repo, "rev-parse", "HEAD")
+        assert _reviewed_revision(self._config(repo), head) == (head, None)
+        if hidden == "gitlink":
+            _git(vendor, "update-index", flag, "inner")
+            _git(vendor / "inner", "checkout", "-q", "--detach", "HEAD~1")
+        else:
+            _git(vendor / "inner", "update-index", flag, "a.txt")
+            (vendor / "inner" / "a.txt").write_text("edited\n")
+        reviewed, why = _reviewed_revision(self._config(repo), head)
+        assert reviewed is None and ("vendor/inner" + ("" if hidden == "gitlink" else "/a.txt")) in why
+
     def test_a_moved_submodule_the_parent_ignores_makes_it_unknown(self, tmp_path):
         from build_pipeline.tdd_engine import _reviewed_revision
         repo = self._repo(tmp_path)

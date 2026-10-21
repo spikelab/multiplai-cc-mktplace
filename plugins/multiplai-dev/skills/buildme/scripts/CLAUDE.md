@@ -230,7 +230,8 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   only when `_reviewed_revision` finds nothing else in the project
   (`git_ops.tree_is_clean` with `every_submodule`, so a submodule's `ignore`
   setting cannot hide it, and no file `git_ops.unchecked_files` lists as
-  assume-unchanged or skip-worktree, in the project or a submodule;
+  assume-unchanged or skip-worktree, in the project or any submodule index,
+  nested ones and gitlink entries included;
   buildme's bookkeeping and the round records, which the reviewer's diff
   leaves out too, are left out, while the rest of the change dir, a
   prototype's source included, counts). Otherwise it is null with `reviewed_sha_unknown`

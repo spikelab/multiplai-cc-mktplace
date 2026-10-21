@@ -951,25 +951,44 @@ def tree_is_clean(repo: Path | str, ignore: Path | str | None = None,
 
 
 def unchecked_files(repo: Path | str, ignore: Path | str | None = None) -> list[str] | None:
-    """The files under *repo* whose index entry tells git not to look at them
+    """The entries under *repo* whose index tells git not to look at them
     (`assume-unchanged` or `skip-worktree`), so `git status` would not show an
-    edit to them, in initialized submodules (`vendor/a.py`) and on a gitlink
-    entry itself (`vendor`). Bookkeeping
-    and *ignore* are left out, as in `tree_is_clean`. None when git could not
-    be asked."""
+    edit to them: files and gitlink entries, in *repo*'s index and in the
+    index of every initialized submodule below it, nested ones included
+    (`vendor/inner/a.py`, `vendor/inner`). Bookkeeping and *ignore* are left
+    out of *repo*'s own index, as in `tree_is_clean`. None when an index could
+    not be read, or a submodule directory holds files but no checkout git can
+    read. Read-only: it only lists."""
     excludes = list(BOOKKEEPING_EXCLUDES)
     if ignore is not None:
         excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
+    return _unchecked_in(Path(repo), excludes, "")
+
+
+def _unchecked_in(repo: Path, excludes: list[str], prefix: str) -> list[str] | None:
+    result = _run(["git", "ls-files", "-v", "-s", "-z", "--", ".", *excludes], cwd=repo)
+    if not result.ok:
+        return None
     found: list[str] = []
-    # Once more without `--recurse-submodules`, which lists a submodule's own
-    # files in place of its gitlink entry and so drops that entry's flags.
-    for recurse in ([], ["--recurse-submodules"]):
-        result = _run(["git", "ls-files", "-v", "-z", *recurse, "--", ".", *excludes], cwd=repo)
-        if not result.ok:
+    for entry in filter(None, result.stdout.split("\0")):
+        # `<tag> <mode> <sha> <stage>\t<path>`; `-v` writes a lowercase tag for
+        # assume-unchanged and S for skip-worktree.
+        identity, name = entry.split("\t", 1)
+        tag, mode = identity.split(" ", 2)[:2]
+        if (tag.islower() or tag == "S") and prefix + name not in found:
+            found.append(prefix + name)
+        path = repo / name
+        if mode != "160000" or path.is_symlink() or not path.is_dir():
+            continue
+        top = _run(["git", "rev-parse", "--show-toplevel"], cwd=path)
+        if not (top.ok and Path(top.stdout.strip()).resolve() == path.resolve()):
+            if any(path.iterdir()):
+                return None
+            continue  # an uninitialized submodule: nothing checked out to hide
+        below = _unchecked_in(path, list(BOOKKEEPING_EXCLUDES), f"{prefix}{name}/")
+        if below is None:
             return None
-        # `-v` writes a lowercase tag for assume-unchanged and S for skip-worktree.
-        found += [entry[2:] for entry in filter(None, result.stdout.split("\0"))
-                  if (entry[:1].islower() or entry[:1] == "S") and entry[2:] not in found]
+        found += [n for n in below if n not in found]
     return found
 
 
