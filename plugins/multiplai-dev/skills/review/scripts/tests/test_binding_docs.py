@@ -359,7 +359,7 @@ def test_with_no_followable_link_the_conventions_text_is_unchanged(tmp_path):
 # --- through a review -----------------------------------------------------------------------------------------------
 
 
-def test_a_review_gives_the_conventions_finder_the_docs_and_records_the_skips(tmp_path, model, mapped):
+def test_a_review_gives_the_conventions_finder_the_docs_and_records_the_skips(tmp_path, model, mapped):  # noqa: F811
     repo = tmp_path / "rv"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")

@@ -1,50 +1,5 @@
 {
   "$defs": {
-    "Assessment": {
-      "additionalProperties": false,
-      "description": "The session's judgment on one quality question, shown as a badge beside\nthe measured ones. `commits` (does anything say why the change is made?)\nand `tests` (would a test fail if the changed behaviour broke?) are\nrequired once the walkthrough is complete, and judged by the rubric in\nSKILL.md. `size` and `risk` are accepted in files written before 0.22 but\nrejected by `walkthrough put`: size is measured and risk is the header\nscore.",
-      "properties": {
-        "detail_md": {
-          "title": "Detail Md",
-          "type": "string"
-        },
-        "title": {
-          "maxLength": 32,
-          "minLength": 1,
-          "title": "Title",
-          "type": "string"
-        },
-        "topic": {
-          "enum": [
-            "commits",
-            "tests",
-            "size",
-            "design",
-            "risk",
-            "other"
-          ],
-          "title": "Topic",
-          "type": "string"
-        },
-        "verdict": {
-          "enum": [
-            "good",
-            "note",
-            "concern"
-          ],
-          "title": "Verdict",
-          "type": "string"
-        }
-      },
-      "required": [
-        "topic",
-        "verdict",
-        "title",
-        "detail_md"
-      ],
-      "title": "Assessment",
-      "type": "object"
-    },
     "Diagram": {
       "additionalProperties": false,
       "properties": {
@@ -206,6 +161,51 @@
       ],
       "title": "WalkthroughAnchor",
       "type": "object"
+    },
+    "WalkthroughAssessment": {
+      "additionalProperties": false,
+      "description": "The session's judgment on one quality question, shown as a badge beside\nthe measured ones. `commits` (does anything say why the change is made?)\nand `tests` (would a test fail if the changed behaviour broke?) are\nrequired once the walkthrough is complete, and judged by the rubric in\nSKILL.md. `size` and `risk` are accepted in files written before 0.22 but\nrejected by `walkthrough put`: size is measured and risk is the header\nscore.",
+      "properties": {
+        "detail_md": {
+          "title": "Detail Md",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "topic": {
+          "enum": [
+            "commits",
+            "tests",
+            "size",
+            "design",
+            "risk",
+            "other"
+          ],
+          "title": "Topic",
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "good",
+            "note",
+            "concern"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "topic",
+        "verdict",
+        "title",
+        "detail_md"
+      ],
+      "title": "WalkthroughAssessment",
+      "type": "object"
     }
   },
   "$id": "walkthrough.v1.schema.json",
@@ -214,7 +214,7 @@
   "properties": {
     "assessments": {
       "items": {
-        "$ref": "#/$defs/Assessment"
+        "$ref": "#/$defs/WalkthroughAssessment"
       },
       "title": "Assessments",
       "type": "array"
