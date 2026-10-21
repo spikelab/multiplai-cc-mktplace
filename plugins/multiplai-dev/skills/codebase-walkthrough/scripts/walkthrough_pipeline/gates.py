@@ -26,7 +26,7 @@ SMALL_FILE_LINES = 30
 
 def split_path(repos: dict[str, RepoInfo], ws_path: str) -> tuple[RepoInfo, str] | None:
     """`DolceEngine/DolceChannex/urls.py` -> (the DolceEngine repo, `DolceChannex/urls.py`)."""
-    p = ws_path.strip().lstrip("./")
+    p = ws_path.strip().removeprefix("./")
     key, _, rel = p.partition("/")
     repo = repos.get(key)
     if repo is None or not rel:

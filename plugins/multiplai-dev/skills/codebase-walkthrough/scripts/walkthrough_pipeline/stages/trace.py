@@ -45,6 +45,22 @@ log = logging.getLogger(__name__)
 TRACE_LIMIT = 30
 # `map_paths`' answer cache, under the run directory. Only `resume` reuses it; `run` starts it empty.
 PATHS_CACHE = "paths-cache"
+# The path cap when `--scenarios` was not passed, and that default before it became 21.
+DEFAULT_CAP = 21
+OLD_DEFAULT_CAP = 6
+
+
+def path_cap(options: dict) -> int:
+    """The saved `--scenarios` cap when the user passed it, else DEFAULT_CAP.
+
+    A state saved before `scenarios_given` existed does not say whether the flag was passed: its cap counts
+    as passed unless it is the old default.
+    """
+    saved = options.get("scenarios")
+    given = options.get("scenarios_given")
+    if given is None:
+        given = saved is not None and saved != OLD_DEFAULT_CAP
+    return int(saved) if given and saved else DEFAULT_CAP
 
 
 def module_lines(state: WalkState, root: Path) -> dict[str, set[int]]:
@@ -152,22 +168,26 @@ def web_seeds(state: WalkState) -> list[Seed]:
 def known_places(state: WalkState) -> list[Location]:
     """The boundary edges under the target repo's root: the target side of each cross-repository
     reference, then every route, then every task and beat entry. First-seen order, no duplicates."""
-    found: list[SymbolEntry | Reference] = []
+    found: list[tuple[str, SymbolEntry | Reference | None]] = []
     for r in state.references:
         if r.repo == state.target.repo_key:
             continue
         if r.kind == "http-route":
-            found.append(_matching_route(state, r.symbol))
+            found.append((r.kind, _matching_route(state, r.symbol)))
         elif r.kind == "celery-name":
-            found.append(_task(state, r.symbol))
-    found += [e for e in state.symbols if e.kind == "url"]
-    found += [e for e in state.symbols if e.kind == "celery-task"]
-    found += [r for r in state.references if r.kind == "celery-name" and r.repo == state.target.repo_key]
+            found.append((r.kind, _task(state, r.symbol)))
+    found += [(e.kind, e) for e in state.symbols if e.kind == "url"]
+    found += [(e.kind, e) for e in state.symbols if e.kind == "celery-task"]
+    found += [(r.kind, r) for r in state.references if r.kind == "celery-name" and r.repo == state.target.repo_key]
     out: list[Location] = []
-    for e in found:
+    for kind, e in found:
         rel = _rel(state, e.path) if e is not None else None
-        place = Location(path=rel, line=e.line) if rel else None
-        if place is not None and place not in out:
+        if not rel:
+            # Only the type: the edge's text is the repository's.
+            log.info("known places: left out a %s edge with no location in the target repo", kind)
+            continue
+        place = Location(path=rel, line=e.line)
+        if place not in out:
             out.append(place)
     return out
 
@@ -239,7 +259,7 @@ async def run_trace(state: WalkState, ctx: RunContext) -> WalkState:
             changed_lines=module_lines(state, root),
             seeds=web_seeds(state),
             places=known_places(state),
-            cap=int(state.options.get("scenarios") or 21),
+            cap=path_cap(state.options),
             trace_limit=TRACE_LIMIT,
             concurrency=ctx.config.concurrency,
             cache_dir=ctx.run_dir / PATHS_CACHE,

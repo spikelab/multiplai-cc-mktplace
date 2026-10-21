@@ -123,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--docs-pages", type=int, default=30, help="Most doc pages fetched (default 30)")
     rn.add_argument("--api-collection", help="A Bruno/OpenCollection directory of API requests")
     rn.add_argument("--unit-lines", type=int, default=6000, help="Most lines per explore unit (default 6000)")
-    rn.add_argument("--scenarios", type=_positive_int, default=21,
+    rn.add_argument("--scenarios", type=_positive_int, default=None,
                     help="Cap on the number of paths traced (default: 21).")
     rn.add_argument("--lsp-timeout", type=float, default=300.0,
                     help="Seconds pyright-langserver gets for references (default 300; 0 = skip LSP)")
@@ -214,7 +214,8 @@ def _main(args: argparse.Namespace) -> int:
                 repo_key=args.repo_key,
                 docs=args.docs, docs_dirs=args.docs_dir, docs_pages=args.docs_pages,
                 api_collection=args.api_collection, unit_lines=args.unit_lines,
-                scenarios=args.scenarios, lsp_timeout=args.lsp_timeout,
+                lsp_timeout=args.lsp_timeout,
+                **({} if args.scenarios is None else {"scenarios": args.scenarios, "scenarios_given": True}),
             )
             state, run_dir = orchestrator.prepare(opts, runs)
             print(f"run: {run_dir}", flush=True)

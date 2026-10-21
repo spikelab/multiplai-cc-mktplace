@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 import path_fixtures
@@ -146,3 +148,15 @@ def test_a_route_another_repo_calls_is_matched_by_its_full_route_not_a_suffix():
         Seed(path="shop/views.py", symbol="status", name="HTTP /status/"),
     ]
     assert known_places(state)[0] == Location(path="shop/urls.py", line=7)
+
+
+def test_an_edge_with_no_target_location_is_logged_by_its_type_only(caplog):
+    from walkthrough_pipeline.stages.trace import known_places
+    state = _state(references=[_ref("mobile", "http-route", "v1/nothing/", "mobile/api.py", 4),
+                               _ref("mobile", "celery-name", "shop.missing", "mobile/jobs.py", 2)])
+    with caplog.at_level(logging.INFO, logger="walkthrough_pipeline.stages.trace"):
+        assert known_places(state) == []
+    left_out = [r.getMessage() for r in caplog.records if "no location in the target repo" in r.getMessage()]
+    assert len(left_out) == 2
+    assert "http-route" in left_out[0] and "celery-name" in left_out[1]
+    assert not any("v1/nothing" in m or "shop.missing" in m for m in left_out)

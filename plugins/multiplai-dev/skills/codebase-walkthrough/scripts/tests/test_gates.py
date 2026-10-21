@@ -134,3 +134,14 @@ def test_corpus_without_rg_names_ripgrep(ws, monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name, *a, **k: None if name == "rg" else real_which(name, *a, **k))
     with pytest.raises(target.MissingToolError, match="ripgrep"):
         gates.Corpus([ws["engine"]]).contains("Ospite")
+
+
+@pytest.mark.parametrize("ws_path", [".github/workflows/ci.yml", "./.github/workflows/ci.yml"])
+def test_split_path_keeps_the_leading_dot_of_a_repo_key(ws_path):
+    repo = RepoInfo(key=".github", path="/x/.github", head_sha="0" * 40)
+    assert gates.split_path({".github": repo}, ws_path) == (repo, "workflows/ci.yml")
+
+
+def test_split_path_strips_only_a_leading_dot_slash():
+    repo = RepoInfo(key="shop", path="/x/shop", head_sha="0" * 40)
+    assert gates.split_path({"shop": repo}, "./shop/.github/workflows/ci.yml") == (repo, ".github/workflows/ci.yml")

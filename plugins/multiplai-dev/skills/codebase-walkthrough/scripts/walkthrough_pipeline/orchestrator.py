@@ -66,6 +66,7 @@ class RunOptions:
     api_collection: str | None = None
     unit_lines: int = 6000
     scenarios: int = 21          # the path cap
+    scenarios_given: bool = False  # `--scenarios` was passed; else a resume uses the default of its own version
     lsp_timeout: float = 300.0
 
 

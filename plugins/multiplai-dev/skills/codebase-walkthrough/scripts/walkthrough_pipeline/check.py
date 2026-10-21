@@ -13,7 +13,7 @@ the code has moved since the walkthrough was written.
 
 Path hops. A link on the same line as a hop anchor (`<a id="p2h3"></a>`) is
 that hop's, and its failure is named by the hop id. A hop citation in prose,
-`[p2h3](#p2h3)`, must have its anchor in the file. Links are checked wherever
+`[p2h3](#p2h3)`, and a hop id named in backticks must have its anchor in the file. Links are checked wherever
 they sit, so an older walkthrough's "End-to-end scenarios" hops are checked as
 before. Only the Markdown is read: never a paths file, a run directory or a
 model.
@@ -34,15 +34,18 @@ LINK = re.compile(r'\[`([^`\n]+?):(\d+)(?:-(\d+))?`\]\(([^)\s]*)\s+"((?:[^"\\]|\
 LINK_START = re.compile(r"\[`[^`\n]+?:\d+(?:-\d+)?`\]\(")
 HOP_ANCHOR = re.compile(r'<a id="(p\d+h\d+)"></a>')
 HOP_REF = re.compile(r"\[(p\d+h\d+)\]\(#(p\d+h\d+)\)")
+# A hop cited as a link, or named in backticks as the Paths section and a writer's prose name one.
+HOP_CITED = re.compile(HOP_REF.pattern + r"|`(p\d+h\d+)`")
 SNIPPET = re.compile(r"<!-- snippet (\S+?):(\d+)-(\d+) -->\n.*?\n\n(`{3,})[^\n]*\n(.*?)\n\4", re.S)
 
 
 def unresolved_hop_citations(markdown: str) -> list[str]:
-    """Hop ids cited as `[pNhK](#pNhK)` with no `<a id="pNhK">` anchor in the file, in first-cited order."""
+    """Hop ids cited as `[pNhK](#pNhK)` or named as `` `pNhK` `` with no `<a id="pNhK">` anchor in the file,
+    in first-cited order. Snippets and link quotes hold code from the commit, so they are not searched."""
     anchors = set(HOP_ANCHOR.findall(markdown))
     out: list[str] = []
-    for m in HOP_REF.finditer(markdown):
-        hid = m.group(2)
+    for m in HOP_CITED.finditer(LINK.sub("", SNIPPET.sub("", markdown))):
+        hid = m.group(2) or m.group(3)
         if hid not in anchors and hid not in out:
             out.append(hid)
     return out

@@ -24,7 +24,7 @@ from code_facts.paths import PathHop, PathsResult, TracedPath
 
 from .check import LINK
 from .gates import CITE_ID, file_at_commit, lines_at_commit, sections_gate
-from .models import Citation, RepoInfo, WalkState
+from .models import Citation, RepoInfo, WalkState, hop_id
 from .stages.write import HUMAN_SECTIONS, citations_for_write, required_titles
 from .target import git, github_web_base, tree_files
 
@@ -154,21 +154,21 @@ def _path_block(state: WalkState, lk: Linker, path: TracedPath) -> list[str]:
     loc = entry.location
     first = hops[0]
     if first.path == loc.path and first.line_start <= loc.line <= first.line_end:
-        where = f"`{pid}h1`"
+        where = f"`{hop_id(pid, 1)}`"
     else:
         ws = f"{key}/{loc.path}"
         where = _entry_link(lk, ws, loc.line, _line_text(lk.repos, ws, loc.line))
     out.append(f"- Entry: invoked by `{entry.invoked_by}`, at {where}")
     out.append("- Hops:")
     for k, hop in enumerate(hops, start=1):
-        hid = f"{pid}h{k}"
+        hid = hop_id(pid, k)
         out.append(f'  - <a id="{hid}"></a>`{hid}` {lk.link(_hop_citation(key, hop))}')
     if path.stops_at is not None:
-        out.append(f"- Stops after `{pid}h{path.stops_at}`: `{path.break_reason}`")
+        out.append(f"- Stops after `{hop_id(pid, path.stops_at)}`: `{path.break_reason}`")
     else:
-        out.append(f"- Ends at `{pid}h{len(hops)}` (trace complete).")
+        out.append(f"- Ends at `{hop_id(pid, len(hops))}` (trace complete).")
     counted = ", ".join(f"`{t.node_id}`" for t in path.tests.e2e) or "no e2e test"
-    mocked = ", ".join(f"`{t.node_id}` (mocks `{pid}h2`, not counted)" for t in path.tests.mocks_hop_2)
+    mocked = ", ".join(f"`{t.node_id}` (mocks `{hop_id(pid, 2)}`, not counted)" for t in path.tests.mocks_hop_2)
     out.append(f"- E2E tests: {counted}" + (f"; not counted: {mocked}" if mocked else ""))
     return out
 
@@ -211,18 +211,23 @@ def _entries_left_out(m: int) -> str:
         "; see **Left out** under Coverage."
 
 
+# Appended to the Paths lead when the model fallback failed: entries static discovery missed may be absent.
+FALLBACK_FAILED = " Entry discovery was incomplete: the model fallback failed."
+
+
 def render_paths_section(state: WalkState, linker: Linker) -> str:
     """The Paths body: a lead sentence, then one block per path in map_paths order."""
     if state.paths_error:
         return f"Path finding failed: {state.paths_error}"
     paths = state.paths.paths if state.paths else []
     m = left_out_count(state.paths) if state.paths else 0
+    incomplete = FALLBACK_FAILED if state.paths and state.paths.fallback.status == "failed" else ""
     if not paths:
-        return f"No paths were traced. {_entries_left_out(m)}" if m else \
-            "No entry points reaching this module were found."
+        return (f"No paths were traced. {_entries_left_out(m)}" if m else
+                "No entry points reaching this module were found.") + incomplete
     n = len(paths)
     lead = "1 path reaches this module." if n == 1 else f"{n} paths reach this module."
-    out = [lead + (f" {_entries_left_out(m)}" if m else ""), ""]
+    out = [lead + (f" {_entries_left_out(m)}" if m else "") + incomplete, ""]
     for path in paths:
         out += _path_block(state, linker, path) + [""]
     return "\n".join(out).rstrip()
