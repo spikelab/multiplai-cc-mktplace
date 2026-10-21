@@ -23,55 +23,26 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
 from datetime import date
 from pathlib import Path
 
 import yaml
 
+# The spec format is multiplai-core's; the rest of build_pipeline imports these
+# names from this module.
+from multiplai_core.specs import (
+    archive_change as _archive_change,
+    archived_change_dirs,
+    expected_capabilities,
+    merge_delta_requirements,
+    normalize_change_name,
+    valid_requirement,
+    valid_requirement_text,
+)
+
 from .models import ArtifactInfo, ArtifactStatus, ChangeStatus
 
 log = logging.getLogger(__name__)
-
-
-def normalize_change_name(name: str) -> str:
-    """Normalize a change name to a safe kebab-case slug.
-
-    Strips path separators, dots, and other non-word characters, so a name can
-    never traverse outside specs/changes/ (e.g. '../../foo' → 'foo').
-
-    A non-empty name that normalizes to nothing (e.g. '!!!') is refused with
-    ValueError — silently returning "" would make change_dir collapse to
-    specs/changes and the branch to 'buildme/', dying much later with a raw
-    git error. An empty input stays "" (an unset --change is legitimate).
-    """
-    slug = re.sub(r"[^\w\s-]", "", name.lower())
-    slug = re.sub(r"[\s_]+", "-", slug).strip("-")
-    if name and not slug:
-        raise ValueError(
-            f"Change name {name!r} contains no usable characters "
-            f"(letters, digits, '-'). Pick a real name, e.g. --change my-feature."
-        )
-    return slug
-
-
-def archived_change_dirs(specs_dir: Path, name: str) -> list[Path]:
-    """All of this change's archive directories, sorted oldest → newest.
-
-    Matches exactly ``specs/archive/YYYY-MM-DD-<slug>`` (the `archive_change`
-    naming scheme). The match is anchored on the whole dirname — a loose
-    ``*-<slug>`` glob would also catch every OTHER change whose slug merely
-    *ends* with this one (change ``foo`` matching ``2026-07-26-bar-foo``),
-    silently crossing two changes' files.
-    """
-    norm = normalize_change_name(name)
-    if not norm:
-        return []
-    pattern = re.compile(rf"^\d{{4}}-\d{{2}}-\d{{2}}-{re.escape(norm)}$")
-    archive_root = specs_dir / "archive"
-    if not archive_root.is_dir():
-        return []
-    return sorted(d for d in archive_root.iterdir() if d.is_dir() and pattern.match(d.name))
 
 
 # The spec-driven artifact DAG — hardcoded since we only use one schema.
@@ -446,21 +417,8 @@ class ChangeManager:
         return result
 
     def archive_change(self, change_dir: Path, merge_specs: bool = True) -> Path:
-        """Archive a completed change.
-
-        Moves change to archive/YYYY-MM-DD-<name>/ and optionally merges
-        delta requirements into the main registry/.
-        """
-        self.archive_dir.mkdir(parents=True, exist_ok=True)
-        archive_name = f"{date.today().isoformat()}-{change_dir.name}"
-        dest = self.archive_dir / archive_name
-
-        if merge_specs:
-            self._merge_delta_requirements(change_dir)
-
-        shutil.move(str(change_dir), str(dest))
-        log.info("Archived change '%s' to %s", change_dir.name, dest)
-        return dest
+        """Archive a completed change: `multiplai_core.specs.archive_change`."""
+        return _archive_change(change_dir, self.specs_dir, merge_specs=merge_specs)
 
     # --- Internal helpers ---
 
@@ -481,125 +439,6 @@ class ChangeManager:
         return normalize_change_name(name)
 
     def _merge_delta_requirements(self, change_dir: Path) -> None:
-        """Merge delta requirements from a change into the main registry.
-
-        Reads flat files from changes/<name>/requirements/<capability>.md and
-        merges them into registry/<capability>.md.
-        """
-        delta_dir = change_dir / "requirements"
-        if not delta_dir.exists():
-            return
-
-        self.registry_dir.mkdir(parents=True, exist_ok=True)
-        for delta_file in sorted(delta_dir.glob("*.md")):
-            capability_name = delta_file.stem
-            target_file = self.registry_dir / f"{capability_name}.md"
-
-            delta_content = delta_file.read_text()
-            if not target_file.exists():
-                # New capability — copy the delta as the main registry file
-                target_file.write_text(delta_content)
-                log.info("Created main registry: %s", target_file)
-                continue
-
-            # Merge into existing main registry file
-            main_content = target_file.read_text()
-            merged = self._apply_delta(main_content, delta_content)
-            target_file.write_text(merged)
-            log.info("Merged delta into: %s", target_file)
-
-    def _apply_delta(self, main: str, delta: str) -> str:
-        """Apply delta spec operations (ADDED/MODIFIED/REMOVED) to main spec."""
-        # Extract ADDED requirements — append to main
-        added_match = re.search(
-            r"## ADDED Requirements\s*\n(.*?)(?=\n## (?:MODIFIED|REMOVED|RENAMED) Requirements|\Z)",
-            delta, re.DOTALL,
-        )
-        if added_match:
-            added_block = added_match.group(1).strip()
-            if added_block:
-                main = main.rstrip() + "\n\n" + added_block + "\n"
-
-        # Extract REMOVED requirements — remove matching blocks from main
-        removed_match = re.search(
-            r"## REMOVED Requirements\s*\n(.*?)(?=\n## (?:ADDED|MODIFIED|RENAMED) Requirements|\Z)",
-            delta, re.DOTALL,
-        )
-        if removed_match:
-            removed_block = removed_match.group(1)
-            req_names = re.findall(r"### Requirement:\s*(.+)", removed_block)
-            for name in req_names:
-                pattern = re.compile(
-                    rf"### Requirement:\s*{re.escape(name.strip())}.*?"
-                    rf"(?=### Requirement:|\Z)",
-                    re.DOTALL,
-                )
-                main = pattern.sub("", main)
-
-        # Extract MODIFIED requirements — replace matching blocks
-        modified_match = re.search(
-            r"## MODIFIED Requirements\s*\n(.*?)(?=\n## (?:ADDED|REMOVED|RENAMED) Requirements|\Z)",
-            delta, re.DOTALL,
-        )
-        if modified_match:
-            mod_block = modified_match.group(1)
-            mod_reqs = re.split(r"(?=### Requirement:)", mod_block)
-            for req in mod_reqs:
-                name_match = re.match(r"### Requirement:\s*(.+)", req)
-                if not name_match:
-                    continue
-                name = name_match.group(1).strip()
-                pattern = re.compile(
-                    rf"### Requirement:\s*{re.escape(name)}.*?"
-                    rf"(?=### Requirement:|\Z)",
-                    re.DOTALL,
-                )
-                # Use a function replacement so backslash sequences in the
-                # requirement text (e.g. a regex like `\d+` or `\1` in a BDD
-                # scenario) are inserted literally instead of being interpreted
-                # as regex backreferences (which would raise re.error or corrupt
-                # the output).
-                replacement = req.strip() + "\n\n"
-                main = pattern.sub(lambda _m: replacement, main)
-
-        return main.strip() + "\n"
-
-
-def expected_capabilities(proposal: str) -> list[str]:
-    section = re.search(r"^##\s+Capabilities\s*$(.*?)(?=^##\s|\Z)", proposal, re.M | re.S)
-    scope = section.group(1) if section else re.sub(r"^##\s+Impact\s*$.*?(?=^##\s|\Z)", "", proposal, flags=re.M | re.S)
-    return list(dict.fromkeys(re.findall(r"^-\s+`([a-z0-9]+(?:-[a-z0-9]+)*)`", scope, re.M)))
-
-
-def valid_requirement(path: Path) -> bool:
-    try:
-        text = path.read_text()
-    except (OSError, UnicodeError):
-        return False
-    return valid_requirement_text(text)
-
-
-def valid_requirement_text(text: str) -> bool:
-    """Validate each requirement, preserving the scenario-free REMOVED format."""
-    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
-    requirements = list(re.finditer(r"^### Requirement:([^\n]*)(.*?)(?=^### Requirement:|^## |\Z)",
-                                    text, re.M | re.S))
-    if not requirements:
-        return False
-    for requirement in requirements:
-        if not requirement.group(1).strip():
-            return False
-        sections = re.findall(r"^## (\w+) Requirements", text[:requirement.start()], re.M)
-        if sections and sections[-1] == "REMOVED":
-            continue
-        scenarios = list(re.finditer(r"^#### Scenario:([^\n]*)(.*?)(?=^#### Scenario:|\Z)",
-                                     requirement.group(2), re.M | re.S))
-        if not scenarios:
-            return False
-        for scenario in scenarios:
-            if not scenario.group(1).strip() or not all(
-                re.search(rf"\b{keyword}\b[^\n]*\w", scenario.group(2))
-                for keyword in ("WHEN", "THEN")
-            ):
-                return False
-    return True
+        """Merge the change's delta requirements into registry/:
+        `multiplai_core.specs.merge_delta_requirements`."""
+        merge_delta_requirements(change_dir, self.registry_dir)

@@ -7,7 +7,7 @@ Two halves, both belonging to the same loop:
   crashed or interrupted build still leaves its learning on disk.
 - `run_respec_audit()` runs *after* the build (BuildPhase.RESPEC). It reads the
   notes plus the current requirements/design and writes `respec.md`: a proposed
-  delta in the same ADDED/MODIFIED/REMOVED format `change_manager._apply_delta`
+  delta in the same ADDED/MODIFIED/REMOVED format `multiplai_core.specs.apply_delta`
   applies.
 
 **Propose only.** `run_respec_audit` writes exactly one file — `respec.md` —
@@ -120,7 +120,7 @@ def merge_state_notes(notes_md: str, state) -> str:
 def ensure_delta_sections(text: str) -> str:
     """Guarantee respec.md carries all three delta headings.
 
-    `change_manager._apply_delta` keys off the ADDED/MODIFIED/REMOVED headings,
+    `multiplai_core.specs.apply_delta` keys off the ADDED/MODIFIED/REMOVED headings,
     so a proposal missing one reads as malformed rather than as "nothing
     proposed here". Missing sections are appended with an explicit empty body.
     """

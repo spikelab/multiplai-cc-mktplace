@@ -2,14 +2,15 @@
 
 For every `spec_change` verdict, and every `code_fix` whose fix contradicts the
 current spec (`Triage.spec_conflict`), one toolless `llm_call` per round writes
-a delta in the ADDED/MODIFIED/REMOVED form `ChangeManager._apply_delta` reads,
+a delta in the ADDED/MODIFIED/REMOVED form `multiplai_core.specs.apply_delta` reads,
 saved as `respec-findings-r<N>.md`. The pipeline applies it to the change's
-`requirements/<capability>.md` files and commits
+`requirements/<capability>.md` files with `_edit_change` below, not with
+`apply_delta`, and commits
 `spec(findings-r<N>): <ids>`, with or without `--auto`.
 
 A change's `requirements/<capability>.md` is itself a delta, split into
 `## ADDED/MODIFIED/REMOVED Requirements` sections, so each requirement is
-edited inside its section (`ChangeManager._apply_delta` is written for
+edited inside its section (`multiplai_core.specs.apply_delta` is written for
 registry files and would move later requirements across sections). When the
 change is archived, which an `--auto` build always does, its requirements
 were already merged into `specs/registry/<capability>.md`: the same edit is
