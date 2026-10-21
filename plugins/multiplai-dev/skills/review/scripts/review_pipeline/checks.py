@@ -23,6 +23,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .chunks import header_path
 from .gates import citation_gate
 from .models import Citation, CoverageRecord, TargetInfo
 from .stages import relative_path
@@ -97,7 +98,7 @@ def diff_hunks(diff: str) -> dict[str, list[tuple[int, int]]]:
     path = ""
     for line in diff.splitlines():
         if line.startswith("+++ "):
-            name = line[4:].strip()
+            name = header_path(line[4:])
             path = "" if name == "/dev/null" else (name[2:] if name.startswith("b/") else name)
             continue
         m = _HUNK.match(line)

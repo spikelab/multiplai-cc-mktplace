@@ -15,7 +15,6 @@ The resolver (`resolver`) places a citation's path at a commit: head lines at
 
 from __future__ import annotations
 
-import codecs
 import json
 import re
 from datetime import datetime, timezone
@@ -25,6 +24,7 @@ from typing import Literal
 from code_facts import Resolve, Scope, Side, Span
 from pydantic import Field
 
+from .chunks import header_path
 from .models import ExplainedFacts, TargetInfo
 
 CONTEXT_LINES = 20
@@ -39,13 +39,9 @@ _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 def _diff_path(name: str) -> str:
     """A path from a `---`/`+++` line: "" for /dev/null, quotes and the a/ or b/ prefix removed."""
-    name = name.rstrip("\n").split("\t", 1)[0].strip()
+    name = header_path(name.rstrip("\n"))
     if name == "/dev/null":
         return ""
-    if len(name) >= 2 and name.startswith('"') and name.endswith('"'):
-        # git quotes a path with unusual bytes as a C string with octal escapes.
-        raw = codecs.escape_decode(name[1:-1].encode("utf-8"))[0]
-        name = raw.decode("utf-8", errors="replace")
     return name[2:] if name[:2] in ("a/", "b/") else name
 
 

@@ -294,6 +294,98 @@ def test_head_changed_lines_count_hunk_lines_not_header_lookalikes_or_form_feeds
     assert head_changed_lines("") == {}
 
 
+# Every name git writes with a tab after it (a space) or C-quotes (a quote, tab, backslash or, with
+# core.quotePath on, a non-ASCII byte); the space at either end of a name is part of it.
+ODD_NAMES = ["has space.py", " leading.py", "trailing.py ", 'quo"te.py', "has\ttab.py", "back\\slash.py",
+             "café.py"]
+
+
+@pytest.fixture
+def odd_names_repo(tmp_path):
+    """(repo, base, head): each of ODD_NAMES edited, `deleted.py` deleted, `old name.py` renamed and edited."""
+    repo = tmp_path / "odd"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=repo, text=True, capture_output=True, check=True).stdout.strip()
+
+    git("init", "-q")
+    for name in ODD_NAMES:
+        (repo / name).write_text("first\nold\nlast\n")
+    (repo / "deleted.py").write_text("deleted\n")
+    (repo / "old name.py").write_text("".join(f"line {n}\n" for n in range(20)))
+    git("add", ".")
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    for name in ODD_NAMES:  # the added line reads like a header but is content
+        (repo / name).write_text("first\nnew\n++ b/header-lookalike.py\nlast\n")
+    (repo / "deleted.py").unlink()
+    git("mv", "old name.py", "new name.py")
+    (repo / "new name.py").write_text((repo / "new name.py").read_text().replace("line 5\n", "updated 5\n"))
+    git("add", "-A")
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "head")
+    return repo, base, git("rev-parse", "HEAD")
+
+
+def _odd_diff(repo, base, head, quote_path):
+    return subprocess.run(["git", "-c", f"core.quotePath={quote_path}", "diff", *target._DIFF_FLAGS, base, head],
+                          cwd=repo, text=True, capture_output=True, check=True).stdout
+
+
+@pytest.mark.parametrize("quote_path", ["true", "false"])
+def test_head_changed_lines_name_each_file_as_the_repository_does(odd_names_repo, quote_path):
+    diff = _odd_diff(*odd_names_repo, quote_path)
+    expected = {name: [2, 3] for name in ODD_NAMES} | {"new name.py": [6]}
+    assert new("chunks", "head_changed_lines")(diff) == expected
+
+
+@pytest.mark.parametrize("quote_path", ["true", "false"])
+def test_every_diff_reader_names_each_file_as_the_repository_does(odd_names_repo, quote_path):
+    from review_pipeline import checks, facts
+    from review_pipeline.chunks import diff_files
+    diff = _odd_diff(*odd_names_repo, quote_path)
+    edited = set(ODD_NAMES) | {"new name.py"}
+    assert {f.path for f in diff_files(diff)} == edited | {"deleted.py"}
+    renamed, = (f for f in diff_files(diff) if f.status == "renamed")
+    assert (renamed.base_path, renamed.head_path) == ("old name.py", "new name.py")
+    assert set(checks.diff_hunks(diff)) == edited
+    head, base = facts.diff_ranges(diff)
+    assert set(head) == edited
+    assert set(base) == set(ODD_NAMES) | {"old name.py", "deleted.py"}
+
+
+def test_an_entry_point_in_a_file_with_a_space_is_reachable_from_the_changed_lines(tmp_path):
+    from code_facts.entries import discover_entries
+    from code_facts.paths import normalise_changed_lines
+    from code_facts.pyindex import PyIndex
+    from code_facts.scope import select_for_trace
+    repo = tmp_path / "cli"
+    repo.mkdir()
+    script = ("import argparse\n\n\ndef main():\n    parser = argparse.ArgumentParser()\n"
+              "    parser.add_argument('--x', default={})\n    parser.parse_args()\n\n\n"
+              "if __name__ == '__main__':\n    main()\n")
+
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                              cwd=repo, text=True, capture_output=True, check=True).stdout.strip()
+
+    git("init", "-q")
+    (repo / "my tool.py").write_text(script.format(1))
+    git("add", ".")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (repo / "my tool.py").write_text(script.format(2))
+    git("commit", "-qam", "head")
+    diff = target.diff_text(repo, base, git("rev-parse", "HEAD"))
+    changed = normalise_changed_lines(repo, new("chunks", "head_changed_lines")(diff))
+    assert changed == {"my tool.py": frozenset({6})}
+    index = PyIndex.build(repo)
+    entries = discover_entries(repo, (), index=index).entries
+    assert [e.location.path for e in entries] and {e.location.path for e in entries} == {"my tool.py"}
+    kept, dropped = select_for_trace(entries, index=index, changed=changed, trace_limit=30)
+    assert kept == entries and dropped == []
+
+
 # --- the call to map_paths -----------------------------------------------------------------------------------
 
 
