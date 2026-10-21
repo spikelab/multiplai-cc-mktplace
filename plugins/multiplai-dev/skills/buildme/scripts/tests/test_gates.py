@@ -1480,9 +1480,16 @@ class TestFinalVerificationSubmodules:
         result = final_verification(self.PASS, project)
         assert result.passed, result.reason
 
-    def test_a_changed_file_in_a_nested_submodule_is_named(self, with_submodule, tmp_path):
+    def test_a_tracked_file_git_is_told_to_assume_unchanged_is_still_read(self, with_submodule):
         from build_pipeline.gates import final_verification
         project, _ = with_submodule
+        _git(project / "vendor", "update-index", "--assume-unchanged", "a.txt")
+        result = final_verification(_python("from pathlib import Path; Path('vendor/a.txt').write_text('changed')"), project)
+        assert not result.passed
+        assert result.metadata["changed_files"] == ["vendor"]
+
+    @staticmethod
+    def _nest(project, tmp_path):
         inner = tmp_path / "inner"
         _repo_with_one_file(inner, "inner\n")
         vendor = project / "vendor"
@@ -1490,9 +1497,33 @@ class TestFinalVerificationSubmodules:
         _git(vendor, "commit", "-qm", "add inner")
         _git(project, "add", "vendor")
         _git(project, "commit", "-qm", "move vendor")
+
+    def test_a_changed_file_in_a_nested_submodule_is_named(self, with_submodule, tmp_path):
+        from build_pipeline.gates import final_verification
+        project, _ = with_submodule
+        self._nest(project, tmp_path)
         assert final_verification(self.PASS, project).passed
         code = "from pathlib import Path; Path('vendor/inner/a.txt').write_text('changed')"
         result = final_verification(_python(code), project)
+        assert not result.passed
+        assert result.metadata["changed_files"] == ["vendor"]
+
+    @pytest.mark.parametrize("command", [
+        "deinit -f inner",
+        "update --init inner",
+    ])
+    def test_a_nested_submodule_removed_or_checked_out_by_the_command_is_named(self, with_submodule,
+                                                                               tmp_path, command):
+        from build_pipeline.gates import final_verification, verification_inputs
+        project, _ = with_submodule
+        self._nest(project, tmp_path)
+        if command.startswith("update"):
+            _git(project / "vendor", "submodule", "deinit", "-q", "-f", "inner")
+        assert verification_inputs(self.PASS, project) == verification_inputs(self.PASS, project)
+        assert final_verification(self.PASS, project).passed
+        argv = ["git", "-C", "vendor", "-c", "protocol.file.allow=always", "submodule", *command.split()]
+        result = final_verification(_python(f"import subprocess; subprocess.run({argv!r}, check=True)"), project)
+        assert (project / "vendor/inner/a.txt").is_file() == command.startswith("update")
         assert not result.passed
         assert result.metadata["changed_files"] == ["vendor"]
 

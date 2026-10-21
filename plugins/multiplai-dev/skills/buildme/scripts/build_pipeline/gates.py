@@ -1543,11 +1543,11 @@ def _path_inputs(root: Path, names: Sequence[str], index: dict[str, str]) -> dic
 
 def _checkout_input(path: Path, name: str, index_entry: str) -> str:
     """A directory Git lists as one path: a submodule, or a repository nested
-    untracked. A checkout gives its HEAD and a hash of its index and of each
-    uncommitted path's content, nested submodules included; Git's own ignore
-    settings for submodules are overridden, and nothing in it is written. An
-    empty directory at a gitlink (mode 160000) is "gitlink:uninitialized". Any
-    other directory raises: its content cannot be told apart from a checkout's."""
+    untracked. A checkout gives its HEAD and a hash of its index and of the
+    content of every path it lists as the project's own check does, each nested
+    submodule included; nothing in it is written. An empty directory at a
+    gitlink (mode 160000) is "gitlink:uninitialized". Any other directory
+    raises: its content cannot be told apart from a checkout's."""
     import hashlib
     import json
     from . import git_ops
@@ -1567,10 +1567,9 @@ def _checkout_input(path: Path, name: str, index_entry: str) -> str:
     index = git_ops.index_entries(path)
     if index is None:
         raise RuntimeError(f"{name} is a checkout whose index Git cannot read")
-    scope = ["--", ".", *git_ops.BOOKKEEPING_EXCLUDES]
-    changed = read("diff", "HEAD", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", *scope)
-    untracked = read("ls-files", "--others", "--exclude-standard", "-z", *scope)
-    files = _path_inputs(path, (changed + untracked).split("\0"), index)
+    listed = read("ls-files", "--cached", "--others", "--exclude-standard", "-z",
+                  "--", ".", *git_ops.BOOKKEEPING_EXCLUDES)
+    files = _path_inputs(path, listed.split("\0"), index)
     content = json.dumps({"files": files, "index": index}, sort_keys=True).encode()
     return f"checkout:{head}:" + hashlib.sha256(content).hexdigest()
 

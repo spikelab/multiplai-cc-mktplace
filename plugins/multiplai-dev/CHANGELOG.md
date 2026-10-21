@@ -15,14 +15,15 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.96.3] - 2026-10-20
+## [0.96.3] - 2026-10-21
 
 ### Fixed
 - buildme: a project with a Git submodule no longer fails its final check with
   `Final verification unavailable: ... Is a directory`. The check now records a
-  checked-out submodule's commit, index and uncommitted files, so the suite
-  passes when the submodule is left alone and fails, naming it, when the test
-  command changes it, even with `submodule.<name>.ignore` set. An uninitialized
+  checked-out submodule's commit, index and every file it tracks or holds
+  untracked, nested submodules included. The check passes when the test
+  command leaves the submodule alone, and fails, naming it, when the command
+  changes it, even with `submodule.<name>.ignore` set. An uninitialized
   submodule passes; a submodule directory holding files without a checkout
   fails the check as unavailable. A repository nested untracked inside the
   project is checked the same way.
