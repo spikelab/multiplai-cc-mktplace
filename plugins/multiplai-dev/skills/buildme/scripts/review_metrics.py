@@ -11,11 +11,13 @@ For each change directory it reports, per block:
 - the round of the first ``review`` record whose gate passed, or ``none``;
 - the accepted and rejected findings of every round;
 - for each finding accepted in round 2 or later that names a file and a line,
-  where that line came from. ``git blame`` at that round's ``head_sha`` names
-  the commit that wrote the line; when that commit is an ancestor of round
-  1's ``head_sha`` the line was ``present at first review``, otherwise it was
-  ``written by a fix``. A failed git command, or a missing ``head_sha``, gives
-  ``unknown``.
+  where that line came from. ``git blame`` at that round's ``reviewed_sha``
+  names the commit that wrote the line; when that commit is an ancestor of
+  round 1's ``reviewed_sha`` the line was ``present at first review``,
+  otherwise it was ``written by a fix``. A failed git command, or a missing
+  ``reviewed_sha``, gives ``unknown``: a reviewer that read uncommitted code
+  has none, and neither has a record written before buildme checked that
+  (0.96.6), whose ``head_sha`` may name a tree other than the one reviewed.
 
 The totals line gives the mean rounds-to-pass, the share of blocks passing at
 round 1, and the share of round-2+ findings present at first review, over all
@@ -62,8 +64,8 @@ class Record:
         return str(self.data.get("kind") or "")
 
     @property
-    def head_sha(self) -> str | None:
-        sha = self.data.get("head_sha")
+    def reviewed_sha(self) -> str | None:
+        sha = self.data.get("reviewed_sha")
         return sha if isinstance(sha, str) and sha else None
 
     def findings(self, key: str) -> list[dict]:
@@ -183,14 +185,14 @@ def measure_block(block: int, records: list[Record], project: Path | None) -> Bl
     records = sorted(records, key=lambda r: r.round)
     metrics = BlockMetrics(block=block, records=records)
     first = next((r for r in records if r.round == 1), None)
-    first_head = first.head_sha if first else None
+    first_head = first.reviewed_sha if first else None
     for record in records:
         if record.round < 2:
             continue
         for finding in record.findings("accepted"):
             where = _location(finding)
             origin = NO_LINE if where is None else line_origin(
-                project, *where, record.head_sha, first_head)
+                project, *where, record.reviewed_sha, first_head)
             metrics.origins[origin] += 1
             if record.kind == "review":
                 metrics.review_origins[origin] += 1

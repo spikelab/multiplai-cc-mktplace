@@ -927,22 +927,74 @@ def is_ancestor_of_head(repo: Path | str, sha: str) -> bool:
     return res.returncode == 0
 
 
-def tree_is_clean(repo: Path | str, ignore: Path | str | None = None) -> bool:
+def tree_is_clean(repo: Path | str, ignore: Path | str | None = None,
+                  every_submodule: bool = False) -> bool:
     """True when *repo* holds nothing but buildme's own bookkeeping.
 
     Used only to decide whether HEAD is a faithful snapshot to discard back
-    to. Returns False when git could not be asked — "unknown" must never be
+    to, and (`tdd_engine._reviewed_revision`) whether it is the tree a review
+    read. Returns False when git could not be asked — "unknown" must never be
     read as "safe to reset", because a reset over uncommitted work destroys it.
     *ignore*, a directory relative to *repo*, is left out of the check too.
+    With *every_submodule*, a submodule whose `ignore` setting hides it from
+    `git status` is checked too.
     """
     excludes = list(BOOKKEEPING_EXCLUDES)
     if ignore is not None:
         excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
-    res = _run(["git", "status", "--porcelain", "--", ".", *excludes], cwd=repo)
+    submodules = ["--ignore-submodules=none"] if every_submodule else []
+    res = _run(["git", "status", "--porcelain", *submodules, "--", ".", *excludes], cwd=repo)
     if not res.ok:
         log.warning("git status failed: %s", res.stderr.strip())
         return False
     return not res.stdout.strip()
+
+
+def unchecked_files(repo: Path | str, ignore: Path | str | None = None) -> list[str] | None:
+    """The entries under *repo* whose index tells git not to look at them
+    (`assume-unchanged` or `skip-worktree`), so `git status` would not show an
+    edit to them: files and gitlink entries, in *repo*'s index and in the
+    index of every initialized submodule below it, nested ones included
+    (`vendor/inner/a.py`, `vendor/inner`). Bookkeeping and *ignore* are left
+    out of *repo*'s own index, as in `tree_is_clean`. None when an index could
+    not be read, a submodule directory holds files but no checkout git can
+    read, or the filesystem refused a look (an unreadable submodule directory,
+    say). Read-only: it only lists."""
+    excludes = list(BOOKKEEPING_EXCLUDES)
+    if ignore is not None:
+        excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
+    try:
+        return _unchecked_in(Path(repo), excludes, "")
+    except OSError as exc:
+        log.info("Could not inspect the index under %s: %s", repo, exc)
+        return None
+
+
+def _unchecked_in(repo: Path, excludes: list[str], prefix: str) -> list[str] | None:
+    result = _run(["git", "ls-files", "-v", "-s", "-z", "--", ".", *excludes], cwd=repo)
+    if not result.ok:
+        return None
+    found: list[str] = []
+    for entry in filter(None, result.stdout.split("\0")):
+        # `<tag> <mode> <sha> <stage>\t<path>`; `-v` writes a lowercase tag for
+        # assume-unchanged and S for skip-worktree.
+        identity, name = entry.split("\t", 1)
+        tag, mode = identity.split(" ", 2)[:2]
+        if (tag.islower() or tag == "S") and prefix + name not in found:
+            found.append(prefix + name)
+        path = repo / name
+        if mode != "160000" or path.is_symlink() or not path.is_dir():
+            continue
+        top = _run(["git", "rev-parse", "--show-toplevel"], cwd=path)
+        if not (top.ok and Path(top.stdout.strip()).resolve() == path.resolve()):
+            if any(path.iterdir()):
+                return None
+            continue  # an uninitialized submodule: nothing checked out to hide
+        below = _unchecked_in(path, list(BOOKKEEPING_EXCLUDES), f"{prefix}{name}/")
+        if below is None:
+            return None
+        found += [n for n in below if n not in found]
+    return found
 
 
 def index_entries(repo: Path | str, ignore: Path | str | None = None) -> dict[str, str] | None:

@@ -95,6 +95,8 @@ def record_round(
     block: BlockInfo,
     *,
     head_sha: str | None,
+    reviewed_sha: str | None = None,
+    reviewed_sha_unknown: str | None = None,
     review: ReviewResult,
     gate_passed: bool,
     gate_reason: str,
@@ -118,7 +120,12 @@ def record_round(
     findings at the indices *new_open*; with *new_open* None, as in round 1,
     it is every accepted finding. ``outside_fix_scope`` holds the accepted
     findings at the indices *outside*: a label, since they are in
-    ``open_findings`` too."""
+    ``open_findings`` too.
+
+    *reviewed_sha* is the commit whose tree the reviewer read, or None when
+    that is not known (``reviewed_sha_unknown`` says why); *head_sha* is HEAD
+    when the record was written, which may hold less than the reviewer saw.
+    A record written before 0.96.6 has no ``reviewed_sha`` key."""
     directory = reviews_dir(change_dir)
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -133,6 +140,8 @@ def record_round(
         "block": {"number": block.number, "name": block.name},
         "round": k,
         "head_sha": head_sha,
+        "reviewed_sha": reviewed_sha,
+        **({} if reviewed_sha else {"reviewed_sha_unknown": reviewed_sha_unknown or "not checked"}),
         "scores": [s.model_dump(mode="json") for s in review.scores],
         "weighted_average": weighted_average,
         "gate": {"passed": gate_passed, "reason": gate_reason},
