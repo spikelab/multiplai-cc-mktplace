@@ -20,6 +20,13 @@ from build_pipeline.models import ArtifactStatus, BuildPhase
 from build_pipeline.state import BuildState, SpecGenState
 
 
+def _resolved(*ids):
+    """A recheck's answer that finds nothing new and calls each listed finding resolved."""
+    from build_pipeline.llm_steps.spec_steps import AuditFindings
+    from build_pipeline.models import PriorAssessment
+    return AuditFindings([], [PriorAssessment(finding_id=i, status="resolved") for i in ids])
+
+
 # --- Capability extraction ---
 
 class TestExtractCapabilities:
@@ -469,7 +476,7 @@ class TestTasksShapeAudit:
              patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
             mock_gen.side_effect = ["## 1. Schema layer", "## 1. Vertical slice A"]
-            mock_audit.side_effect = [[_LAYERING_FINDING], []]
+            mock_audit.side_effect = [[_LAYERING_FINDING], _resolved("TA-F1")]
 
             await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
@@ -700,7 +707,7 @@ class TestDesignAuditFeedback:
              patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.git_ops.commit_stage") as mock_commit:
             # First pass finds the gap; the report-only re-check finds nothing.
-            mock_audit.side_effect = [[_CRITICAL_GAP, _MINOR_GAP], []]
+            mock_audit.side_effect = [[_CRITICAL_GAP, _MINOR_GAP], _resolved("DA-F1")]
             mock_gen.side_effect = ["# Design v2", "## 1. Block v2"]
 
             gaps = await run_design_audit_stage(
@@ -741,7 +748,7 @@ class TestDesignAuditFeedback:
         with patch("build_pipeline.llm_steps.spec_steps.run_design_audit", new_callable=AsyncMock) as mock_audit, \
              patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.git_ops.commit_stage"):
-            mock_audit.side_effect = [[_MAJOR_GAP], []]
+            mock_audit.side_effect = [[_MAJOR_GAP], _resolved("DA-F1")]
             mock_gen.side_effect = ["# Design v2", "## 1. Block v2"]
 
             await run_design_audit_stage(
@@ -893,7 +900,7 @@ class TestDesignAuditFeedback:
         with patch("build_pipeline.llm_steps.spec_steps.run_design_audit", new_callable=AsyncMock) as mock_audit, \
              patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.git_ops.commit_stage"):
-            mock_audit.side_effect = [[_CRITICAL_GAP], []]
+            mock_audit.side_effect = [[_CRITICAL_GAP], _resolved("DA-F1")]
             mock_gen.side_effect = ["# Design v2", "## 1. Block v2"]
 
             await run_design_audit_stage(
@@ -2073,7 +2080,7 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
              patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
             mock_gen.side_effect = [first, rewritten]
-            mock_audit.side_effect = [[model_finding], []]
+            mock_audit.side_effect = [[model_finding], _resolved("TA-F1")]
 
             await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
@@ -2114,7 +2121,7 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
              patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
              patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
             mock_gen.side_effect = [first, rewritten]
-            mock_audit.side_effect = [[finding], []]
+            mock_audit.side_effect = [[finding], _resolved("TA-F1")]
 
             await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 

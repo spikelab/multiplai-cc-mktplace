@@ -490,6 +490,8 @@ class PlanReviewResult(BaseModel):
     """Structured output of one PLAN_REVIEW pass."""
 
     findings: list[PlanReviewFinding] = Field(default_factory=list)
+    # Filled only by a recheck: a status for each finding the rewrite was asked to fix.
+    prior_assessments: list[PriorAssessment] = Field(default_factory=list)
 
 
 class GateResult(BaseModel):

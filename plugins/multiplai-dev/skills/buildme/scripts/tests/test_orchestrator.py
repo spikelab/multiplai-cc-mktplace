@@ -626,7 +626,9 @@ class TestPrototypePhase:
                    new_callable=AsyncMock) as mock_audit, \
                 patch("build_pipeline.llm_steps.spec_steps.generate_artifact",
                       new_callable=AsyncMock) as mock_gen:
-            mock_audit.side_effect = [[gap], []]
+            from build_pipeline.llm_steps.spec_steps import AuditFindings
+            from build_pipeline.models import PriorAssessment
+            mock_audit.side_effect = [[gap], AuditFindings([], [PriorAssessment(finding_id="DA-F1", status="resolved")])]
             mock_gen.side_effect = ["## Decisions\nv2", "## 1. Block v2"]
             result = await run_orchestrator(config, self._args(tmp_path, "audit-loop"))
 

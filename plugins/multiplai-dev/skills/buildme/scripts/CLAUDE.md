@@ -138,6 +138,27 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   phase checks as proof. The phase still describes progress.
 - **Bounded repair can fail.** Required review errors or remaining blocking
   findings leave resumable blocked evidence. Never log failure and mark it passed.
+  Each of tasks_audit, design_audit, plan_review and prototype gets one
+  rewrite. Its findings are numbered (`number_findings`, `<TA|DA|PR|PT>-F<n>`)
+  and saved in `StepOutcome.repair_findings` in the checkpoint that admits the
+  rewrite (`admit_repair`). The audit after the rewrite is given them (`prior=`,
+  `prompts.design_audit.prior_findings_section`) and answers a status for each
+  in `prior_assessments`; a first audit still answers a bare list.
+  `recheck_verdict` decides: a listed finding not `resolved` (no status is
+  `cannot_verify`) blocks, a new finding blocks only when critical or
+  `no-new-behaviour`, the deterministic scans' findings always block (their own
+  listed findings, `source: scan`, are resolved when the scans find nothing),
+  and the rest are advisory (`record_advisory`, `<STEP>_ADVISORY`). Only the
+  audit after a rewrite uses it; a first audit blocks on critical and major.
+  `rewrite_plan` raises `PlanRepairRejected` with the findings it acted on,
+  never discards them. A block on findings (`block_on_findings`) saves
+  `blocked_revision`; a resume at that revision refuses with no model call
+  (`refuse_if_blocked`, ending with `REOPEN_LINE`), and one at another revision
+  (the user edited the plan) resets the count and clears both fields
+  (`reopen_if_edited`). A block caused by an error sets no `blocked_revision`,
+  so its resume re-audits. `rewrite_published` tells a resume after a published
+  rewrite from one before it with no extra state: the step's recorded revision
+  is the admission's, and the plan has moved past it.
 - **Ignore generated test reports.** Projects put reports in `.gitignore`.
   Gitignored files stay out of verification, clean-tree checks and commits;
   tracked files remain inputs. Commits never run test commands. Final verification
@@ -355,9 +376,12 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   cap (30) is part of the same bound: enough to open a neighbour and grep for a
   name the plan claims exists, not enough to wander.
 - **PLAN_REVIEW requests at most one owner repair.** Model and deterministic
-  findings share that bound; the required recheck blocks unresolved major
-  findings. `steps.plan_review.repair_attempts` records repair admission; its
-  revision-bound outcome records success. Revalidate both required audits after
+  findings share that bound; the recheck after it applies `recheck_verdict` to
+  the listed findings (the model is asked only about its own; the
+  deterministic ones are rechecked by the scans). `steps.plan_review.repair_attempts`
+  records repair admission, `repair_findings` the listed findings and their
+  statuses, `blocked_revision` a final block; its revision-bound outcome
+  records success. Revalidate both required audits after
   a repair, including any audit invalidated by a later review. `oversized-plan` proposes a split for the size
   gate and never silently restructures a plan.
 

@@ -190,7 +190,7 @@ async def test_cancelled_standalone_tdd_persists_current_spend(accepted_build, m
 
 @pytest.mark.asyncio
 async def test_plan_review_repair_revalidates_design_before_spec_only_success(accepted_build, monkeypatch):
-    from build_pipeline.models import PlanReviewFinding, PlanReviewResult
+    from build_pipeline.models import PlanReviewFinding, PlanReviewResult, PriorAssessment
     from build_pipeline.state import completed_state_path
     config, state, args, _ = accepted_build
     config.spec_only = True
@@ -205,7 +205,8 @@ async def test_plan_review_repair_revalidates_design_before_spec_only_success(ac
     monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.run_tasks_audit", AsyncMock(return_value=[]))
     repair = PlanReviewFinding(category="use-case-coverage", severity="major", file_path="tasks.md",
                                location="block 1", claim="Missing case", reason="Cover the case")
-    review = AsyncMock(side_effect=[PlanReviewResult(findings=[repair]), PlanReviewResult(findings=[])])
+    review = AsyncMock(side_effect=[PlanReviewResult(findings=[repair]), PlanReviewResult(
+        findings=[], prior_assessments=[PriorAssessment(finding_id="PR-F1", status="resolved")])])
     monkeypatch.setattr("build_pipeline.llm_steps.plan_review_steps.run_plan_review", review)
     monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.generate_artifact", AsyncMock(return_value="## 1. Value\nReturn one including the missing case"))
     monkeypatch.setattr("build_pipeline.spec_generator.generate_rubric", AsyncMock(return_value="# Updated rubric"))

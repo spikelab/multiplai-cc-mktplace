@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 
 from ..models import PlanReviewFinding, PlanReviewResult
+from ..prompts.design_audit import prior_findings_section
 from ..prompts.plan_review import NO_USE_CASES, PLAN_REVIEW_PROMPT
 from ..sdk import agent_call_structured
 
@@ -341,12 +342,14 @@ async def run_plan_review(
     config,
     *,
     split_context: str = "",
+    prior: list[dict] | None = None,
 ) -> PlanReviewResult:
     """Review tasks.md against the rubric, the constraints and the use cases.
 
     Runs as a read-only subagent on `config.model_for("plan_review")` and
     `config.effort_for("plan_review")`. Returns the findings; raises whatever `agent_call_structured`
-    raises (the required stage records a blocked outcome).
+    raises (the required stage records a blocked outcome). With `prior` (the
+    findings a rewrite was asked to fix) it also asks for a status for each.
     """
     use_cases = _read(change_dir / "use-cases.md", NO_USE_CASES)
 
@@ -359,7 +362,7 @@ async def run_plan_review(
         split_context=split_context,
         block_trigger=getattr(config, "plan_split_block_trigger", 10),
         package_trigger=getattr(config, "plan_split_package_trigger", 5),
-    )
+    ) + prior_findings_section(prior)
 
     model = config.model_for("plan_review")
     effort = config.effort_for("plan_review")
@@ -377,27 +380,43 @@ async def run_plan_review(
     )
 
 
-def plan_review_findings_text(findings: list[PlanReviewFinding]) -> str:
-    """The findings block injected into the single tasks.md regeneration.
-
-    Empty string when nothing actionable survives the filter — the caller reads
-    that as "report only, nothing to regenerate". `oversized-plan` never
-    survives it: that finding is a proposal for a human, not an instruction for
-    a rewriter (see PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES).
-    """
-    actionable = [
+def plan_review_actionable(findings: list[PlanReviewFinding]) -> list[PlanReviewFinding]:
+    """The findings that earn the rewrite: critical or major, and never
+    `oversized-plan`, a proposal for a human, not an instruction for a
+    rewriter (see PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES)."""
+    return [
         f for f in findings or []
         if f.severity in PLAN_REVIEW_ACTIONABLE
         and f.category not in PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES
     ]
+
+
+def _finding_line(f: PlanReviewFinding) -> str:
+    return (f"{f.file_path}" + (f" @ {f.location}" if f.location else "") + f": {f.claim}"
+            + (f" Reason: {f.reason}" if f.reason else ""))
+
+
+def finding_dicts(findings: list[PlanReviewFinding]) -> list[dict]:
+    """Plan review findings in the shape the recheck and the checkpoint use."""
+    return [{"category": f.category, "severity": f.severity, "text": _finding_line(f)} for f in findings]
+
+
+def plan_review_findings_text(findings: list[PlanReviewFinding], *, ids: list[str] | None = None) -> str:
+    """The findings block injected into the single tasks.md regeneration.
+
+    Empty string when nothing actionable survives the filter — the caller reads
+    that as "report only, nothing to regenerate". `oversized-plan` never
+    survives it (`plan_review_actionable`). With `ids` (one per actionable
+    finding, in order) each line starts with its finding's id.
+    """
+    actionable = plan_review_actionable(findings)
     if not actionable:
         return ""
+    ids = list(ids or [])
     return "\n".join(
-        f"- [{f.severity}] ({f.category}) {f.file_path}"
-        + (f" @ {f.location}" if f.location else "")
-        + f": {f.claim}"
-        + (f" Reason: {f.reason}" if f.reason else "")
-        for f in actionable
+        "- " + (f"{ids[n]} " if n < len(ids) else "")
+        + f"[{f.severity}] ({f.category}) " + _finding_line(f)
+        for n, f in enumerate(actionable)
     )
 
 
@@ -445,43 +464,76 @@ async def run_plan_review_stage(
     """Run the plan review and fold its findings back into tasks.md.
 
     Blocking findings request one staged rewrite through the planning owner,
-    then a required recheck of that revision. Unresolved findings and failed
+    then a required recheck of that revision, which is given the findings the
+    rewrite was asked to fix and blocks on any not `resolved`, and on new
+    critical findings (`recheck_verdict`). Unresolved findings and failed
     review calls record a blocked outcome and raise; they cannot authorize TDD.
     """
-    from ..spec_generator import reconcile_plan, rewrite_plan, record_blocked_review
+    from ..spec_generator import (
+        PlanBlocked, PlanRepairRejected, assess_listed, block_on_findings, from_scans, log_findings,
+        model_listed, number_findings, open_findings, reconcile_plan, record_advisory, record_blocked_review,
+        recheck_verdict, refuse_if_blocked, reopen_if_edited, rewrite_plan, rewrite_published, saved_findings,
+        scan_assessments,
+    )
+    name = "plan_review"
+    reason = "Plan review still has blocking findings after bounded repair"
     reconcile_plan(config, state)
     sg = state.spec_gen
     assert sg is not None
-    if sg.step_passed("plan_review"):
+    if sg.step_passed(name):
         return []
-    previous = sg.steps.get("plan_review")
-    if previous and previous.revision == sg.step_revision("plan_review") and previous.blocking_findings:
-        raise RuntimeError(previous.reason)
-    text = ""
-    findings_revision = sg.step_revision("plan_review")
+    reopen_if_edited(state, name, state_path)
+    refuse_if_blocked(sg, name)
+    admitted = sg.steps[name].revision if rewrite_published(sg, name) else None
     try:
-        result = await run_plan_review(change_dir, config, split_context=_split_context(config, change_dir))
-        findings = list(result.findings) + _no_behaviour_findings(change_dir)
-        text = plan_review_findings_text(findings)
-        if text and not sg.repair_attempts("plan_review"):
-            sg.admit_repair("plan_review")
-            state.checkpoint(state_path)
-            await rewrite_plan(config, state, text)
-            text = ""  # The old findings do not describe the published revision.
-            findings_revision = sg.step_revision("plan_review")
+        if admitted is None:
             result = await run_plan_review(change_dir, config, split_context=_split_context(config, change_dir))
-            findings = list(result.findings) + _no_behaviour_findings(change_dir)
-            text = plan_review_findings_text(findings)
+            scanned = _no_behaviour_findings(change_dir)
+            findings = list(result.findings) + scanned
+            log_plan_review_findings(findings)
+            actionable = plan_review_actionable(findings)
+            if not actionable:
+                sg.record_step(name)
+                state.checkpoint(state_path)
+                return findings
+            if sg.repair_attempts(name):
+                block_on_findings(config, state, state_path, name, reason, open_findings(finding_dicts(actionable)))
+                raise PlanBlocked(reason)
+            numbered = number_findings(name, [
+                *finding_dicts(plan_review_actionable(result.findings)),
+                *from_scans(finding_dicts(plan_review_actionable(scanned)))])
+            sg.admit_repair(name, saved_findings(numbered))
+            state.checkpoint(state_path)
+            admitted = sg.steps[name].revision
+            await rewrite_plan(config, state, plan_review_findings_text(
+                actionable, ids=[f["finding_id"] for f in numbered]), step=name)
+        listed = sg.steps[name].repair_findings
+        result = await run_plan_review(change_dir, config, split_context=_split_context(config, change_dir),
+                                       prior=model_listed(listed) or None)
+        scanned = finding_dicts(_no_behaviour_findings(change_dir))
+        findings = list(result.findings) + _no_behaviour_findings(change_dir)
         log_plan_review_findings(findings)
-        if text:
-            raise RuntimeError("Plan review still has blocking findings after bounded repair")
-        sg.record_step("plan_review")
+        new = [f for f in result.findings if f.category not in PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES]
+        given = list(result.prior_assessments) + scan_assessments(listed, scanned)
+        blocking, advisory = recheck_verdict(listed, given, finding_dicts(new), deterministic=scanned)
+        sg.steps[name].repair_findings = saved_findings(assess_listed(listed, given))
+        log_findings(name, "listed", sg.steps[name].repair_findings)
+        record_advisory(config, name, advisory)
+        if blocking:
+            block_on_findings(config, state, state_path, name, reason, blocking)
+            raise PlanBlocked(reason)
+        sg.record_step(name)
         state.checkpoint(state_path)
         return findings
+    except PlanBlocked:
+        raise
+    except PlanRepairRejected as rejection:
+        record_advisory(config, name, rejection.advisory)
+        block_on_findings(config, state, state_path, name, str(rejection), rejection.blocking)
+        raise
     except BaseException as error:
-        record_blocked_review(config, state, state_path, "plan_review",
-                              str(error) or type(error).__name__,
-                              text if findings_revision == sg.step_revision("plan_review") else "")
+        record_blocked_review(config, state, state_path, name, str(error) or type(error).__name__, "",
+                              revision=admitted)
         raise
 
 

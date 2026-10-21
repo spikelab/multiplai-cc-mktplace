@@ -224,3 +224,49 @@ If the breakdown is properly sliced into vertical slices, return an empty array:
 
 Flag shape problems only — not naming style, granularity taste, or block count.
 """
+
+
+# Appended to the design audit, the tasks audit and the plan review when they
+# recheck a rewrite (`prior_findings_section`), and only then: a first audit's
+# prompt is unchanged. The status wording is the per-block reviewer's
+# (`prompts/review.py`), adapted to plan documents.
+PRIOR_FINDINGS_SECTION = """
+
+## Findings the rewrite was asked to fix
+
+These documents were rewritten to fix the findings below.
+
+{prior_findings}
+
+For each finding listed here, give its status with the lines of the documents
+that show it. The status is `resolved`, `still_present`, `partially_resolved`
+or `cannot_verify`, and it goes in `prior_assessments` with the finding's
+`finding_id`. Report every other problem in `findings`, as above.
+
+Return one JSON object holding both lists. Where the format above asks for a
+bare array, that array becomes the value of `findings`:
+
+```json
+{{
+  "findings": [],
+  "prior_assessments": [
+    {{
+      "finding_id": "DA-F1",
+      "status": "resolved | still_present | partially_resolved | cannot_verify",
+      "evidence": "The lines of the documents that show the status"
+    }}
+  ]
+}}
+```
+"""
+
+
+def prior_findings_section(prior: list[dict] | None) -> str:
+    """The recheck section for these listed findings; empty for none."""
+    if not prior:
+        return ""
+    lines = "\n".join(
+        f"- {f.get('finding_id', '?')} [{f.get('severity', '?')}] ({f.get('category', '?')}) {f.get('text', '')}"
+        for f in prior
+    )
+    return PRIOR_FINDINGS_SECTION.format(prior_findings=lines)

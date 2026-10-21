@@ -495,10 +495,15 @@ generation (via change_manager) including the unknowns/explainer pass, the
 design audit — which critiques the specs for consistency *and* plan quality
 (over-engineering, task granularity, testability, uncovered edge cases) and
 folds every critical/major gap back into one regeneration pass of `design.md`
-and `tasks.md` before re-auditing once; unresolved blockers stop the run. The plan review
+and `tasks.md` before re-auditing once. The plan review
 reads `tasks.md` against the rubric, the constraints and the use cases and
-regenerates `tasks.md` at most once. Prototype feedback precedes these final
-checks. TDD implementation (test-writer + implementer agents per block),
+regenerates `tasks.md` at most once. Each re-audit is told which findings the
+rewrite was asked to fix and stops the run when one is not `resolved` or when
+it finds a new critical problem; new major and minor findings are reported
+only. A stopped step prints those findings with their statuses. Resuming
+without editing the plan stops again at no cost; editing the plan gives the
+step one more rewrite. Prototype feedback precedes these final checks and gets
+one rewrite too. TDD implementation (test-writer + implementer agents per block),
 integration gates, scored quality reviews, entry point verification, the
 documentation update, the respec proposal, and publishing (push + draft PR).
 
