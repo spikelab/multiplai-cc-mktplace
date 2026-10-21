@@ -172,7 +172,8 @@ def _entries_block(state: WalkState) -> list[str]:
     out = []
     for p in main_first(state):
         e = p.entry
-        out.append(f"- entry point [{p.id}] `{e.name}` ({e.kind}), invoked by {e.invoked_by}; {len(p.hops)} hop(s)")
+        out.append(f"- entry point `{e.name}` ({e.kind}, path {p.id}), invoked by {e.invoked_by}; {len(p.hops)} "
+                   f"hop(s), cited as [[{hop_id(p.id, 1)}]] onwards")
     return out
 
 
