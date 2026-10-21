@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import os
 import shutil
@@ -35,6 +36,25 @@ def argparse_entries(disc, path=None):
 
 def by_name(entries):
     return {e.name: e for e in entries}
+
+
+def add_parser_line(src: str, name: str) -> int:
+    """The line of the `add_parser(name, ...)` call in `src`, found by AST.
+
+    A text search for `add_parser("name"` misses a call the formatter has
+    wrapped across lines; the extractor reports the call's own line.
+    """
+    for node in ast.walk(ast.parse(src)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add_parser"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == name
+        ):
+            return node.lineno
+    raise AssertionError(f"no add_parser({name!r}, ...) call in source")
 
 
 def edges(entry):
@@ -873,7 +893,7 @@ class TestPrPipelineShapes:
         for name in ("open", "edit", "render"):
             e = found[name]
             def_line = line_of(commands_src, f"def cmd_{name}(")
-            assert e.location.line == line_of(main_src, f'add_parser("{name}"')
+            assert e.location.line == add_parser_line(main_src, name)
             assert (e.handler.path, e.handler.line, e.handler.symbol) == (
                 "scripts/pr_pipeline/commands.py",
                 def_line,
