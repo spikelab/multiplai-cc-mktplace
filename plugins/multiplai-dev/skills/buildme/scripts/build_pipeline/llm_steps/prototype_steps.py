@@ -124,26 +124,36 @@ def read_prototype_notes(prototype_dir: Path) -> dict[str, str]:
     return parse_prototype_notes(notes_path.read_text())
 
 
-def prototype_findings_text(notes: dict[str, str]) -> str:
+def prototype_findings(notes: dict[str, str]) -> list[dict]:
+    """The notes' DISPROVES and OPEN QUESTIONS slots as findings for the one
+    design/tasks rewrite (empty when neither has content)."""
+    findings = []
+    if slot_has_content(notes.get("disproves")):
+        findings.append({
+            "category": "prototype-disproves", "severity": "major",
+            "description": f"The prototype disproved part of the current design: {notes['disproves'].strip()}",
+            "suggestion": "change the design/tasks to match what the prototype showed."})
+    if slot_has_content(notes.get("open_questions")):
+        findings.append({
+            "category": "prototype-open-questions", "severity": "minor",
+            "description": f"The prototype left open questions: {notes['open_questions'].strip()}",
+            "suggestion": "decide each one explicitly in the document rather than leaving it for the implementer."})
+    return findings
+
+
+def prototype_findings_text(notes: dict[str, str], findings: list[dict] | None = None) -> str:
     """The audit-findings block fed back into design/tasks regeneration.
 
     Empty string when the prototype surfaced nothing actionable — the caller
-    treats that as "no regeneration needed".
+    treats that as "no regeneration needed". `findings` are the notes'
+    findings with ids (`spec_generator.number_findings`); each line then
+    starts with its finding's id.
     """
-    parts = []
-    if slot_has_content(notes.get("disproves")):
-        parts.append(
-            "- [major] The prototype disproved part of the current design: "
-            f"{notes['disproves'].strip()} "
-            "Fix: change the design/tasks to match what the prototype showed."
-        )
-    if slot_has_content(notes.get("open_questions")):
-        parts.append(
-            "- [minor] The prototype left open questions: "
-            f"{notes['open_questions'].strip()} "
-            "Fix: decide each one explicitly in the document rather than "
-            "leaving it for the implementer."
-        )
+    parts = [
+        "- " + (f"{f['finding_id']} " if f.get("finding_id") else "")
+        + f"[{f['severity']}] {f['description']} Fix: {f['suggestion']}"
+        for f in (prototype_findings(notes) if findings is None else findings)
+    ]
     if slot_has_content(notes.get("proves")):
         parts.append(
             "- [note] The prototype established this shape — keep the design "
@@ -179,12 +189,38 @@ def primary_prototype_artifact(prototype_dir: Path) -> Path | None:
 
 
 async def apply_prototype_findings(config, state=None) -> int:
-    """Send prototype feedback to the planning owner for one coherent revision."""
-    from ..spec_generator import rewrite_plan, _load_or_create_state
-    findings = prototype_findings_text(read_prototype_notes(config.prototype_dir))
-    if not findings:
+    """Send prototype feedback to the planning owner for one coherent revision.
+
+    The prototype gets one rewrite, like the audits: its numbered findings are
+    saved as it is admitted, and a resume after that records the step blocked
+    on them instead of rewriting again. A rewrite that still has blocking
+    findings is recorded blocked on them.
+    """
+    from ..spec_generator import (
+        PlanBlocked, PlanRepairRejected, _load_or_create_state, block_on_findings, number_findings,
+        record_advisory, rewrite_plan, saved_findings,
+    )
+    notes = read_prototype_notes(config.prototype_dir)
+    if not prototype_findings_text(notes):
         return 0
-    return await rewrite_plan(config, state or _load_or_create_state(config), findings, design=True)
+    name = "prototype"
+    state = state or _load_or_create_state(config)
+    sg = state.spec_gen
+    assert sg is not None
+    state_path = config.state_file_path()
+    numbered = number_findings(name, prototype_findings(notes))
+    if sg.repair_attempts(name):
+        reason = "Prototype feedback repair already attempted"
+        block_on_findings(config, state, state_path, name, reason, sg.steps[name].repair_findings or numbered)
+        raise PlanBlocked(reason)
+    sg.admit_repair(name, saved_findings(numbered))
+    state.checkpoint(state_path)
+    try:
+        return await rewrite_plan(config, state, prototype_findings_text(notes, numbered), design=True, step=name)
+    except PlanRepairRejected as rejection:
+        record_advisory(config, name, rejection.advisory)
+        block_on_findings(config, state, state_path, name, str(rejection), rejection.blocking)
+        raise
 
 
 def _read(path: Path) -> str:

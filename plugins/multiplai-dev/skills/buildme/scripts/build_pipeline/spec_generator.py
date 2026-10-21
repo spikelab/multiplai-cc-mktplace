@@ -30,7 +30,7 @@ from .change_manager import ChangeManager, ARTIFACT_DAG, expected_capabilities, 
 from .dependencies import NewDependency, design_decisions_text, detect_new_dependencies
 from .gates import unknowns_gate
 from .io_utils import atomic_write
-from .models import ArtifactStatus, BuildPhase
+from .models import ArtifactStatus, BuildPhase, PriorAssessment
 from .rubric import generate_rubric
 from .state import BuildState, SpecGenState
 
@@ -963,12 +963,147 @@ def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
 
 
 def tasks_findings_text(findings: list[dict]) -> str:
-    """Audit findings as the ``audit_findings`` text of a tasks rewrite."""
+    """Audit findings as the ``audit_findings`` text of a tasks rewrite, each
+    line starting with its id when ``number_findings`` gave it one."""
     return "\n".join(
-        f"- [{f.get('severity', '?')}] {f.get('description', '')}"
+        "- " + (f"{f['finding_id']} " if f.get("finding_id") else "")
+        + f"[{f.get('severity', '?')}] {f.get('description', '')}"
         + (f" Fix: {f['suggestion']}" if f.get("suggestion") else "")
         for f in findings
     )
+
+
+# The prefix of each step's finding ids: `<prefix>-F<n>`.
+FINDING_ID_PREFIXES = {"tasks_audit": "TA", "design_audit": "DA", "plan_review": "PR", "prototype": "PT"}
+
+# The evidence a listed finding from the deterministic scans gets when the
+# rewritten tasks pass every scan.
+SCANS_PASS_EVIDENCE = "The deterministic scans find nothing in the rewritten tasks."
+
+
+def _finding_text(finding: dict) -> str:
+    if finding.get("text"):
+        return str(finding["text"])
+    return str(finding.get("description", "")) + (
+        f" Fix: {finding['suggestion']}" if finding.get("suggestion") else "")
+
+
+def number_findings(step: str, findings: list[dict], *, start: int = 1) -> list[dict]:
+    """Copies of the findings a rewrite is asked to fix, each with an id
+    `<prefix>-F<n>` (`FINDING_ID_PREFIXES`) and the text the rewrite and the
+    recheck are shown."""
+    prefix = FINDING_ID_PREFIXES[step]
+    return [{**f, "finding_id": f"{prefix}-F{n}", "severity": f.get("severity", "?"),
+             "category": f.get("category", ""), "text": _finding_text(f)}
+            for n, f in enumerate(findings, start)]
+
+
+def saved_findings(findings: list[dict]) -> list[dict]:
+    """The fields of each finding a checkpoint keeps in `repair_findings`.
+    `source` is `scan` for a finding of the deterministic scans."""
+    keys = ("finding_id", "severity", "category", "text", "source", "status", "evidence")
+    return [{k: f[k] for k in keys if k in f} for f in findings]
+
+
+def from_scans(findings: list[dict]) -> list[dict]:
+    """Copies of the deterministic scans' findings, marked `source: scan`."""
+    return [{**f, "source": "scan"} for f in findings]
+
+
+def model_listed(listed: list[dict]) -> list[dict]:
+    """The listed findings a recheck model is asked about: those not from the
+    deterministic scans, which the scans themselves recheck."""
+    return [f for f in listed if f.get("source") != "scan"]
+
+
+def scan_assessments(listed: list[dict], deterministic: list[dict]) -> list[PriorAssessment]:
+    """`resolved` for each listed finding of the deterministic scans when the
+    scans find nothing in the rewritten plan; none otherwise, so they count as
+    `cannot_verify`."""
+    if deterministic:
+        return []
+    return [PriorAssessment(finding_id=f["finding_id"], status="resolved", evidence=SCANS_PASS_EVIDENCE)
+            for f in listed if f.get("source") == "scan"]
+
+
+def assess_listed(listed: list[dict], assessments) -> list[dict]:
+    """Each listed finding with the recheck's status and evidence. A finding
+    the recheck gave no status is `cannot_verify`, never resolved, as in
+    `review_rounds.complete_assessments`."""
+    given = {a.finding_id: a for a in assessments or []}
+    return [{**f, "status": given[f["finding_id"]].status if f["finding_id"] in given else "cannot_verify",
+             "evidence": given[f["finding_id"]].evidence if f["finding_id"] in given else ""}
+            for f in listed]
+
+
+def _new_finding(finding: dict) -> dict:
+    return {"finding_id": "", "severity": finding.get("severity", "?"),
+            "category": finding.get("category", ""), "text": _finding_text(finding), "status": "new"}
+
+
+def recheck_verdict(listed: list[dict], assessments, new_findings: list[dict], *,
+                    deterministic: list[dict]) -> tuple[list[dict], list[dict]]:
+    """What a recheck after a rewrite blocks on, and what it only reports.
+
+    Blocking: a listed finding whose status is not `resolved` (no status is
+    `cannot_verify`); a new finding that is critical or in the
+    `no-new-behaviour` category, as `_blocks_plan` treats that category; and
+    every finding of the deterministic scans. Every other new finding is
+    advisory. A resolved listed finding is in neither list.
+    """
+    blocking = [f for f in assess_listed(listed, assessments) if f["status"] != "resolved"]
+    blocking += [_new_finding(f) for f in deterministic]
+    advisory = []
+    for finding in new_findings:
+        blocks = finding.get("severity") == "critical" or finding.get("category") == "no-new-behaviour"
+        (blocking if blocks else advisory).append(_new_finding(finding))
+    return blocking, advisory
+
+
+def findings_report(findings: list[dict]) -> str:
+    """One line per finding: its id when it has one, its status (`new` for a
+    finding the recheck raised, `open` for one no recheck has assessed), its
+    severity and its text."""
+    return "\n".join(
+        "- " + (f"{f['finding_id']} " if f.get("finding_id") else "")
+        + f"{f.get('status') or 'open'} [{f.get('severity', '?')}] "
+        f"({f.get('category') or '?'}) {f.get('text') or _finding_text(f)}"
+        + (f" Evidence: {f['evidence']}" if f.get("evidence") else "")
+        for f in findings
+    )
+
+
+def log_findings(step: str, label: str, findings: list[dict]) -> None:
+    """Log each finding a recheck acted on, one warning line each."""
+    for f in findings:
+        log.warning("%s %s finding id=%s status=%s severity=%s text=%s", step, label,
+                    f.get("finding_id") or "-", f.get("status") or "open",
+                    f.get("severity", "?"), (f.get("text") or _finding_text(f))[:300])
+
+
+def record_advisory(config, name: str, advisory: list[dict]) -> None:
+    """Write a recheck's advisory findings to the log and the progress file,
+    under `<STEP>_ADVISORY`. They block nothing."""
+    if not advisory:
+        return
+    log_findings(name, "advisory", advisory)
+    from .progress import ProgressWriter
+    path = config.progress_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ProgressWriter(path).log_phase(name.upper() + "_ADVISORY", findings_report(advisory))
+
+
+class PlanRepairRejected(ValueError):
+    """`rewrite_plan` refused to publish: the rewrite still has blocking
+    findings. Carries them, the advisory ones, and the listed findings with
+    their statuses."""
+
+    def __init__(self, message: str, *, blocking: list[dict], advisory: list[dict] | None = None,
+                 assessments: list[dict] | None = None):
+        super().__init__(message)
+        self.blocking = blocking
+        self.advisory = advisory or []
+        self.assessments = assessments or []
 
 
 def _blocks_plan(finding: dict, default: str | None = "major") -> bool:
@@ -998,14 +1133,22 @@ async def _audit_tasks_shape(
     """
     from .llm_steps.spec_steps import run_tasks_audit
 
+    name = "tasks_audit"
+    sg = state.spec_gen if state is not None else None
+    if sg is not None:
+        reconcile_plan(config, state)
+        reopen_if_edited(state, name, config.state_file_path())
+        refuse_if_blocked(sg, name)
     log.info("START phase=TASKS_SHAPE_AUDIT")
     print("PHASE: tasks_shape_audit")
-    findings = scan_placeholders(output_path.read_text())
-    findings += scan_no_behaviour_blocks(output_path)
-    if findings:
-        log.warning("Deterministic scans found %d findings", len(findings))
-    findings += await run_tasks_audit(change_dir, config)
-    findings = [f for f in findings if _blocks_plan(f)]
+    scanned = scan_placeholders(output_path.read_text())
+    scanned += scan_no_behaviour_blocks(output_path)
+    if scanned:
+        log.warning("Deterministic scans found %d findings", len(scanned))
+    model = await run_tasks_audit(change_dir, config)
+    scanned = [f for f in scanned if _blocks_plan(f)]
+    model = [f for f in model if _blocks_plan(f)]
+    findings = scanned + model
 
     if not findings:
         log.info("DONE phase=TASKS_SHAPE_AUDIT findings=0")
@@ -1022,14 +1165,25 @@ async def _audit_tasks_shape(
             finding.get("description", "?"),
         )
 
-    assert state is not None and state.spec_gen is not None
-    state.spec_gen.admit_repair("tasks_audit")
-    state.checkpoint(config.state_file_path())
+    assert state is not None and sg is not None
+    state_path = config.state_file_path()
+    if sg.repair_attempts(name):
+        block_on_findings(config, state, state_path, name,
+                          "Tasks audit still has blocking findings after bounded repair", open_findings(findings))
+        raise PlanBlocked("Tasks audit still has blocking findings after bounded repair")
+    numbered = number_findings(name, from_scans(scanned) + model)
+    sg.admit_repair(name, saved_findings(numbered))
+    state.checkpoint(state_path)
     try:
-        await rewrite_plan(config, state, tasks_findings_text(findings))
+        await rewrite_plan(config, state, tasks_findings_text(numbered), step=name, listed=numbered)
+    except PlanRepairRejected as rejection:
+        sg.steps[name].repair_findings = saved_findings(rejection.assessments)
+        record_advisory(config, name, rejection.advisory)
+        block_on_findings(config, state, state_path, name, str(rejection), rejection.blocking)
+        raise
     except BaseException:
-        state.spec_gen.record_step("tasks_audit", "blocked", "Task repair did not complete")
-        state.checkpoint(config.state_file_path())
+        sg.record_step(name, "blocked", "Task repair did not complete")
+        state.checkpoint(state_path)
         raise
 
 
@@ -1062,15 +1216,20 @@ async def _generate_rubric(
     log.info("Wrote rubric: %s", rubric_path)
 
 
-async def _run_audit(change_dir: Path, config) -> list[dict]:
+async def _run_audit(change_dir: Path, config, *, prior: list[dict] | None = None) -> list[dict]:
     """Run design audit on generated artifacts."""
     from .llm_steps.spec_steps import run_design_audit
-    return await run_design_audit(change_dir, config)
+    return await run_design_audit(change_dir, config, prior=prior)
 
 
 # Severities that earn a regeneration pass. A minor gap is a clarification,
 # not a reason to spend two more spec-generation calls.
 DESIGN_AUDIT_ACTIONABLE = ("critical", "major")
+
+
+def design_audit_actionable(gaps: list[dict]) -> list[dict]:
+    """The gaps at critical or major severity: what earns the rewrite."""
+    return [g for g in gaps or [] if isinstance(g, dict) and g.get("severity") in DESIGN_AUDIT_ACTIONABLE]
 
 
 def design_audit_findings_text(gaps: list[dict]) -> str:
@@ -1079,14 +1238,12 @@ def design_audit_findings_text(gaps: list[dict]) -> str:
     Empty string when the audit surfaced nothing at critical or major severity
     — the caller reads that as "report only, nothing to regenerate".
     """
-    actionable = [
-        g for g in gaps or []
-        if isinstance(g, dict) and g.get("severity") in DESIGN_AUDIT_ACTIONABLE
-    ]
+    actionable = design_audit_actionable(gaps)
     if not actionable:
         return ""
     return "\n".join(
-        f"- [{g.get('severity', '?')}] ({g.get('category', 'design-audit')}) "
+        "- " + (f"{g['finding_id']} " if g.get("finding_id") else "")
+        + f"[{g.get('severity', '?')}] ({g.get('category', 'design-audit')}) "
         f"{g.get('description', '')}"
         + (f" Fix: {g['suggestion']}" if g.get("suggestion") else "")
         for g in actionable
@@ -1094,17 +1251,99 @@ def design_audit_findings_text(gaps: list[dict]) -> str:
 
 
 def record_blocked_review(config, state: BuildState, state_path: Path, name: str,
-                          reason: str, findings: str) -> None:
-    """Keep actionable review evidence in both the checkpoint and progress log."""
+                          reason: str, findings: str, *, final: bool = False,
+                          revision: str | None = None) -> None:
+    """Keep actionable review evidence in both the checkpoint and progress log.
+
+    `final` marks a block on findings: it saves the step's current revision
+    as `blocked_revision`, so a resume at that revision refuses and one at
+    another (the plan was edited) gets the rewrite back. `revision` keeps the
+    record at the revision a rewrite was admitted at, so a resume after a
+    published rewrite still rechecks it.
+    """
     assert state.spec_gen is not None
     details = reason + ("\n" + findings if findings and findings not in reason else "")
-    state.spec_gen.record_step(name, "blocked", details, blocking_findings=findings)
+    state.spec_gen.record_step(name, "blocked", details, blocking_findings=findings, revision=revision,
+                               blocked_revision=state.spec_gen.step_revision(name) if final else None)
     state.checkpoint(state_path)
     from .progress import ProgressWriter
     path = config.progress_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     ProgressWriter(path).log_phase(name.upper() + "_BLOCKED", details)
     log.error("%s blocked: %s", name, details)
+
+
+class PlanBlocked(RuntimeError):
+    """A planning step stopped on findings, already recorded as blocked."""
+
+
+REOPEN_LINE = "Edit the plan to fix these and resume; the step then gets one rewrite."
+
+
+def block_on_findings(config, state: BuildState, state_path: Path, name: str, reason: str,
+                      blocking: list[dict]) -> None:
+    """Record a final block on these findings and log each one. The caller raises."""
+    log_findings(name, "blocking", blocking)
+    record_blocked_review(config, state, state_path, name, reason, findings_report(blocking), final=True)
+
+
+def refusal_text(name: str, step) -> str:
+    """What a refused resume prints: the saved findings, then `REOPEN_LINE`."""
+    parts = [f"{name} is blocked at this plan revision."]
+    if step.repair_findings:
+        parts += ["Findings the rewrite was asked to fix:", findings_report(step.repair_findings)]
+    if step.blocking_findings:
+        parts += ["Blocking findings:", step.blocking_findings]
+    elif step.reason:
+        parts.append(step.reason)
+    parts.append(REOPEN_LINE)
+    return "\n".join(parts)
+
+
+def refuse_if_blocked(sg: SpecGenState, name: str) -> None:
+    """Refuse, with no model call, a step that findings blocked at the current
+    revision. A checkpoint from before `blocked_revision` refuses as before:
+    on saved blocking findings at its recorded revision."""
+    step = sg.steps.get(name)
+    if not step or step.outcome != "blocked":
+        return
+    current = sg.step_revision(name)
+    if step.blocked_revision == current or (
+            step.blocked_revision is None and step.revision == current and step.blocking_findings):
+        text = refusal_text(name, step)
+        print(text, flush=True)
+        log.error("%s refused: %s", name, text)
+        raise PlanBlocked(text)
+
+
+def reopen_if_edited(state: BuildState, name: str, state_path: Path) -> None:
+    """A step findings blocked whose input files changed since: the plan was
+    edited, so it gets its one rewrite back."""
+    sg = state.spec_gen
+    assert sg is not None
+    step = sg.steps.get(name)
+    if not (step and step.outcome == "blocked" and step.blocked_revision
+            and step.blocked_revision != sg.step_revision(name)):
+        return
+    step.repair_attempts = 0
+    step.repair_findings = []
+    step.blocked_revision = None
+    log.warning("%s: plan changed since it was blocked; one rewrite allowed again", name)
+    state.checkpoint(state_path)
+
+
+def rewrite_published(sg: SpecGenState, name: str) -> bool:
+    """The step's one rewrite was admitted with findings and published, and
+    nothing has blocked since: the step's revision moved on from the one the
+    admission recorded."""
+    step = sg.steps.get(name)
+    return bool(step and step.repair_attempts and step.repair_findings and step.blocked_revision is None
+                and step.revision != sg.step_revision(name))
+
+
+def open_findings(findings: list[dict]) -> list[dict]:
+    """Findings of an audit that cannot have a rewrite, for a block record."""
+    return [{**f, "finding_id": "", "text": _finding_text(f)} for f in findings]
 
 
 async def run_design_audit_stage(
@@ -1115,43 +1354,64 @@ async def run_design_audit_stage(
 ) -> list[dict]:
     """Audit the current revision, request one owner repair, and require recheck.
 
+    The recheck is given the findings the rewrite was asked to fix and blocks
+    on any not `resolved`, and on new critical findings (`recheck_verdict`).
     Failed or unresolved blocking reviews checkpoint a blocked outcome. An
     unchanged passed revision costs no additional model call on resume.
     """
+    name = "design_audit"
     reconcile_plan(config, state)
     sg = state.spec_gen
     assert sg is not None
-    if sg.step_passed("design_audit"):
+    if sg.step_passed(name):
         return []
-    previous = sg.steps.get("design_audit")
-    if previous and previous.revision == sg.step_revision("design_audit") and previous.blocking_findings:
-        raise RuntimeError(previous.reason)
-    text = ""
-    findings_revision = sg.step_revision("design_audit")
+    reopen_if_edited(state, name, state_path)
+    refuse_if_blocked(sg, name)
+    admitted = sg.steps[name].revision if rewrite_published(sg, name) else None
     try:
-        gaps = await _run_audit(change_dir, config)
-        text = design_audit_findings_text(gaps)
-        if text and not sg.repair_attempts("design_audit"):
-            sg.admit_repair("design_audit")
-            state.checkpoint(state_path)
-            await rewrite_plan(config, state, text, design=True)
-            text = ""  # The old findings do not describe the published revision.
-            findings_revision = sg.step_revision("design_audit")
+        if admitted is None:
             gaps = await _run_audit(change_dir, config)
-            text = design_audit_findings_text(gaps)
+            actionable = design_audit_actionable(gaps)
+            _log_design_audit_gaps(gaps)
+            if not actionable:
+                sg.record_step(name)
+                state.checkpoint(state_path)
+                return gaps
+            if sg.repair_attempts(name):
+                block_on_findings(config, state, state_path, name,
+                                  "Design audit still has blocking findings after bounded repair",
+                                  open_findings(actionable))
+                raise PlanBlocked("Design audit still has blocking findings after bounded repair")
+            numbered = number_findings(name, actionable)
+            sg.admit_repair(name, saved_findings(numbered))
+            state.checkpoint(state_path)
+            admitted = sg.steps[name].revision
+            await rewrite_plan(config, state, design_audit_findings_text(numbered), design=True, step=name)
+        listed = sg.steps[name].repair_findings
+        gaps = await _run_audit(change_dir, config, prior=listed)
         _log_design_audit_gaps(gaps)
-        if text:
-            raise RuntimeError("Design audit still has blocking findings after bounded repair")
-        sg.record_step("design_audit")
+        assessments = getattr(gaps, "prior_assessments", [])
+        blocking, advisory = recheck_verdict(listed, assessments, list(gaps), deterministic=[])
+        sg.steps[name].repair_findings = saved_findings(assess_listed(listed, assessments))
+        log_findings(name, "listed", sg.steps[name].repair_findings)
+        record_advisory(config, name, advisory)
+        if blocking:
+            block_on_findings(config, state, state_path, name,
+                              "Design audit still has blocking findings after bounded repair", blocking)
+            raise PlanBlocked("Design audit still has blocking findings after bounded repair")
+        sg.record_step(name)
         state.checkpoint(state_path)
         return gaps
-    except BaseException as error:
-        record_blocked_review(config, state, state_path, "design_audit",
-                              str(error) or type(error).__name__,
-                              text if findings_revision == sg.step_revision("design_audit") else "")
+    except PlanBlocked:
         raise
-
-
+    except PlanRepairRejected as rejection:
+        record_advisory(config, name, rejection.advisory)
+        block_on_findings(config, state, state_path, name, str(rejection), rejection.blocking)
+        raise
+    except BaseException as error:
+        record_blocked_review(config, state, state_path, name, str(error) or type(error).__name__, "",
+                              revision=admitted)
+        raise
 
 
 async def validate_plan(config, state: BuildState, state_path: Path) -> None:
@@ -1339,11 +1599,19 @@ def _finish_plan_publication(config) -> set[str]:
     return {Path(name).stem for name in files}
 
 
-async def rewrite_plan(config, state: BuildState, findings_text: str, *, design: bool = False) -> int:
+async def rewrite_plan(config, state: BuildState, findings_text: str, *, design: bool = False,
+                       step: str | None = None, listed: list[dict] | None = None) -> int:
     """The sole feedback publisher: stage, validate, then publish one revision.
 
     Failed generation leaves the original set intact. A crash during publication
     leaves a journal that must reconcile before any consumer accepts the files.
+
+    `step` names the caller. When it is the tasks audit, the staged tasks
+    recheck checks `listed` (the numbered findings the rewrite was asked to
+    fix: the model is asked about its own, and those from the deterministic
+    scans are resolved when every scan passes), and their statuses are saved
+    on the step. Every other caller's recheck looks only for new problems. A rewrite that still
+    has blocking findings (`recheck_verdict`) raises `PlanRepairRejected`.
     """
     from .llm_steps.spec_steps import generate_artifact
     from .tdd_engine import parse_blocks
@@ -1373,18 +1641,38 @@ async def rewrite_plan(config, state: BuildState, findings_text: str, *, design:
                                           codebase_analysis=read_codebase_analysis(state),
                                           reference_docs=config.reference_docs_text())
             atomic_write(staged.change_dir / f"{name}.md", text)
-        if not parse_blocks(staged.change_dir / "tasks.md"):
-            raise ValueError("Rewritten tasks contain no implementation blocks")
-        if scan_placeholders((staged.change_dir / "tasks.md").read_text()):
-            raise ValueError("Rewritten tasks still contain placeholder findings")
-        if scan_no_behaviour_blocks(staged.change_dir / "tasks.md"):
-            raise ValueError("Rewritten tasks still contain blocks with no behavior")
+        label = step or "tasks_audit"
+        listed = list(listed or []) if step == "tasks_audit" else []
+
+        def reject(message: str, deterministic: list[dict], assessments=(), new=()) -> None:
+            blocking, advisory = recheck_verdict(listed, assessments, list(new), deterministic=deterministic)
+            log_findings(label, "blocking", blocking)
+            log_findings(label, "advisory", advisory)
+            raise PlanRepairRejected(message, blocking=blocking, advisory=advisory,
+                                     assessments=assess_listed(listed, assessments))
+
+        tasks_path = staged.change_dir / "tasks.md"
+        if not parse_blocks(tasks_path):
+            reject("Rewritten tasks contain no implementation blocks", [{
+                "category": "no-blocks", "severity": "critical",
+                "description": "The rewritten tasks.md has no implementation blocks."}])
+        if found := scan_placeholders(tasks_path.read_text()):
+            reject("Rewritten tasks still contain placeholder findings", found)
+        if found := scan_no_behaviour_blocks(tasks_path):
+            reject("Rewritten tasks still contain blocks with no behavior", found)
         if not cm._artifact_exists(staged.change_dir, "requirements/*.md"):
-            raise ValueError("Cannot publish a plan with incomplete capability requirements")
+            reject("Cannot publish a plan with incomplete capability requirements", [{
+                "category": "requirements", "severity": "critical",
+                "description": "A capability the proposal names has no requirements file."}])
         from .llm_steps.spec_steps import run_tasks_audit
-        findings = await run_tasks_audit(staged.change_dir, staged)
-        if any(_blocks_plan(f, default=None) for f in findings):
-            raise ValueError("Rewritten tasks still have blocking shape findings")
+        findings = await run_tasks_audit(staged.change_dir, staged, prior=model_listed(listed) or None)
+        given = list(getattr(findings, "prior_assessments", [])) + scan_assessments(listed, [])
+        blocking, advisory = recheck_verdict(listed, given, list(findings), deterministic=[])
+        if blocking:
+            reject("Rewritten tasks still have blocking shape findings", [], given, findings)
+        assessed = assess_listed(listed, given)
+        log_findings(label, "listed", assessed)
+        record_advisory(config, label, advisory)
         # The rubric describes this exact task/design set.
         await _generate_rubric(staged.change_dir, staged, state)
         names.append("rubric")
@@ -1401,6 +1689,8 @@ async def rewrite_plan(config, state: BuildState, findings_text: str, *, design:
     state.checkpoint(config.state_file_path())
     assert state.spec_gen is not None
     state.spec_gen.record_step("tasks_audit", "passed")
+    if step == "tasks_audit":
+        state.spec_gen.steps["tasks_audit"].repair_findings = saved_findings(assessed)
     state.checkpoint(config.state_file_path())
     _commit_change_dir(config, config.change_dir,
                        "docs(specs): publish " + ("design audit" if design else "plan review") + " repair")

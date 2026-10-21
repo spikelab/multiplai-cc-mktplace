@@ -647,6 +647,17 @@ async def _run_prototype_phase(
 
     if state.spec_gen is None:
         state.spec_gen = SpecGenState()
+    from .spec_generator import reconcile_plan, refuse_if_blocked, reopen_if_edited, rewrite_published
+
+    reconcile_plan(config, state)
+    if rewrite_published(state.spec_gen, "prototype"):
+        # The feedback rewrite was published before the stop; nothing is left to do.
+        log.info("SKIP phase=PROTOTYPE reason=feedback-rewrite-published")
+        state.spec_gen.record_step("prototype", "passed")
+        state.checkpoint(state_path)
+        return
+    reopen_if_edited(state, "prototype", state_path)
+    refuse_if_blocked(state.spec_gen, "prototype")
     state.spec_gen.record_step("prototype", "blocked", "Prototype and feedback have not completed")
     state.checkpoint(state_path)
     log.info("START phase=PROTOTYPE reason=%s", reason)
