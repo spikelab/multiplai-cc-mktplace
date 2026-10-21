@@ -142,13 +142,24 @@ review, decisions with nothing a test can assert on, and edge cases no scenario
 covers.
 
 The gaps are not just logged. Every gap at **critical** or **major** severity is
-fed back into **one** staged repair of design, tasks and rubric. The repaired
-set must pass deterministic checks and the required re-audit before implementation.
-Minor findings are reported; unresolved critical or major findings stop planning.
-Repair admission and outcomes live together in `spec_gen.steps.design_audit`.
-An unchanged accepted revision skips the model call on resume. If a later plan
-review repairs tasks, the design audit revalidates those new inputs; each stage
-retains its one-repair allowance, so validation cannot become an unbounded loop.
+numbered (`DA-F1`, `DA-F2`, …) and fed back into **one** staged repair of
+design, tasks and rubric. The repaired set must pass deterministic checks and a
+re-audit before implementation. Minor findings on the first audit are reported
+only.
+
+The re-audit is told which findings the rewrite was asked to fix, and gives
+each one a status: `resolved`, `partially_resolved`, `still_present` or
+`cannot_verify` (a finding it gives no status is `cannot_verify`). It blocks
+when a listed finding is anything but `resolved`, and when it finds a new
+**critical** problem. New major and minor findings are logged and written to
+`build-progress.md` under `DESIGN_AUDIT_ADVISORY`; they do not block.
+
+Repair admission and outcomes live together in `spec_gen.steps.design_audit`:
+`repair_findings` holds the numbered findings with their statuses, and
+`blocked_revision` the plan revision a block happened at. An unchanged accepted
+revision skips the model call on resume. If a later plan review repairs tasks,
+the design audit revalidates those new inputs; each stage retains its
+one-repair allowance, so validation cannot become an unbounded loop.
 
 > Note: the multi-agent codebase-analysis step (`run_codebase_analysis`) **is**
 > wired — see [Phase 2.5](#phase-25-codebase-analysis).
@@ -170,11 +181,16 @@ findings under seven categories:
 | `no-new-behaviour` | A block adds nothing an earlier block has not built, so its tests pass before it is built and the TDD RED gate fails it |
 | `oversized-plan` | The change should be several changes |
 
-Critical and major findings request one staged owner repair, shared with the
-model-free checks. The required recheck must pass; failed calls and unresolved
-findings record a blocked outcome and stop planning. The step's `repair_attempts`
-and revision-bound outcome live in `spec_gen.steps.plan_review`. A passing outcome
-skips repeat calls only while its inputs remain current.
+Critical and major findings, numbered `PR-F1`, `PR-F2`, …, request one staged
+owner repair, shared with the model-free checks. The recheck after it follows
+the design audit's rule: every listed finding must come back `resolved`, a new
+critical finding blocks, and new major and minor findings go to the log and to
+`PLAN_REVIEW_ADVISORY`. The model-free checks recheck their own findings, and
+anything they still find blocks. Failed calls and unresolved findings record a
+blocked outcome and stop planning. The step's `repair_attempts`,
+`repair_findings`, `blocked_revision` and revision-bound outcome live in
+`spec_gen.steps.plan_review`. A passing outcome skips repeat calls only while
+its inputs remain current.
 
 `oversized-plan` is deliberately excluded from that regeneration. It names a
 proposed cut and the signature boundary the cut crosses, and stops there:
@@ -1098,7 +1114,11 @@ State is checkpointed to `.build-state.json` after every phase transition:
     "revision": "<plan-content-hash>",
     "steps": {
       "explainers": {"revision": "<explainer-input-hash>", "outcome": "skipped", "repair_attempts": 0},
-      "design_audit": {"revision": "<audit-input-hash>", "outcome": "passed", "repair_attempts": 1},
+      "design_audit": {"revision": "<audit-input-hash>", "outcome": "passed", "repair_attempts": 1,
+                       "repair_findings": [{"finding_id": "DA-F1", "severity": "major", "category": "edge-cases",
+                                            "text": "No scenario covers an empty schedule.",
+                                            "status": "resolved", "evidence": "requirements/next-run.md, scenario 4"}],
+                       "blocked_revision": null},
       "plan_review": {"revision": "<plan-content-hash>", "outcome": "passed", "repair_attempts": 0},
       "prototype": {"revision": "<prototype-input-hash>", "outcome": "passed", "repair_attempts": 0}
     }
@@ -1213,9 +1233,15 @@ actual spend can exceed it by the unknown amount. Acceptance is saved in the
 checkpoint. A later interrupted call needs a new explicit acceptance. Raising
 the cap alone does not accept unknown usage; no JSON editing is required.
 
-Required audits retain blocking findings in the checkpoint and `build-progress.md`.
-An unchanged blocked revision stops without another paid review; edit the plan to
-address those findings before resuming. Prototype evidence remains revision-bound
+Required audits retain blocking findings in the checkpoint and `build-progress.md`,
+and print them. A step blocked at the current plan revision (`blocked_revision`)
+stops on resume without another paid review, prints the findings the rewrite
+was asked to fix with their statuses, and ends with `Edit the plan to fix these
+and resume; the step then gets one rewrite.` Edit the plan to address those
+findings before resuming: when a step's input files differ from
+`blocked_revision`, the resume clears `repair_findings` and `blocked_revision`,
+gives the step its one rewrite back, and audits it as a first audit. The tasks
+audit and the prototype feedback follow the same rule. Prototype evidence remains revision-bound
 before implementation: a changed proposal invalidates a prior skip. Repairs made
 by the planning publisher retain the completed prototype while updating design.
 
