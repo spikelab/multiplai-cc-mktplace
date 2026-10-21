@@ -13,12 +13,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio"]
+dev = ["pytest", "pytest-asyncio", "pytest-xdist>=3.8"]
 
 # The same as the `dev` extra, as a dependency group, so the bare
 # `uv run --directory <this dir> python -m pytest tests/` works too.
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio"]
+dev = ["pytest", "pytest-asyncio", "pytest-xdist>=3.8"]
 
 [build-system]
 requires = ["hatchling"]
