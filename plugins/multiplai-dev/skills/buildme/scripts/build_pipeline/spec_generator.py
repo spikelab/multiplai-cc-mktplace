@@ -1282,9 +1282,12 @@ REOPEN_LINE = "Edit the plan to fix these and resume; the step then gets one rew
 
 def block_on_findings(config, state: BuildState, state_path: Path, name: str, reason: str,
                       blocking: list[dict]) -> None:
-    """Record a final block on these findings and log each one. The caller raises."""
+    """Record a final block on these findings, log each one and print them.
+    The caller raises."""
     log_findings(name, "blocking", blocking)
-    record_blocked_review(config, state, state_path, name, reason, findings_report(blocking), final=True)
+    report = findings_report(blocking)
+    record_blocked_review(config, state, state_path, name, reason, report, final=True)
+    print(f"{name} blocked: {reason}\n{report}", flush=True)
 
 
 def refusal_text(name: str, step) -> str:
