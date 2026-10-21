@@ -66,3 +66,28 @@ def test_a_run_without_rg_stops_before_any_agent_call(ws, tmp_path, monkeypatch,
     assert main(run_args(ws, tmp_path)) == 1
     assert "ripgrep" in capsys.readouterr().err
     assert not agents.calls
+
+
+def test_resume_after_a_stop_between_the_markdown_and_the_html(done_run, monkeypatch, capsys):
+    """S1: a run stopped in its render stage after writing the Markdown, before the HTML (the saved stage
+    is still `write`): resume writes all four files, the same as a run that never stopped, and asks no agent."""
+    from test_render_command import OUTPUTS, assert_same_outputs
+
+    md_path, run_dir, _ = done_run
+    out = md_path.parent
+    original = {n: (out / n).read_bytes() for n in OUTPUTS}
+    state = json.loads((run_dir / STATE_FILE).read_text())
+    state["stage"] = "write"
+    (run_dir / STATE_FILE).write_text(json.dumps(state))
+    for n in OUTPUTS[1:]:
+        (out / n).unlink()
+
+    def no_agent(*args, **kwargs):
+        raise AssertionError("resume asked an agent after the write stage")
+    monkeypatch.setattr(sdk, "agent_call_structured", no_agent)
+    capsys.readouterr()
+    assert main(["resume", str(run_dir), "--trust-repo"]) == 0
+    assert [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("walkthrough: ")] == \
+        [f"walkthrough: {out / n}" for n in OUTPUTS]
+    assert_same_outputs(out, original)
+    assert json.loads((run_dir / STATE_FILE).read_text())["stage"] == "done"

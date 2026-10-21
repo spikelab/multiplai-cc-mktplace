@@ -37,6 +37,21 @@ def fresh_ws(tmp_path) -> dict[str, Path]:
 
 
 @pytest.fixture
+def done_run(ws, tmp_path, monkeypatch, fake_fetch):
+    """A finished human-mode run of the fixture's `bookings` module: (Markdown path, run dir, fake agents)."""
+    from fakes import FakeAgents
+    from test_pipeline import run_args
+    from walkthrough_pipeline import sdk
+    from walkthrough_pipeline.__main__ import main
+
+    agents = FakeAgents()
+    monkeypatch.setattr(sdk, "agent_call_structured", agents)
+    assert main(run_args(ws, tmp_path)) == 0
+    run_dir = next((tmp_path / "runs").iterdir())
+    return tmp_path / "out" / "bookings-walkthrough.md", run_dir, agents
+
+
+@pytest.fixture
 def fake_fetch(monkeypatch, ws):
     """Serve https://docs.acme.test/<path> from the fixture's acme-docs/. No network."""
     fetched: list[str] = []

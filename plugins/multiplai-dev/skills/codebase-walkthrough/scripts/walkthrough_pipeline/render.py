@@ -1,4 +1,4 @@
-"""Assemble the walkthrough from gated sections. Markdown first; walkthrough.json holds the same text.
+"""Assemble the walkthrough from gated sections. Markdown first; the HTML page and walkthrough.json hold the same text.
 
 Code, not a model, turns `[[cN]]` into `path:line` links and `[[snippet:cN]]`
 into the cited lines read with `git show` at the commit. Each link carries its
@@ -11,6 +11,7 @@ code_facts' `write_paths_file`.
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -25,12 +26,13 @@ from .check import LINK
 from .gates import CITE_ID, file_at_commit, lines_at_commit, sections_gate
 from .models import Citation, RepoInfo, WalkState
 from .stages.write import citations_for_write, required_titles
-from .target import github_web_base, tree_files
+from .target import git, github_web_base, tree_files
 
 LANG = {".py": "python", ".ts": "typescript", ".tsx": "tsx", ".js": "javascript", ".jsx": "jsx", ".sql": "sql",
         ".sqlx": "sql", ".yml": "yaml", ".yaml": "yaml", ".json": "json", ".md": "markdown", ".html": "markup",
         ".sh": "bash", ".toml": "toml"}
 SNIPPET_MAX_LINES = 40
+TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "walkthrough.html"
 HOP_ID = re.compile(r"p\d+h\d+")
 
 
@@ -584,8 +586,88 @@ def render_walkthrough_json(state: WalkState, md: str) -> dict:
     }
 
 
+# --- HTML -------------------------------------------------------------------------------
+
+
 def markdown_headings(md: str) -> list[str]:
     return [m.group(1).strip() for m in re.finditer(r"^## (.+)$", md, re.M)]
+
+
+# Characters Python-Markdown's inline patterns act on before it stashes a raw HTML tag, plus the
+# table's cell separator: encoded as character references in the attributes `_raw_link` writes.
+# The link text sits between tags, where emphasis applies too, so `*` and `_` are encoded there as well.
+_ATTR_ENCODE = frozenset("&<>\"'`\\[]|")
+_TEXT_ENCODE = _ATTR_ENCODE | {"*", "_"}
+
+
+def _encode(text: str, chars: frozenset[str] = _ATTR_ENCODE) -> str:
+    return "".join(f"&#{ord(ch)};" if ch in chars else ch for ch in text)
+
+
+def _raw_link(m: re.Match) -> str:
+    """One citation link as a raw `<a>`. Python-Markdown misreads a link title holding an escaped quote
+    and drops the link, so every citation link is written as HTML before the conversion."""
+    where = f"{m.group(1)}:{m.group(2)}" + (f"-{m.group(3)}" if m.group(3) else "")
+    title = re.sub(r"\\(.)", r"\1", m.group(5))
+    return f'<a href="{_encode(m.group(4))}" title="{_encode(title)}"><code>{_encode(where, _TEXT_ENCODE)}</code></a>'
+
+
+def _raw_links(md: str) -> str:
+    """`_raw_link` on every citation link outside fenced code blocks; the Markdown file itself is unchanged."""
+    out: list[str] = []
+    fence = ""
+    for line in md.split("\n"):
+        m = FENCE.match(line)
+        if fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line[len(m.group(1)):].strip():
+                fence = ""
+        elif m:
+            fence = m.group(1)
+        else:
+            line = LINK.sub(_raw_link, line)
+        out.append(line)
+    return "\n".join(out)
+
+
+# The elements Python-Markdown writes with the extensions `render_html` uses. Any other tag in its
+# output came through as raw HTML from the text, most often a placeholder such as `changes/<name>/`
+# written outside backticks, which a browser would swallow; it is shown as text instead.
+_HTML_TAGS = frozenset({"a", "p", "h1", "h2", "h3", "h4", "h5", "h6", "code", "pre", "em", "strong", "ul", "ol",
+                        "li", "blockquote", "table", "thead", "tbody", "tr", "th", "td", "hr", "br", "img"})
+_TAG = re.compile(r"</?([A-Za-z][^\s/<>]*)(?:\s[^<>]*)?/?>")
+
+
+def _escape_raw_tags(body: str) -> str:
+    return _TAG.sub(lambda m: m.group(0) if m.group(1) in _HTML_TAGS else html.escape(m.group(0), quote=False), body)
+
+
+def render_html(md: str, title: str) -> str:
+    """The Markdown as one page with a step per H2. Fenced code keeps `language-<lang>` for highlight.js."""
+    import markdown as mdlib
+
+    blocks: list[str] = []
+
+    def keep_mermaid(m: re.Match) -> str:
+        blocks.append(m.group(1))
+        return f"\n\nMERMAIDBLOCK{len(blocks) - 1}\n\n"
+
+    text = _raw_links(MERMAID.sub(keep_mermaid, md))
+    body = _escape_raw_tags(mdlib.markdown(text, extensions=["tables", "fenced_code", "sane_lists"]))
+    for i, b in enumerate(blocks):
+        body = body.replace(f"<p>MERMAIDBLOCK{i}</p>", f'<pre class="mermaid">{html.escape(b)}</pre>')
+    parts = re.split(r"(?=<h2>)", body)
+    intro, steps = parts[0], parts[1:]
+    nav, sections = [], []
+    for i, s in enumerate(steps, start=1):
+        h = re.match(r"<h2>(.*?)</h2>", s)
+        label = re.sub(r"<[^>]+>", "", h.group(1)) if h else f"Step {i}"
+        nav.append(f'<li><a href="#step-{i}" data-step="{i}">{i}. {label}</a></li>')
+        sections.append(f'<section class="step" id="step-{i}" data-step="{i}">{s}'
+                        f'<nav class="pager"><button class="prev" type="button">Previous</button>'
+                        f'<button class="next" type="button">Next</button></nav></section>')
+    page = TEMPLATE.read_text(encoding="utf-8")
+    return (page.replace("{{TITLE}}", html.escape(title)).replace("{{INTRO}}", intro)
+            .replace("{{NAV}}", "\n".join(nav)).replace("{{STEPS}}", "\n".join(sections)))
 
 
 def paths_file_for(md: Path) -> Path:
@@ -610,6 +692,22 @@ def write_paths_output(state: WalkState, md: Path) -> Path | None:
         return None
 
 
+def unreadable_commit(state: WalkState) -> str | None:
+    """`<repo_key> at <sha>: <git error>` for the first repo the outputs read that cannot show its commit, else None.
+
+    The outputs read the target's repo and the repo of every citation; checked before any file is written.
+    """
+    keys = {state.target.repo_key} | {c.path.partition("/")[0] for c in citations_for_write(state).values()}
+    for key in sorted(keys):
+        repo = state.repos.get(key)
+        if repo is None:
+            continue
+        proc = git(repo.path, "show", "-s", "--format=", repo.head_sha, check=False)
+        if proc.returncode != 0:
+            return f"{key} at {repo.head_sha}: {proc.stderr.strip() or f'git exited {proc.returncode}'}"
+    return None
+
+
 def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     name = state.target.name
@@ -625,6 +723,9 @@ def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
         json_path.write_text(json.dumps(render_walkthrough_json(state, md), indent=2, ensure_ascii=False) + "\n",
                              encoding="utf-8")
         paths.append(json_path)
+        html_path = out_dir / f"{name}-walkthrough.html"
+        html_path.write_text(render_html(md, f"{state.target.package} walkthrough"), encoding="utf-8")
+        paths.append(html_path)
         written = write_paths_output(state, md_path)
         if written is not None:
             paths.append(written)
