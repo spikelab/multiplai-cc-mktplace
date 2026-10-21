@@ -953,12 +953,13 @@ def tree_is_clean(repo: Path | str, ignore: Path | str | None = None,
 def unchecked_files(repo: Path | str, ignore: Path | str | None = None) -> list[str] | None:
     """The files under *repo* whose index entry tells git not to look at them
     (`assume-unchanged` or `skip-worktree`), so `git status` would not show an
-    edit to them. Bookkeeping and *ignore* are left out, as in `tree_is_clean`.
-    None when git could not be asked."""
+    edit to them, initialized submodules included (`vendor/a.py`). Bookkeeping
+    and *ignore* are left out, as in `tree_is_clean`. None when git could not
+    be asked."""
     excludes = list(BOOKKEEPING_EXCLUDES)
     if ignore is not None:
         excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
-    result = _run(["git", "ls-files", "-v", "-z", "--", ".", *excludes], cwd=repo)
+    result = _run(["git", "ls-files", "-v", "-z", "--recurse-submodules", "--", ".", *excludes], cwd=repo)
     if not result.ok:
         return None
     # `-v` writes a lowercase tag for assume-unchanged and S for skip-worktree.

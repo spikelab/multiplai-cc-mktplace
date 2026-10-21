@@ -2004,13 +2004,14 @@ def _record_review_round(
 def _reviewed_revision(config: BuildConfig, head: str | None) -> tuple[str | None, str | None]:
     """(*head*, None) when *head* holds the code the reviewer just read:
     nothing in the project differs from it but buildme's bookkeeping and the
-    change dir (its plan, notes and round records), a submodule the parent's
-    `ignore` setting hides included, and git is told to skip checking no
-    file. Otherwise (None, why)."""
+    round records (which the reviewer's diff leaves out too), a submodule the
+    parent's `ignore` setting hides included, and git is told to skip
+    checking no file, in the project or in a submodule. Otherwise (None, why)."""
     if not head:
         return None, "git could not read HEAD"
     try:
-        change = config.change_dir.resolve().relative_to(Path(config.project_dir).resolve())
+        change = (config.change_dir / review_rounds.REVIEWS_DIR).resolve().relative_to(
+            Path(config.project_dir).resolve())
     except ValueError:
         change = None
     unchecked = git_ops.unchecked_files(config.project_dir, ignore=change)

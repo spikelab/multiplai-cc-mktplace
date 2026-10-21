@@ -1242,11 +1242,12 @@ class TestRoundMemory:
         assert "## Changes since the previous review" not in prompt
 
     @pytest.mark.asyncio
-    async def test_uncommitted_change_dir_files_leave_the_reviewed_commit_known(self, project):
+    async def test_uncommitted_bookkeeping_and_round_records_leave_the_reviewed_commit_known(self, project):
         p = project
         head = _git(p.dir, "rev-parse", "HEAD")
-        (p.config.change_dir / "implementation-notes.md").write_text("a note written during the build\n")
-        (p.config.change_dir / "tasks.md").write_text("edited\n")
+        (p.config.change_dir / "build-progress.md").write_text("progress\n")
+        (p.config.change_dir / "reviews").mkdir()
+        (p.config.change_dir / "reviews" / "block-09-round-1.json").write_text("{}\n")
         _, rounds, *_ = await _two_rounds(p, _failing([_finding("Major", NEW)]), FindingAdjudication())
         assert rounds[1]["reviewed_sha"] == head
 
@@ -1911,6 +1912,18 @@ class TestReviewedRevision:
         return SimpleNamespace(project_dir=repo, change_dir=repo / "specs" / "changes" / "c")
 
     @staticmethod
+    def _sub(tmp_path, repo, name="vendor"):
+        source = tmp_path / f"{name}-source"
+        source.mkdir()
+        _git(source, "init", "-q")
+        for text in ("one\n", "two\n"):
+            (source / "a.txt").write_text(text)
+            _git(source, "add", "-A")
+            _git(source, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", text)
+        _git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), name)
+        _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", name)
+
+    @staticmethod
     def _repo(tmp_path):
         repo = tmp_path / "r"
         (repo / "specs" / "changes" / "c").mkdir(parents=True)
@@ -1926,8 +1939,13 @@ class TestReviewedRevision:
         repo = self._repo(tmp_path)
         head = _git(repo, "rev-parse", "HEAD")
         assert _reviewed_revision(self._config(repo), head) == (head, None)
-        (repo / "specs" / "changes" / "c" / "tasks.md").write_text("edited\n")
+        (repo / "specs" / "changes" / "c" / "reviews").mkdir()
+        (repo / "specs" / "changes" / "c" / "reviews" / "block-01-round-1.json").write_text("{}\n")
         assert _reviewed_revision(self._config(repo), head) == (head, None)
+        # The reviewer's diff holds the rest of the change dir: a prototype's source, the plan.
+        (repo / "specs" / "changes" / "c" / "tasks.md").write_text("edited\n")
+        assert _reviewed_revision(self._config(repo), head)[0] is None
+        _git(repo, "checkout", "--", "specs")
         (repo / "new.py").write_text("y = 2\n")
         assert _reviewed_revision(self._config(repo), head)[0] is None
         assert _reviewed_revision(self._config(repo), None) == (None, "git could not read HEAD")
@@ -1942,18 +1960,20 @@ class TestReviewedRevision:
         reviewed, why = _reviewed_revision(self._config(repo), head)
         assert reviewed is None and "app.py" in why
 
+    def test_a_file_a_submodule_tells_git_not_to_check_makes_it_unknown(self, tmp_path):
+        from build_pipeline.tdd_engine import _reviewed_revision
+        repo = self._repo(tmp_path)
+        self._sub(tmp_path, repo)
+        head = _git(repo, "rev-parse", "HEAD")
+        _git(repo / "vendor", "update-index", "--assume-unchanged", "a.txt")
+        (repo / "vendor" / "a.txt").write_text("edited\n")
+        reviewed, why = _reviewed_revision(self._config(repo), head)
+        assert reviewed is None and "vendor/a.txt" in why
+
     def test_a_moved_submodule_the_parent_ignores_makes_it_unknown(self, tmp_path):
         from build_pipeline.tdd_engine import _reviewed_revision
-        source = tmp_path / "source"
-        source.mkdir()
-        _git(source, "init", "-q")
-        for text in ("one\n", "two\n"):
-            (source / "a.txt").write_text(text)
-            _git(source, "add", "-A")
-            _git(source, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", text)
         repo = self._repo(tmp_path)
-        _git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), "vendor")
-        _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "vendor")
+        self._sub(tmp_path, repo)
         _git(repo, "config", "submodule.vendor.ignore", "all")
         head = _git(repo, "rev-parse", "HEAD")
         assert _reviewed_revision(self._config(repo), head) == (head, None)
