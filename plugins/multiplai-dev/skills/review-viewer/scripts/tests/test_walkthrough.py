@@ -207,7 +207,7 @@ def test_assessment_title_fits_one_line(complete, ff):
 
 def test_the_schema_advertises_the_title_limit_put_enforces():
     schema = Walkthrough.model_json_schema()
-    assert schema["$defs"]["Assessment"]["properties"]["title"]["maxLength"] == walkthrough.TITLE_MAX
+    assert schema["$defs"]["WalkthroughAssessment"]["properties"]["title"]["maxLength"] == walkthrough.TITLE_MAX
 
 
 def test_assessment_verdicts_and_topics_are_closed_sets(complete):

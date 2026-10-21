@@ -15,6 +15,21 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.96.1] - 2026-10-20
+
+### Fixed
+- buildme-findings: a reply no longer says a check failed after the fixes
+  when that failure came from an earlier attempt. A failed check after the
+  fixes (the whole-change refactor's budget stop, or mutation testing) stops
+  the round before anything is pushed, and the skill's table now says so
+  instead of saying the fixes are still pushed.
+- buildme: the README no longer says a failed plan review never fails the
+  build. It stops planning, as the section above it already said.
+- review-viewer: the walkthrough schema's badge definition is now
+  `WalkthroughAssessment` in `walkthrough.v1.schema.json`'s `$defs`, so it no
+  longer shares the name `Assessment` with a finding's label in the code. The
+  shape a walkthrough file must have is unchanged.
+
 ## [0.96.0] - 2026-10-20
 
 ### Added
