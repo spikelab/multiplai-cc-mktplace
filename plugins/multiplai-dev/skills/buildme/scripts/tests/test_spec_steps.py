@@ -527,3 +527,53 @@ async def test_audit_severity_is_canonical_for_blocking_consumers(tmp_path, audi
         call.return_value = _agent_text(raw)
         findings = await audit(tmp_path, MagicMock(model="test-model"))
     assert findings[0]["severity"] == "major"
+
+
+PRIOR = [{"finding_id": "DA-F1", "severity": "major", "category": "coverage", "text": "LISTED-MARKER gap"}]
+FINDING = '{"category":"coverage","severity":"critical","description":"new gap","suggestion":"fix it"}'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
+async def test_prior_assessments_are_read_from_the_recheck_object(tmp_path, audit):
+    raw = ('{"findings": [' + FINDING + '], "prior_assessments": '
+           '[{"finding_id": "DA-F1", "status": "still_present", "evidence": "Block 2 still lacks it"}]}')
+    with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+        call.return_value = _agent_text(raw)
+        findings = await audit(tmp_path, MagicMock(model="test-model"), prior=PRIOR)
+    assert [f["description"] for f in findings] == ["new gap"]
+    assert [(a.finding_id, a.status, a.evidence) for a in findings.prior_assessments] == [
+        ("DA-F1", "still_present", "Block 2 still lacks it")]
+    prompt = call.await_args.args[0]
+    assert "## Findings the rewrite was asked to fix" in prompt
+    assert "DA-F1 [major] (coverage) LISTED-MARKER gap" in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
+async def test_prior_assessments_absent_from_a_bare_list_recheck(tmp_path, audit):
+    with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+        call.return_value = _agent_text("[" + FINDING + "]")
+        findings = await audit(tmp_path, MagicMock(model="test-model"), prior=PRIOR)
+    assert len(findings) == 1
+    assert findings.prior_assessments == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
+async def test_prior_assessments_unknown_status_is_cannot_verify(tmp_path, audit):
+    raw = '{"findings": [], "prior_assessments": [{"finding_id": "DA-F1", "status": "fixed, I think"}]}'
+    with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+        call.return_value = _agent_text(raw)
+        findings = await audit(tmp_path, MagicMock(model="test-model"), prior=PRIOR)
+    assert findings.prior_assessments[0].status == "cannot_verify"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
+async def test_prior_assessments_section_left_out_of_a_first_audit(tmp_path, audit):
+    with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+        call.return_value = _agent_text("[]")
+        findings = await audit(tmp_path, MagicMock(model="test-model"))
+    assert findings.prior_assessments == []
+    assert "Findings the rewrite was asked to fix" not in call.await_args.args[0]

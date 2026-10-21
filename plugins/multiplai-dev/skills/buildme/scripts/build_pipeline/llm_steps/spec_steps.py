@@ -20,7 +20,8 @@ from ..prompts.spec_generation import (
     DESIGN_PROMPT,
     TASKS_PROMPT,
 )
-from ..prompts.design_audit import DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT
+from ..models import PriorAssessment
+from ..prompts.design_audit import DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT, prior_findings_section
 from ..prompts.explainer import EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT
 from ..sdk import agent_call, agent_call_structured, llm_call, extract_json, LLMCallError
 
@@ -79,12 +80,38 @@ async def _audit_agent_text(prompt: str, config, *, budget_label: str) -> str:
     return result.output or ""
 
 
-def _audit_findings(raw: str, label: str) -> list[dict]:
-    """Require the complete findings schema before accepting audit evidence."""
+class AuditFindings(list):
+    """An audit's findings, plus its status for each finding the rewrite was
+    asked to fix (`prior_assessments`, empty on a first audit)."""
+
+    prior_assessments: list[PriorAssessment]
+
+    def __init__(self, findings=(), prior_assessments=()):
+        super().__init__(findings)
+        self.prior_assessments = list(prior_assessments)
+
+
+def _audit_findings(raw: str, label: str, *, recheck: bool = False) -> AuditFindings:
+    """Require the complete findings schema before accepting audit evidence.
+
+    A first audit answers a bare list. A recheck answers
+    `{findings, prior_assessments}`, or a bare list, which then holds no
+    assessments. An unknown status is read as `cannot_verify`
+    (`PriorAssessment`)."""
     try:
         findings = extract_json(raw)
     except ValueError as exc:
         raise LLMCallError(f"{label} audit returned invalid JSON") from exc
+    assessments = []
+    if recheck and isinstance(findings, dict) and isinstance(findings.get("findings"), list):
+        raw_assessments = findings.get("prior_assessments") or []
+        if not isinstance(raw_assessments, list):
+            raise LLMCallError(f"{label} audit returned invalid prior_assessments")
+        try:
+            assessments = [PriorAssessment.model_validate(a) for a in raw_assessments]
+        except ValueError as exc:
+            raise LLMCallError(f"{label} audit returned an invalid prior assessment") from exc
+        findings = findings["findings"]
     if not isinstance(findings, list):
         raise LLMCallError(f"{label} audit must return a findings list")
     for finding in findings:
@@ -95,7 +122,7 @@ def _audit_findings(raw: str, label: str) -> list[dict]:
             raise LLMCallError(f"{label} audit returned an invalid finding")
         finding["severity"] = finding["severity"].lower()
     log.info("%s audit found %d findings", label, len(findings))
-    return findings
+    return AuditFindings(findings, assessments)
 
 
 async def generate_artifact(
@@ -354,13 +381,15 @@ async def run_explainer(dep, config, usage_context: str = "") -> str:
     )
 
 
-async def run_design_audit(change_dir: Path, config) -> list[dict]:
+async def run_design_audit(change_dir: Path, config, *, prior: list[dict] | None = None) -> AuditFindings:
     """Run adversarial design audit on generated artifacts.
 
     Runs as a read-only subagent, so the auditor can open the codebase the
     design claims to change instead of judging four documents in isolation.
 
     Returns list of gap dicts with category, severity, description, suggestion.
+    With `prior` (the findings a rewrite was asked to fix) it also asks for a
+    status for each, returned as `prior_assessments`.
     """
     proposal = _read_file(change_dir / "proposal.md")
     design = _read_file(change_dir / "design.md")
@@ -384,22 +413,22 @@ async def run_design_audit(change_dir: Path, config) -> list[dict]:
         design_content=design,
         tasks_content=tasks,
         change_type=change_type,
-    )
+    ) + prior_findings_section(prior)
 
     log.info("Running design audit on %s", change_dir.name)
     raw = await _audit_agent_text(prompt, config, budget_label="design_audit")
 
-    return _audit_findings(raw, "Design")
+    return _audit_findings(raw, "Design", recheck=bool(prior))
 
 
-async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
+async def run_tasks_audit(change_dir: Path, config, *, prior: list[dict] | None = None) -> AuditFindings:
     """Audit tasks.md for horizontal (layer-by-layer) decomposition.
 
     Checks that each block is a vertical slice — end-to-end exercisable when it
     completes — rather than a layer (schema block, API block, UI block, final
     wiring block). Runs as a read-only subagent. Returns a list of finding
     dicts with category, severity, description, suggestion; empty list when the
-    shape is clean.
+    shape is clean. `prior` works as in `run_design_audit`.
     """
     tasks = _read_file(change_dir / "tasks.md")
     design = _read_file(change_dir / "design.md")
@@ -416,12 +445,12 @@ async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
         design_content=design,
         specs_content=specs_content,
         tasks_content=tasks,
-    )
+    ) + prior_findings_section(prior)
 
     log.info("Running tasks shape audit on %s", change_dir.name)
     raw = await _audit_agent_text(prompt, config, budget_label="tasks_audit")
 
-    return _audit_findings(raw, "Tasks shape")
+    return _audit_findings(raw, "Tasks shape", recheck=bool(prior))
 
 
 async def _codebase_analysis_call(prompt: str, schema, *, config, budget_label: str = "", **kwargs):

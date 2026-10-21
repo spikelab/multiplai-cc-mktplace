@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 
 from ..models import PlanReviewFinding, PlanReviewResult
+from ..prompts.design_audit import prior_findings_section
 from ..prompts.plan_review import NO_USE_CASES, PLAN_REVIEW_PROMPT
 from ..sdk import agent_call_structured
 
@@ -341,12 +342,14 @@ async def run_plan_review(
     config,
     *,
     split_context: str = "",
+    prior: list[dict] | None = None,
 ) -> PlanReviewResult:
     """Review tasks.md against the rubric, the constraints and the use cases.
 
     Runs as a read-only subagent on `config.model_for("plan_review")` and
     `config.effort_for("plan_review")`. Returns the findings; raises whatever `agent_call_structured`
-    raises (the required stage records a blocked outcome).
+    raises (the required stage records a blocked outcome). With `prior` (the
+    findings a rewrite was asked to fix) it also asks for a status for each.
     """
     use_cases = _read(change_dir / "use-cases.md", NO_USE_CASES)
 
@@ -359,7 +362,7 @@ async def run_plan_review(
         split_context=split_context,
         block_trigger=getattr(config, "plan_split_block_trigger", 10),
         package_trigger=getattr(config, "plan_split_package_trigger", 5),
-    )
+    ) + prior_findings_section(prior)
 
     model = config.model_for("plan_review")
     effort = config.effort_for("plan_review")
