@@ -1358,16 +1358,33 @@ class TestParallelFullSuite:
         probe.assert_not_called()
 
     def test_every_full_suite_gate_in_the_engine_passes_the_setting(self):
-        """`tdd.parallel` reaches every integration and baseline gate call."""
+        """`tdd.parallel` reaches every integration and baseline gate call.
+
+        The calls are found by AST, not by text, so a call the formatter has
+        wrapped across lines is still seen.
+        """
+        import ast
         import inspect
-        import re
 
         from build_pipeline import tdd_engine
 
-        src = inspect.getsource(tdd_engine)
-        calls = re.findall(r"(?:integration_gate|baseline_test_gate)\(([^()]*)\)", src)
+        gates = ("integration_gate", "baseline_test_gate")
+        calls = [
+            node
+            for node in ast.walk(ast.parse(inspect.getsource(tdd_engine)))
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", getattr(node.func, "attr", None)) in gates
+        ]
         assert calls  # every call must pass the setting; adding a gate is allowed
-        assert all(c.endswith("parallel=config.parallel_tests") for c in calls), calls
+        missing = [
+            ast.unparse(c)
+            for c in calls
+            if not any(
+                k.arg == "parallel" and ast.unparse(k.value) == "config.parallel_tests"
+                for k in c.keywords
+            )
+        ]
+        assert not missing, missing
 
 
 class TestFinalVerification:
