@@ -8,6 +8,7 @@ agent.
 """
 import json
 import logging
+import os
 import subprocess
 import sys
 from contextlib import ExitStack
@@ -2001,6 +2002,46 @@ class TestReviewedRevision:
             (vendor / "inner" / "a.txt").write_text("edited\n")
         reviewed, why = _reviewed_revision(self._config(repo), head)
         assert reviewed is None and ("vendor/inner" + ("" if hidden == "gitlink" else "/a.txt")) in why
+
+    @pytest.mark.parametrize("where", ["git", "stat", "iterdir", "resolve"])
+    def test_a_submodule_the_filesystem_refuses_makes_it_unknown(self, tmp_path, monkeypatch, where):
+        from build_pipeline import git_ops
+        from build_pipeline.tdd_engine import _reviewed_revision
+        repo = self._repo(tmp_path)
+        self._sub(tmp_path, repo)
+        head = _git(repo, "rev-parse", "HEAD")
+        vendor = repo / "vendor"
+        if where == "git":
+            run = git_ops._run
+            def refuse(argv, cwd=None, **kw):
+                if cwd is not None and Path(cwd) == vendor:
+                    raise PermissionError(13, "Permission denied", str(cwd))
+                return run(argv, cwd=cwd, **kw)
+            monkeypatch.setattr(git_ops, "_run", refuse)
+        else:
+            name = {"stat": "is_dir", "iterdir": "iterdir", "resolve": "resolve"}[where]
+            real = getattr(Path, name)
+            def refuse(self, *a, **kw):
+                if self == vendor:
+                    raise PermissionError(13, "Permission denied", str(self))
+                return real(self, *a, **kw)
+            monkeypatch.setattr(Path, name, refuse)
+            if where == "iterdir":  # reached only when git cannot read the checkout
+                monkeypatch.setattr(git_ops, "_run", lambda argv, cwd=None, _r=git_ops._run, **kw:
+                                    _r(["false"]) if "--show-toplevel" in argv else _r(argv, cwd=cwd, **kw))
+        assert _reviewed_revision(self._config(repo), head) == (None, "git could not list the index")
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 directory")
+    def test_an_unreadable_submodule_directory_makes_it_unknown(self, tmp_path):
+        from build_pipeline.tdd_engine import _reviewed_revision
+        repo = self._repo(tmp_path)
+        self._sub(tmp_path, repo)
+        head = _git(repo, "rev-parse", "HEAD")
+        (repo / "vendor").chmod(0)
+        try:
+            assert _reviewed_revision(self._config(repo), head)[0] is None
+        finally:
+            (repo / "vendor").chmod(0o755)
 
     def test_a_moved_submodule_the_parent_ignores_makes_it_unknown(self, tmp_path):
         from build_pipeline.tdd_engine import _reviewed_revision

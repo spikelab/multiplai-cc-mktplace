@@ -957,12 +957,17 @@ def unchecked_files(repo: Path | str, ignore: Path | str | None = None) -> list[
     index of every initialized submodule below it, nested ones included
     (`vendor/inner/a.py`, `vendor/inner`). Bookkeeping and *ignore* are left
     out of *repo*'s own index, as in `tree_is_clean`. None when an index could
-    not be read, or a submodule directory holds files but no checkout git can
-    read. Read-only: it only lists."""
+    not be read, a submodule directory holds files but no checkout git can
+    read, or the filesystem refused a look (an unreadable submodule directory,
+    say). Read-only: it only lists."""
     excludes = list(BOOKKEEPING_EXCLUDES)
     if ignore is not None:
         excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
-    return _unchecked_in(Path(repo), excludes, "")
+    try:
+        return _unchecked_in(Path(repo), excludes, "")
+    except OSError as exc:
+        log.info("Could not inspect the index under %s: %s", repo, exc)
+        return None
 
 
 def _unchecked_in(repo: Path, excludes: list[str], prefix: str) -> list[str] | None:
