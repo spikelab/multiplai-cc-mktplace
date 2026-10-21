@@ -15,9 +15,9 @@ from pathlib import Path
 import pytest
 from multiplai_core.specs import is_ready, set_spec_issues, spec_revision
 
-from pm_spec_pipeline import epic, git_ops, handoff, intake, prototype, publish, runlock, sdk
+from pm_spec_pipeline import git_ops, handoff, intake, prototype, publish, runlock, sdk
 
-from conftest import (CAPS, FakeModel, Killed, change_dir, committed, git, meta, proposal, ready_line,
+from conftest import (FakeModel, Killed, change_dir, committed, git, meta, ready_line,
                       requirements, run, snapshot, state, write)
 from test_prototype import NOTES_FINDINGS, agent, ui_proposal
 
