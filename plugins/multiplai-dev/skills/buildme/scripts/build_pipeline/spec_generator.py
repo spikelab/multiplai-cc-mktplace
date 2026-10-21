@@ -23,7 +23,6 @@ import os
 import tempfile
 import logging
 import re
-import sys
 from pathlib import Path
 
 from . import budget
@@ -32,7 +31,7 @@ from .dependencies import NewDependency, design_decisions_text, detect_new_depen
 from .gates import unknowns_gate
 from .io_utils import atomic_write
 from .models import ArtifactStatus, BuildPhase
-from .rubric import detect_change_type, generate_rubric
+from .rubric import generate_rubric
 from .state import BuildState, SpecGenState
 
 log = logging.getLogger(__name__)
@@ -103,8 +102,6 @@ async def _generate_all_artifacts(
     state: BuildState,
 ) -> None:
     """Generate all artifacts in dependency order, with resume support."""
-    from .llm_steps.spec_steps import generate_artifact
-
     reconcile_plan(config, state)
     max_iterations = len(ARTIFACT_DAG) * 2  # safety limit
     iteration = 0
