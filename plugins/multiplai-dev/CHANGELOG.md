@@ -15,6 +15,19 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.98.1] - 2026-10-21
+
+### Changed
+- internal: spec format code moved to multiplai-core. buildme now reads and
+  merges a change's requirements with `multiplai_core.specs`, the code the
+  coming `pm-spec` skill will use too: change names, the capability list in
+  `proposal.md`, the requirement check, the merge into `specs/registry/` and
+  the archive move. Nothing a build does changes, and there is nothing to do
+  on your side.
+- spec-extract: a scenario with no text in its name, its WHEN or its THEN is
+  now dropped and listed in `report.md`, like a scenario whose citation fails.
+  Every registry file it writes now passes buildme's requirement check.
+
 ## [0.98.0] - 2026-10-21
 
 ### Changed
