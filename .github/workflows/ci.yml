@@ -331,6 +331,23 @@ jobs:
           uv run --project ../../../../.. --package spec-extract-pipeline \
             --extra dev python -m pytest tests/ -q
 
+  pm-spec-tests:
+    name: pm-spec tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # The tests build temporary git repositories; git is on the runner
+      # image. Every model call is stubbed.
+      - name: Run tests
+        working-directory: plugins/multiplai-pm/skills/pm-spec/scripts
+        run: |
+          uv run --project ../../../../.. --package pm-spec-pipeline \
+            --extra dev python -m pytest tests/ -q
+
   review-viewer-tests:
     name: review-viewer tests
     runs-on: ubuntu-latest

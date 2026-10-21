@@ -42,6 +42,7 @@ members = [
     "plugins/multiplai-media/skills/video-edit/scripts",
     "plugins/multiplai-messaging/skills/gmail/scripts",
     "plugins/multiplai-messaging/skills/slack/scripts",
+    "plugins/multiplai-pm/skills/pm-spec/scripts",
     "plugins/multiplai-research/skills/deep-research/scripts",
 ]
 
