@@ -244,7 +244,7 @@ def running():
     """Marks the end-to-end tests, which run git and the fake model: `nothing_runs` patches nothing for them."""
 
 
-def test_a_reviewed_change_with_three_paths_has_one_section_with_three_blocks(tmp_path, running, model, mapped):
+def test_a_reviewed_change_with_three_paths_has_one_section_with_three_blocks(tmp_path, running, model, mapped):  # noqa: F811
     repo, base, head = make_repo(tmp_path, 1)
     mapped(3)
     model()
@@ -254,7 +254,7 @@ def test_a_reviewed_change_with_three_paths_has_one_section_with_three_blocks(tm
     assert text.count("## Paths") == 1 and text.count("### Path p") == 3
 
 
-def test_a_tree_review_without_paths_has_no_section_and_no_paths_json(tmp_path, running, model, mapped):
+def test_a_tree_review_without_paths_has_no_section_and_no_paths_json(tmp_path, running, model, mapped):  # noqa: F811
     repo, _, _ = make_repo(tmp_path, 1)
     mapped(2)
     model()

@@ -490,10 +490,8 @@ def _no_behaviour_findings(change_dir: Path) -> list[PlanReviewFinding]:
 
     The design audit's rewrite of tasks.md comes after the shape audit, so the
     scan runs here too: a block the reviewer model misses still reaches the
-    one regeneration, and a review whose model call fails still rewrites the
-    scan's blocks, once per build (``plan_review_scan_regen_done``), so a
-    resume reviews again. The prototype feedback pass, after this review,
-    runs the same scan on what it writes.
+    one regeneration. The prototype feedback pass, after this review, runs the
+    same scan on what it writes.
     """
     from ..spec_generator import scan_no_behaviour_blocks
 
