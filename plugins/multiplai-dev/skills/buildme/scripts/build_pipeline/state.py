@@ -31,6 +31,12 @@ class StepOutcome(BaseModel):
     reason: str = ""
     repair_attempts: int = 0
     blocking_findings: str = ""
+    # The findings the step's one rewrite was asked to fix, numbered, saved as
+    # the rewrite is admitted; the recheck adds each one's status and evidence.
+    repair_findings: list[dict] = Field(default_factory=list)
+    # The step's revision when findings finally blocked it. A resume at another
+    # revision means the plan was edited, and the step gets its rewrite back.
+    blocked_revision: str | None = None
 
 
 class SpecGenState(BaseModel):
@@ -71,11 +77,12 @@ class SpecGenState(BaseModel):
         step = self.steps.get(name)
         return step.repair_attempts if step else 0
 
-    def admit_repair(self, name: str) -> None:
+    def admit_repair(self, name: str, findings: list[dict] | None = None) -> None:
         if self.repair_attempts(name):
             raise RuntimeError(f"{name} repair already attempted; resolve blocking findings before resuming")
         self.record_step(name, "blocked", "Repair admitted; validation pending")
         self.steps[name].repair_attempts = 1
+        self.steps[name].repair_findings = [dict(f) for f in findings or []]
 
     def step_revision(self, name: str) -> str:
         keys = {
@@ -94,9 +101,13 @@ class SpecGenState(BaseModel):
         accepted = {"passed", "skipped", "advisory"} if name in {"prototype", "explainers"} else {"passed"}
         return bool(step and step.revision == self.step_revision(name) and step.outcome in accepted)
 
-    def record_step(self, name: str, outcome: Literal["passed", "blocked", "advisory", "skipped"] = "passed", reason: str = "", *, blocking_findings: str = "") -> None:
-        self.steps[name] = StepOutcome(revision=self.step_revision(name), outcome=outcome, reason=reason,
-                                       repair_attempts=self.repair_attempts(name), blocking_findings=blocking_findings)
+    def record_step(self, name: str, outcome: Literal["passed", "blocked", "advisory", "skipped"] = "passed", reason: str = "", *, blocking_findings: str = "",
+                    blocked_revision: str | None = None, revision: str | None = None) -> None:
+        previous = self.steps.get(name)
+        self.steps[name] = StepOutcome(revision=revision or self.step_revision(name), outcome=outcome, reason=reason,
+                                       repair_attempts=self.repair_attempts(name), blocking_findings=blocking_findings,
+                                       repair_findings=previous.repair_findings if previous else [],
+                                       blocked_revision=blocked_revision)
 
 
 
