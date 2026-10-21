@@ -15,6 +15,28 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.98.0] - 2026-10-21
+
+### Changed
+- buildme: after a planning step rewrites the plan, the re-audit is told which
+  findings the rewrite was asked to fix and says for each one whether it is
+  resolved. The step stops when one is not resolved, or when the re-audit finds
+  a new critical problem. New major and minor findings are logged and written
+  to `build-progress.md` under `<STEP>_ADVISORY`, and no longer stop the build.
+  This applies to the design audit, the plan review and the tasks audit.
+- buildme: when a planning step stops, the checkpoint, `build-progress.md` and
+  the console show every finding the rewrite was asked to fix, with an id such
+  as `DA-F1` and its status, and every new finding that stopped it. The tasks
+  audit's re-audit used to drop its findings and stop with a bare error.
+- buildme: resuming a stopped planning step without editing the plan stops
+  again with no model call and prints the same findings. Editing the plan gives
+  the step one more rewrite; before, an edited plan had to pass with no rewrite
+  allowed.
+
+### Fixed
+- buildme: the prototype feedback rewrite now runs at most once. A resume after
+  a stop used to run it again, with no limit.
+
 ## [0.97.1] - 2026-10-21
 
 ### Fixed
