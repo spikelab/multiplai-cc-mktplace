@@ -185,6 +185,30 @@ def test_a_requirement_whose_name_starts_or_extends_a_kept_name_is_dropped(tmp_p
             "the other way round; buildme matches requirement names by prefix") in (run_dir / "report.md").read_text()
 
 
+def test_a_scenario_buildmes_requirement_check_would_reject_is_dropped(tmp_path, fake_call):
+    # multiplai_core.specs.valid_requirement_text needs text in a scenario's name, WHEN and THEN.
+    from multiplai_core.specs import valid_requirement_text
+
+    repo = make_calc_repo(tmp_path / "widgets")
+    c = [cite("src/calc.py", 1, 2, "return a + b")]
+    fake_call.answers["write:calc"] = {"requirements": [{"name": "Adds", "scenarios": [
+        {"name": "ok", "when": "w", "then": "t", "citations": c},
+        {"name": " ", "when": "w", "then": "t", "citations": c},
+        {"name": "no when", "when": "", "then": "t", "citations": c},
+        {"name": "no then", "when": "w", "then": "--", "citations": c}]},
+        {"name": "Only empty", "scenarios": [{"name": "e", "when": "w", "then": "", "citations": c}]}]}
+    assert go(repo, tmp_path / "out") == 0
+    run_dir = folder(tmp_path / "out")
+    spec = (run_dir / "registry" / "calc.md").read_text()
+    assert valid_requirement_text(spec)
+    assert re.findall(r"^#### Scenario: (.*)$", spec, re.M) == ["ok"]
+    assert "Only empty" not in spec
+    report = (run_dir / "report.md").read_text()
+    why = "a scenario needs a name, a WHEN and a THEN, each with text"
+    for dropped in ("Adds / (no name)", "Adds / no when", "Adds / no then", "Only empty / e"):
+        assert f"- calc / {dropped}: {why}" in report
+    assert "- calc / Only empty: no scenario left" in report
+
 def test_a_citation_by_absolute_path_under_the_snapshot_is_kept(tmp_path, fake_call):
     repo = make_calc_repo(tmp_path / "widgets")
     assert go(repo, tmp_path / "out", "--plan-only") == 0

@@ -46,7 +46,8 @@ repository's `specs/registry/`:
    after two attempts is "not written".
 6. **Gate.** Every citation is re-read at the commit. A scenario with no
    citation that passes is dropped and listed with the reason; so is a
-   requirement left with no scenario. A scenario citing a test file is
+   scenario whose name, WHEN or THEN has no text, and a requirement left
+   with no scenario. A scenario citing a test file is
    "pinned by test", else "read from code only". A public symbol no kept
    scenario cites is listed as not specified.
 7. **Render.** Writes `registry/<capability>.md` in buildme's

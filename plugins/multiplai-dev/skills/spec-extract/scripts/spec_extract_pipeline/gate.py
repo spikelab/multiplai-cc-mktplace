@@ -9,6 +9,10 @@
   name. So is one whose name as written (`md`) is a prefix of a kept name, or
   has a kept name as a prefix: buildme's `ChangeManager` finds a REMOVED or
   MODIFIED name as a prefix, with no end-of-line anchor.
+- A scenario is dropped too when its requirement, written with only that
+  scenario as render writes it, fails `multiplai_core.specs.valid_requirement_text`
+  (buildme's check of a requirements file): a scenario name, a WHEN or a THEN
+  with no text. So every registry file render writes passes that check.
 - A scenario is "pinned by test" when a passing citation is in a test file,
   else "read from code only".
 - A public symbol is specified when a kept citation in its file overlaps its
@@ -27,6 +31,7 @@ from pathlib import Path
 
 from code_facts import Citation, check_citation, ws_path
 from multiplai_core.citations import file_at
+from multiplai_core.specs import valid_requirement_text
 
 from .explore import resolver
 from .group import Capability, md, one_line, symbol_id
@@ -92,6 +97,12 @@ def symbol_spans(target: Target, symbols: list[Symbol]) -> dict[str, list[tuple[
     return {sid: spans.get(sid) or lines for sid, lines in def_lines.items()}
 
 
+def _as_written(cap: Capability, name: str, scenario: Scenario) -> str:
+    """Requirement *name* with only *scenario*, as render writes it into a registry file."""
+    from .render import capability_md  # here, not at the top: render imports this module
+    return capability_md("", "", Spec(cap.name, cap.summary, [Requirement(name, "", [scenario])]))
+
+
 def check(caps: list[Capability], answers: dict[str, dict], symbols: list[Symbol], target: Target,
           snapshot: Path) -> Checked:
     """Gate every write answer. *target* is read through this run's checkout."""
@@ -136,8 +147,13 @@ def check(caps: list[Capability], answers: dict[str, dict], symbols: list[Symbol
                     out.dropped.append(f"{cap.name} / {name} / {one_line(sc.name)}: "
                                        f"{'; '.join(reasons) or 'no citation'}")
                     continue
-                kept.append(Scenario(one_line(sc.name), one_line(sc.when), one_line(sc.then), good,
-                                     pinned=any(is_test_file(c.path) for c in good)))
+                scenario = Scenario(one_line(sc.name), one_line(sc.when), one_line(sc.then), good,
+                                    pinned=any(is_test_file(c.path) for c in good))
+                if not valid_requirement_text(_as_written(cap, name, scenario)):
+                    out.dropped.append(f"{cap.name} / {name} / {scenario.name or '(no name)'}: a scenario "
+                                       "needs a name, a WHEN and a THEN, each with text")
+                    continue
+                kept.append(scenario)
                 for c in good:
                     cited.update(sid for sid, ranges in spans.items() if path_of[sid] == c.path
                                  and any(c.line_start <= hi and c.line_end >= lo for lo, hi in ranges))
