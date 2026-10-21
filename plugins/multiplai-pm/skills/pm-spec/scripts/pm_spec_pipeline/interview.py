@@ -110,7 +110,7 @@ async def run_interview(run: Run, *, replies_file: str = "") -> None:
         try:
             questions = await ask_questions(run, inputs, has_prd=has_prd)
             answers = await answer_questions(run, inputs, questions, has_prd=has_prd) if questions else []
-        except sdk.BudgetExceededError:
+        except (sdk.BudgetExceededError, sdk.RepoTrustError):
             raise
         except Exception as e:
             # Best effort, as in buildme: the spec is still written from the
