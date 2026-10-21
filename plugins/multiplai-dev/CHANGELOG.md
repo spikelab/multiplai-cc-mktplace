@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.96.3] - 2026-10-21
+## [0.96.4] - 2026-10-21
 
 ### Fixed
 - buildme: a project with a Git submodule no longer fails its final check with
@@ -28,7 +28,7 @@ time, not derived from a tag.
   fails the check as unavailable. A repository nested untracked inside the
   project is checked the same way.
 
-## [0.96.2] - 2026-10-20
+## [0.96.3] - 2026-10-21
 
 ### Fixed
 - buildme: a finding the fix on pass did not fix no longer disappears when
@@ -38,7 +38,7 @@ time, not derived from a tag.
   list it with its status. When the block's round records could not be
   written or read, every finding the fix on pass worked on stays open.
 
-## [0.96.1] - 2026-10-20
+## [0.96.2] - 2026-10-21
 
 ### Fixed
 - review: an earlier finding no longer shows as resolved when this round's
@@ -48,6 +48,21 @@ time, not derived from a tag.
   counted as new. Now the earlier finding is `still_present`, and the
   survivor is labelled `still-open` against it, with its `lineage`. When a
   duplicate set is still open against two earlier findings, both stay open.
+
+## [0.96.1] - 2026-10-20
+
+### Fixed
+- buildme-findings: a reply no longer says a check failed after the fixes
+  when that failure came from an earlier attempt. A failed check after the
+  fixes (the whole-change refactor's budget stop, or mutation testing) stops
+  the round before anything is pushed, and the skill's table now says so
+  instead of saying the fixes are still pushed.
+- buildme: the README no longer says a failed plan review never fails the
+  build. It stops planning, as the section above it already said.
+- review-viewer: the walkthrough schema's badge definition is now
+  `WalkthroughAssessment` in `walkthrough.v1.schema.json`'s `$defs`, so it no
+  longer shares the name `Assessment` with a finding's label in the code. The
+  shape a walkthrough file must have is unchanged.
 
 ## [0.96.0] - 2026-10-20
 

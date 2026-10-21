@@ -232,7 +232,7 @@ def test_plan_only_on_a_tree_review(tmp_path, capsys, no_spend):
     assert line.group(1) is None and line.group(2) == "24"
 
 
-def test_a_5_usd_run_warns_starts_and_stops_only_at_the_ledger(tmp_path, capsys, model, mapped, monkeypatch):
+def test_a_5_usd_run_warns_starts_and_stops_only_at_the_ledger(tmp_path, capsys, model, mapped, monkeypatch):  # noqa: F811
     repo, base, head = big_repo(tmp_path, 227_000)
     fake = model()
     mapped(1)
@@ -254,7 +254,7 @@ def test_a_5_usd_run_warns_starts_and_stops_only_at_the_ledger(tmp_path, capsys,
     assert kept >= 1
 
 
-def test_the_warning_prints_before_the_paths_stage(tmp_path, capsys, model, mapped, monkeypatch):
+def test_the_warning_prints_before_the_paths_stage(tmp_path, capsys, model, mapped, monkeypatch):  # noqa: F811
     repo, base, head = big_repo(tmp_path, 227_000)
     model()
     mapped(0)

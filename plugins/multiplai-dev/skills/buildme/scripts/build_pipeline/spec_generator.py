@@ -974,23 +974,6 @@ def tasks_findings_text(findings: list[dict]) -> str:
     )
 
 
-def report_no_behaviour_blocks_left(tasks_path: Path) -> list[dict]:
-    """After a rewrite, or one that failed, name any block the scan flags.
-
-    Every audit here rewrites once and lets the plan stand, so this only
-    reports: a block named here will most likely fail the TDD RED gate.
-    """
-    left = scan_no_behaviour_blocks(tasks_path)
-    if left:
-        names = ", ".join(f"Block {f['block']}" for f in left)
-        log.warning(
-            "No-behaviour blocks remain in tasks.md (the TDD RED gate "
-            "will likely fail them): %s", names,
-        )
-        print(f"PHASE: no_behaviour_blocks_remain — {names}", flush=True)
-    return left
-
-
 def _blocks_plan(finding: dict, default: str | None = "major") -> bool:
     """A tasks-audit finding that a repair must resolve: critical or major, or
     any `no-new-behaviour` finding, whose severity the audit prompt leaves to
