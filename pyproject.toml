@@ -52,3 +52,16 @@ members = [
 # pins drifted to three different versions (v0.10.0 / v0.11.0 / v0.12.0) with
 # no reason on record.
 multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }
+
+[tool.ruff]
+# Pinned because 0.17 widened the default rule set; another minor version can
+# change what the default checks. CI calls `uvx ruff@0.17.1` to match.
+required-version = "==0.17.1"
+# Test fixtures are input data the tests read; reformatting them can change
+# what the tests see.
+extend-exclude = ["**/tests/fixtures/**"]
+# These two skills' scripts run under a bare `python3` (their SKILL.md calls
+# `python3 <script>`), possibly the host's own interpreter, and they have no
+# pyproject.toml floor. Both import under Python 3.9 today; py39 keeps
+# pyupgrade from rewriting them into 3.11+ syntax such as `datetime.UTC`.
+per-file-target-version = { "plugins/multiplai-pm/skills/plane/scripts/**" = "py39", "plugins/multiplai-messaging/skills/fireflies/scripts/**" = "py39" }
