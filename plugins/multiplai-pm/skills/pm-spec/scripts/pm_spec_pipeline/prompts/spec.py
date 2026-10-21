@@ -161,6 +161,8 @@ Fix every one of these problems and write the whole proposal again:
 USE_CASES_PROMPT = """\
 You are generating the use cases document for a spec-driven change.
 
+{notice}
+
 ## Project Context
 {project_context}
 
@@ -194,6 +196,8 @@ Output ONLY the markdown content. No commentary.
 
 REQUIREMENTS_PROMPT = """\
 You are generating a requirements file for a single capability in a spec-driven change.
+
+{notice}
 
 ## Project Context
 {project_context}
@@ -269,6 +273,8 @@ REWRITE_REQUIREMENTS_PROMPT = """\
 You are revising one capability's requirements file in a spec-driven change to
 fix the findings listed below. Keep every requirement the findings do not touch
 as it is, word for word.
+
+{notice}
 
 ## Project Context
 {project_context}

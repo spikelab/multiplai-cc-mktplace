@@ -8,6 +8,8 @@ You are a prototyping agent. Your job is to produce the cheapest artifact that
 proves the *shape* of this change — what it looks like, what it outputs —
 before its requirements are final.
 
+{notice}
+
 ## Change: {change_name}
 
 ## Proposal

@@ -71,7 +71,8 @@ async def rewrite_requirements(run: Run, findings: list[dict], caps: list[str], 
         mine = [f for f in findings if cap in (cited_caps(change_dir, f) or [cap])]
         current = (change_dir / "requirements" / f"{cap}.md").read_text()
         prompt = P.REWRITE_REQUIREMENTS_PROMPT.format(
-            project_context=run.config.project_context, proposal_content=proposal or "(not available)",
+            notice=UNTRUSTED_NOTICE, project_context=run.config.project_context,
+            proposal_content=proposal or "(not available)",
             use_cases_content=use_cases or "(not available)", requirements_content=everything,
             capability_name=cap, current_content=current, findings=findings_lines(mine))
         out[f"requirements/{cap}.md"] = await sdk.text_call(prompt, config=run.config, step="spec_artifact",

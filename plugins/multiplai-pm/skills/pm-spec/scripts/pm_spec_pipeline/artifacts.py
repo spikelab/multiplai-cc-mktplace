@@ -235,6 +235,7 @@ def proposal_prompt(run: Run, errors: list[str] | None = None) -> str:
 
 def use_cases_prompt(run: Run) -> str:
     return P.USE_CASES_PROMPT.format(
+        notice=UNTRUSTED_NOTICE,
         project_context=run.config.project_context,
         interview=_read(run.config.change_dir / "interview.md") or "(none provided)",
         proposal_content=proposal_text(run) or "(not available)",
@@ -245,6 +246,7 @@ def use_cases_prompt(run: Run) -> str:
 
 def requirements_prompt(run: Run, cap: str, *, proposal: str | None = None) -> str:
     prompt = P.REQUIREMENTS_PROMPT.format(
+        notice=UNTRUSTED_NOTICE,
         project_context=run.config.project_context,
         proposal_content=(proposal_text(run) if proposal is None else proposal) or "(not available)",
         capability_name=cap,

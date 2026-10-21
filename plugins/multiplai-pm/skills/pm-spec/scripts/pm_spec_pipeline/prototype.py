@@ -28,6 +28,7 @@ from pathlib import Path
 
 from . import artifacts, sdk
 from . import findings as F
+from .prompts import UNTRUSTED_NOTICE
 from .prompts.prototype import PROTOTYPE_PROMPT
 from .publish import publish
 from .rewrite import check_texts, rewrite_proposal_and_requirements
@@ -183,7 +184,7 @@ async def run_prototype(run: Run) -> Gate:
     change_dir = run.config.change_dir
     prototype_dir = change_dir / "prototype"
     prototype_dir.mkdir(parents=True, exist_ok=True)
-    prompt = PROTOTYPE_PROMPT.format(change_name=run.config.change_name,
+    prompt = PROTOTYPE_PROMPT.format(notice=UNTRUSTED_NOTICE, change_name=run.config.change_name,
                                      proposal_content=artifacts.proposal_text(run) or "(not available)",
                                      requirements_content=artifacts.all_requirements_text(change_dir),
                                      prototype_dir=prototype_dir)
