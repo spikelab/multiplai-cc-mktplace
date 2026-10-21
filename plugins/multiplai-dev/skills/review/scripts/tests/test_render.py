@@ -6,7 +6,7 @@ from conftest import CLAIM_HIGH, CLAIM_MEDIUM, CLAIM_REFUTED, CLAIM_REJECTED, EX
 from review_pipeline import post as post_mod
 from review_pipeline.__main__ import main
 from review_pipeline.export import to_findings_file, write_findings_file
-from review_pipeline.models import Merged
+from review_pipeline.models import Merged, ReviewState
 from review_pipeline.render import render_review, render_summary, write_review, write_rollups
 from review_pipeline.state import save_state
 

@@ -1169,8 +1169,8 @@ class TestRoundBudget:
 
 class TestStoppedAfterTheBlocks:
     """The engine runs whole-change steps after its blocks (refactor, mutation
-    testing). A failure there comes back on every re-run, so it must not hold
-    back fixes that every block gate already passed."""
+    testing). A failure there stops the round before it publishes, though every
+    block gate already passed."""
 
     @pytest.mark.asyncio
     async def test_failed_post_block_check_prevents_publication(

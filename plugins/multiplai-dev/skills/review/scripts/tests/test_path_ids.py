@@ -180,7 +180,7 @@ def exported(target_dir: Path) -> list[dict]:
     return json.loads((target_dir / "findings.json").read_text())["findings"]
 
 
-def test_a_change_reviews_findings_carry_the_ids_of_the_paths_they_lie_on(tmp_path, model, mapped):
+def test_a_change_reviews_findings_carry_the_ids_of_the_paths_they_lie_on(tmp_path, model, mapped):  # noqa: F811
     """`traced_path` hops at line 1 of p01..p03/m.py and the entry at p01/m.py:1; the piece findings cite line 2."""
     repo, base, head = make_repo(tmp_path, 3)
     mapped(2)
@@ -200,7 +200,7 @@ def test_a_change_reviews_findings_carry_the_ids_of_the_paths_they_lie_on(tmp_pa
 
 
 @pytest.mark.parametrize("how", ["failed", "empty"])
-def test_without_paths_no_finding_has_a_paths_key_and_no_error_is_added(tmp_path, model, mapped, how):
+def test_without_paths_no_finding_has_a_paths_key_and_no_error_is_added(tmp_path, model, mapped, how):  # noqa: F811
     repo, base, head = make_repo(tmp_path, 2)
     if how == "failed":
         mapped(raises=RuntimeError("index exploded"))
@@ -214,7 +214,7 @@ def test_without_paths_no_finding_has_a_paths_key_and_no_error_is_added(tmp_path
     assert [e for e in state.errors if not e.startswith(("paths ", "assess:"))] == []
 
 
-def test_a_tree_review_without_paths_writes_no_paths_key(tmp_path, model, mapped):
+def test_a_tree_review_without_paths_writes_no_paths_key(tmp_path, model, mapped):  # noqa: F811
     repo, _, _ = make_repo(tmp_path, 1)
     mapped(2)
     model()
@@ -227,7 +227,7 @@ def test_a_tree_review_without_paths_writes_no_paths_key(tmp_path, model, mapped
     assert not any("paths" in r for r in exported(target_dir))
 
 
-def test_a_resumed_review_assigns_the_same_ids_as_one_that_never_stopped(tmp_path, model, mapped):
+def test_a_resumed_review_assigns_the_same_ids_as_one_that_never_stopped(tmp_path, model, mapped):  # noqa: F811
     repo, base, head = make_repo(tmp_path, 2)
     mapped(2)
     answers = dict(path_reports={"p2": "p01/m.py:1 Kind: defect\nx"},
