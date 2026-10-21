@@ -109,6 +109,21 @@ class Root:
             time.sleep(0.02)
         raise AssertionError("no review is running")
 
+    def started_review_pid(self) -> int:
+        """The running review's pid once it has started: its lock names it, and
+        its `review-state.json` and `started` line for the PR are written, so a
+        kill now leaves an interrupted run for the next review to find."""
+        target = self.data / "reviews" / "o-r" / f"pr-{N}"
+        ledger = self.data / "reviews" / "ledger.jsonl"
+        pid = self.review_pid()
+        for _ in range(500):
+            lines = [json.loads(x) for x in ledger.read_text().splitlines()] if ledger.exists() else []
+            if (target / "review-state.json").exists() and any(
+                    x["event"] == "started" and x.get("target_dir") == str(target) for x in lines):
+                return pid
+            time.sleep(0.02)
+        raise AssertionError("the review never started")
+
     def snapshot(self) -> dict:
         names = commit_names([self.root / "o" / "r.git", self.project])
         return name_commits({"epic": epic_snapshot(self.dir, self.root),
@@ -168,15 +183,18 @@ def _result(root: Root, i: int) -> dict:
     return root.reviews()[i].result
 
 
-def test_C_S2_coordinator_killed_with_the_review_alive_waits_for_it(tmp_path, monkeypatch):
+@pytest.mark.parametrize("start_delay", [0, 0.5], ids=["prompt", "slow-start"])
+def test_C_S2_coordinator_killed_with_the_review_alive_waits_for_it(tmp_path, monkeypatch, start_delay):
     """C.S2: the ledger's `started` line for this head and the review's run
     lock held: the coordinator launches nothing, waits 60 s and looks again
     until the lock is free, then reads the ledger and writes the killed
-    record's result from it. Never two reviews; no launch and no pair."""
-    reviews = {str(N): [{"block": True}, {}]}
+    record's result from it. Never two reviews; no launch and no pair.
+    The coordinator runs again only once the review has started (`slow-start`
+    widens the gap between its lock naming its pid and its `started` line)."""
+    reviews = {str(N): [{"block": True, "start_delay": start_delay}, {}]}
     stopped, clean = _roots(tmp_path, monkeypatch, reviews)
     stopped.killed(_kill_at_review)
-    pid = stopped.review_pid()
+    pid = stopped.started_review_pid()
     assert subprocess.run(["kill", "-0", str(pid)]).returncode == 0      # the review outlived it
     looks, launched = [], stopped.fakes.review_launches()
 
@@ -196,13 +214,16 @@ def test_C_S2_coordinator_killed_with_the_review_alive_waits_for_it(tmp_path, mo
     assert old["reused_pipeline_run"] == {"target_dir": str(stopped.target), "round": "01"}
 
 
-def test_C_S3_review_killed_with_its_coordinator_is_resumed(tmp_path, monkeypatch):
+@pytest.mark.parametrize("start_delay", [0, 0.5], ids=["prompt", "slow-start"])
+def test_C_S3_review_killed_with_its_coordinator_is_resumed(tmp_path, monkeypatch, start_delay):
     """C.S3: the killed record's result is written; `review` exits 4 with the
-    hint and the coordinator runs `resume`. Two more launches and pairs."""
-    reviews = {str(N): [{"block": True}, {}]}
+    hint and the coordinator runs `resume`. Two more launches and pairs.
+    The review is killed only once it has started (`slow-start` widens the
+    gap between its lock naming its pid and its `started` line)."""
+    reviews = {str(N): [{"block": True, "start_delay": start_delay}, {}]}
     stopped, clean = _roots(tmp_path, monkeypatch, reviews)
     stopped.killed(_kill_at_review)
-    pid = stopped.review_pid()
+    pid = stopped.started_review_pid()
     os.killpg(pid, signal.SIGKILL)
     for _ in range(500):
         stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout

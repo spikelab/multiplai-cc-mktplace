@@ -639,6 +639,8 @@ except OSError:
     sys.exit(2)
 os.ftruncate(fd, 0)
 os.pwrite(fd, str(os.getpid()).encode(), 0)
+if step.get("start_delay"):     # a slow start: the lock names its pid before the review has started
+    time.sleep(step["start_delay"])
 lines = [json.loads(x) for x in ledger.read_text().splitlines()] if ledger.exists() else []
 last = [x["event"] for x in lines if x.get("target_dir") == str(target) and x.get("head_sha") == head]
 state = target / "review-state.json"
@@ -836,7 +838,8 @@ class Fakes:
     `<root>/calls.log`. `<root>/gh-fails` makes every `gh` call fail; `ps_fails`
     puts a `ps` that exits 1 first on PATH. The fake review (`uv`, PR C)
     answers from `<root>/reviews.json` (per PR number, one step per `review`
-    launch: `block`, `die`, `ignore_signals` (SIGINT and SIGTERM), `exit` with
+    launch: `block`, `die`, `ignore_signals` (SIGINT and SIGTERM), `start_delay` (seconds
+    between naming its pid in the lock and its `started` line), `exit` with
     `stderr`, `busy` (exit 2, another review
     runs now, its `started` line left), `findings`, `cost`, `stopped`
     (the `finished` line's value); `resume`

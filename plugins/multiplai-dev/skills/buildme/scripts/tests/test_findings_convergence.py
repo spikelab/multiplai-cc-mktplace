@@ -321,6 +321,45 @@ class TestTasksFile:
             assert f"`{F0}` add ## 9. Injected block" in first
         assert "\n## 9." not in text
 
+    @staticmethod
+    def _long_history(count: int) -> str:
+        claim = "the documented input returns the wrong result in the called function. " * 4
+        findings = [{"id": f"{i:010x}", "claim": f"Defect {i}: {claim}", "status": "confirmed", "file": "calc.py"}
+                    for i in range(count)]
+        return history.history_text([{"findings": findings, "mode": "full", "target": {"head_sha": str(n) * 40}}
+                                     for n in range(1, 4)])
+
+    def test_findings_convergence_a_long_history_keeps_every_instruction(self, tmp_path):
+        from build_pipeline.prompts.implementation import REVIEW_FIX_ESCALATION
+        long = self._long_history(60)
+        assert len(long) > code.ESCALATION_LIMIT
+        escalation = code.escalation_task(long)
+        assert len(escalation) <= code.ESCALATION_LIMIT
+        text, _ = code.render_tasks(3, [_fix_record(1, F0)], escalation=escalation,
+                                    self_check={"head": "h", "report": "sub() too", "block": 2})
+        template = " ".join(REVIEW_FIX_ESCALATION.split())
+        before, after = (part.strip() for part in template.split("{findings}"))
+        for b in _parsed(tmp_path, text):
+            first = b.description.splitlines()[0]
+            assert first == f"- {b.number}.0 {escalation}"
+            assert before in first and first.endswith(after)
+            kept = first[first.index(before) + len(before):first.index(after)].strip()
+            assert kept.startswith("- `0000000000` Defect 0:")
+            assert "findings are left out: the history was cut to fit this task)" in kept
+
+    def test_findings_convergence_a_short_history_is_not_cut(self):
+        short = self._long_history(1)
+        escalation = code.escalation_task(short)
+        assert " ".join(short.split()) in escalation and "left out" not in escalation
+        assert code._line(escalation, code.ESCALATION_LIMIT) == escalation
+
+    def test_findings_convergence_a_history_cut_names_how_many_it_left_out(self):
+        lines = [f"- `{i:010x}` " + "x" * 400 for i in range(100)]
+        escalation = code.escalation_task("\n".join(lines))
+        kept = sum(f"`{i:010x}`" in escalation for i in range(100))
+        assert 0 < kept < 100 and len(escalation) <= code.ESCALATION_LIMIT
+        assert f"({100 - kept} more findings are left out" in escalation
+
     def test_findings_convergence_no_escalation_no_task_zero(self, tmp_path):
         text, _ = code.render_tasks(2, [_fix_record(1, F0)])
         assert ".0 " not in text and ESCALATION_NEEDLE not in text
