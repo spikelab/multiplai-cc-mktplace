@@ -1,7 +1,7 @@
 """CLI for the walkthrough pipeline.
 
   run     — explain one module end to end
-  resume  — continue a run from its walkthrough-state.json
+  resume  — continue a run from its walkthrough-state.json (`--rewrite`: write it again after trace)
   check   — re-check every `path:line` and snippet in a finished walkthrough
   render  — rewrite a finished run's walkthrough files from its state; no model call
 
@@ -134,6 +134,9 @@ def build_parser() -> argparse.ArgumentParser:
     rs_docs = rs.add_mutually_exclusive_group()
     rs_docs.add_argument("--docs", help="Replace the saved vendor docs URL (after a docs-gate stop)")
     rs_docs.add_argument("--no-docs", action="store_true", help="Go on without vendor docs (after a docs-gate stop)")
+    rs.add_argument("--rewrite", action="store_true",
+                    help="Write the walkthrough again from a run past its trace stage: keeps the explore, docs and "
+                         "trace answers and runs only the write and render stages (their model calls are paid)")
     _run_flags(rs)
 
     ck = sub.add_parser("check", help="Re-check every path:line and snippet in a finished walkthrough")
@@ -221,7 +224,7 @@ def _main(args: argparse.Namespace) -> int:
             run_dir = Path(args.run_dir).expanduser().resolve()
             docs = None if args.no_docs else (args.docs if args.docs else orchestrator.NO_CHANGE)
             paths = asyncio.run(orchestrator.resume(run_dir, load_config(run_dir, max_cost_usd=max_cost),
-                                                    session_id=args.session_id, docs=docs))
+                                                    session_id=args.session_id, docs=docs, rewrite=args.rewrite))
         for p in paths:
             print(f"walkthrough: {p}")
         return 0
