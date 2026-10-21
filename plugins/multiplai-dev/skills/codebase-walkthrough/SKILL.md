@@ -1,6 +1,6 @@
 ---
 name: codebase-walkthrough
-description: Explains a module end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and opens it in the review-viewer, or compact Markdown for coding agents.
+description: Explains a module end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and an HTML page (and a review-viewer file), or compact Markdown for coding agents.
 when_to_use: 'Triggers: walk me through this module, explain this codebase, onboard me, codebase tour, walkthrough, /multiplai-dev:codebase-walkthrough'
 disable-model-invocation: true
 ---
@@ -33,7 +33,8 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
    scope: every entry whose path reaches one of its lines is kept, up to
    `--scenarios` paths (default 21), and code gates every hop. Every entry
    left out (over the cap, unreachable, a trace that failed) is listed with
-   its stage and reason in the **Left out** table under Coverage. If path
+   its stage and reason in the **Left out** table under Coverage (in human
+   mode, under How this was made). If path
    finding itself fails, the Paths section says why and the rest of the
    walkthrough is still written; a trust or budget stop still halts the run. The walkthrough's **Paths** section lists each path: its
    entry point, kind and who invokes it, its hops as `path:line` links with
@@ -46,6 +47,37 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
    claims only and refers to code by citation id. Each path gets one or two
    paragraphs written from its checked hops, citing them by hop id. Code turns the ids into
    `path:line` links and inserts the code snippets from the commit.
+
+In human mode the walkthrough is an explainer for someone new to the code. It
+has these sections, in this order:
+
+1. **What it is**: a sentence at the top on what the code is for, then two
+   short paragraphs in plain words.
+2. **Use cases**: at least two, each with who uses it and when, an example
+   command, call or file, what happens and what comes out. Each way to invoke
+   the code (a subcommand, a flag, a mode) gets its own example.
+3. **How it works**: one flow diagram of the main path, drawn by code from
+   boxes and arrows the writer names, then one short summary per step with
+   the specifics and code snippets behind a click.
+4. **What it creates**: each file, state record or output the code writes,
+   with an example payload behind a click.
+5. **Configuration**: a table of the settings and flags that change behaviour.
+6. **Gotchas**.
+7. **Reference**, closed by default: Paths, Module tour, Who calls it and what
+   it calls (names that appear only inside a quoted string are listed apart,
+   under "Mentions in strings (not calls)"), Data stores, Vendor docs,
+   Glossary, and the questions for the module's owner.
+8. **How this was made**, closed by default: Commits read (the module's
+   repository and each one with a reference, plus how many were searched),
+   Coverage, and Cut by the checks.
+
+Code checks each use case's flags and subcommands, each diagram box's
+citation and that the diagram is connected, and each key of a JSON or YAML
+example against the code. What fails is asked again once, then cut and
+listed under "Cut by the checks". In the HTML page a citation is a small
+numbered link to the cited lines, with `path:line` and the quote in its
+tooltip; the Markdown keeps the `path:line` links, so `check` reads it as
+before. Agent mode is unchanged.
 
 Between the stages, gates written in Python re-read every cited line range
 with `git show <sha>:<path>` and drop what is not there. A claim, a doc quote,
@@ -73,8 +105,10 @@ gates never ask a model.
   vendor's API.**
 - **Runs local programs**: `git`, `rg`, `ast-grep`, `pyright-langserver`.
 - **Writes files** to the run directory, the output directory and the log
-  files.
-- **Opens the walkthrough in the review-viewer** (human mode, step 2). That
+  files. The HTML page loads highlight.js and mermaid from
+  `cdnjs.cloudflare.com` when a browser opens it.
+- **Opens the walkthrough in the review-viewer only when the user asks for
+  it** (step 2). That
   is the multiplai-dev `review-viewer` skill: a local web server on a port in
   8765–8784 that reads the module's repository with git and calls no model.
   Its `SKILL.md` says what it does on the machine.
@@ -101,7 +135,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 |-----|---------|---------|
 | target | Directory of the module, inside a git repository | required |
 | `--depth` | `overview` (skips test files), `standard`, `deep` | `standard` |
-| `--mode` | `human` (Markdown and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or paths) | `human` |
+| `--mode` | `human` (Markdown, an HTML page and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or paths) | `human` |
 | `--name` | Base file name | the module directory, lower-cased |
 | `--output` | Directory for the walkthrough files | `INBOX/` if it exists, else the current directory |
 | `--search-root` / `--repos` | Where to look for references | the nearest ancestor holding several repositories |
@@ -151,12 +185,23 @@ only if the user raises the ceiling:
 The run prints `walkthrough: <path>` for each file written, and last, on
 every exit but a kill, `SPEND:<usd>:<tokens>`: what this run's model calls
 cost (a resume counts only its own calls). Read the
-`## Coverage` section of the Markdown file and paste its table into chat as it
-is, with the list of files that have no surviving fact. Then give the paths of
+Coverage section of the Markdown file (`## Coverage` in agent mode,
+`### Coverage` under How this was made in human mode) and paste its table into
+chat as it is, with the list of files that have no surviving fact. Then give the paths of
 the Markdown, `walkthrough.json` and `<name>-paths.json` files.
 
-Then, in human mode, open the walkthrough in the review-viewer. Start it in
-the background (Bash tool, `run_in_background: true`):
+Then, in human mode, give the user the HTML page as a `file://` URL:
+`file://` followed by the absolute path of `<name>-walkthrough.html` exactly
+as its `walkthrough:` line printed it, with each space written `%20`. The page
+opens straight from disk in a browser: one scrolling page with a contents list
+down the side, details behind clicks, and every citation a small numbered link
+to the cited lines.
+
+Open the review-viewer only when the user asks for it.
+
+#### If the user asks for the review-viewer
+
+Start it in the background (Bash tool, `run_in_background: true`):
 
 ```bash
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review-viewer/scripts \
@@ -198,6 +243,46 @@ a hop cited in prose whose anchor is missing fails as `unresolved hop
 citation p4h1`, and when the file has path hops `check: N hops checked` is
 printed on stderr. It reads only the Markdown; walkthroughs with the older
 "End-to-end scenarios" section are checked as before.
+
+### 4. Re-render a finished run
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
+  python -m walkthrough_pipeline render <run dir> [--output /abs/out]
+```
+
+It rewrites the Markdown, `walkthrough.json`, `<name>-paths.json` and the
+HTML page from the run's `walkthrough-state.json`. It makes no model call and
+spends nothing: it prints the same `walkthrough: <path>` lines as `run`, then
+`SPEND:0.000000:0`. Use it to get the HTML page for a run that finished
+before the page existed, or to replace a deleted or edited output; it
+overwrites the files without asking. The files go to `--output`, else the
+run's own `--output`, else the run directory. It reads the cited repositories
+with `git show`, so they must still hold the commits in the "Commits read"
+table. It exits 1 with `render: <run dir> has not finished its write stage`
+for a run that has not got that far (resume it instead), and with
+`render: cannot read <repo> at <sha>: …` when a repository or its commit is
+gone; in both cases it writes nothing. Report as in step 2.
+
+### 5. Write a finished run again
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
+  python -m walkthrough_pipeline --session-id "{session_id}" \
+  resume <run dir> --rewrite --trust-repo [--max-usd <n>]
+```
+
+It runs the write and render stages again on a run past its trace stage, with
+the explore, docs and trace answers it already paid for, so only the writers
+are paid again. Use it to get a run's walkthrough in the current format. It
+needs `--trust-repo`, as any run with model calls does. It cites the commits
+the run read, even when a repository has moved on since, and overwrites the
+outputs. It exits 1 with `resume --rewrite: <run dir> has not finished its
+trace stage` for a run that has not got that far, and writes nothing. A stop
+part-way through (exit 2) is continued with a plain `resume`. `--max-usd` is
+the ceiling for the run's whole spend, the earlier stages included: a run that
+spent $20 and is resumed with `--max-usd 25` stops after $5 more. Run it in
+the background and report as in steps 1 and 2.
 
 ## Configuration
 

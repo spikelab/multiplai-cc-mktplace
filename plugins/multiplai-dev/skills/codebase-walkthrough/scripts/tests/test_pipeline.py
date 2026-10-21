@@ -23,24 +23,16 @@ def run_args(ws, tmp_path, *extra):
             "--output", str(tmp_path / "out"), "--docs", "https://docs.acme.test", "--lsp-timeout", "0", *extra]
 
 
-@pytest.fixture
-def done_run(ws, tmp_path, monkeypatch, fake_fetch):
-    agents = FakeAgents()
-    monkeypatch.setattr(sdk, "agent_call_structured", agents)
-    assert main(run_args(ws, tmp_path)) == 0
-    run_dir = next((tmp_path / "runs").iterdir())
-    return tmp_path / "out" / "bookings-walkthrough.md", run_dir, agents
-
-
-def test_run_writes_markdown_and_json_but_no_html(done_run):
+def test_run_writes_markdown_json_and_html_with_the_same_headings(done_run):
     md_path, _, _ = done_run
     md = md_path.read_text()
-    assert not md_path.with_suffix(".html").exists()
+    html = md_path.with_suffix(".html").read_text()
     assert md_path.with_suffix(".json").exists()
+    assert "<svg" not in html
     md_heads = markdown_headings(md)
-    for title in ("Overview", "Glossary", "Paths", "Module tour", "Who calls it and what it calls",
-                  "Data stores and config", "Vendor docs", "Gotchas and questions for the owner", "Coverage"):
-        assert title in md_heads
+    html_heads = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<h2>(.*?)</h2>", html)]
+    assert md_heads == html_heads == ["What it is", "Use cases", "How it works", "What it creates", "Configuration",
+                                      "Gotchas", "Reference", "How this was made"]
     assert "End-to-end scenarios" not in md_heads
 
 

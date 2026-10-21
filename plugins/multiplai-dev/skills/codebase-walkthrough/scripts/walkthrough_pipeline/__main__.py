@@ -1,14 +1,16 @@
 """CLI for the walkthrough pipeline.
 
   run     — explain one module end to end
-  resume  — continue a run from its walkthrough-state.json
+  resume  — continue a run from its walkthrough-state.json (`--rewrite`: write it again after trace)
   check   — re-check every `path:line` and snippet in a finished walkthrough
+  render  — rewrite a finished run's walkthrough files from its state; no model call
 
 stdout contract: one summary line per stage, then `walkthrough: <path>` for
 each file written, or `check: N checked, M failed` (and, when the file has path
 hops, `check: N hops checked` on stderr). `run` and `resume` print
 `SPEND:<usd>:<tokens>` last, on every exit but a kill: what this process's
-model calls cost.
+model calls cost. `render` prints the same `walkthrough:` lines, then
+`SPEND:0.000000:0`.
 
 Exit codes: 0 done; 1 error (bad input, untrusted repo, failed check, failed
 run); 2 the budget circuit breaker stopped the run with a checkpoint (resume
@@ -29,7 +31,7 @@ from .budget import DEFAULT_MAX_USD
 
 log = logging.getLogger("walkthrough_pipeline")
 
-SUBCOMMANDS = ("run", "resume", "check")
+SUBCOMMANDS = ("run", "resume", "check", "render")
 
 TRUST_MESSAGE = (
     "Not run: the walkthrough skill sends the module's repository, and every repository that "
@@ -105,7 +107,8 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("target", help="Path to the module (a directory inside a git repository)")
     rn.add_argument("--depth", choices=("overview", "standard", "deep"), default="standard")
     rn.add_argument("--mode", choices=("human", "agent"), default="human",
-                    help="human: Markdown walkthrough + review-viewer walkthrough.json; agent: compact Markdown for coding agents")
+                    help="human: Markdown walkthrough, HTML page and review-viewer walkthrough.json; "
+                         "agent: compact Markdown for coding agents")
     rn.add_argument("--name", help="Base file name (default: the module directory's name, lower-cased)")
     rn.add_argument("--output", help="Directory for the walkthrough files (default: INBOX/ if it exists, else .)")
     rn.add_argument("--runs-dir", help="Directory for run state, snapshots and boundary.json "
@@ -131,6 +134,9 @@ def build_parser() -> argparse.ArgumentParser:
     rs_docs = rs.add_mutually_exclusive_group()
     rs_docs.add_argument("--docs", help="Replace the saved vendor docs URL (after a docs-gate stop)")
     rs_docs.add_argument("--no-docs", action="store_true", help="Go on without vendor docs (after a docs-gate stop)")
+    rs.add_argument("--rewrite", action="store_true",
+                    help="Write the walkthrough again from a run past its trace stage: keeps the explore, docs and "
+                         "trace answers and runs only the write and render stages (their model calls are paid)")
     _run_flags(rs)
 
     ck = sub.add_parser("check", help="Re-check every path:line and snippet in a finished walkthrough")
@@ -140,6 +146,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "(says whether the code has moved since)")
     ck.add_argument("--repo", action="append", default=[], metavar="KEY=PATH",
                     help="Where a repo in the header lives now, when it has moved")
+
+    rd = sub.add_parser("render", help="Rewrite a finished run's walkthrough files from its state, with no model call")
+    rd.add_argument("run_dir", help="The run's directory")
+    rd.add_argument("--output", help="Directory for the walkthrough files (default: the run's saved --output, "
+                                     "else the run directory)")
+    rd.add_argument("--trust-repo", action="store_true", help="Accepted and ignored: render runs no agent")
     return parser
 
 
@@ -178,6 +190,9 @@ def _main(args: argparse.Namespace) -> int:
             print(f"check: {hops} hops checked", file=sys.stderr)
         return 1 if failures or checked == 0 else 0
 
+    if args.command == "render":
+        return _render(args)
+
     if getattr(args, "trust_repo", False):
         os.environ["WALKTHROUGH_TRUST_REPO"] = "1"
 
@@ -209,7 +224,7 @@ def _main(args: argparse.Namespace) -> int:
             run_dir = Path(args.run_dir).expanduser().resolve()
             docs = None if args.no_docs else (args.docs if args.docs else orchestrator.NO_CHANGE)
             paths = asyncio.run(orchestrator.resume(run_dir, load_config(run_dir, max_cost_usd=max_cost),
-                                                    session_id=args.session_id, docs=docs))
+                                                    session_id=args.session_id, docs=docs, rewrite=args.rewrite))
         for p in paths:
             print(f"walkthrough: {p}")
         return 0
@@ -227,6 +242,33 @@ def _main(args: argparse.Namespace) -> int:
         log.error("walkthrough failed: %s", e, exc_info=True)
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
+
+
+def _render(args: argparse.Namespace) -> int:
+    """Write the outputs of a run past its write stage from walkthrough-state.json. No agent, no ledger;
+    the state file and progress.log are left as they are."""
+    from . import render, target
+    from .state import STATE_FILE, load_state
+
+    run_dir = Path(args.run_dir).expanduser().resolve()
+    state = load_state(run_dir / STATE_FILE)
+    if state is None or not state.past("write"):
+        print(f"render: {run_dir} has not finished its write stage; continue it with resume {run_dir} --trust-repo",
+              file=sys.stderr)
+        return 1
+    unreadable = render.unreadable_commit(state)
+    if unreadable is not None:
+        print(f"render: cannot read {unreadable}", file=sys.stderr)
+        return 1
+    out_dir = Path(args.output).expanduser().resolve() if args.output else Path(state.options.get("output") or run_dir)
+    try:
+        paths = render.write_outputs(state, out_dir)
+    except (target.TargetError, OSError) as e:
+        print(f"render: {e}", file=sys.stderr)
+        return 1
+    for p in paths:
+        print(f"walkthrough: {p}")
+    return 0
 
 
 if __name__ == "__main__":

@@ -15,6 +15,45 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.97.0] - 2026-10-21
+
+### Added
+- codebase-walkthrough: human mode writes an HTML page,
+  `<name>-walkthrough.html`, beside the Markdown again. It opens straight
+  from disk in a browser, in light or dark theme and at phone width: one
+  scrolling page with a contents list down the side, every citation a small
+  numbered link to the cited lines on GitHub with `path:line` and the quote
+  in its tooltip, a link to a path hop (`#p2h3`) opening the closed section
+  that holds it, and Mermaid diagrams drawn.
+- codebase-walkthrough: in human mode the walkthrough is an explainer for
+  someone new to the code. It opens with what the code is for, then use
+  cases with example commands or calls (one per way to invoke it), the main
+  path as one flow diagram with a short summary per step and the specifics
+  behind a click, what the code creates with example payloads behind a
+  click, its configuration, and gotchas. The paths, module tour, callers,
+  data stores, vendor docs and glossary move under a closed Reference
+  section, and the commits read, coverage and cuts under a closed "How this
+  was made". Code checks every example's flags and subcommands, every
+  diagram box and every key of a JSON or YAML example against the code, and
+  cuts what fails.
+- codebase-walkthrough: `resume <run dir> --rewrite` writes a finished run
+  again in the current format, paying only for the write stage: the explore,
+  docs and trace answers are kept. It refuses a run that has not finished
+  its trace stage.
+- codebase-walkthrough: `render <run dir>` rewrites a finished run's
+  Markdown, `walkthrough.json`, `<name>-paths.json` and HTML files from its
+  saved state, with no model call and no spend. It gives a run that finished
+  before the page existed its page.
+
+### Changed
+- codebase-walkthrough: at the end of a run the skill hands over the HTML
+  page as a `file://` link instead of opening the review-viewer; it opens
+  the viewer only when you ask for it. `walkthrough.json` is still written.
+- codebase-walkthrough: "Commits read" lists only the module's repository
+  and the repositories with a reference, with one line saying how many were
+  searched. Names that appear only inside a quoted string are listed under
+  "Mentions in strings (not calls)", apart from the callers.
+
 ## [0.96.8] - 2026-10-21
 
 ### Fixed

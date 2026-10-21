@@ -22,7 +22,7 @@ from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.config import DEFAULT_CONCURRENCY
 from walkthrough_pipeline.models import SectionOutput, TargetInfo, WalkState
-from walkthrough_pipeline.render import markdown_headings, split_sections
+from walkthrough_pipeline.render import markdown_headings, section_texts
 from walkthrough_pipeline.state import STATE_FILE, load_state
 
 HOP_ID = re.compile(r"p\d+h\d+")
@@ -46,7 +46,7 @@ def _click_run(tmp_path, monkeypatch, agents, *extra, names=("sync",)):
 
 
 def _paths_body(md: str) -> str:
-    bodies = [body for title, body in split_sections(md)[1] if title == "Paths"]
+    bodies = section_texts(md, "Paths")
     assert len(bodies) == 1, markdown_headings(md)
     return bodies[0]
 
@@ -136,9 +136,9 @@ def test_click_cli_run_renders_the_paths_section(tmp_path, monkeypatch, spy):
     code, run_dir, md_path = _click_run(tmp_path, monkeypatch, FakeAgents(trace_plan=path_fixtures.click_plan()))
     assert code == 0
     md = md_path.read_text()
-    heads = markdown_headings(md)
-    assert heads.count("Paths") == 1 and "End-to-end scenarios" not in heads
-    assert heads.index("Glossary") + 1 == heads.index("Paths") == heads.index("Module tour") - 1
+    heads = markdown_headings(md, 3)
+    assert heads.count("Paths") == 1 and "End-to-end scenarios" not in heads + markdown_headings(md)
+    assert heads.index("Paths") + 1 == heads.index("Module tour")
     body = _paths_body(md)
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     assert lines[0] == "1 path reaches this module."
@@ -153,7 +153,7 @@ def test_click_cli_run_renders_the_paths_section(tmp_path, monkeypatch, spy):
     assert body.index('id="p1h1"') < body.index('id="p1h2"')
     assert "- Ends at `p1h2` (trace complete)." in lines
     assert "no e2e test" in body
-    coverage = dict(split_sections(md)[1])["Coverage"]
+    coverage = section_texts(md, "Coverage")[0]
     assert re.search(r"^\| Paths traced \| 1\b", coverage, re.M)
     assert re.search(r"^\| Paths cut short \| 0\b", coverage, re.M)
     assert "Scenarios cut short" not in md

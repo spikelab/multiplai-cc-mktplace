@@ -11,7 +11,7 @@ from test_paths_stage import _paths_body
 from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.models import Reference, SymbolEntry, TargetInfo, WalkState
-from walkthrough_pipeline.render import split_sections
+from walkthrough_pipeline.render import section_texts
 
 SEEDS = [Seed(path="shop/views.py", symbol="pay_hook", name=path_fixtures.WEBHOOK),
          Seed(path="shop/views.py", symbol="status", name=path_fixtures.CALLED),
@@ -58,7 +58,7 @@ def test_every_web_entry_is_traced_or_over_cap(tmp_path, monkeypatch, spy):
     assert len(traced) == 2
     for seed in SEEDS:
         assert seed.name in traced or dropped.get(seed.name) == "over_cap", seed.name
-    coverage = dict(split_sections(md_path.read_text())[1])["Coverage"]
+    coverage = section_texts(md_path.read_text(), "Coverage")[0]
     for name, reason in dropped.items():
         assert f"(`{name}`) | cap | `{reason}` |" in coverage
 

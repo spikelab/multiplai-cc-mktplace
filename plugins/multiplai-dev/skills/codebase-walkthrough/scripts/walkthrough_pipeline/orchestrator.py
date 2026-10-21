@@ -23,7 +23,7 @@ from . import budget, docs as docs_mod, lsp, references, repos as repos_mod, sym
 from . import target as target_mod
 from .config import WalkConfig
 from .gates import boundary_gate, partition_gate, target_files_ws
-from .models import Dropped, WalkState
+from .models import STAGES as STAGES_ORDER, Dropped, WalkState
 from .partition import partition, ws_lines
 from .progress import ProgressWriter
 from .render import write_outputs
@@ -285,9 +285,24 @@ async def run_state(state: WalkState, run_dir: Path, config: WalkConfig, *, sess
 NO_CHANGE = object()
 
 
+def rewind_for_rewrite(state: WalkState, run_dir: Path) -> WalkState:
+    """`resume --rewrite`: send a run past its trace stage back to the stage before `write`, dropping what
+    the write stage made (its sections, its answers, its entries in `dropped`). The explore, docs and
+    trace answers are kept, so only the write and render stages run again. Raises WalkError, and changes
+    nothing, when the run has not finished its trace stage."""
+    if not state.past("trace"):
+        raise WalkError(f"resume --rewrite: {run_dir} has not finished its trace stage")
+    state.stage = STAGES_ORDER[STAGES_ORDER.index("write") - 1]
+    state.sections = {}
+    state.write_answers = {}
+    state.dropped = [d for d in state.dropped if not d.stage.startswith("write")]
+    return state
+
+
 async def resume(run_dir: Path, config: WalkConfig, *, session_id: str = "",
-                 docs: str | None | object = NO_CHANGE) -> list[Path]:
-    """Continue a saved run. *docs* replaces the saved `--docs` URL (None drops the docs)."""
+                 docs: str | None | object = NO_CHANGE, rewrite: bool = False) -> list[Path]:
+    """Continue a saved run. *docs* replaces the saved `--docs` URL (None drops the docs). *rewrite* runs the
+    write and render stages again on a run past its trace stage (`rewind_for_rewrite`)."""
     state = load_state(run_dir / STATE_FILE)
     if state is None:
         raise WalkError(f"no readable {STATE_FILE} in {run_dir}")
@@ -296,5 +311,8 @@ async def resume(run_dir: Path, config: WalkConfig, *, session_id: str = "",
             raise WalkError("the docs stage of this run is already done; --docs/--no-docs can no longer change it")
         state.options["docs"] = docs
         state.docs = {}
+    if rewrite:
+        # Saved at once: a stop before the first write call leaves a run a plain `resume` finishes.
+        save_state(rewind_for_rewrite(state, run_dir), run_dir)
     rewind_legacy_trace(state)
     return await run_state(state, run_dir, config, session_id=session_id)
