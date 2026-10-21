@@ -1,35 +1,121 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-10-17T13:39:40+00:00",
+  "generated_at": "2026-10-21T06:04:47+00:00",
   "base_sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
   "head_sha": "8fad5fdf1b69c48c9b215ec887f8d99e3ca0ab2e",
-  "overview_md": "# bookings — codebase walkthrough\n\n> Generated 2026-10-17 · depth standard · mode human · 7 files · spent $0.00 over 19 agent calls\n\n- Module directory: `../../ws0/ws/engine/bookings`\n- Depth: `standard`\n- Mode: `human`\n\nEvery `path:line` below was checked against the commit listed here. Re-check with `python -m walkthrough_pipeline check <this file>`.\n\n## Commits read\n\n| Repo | Path | Commit |\n|---|---|---|\n| engine | ../../ws0/ws/engine | `8fad5fdf1b69c48c9b215ec887f8d99e3ca0ab2e` |\n| front | ../../ws0/ws/front | `45ab50e45bca1db91f7c793b0b2fbedda90916d4` |\n| warehouse | ../../ws0/ws/warehouse | `f3c723ce7aaf4f871132ed8184281240923873f2` |\n\n## Vendor docs\n\nNothing passed the checks here.\n\nDocs: https://docs.acme.test — `llms.txt` lists 3 pages; 2 fetched. Local docs: acme-docs.\n\n| API path the code calls | Docs page | Collection request |\n|---|---|---|\n| `/bookings/{}/ack` | https://docs.acme.test/api/bookings-collection.md | `acme-api-collection/bookings/ack.yml` (POST) |\n| `/webhooks` | no doc page found | not in the collection |\n\nNo doc page found for: `/webhooks`\n\nNot in the collection `acme-api-collection`: `/webhooks`\n\nOpen a request file in Bruno and run it with your own API key; this pipeline never calls the API.\n\n## Coverage\n\n| Measure | Value |\n|---|---|\n| Files with a surviving fact | 6 of 7 (85.7%) |\n| Files over 30 lines with a surviving fact | 0 of 0 (0.0%) |\n| Migrations (counted, not read) | 2; latest `0002_ospite.py` |\n| Boundary entries not cited by any fact | 0 |\n| Facts kept | 26 |\n| Claims dropped by the docs checks | 2 |\n| Claims dropped by the explore checks | 2 |\n| Paragraphs cut by the write checks | 0 |\n| Paths traced | 2 |\n| Paths cut short | 0 |\n| Entries left out | 0 |\n| pyright references | skipped (--lsp-timeout 0) |\n\nFiles with no surviving fact (1):\n\n- `engine/bookings/__init__.py` (1 lines, at or under 30: not required)\n",
+  "overview_md": "# bookings — codebase walkthrough\n\nBookings takes reservations from Acme. [`engine/bookings/apps.py:1`](../../ws0/ws/engine/bookings/apps.py#L1 \"from django.apps import AppConfig\")\n\n> Generated 2026-10-21 · engine at `8fad5fdf1b69` · 7 files · depth standard · spent $0.00 over 25 agent calls\n\n## Reference\n\nDetails for when you need them: every path traced, every file, every caller.\n\n## Vendor docs\n\nNothing passed the checks here.\n\nDocs: https://docs.acme.test — `llms.txt` lists 3 pages; 2 fetched. Local docs: acme-docs.\n\n| API path the code calls | Docs page | Collection request |\n|---|---|---|\n| `/bookings/{}/ack` | https://docs.acme.test/api/bookings-collection.md | `acme-api-collection/bookings/ack.yml` (POST) |\n| `/webhooks` | no doc page found | not in the collection |\n\nNo doc page found for: `/webhooks`\n\nNot in the collection `acme-api-collection`: `/webhooks`\n\nOpen a request file in Bruno and run it with your own API key; this pipeline never calls the API.\n\n## Questions for the owner\n\n- Who owns `poll_task`?\n\n## How this was made\n\n### Commits read\n\n| Repo | Path | Commit |\n|---|---|---|\n| engine | ../../ws0/ws/engine | `8fad5fdf1b69c48c9b215ec887f8d99e3ca0ab2e` |\n| front | ../../ws0/ws/front | `45ab50e45bca1db91f7c793b0b2fbedda90916d4` |\n| warehouse | ../../ws0/ws/warehouse | `f3c723ce7aaf4f871132ed8184281240923873f2` |\n\nSearched 3 repositories under `../../ws0/ws`; 3 had references.\n\n- Module directory: `../../ws0/ws/engine/bookings`\n- Depth: `standard`\n- Mode: `human`\n\nEvery citation in this file was checked against the commit listed here. Re-check with `python -m walkthrough_pipeline check <this file>`.\n\n### Coverage\n\n| Measure | Value |\n|---|---|\n| Files with a surviving fact | 6 of 7 (85.7%) |\n| Files over 30 lines with a surviving fact | 0 of 0 (0.0%) |\n| Migrations (counted, not read) | 2; latest `0002_ospite.py` |\n| Boundary entries not cited by any fact | 0 |\n| Facts kept | 26 |\n| Claims dropped by the docs checks | 2 |\n| Claims dropped by the explore checks | 2 |\n| Paragraphs and items cut by the write checks | 0 |\n| Paths traced | 2 |\n| Paths cut short | 0 |\n| Entries left out | 0 |\n| pyright references | skipped (--lsp-timeout 0) |\n\nFiles with no surviving fact (1):\n\n- `engine/bookings/__init__.py` (1 lines, at or under 30: not required)\n\n### Cut by the checks\n\nNothing was cut.\n",
   "steps": [
     {
-      "id": "overview",
-      "title": "Overview",
+      "id": "what-it-is",
+      "title": "What it is",
       "anchors": [
         {
           "path": "bookings/apps.py",
           "side": "head",
           "line_start": 1,
           "line_end": 1
+        },
+        {
+          "path": "bookings/client.py",
+          "side": "head",
+          "line_start": 1,
+          "line_end": 1
         }
       ],
-      "body_md": "This part is explained by [`engine/bookings/apps.py:1`](../../ws0/ws/engine/bookings/apps.py#L1 \"from django.apps import AppConfig\") and `Reservation`."
+      "body_md": "It keeps each `Reservation` in the database. [`engine/bookings/apps.py:1`](../../ws0/ws/engine/bookings/apps.py#L1 \"from django.apps import AppConfig\")\n\nOther code calls it over HTTP and on a timer. [`engine/bookings/client.py:1`](../../ws0/ws/engine/bookings/client.py#L1 \"import os\")"
     },
     {
-      "id": "glossary",
-      "title": "Glossary",
+      "id": "use-cases",
+      "title": "Use cases",
+      "anchors": [
+        {
+          "path": "bookings/tasks.py",
+          "side": "head",
+          "line_start": 5,
+          "line_end": 5
+        },
+        {
+          "path": "bookings/views.py",
+          "side": "head",
+          "line_start": 5,
+          "line_end": 5
+        }
+      ],
+      "body_md": "### Poll for new bookings\n\n**Who:** The scheduler · **When:** Every minute\n\n```bash\nbookings poll\n```\n\nIt asks Acme for new bookings. [`engine/bookings/tasks.py:5`](../../ws0/ws/engine/bookings/tasks.py#L5 \"def poll_task():\") ([p1h1](#p1h1))\n\n**What comes out:** New reservations.\n\nBased on: [`engine/bookings/tasks.py:5`](../../ws0/ws/engine/bookings/tasks.py#L5 \"def poll_task():\") ([p1h1](#p1h1))\n\n### Receive a webhook\n\n**Who:** Acme · **When:** When a booking changes\n\n```python\nReservation(guest=\"Ada\")\n```\n\nIt stores the booking. [`engine/bookings/views.py:5`](../../ws0/ws/engine/bookings/views.py#L5 \"def webhook(request):\") ([p2h1](#p2h1))\n\n**What comes out:** One reservation row.\n\nBased on: [`engine/bookings/views.py:5`](../../ws0/ws/engine/bookings/views.py#L5 \"def webhook(request):\") ([p2h1](#p2h1))"
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "anchors": [
+        {
+          "path": "bookings/tasks.py",
+          "side": "head",
+          "line_start": 5,
+          "line_end": 5
+        },
+        {
+          "path": "bookings/views.py",
+          "side": "head",
+          "line_start": 5,
+          "line_end": 5
+        },
+        {
+          "path": "bookings/tasks.py",
+          "side": "head",
+          "line_start": 1,
+          "line_end": 1
+        }
+      ],
+      "diagram": {
+        "kind": "mermaid",
+        "source": "flowchart TD\n    f1[\"Acme sends a booking\"]\n    f2[\"The view stores it\"]\n    f3[\"The task acknowledges it\"]\n    f1 -->|\"webhook\"| f2\n    f2 --> f3"
+      },
+      "body_md": "Where each box is in the code:\n\n- Acme sends a booking: [`engine/bookings/tasks.py:5`](../../ws0/ws/engine/bookings/tasks.py#L5 \"def poll_task():\") ([p1h1](#p1h1))\n- The view stores it: [`engine/bookings/views.py:5`](../../ws0/ws/engine/bookings/views.py#L5 \"def webhook(request):\") ([p2h1](#p2h1))\n- The task acknowledges it: [`engine/bookings/tasks.py:1`](../../ws0/ws/engine/bookings/tasks.py#L1 \"from celery import shared_task\")\n\n### 1. Receive\n\nA booking arrives. [`engine/bookings/tasks.py:5`](../../ws0/ws/engine/bookings/tasks.py#L5 \"def poll_task():\") ([p1h1](#p1h1))\n\nThe handler reads the body. [`engine/bookings/views.py:5`](../../ws0/ws/engine/bookings/views.py#L5 \"def webhook(request):\") ([p2h1](#p2h1))\n\n<!-- snippet engine/bookings/tasks.py:5-5 -->\n[`engine/bookings/tasks.py:5`](../../ws0/ws/engine/bookings/tasks.py#L5 \"def poll_task():\")\n\n```python\ndef poll_task():\n```\n\n### 2. Store\n\nIt is saved. [`engine/bookings/tasks.py:1`](../../ws0/ws/engine/bookings/tasks.py#L1 \"from celery import shared_task\")"
+    },
+    {
+      "id": "what-it-creates",
+      "title": "What it creates",
       "anchors": [
         {
           "path": "bookings/models.py",
+          "side": "head",
+          "line_start": 4,
+          "line_end": 4
+        },
+        {
+          "path": "bookings/client.py",
           "side": "head",
           "line_start": 6,
           "line_end": 6
         }
       ],
-      "body_md": "| Term | Meaning | Where |\n|---|---|---|\n| ospite | guest (Italian) | [`engine/bookings/models.py:6`](../../ws0/ws/engine/bookings/models.py#L6 \"ospite_count\") |"
+      "body_md": "### Reservation row\n\nOne row per booking. [`engine/reports/usage.py:2`](../../ws0/ws/engine/reports/usage.py#L2 \"from bookings.models import Reservation\")\n\nWritten at: [`engine/reports/usage.py:2`](../../ws0/ws/engine/reports/usage.py#L2 \"from bookings.models import Reservation\")\n\nExample (json):\n\n```json\n{\"guest\": \"Ada\", \"ospite_count\": 2}\n```\n\n### Acknowledgement\n\nWhat it sends back to Acme. [`engine/bookings/models.py:4`](../../ws0/ws/engine/bookings/models.py#L4 \"class Reservation(models.Model):\")\n\nWritten at: [`engine/bookings/models.py:4`](../../ws0/ws/engine/bookings/models.py#L4 \"class Reservation(models.Model):\")\n\nExample (text):\n\n```text\nok\n```\n\n### Poll log\n\nA line per poll. [`engine/bookings/client.py:6`](../../ws0/ws/engine/bookings/client.py#L6 \"BASE_URL = settings.ACME_API_URL\")\n\nWritten at: [`engine/bookings/client.py:6`](../../ws0/ws/engine/bookings/client.py#L6 \"BASE_URL = settings.ACME_API_URL\")"
+    },
+    {
+      "id": "configuration",
+      "title": "Configuration",
+      "anchors": [
+        {
+          "path": "bookings/client.py",
+          "side": "head",
+          "line_start": 6,
+          "line_end": 6
+        }
+      ],
+      "body_md": "| Setting | What it changes | Default | Where |\n|---|---|---|---|\n| `ACME_ENV` | Picks the staging or production key. [`engine/bookings/client.py:6`](../../ws0/ws/engine/bookings/client.py#L6 \"BASE_URL = settings.ACME_API_URL\") | `production` | [`engine/bookings/client.py:6`](../../ws0/ws/engine/bookings/client.py#L6 \"BASE_URL = settings.ACME_API_URL\") |"
+    },
+    {
+      "id": "gotchas",
+      "title": "Gotchas",
+      "anchors": [
+        {
+          "path": "bookings/models.py",
+          "side": "head",
+          "line_start": 5,
+          "line_end": 5
+        }
+      ],
+      "body_md": "This part is explained by [`engine/bookings/models.py:5`](../../ws0/ws/engine/bookings/models.py#L5 \"guest = models.CharField\") and `Reservation`."
     },
     {
       "id": "paths",
@@ -48,7 +134,7 @@
           "line_end": 5
         }
       ],
-      "body_md": "2 paths reach this module.\n\n**p1** — `bookings.poll (beat)` (caller seed)\n\n- Entry: invoked by `bookings.poll (beat)`, at `p1h1`\n- Hops:\n  - <a id=\"p1h1\"></a>`p1h1` [`engine/bookings/tasks.py:5`](../../ws0/ws/engine/bookings/tasks.py#L5 \"def poll_task():\")\n- Ends at `p1h1` (trace complete).\n- E2E tests: no e2e test\n\n**p2** — `HTTP /hooks/acme/` (caller seed)\n\n- Entry: invoked by `HTTP /hooks/acme/`, at `p2h1`\n- Hops:\n  - <a id=\"p2h1\"></a>`p2h1` [`engine/bookings/views.py:5`](../../ws0/ws/engine/bookings/views.py#L5 \"def webhook(request):\")\n- Ends at `p2h1` (trace complete).\n- E2E tests: no e2e test"
+      "body_md": "2 paths reach this module.\n\n**p1** — `bookings.poll (beat)` (caller seed)\n\nThis part is explained by [`engine/bookings/tasks.py:5`](../../ws0/ws/engine/bookings/tasks.py#L5 \"def poll_task():\") ([p1h1](#p1h1)) and `Reservation`.\n\n- Entry: invoked by `bookings.poll (beat)`, at `p1h1`\n- Hops:\n  - <a id=\"p1h1\"></a>`p1h1` [`engine/bookings/tasks.py:5`](../../ws0/ws/engine/bookings/tasks.py#L5 \"def poll_task():\")\n- Ends at `p1h1` (trace complete).\n- E2E tests: no e2e test\n\n**p2** — `HTTP /hooks/acme/` (caller seed)\n\nThis part is explained by [`engine/bookings/views.py:5`](../../ws0/ws/engine/bookings/views.py#L5 \"def webhook(request):\") ([p2h1](#p2h1)) and `Reservation`.\n\n- Entry: invoked by `HTTP /hooks/acme/`, at `p2h1`\n- Hops:\n  - <a id=\"p2h1\"></a>`p2h1` [`engine/bookings/views.py:5`](../../ws0/ws/engine/bookings/views.py#L5 \"def webhook(request):\")\n- Ends at `p2h1` (trace complete).\n- E2E tests: no e2e test"
     },
     {
       "id": "module-tour",
@@ -61,7 +147,7 @@
           "line_end": 1
         }
       ],
-      "body_md": "### __init__.py, apps.py, client.py, models.py, tasks.py, urls.py, views.py\n\nThis part is explained by [`engine/bookings/apps.py:1`](../../ws0/ws/engine/bookings/apps.py#L1 \"from django.apps import AppConfig\") and `Reservation`."
+      "body_md": "#### __init__.py, apps.py, client.py, models.py, tasks.py, urls.py, views.py\n\nThis part is explained by [`engine/bookings/apps.py:1`](../../ws0/ws/engine/bookings/apps.py#L1 \"from django.apps import AppConfig\") and `Reservation`."
     },
     {
       "id": "who-calls-it-and-what-it-calls",
@@ -84,11 +170,11 @@
         "kind": "mermaid",
         "source": "graph LR\n    T[\"bookings\"]\n    R0[\"engine\"] -->|3 refs| T\n    R1[\"front\"] -->|1 refs| T\n    R2[\"warehouse\"] -->|1 refs| T\n    T -->|1| O0[\"env\"]\n    T -->|2| O1[\"http\"]\n    T -->|2| O2[\"setting\"]\n    T -->|2| O3[\"setting-definition\"]"
       },
-      "body_md": "### Who calls it\n\nThis part is explained by [`engine/project/settings.py:9`](../../ws0/ws/engine/project/settings.py#L9 \"'task': 'bookings.poll',\") and `Reservation`.\n\n| Repo | Kind | Symbol | Where | Found by |\n|---|---|---|---|---|\n| engine | celery-name | `bookings.poll` | [`engine/project/settings.py:9`](../../ws0/ws/engine/project/settings.py#L9 \"'task': 'bookings.poll',\") | ast |\n| engine | python-import | `bookings.models: Reservation` | [`engine/reports/usage.py:2`](../../ws0/ws/engine/reports/usage.py#L2 \"from bookings.models import Reservation\") | ast |\n| engine | url-include | `bookings.urls mounted at ''` | [`engine/project/urls.py:4`](../../ws0/ws/engine/project/urls.py#L4 \"path('', include('bookings.urls')),\") | ast |\n| front | http-route | `hooks/acme/` | [`front/src/api.ts:5`](../../ws0/ws/front/src/api.ts#L5 \"return fetch(`${BASE}/hooks/acme/`, { method: 'POST' });\") | ast-grep |\n| warehouse | sql-table | `bookings_reservation` | [`warehouse/models.sql:4`](../../ws0/ws/warehouse/models.sql#L4 \"from bookings_reservation\") | sql-identifier |\n\n### What it calls\n\nThis part is explained by [`engine/bookings/client.py:12`](../../ws0/ws/engine/bookings/client.py#L12 \"return httpx.post(f'{BASE_URL}/bookings/{booking_id}/ack', headers={'user-api-key': key})\") and `Reservation`.\n\n| Kind | Target | Where |\n|---|---|---|\n| http | `/bookings/{booking_id}/ack` | [`engine/bookings/client.py:12`](../../ws0/ws/engine/bookings/client.py#L12 \"return httpx.post(f'{BASE_URL}/bookings/{booking_id}/ack', headers={'user-api-key': key})\") |\n| http | `/webhooks` | [`engine/bookings/client.py:16`](../../ws0/ws/engine/bookings/client.py#L16 \"return httpx.get(f'{BASE_URL}/webhooks')\") |"
+      "body_md": "#### Who calls it\n\nThis part is explained by [`engine/project/settings.py:9`](../../ws0/ws/engine/project/settings.py#L9 \"'task': 'bookings.poll',\") and `Reservation`.\n\n| Repo | Kind | Symbol | Where | Found by |\n|---|---|---|---|---|\n| engine | celery-name | `bookings.poll` | [`engine/project/settings.py:9`](../../ws0/ws/engine/project/settings.py#L9 \"'task': 'bookings.poll',\") | ast |\n| engine | python-import | `bookings.models: Reservation` | [`engine/reports/usage.py:2`](../../ws0/ws/engine/reports/usage.py#L2 \"from bookings.models import Reservation\") | ast |\n| engine | url-include | `bookings.urls mounted at ''` | [`engine/project/urls.py:4`](../../ws0/ws/engine/project/urls.py#L4 \"path('', include('bookings.urls')),\") | ast |\n| front | http-route | `hooks/acme/` | [`front/src/api.ts:5`](../../ws0/ws/front/src/api.ts#L5 \"return fetch(`${BASE}/hooks/acme/`, { method: 'POST' });\") | ast-grep |\n| warehouse | sql-table | `bookings_reservation` | [`warehouse/models.sql:4`](../../ws0/ws/warehouse/models.sql#L4 \"from bookings_reservation\") | sql-identifier |\n\n#### Mentions in strings (not calls)\n\nThese name the module inside a quoted string. They are not calls.\n\nNone.\n\n#### What it calls\n\nThis part is explained by [`engine/bookings/client.py:12`](../../ws0/ws/engine/bookings/client.py#L12 \"return httpx.post(f'{BASE_URL}/bookings/{booking_id}/ack', headers={'user-api-key': key})\") and `Reservation`.\n\n| Kind | Target | Where |\n|---|---|---|\n| http | `/bookings/{booking_id}/ack` | [`engine/bookings/client.py:12`](../../ws0/ws/engine/bookings/client.py#L12 \"return httpx.post(f'{BASE_URL}/bookings/{booking_id}/ack', headers={'user-api-key': key})\") |\n| http | `/webhooks` | [`engine/bookings/client.py:16`](../../ws0/ws/engine/bookings/client.py#L16 \"return httpx.get(f'{BASE_URL}/webhooks')\") |"
     },
     {
-      "id": "data-stores-and-config",
-      "title": "Data stores and config",
+      "id": "data-stores",
+      "title": "Data stores",
       "anchors": [
         {
           "path": "bookings/models.py",
@@ -118,17 +204,17 @@
       "body_md": "This part is explained by [`engine/bookings/models.py:4`](../../ws0/ws/engine/bookings/models.py#L4 \"class Reservation(models.Model):\") and `Reservation`.\n\n| Model | Table | Defined at |\n|---|---|---|\n| `Reservation` | `bookings_reservation` | [`engine/bookings/models.py:4`](../../ws0/ws/engine/bookings/models.py#L4 \"class Reservation(models.Model):\") |\n\n| Setting | Defined at | Env vars it reads | First read at |\n|---|---|---|---|\n| `ACME_API_URL` | [`engine/project/settings.py:3`](../../ws0/ws/engine/project/settings.py#L3 \"ACME_API_URL = config('ACME_API_URL', default='https://api.acme.test/v1')\") | `ACME_API_URL` | [`engine/bookings/client.py:6`](../../ws0/ws/engine/bookings/client.py#L6 \"BASE_URL = settings.ACME_API_URL\") |\n| `ACME_ENV` | [`engine/project/settings.py:5`](../../ws0/ws/engine/project/settings.py#L5 \"ACME_ENV = config('ACME_ENV', default='production')\") | `ACME_ENV` | [`engine/bookings/client.py:7`](../../ws0/ws/engine/bookings/client.py#L7 \"STAGING = settings.ACME_ENV == 'staging'\") |\n\n| Env var read directly | Where |\n|---|---|\n| `ACME_API_KEY` | [`engine/bookings/client.py:11`](../../ws0/ws/engine/bookings/client.py#L11 \"key = os.environ.get('ACME_API_KEY')\") |"
     },
     {
-      "id": "gotchas-and-questions-for-the-owner",
-      "title": "Gotchas and questions for the owner",
+      "id": "glossary",
+      "title": "Glossary",
       "anchors": [
         {
           "path": "bookings/models.py",
           "side": "head",
-          "line_start": 5,
-          "line_end": 5
+          "line_start": 6,
+          "line_end": 6
         }
       ],
-      "body_md": "This part is explained by [`engine/bookings/models.py:5`](../../ws0/ws/engine/bookings/models.py#L5 \"guest = models.CharField\") and `Reservation`.\n\nQuestions to ask the owner:\n\n- Who owns `poll_task`?"
+      "body_md": "| Term | Meaning | Where |\n|---|---|---|\n| ospite | guest (Italian) | [`engine/bookings/models.py:6`](../../ws0/ws/engine/bookings/models.py#L6 \"ospite_count\") |"
     }
   ],
   "skipped": [

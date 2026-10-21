@@ -14,7 +14,7 @@ from test_paths_render import _entry, _render, _result, _state
 from test_paths_stage import _click_run, _paths_body
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.orchestrator import RunOptions
-from walkthrough_pipeline.render import coverage_lines, split_sections
+from walkthrough_pipeline.render import coverage_lines, section_texts
 
 TWENTY_FIVE = [f"c{n:02d}" for n in range(1, 26)]
 LEFT_OUT_HEAD = "| Entry | Stage | Reason | Detail |"
@@ -75,7 +75,7 @@ def test_25_commands_with_the_default_cap_trace_21_and_list_4_over_cap(tmp_path,
     body = _paths_body(md)
     assert body.strip().splitlines()[0] == ("21 paths reach this module. 4 entries were left out; "
                                     "see **Left out** under Coverage.")
-    coverage = dict(split_sections(md)[1])["Coverage"]
+    coverage = section_texts(md, "Coverage")[0]
     assert re.search(r"^\| Entries left out \| 4 \|", coverage, re.M)
     rows = _left_out_rows(coverage)
     assert len(rows) == 4
@@ -98,7 +98,7 @@ def test_an_explicit_cap_keeps_at_most_that_many(tmp_path, monkeypatch, spy):
     assert len(spy.results[0].paths) == 3
     md = md_path.read_text()
     assert "2 entries were left out" in _paths_body(md)
-    assert [r[2] for r in _left_out_rows(dict(split_sections(md)[1])["Coverage"])] == ["`over_cap`"] * 2
+    assert [r[2] for r in _left_out_rows(section_texts(md, "Coverage")[0])] == ["`over_cap`"] * 2
 
 
 # --- the Left out table, from a hand-built result ------------------------------------------------

@@ -17,7 +17,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from walkthrough_pipeline import budget
-from walkthrough_pipeline.models import DocsOutput, ExploreOutput, SectionOutput
+from walkthrough_pipeline.models import (ConfigOutput, DocsOutput, ExploreOutput, FlowOutput, OutputsOutput,
+                                        SectionOutput, SummaryOutput, UseCasesOutput)
 
 
 def _line(cwd: str, path: str, n: int) -> str:
@@ -42,7 +43,8 @@ def _def_line(cwd: str, path: str, symbol: str) -> int:
 class FakeAgents:
     def __init__(self, *, cost: float = 0.0, invent_path: bool = False, fail_on: str | None = None,
                  trace_plan: dict[str, list] | None = None, span_declaration: bool = False,
-                 stop_trace_after: int | None = None):
+                 stop_trace_after: int | None = None, plant: set[str] | None = None,
+                 stop_write_after: int | None = None):
         self.calls: list[dict] = []
         self.cost = cost
         self.invent_path = invent_path
@@ -55,6 +57,13 @@ class FakeAgents:
         # Raise BudgetExceededError on trace call number stop_trace_after + 1.
         self.stop_trace_after = stop_trace_after
         self.trace_calls = 0
+        # Failures planted in the explainer's structured answers: "usecase_flag" (a use case with a flag
+        # the code does not have), "flow_node" (a box citing an unknown id), "flow_disconnected" (two boxes,
+        # no arrow), "output_key" (a JSON example with a key the code does not have).
+        self.plant = plant or set()
+        # Raise BudgetExceededError on write call number stop_write_after + 1.
+        self.stop_write_after = stop_write_after
+        self.write_calls = 0
 
     async def __call__(self, prompt: str, schema, **kw):
         from walkthrough_pipeline import sdk
@@ -77,8 +86,14 @@ class FakeAgents:
             return schema.model_validate(self.trace(prompt, cwd))
         if schema.__name__ == "FallbackAnswer":
             return schema.model_validate(self.fallback(prompt, cwd))
+        if schema in (SectionOutput, SummaryOutput, UseCasesOutput, FlowOutput, OutputsOutput, ConfigOutput):
+            self.write_calls += 1
+            if self.stop_write_after is not None and self.write_calls > self.stop_write_after:
+                raise budget.BudgetExceededError("circuit breaker: planted stop during write")
         if schema is SectionOutput:
             return self.write(prompt)
+        if schema in (SummaryOutput, UseCasesOutput, FlowOutput, OutputsOutput, ConfigOutput):
+            return schema.model_validate(self.explain(schema, prompt))
         if schema.__name__ == "TraceOutput":
             # The trace stage from before map_paths: an empty answer, so suites that do not test
             # tracing still run against it. Unreachable once that stage and its model are gone.
@@ -162,3 +177,54 @@ class FakeAgents:
             paragraphs.append({"text": "See engine/bookings/nowhere.py:99 for the retry."})
         questions = ["Who owns `poll_task`?"] if "questions" in prompt and "Gotchas" in prompt else []
         return SectionOutput.model_validate({"paragraphs": paragraphs, "questions": questions})
+
+    def explain(self, schema, prompt: str) -> dict:
+        """An answer for one of the explainer's structured sections, citing the first ids of its material."""
+        ids = re.findall(r"^- \[([a-z0-9]+)\]", prompt, re.M) or ["c1"]
+        a, b, c = (ids + ids + ids)[:3]
+        if schema is SummaryOutput:
+            return {"tagline": f"Bookings takes reservations from Acme. [[{a}]]",
+                    "paragraphs": [{"text": f"It keeps each `Reservation` in the database. [[{a}]]"},
+                                   {"text": f"Other code calls it over HTTP and on a timer. [[{b}]]"}]}
+        if schema is UseCasesOutput:
+            cases = [
+                {"title": "Poll for new bookings", "who": "The scheduler", "when": "Every minute",
+                 "example": {"kind": "command", "text": "bookings poll"},
+                 "what_happens": f"It asks Acme for new bookings. [[{a}]]", "result": "New reservations.",
+                 "cites": [a]},
+                {"title": "Receive a webhook", "who": "Acme", "when": "When a booking changes",
+                 "example": {"kind": "call", "text": "Reservation(guest=\"Ada\")"},
+                 "what_happens": f"It stores the booking. [[{b}]]", "result": "One reservation row.",
+                 "cites": [f"[[{b}]]"]},
+            ]
+            if "usecase_flag" in self.plant:
+                cases.append({"title": "Poll in a hurry", "who": "An engineer", "when": "Debugging",
+                              "example": {"kind": "command", "text": "bookings poll --no-such-flag"},
+                              "what_happens": f"It polls. [[{a}]]", "result": "", "cites": [a]})
+            return {"cases": cases}
+        if schema is FlowOutput:
+            nodes = [{"id": "n1", "label": "Acme sends a booking", "cite": a},
+                     {"id": "n2", "label": "The view stores it", "cite": f"[[{b}]]"},
+                     {"id": "n3", "label": "The task acknowledges it", "cite": c}]
+            edges = [{"from": "n1", "to": "n2", "label": "webhook"}, {"from": "n2", "to": "n3"}]
+            if "flow_node" in self.plant:
+                nodes.append({"id": "n4", "label": "A box with no source", "cite": "c999"})
+                edges.append({"from": "n3", "to": "n4"})
+            if "flow_disconnected" in self.plant:
+                edges = []
+            steps = [{"title": "Receive", "summary": f"A booking arrives. [[{a}]]",
+                      "details_paragraphs": [f"The handler reads the body. [[{b}]]"], "snippet_cites": [a]},
+                     {"title": "Store", "summary": f"It is saved. [[{c}]]", "details_paragraphs": [],
+                      "snippet_cites": []}]
+            return {"nodes": nodes, "edges": edges, "steps": steps}
+        if schema is OutputsOutput:
+            key = "zz_not_in_the_code" if "output_key" in self.plant else "ospite_count"
+            return {"items": [
+                {"name": "Reservation row", "what": f"One row per booking. [[{a}]]", "written_by_cite": a,
+                 "example": {"format": "json", "text": '{"guest": "Ada", "' + key + '": 2}'}},
+                {"name": "Acknowledgement", "what": f"What it sends back to Acme. [[{b}]]", "written_by_cite": b,
+                 "example": {"format": "text", "text": "ok"}},
+                {"name": "Poll log", "what": f"A line per poll. [[{c}]]", "written_by_cite": c},
+            ]}
+        return {"rows": [{"name": "ACME_ENV", "effect": f"Picks the staging or production key. [[{a}]]",
+                          "default": "production", "cite": a}]}

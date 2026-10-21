@@ -14,14 +14,14 @@ from test_paths_render import _render, _result, _state as _render_state
 from test_paths_stage import _answer_files, _click_run, _paths_body, _state, _trace_answer_files, _trace_calls
 from walkthrough_pipeline import budget, sdk
 from walkthrough_pipeline.__main__ import TRUST_MESSAGE, main
-from walkthrough_pipeline.render import split_sections
+from walkthrough_pipeline.render import section_texts
 from walkthrough_pipeline.state import STATE_FILE
 
 THREE = ["sync", "push", "pull"]
 
 
 def _coverage(md: str) -> str:
-    return dict(split_sections(md)[1])["Coverage"]
+    return section_texts(md, "Coverage")[0]
 
 
 def test_an_agent_failure_on_one_entry_drops_only_that_entry(tmp_path, monkeypatch, spy):

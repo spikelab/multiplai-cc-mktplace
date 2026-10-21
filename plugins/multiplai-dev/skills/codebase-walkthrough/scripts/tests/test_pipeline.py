@@ -31,10 +31,8 @@ def test_run_writes_markdown_json_and_html_with_the_same_headings(done_run):
     assert "<svg" not in html
     md_heads = markdown_headings(md)
     html_heads = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<h2>(.*?)</h2>", html)]
-    assert md_heads == html_heads
-    for title in ("Overview", "Glossary", "Paths", "Module tour", "Who calls it and what it calls",
-                  "Data stores and config", "Vendor docs", "Gotchas and questions for the owner", "Coverage"):
-        assert title in md_heads
+    assert md_heads == html_heads == ["What it is", "Use cases", "How it works", "What it creates", "Configuration",
+                                      "Gotchas", "Reference", "How this was made"]
     assert "End-to-end scenarios" not in md_heads
 
 

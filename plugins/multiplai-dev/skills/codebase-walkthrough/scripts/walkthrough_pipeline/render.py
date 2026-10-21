@@ -25,7 +25,7 @@ from code_facts.paths import PathHop, PathsResult, TracedPath
 from .check import LINK
 from .gates import CITE_ID, file_at_commit, lines_at_commit, sections_gate
 from .models import Citation, RepoInfo, WalkState
-from .stages.write import citations_for_write, required_titles
+from .stages.write import HUMAN_SECTIONS, citations_for_write, required_titles
 from .target import git, github_web_base, tree_files
 
 LANG = {".py": "python", ".ts": "typescript", ".tsx": "tsx", ".js": "javascript", ".jsx": "jsx", ".sql": "sql",
@@ -182,8 +182,9 @@ def left_out_count(result: PathsResult) -> int:
     return len(result.dropped) + sum(1 for d in result.diagnostics if d.reason == "seed_not_found")
 
 
-def render_left_out(result: PathsResult, repo_key: str) -> str:
-    """The `### Left out` table: drops, then diagnostics, then e2e listing skips. "" when there is no row.
+def render_left_out(result: PathsResult, repo_key: str, level: int = 3) -> str:
+    """The `### Left out` table (`level` sets the heading's level): drops, then diagnostics, then e2e
+    listing skips. "" when there is no row.
 
     Entries are plain text, never links: they are not claims, so `check` does not re-read them.
     """
@@ -199,7 +200,7 @@ def render_left_out(result: PathsResult, repo_key: str) -> str:
         rows.append((f"`{repo_key}/{skip.file}`", "e2e", "e2e_listing", skip.reason))
     if not rows:
         return ""
-    out = ["### Left out", "", "| Entry | Stage | Reason | Detail |", "|---|---|---|---|"]
+    out = ["#" * level + " Left out", "", "| Entry | Stage | Reason | Detail |", "|---|---|---|---|"]
     out += [f"| {_cell(entry)} | {_cell(stage)} | `{_cell(reason)}` | {_cell(detail)} |"
             for entry, stage, reason, detail in rows]
     return "\n".join(out)
@@ -227,7 +228,7 @@ def render_paths_section(state: WalkState, linker: Linker) -> str:
     return "\n".join(out).rstrip()
 
 
-def coverage_lines(state: WalkState) -> list[str]:
+def coverage_lines(state: WalkState, left_out_level: int = 3) -> list[str]:
     t = state.target
     cited = {c.path for f in state.facts for c in f.citations}
     files = [t.ws(f) for f in t.files]
@@ -251,7 +252,8 @@ def coverage_lines(state: WalkState) -> list[str]:
     for stage, n in sorted(by_stage.items()):
         out.append(f"| Claims dropped by the {stage} checks | {n} |")
     cut = sum(len(s.cut) for s in state.sections.values())
-    out.append(f"| Paragraphs cut by the write checks | {cut} |")
+    what = "Paragraphs" if state.options.get("mode") == "agent" else "Paragraphs and items"
+    out.append(f"| {what} cut by the write checks | {cut} |")
     if state.options.get("mode") != "agent":
         paths = state.paths.paths if state.paths else []
         out.append(f"| Paths traced | {len(paths)} |")
@@ -263,7 +265,7 @@ def coverage_lines(state: WalkState) -> list[str]:
                   "symbols answered" if not str(lsp.get("status", "")).startswith("skipped") else lsp.get("status"))
         out.append(f"| pyright references | {detail} |")
     out.append("")
-    left_out = render_left_out(state.paths, t.repo_key) if state.paths else ""
+    left_out = render_left_out(state.paths, t.repo_key, left_out_level) if state.paths else ""
     if left_out:
         out += [left_out, ""]
     missing = [f for f in files if f not in cited]
@@ -297,11 +299,12 @@ def render_markdown(state: WalkState, out_dir: Path) -> str:
     lk = Linker(state, out_dir)
     t = state.target
     mode = state.options.get("mode", "human")
+    if mode != "agent":
+        return human_markdown(state, lk, out_dir)
     spent = state.budget.get("cost_usd", 0.0)
     calls = state.budget.get("calls", 0)
     md: list[str] = []
-    title = f"Module: {t.ws(t.subpath)}" if mode == "agent" else f"{t.package} — codebase walkthrough"
-    md += [f"# {title}", "",
+    md += [f"# Module: {t.ws(t.subpath)}", "",
            f"> Generated {date.today().isoformat()} · depth {state.options.get('depth', 'standard')} · mode {mode} · "
            f"{len(t.files)} files · spent ${spent:.2f} over {calls} agent calls", "",
            f"- Module directory: `{os.path.relpath(Path(t.repo_path) / t.subpath, out_dir)}`",
@@ -318,93 +321,13 @@ def render_markdown(state: WalkState, out_dir: Path) -> str:
         s = state.sections.get(key)
         return [lk.expand(p) + "\n" for p in s.paragraphs] if s else []
 
-    if mode == "agent":
-        md += [f"## Files ({len(t.files)})", ""]
-        for f in t.files:
-            md.append(f"- `{f}` — {state.file_purposes.get(t.ws(f), '(no checked purpose)')}")
-        md.append("")
-        for key, title in (("architecture", "Architecture"), ("patterns", "Patterns & Conventions"),
-                           ("interfaces", "Key Interfaces"), ("gotchas", "Gotchas")):
-            md += [f"## {title}", ""] + section(key)
-        md += ["## Coverage", ""] + coverage_lines(state)
-        md += _cut_appendix(state, lk)
-        return "\n".join(md).rstrip() + "\n"
-
-    md += ["## Overview", ""] + section("overview")
-    md += ["## Glossary", ""]
-    gl = state.sections.get("glossary")
-    if gl and gl.glossary:
-        md += ["| Term | Meaning | Where |", "|---|---|---|"]
-        for term in gl.glossary:
-            where = lk.link(term.citation) if term.citation else ""
-            md.append(f"| {_cell(term.term)} | {_cell(term.meaning)} | {where} |")
-    else:
-        md.append("No domain terms passed the checks.")
+    md += [f"## Files ({len(t.files)})", ""]
+    for f in t.files:
+        md.append(f"- `{f}` — {state.file_purposes.get(t.ws(f), '(no checked purpose)')}")
     md.append("")
-
-    md += ["## Paths", "", render_paths_section(state, lk), ""]
-
-    md += ["## Module tour", ""]
-    for u in state.units:
-        s = state.sections.get(f"tour:{u.id}")
-        md += [f"### {s.title if s else u.id}", ""] + section(f"tour:{u.id}")
-
-    md += ["## Who calls it and what it calls", "", _boundary_mermaid(state), ""]
-    md += ["### Who calls it", ""] + section("boundary:inbound")
-    if state.references:
-        md += ["| Repo | Kind | Symbol | Where | Found by |", "|---|---|---|---|---|"]
-        for r in sorted(state.references, key=lambda r: (r.repo, r.kind, r.path, r.line)):
-            md.append(f"| {r.repo} | {r.kind} | `{_cell(r.symbol)}` | {_entry_link(lk, r.path, r.line, r.quote)} "
-                      f"| {r.method} |")
-    md += ["", "### What it calls", ""] + section("boundary:outbound")
-    out_entries = [e for e in state.symbols if e.direction == "calls" and e.kind in ("http", "import")]
-    if out_entries:
-        md += ["| Kind | Target | Where |", "|---|---|---|"]
-        for e in sorted(out_entries, key=lambda e: (e.kind, e.name, e.path, e.line)):
-            md.append(f"| {e.kind} | `{_cell(e.name)}` | {_entry_link(lk, e.path, e.line, e.quote)} |")
-    md.append("")
-
-    md += ["## Data stores and config", ""] + section("data")
-    models = [e for e in state.symbols if e.kind == "model"]
-    if models:
-        md += ["| Model | Table | Defined at |", "|---|---|---|"]
-        md += [f"| `{e.name}` | `{e.detail.get('table', '')}` | {_entry_link(lk, e.path, e.line, e.quote)} |"
-               for e in models]
-        md.append("")
-    caches = [e for e in state.symbols if e.kind == "cache"]
-    if caches:
-        md += ["| Cache key | Call | Where |", "|---|---|---|"]
-        md += [f"| `{_cell(e.name)}` | {e.detail.get('method', '')} | {_entry_link(lk, e.path, e.line, e.quote)} |"
-               for e in caches]
-        md.append("")
-    defs = {e.name: e for e in state.symbols if e.kind == "setting-definition"}
-    reads = [e for e in state.symbols if e.kind == "setting"]
-    if reads:
-        md += ["| Setting | Defined at | Env vars it reads | First read at |", "|---|---|---|---|"]
-        seen = set()
-        for e in reads:
-            if e.name in seen:
-                continue
-            seen.add(e.name)
-            d = defs.get(e.name)
-            md.append(f"| `{e.name}` | {_entry_link(lk, d.path, d.line, d.quote) if d else '(not found in settings)'} "
-                      f"| {', '.join(f'`{x}`' for x in d.detail.get('env', '').split(',') if x) if d else ''} "
-                      f"| {_entry_link(lk, e.path, e.line, e.quote)} |")
-        md.append("")
-    envs = [e for e in state.symbols if e.kind == "env"]
-    if envs:
-        md += ["| Env var read directly | Where |", "|---|---|"]
-        md += [f"| `{e.name}` | {_entry_link(lk, e.path, e.line, e.quote)} |" for e in envs]
-        md.append("")
-
-    md += ["## Vendor docs", ""] + section("docs")
-    md += _docs_tables(state, lk)
-
-    md += ["## Gotchas and questions for the owner", ""] + section("gotchas")
-    g = state.sections.get("gotchas")
-    if g and g.questions:
-        md += ["Questions to ask the owner:", ""] + [f"- {lk.expand(q)}" for q in g.questions] + [""]
-
+    for key, title in (("architecture", "Architecture"), ("patterns", "Patterns & Conventions"),
+                       ("interfaces", "Key Interfaces"), ("gotchas", "Gotchas")):
+        md += [f"## {title}", ""] + section(key)
     md += ["## Coverage", ""] + coverage_lines(state)
     md += _cut_appendix(state, lk)
     return "\n".join(md).rstrip() + "\n"
@@ -447,16 +370,294 @@ def _docs_tables(state: WalkState, lk: Linker) -> list[str]:
 
 
 def _cut_appendix(state: WalkState, lk: Linker) -> list[str]:
-    cut = [(s.title, c) for s in state.sections.values() for c in s.cut]
+    cut = cut_lines(state)
     if not cut:
         return []
-    out = ["## Cut by the checks", "",
-           "These paragraphs failed the write checks twice and are not part of the walkthrough above.", ""]
-    for title, c in cut:
-        text = CITE_ID.sub("", c["text"]).replace("\n", " ")
-        out.append(f"- ({_cell(title)}) {_cell(text[:400])} — **{_cell('; '.join(c['reasons'])[:300])}**")
-    out.append("")
+    return ["## Cut by the checks", "",
+            "These paragraphs failed the write checks twice and are not part of the walkthrough above.", "",
+            *cut, ""]
+
+
+def cut_lines(state: WalkState) -> list[str]:
+    """One line per paragraph or item the write checks cut, with its section and reasons."""
+    out = []
+    for s in state.sections.values():
+        for c in s.cut:
+            text = CITE_ID.sub("", c["text"]).replace("\n", " ")
+            out.append(f"- ({_cell(s.title)}) {_cell(text[:400])} — **{_cell('; '.join(c['reasons'])[:300])}**")
     return out
+
+
+# --- the human-mode explainer: one Markdown section per H2 of HUMAN_SECTIONS -----------------------
+
+
+class MdSection:
+    """An H2's Markdown: the text under its heading, then its H3 subsections as (title, text)."""
+
+    def __init__(self, body: str = "", subs: list[tuple[str, str]] | None = None):
+        self.body = body
+        self.subs = subs or []
+
+
+def _join(lines: list[str]) -> str:
+    return "\n".join(lines).strip()
+
+
+def _fence(text: str, lang: str = "") -> str:
+    fence = "````" if "```" in text else "```"
+    return f"{fence}{lang}\n{text.strip(chr(10))}\n{fence}"
+
+
+EXAMPLE_LANG = {"command": "bash", "call": "python", "file": "", "json": "json", "yaml": "yaml",
+                "markdown": "markdown", "text": "text"}
+
+
+def _data(state: WalkState, key: str) -> dict:
+    s = state.sections.get(key)
+    return s.data if s else {}
+
+
+def _cites(lk: Linker, ids: list[str]) -> str:
+    return " ".join(lk.expand(f"[[{i}]]") for i in ids if i in lk.citations)
+
+
+def _mermaid_text(text: str) -> str:
+    return " ".join(text.replace('"', "#quot;").replace("|", "/").split())
+
+
+def flow_mermaid(data: dict) -> str:
+    """`flowchart TD` from the gated boxes and arrows; "" when the diagram was cut."""
+    nodes = data.get("nodes") or []
+    if not nodes:
+        return ""
+    ids = {n["id"]: f"f{i}" for i, n in enumerate(nodes, start=1)}
+    lines = ["flowchart TD"] + [f'    {ids[n["id"]]}["{_mermaid_text(n["label"])}"]' for n in nodes]
+    for e in data.get("edges") or []:
+        label = f'|"{_mermaid_text(e["label"])}"|' if e.get("label") else ""
+        lines.append(f"    {ids[e['from']]} -->{label} {ids[e['to']]}")
+    return "\n".join(lines)
+
+
+def _md_summary(state: WalkState, lk: Linker) -> MdSection:
+    paras = _data(state, "summary").get("paragraphs") or []
+    return MdSection(_join([lk.expand(p) + "\n" for p in paras]) or "Nothing about this section passed the checks.")
+
+
+def _md_usecases(state: WalkState, lk: Linker) -> MdSection:
+    subs = []
+    for c in _data(state, "usecases").get("cases") or []:
+        ex = c["example"]
+        out = []
+        who = " · ".join(x for x in (f"**Who:** {lk.expand(c['who'])}" if c.get("who") else "",
+                                   f"**When:** {lk.expand(c['when'])}" if c.get("when") else "") if x)
+        if who:
+            out += [who, ""]
+        out += [_fence(ex["text"], EXAMPLE_LANG.get(ex["kind"], "")), ""]
+        if c.get("what_happens"):
+            out += [lk.expand(c["what_happens"]), ""]
+        if c.get("result"):
+            out += [f"**What comes out:** {lk.expand(c['result'])}", ""]
+        out += [f"Based on: {_cites(lk, c.get('cites') or [])}", ""]
+        subs.append((_cell(c["title"]), _join(out)))
+    return MdSection("" if subs else "No use case passed the checks.", subs)
+
+
+def _md_flow(state: WalkState, lk: Linker) -> MdSection:
+    data = _data(state, "flow")
+    body = []
+    src = flow_mermaid(data)
+    if src:
+        body += ["```mermaid", src, "```", ""]
+        body += ["Where each box is in the code:", ""]
+        body += [f"- {_cell(n['label'])}: {_cites(lk, [n['cite']])}" for n in data["nodes"]]
+    elif not data.get("steps"):
+        body.append("Nothing about this section passed the checks.")
+    subs = []
+    for i, st in enumerate(data.get("steps") or [], start=1):
+        out = [lk.expand(st["summary"]), ""]
+        out += [x for p in st.get("details") or [] for x in (lk.expand(p), "")]
+        out += [x for cid in st.get("snippets") or [] if cid in lk.citations
+                for x in (lk.snippet(lk.citations[cid]), "")]
+        subs.append((f"{i}. {_cell(st['title'])}", _join(out)))
+    return MdSection(_join(body), subs)
+
+
+def _md_outputs(state: WalkState, lk: Linker) -> MdSection:
+    subs = []
+    for it in _data(state, "outputs").get("items") or []:
+        out = [lk.expand(it["what"]), "", f"Written at: {_cites(lk, [it['cite']])}", ""]
+        ex = it.get("example")
+        if ex:
+            out += [f"Example ({ex['format']}):", "", _fence(ex["text"], EXAMPLE_LANG.get(ex["format"], "")), ""]
+        subs.append((_cell(it["name"]), _join(out)))
+    return MdSection("" if subs else "No output passed the checks.", subs)
+
+
+def _md_config(state: WalkState, lk: Linker) -> MdSection:
+    rows = _data(state, "config").get("rows") or []
+    if not rows:
+        return MdSection("No setting passed the checks.")
+    out = ["| Setting | What it changes | Default | Where |", "|---|---|---|---|"]
+    for r in rows:
+        default = f"`{_cell(r['default'])}`" if r.get("default") else ""
+        out.append(f"| `{_cell(r['name'])}` | {_cell(lk.expand(r['effect']))} | {default} | {_cites(lk, [r['cite']])} |")
+    return MdSection(_join(out))
+
+
+def _md_gotchas(state: WalkState, lk: Linker) -> MdSection:
+    s = state.sections.get("gotchas")
+    return MdSection(_join([lk.expand(p) + "\n" for p in s.paragraphs]) if s and s.paragraphs
+                     else "No gotcha passed the checks.")
+
+
+def _prose(state: WalkState, lk: Linker, key: str) -> list[str]:
+    s = state.sections.get(key)
+    return [lk.expand(p) + "\n" for p in s.paragraphs] if s else []
+
+
+def _md_reference(state: WalkState, lk: Linker) -> MdSection:
+    subs = [("Paths", render_paths_section(state, lk))]
+    tour: list[str] = []
+    for u in state.units:
+        s = state.sections.get(f"tour:{u.id}")
+        tour += [f"#### {s.title if s else u.id}", ""] + _prose(state, lk, f"tour:{u.id}")
+    subs.append(("Module tour", _join(tour)))
+
+    who = [_boundary_mermaid(state), "", "#### Who calls it", ""] + _prose(state, lk, "boundary:inbound")
+    calls = [r for r in state.references if r.kind != "dotted-string"]
+    strings = [r for r in state.references if r.kind == "dotted-string"]
+    for refs, head in ((calls, None), (strings, "#### Mentions in strings (not calls)")):
+        if head:
+            who += [head, "", "These name the module inside a quoted string. They are not calls.", ""]
+        if refs:
+            who += ["| Repo | Kind | Symbol | Where | Found by |", "|---|---|---|---|---|"]
+            for r in sorted(refs, key=lambda r: (r.repo, r.kind, r.path, r.line)):
+                who.append(f"| {r.repo} | {r.kind} | `{_cell(r.symbol)}` | {_entry_link(lk, r.path, r.line, r.quote)} "
+                           f"| {r.method} |")
+            who.append("")
+        elif head:
+            who += ["None.", ""]
+    who += ["#### What it calls", ""] + _prose(state, lk, "boundary:outbound")
+    out_entries = [e for e in state.symbols if e.direction == "calls" and e.kind in ("http", "import")]
+    if out_entries:
+        who += ["| Kind | Target | Where |", "|---|---|---|"]
+        for e in sorted(out_entries, key=lambda e: (e.kind, e.name, e.path, e.line)):
+            who.append(f"| {e.kind} | `{_cell(e.name)}` | {_entry_link(lk, e.path, e.line, e.quote)} |")
+    subs.append(("Who calls it and what it calls", _join(who)))
+
+    data = _prose(state, lk, "data")
+    models = [e for e in state.symbols if e.kind == "model"]
+    if models:
+        data += ["| Model | Table | Defined at |", "|---|---|---|"]
+        data += [f"| `{e.name}` | `{e.detail.get('table', '')}` | {_entry_link(lk, e.path, e.line, e.quote)} |"
+                 for e in models]
+        data.append("")
+    caches = [e for e in state.symbols if e.kind == "cache"]
+    if caches:
+        data += ["| Cache key | Call | Where |", "|---|---|---|"]
+        data += [f"| `{_cell(e.name)}` | {e.detail.get('method', '')} | {_entry_link(lk, e.path, e.line, e.quote)} |"
+                 for e in caches]
+        data.append("")
+    defs = {e.name: e for e in state.symbols if e.kind == "setting-definition"}
+    reads = [e for e in state.symbols if e.kind == "setting"]
+    if reads:
+        data += ["| Setting | Defined at | Env vars it reads | First read at |", "|---|---|---|---|"]
+        seen = set()
+        for e in reads:
+            if e.name in seen:
+                continue
+            seen.add(e.name)
+            d = defs.get(e.name)
+            data.append(f"| `{e.name}` | {_entry_link(lk, d.path, d.line, d.quote) if d else '(not found in settings)'} "
+                        f"| {', '.join(f'`{x}`' for x in d.detail.get('env', '').split(',') if x) if d else ''} "
+                        f"| {_entry_link(lk, e.path, e.line, e.quote)} |")
+        data.append("")
+    envs = [e for e in state.symbols if e.kind == "env"]
+    if envs:
+        data += ["| Env var read directly | Where |", "|---|---|"]
+        data += [f"| `{e.name}` | {_entry_link(lk, e.path, e.line, e.quote)} |" for e in envs]
+    subs.append(("Data stores", _join(data) or "No data stores or settings were found."))
+
+    subs.append(("Vendor docs", _join(_prose(state, lk, "docs") + _docs_tables(state, lk))))
+
+    gl = state.sections.get("glossary")
+    if gl and gl.glossary:
+        rows = ["| Term | Meaning | Where |", "|---|---|---|"]
+        for term in gl.glossary:
+            where = lk.link(term.citation) if term.citation else ""
+            rows.append(f"| {_cell(term.term)} | {_cell(term.meaning)} | {where} |")
+        subs.append(("Glossary", _join(rows)))
+    else:
+        subs.append(("Glossary", "No domain terms passed the checks."))
+    g = state.sections.get("gotchas")
+    if g and g.questions:
+        subs.append(("Questions for the owner", _join([f"- {lk.expand(q)}" for q in g.questions])))
+    return MdSection("Details for when you need them: every path traced, every file, every caller.", subs)
+
+
+def commit_repos(state: WalkState) -> list[str]:
+    """The repositories "Commits read" lists: the target's, each one with a reference that passed the
+    checks, and any other one a citation points into (so `check` can read every link)."""
+    t = state.target
+    keys = {t.repo_key} | {r.repo for r in state.references}
+    keys |= {c.path.partition("/")[0] for c in citations_for_write(state).values()}
+    return sorted((k for k in keys if k in state.repos), key=lambda k: (k != t.repo_key, k))
+
+
+def searched_line(state: WalkState, out_dir: Path) -> str:
+    n, m = len(state.searched_repos), len({r.repo for r in state.references})
+    root = state.options.get("search_root_resolved")
+    where = f" under `{os.path.relpath(root, out_dir)}`" if root else ""
+    return f"Searched {n} repositor{'y' if n == 1 else 'ies'}{where}; {m} had references."
+
+
+def _md_made(state: WalkState, out_dir: Path) -> MdSection:
+    t = state.target
+    commits = ["| Repo | Path | Commit |", "|---|---|---|"]
+    commits += [f"| {k} | {os.path.relpath(state.repos[k].path, out_dir)} | `{state.repos[k].head_sha}` |"
+                for k in commit_repos(state)]
+    commits += ["", searched_line(state, out_dir), "",
+                f"- Module directory: `{os.path.relpath(Path(t.repo_path) / t.subpath, out_dir)}`",
+                f"- Depth: `{state.options.get('depth', 'standard')}`",
+                f"- Mode: `{state.options.get('mode', 'human')}`", "",
+                "Every citation in this file was checked against the commit listed here. "
+                "Re-check with `python -m walkthrough_pipeline check <this file>`."]
+    cut = cut_lines(state)
+    cut_text = (["These failed the write checks, after one rewrite, and are not part of the walkthrough above.", ""]
+                + cut) if cut else ["Nothing was cut."]
+    return MdSection("", [("Commits read", _join(commits)), ("Coverage", _join(coverage_lines(state, 4))),
+                          ("Cut by the checks", _join(cut_text))])
+
+
+def human_md_sections(state: WalkState, lk: Linker, out_dir: Path) -> dict[str, MdSection]:
+    return {"summary": _md_summary(state, lk), "usecases": _md_usecases(state, lk), "flow": _md_flow(state, lk),
+            "outputs": _md_outputs(state, lk), "config": _md_config(state, lk), "gotchas": _md_gotchas(state, lk),
+            "reference": _md_reference(state, lk), "made": _md_made(state, out_dir)}
+
+
+def run_line(state: WalkState) -> str:
+    t = state.target
+    spent, calls = state.budget.get("cost_usd", 0.0), state.budget.get("calls", 0)
+    return (f"Generated {date.today().isoformat()} · {t.repo_key} at `{t.head_sha[:12]}` · {len(t.files)} files · "
+            f"depth {state.options.get('depth', 'standard')} · spent ${spent:.2f} over {calls} agent calls")
+
+
+def human_markdown(state: WalkState, lk: Linker, out_dir: Path) -> str:
+    t = state.target
+    md = [f"# {t.package} — codebase walkthrough", ""]
+    tagline = _data(state, "summary").get("tagline")
+    if tagline:
+        md += [lk.expand(tagline), ""]
+    md += [f"> {run_line(state)}", ""]
+    sections = human_md_sections(state, lk, out_dir)
+    for key, title in HUMAN_SECTIONS:
+        sec = sections[key]
+        md += [f"## {title}", ""]
+        if sec.body:
+            md += [sec.body, ""]
+        for sub, text in sec.subs:
+            md += [f"### {sub}", "", text, ""]
+    return "\n".join(md).rstrip() + "\n"
 
 
 # --- walkthrough.json, for the review-viewer ------------------------------------------------
@@ -467,16 +668,19 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 MERMAID = re.compile(r"```mermaid\n(.*?)```", re.S)
 # walkthrough.v1.schema.json: Diagram.source maxLength.
 DIAGRAM_MAX_CHARS = 20000
-# Sections that go in overview_md, not in a step: the commits table and the coverage table.
-OVERVIEW_SECTIONS = ("Commits read", "Coverage")
+# Sections that go in overview_md, not in a step: the commits table and the coverage table (agent mode),
+# and How this was made, which holds both (human mode).
+OVERVIEW_SECTIONS = ("Commits read", "Coverage", "How this was made")
+REFERENCE_TITLE = "Reference"
 FENCE = re.compile(r"^(`{3,}|~{3,})")
 
 
-def split_sections(md: str) -> tuple[str, list[tuple[str, str]]]:
-    """(the text before the first H2, [(H2 title, text under it)]), in order.
+def split_sections(md: str, level: int = 2) -> tuple[str, list[tuple[str, str]]]:
+    """(the text before the first H2, [(H2 title, text under it)]), in order; `level=3` splits on H3s.
 
     A `## ` line inside a fenced code block (a snippet of a Markdown file) is not a heading.
     """
+    mark = "#" * level + " "
     intro: list[str] = []
     sections: list[tuple[str, list[str]]] = []
     fence = ""
@@ -487,11 +691,35 @@ def split_sections(md: str) -> tuple[str, list[tuple[str, str]]]:
                 fence = ""
         elif m:
             fence = m.group(1)
-        elif line.startswith("## "):
-            sections.append((line[3:].strip(), []))
+        elif line.startswith(mark):
+            sections.append((line[len(mark):].strip(), []))
             continue
         (sections[-1][1] if sections else intro).append(line)
     return "\n".join(intro), [(title, "\n".join(body)) for title, body in sections]
+
+
+def section_texts(md: str, title: str) -> list[str]:
+    """The text under each H2 or H3 titled *title*, up to the next heading of the same or a higher level.
+    Headings inside fenced code blocks do not count. Human mode puts Paths and Coverage under H2s as H3s."""
+    out: list[str] = []
+    level, body, fence = 0, [], ""
+    for line in md.split("\n") + ["## "]:
+        m = FENCE.match(line)
+        h = None if fence or m else re.match(r"^(#{2,3}) (.*)$", line)
+        if fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line[len(m.group(1)):].strip():
+                fence = ""
+        elif m:
+            fence = m.group(1)
+        if h and level and len(h.group(1)) <= level:
+            out.append("\n".join(body))
+            level, body = 0, []
+        if h and h.group(2).strip() == title:
+            level, body = len(h.group(1)), []
+            continue
+        if level:
+            body.append(line)
+    return out
 
 
 def _step_id(title: str, used: set[str], n: int) -> str:
@@ -547,8 +775,8 @@ def _skip_reason(state: WalkState, rel: str) -> str:
 def render_walkthrough_json(state: WalkState, md: str) -> dict:
     """The walkthrough as a review-viewer `walkthrough.json` (v1) over the module's tree at its commit.
 
-    Each H2 section becomes a step anchored on its links into the module directory. Links into
-    other repos stay in the text. The introduction, the commits and coverage tables, and any
+    Each H2 section, and in human mode each H3 of Reference, becomes a step anchored on its links into
+    the module directory. Links into other repos stay in the text. The introduction, the commits and coverage tables, and any
     section with no link into the module directory go in `overview_md`, because a v1 step needs
     at least one anchor. Every file under the module directory that no step anchors is listed in
     `skipped` with the reason, so the viewer counts the walkthrough as covering the whole tree.
@@ -560,7 +788,17 @@ def render_walkthrough_json(state: WalkState, md: str) -> dict:
     overview = [intro.strip()]
     steps: list[dict] = []
     used: set[str] = set()
+    # Reference's subsections are steps of their own: the viewer shows each beside its code.
+    parts: list[tuple[str, str]] = []
     for title, text in sections:
+        if title == REFERENCE_TITLE:
+            lead, subs = split_sections(text, level=3)
+            if lead.strip():
+                overview.append(f"## {title}\n\n{lead.strip()}")
+            parts += subs
+        else:
+            parts.append((title, text))
+    for title, text in parts:
         anchors = [] if title in OVERVIEW_SECTIONS else _anchors(text, state, in_tree, counts)
         if not anchors:
             overview.append(f"## {title}\n\n{text.strip()}")
@@ -589,8 +827,8 @@ def render_walkthrough_json(state: WalkState, md: str) -> dict:
 # --- HTML -------------------------------------------------------------------------------
 
 
-def markdown_headings(md: str) -> list[str]:
-    return [m.group(1).strip() for m in re.finditer(r"^## (.+)$", md, re.M)]
+def markdown_headings(md: str, level: int = 2) -> list[str]:
+    return [m.group(1).strip() for m in re.finditer(rf"^{'#' * level} (.+)$", md, re.M)]
 
 
 # Characters Python-Markdown's inline patterns act on before it stashes a raw HTML tag, plus the
@@ -604,16 +842,29 @@ def _encode(text: str, chars: frozenset[str] = _ATTR_ENCODE) -> str:
     return "".join(f"&#{ord(ch)};" if ch in chars else ch for ch in text)
 
 
-def _raw_link(m: re.Match) -> str:
-    """One citation link as a raw `<a>`. Python-Markdown misreads a link title holding an escaped quote
-    and drops the link, so every citation link is written as HTML before the conversion."""
+class CiteNumbers:
+    """Citation numbers within one section of the page: the same link gets the same number."""
+
+    def __init__(self):
+        self.seen: dict[tuple[str, str], int] = {}
+
+    def number(self, href: str, title: str) -> int:
+        return self.seen.setdefault((href, title), len(self.seen) + 1)
+
+
+def _cite_html(m: re.Match, cites: CiteNumbers) -> str:
+    """One citation link as a numbered superscript whose tooltip holds `path:line` and the quote.
+    Written as HTML before the Markdown conversion: Python-Markdown misreads a link title holding an
+    escaped quote and drops the link."""
     where = f"{m.group(1)}:{m.group(2)}" + (f"-{m.group(3)}" if m.group(3) else "")
-    title = re.sub(r"\\(.)", r"\1", m.group(5))
-    return f'<a href="{_encode(m.group(4))}" title="{_encode(title)}"><code>{_encode(where, _TEXT_ENCODE)}</code></a>'
+    quote = re.sub(r"\\(.)", r"\1", m.group(5))
+    title = f"{where} — {quote}" if quote else where
+    n = cites.number(m.group(4), title)
+    return f'<sup><a class="cite" href="{_encode(m.group(4))}" title="{_encode(title)}">{n}</a></sup>'
 
 
-def _raw_links(md: str) -> str:
-    """`_raw_link` on every citation link outside fenced code blocks; the Markdown file itself is unchanged."""
+def _raw_links(md: str, cites: CiteNumbers) -> str:
+    """`_cite_html` on every citation link outside fenced code blocks; the Markdown file itself is unchanged."""
     out: list[str] = []
     fence = ""
     for line in md.split("\n"):
@@ -624,16 +875,25 @@ def _raw_links(md: str) -> str:
         elif m:
             fence = m.group(1)
         else:
-            line = LINK.sub(_raw_link, line)
+            line = HOP_REF_MD.sub(_hop_html, LINK.sub(lambda x: _cite_html(x, cites), line))
         out.append(line)
     return "\n".join(out)
 
 
-# The elements Python-Markdown writes with the extensions `render_html` uses. Any other tag in its
-# output came through as raw HTML from the text, most often a placeholder such as `changes/<name>/`
-# written outside backticks, which a browser would swallow; it is shown as text instead.
+# The pointer `Linker.expand` puts after a hop's citation, ` ([p2h3](#p2h3))`; the page shows it as an arrow.
+HOP_REF_MD = re.compile(r" ?\(\[(p(\d+)h(\d+))\]\(#\1\)\)")
+
+
+def _hop_html(m: re.Match) -> str:
+    return (f'<sup><a class="hop" href="#{m.group(1)}" title="Step {m.group(3)} of path p{m.group(2)}, '
+            f'under Reference, Paths">&#8618;</a></sup>')
+
+
+# The elements Python-Markdown writes with the extensions `markdown_html` uses, plus the citation's `sup`.
+# Any other tag in its output came through as raw HTML from the text, most often a placeholder such as
+# `changes/<name>/` written outside backticks, which a browser would swallow; it is shown as text instead.
 _HTML_TAGS = frozenset({"a", "p", "h1", "h2", "h3", "h4", "h5", "h6", "code", "pre", "em", "strong", "ul", "ol",
-                        "li", "blockquote", "table", "thead", "tbody", "tr", "th", "td", "hr", "br", "img"})
+                        "li", "blockquote", "table", "thead", "tbody", "tr", "th", "td", "hr", "br", "img", "sup"})
 _TAG = re.compile(r"</?([A-Za-z][^\s/<>]*)(?:\s[^<>]*)?/?>")
 
 
@@ -641,8 +901,9 @@ def _escape_raw_tags(body: str) -> str:
     return _TAG.sub(lambda m: m.group(0) if m.group(1) in _HTML_TAGS else html.escape(m.group(0), quote=False), body)
 
 
-def render_html(md: str, title: str) -> str:
-    """The Markdown as one page with a step per H2. Fenced code keeps `language-<lang>` for highlight.js."""
+def markdown_html(md: str, cites: CiteNumbers | None = None) -> str:
+    """A Markdown fragment as HTML: citation links become numbered superscripts, Mermaid a diagram box,
+    fenced code keeps `language-<lang>` for highlight.js, and tables scroll in their own box."""
     import markdown as mdlib
 
     blocks: list[str] = []
@@ -651,23 +912,177 @@ def render_html(md: str, title: str) -> str:
         blocks.append(m.group(1))
         return f"\n\nMERMAIDBLOCK{len(blocks) - 1}\n\n"
 
-    text = _raw_links(MERMAID.sub(keep_mermaid, md))
+    text = _raw_links(MERMAID.sub(keep_mermaid, md), cites or CiteNumbers())
     body = _escape_raw_tags(mdlib.markdown(text, extensions=["tables", "fenced_code", "sane_lists"]))
     for i, b in enumerate(blocks):
-        body = body.replace(f"<p>MERMAIDBLOCK{i}</p>", f'<pre class="mermaid">{html.escape(b)}</pre>')
-    parts = re.split(r"(?=<h2>)", body)
-    intro, steps = parts[0], parts[1:]
-    nav, sections = [], []
-    for i, s in enumerate(steps, start=1):
-        h = re.match(r"<h2>(.*?)</h2>", s)
-        label = re.sub(r"<[^>]+>", "", h.group(1)) if h else f"Step {i}"
-        nav.append(f'<li><a href="#step-{i}" data-step="{i}">{i}. {label}</a></li>')
-        sections.append(f'<section class="step" id="step-{i}" data-step="{i}">{s}'
-                        f'<nav class="pager"><button class="prev" type="button">Previous</button>'
-                        f'<button class="next" type="button">Next</button></nav></section>')
+        body = body.replace(f"<p>MERMAIDBLOCK{i}</p>", f'<div class="diagram"><pre class="mermaid">{html.escape(b)}</pre></div>')
+    return body.replace("<table>", '<div class="tbl"><table>').replace("</table>", "</table></div>")
+
+
+def _inline(md: str, cites: CiteNumbers) -> str:
+    """`markdown_html` for one line of text, without the paragraph around it."""
+    out = markdown_html(md, cites).strip()
+    if out.startswith("<p>") and out.endswith("</p>") and out.count("<p>") == 1:
+        out = out[3:-4]
+    return out
+
+
+# A `path:line` (or `path:start-end`) in the page's visible text: a file name with an extension, then a line.
+LOCATION = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)*[\w-]+(?:\.[\w-]+)+):(\d+)(?:-(\d+))?(?![\w])")
+_HIDDEN = ("pre", "script", "style")
+
+
+def hide_locations(body: str) -> str:
+    """Every `path:line` left in the page's visible text, outside code blocks, becomes the file's name with
+    the full location in its tooltip. Citations are already superscripts; this catches the rest (left-out
+    entries, uncited boundary entries, check reasons)."""
+    parts = re.split(r"(<[^>]*>)", body)
+    depth = 0
+    for i, part in enumerate(parts):
+        if part.startswith("<"):
+            m = re.match(r"<(/?)([A-Za-z]+)", part)
+            if m and m.group(2).lower() in _HIDDEN:
+                depth += -1 if m.group(1) else 1
+            continue
+        if depth == 0 and part:
+            parts[i] = LOCATION.sub(lambda x: f'<span class="loc" title="{x.group(0)}">'
+                                              f'{PurePosixPath(x.group(1)).name}</span>', part)
+    return "".join(parts)
+
+
+def _code_block(text: str, lang: str) -> str:
+    cls = f' class="language-{lang}"' if lang else ""
+    return f"<pre><code{cls}>{html.escape(text.strip(chr(10)))}</code></pre>"
+
+
+def _html_cites(lk: Linker, ids: list[str], cites: CiteNumbers) -> str:
+    return _inline(_cites(lk, ids), cites) if ids else ""
+
+
+def _html_usecases(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
+    cases = _data(state, "usecases").get("cases") or []
+    if not cases:
+        return "<p>No use case passed the checks.</p>"
+    out = ['<div class="cases">']
+    for c in cases:
+        ex = c["example"]
+        meta = " · ".join(x for x in (f"<b>Who</b> {_inline(lk.expand(c['who']), cites)}" if c.get("who") else "",
+                                      f"<b>When</b> {_inline(lk.expand(c['when']), cites)}" if c.get("when") else "")
+                          if x)
+        out.append('<article class="case">')
+        out.append(f"<h3>{_inline(c['title'], cites)}</h3>")
+        if meta:
+            out.append(f'<p class="meta">{meta}</p>')
+        out.append(_code_block(ex["text"], EXAMPLE_LANG.get(ex["kind"], "")))
+        if c.get("what_happens"):
+            out.append(f"<p>{_inline(lk.expand(c['what_happens']), cites)}</p>")
+        if c.get("result"):
+            out.append(f"<p><b>What comes out</b> {_inline(lk.expand(c['result']), cites)}</p>")
+        out.append(f'<p class="based">Based on {_html_cites(lk, c.get("cites") or [], cites)}</p>')
+        out.append("</article>")
+    out.append("</div>")
+    return "\n".join(out)
+
+
+def _html_flow(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
+    data = _data(state, "flow")
+    out = []
+    src = flow_mermaid(data)
+    if src:
+        out.append(f'<div class="diagram"><pre class="mermaid">{html.escape(src)}</pre></div>')
+        where = "".join(f"<li>{html.escape(n['label'])} {_html_cites(lk, [n['cite']], cites)}</li>"
+                        for n in data["nodes"])
+        out.append(f'<details class="more"><summary>Where each box is in the code</summary><ul>{where}</ul></details>')
+    steps = data.get("steps") or []
+    if not src and not steps:
+        return "<p>Nothing about this section passed the checks.</p>"
+    if steps:
+        out.append('<ol class="steps">')
+        for i, st in enumerate(steps, start=1):
+            out.append(f'<li id="flow-step-{i}"><h3>{_inline(st["title"], cites)}</h3>')
+            out.append(f"<p>{_inline(lk.expand(st['summary']), cites)}</p>")
+            more = "".join(markdown_html(lk.expand(p), cites) for p in st.get("details") or [])
+            more += "".join(markdown_html(lk.snippet(lk.citations[cid]), cites) for cid in st.get("snippets") or []
+                            if cid in lk.citations)
+            if more:
+                out.append(f'<details class="more"><summary>Details</summary>{more}</details>')
+            out.append("</li>")
+        out.append("</ol>")
+    return "\n".join(out)
+
+
+def _html_outputs(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
+    items = _data(state, "outputs").get("items") or []
+    if not items:
+        return "<p>No output passed the checks.</p>"
+    out = []
+    for it in items:
+        out.append('<div class="item">')
+        out.append(f"<h3>{_inline(it['name'], cites)}</h3>")
+        out.append(f"<p>{_inline(lk.expand(it['what']), cites)} "
+                   f'<span class="based">Written at {_html_cites(lk, [it["cite"]], cites)}</span></p>')
+        ex = it.get("example")
+        if ex:
+            out.append(f'<details class="more"><summary>Example payload ({html.escape(ex["format"])})</summary>'
+                       f'{_code_block(ex["text"], EXAMPLE_LANG.get(ex["format"], ""))}</details>')
+        out.append("</div>")
+    return "\n".join(out)
+
+
+def _html_config(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
+    rows = _data(state, "config").get("rows") or []
+    if not rows:
+        return "<p>No setting passed the checks.</p>"
+    out = ['<div class="tbl"><table><thead><tr><th>Setting</th><th>What it changes</th><th>Default</th>'
+           '<th>Where</th></tr></thead><tbody>']
+    for r in rows:
+        default = f"<code>{html.escape(r['default'])}</code>" if r.get("default") else ""
+        out.append(f"<tr><td><code>{html.escape(r['name'])}</code></td><td>{_inline(lk.expand(r['effect']), cites)}"
+                   f"</td><td>{default}</td><td>{_html_cites(lk, [r['cite']], cites)}</td></tr>")
+    out.append("</tbody></table></div>")
+    return "\n".join(out)
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def _html_subs(key: str, sec: MdSection) -> str:
+    """Each H3 of Reference or How this was made as a closed `<details>`, numbered on its own."""
+    out = [markdown_html(sec.body)] if sec.body else []
+    for title, text in sec.subs:
+        out.append(f'<details class="sub" id="{key}-{_slug(title)}"><summary><h3>{html.escape(title)}</h3></summary>'
+                   f"{markdown_html(text, CiteNumbers())}</details>")
+    return "\n".join(out)
+
+
+def render_html(state: WalkState, out_dir: Path) -> str:
+    """The explainer as one scrolling page with a contents rail. The structured sections are drawn from
+    their gated answers; the others from the same Markdown the .md file holds."""
+    lk = Linker(state, out_dir)
+    t = state.target
+    sections = human_md_sections(state, lk, out_dir)
+    builders = {"usecases": _html_usecases, "flow": _html_flow, "outputs": _html_outputs, "config": _html_config}
+    body, nav = [], []
+    for key, title in HUMAN_SECTIONS:
+        cites = CiteNumbers()
+        if key in builders:
+            inner = builders[key](state, lk, cites)
+        elif key in ("reference", "made"):
+            inner = _html_subs(key, sections[key])
+        else:
+            inner = markdown_html(sections[key].body, cites)
+        nav.append(f'<li><a href="#{key}">{html.escape(title)}</a></li>')
+        body.append(f'<section id="{key}">\n<h2>{html.escape(title)}</h2>\n{inner}\n</section>')
+    tagline = _data(state, "summary").get("tagline")
+    header = (f'<header class="top"><div class="eyebrow">Codebase walkthrough</div>'
+              f"<h1>{html.escape(t.package)}</h1>"
+              + (f'<p class="lede">{_inline(lk.expand(tagline), CiteNumbers())}</p>' if tagline else "")
+              + f'<p class="run">{_inline(run_line(state), CiteNumbers())}</p></header>')
     page = TEMPLATE.read_text(encoding="utf-8")
-    return (page.replace("{{TITLE}}", html.escape(title)).replace("{{INTRO}}", intro)
-            .replace("{{NAV}}", "\n".join(nav)).replace("{{STEPS}}", "\n".join(sections)))
+    return (page.replace("{{TITLE}}", html.escape(f"{t.package} walkthrough"))
+            .replace("{{HEADER}}", hide_locations(header)).replace("{{NAV}}", "\n".join(nav))
+            .replace("{{BODY}}", hide_locations("\n".join(body))))
 
 
 def paths_file_for(md: Path) -> Path:
@@ -724,7 +1139,7 @@ def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
                              encoding="utf-8")
         paths.append(json_path)
         html_path = out_dir / f"{name}-walkthrough.html"
-        html_path.write_text(render_html(md, f"{state.target.package} walkthrough"), encoding="utf-8")
+        html_path.write_text(render_html(state, out_dir), encoding="utf-8")
         paths.append(html_path)
         written = write_paths_output(state, md_path)
         if written is not None:

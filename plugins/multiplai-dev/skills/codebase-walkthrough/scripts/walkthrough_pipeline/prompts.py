@@ -93,8 +93,21 @@ Writing rules (a program checks every paragraph; one that fails is cut from the 
   the word "think". Use only what the facts say."""
 
 
+EXPLAINER_RULES = """\
+Writing rules (a program checks every sentence, example, box and key; what fails is cut):
+- Write for someone who has never seen this code: plain words, short sentences. Say what something
+  does before how it does it. No code-speak in the text; name a function only when the reader needs it.
+- Cite with the citation id in double brackets at the END of the sentence it supports, e.g.
+  "It saves its progress after every phase. [[c12]]". Never put a citation in the middle of a phrase.
+- Never type a file path with a line number; the program turns each id into a link.
+- Backtick only identifiers that appear in the material (function, class, setting, flag names).
+  Do not invent names.
+- Never type code blocks or Mermaid; the program inserts code and draws diagrams.
+- Use only what the material says. Do not use the word "think"."""
+
+
 def write_section(name: str, title: str, brief: str, material: str, schema, failures: list[str] | None = None,
-                  previous: list[str] | None = None) -> str:
+                  previous: list[str] | None = None, rules: str = WRITE_RULES) -> str:
     redo = ""
     if failures and previous:
         redo = ("\nYour previous paragraphs failed these checks; rewrite them so they pass, using only the "
@@ -106,11 +119,73 @@ def write_section(name: str, title: str, brief: str, material: str, schema, fail
 Material (every item was checked against the code; ids in brackets are citation ids):
 {material}
 {redo}
-{WRITE_RULES}
+{rules}
 
 Return ONE JSON object: `paragraphs` (a list of {{"text": ...}}, Markdown allowed, no headings),
 plus `glossary` (for the glossary section only: `term`, `meaning`) and `questions` (for the
 gotchas section only: questions to ask the module's owner).
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""
+
+
+
+# What each structured section of the explainer asks for. The schema follows in the prompt.
+STRUCTURED_ASKS = {
+    "summary": """Return `tagline`: ONE sentence saying what the code is for, for someone who has never
+seen it. Then `paragraphs`: at most two short paragraphs in plain language: what it does, who uses it,
+and what it talks to.""",
+    "usecases": """Return `cases`: at least two use cases, more when there is more than one way to use the
+code (each CLI subcommand, flag or mode that changes what happens gets its own case). Each case has:
+- `title`: a short name, e.g. "Build a feature from a plan";
+- `who` and `when`: who uses it and in what situation;
+- `example`: `kind` "command" (a shell command), "call" (a function call) or "file" (a file the user
+  writes), and its `text`. Use ONLY flags, subcommands and names that appear in the material; a program
+  checks each one. Write any value the user chooses as a placeholder in angle brackets, e.g. `<plan file>`;
+- `what_happens`: what the code then does, in two or three sentences;
+- `result`: what comes out (files, a PR, a report);
+- `cites`: the citation ids (e.g. "c12") of the material the case rests on, at least one.""",
+    "flow": """Return the main path through the code as a flow diagram plus a walk through it.
+- `nodes`: at most 14 boxes, each with an `id` (letters and digits, e.g. "n1"), a `label` in plain words
+  (no code names, no file names, at most 60 characters) and a `cite`: the citation id of the line that
+  box stands for;
+- `edges`: arrows `{"from": <node id>, "to": <node id>, "label": <optional plain words>}`. Every box must
+  be reached by an arrow: one connected diagram;
+- `steps`: one per box or group of boxes, in order, each with a `title`, a `summary` of one to three
+  sentences, `details_paragraphs` (the specifics, for a reader who opens the step) and `snippet_cites`
+  (one or two citation ids whose lines are worth showing as code).
+Follow the first path listed (the module's main entry point) unless the material shows another path is
+the main one.""",
+    "outputs": """Return `items`: each file, state record, log or other output the code writes, with its
+`name`, `what` (what it is for, in one or two sentences), `written_by_cite` (the citation id of the line
+that writes it) and, when the material shows its shape, an `example`: `format` "json", "yaml",
+"markdown" or "text", and its `text`, a short realistic sample. A program checks every key of a JSON or
+YAML example against the code; use only keys that appear in the material.""",
+    "config": """Return `rows`: the settings, flags, environment variables and config keys that change
+what the code does. Each row has the `name` exactly as the code spells it, its `effect` in one plain
+sentence, its `default` when the material shows it, and `cite`: the citation id of the line that reads
+or defines it.""",
+}
+
+
+def write_structured(name: str, kind: str, title: str, brief: str, material: str, schema,
+                     failures: list[str] | None = None, previous: str | None = None) -> str:
+    redo = ""
+    if failures and previous:
+        redo = ("\nYour previous answer failed these checks. Return the whole section again, fixed, using only "
+                "the material below:\n" + "\n".join(f"- {f}" for f in failures[:60]) + "\n\nPrevious answer:\n"
+                + previous[:20000] + "\n")
+    return f"""You are writing the section "{title}" of a friendly explainer of `{name}`, for a reader new to it.
+{brief}
+
+{STRUCTURED_ASKS[kind]}
+
+Material (every item was checked against the code; ids in brackets are citation ids):
+{material}
+{redo}
+{EXPLAINER_RULES}
 
 Schema:
 {_schema(schema)}

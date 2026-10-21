@@ -13,75 +13,110 @@
       integrity="sha512-rO+olRTkcf304DQBxSWxln8JXCzTHlKnIdnMUwYvQa9/Jd4cQaNkItIUj6Z4nvW1dqK0SKXLbn9h4KwZTNtAyw=="
       crossorigin="anonymous">
 <style>
+  /* One reading column beside a sticky contents rail; tables, code and diagrams scroll in their own boxes. */
   :root {
     color-scheme: light;
-    --bg: #fbfbfa; --fg: #1d1f21; --muted: #5f6368; --line: #e3e3e0; --side: #f3f3f1;
-    --accent: #0f766e; --on-accent: #ffffff; --link: #0b5cad; --code-bg: #f6f8fa; --code-fg: #1f2328;
+    --bg: #f4f6f8; --surface: #ffffff; --ink: #15212c; --muted: #566573; --rule: #d6dde4;
+    --accent: #0b6a8a; --accent-soft: #e2f0f5; --neutral-bg: #e9edf1; --code-bg: #eef2f5;
+    --f-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+    --f-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --f-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --bg: #16181b; --fg: #e6e6e3; --muted: #a0a4a8; --line: #2c2f33; --side: #1d2024;
-      --accent: #2dd4bf; --on-accent: #06201d; --link: #7cb7ff; --code-bg: #0d1117; --code-fg: #e6edf3;
+      --bg: #0f161c; --surface: #16202a; --ink: #e3eaf0; --muted: #98a8b6; --rule: #2a3946;
+      --accent: #5cc0de; --accent-soft: #15323d; --neutral-bg: #22303b; --code-bg: #1d2a35;
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg: #16181b; --fg: #e6e6e3; --muted: #a0a4a8; --line: #2c2f33; --side: #1d2024;
-    --accent: #2dd4bf; --on-accent: #06201d; --link: #7cb7ff; --code-bg: #0d1117; --code-fg: #e6edf3;
+    --bg: #0f161c; --surface: #16202a; --ink: #e3eaf0; --muted: #98a8b6; --rule: #2a3946;
+    --accent: #5cc0de; --accent-soft: #15323d; --neutral-bg: #22303b; --code-bg: #1d2a35;
   }
   * { box-sizing: border-box; }
-  html { background: var(--bg); }
-  body { margin: 0; background: var(--bg); color: var(--fg); overflow-wrap: break-word;
-    font: 18px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-  a { color: var(--link); }
-  #progress { position: fixed; top: 0; left: 0; right: 0; height: 40px; background: var(--bg);
-    border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; padding: 0 16px; z-index: 3; font-size: 14px; }
-  #count { white-space: nowrap; }
-  #bar { flex: 1; min-width: 0; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
-  #bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
-  #menu { display: none; background: none; border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 2px 10px; }
-  aside { position: fixed; top: 40px; bottom: 0; left: 0; width: 280px; overflow-y: auto; background: var(--side);
-    border-right: 1px solid var(--line); padding: 16px; font-size: 15px; z-index: 2; }
-  aside h1 { font-size: 17px; margin: 0 0 12px; }
-  aside ol { list-style: none; padding: 0; margin: 0; }
-  aside a { display: block; padding: 6px 8px; border-radius: 6px; text-decoration: none; color: var(--fg); overflow-wrap: anywhere; }
-  aside a.active { background: var(--accent); color: var(--on-accent); }
-  main { margin-left: 280px; padding: 56px 32px 64px; max-width: 1100px; min-width: 0; }
-  main [id] { scroll-margin-top: 56px; }
-  .intro { color: var(--muted); }
-  .step { display: none; }
-  .step.active { display: block; }
-  table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; font-size: 15px; margin: 12px 0; }
-  th, td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
-  code { font-size: 0.88em; overflow-wrap: anywhere; }
-  pre { max-width: 100%; overflow-x: auto; font-size: 14px; border-radius: 8px; padding: 12px 16px;
-    background: var(--code-bg); color: var(--code-fg); }
+  html { background: var(--bg); scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 16px;
+    line-height: 1.6; overflow-wrap: break-word; }
+  .wrap { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 40px; max-width: 1240px; margin: 0 auto;
+    padding: 32px 16px 80px; }
+  nav.toc { position: sticky; top: 20px; align-self: start; font-size: 14px; }
+  nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: s; }
+  nav.toc li { counter-increment: s; }
+  nav.toc a { display: block; padding: 4px 8px; border-radius: 4px; color: var(--muted); text-decoration: none; }
+  nav.toc a::before { content: counter(s) ". "; font-family: var(--f-mono); font-size: 11px; }
+  nav.toc a:hover, nav.toc a:focus-visible, nav.toc a.active { background: var(--accent-soft); color: var(--ink); outline: none; }
+  main { min-width: 0; }
+  main [id] { scroll-margin-top: 16px; }
+  header.top { border-bottom: 2px solid var(--ink); padding-bottom: 18px; margin-bottom: 8px; }
+  .eyebrow { font-family: var(--f-mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-family: var(--f-display); font-weight: 700; font-size: 40px; line-height: 1.1; margin: 6px 0 10px; }
+  h2 { font-family: var(--f-display); font-weight: 600; font-size: 26px; margin: 48px 0 10px; padding-top: 12px;
+    border-top: 1px solid var(--rule); }
+  h3 { font-family: var(--f-display); font-weight: 600; font-size: 19px; margin: 24px 0 6px; }
+  h4 { font-size: 16px; margin: 20px 0 6px; }
+  p, li { max-width: 75ch; }
+  .lede { font-size: 18px; margin: 0 0 8px; }
+  .run { font-size: 13px; color: var(--muted); margin: 0; }
+  a { color: var(--accent); }
+  code { font-family: var(--f-mono); font-size: .86em; background: var(--code-bg); padding: 1px 4px; border-radius: 3px;
+    overflow-wrap: anywhere; }
+  pre { max-width: 100%; overflow-x: auto; font-size: 13.5px; border-radius: 6px; padding: 12px 16px;
+    background: var(--code-bg); border: 1px solid var(--rule); }
   pre code, pre code.hljs { padding: 0; background: transparent; overflow-wrap: normal; }
-  pre.mermaid { background: transparent; text-align: center; padding: 0; }
+  sup { line-height: 0; }
+  a.cite { font-family: var(--f-mono); font-size: 11px; color: var(--muted); text-decoration: none;
+    border-bottom: 1px dotted var(--rule); padding: 0 1px; }
+  a.cite:hover, a.cite:focus-visible { color: var(--accent); border-bottom-color: var(--accent); }
+  a.hop { font-size: 11px; color: var(--muted); text-decoration: none; padding: 0 1px; }
+  a.hop:hover, a.hop:focus-visible { color: var(--accent); }
+  span.loc { font-family: var(--f-mono); font-size: .9em; border-bottom: 1px dotted var(--rule); }
+  .based { font-size: 13px; color: var(--muted); }
+  .tbl { overflow-x: auto; margin: 12px 0 18px; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
+  th { font-family: var(--f-display); font-weight: 600; background: var(--neutral-bg); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  .diagram { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px;
+    padding: 16px; margin: 12px 0 18px; }
+  .diagram pre.mermaid { margin: 0; background: none; border: 0; text-align: center; padding: 0; }
   pre.mermaid svg { max-width: 100%; height: auto; }
-  blockquote { border-left: 3px solid var(--accent); margin: 12px 0; padding: 0 12px; color: var(--muted); }
-  .pager { display: flex; justify-content: space-between; gap: 16px; margin-top: 32px; }
-  .pager button { font: inherit; padding: 6px 16px; border-radius: 6px; border: 1px solid var(--line);
-    background: var(--side); color: var(--fg); cursor: pointer; }
-  @media (max-width: 768px) {
-    #menu { display: inline-block; }
-    aside { transform: translateX(-100%); transition: transform .2s; width: 85%; }
-    aside.open { transform: none; }
-    main { margin-left: 0; padding: 56px 16px 48px; }
-    body { font-size: 16px; }
+  .cases { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; margin: 12px 0; }
+  .case, .item { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 4px 16px 8px; }
+  .item { margin: 12px 0; }
+  .case h3, .item h3 { margin-top: 12px; }
+  .meta { font-size: 14px; color: var(--muted); }
+  ol.steps { padding-left: 22px; }
+  ol.steps > li { max-width: none; margin: 0 0 12px; }
+  ol.steps > li::marker { font-family: var(--f-display); font-weight: 600; color: var(--accent); }
+  ol.steps h3 { display: inline; font-size: 17px; }
+  details { margin: 8px 0; }
+  details > summary { cursor: pointer; color: var(--accent); font-size: 14px; }
+  details.more > *:not(summary) { margin-left: 4px; }
+  details.sub { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 8px 14px; }
+  details.sub > summary { color: var(--ink); }
+  details.sub > summary h3 { display: inline; margin: 0; font-size: 17px; }
+  blockquote { border-left: 3px solid var(--accent); background: var(--accent-soft); margin: 12px 0; padding: 4px 14px;
+    border-radius: 0 6px 6px 0; }
+  @media (max-width: 860px) {
+    .wrap { grid-template-columns: minmax(0, 1fr); gap: 8px; padding-top: 20px; }
+    nav.toc { position: static; border: 1px solid var(--rule); border-radius: 6px; padding: 8px; background: var(--surface); }
+    nav.toc ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    h1 { font-size: 30px; }
   }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 </style>
 </head>
 <body>
-<div id="progress"><button id="menu" type="button" aria-label="Steps">&#9776;</button><span id="count"></span><div id="bar"><div></div></div></div>
-<aside id="side"><h1>{{TITLE}}</h1><ol>
+<div class="wrap">
+<nav class="toc" aria-label="Contents"><ol>
 {{NAV}}
-</ol></aside>
+</ol></nav>
 <main>
-<div class="intro">{{INTRO}}</div>
-{{STEPS}}
+{{HEADER}}
+{{BODY}}
 </main>
+</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.2/highlight.min.js"
         integrity="sha512-VSPLUv/n1Bmn+4zoxBNwpuFAO3//79I0Aax/qHDx24R47vylPcc9PrHDCqlePwHnh3joiM7/YTQhcXyQAAxvPQ=="
         crossorigin="anonymous"></script>
@@ -90,11 +125,6 @@
         crossorigin="anonymous"></script>
 <script>
 (function () {
-  var steps = Array.prototype.slice.call(document.querySelectorAll('.step'));
-  var links = Array.prototype.slice.call(document.querySelectorAll('aside a[data-step]'));
-  var side = document.getElementById('side');
-  var decorated = {};
-  var current = 1;
   var theme = document.documentElement.getAttribute('data-theme');
   var dark = theme === 'dark' || (theme !== 'light' && !!window.matchMedia &&
              window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -103,98 +133,68 @@
     if (window.hljs) {
       hljs.configure({ ignoreUnescapedHTML: true });
       hljs.registerAliases(['markup'], { languageName: 'xml' });   // the Markdown names HTML snippets `markup`
-    }
-  } catch (e) {}
-
-  // Highlight code and draw diagrams once per step, when it is first shown:
-  // mermaid cannot measure a diagram inside a hidden step.
-  function decorate(n, target) {
-    if (decorated[n]) return;
-    decorated[n] = true;
-    var step = steps[n - 1];
-    if (window.hljs) {
-      Array.prototype.forEach.call(step.querySelectorAll('pre code[class*="language-"]'), function (el) {
+      Array.prototype.forEach.call(document.querySelectorAll('pre code[class*="language-"]'), function (el) {
         try { hljs.highlightElement(el); } catch (e) {}
       });
     }
-    var nodes = step.querySelectorAll('pre.mermaid');
-    if (window.mermaid && nodes.length) {
-      try {
-        var done = mermaid.run({ nodes: nodes });
-        if (done && done.then) {
-          // A drawn diagram changes the height above the target, so scroll to it again.
-          done.then(function () { if (target) target.scrollIntoView({ block: 'start' }); }, function () {});
-        }
-      } catch (e) {}
+  } catch (e) {}
+
+  // Mermaid cannot measure a diagram inside a closed <details>, so each one is drawn when it is first shown.
+  function closed(el) {
+    for (var d = el.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) {
+      if (!d.open) return true;
     }
+    return false;
   }
-
-  function show(n, target) {
-    if (!steps.length) return;
-    n = Math.max(1, Math.min(steps.length, n));
-    current = n;
-    steps.forEach(function (s, i) { s.classList.toggle('active', i + 1 === n); });
-    links.forEach(function (a) { a.classList.toggle('active', +a.dataset.step === n); });
-    var active = links[n - 1];
-    if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
-    document.getElementById('count').textContent = 'Step ' + n + ' of ' + steps.length;
-    document.querySelector('#bar > div').style.width = (100 * n / steps.length) + '%';
-    side.classList.remove('open');
-    decorate(n, target);
-    if (target) target.scrollIntoView({ block: 'start' });
-    else window.scrollTo(0, 0);
+  function draw(root) {
+    if (!window.mermaid) return;
+    var nodes = Array.prototype.filter.call(root.querySelectorAll('pre.mermaid:not([data-drawn])'),
+                                            function (el) { return !closed(el); });
+    if (!nodes.length) return;
+    nodes.forEach(function (el) { el.setAttribute('data-drawn', '1'); });
+    try { mermaid.run({ nodes: nodes }); } catch (e) {}
   }
+  document.addEventListener('toggle', function (e) {
+    if (e.target && e.target.open) draw(e.target);
+  }, true);
 
-  function setHash(hash, push) {
-    if (location.hash === hash) return;
-    try {
-      if (push) history.pushState(null, '', hash);
-      else history.replaceState(null, '', hash);
-    } catch (e) {}
-  }
-
-  // `#step-N` shows step N. Any other hash names an element: show the step
-  // that holds it and scroll it into view. False when nothing has that id.
-  function route(hash) {
-    var m = /^#step-(\d+)$/.exec(hash || '');
-    if (m) { show(+m[1]); return true; }
+  // A link to an id inside closed <details> (a path hop such as #p2h3) opens every <details> around it.
+  function reveal(hash) {
     var id = (hash || '').slice(1);
     try { id = decodeURIComponent(id); } catch (e) {}
     var el = id ? document.getElementById(id) : null;
     if (!el) return false;
-    var step = el.closest ? el.closest('.step') : null;
-    if (step) show(steps.indexOf(step) + 1, el);
-    else el.scrollIntoView({ block: 'start' });
+    for (var d = el.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
+    if (el.tagName === 'DETAILS') el.open = true;
+    draw(document);
+    el.scrollIntoView({ block: 'start' });
     return true;
   }
-
-  function go(n) {
-    show(n);
-    setHash('#step-' + current, false);
-  }
-
   document.addEventListener('click', function (e) {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     var a = e.target.closest ? e.target.closest('a[href^="#"]') : null;
     if (!a) return;
     var hash = a.getAttribute('href');
-    if (!route(hash)) return;
+    if (!reveal(hash)) return;
     e.preventDefault();
-    setHash(hash, true);
+    try { history.pushState(null, '', hash); } catch (err) {}
   });
-  window.addEventListener('hashchange', function () { route(location.hash); });
-  steps.forEach(function (s) {
-    s.querySelector('.prev').addEventListener('click', function () { go(current - 1); });
-    s.querySelector('.next').addEventListener('click', function () { go(current + 1); });
-  });
-  document.addEventListener('keydown', function (e) {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
-    if (e.key === 'ArrowRight') go(current + 1);
-    if (e.key === 'ArrowLeft') go(current - 1);
-  });
-  document.getElementById('menu').addEventListener('click', function () { side.classList.toggle('open'); });
-  if (!route(location.hash)) go(1);
+  window.addEventListener('hashchange', function () { reveal(location.hash); });
+
+  // The rail marks the section being read.
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a'));
+  if (window.IntersectionObserver) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.isIntersecting) return;
+        links.forEach(function (a) { a.classList.toggle('active', a.getAttribute('href') === '#' + en.target.id); });
+      });
+    }, { rootMargin: '0px 0px -70% 0px' });
+    Array.prototype.forEach.call(document.querySelectorAll('main > section[id]'), function (s) { io.observe(s); });
+  }
+
+  draw(document);
+  if (location.hash) reveal(location.hash);
 })();
 </script>
 </body>

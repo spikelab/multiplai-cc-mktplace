@@ -18,7 +18,7 @@ from typing import Literal
 # The explore answers and units live in code_facts, shared with review and buildme.
 from code_facts.models import Citation, Dropped, ExploreOutput, Fact, FilePurpose, Term, Unit  # noqa: F401
 from code_facts.paths import PathsResult
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Stage names in run order. `WalkState.stage` holds the last one completed.
 STAGES: tuple[str, ...] = (
@@ -131,6 +131,101 @@ class SectionOutput(_Model):
     questions: list[str] = Field(default_factory=list)
 
 
+# The human-mode explainer's structured sections. Every text field may cite `[[cN]]`; a cite field
+# holds one id. Code checks each item (gates.py) and draws the flow's Mermaid from `nodes` and `edges`.
+
+
+def _lower(value):
+    return value.strip().lower() if isinstance(value, str) else value
+
+
+class SummaryOutput(_Model):
+    tagline: str = ""                                    # one sentence: what the code is for
+    paragraphs: list[Paragraph] = Field(default_factory=list)
+
+
+class Example(_Model):
+    kind: Literal["command", "call", "file"] = "command"
+    text: str = ""
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _kind(cls, v):
+        return _lower(v)
+
+
+class UseCase(_Model):
+    title: str
+    who: str = ""
+    when: str = ""
+    example: Example
+    what_happens: str = ""
+    result: str = ""
+    cites: list[str] = Field(default_factory=list)
+
+
+class UseCasesOutput(_Model):
+    cases: list[UseCase] = Field(default_factory=list)
+
+
+class FlowNode(_Model):
+    id: str
+    label: str
+    cite: str = ""
+
+
+class FlowEdge(_Model):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    source: str = Field(alias="from")
+    to: str
+    label: str = ""
+
+
+class FlowStep(_Model):
+    title: str
+    summary: str
+    details_paragraphs: list[str] = Field(default_factory=list)
+    snippet_cites: list[str] = Field(default_factory=list)
+
+
+class FlowOutput(_Model):
+    nodes: list[FlowNode] = Field(default_factory=list)
+    edges: list[FlowEdge] = Field(default_factory=list)
+    steps: list[FlowStep] = Field(default_factory=list)
+
+
+class Payload(_Model):
+    format: Literal["json", "yaml", "markdown", "text"] = "text"
+    text: str = ""
+
+    @field_validator("format", mode="before")
+    @classmethod
+    def _format(cls, v):
+        return _lower(v)
+
+
+class OutputItem(_Model):
+    name: str
+    what: str
+    written_by_cite: str = ""
+    example: Payload | None = None
+
+
+class OutputsOutput(_Model):
+    items: list[OutputItem] = Field(default_factory=list)
+
+
+class ConfigRow(_Model):
+    name: str
+    effect: str
+    default: str = ""
+    cite: str = ""
+
+
+class ConfigOutput(_Model):
+    rows: list[ConfigRow] = Field(default_factory=list)
+
+
 # --- stage records in the state ------------------------------------------------------
 
 
@@ -141,6 +236,7 @@ class Section(BaseModel):
     cut: list[dict] = Field(default_factory=list)   # [{text, reasons}]
     glossary: list[Term] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
+    data: dict = Field(default_factory=dict)        # a structured section's gated answer (human mode)
 
 
 class WalkState(BaseModel):
