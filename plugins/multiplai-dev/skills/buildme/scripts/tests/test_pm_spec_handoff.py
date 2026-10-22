@@ -103,6 +103,7 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(tmp_path, mo
     out = capsys.readouterr().out
     assert rc == 2
     assert "SPEC:NOT_READY:the specs changed after they were marked ready" in out
-    assert f"Run /multiplai-pm:pm-spec {CHANGE} first" in out
+    # The edited copy is the worktree's, so the advice names that checkout.
+    assert f"Run /multiplai-pm:pm-spec {CHANGE} --project-dir {built.parent.parent.parent} first" in out
     models.generate.assert_not_awaited()
 

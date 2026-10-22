@@ -455,6 +455,164 @@ class TestOldCheckpoints:
         assert rc == 2
         assert f"Run /multiplai-pm:pm-spec {CHANGE} first" in out
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("fixture, line", [
+        ("build-state-pre-codebase-analysis.json", "pm-spec {change} --project-dir {wt} first"),
+        ("build-state-pre-findings.json", "pm-spec resume {change} --project-dir {wt} first"),
+    ])
+    async def test_S13_a_checkpoint_in_the_builds_worktree_names_the_worktree(
+            self, repo, tmp_path, capsys, fixture, line):
+        """The old checkpoint is in the build's worktree, whose copy of the
+        specs has no ready record, while the user's checkout is ready: the
+        advice names `--project-dir <worktree>`, and a pm-spec run there
+        (played by marking that copy ready and committing it) lets the build
+        go on. Run twice, the refusal is the same and changes nothing."""
+        ready_specs(_source_change(repo), repo)
+        assert await _build(repo, Models(design=[f"# Design\n\n{ISSUE_LINE}\n"])) == 4
+        wt = _worktree(tmp_path)
+        built = wt / "specs" / "changes" / CHANGE
+        raw = json.loads((FIXTURES / fixture).read_text())
+        raw.update(change_name=CHANGE, state_file=str(built / ".build-state.json"),
+                   worktree_path=str(wt), source_repo=str(repo), branch=f"buildme/{CHANGE}")
+        (built / ".build-state.json").write_text(json.dumps(raw))
+        (built / readiness.ISSUES_FILE).unlink()
+        (built / ".change.yaml").write_text("{}\n")
+        _git(wt, "add", "-A", "specs")
+        _git(wt, "commit", "-qm", "an old build's change dir")
+        capsys.readouterr()
+        before = _tree(built)
+
+        for _ in range(2):
+            rc = await _build(repo, Models())
+            out = capsys.readouterr().out
+            assert rc == 2, out
+            assert "SPEC:NOT_READY:no spec_status" in out or "SPEC:NOT_READY:spec_status is not set" in out
+            assert f"Run /multiplai-pm:{line.format(change=CHANGE, wt=wt)}" in out
+            assert _tree(built) == before
+
+        if fixture == "build-state-pre-codebase-analysis.json":
+            mark_ready(built)
+            assert commit_specs(wt, built, "specs: ready (pm-spec in the worktree)")
+            models = Models()
+            rc = await _build(repo, models)
+            out = capsys.readouterr().out
+            assert rc == 0, out
+            assert "SPEC:NOT_READY" not in out
+            assert (built / "design.md").is_file() and (built / "tasks.md").is_file()
+
+
+# --- the copy the build reads: --base-ref and a resumed worktree (S7, S10) ----
+
+class TestTheCopyTheBuildReads:
+    @pytest.mark.asyncio
+    async def test_S10_a_base_ref_holding_specs_never_marked_ready_refuses(self, repo, tmp_path, capsys):
+        """The checkout's specs are ready, but the worktree is cut from
+        `--base-ref`, whose copy is not: refused before the worktree is cut."""
+        change_dir = write_specs(_source_change(repo))
+        commit_specs(repo, change_dir, "specs: draft, never marked ready")
+        draft = _git(repo, "rev-parse", "HEAD")
+        ready_specs(change_dir, repo)
+        models = Models()
+
+        rc = await _build(repo, models, base_ref=draft)
+
+        out = capsys.readouterr().out
+        assert rc == 2, out
+        assert f"SPEC:NOT_READY:specs/changes/{CHANGE} at --base-ref {draft}" in out
+        assert "no .change.yaml" in out
+        assert "Build from a --base-ref that holds the ready specs" in out
+        assert not (tmp_path / "ws").exists(), "no worktree"
+        models.generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_S10_a_base_ref_holding_an_older_ready_revision_refuses(self, repo, tmp_path, capsys):
+        change_dir = _source_change(repo)
+        ready_specs(change_dir, repo)
+        older = _git(repo, "rev-parse", "HEAD")
+        _revise(repo, change_dir)
+        models = Models()
+
+        rc = await _build(repo, models, base_ref=older)
+
+        out = capsys.readouterr().out
+        assert rc == 2, out
+        assert "holds other specs than the ones marked ready in" in out
+        assert not (tmp_path / "ws").exists()
+        models.generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_base_ref_holding_the_ready_specs_builds(self, repo, tmp_path, capsys):
+        change_dir = _source_change(repo)
+        ready_specs(change_dir, repo)
+        rc = await _build(repo, Models(), base_ref=_git(repo, "rev-parse", "HEAD"))
+        assert rc == 0, capsys.readouterr().out
+        assert (_worktree(tmp_path) / "specs" / "changes" / CHANGE / "design.md").is_file()
+
+    @staticmethod
+    async def _failed_at_tasks(repo: Path, models: Models) -> None:
+        real = models.generate.side_effect
+        failed = []
+
+        async def once(artifact_id, *a, **k):
+            if artifact_id == "tasks" and not failed:
+                failed.append(artifact_id)
+                raise RuntimeError("stop at tasks")
+            return await real(artifact_id, *a, **k)
+
+        models.generate.side_effect = once
+        assert await _build(repo, models) == 1
+
+    @pytest.mark.asyncio
+    async def test_S7_specs_revised_in_the_checkout_refuse_a_resume_naming_them(self, repo, tmp_path, capsys):
+        """pm-spec revised and marked ready the specs in the user's checkout
+        after the build's worktree was cut: the resume refuses and names
+        where the newer specs are, instead of building its older copy.
+        Following the advice (copy them in, commit) lets it go on, from them."""
+        change_dir = _source_change(repo)
+        ready_specs(change_dir, repo)
+        models = Models()
+        await self._failed_at_tasks(repo, models)
+        built = _worktree(tmp_path) / "specs" / "changes" / CHANGE
+        _revise(repo, change_dir)
+        capsys.readouterr()
+        asked = len(models.prompts)
+        before = _tree(built)
+
+        rc = await _build(repo, models)
+
+        out = capsys.readouterr().out
+        assert rc == 2, out
+        assert f"SPEC:NOT_READY:the specs in {change_dir} were marked ready again" in out
+        assert f"Copy proposal.md, use-cases.md, requirements/ and .change.yaml from {change_dir} " \
+               f"into {built}, commit them there" in out
+        assert len(models.prompts) == asked and _tree(built) == before
+
+        for name in ("proposal.md", "use-cases.md", "requirements/fixture.md", ".change.yaml"):
+            (built / name).write_bytes((change_dir / name).read_bytes())
+        assert commit_specs(_worktree(tmp_path), built, "specs: from the checkout")
+        rc = await _build(repo, models)
+        out = capsys.readouterr().out
+        assert rc == 0, out
+        assert "Requirement: Store" in "\n".join(models.prompts[asked:])
+
+    @pytest.mark.asyncio
+    async def test_S7_specs_revised_in_the_worktree_resume_from_the_worktree(self, repo, tmp_path, capsys):
+        """The other way round: the worktree's copy was revised (`pm-spec
+        revise --project-dir <worktree>`) and the checkout is as the worktree
+        was cut from it. Nothing is newer elsewhere, so the resume goes on."""
+        change_dir = _source_change(repo)
+        ready_specs(change_dir, repo)
+        models = Models()
+        await self._failed_at_tasks(repo, models)
+        built = _worktree(tmp_path) / "specs" / "changes" / CHANGE
+        _revise(_worktree(tmp_path), built)
+        asked = len(models.prompts)
+
+        rc = await _build(repo, models)
+
+        assert rc == 0, capsys.readouterr().out
+        assert "Requirement: Store" in "\n".join(models.prompts[asked:])
+
 
 # --- the pieces --------------------------------------------------------------------
 

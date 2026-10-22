@@ -717,6 +717,10 @@ class BuildConfig:
     # `build --base-ref`: the commit a new worktree branches from (an epic's
     # coordinator passes origin's default branch). Empty: the source HEAD.
     base_ref: str = ""
+    # The checkout the build was started in, when a resume re-bound the config
+    # to the build's existing worktree (`orchestrator._rebind_to_existing_worktree`);
+    # None otherwise. The readiness check compares its specs with the worktree's.
+    source_project_dir: Path | None = None
     # `build --epic-child`: an epic's coordinator started this build (or its
     # saved command was run again). `orchestrator._epic_child` reads it.
     epic_child: bool = False

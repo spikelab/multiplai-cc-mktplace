@@ -16,6 +16,8 @@ because of them:
 
 from __future__ import annotations
 
+import subprocess
+import tempfile
 from pathlib import Path
 
 from multiplai_core.specs import read_change_meta, set_spec_issues
@@ -68,17 +70,32 @@ def stop_on_issues(change_dir: Path, found: SpecIssuesFound, *, change: str) -> 
     return refuse_issues(write_issues(change_dir, found.issues, change=change))
 
 
-def pm_spec_line(name: str, *, resume: bool = False) -> str:
-    return f"Run /multiplai-pm:pm-spec {'resume ' if resume else ''}{name} first"
+def change_project(change_dir: Path) -> Path | None:
+    """The repository *change_dir* belongs to when it is
+    `<repo>/specs/changes/<change>`, else None."""
+    change_dir = Path(change_dir)
+    if change_dir.parent.name == "changes" and change_dir.parent.parent.name == "specs":
+        return change_dir.parent.parent.parent
+    return None
 
 
-def refuse_not_ready(name: str, reason: str, *, resume: bool = False) -> int:
+def pm_spec_line(name: str, *, resume: bool = False, project_dir: Path | None = None) -> str:
+    where = f" --project-dir {project_dir}" if project_dir else ""
+    return f"Run /multiplai-pm:pm-spec {'resume ' if resume else ''}{name}{where} first"
+
+
+def refuse_not_ready(name: str, reason: str, *, resume: bool = False,
+                     project_dir: Path | None = None, advice: str | None = None) -> int:
     """Print `SPEC:NOT_READY:<reason>` and the pm-spec line; the exit code (2).
     *resume* names `pm-spec resume <name>`, which checks specs already on disk
-    and marks them ready without rewriting them."""
+    and marks them ready without rewriting them. *project_dir* adds
+    `--project-dir`: the specs the build reads are in that checkout (a
+    worktree build's own worktree), not the one the user runs in. *advice*,
+    when given, is printed in place of the pm-spec line: what to do is not a
+    pm-spec run."""
     reason = " ".join(str(reason).split())
     print(f"{MARKER_NOT_READY}:{reason}", flush=True)
-    print(pm_spec_line(name, resume=resume), flush=True)
+    print(advice or pm_spec_line(name, resume=resume, project_dir=project_dir), flush=True)
     return EXIT_NOT_READY
 
 
@@ -104,9 +121,8 @@ def refuse_issues(path: Path) -> int:
     path = Path(path)
     print(f"{MARKER_ISSUES}:{path}", flush=True)
     change_dir = path.parent
-    where = ""
-    if change_dir.parent.name == "changes" and change_dir.parent.parent.name == "specs":
-        where = f" --project-dir {change_dir.parent.parent.parent}"
+    repo = change_project(change_dir)
+    where = f" --project-dir {repo}" if repo else ""
     print(f"Run /multiplai-pm:pm-spec revise {change_dir.name}{where}, then run the build again",
           flush=True)
     return EXIT_SPEC_ISSUES
@@ -127,3 +143,51 @@ def uncommitted(project_dir: Path, path: Path) -> list[str]:
         raise git_ops.GitLifecycleError(f"{res.command} failed: {res.stderr.strip()[-300:]}")
     return [line[3:] for line in res.stdout.splitlines() if line.strip()]
 
+
+
+def saved_revision(change_dir: Path) -> str | None:
+    """The `spec_revision` `.change.yaml` records (what was marked ready), or
+    None when there is none or it cannot be read."""
+    try:
+        value = read_change_meta(change_dir).get("spec_revision")
+    except (OSError, UnicodeError, ValueError):
+        return None
+    return str(value) if value else None
+
+
+def specs_at(repo: Path, rev: str, rel: str, dest: Path) -> Path | None:
+    """Write the change dir *rel* (relative to *repo*, POSIX form) as commit
+    *rev* holds it to `<dest>/<rel>`, byte for byte, and return that copy:
+    what a worktree cut from *rev* would hold. None when *rev* does not hold
+    *rel*. Raises `git_ops.GitLifecycleError` when git cannot read *rev*."""
+    res = git_ops._run(["git", "ls-tree", "-r", "-z", rev, "--", f"{rel}/"], cwd=repo,
+                       errors="surrogateescape")
+    if not res.ok:
+        raise git_ops.GitLifecycleError(f"{res.command} failed: {res.stderr.strip()[-300:]}")
+    entries = [e for e in res.stdout.split("\0") if e]
+    if not entries:
+        return None
+    for entry in entries:
+        meta, _, path = entry.partition("\t")
+        _mode, kind, oid = meta.split()
+        if kind != "blob":
+            continue
+        blob = subprocess.run(["git", "cat-file", "blob", oid], cwd=repo, capture_output=True,
+                              timeout=git_ops._GIT_TIMEOUT)
+        if blob.returncode != 0:
+            raise git_ops.GitLifecycleError(f"git cat-file blob {oid} failed in {repo}")
+        target = Path(dest) / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(blob.stdout)
+    return Path(dest) / rel
+
+
+def saved_revision_at(repo: Path, rev: str, rel: str) -> str | None:
+    """The `spec_revision` the change dir *rel*'s `.change.yaml` records at
+    commit *rev*; None when it has none or git cannot read it."""
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = specs_at(repo, rev, rel, Path(tmp))
+            return saved_revision(copy) if copy is not None else None
+    except (git_ops.GitLifecycleError, OSError, subprocess.SubprocessError, ValueError):
+        return None

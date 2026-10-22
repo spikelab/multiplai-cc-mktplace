@@ -549,8 +549,17 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
     short of their generation (item 21). An open `spec_issues` prints
     `SPEC:ISSUES:<path>`, exit 4 (rows S11, S12). A first run that will branch
     a worktree from HEAD refuses a change dir with uncommitted changes, since
-    the worktree would not hold them. A finished build's checkpoint is not
-    checked: its run only reports the result.
+    the worktree would not hold them; with `--base-ref`, the change dir as
+    that ref holds it must be ready and hold the revision the change dir
+    marked ready (`_base_ref_reason`), since the worktree is cut from it.
+
+    A worktree build's resume reads the copy in its own worktree; the
+    not-ready advice then names `--project-dir <worktree>`. When the change
+    dir in the checkout the build was cut from was marked ready again since,
+    with other specs, the resume refuses and names where they are
+    (`_newer_source_reason`, row S7) instead of building the older copy. A
+    finished build's checkpoint is not checked: its run only reports the
+    result.
     """
     from multiplai_core.specs import CHANGE_META_FILE, is_ready, read_change_meta
 
@@ -565,6 +574,17 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
         if prior is not None and prior.phase == BuildPhase.COMPLETE:
             return None
     change_dir = state_path.parent if state_path.exists() else config.change_dir
+    source = _source_change_dir(config, prior, change_dir) if prior is not None else None
+    in_worktree = source is not None
+    if source is not None:
+        newer = _newer_source_reason(prior, change_dir, source)
+        if newer:
+            source, reason = newer
+            log.error("REFUSED change=%s reason=newer-specs-in-source source=%s", config.change_name, source)
+            return readiness.refuse_not_ready(
+                config.change_name, reason,
+                advice=(f"Copy proposal.md, use-cases.md, requirements/ and .change.yaml from {source} "
+                        f"into {change_dir}, commit them there, then run the build again"))
     ready, reason = is_ready(change_dir)
     if not ready:
         try:
@@ -575,8 +595,9 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
         on_disk = (change_dir / "proposal.md").is_file() and any((change_dir / "requirements").glob("*.md"))
         early = prior is not None and prior.tdd is None and not prior.is_phase_complete(BuildPhase.SPEC_GENERATION)
         log.error("REFUSED change=%s reason=spec-not-ready detail=%s", config.change_name, reason)
-        return readiness.refuse_not_ready(config.change_name, reason,
-                                          resume=not marked and on_disk and not early)
+        return readiness.refuse_not_ready(
+            config.change_name, reason, resume=not marked and on_disk and not early,
+            project_dir=readiness.change_project(change_dir) if in_worktree else None)
     issues = readiness.open_issues(change_dir)
     if issues is not None:
         log.error("REFUSED change=%s reason=spec-issues file=%s", config.change_name, issues)
@@ -596,6 +617,108 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
                 f"{', ...' if len(dirty) > 5 else ''}); the build's worktree branches from HEAD, "
                 f"which does not hold them",
                 resume=True)
+    if prior is None and config.git.worktree and config.base_ref:
+        why = _base_ref_reason(config, change_dir)
+        if why:
+            log.error("REFUSED change=%s reason=base-ref-specs detail=%s", config.change_name, why)
+            return readiness.refuse_not_ready(
+                config.change_name, why,
+                advice=f"Build from a --base-ref that holds the ready specs in {change_dir}, then run the build again")
+    return None
+
+
+def _source_change_dir(config: BuildConfig, prior: BuildState, change_dir: Path) -> Path | None:
+    """The change dir in the checkout this worktree build was cut from, at the
+    same place as *change_dir* (the copy in the build's worktree), or None
+    when *change_dir* is not in the build's worktree. The checkout is the one
+    the resume was started in when it re-bound to the worktree, else the
+    checkpoint's `source_repo`."""
+    change_dir = Path(change_dir)
+    if config.source_project_dir is not None:
+        try:
+            source = Path(config.source_project_dir) / change_dir.relative_to(config.project_dir)
+        except ValueError:
+            return None
+    elif prior.worktree_path and prior.source_repo:
+        try:
+            rel = change_dir.resolve().relative_to(Path(prior.worktree_path).resolve())
+        except ValueError:
+            return None
+        source = Path(prior.source_repo) / rel
+    else:
+        return None
+    return None if source.resolve() == change_dir.resolve() else source
+
+
+def _newer_source_reason(prior: BuildState, change_dir: Path, source: Path) -> tuple[Path, str] | None:
+    """`(source, reason)` when *source*, the change dir in the checkout this
+    worktree build was cut from, is ready with other specs than it held when
+    the worktree was cut (its `.change.yaml` at `base_sha`), and other than
+    the copy the build reads, *change_dir*; None otherwise.
+
+    The worktree's own copy may be revised in place (`pm-spec revise
+    --project-dir <worktree>`, rows S11, S14): the source is then unchanged
+    and the build goes on. With no `base_sha` (an older checkpoint), the
+    source counts as newer whenever it differs from the copy."""
+    from multiplai_core.specs import is_ready, spec_revision
+
+    from . import readiness
+
+    if not source.is_dir() or not is_ready(source)[0]:
+        return None
+    theirs = readiness.saved_revision(source)
+    try:
+        files = spec_revision(change_dir)
+    except OSError:
+        files = None
+    if theirs in (readiness.saved_revision(change_dir), files):
+        return None
+    root = Path(prior.worktree_path) if prior.worktree_path else git_ops.repo_root(change_dir)
+    if prior.base_sha and root is not None:
+        try:
+            rel = Path(change_dir).resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            rel = None
+        if rel and readiness.saved_revision_at(root, prior.base_sha, rel) == theirs:
+            return None
+    return source, (f"the specs in {source} were marked ready again after this build's worktree was cut, "
+                    f"and differ from the copy the build reads in {change_dir} (spec_revision "
+                    f"{str(theirs)[:12]})")
+
+
+def _base_ref_reason(config: BuildConfig, change_dir: Path) -> str | None:
+    """Why a first run with `--base-ref` cannot build: the change dir as the
+    ref holds it, which is what the worktree cut from it reads, is missing,
+    not ready (`is_ready`), or ready with another revision than the change
+    dir marked ready here. None when it can, or when git cannot place the
+    change dir (bootstrap's preflight says why)."""
+    import tempfile
+
+    from multiplai_core.specs import is_ready
+
+    from . import readiness
+
+    repo = git_ops.repo_root(config.project_dir)
+    if repo is None:
+        return None
+    try:
+        rel = Path(change_dir).resolve().relative_to(repo.resolve()).as_posix()
+    except ValueError:
+        return None
+    base = config.base_ref
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            copy = readiness.specs_at(repo, base, rel, Path(tmp))
+        except git_ops.GitLifecycleError as e:
+            return f"cannot read {rel} at --base-ref {base}: {e}"
+        if copy is None:
+            return f"--base-ref {base} does not hold {rel}, and the build's worktree is cut from it"
+        ready, why = is_ready(copy)
+        if not ready:
+            return f"{rel} at --base-ref {base}, which the build's worktree is cut from: {why}"
+        if readiness.saved_revision(copy) != readiness.saved_revision(change_dir):
+            return (f"{rel} at --base-ref {base}, which the build's worktree is cut from, holds other "
+                    f"specs than the ones marked ready in {change_dir}")
     return None
 
 
@@ -1317,6 +1440,7 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
     # behind, and `buildme-x` sorts before `buildme-x-2`: the build lives
     # where it last checkpointed. A tie keeps the sorted order.
     _, dest, prior = max(found, key=lambda f: f[0])
+    config.source_project_dir = config.project_dir
     config.rebind_project_dir(dest / offset)
     config.pipeline_branch = prior.branch or git_ops.current_branch(dest)
     log.info(
