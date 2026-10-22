@@ -32,9 +32,16 @@ are not marked ready or were edited since.
    more, the answer cannot be one change), checked in code, asked once more,
    then the run fails.
    Several: each child becomes `specs/changes/<name>-<id>/` with its own plan
-   (`plan.md`) as its interview input, the run prints `SPEC:SPLIT:<dir>` and
-   one `SPEC:CHILD:<dir>` per child in dependency order, and exits 0. Specify
-   each child with `resume <name>-<id>`. `--no-epic-split` keeps one change.
+   (`plan.md`) as its interview input, and its `.change.yaml` records `parent`
+   and `depends_on` (the names of the child changes it depends on, `[]` for
+   none). The parent's `.change.yaml` records `children`, the child change
+   names in dependency order; the parent's change dir is then committed. A
+   split run again on changed inputs updates both records: a child it drops
+   keeps its dir but leaves `children`, and a child already handed off gets
+   its new `depends_on` committed (its `.change.yaml` alone). The run prints
+   `SPEC:SPLIT:<dir>` and one `SPEC:CHILD:<dir>` per child in dependency
+   order, and exits 0. Specify each child with `resume <name>-<id>`.
+   `--no-epic-split` keeps one change.
 4. **Artifacts.** `proposal.md`, then `use-cases.md`, then
    `requirements/<capability>.md` one capability at a time, each from a call
    with no tools. With a PRD, the proposal's `## Sources` names the PRD
@@ -146,8 +153,9 @@ In `specs/changes/<name>/`: `.change.yaml`, `prd.md`, `ticket.md`, `plan.md`,
 `use-cases.md`, `requirements/<capability>.md`, `superseded-requirements/`,
 `prototype/`, and `tickets.json`. The run's own state is in `.pm-spec/`
 (`state.json`, `progress.md`, `run.lock`), which has its own `.gitignore` and
-is never committed. The handoff makes one git commit of the change dir; pm-spec
-never pushes.
+is never committed. The handoff makes one git commit of the change dir, and a
+split commits the parent's change dir and any child whose `depends_on` it
+changed after that child's handoff; pm-spec never pushes.
 
 `tickets.json` is a JSON array, described by `references/tickets.schema.json`:
 one `epic` item for the change (its title and description from the proposal)

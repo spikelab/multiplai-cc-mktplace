@@ -15,11 +15,26 @@ unchanged, makes no call: it creates the child change dirs that are missing
 and prints the same markers. Changed inputs split again.
 
 Each child is `specs/changes/<parent>-<id>/` with its own `.change.yaml`
-(`parent`, and `ticket_refs` when it delivers a ticket child item), its plan as
-`plan.md` (its own interview input), a copy of the parent's `prd.md`, and a run
-state that carries the parent's options. A child dir counts as created once
-its run state exists. Each child is then specified by its own run:
-`resume <parent>-<id>`.
+(`parent`; `depends_on`, the change names of the children it depends on, in
+the answer's order, `[]` for none; and `ticket_refs` when it delivers a ticket
+child item), its plan as `plan.md` (its own interview input), a copy of the
+parent's `prd.md`, and a run state that carries the parent's options. A child
+dir counts as created once its run state exists. A child created by an earlier
+run keeps its files, but its `depends_on` is rewritten when a new answer
+changed it. Each child is then specified by its own run: `resume <parent>-<id>`.
+
+The parent's `.change.yaml` records `children`: the current split's child
+change names in dependency (wave) order, written after every child dir exists
+and rewritten when a new answer changes it. A child an earlier split made and
+a new one dropped keeps its dir, and its `parent`, but is not in the list:
+the list, not a scan for `parent`, says which children the epic has.
+
+What these records say is committed, one commit per change dir, whenever
+HEAD's copy says otherwise: the parent's change dir whole (`specs(<parent>):
+children updated`), and the `.change.yaml` alone of a child HEAD already holds
+(`specs(<child>): dependencies updated`). A child created in this run is
+committed at its own handoff, as before. Unchanged records write and commit
+nothing.
 """
 
 from __future__ import annotations
@@ -28,11 +43,13 @@ import datetime
 import json
 import logging
 import re
+from pathlib import Path
 
-from multiplai_core.specs import write_change_meta
+import yaml
+from multiplai_core.specs import CHANGE_META_FILE, read_change_meta, write_change_meta
 from pydantic import BaseModel, Field
 
-from . import intake, sdk
+from . import git_ops, intake, sdk
 from .artifacts import sha
 from . import state as state_mod
 from .prompts import UNTRUSTED_NOTICE
@@ -165,8 +182,35 @@ def child_name(run: Run, child: EpicChild) -> str:
     return f"{run.config.change_name}-{child.id}"
 
 
+def _committed_meta(run: Run, change_dir: Path) -> dict | None:
+    """HEAD's `.change.yaml` of *change_dir*; None when HEAD holds none."""
+    text = git_ops.committed_text(run.config.project_dir, change_dir / CHANGE_META_FILE)
+    if text is None:
+        return None
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _set(change_dir: Path, key: str, value: list[str]) -> None:
+    """Set *key* in *change_dir*'s `.change.yaml`; writes nothing when it holds *value* already."""
+    if read_change_meta(change_dir).get(key) != value:
+        write_change_meta(change_dir, {key: value})
+
+
 def create_children(run: Run, split: SplitRecord) -> list[str]:
-    """Create each child change dir that has no run state yet; return every child's name in order."""
+    """Create each child change dir that has no run state yet, keep every
+    child's `depends_on` and the parent's `children` as the split answered
+    them, and return every child's name in order.
+
+    A child that HEAD already holds (its handoff committed it) gets its
+    rewritten `depends_on` committed, its `.change.yaml` alone. The parent's
+    change dir is committed whole whenever HEAD's `children` is not the
+    current list, so the split's inputs and its list are in git together.
+    A child created in this run is committed at its own handoff."""
+    project_dir = run.config.project_dir
     order = waves(split.children)
     by_id = {c.id: c for c in split.children}
     parent_prd = run.config.change_dir / "prd.md"
@@ -177,11 +221,23 @@ def create_children(run: Run, split: SplitRecord) -> list[str]:
         names.append(name)
         child_dir = run.config.change_dir_for(name)
         run_dir = child_dir / ".pm-spec"
+        depends_on = [child_name(run, by_id[d]) for d in child.depends_on]
         if (run_dir / state_mod.STATE_FILE).is_file():
+            # Created by an earlier run: a split answered again with other
+            # dependencies updates the record, and an unchanged one writes nothing.
+            # The commit compares with HEAD, not with this run's write, so a
+            # commit an earlier run failed to make is made now.
+            _set(child_dir, "depends_on", depends_on)
+            committed = _committed_meta(run, child_dir)
+            if committed is not None and committed.get("depends_on") != depends_on:
+                git_ops.commit_change_dir(project_dir, child_dir / CHANGE_META_FILE,
+                                          f"specs({name}): dependencies updated")
             continue
         intake.create_change(child_dir, parent=run.config.change_name)
+        updates: dict = {"depends_on": depends_on}
         if child.ticket_ref:
-            write_change_meta(child_dir, {"ticket_refs": {"epic": child.ticket_ref, "children": []}})
+            updates["ticket_refs"] = {"epic": child.ticket_ref, "children": []}
+        write_change_meta(child_dir, updates)
         (child_dir / "plan.md").write_text(child.plan.rstrip() + "\n")
         if parent_prd.is_file():
             (child_dir / "prd.md").write_text(parent_prd.read_text())
@@ -192,6 +248,14 @@ def create_children(run: Run, split: SplitRecord) -> list[str]:
         state_mod.save(RunState(change=name, options=options, parent=run.config.change_name, intake_done=True),
                        run_dir, ledger=False)
         log.info("Created child change %s", child_dir)
+    # Last, so the list never names a child whose dir is not there yet. A
+    # child an earlier split made and this one dropped keeps its dir and its
+    # `parent`, and is not in the list.
+    _set(run.config.change_dir, "children", names)
+    committed = _committed_meta(run, run.config.change_dir)
+    if committed is None or committed.get("children") != names:
+        git_ops.commit_change_dir(project_dir, run.config.change_dir,
+                                  f"specs({run.config.change_name}): children updated")
     return names
 
 
