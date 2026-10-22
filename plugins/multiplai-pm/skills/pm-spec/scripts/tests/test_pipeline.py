@@ -52,7 +52,20 @@ def test_the_order_of_the_calls(repo, model):
 def test_the_spend_line_is_last(repo, model, capsys):
     from pm_spec_pipeline.__main__ import cli
 
-    assert cli(["new", "throttle", "--project-dir", str(repo), "--auto"]) == 0
+    assert (
+        cli(
+            [
+                "new",
+                "throttle",
+                "--project-dir",
+                str(repo),
+                "--auto",
+                "--ticket-ref",
+                "ENG-1",
+            ]
+        )
+        == 0
+    )
     last = capsys.readouterr().out.strip().splitlines()[-1]
     assert last.startswith("SPEND:") and float(last.split(":")[1]) > 0
 

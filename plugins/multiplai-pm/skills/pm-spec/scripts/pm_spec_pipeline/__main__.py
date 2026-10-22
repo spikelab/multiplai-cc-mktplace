@@ -1,18 +1,19 @@
 """pm-spec command line.
 
-    python -m pm_spec_pipeline new <change> [--project-dir DIR] [--branch NAME] [--prd FILE]
-        [--ticket-file FILE [--ticket-ref REF] [--ticket-url URL] [--ticket-child REF ...]]
+    python -m pm_spec_pipeline new <change> --ticket-ref REF [--project-dir DIR] [--branch NAME]
+        [--prd FILE] [--ticket-file FILE [--ticket-url URL] [--ticket-child REF ...]]
         [--plan-file FILE] [--context-files FILE ...] [--interview-summary TEXT]
         [--interview-mode self|user|ticket] [--interview-replies FILE] [--auto]
         [--prototype | --no-prototype] [--no-epic-split] [--trust-repo] [--max-usd USD]
     python -m pm_spec_pipeline resume <change> [--project-dir DIR] [--branch NAME]
-        [--interview-replies FILE] [--trust-repo] [--max-usd USD]
-    python -m pm_spec_pipeline revise <change> [--project-dir DIR] [--branch NAME] [--from-respec]
-        [--trust-repo] [--max-usd USD]
+        [--ticket-ref REF] [--interview-replies FILE] [--trust-repo] [--max-usd USD]
+    python -m pm_spec_pipeline revise <change> [--project-dir DIR] [--branch NAME]
+        [--ticket-ref REF] [--from-respec] [--trust-repo] [--max-usd USD]
 
-The specs are written on the change's feature branch (`change/<change>`, or
-`--branch`), in pm-spec's own worktree of it, and pushed to origin
-(`branch.py`).
+The specs are written on the change's feature branch (`<TICKET>-<change>`, or
+`--branch`, which starts with `<TICKET>-` too), in pm-spec's own worktree of
+it, and pushed to origin (`branch.py`). A change with no ticket ref, of its
+own or a parent's, is refused (exit 2) until `--ticket-ref` names one.
 
 Exit codes: 0 done (ready, or split into children), 1 failed, 2 refused,
 3 waiting for interview replies, 4 blocked on findings, 5 another run holds
@@ -29,6 +30,8 @@ import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+
+from multiplai_core.specs import normalize_change_name
 
 from . import branch, runlock, sdk
 from . import state as state_mod
@@ -56,8 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--branch",
             default="",
-            help=f"The feature branch the specs go on (default: the one the change records, else "
-            f"{branch.PREFIX}<change>)",
+            help="The feature branch the specs go on; it starts with <TICKET>- (default: the "
+            "one the change records, else <TICKET>-<change>)",
         )
         p.add_argument(
             "--trust-repo",
@@ -72,6 +75,14 @@ def build_parser() -> argparse.ArgumentParser:
             help=f"Spend cap for the change's run, across resumes (default {sdk.DEFAULT_MAX_USD:g})",
         )
 
+    def ticket_ref(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--ticket-ref",
+            default="",
+            help="The ticket's ref, as an opaque string; the feature branch is named after it "
+            "(<TICKET>-<change>). Needed when neither the change nor a parent records one",
+        )
+
     new = sub.add_parser("new", help="Start the specs of a change")
     common(new)
     new.add_argument(
@@ -82,9 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="The ticket's text (with its children's), as fetched",
     )
-    new.add_argument(
-        "--ticket-ref", default="", help="The ticket's ref, as an opaque string"
-    )
+    ticket_ref(new)
     new.add_argument("--ticket-url", default="", help="The ticket's URL")
     new.add_argument(
         "--ticket-child",
@@ -146,6 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
         "resume", help="Continue a change's run from where it stopped"
     )
     common(resume)
+    ticket_ref(resume)
     resume.add_argument(
         "--interview-replies",
         default="",
@@ -157,6 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fix the requirements issues in spec-issues.md, then hand off again",
     )
     common(revise)
+    ticket_ref(revise)
     revise.add_argument(
         "--from-respec",
         action="store_true",
@@ -176,10 +187,22 @@ async def _dispatch(args: argparse.Namespace) -> int:
     # The checkout the run writes in is the feature branch's (`branch.place`);
     # the input files are still read from `--project-dir`.
     where = branch.place(
-        args.project_dir, args.change, args.branch, command=args.command
+        args.project_dir,
+        args.change,
+        args.branch,
+        command=args.command,
+        ticket=args.ticket_ref,
     )
     branch.prepare(where)
-    branch.adopt(where, args.project_dir, args.change)
+    branch.adopt(where, args.project_dir, args.change, args.ticket_ref.strip())
+    if args.command != "new":
+        branch.record_ticket(
+            where.project_dir
+            / "specs"
+            / "changes"
+            / normalize_change_name(args.change),
+            args.ticket_ref.strip(),
+        )
     config = SpecConfig(
         project_dir=where.project_dir,
         change_name=args.change,

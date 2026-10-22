@@ -16,8 +16,9 @@ the run state with `committed: false`; the change dir alone is committed
 commit; the feature branch is pushed (`branch.push`, never with force) and the
 run state records that; `SPEC:READY:<change_dir>:<spec_revision>` is printed,
 then `SPEC:BRANCH:<branch>`. In a build's worktree (`branch.Place.push`
-False) nothing is pushed: the revision reaches the feature branch through that
-build's pull request.
+False) nothing is pushed: the revision reaches the feature branch with that
+build's push (a single change's build is on the feature branch) or through its
+pull request (an epic child's).
 
 Row S6, the commit or the push failed after the ready record was written: a
 resume recomputes the revision (`is_ready`). When it still matches, only what
@@ -95,8 +96,8 @@ def print_ready(run: Run, revision: str) -> None:
     print(f"{MARKER_BRANCH}:{where.branch}", flush=True)
     if not where.push:
         print(
-            f"Committed in {where.checkout}, which is not on {where.branch}: the revision reaches "
-            f"{where.branch} through that branch's pull request.",
+            f"Committed in the build's worktree {where.checkout}, and not pushed: the revision "
+            f"reaches {where.branch} with that build's push, or through its pull request.",
             flush=True,
         )
 
@@ -113,7 +114,7 @@ def _push(run: Run) -> None:
             run.progress("HANDOFF_ERROR", f"The push failed: {e}")
             print(
                 f"ERROR: handoff: the ready record is written and committed, but "
-                f"`git push origin {where.branch}` failed: {e}\n"
+                f"`git push origin HEAD:refs/heads/{where.branch}` failed: {e}\n"
                 f"Fix that, then run `resume {run.config.change_name}`: it retries only the push.",
                 flush=True,
             )

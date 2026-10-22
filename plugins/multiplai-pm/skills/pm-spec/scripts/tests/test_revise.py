@@ -182,7 +182,7 @@ def test_revise_adopts_a_change_pm_spec_did_not_write(repo, model):
         write(hand / "requirements" / f"{cap}.md", requirements(cap))
     write(hand / "spec-issues.md", ISSUES)
     model["consistency"] = resolved()
-    assert run(repo, "revise", "throttle") == 0
+    assert run(repo, "revise", "throttle", "--ticket-ref", "ENG-1") == 0
     assert is_ready(cdir) == (True, "")
     assert model.calls_to("spec:") == 0
 

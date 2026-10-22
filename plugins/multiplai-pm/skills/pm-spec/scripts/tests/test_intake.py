@@ -259,10 +259,19 @@ def test_interview_mode_comes_from_specs_config(repo, model):
     assert "interview:questions" in model.labels()
 
 
-def test_ticket_mode_without_a_ticket_ref_falls_back(repo, model):
-    assert run(repo, "new", "throttle", "--interview-mode", "ticket", "--auto") == 0
-    assert "interview:answers" in model.labels()  # self
-    assert not (change_dir(repo) / "interview-questions.md").exists()
+@pytest.mark.parametrize("auto, fallback", [(True, "self"), (False, "user")])
+def test_ticket_mode_without_a_ticket_ref_falls_back(auto, fallback):
+    """A run with no ticket ref of its own (an epic's child, split before any
+    ticket exists for it) has no ticket to ask on."""
+    from types import SimpleNamespace
+
+    from pm_spec_pipeline.interview import effective_mode
+
+    options = SimpleNamespace(interview_mode="ticket", ticket_ref="", auto=auto)
+    assert (
+        effective_mode(SimpleNamespace(state=SimpleNamespace(options=options)))
+        == fallback
+    )
 
 
 def test_ticket_mode_with_no_questions_does_not_wait(repo, model, tmp_path, capsys):

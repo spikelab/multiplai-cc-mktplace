@@ -1,6 +1,6 @@
 ---
 name: pm-spec
-description: Writes the "what" of a change before anyone builds it — an interview, a proposal, use cases and requirements one capability at a time, a UI or output-format prototype when the change has one — then checks with one read-only agent that the specs agree with each other, and hands off a ready record, a tickets.json and a commit of the change dir, pushed on the change's own feature branch (named change/ and the change's name), for /multiplai-dev:buildme to build from. Takes a PRD and a ticket's text (with its child items) as inputs. revise fixes requirements issues buildme raised later.
+description: Writes the "what" of a change before anyone builds it — an interview, a proposal, use cases and requirements one capability at a time, a UI or output-format prototype when the change has one — then checks with one read-only agent that the specs agree with each other, and hands off a ready record, a tickets.json and a commit of the change dir, pushed on the change's own feature branch, named after its ticket, for /multiplai-dev:buildme to build from. Takes a PRD and a ticket's text (with its child items) as inputs. revise fixes requirements issues buildme raised later.
 when_to_use: 'Triggers: pm-spec, write the spec, spec this change, specify a feature, turn this PRD into specs, spec this ticket, revise the specs, fix spec-issues.md, /multiplai-pm:pm-spec'
 ---
 
@@ -11,19 +11,26 @@ them ready to build, on the change's feature branch, which it pushes. buildme
 then builds from that branch, and refuses specs that are not marked ready or
 were edited since.
 
-**The feature branch.** The specs go on `change/<name>` (`--branch` names
-another), and every `.change.yaml` pm-spec writes records it as `branch:`. A
-split's children use the parent's branch. pm-spec needs an `origin` remote
-(else exit 2) and fetches it first. It writes in a worktree of its own,
-`$WORKSPACE/.worktrees/pm-spec-<branch>` (without `WORKSPACE`, a
-`.worktrees/` folder beside the repository), and never touches the checkout
-`--project-dir` names: a new branch starts from origin's default branch, an
-existing one from `origin/<branch>`. A later run reuses the worktree and
-fast-forwards it to `origin/<branch>`; a worktree that has diverged from
-origin is refused (exit 2) with both shas named. When `--project-dir` has the
-branch checked out, pm-spec writes there instead. It opens no pull request:
-the build's pull requests target the feature branch, and the pull request from
-it to your release branch is yours.
+**The feature branch.** The specs go on `<TICKET>-<name>`, for example
+`ENG-42-login-timeout`: the ticket id is the change's `--ticket-ref`, and a
+split's children use the parent's branch. `--branch` names another, which
+must still start with `<TICKET>-`. Every `.change.yaml` pm-spec writes
+records it as `branch:`. **No ticket, no handoff:** a change with no ticket
+ref, of its own or a parent's, is refused (exit 2) before any model call,
+with nothing written, until you pass `--ticket-ref`; so is a ticket id git
+cannot start a branch name with (a space or `[`, for example), with the
+reason. pm-spec needs an `origin` remote (else exit 2) and fetches it first.
+It writes in a worktree of its own, `$WORKSPACE/.worktrees/pm-spec-<branch>`
+(without `WORKSPACE`, a `.worktrees/` folder beside the repository), with a
+detached HEAD so that no local branch is checked out there, and never touches
+the checkout `--project-dir` names: a new branch starts from origin's default
+branch, an existing one from `origin/<branch>`. A later run reuses the
+worktree and fast-forwards it to `origin/<branch>`; a worktree that has
+diverged from origin is refused (exit 2) with both shas named. When
+`--project-dir` has the branch checked out, pm-spec writes there instead. It
+opens no pull request: buildme builds a single change on this branch and opens
+its pull request to your default branch; an epic's children target this
+branch, and the pull request from it to your default branch is yours.
 
 1. **Intake.** Creates the change dir and `.change.yaml` (`spec_status: draft`).
    `--prd` is saved as `prd.md`: the primary source. A ticket's text is saved
@@ -40,7 +47,8 @@ it to your release branch is yours.
    - `ticket`: the questions go to `interview-questions.md` and the run stops
      with `INTERVIEW:WAITING:<path>`, exit 3. Post them on the ticket; when
      the replies come, run `resume` with `--interview-replies <file>`. Needs
-     `--ticket-ref`; without one it runs as `self` under `--auto`, else `user`.
+     a ticket ref of the change's own; a child split before its ticket exists
+     runs as `self` under `--auto`, else `user`.
 3. **Epic split.** One call decides whether the work is one change or several.
    It follows the ticket's existing child items before inventing its own:
    each `--ticket-child` must become exactly one child change (with two or
@@ -81,8 +89,8 @@ it to your release branch is yours.
    Writes `tickets.json`, the ready record (`spec_status: ready`
    and `spec_revision`, a hash of the proposal, use cases and requirements),
    commits `specs/changes/<name>/` and nothing else (other staged work is left
-   staged), pushes the feature branch (`git push -u origin <branch>`, never
-   with force), and prints `SPEC:READY:<change_dir>:<spec_revision>` and then
+   staged), pushes the feature branch (`git push origin HEAD:refs/heads/<branch>`,
+   never with force), and prints `SPEC:READY:<change_dir>:<spec_revision>` and then
    `SPEC:BRANCH:<branch>`. A failed push keeps the ready record and the
    commit and exits 1; `resume` retries only the push. Next:
    `/multiplai-dev:buildme <name>`.
@@ -103,14 +111,17 @@ newest archived copy, `specs/archive/<date>-<name>/`, where buildme-findings
 writes later issues.
 
 **A revision in a build's worktree.** When buildme refuses specs edited in
-its worktree, it names `--project-dir <build worktree>`. There, `revise` and
-`resume` write and commit in that worktree, on the build's branch, and push
-nothing: the revision reaches the feature branch through that build's pull
-request. They find the change there because its `.change.yaml` records the
-feature branch.
+its worktree, it names `--project-dir <build worktree>`. There (a worktree
+named `buildme-<name>` whose `.change.yaml` records the feature branch),
+`revise` and `resume` write and commit in that worktree and push nothing: a
+single change's build is on the feature branch itself, so the revision
+reaches it with the build's push; an epic child's reaches it through the
+child's pull request. Any other checkout that is not on the feature branch
+is left alone: pm-spec works in its own worktree.
 
 **A change handed off before pm-spec pushed** (ready in your checkout, its
-`.change.yaml` records no `branch`): `resume <name>` copies its change dir,
+`.change.yaml` records no `branch`): `resume <name>` (with `--ticket-ref`
+when the change records no ticket ref) copies its change dir,
 and the children it lists, into pm-spec's worktree, commits them there
 (`specs(<name>): moved to <branch>`) and pushes the branch. The originals in
 your checkout are left as they are; delete them when you no longer need them.
@@ -121,6 +132,8 @@ your checkout are left as they are; delete them when you no longer need them.
   using whatever ticket skill the project uses, and pass the text in:
   `--ticket-file` (the text), `--ticket-ref`, `--ticket-url`, and
   `--ticket-child <ref>` once per child. pm-spec reads only the text you pass.
+  A ticket ref is required either way: the branch is named after it. If the
+  user names no ticket, ask for its id and pass it as `--ticket-ref`.
 - **The interview (`user` mode).** Ask the user, in a few short rounds, what
   the inputs leave open: who the change is for, what "done" looks like, what
   is out of scope, and the constraints. With a PRD, ask only what it leaves
@@ -155,7 +168,8 @@ from the skill's `scripts/` folder; other relative paths are read from
 |---|---|---|
 | `--prd FILE` | new | The PRD, saved as `prd.md`. |
 | `--ticket-file FILE` | new | The ticket's text, saved fenced as `ticket.md`. |
-| `--ticket-ref REF`, `--ticket-url URL` | new | The ticket's ref and URL. |
+| `--ticket-ref REF` | all | The ticket's ref; the branch is named after it. Needed by `new`, and by `resume` or `revise` of a change that records none. |
+| `--ticket-url URL` | new | The ticket's URL. |
 | `--ticket-child REF` | new | One of the ticket's child items; once per child. |
 | `--plan-file FILE` | new | A plan, saved as `plan.md`. |
 | `--context-files FILE ...` | new | More files the interview reads. |
@@ -166,7 +180,7 @@ from the skill's `scripts/` folder; other relative paths are read from
 | `--prototype`, `--no-prototype` | new | Force the prototype on or off (default: `prototype: {enabled: auto}` in `specs/config.yaml`). |
 | `--no-epic-split` | new | Keep the work as one change. |
 | `--from-respec` | revise | Read `respec.md` instead of `spec-issues.md`. |
-| `--branch NAME` | all | The feature branch (default: the one the change's `.change.yaml` records, else `change/<name>`). |
+| `--branch NAME` | all | The feature branch; it must start with `<TICKET>-` (default: the one the change's `.change.yaml` records, else `<TICKET>-<name>`). |
 | `--trust-repo` | all | Say the repository is trusted (same as `PM_SPEC_TRUST_REPO=1`). |
 | `--max-usd USD` | all | Spend cap for the change's run, counted across resumes (default 20). |
 
@@ -214,7 +228,7 @@ calls cost.
 |---|---|
 | 0 | Ready (`SPEC:READY:...`, then `SPEC:BRANCH:<branch>`), or split into children (`SPEC:SPLIT:...`). |
 | 1 | Failed: a model call, an answer rejected twice, the prototype, `git fetch`, the commit or the push (the ready record is kept; `resume` retries only the commit or the push while the files are unchanged), or the spend cap. |
-| 2 | Refused: an input file missing, an untrusted repository, no `origin` remote, pm-spec's worktree diverged from `origin/<branch>` or the branch checked out in another worktree, a run that exists (`new`) or does not (`resume`), no issues to revise. |
+| 2 | Refused: an input file missing, an untrusted repository, no ticket ref (or one git cannot start a branch name with), a `--branch` not starting with `<TICKET>-`, no `origin` remote, pm-spec's worktree diverged from `origin/<branch>`, a run that exists (`new`) or does not (`resume`), no issues to revise. |
 | 3 | Waiting for the ticket replies (`INTERVIEW:WAITING:<path>`). |
 | 4 | Blocked on findings (`SPEC:BLOCKED:<change_dir>`). Edit the files, then run again. Also `resume` while requirements issues are open or a revise is blocked: run `revise`. |
 | 5 | Another process holds the change's lock; the message names its pid, host and start time. |

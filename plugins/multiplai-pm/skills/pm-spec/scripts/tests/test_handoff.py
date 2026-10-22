@@ -40,6 +40,8 @@ def test_tickets_json_validates_and_has_one_epic_and_one_task_per_capability(
             "specs/changes/throttle/proposal.md",
             "specs/changes/throttle/use-cases.md",
         ],
+        # Every change has a ticket now (the test's `--ticket-ref ENG-1`).
+        "ref": "ENG-1",
     }
     assert [t["id"] for t in tasks] == [f"throttle/{c}" for c in CAPS]
     for task, cap in zip(tasks, CAPS):
@@ -56,7 +58,6 @@ def test_tickets_json_validates_and_has_one_epic_and_one_task_per_capability(
         ]
         assert task["links"] == [f"specs/changes/throttle/requirements/{cap}.md"]
         assert "ref" not in task
-    assert "ref" not in epic
 
 
 def test_refs_come_from_the_recorded_ticket_refs_not_the_proposal(

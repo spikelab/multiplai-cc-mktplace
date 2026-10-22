@@ -1,33 +1,38 @@
 """The change's feature branch, and the checkout pm-spec writes it in.
 
-A change's specs live on a feature branch on `origin`: `change/<change>`, or
-the name `--branch` gives. A child of an epic uses its parent's branch. pm-spec
-writes in a worktree of its own, so the checkout it was started from
-(`--project-dir`) is never touched:
+A change's specs live on a feature branch on `origin` named after its ticket:
+`<TICKET>-<change>` (`name`), or the name `--branch` gives, which must still
+start with `<TICKET>-`. The ticket is the change's own ref (`--ticket-ref`,
+kept in `.change.yaml` as `ticket_refs.epic`), else its nearest parent's
+(`tickets`): an epic's children, split before any ticket exists for them, go
+on their parent's branch. A change with no ticket anywhere is refused before
+anything is written, and so is a ticket id that cannot start a branch name
+(`git check-ref-format`). pm-spec writes in a worktree of its own, so the
+checkout it was started from (`--project-dir`) is never touched:
 
 - `place` picks the branch and the checkout. With no `--branch`, the branch is
-  the one the change's `.change.yaml` in `--project-dir` records (`branch`),
-  else the branch of a worktree of the repository whose copy of the change
-  records that branch (the parent's worktree holds a new child's change dir),
-  else `change/<change>`. The checkout is `--project-dir` itself when it is on
-  that branch; for `resume` and `revise`, also when its copy of the change
-  records the branch while another branch is checked out (a build's worktree,
-  whose revision reaches the feature branch through that build's pull
-  request: nothing is pushed). Otherwise it is the worktree
+  the one the change's `.change.yaml` records (`branch`), in `--project-dir`
+  or in a worktree of the repository on that branch or pm-spec's own for it
+  (the parent's worktree holds a new child's change dir), else
+  `<TICKET>-<change>`. For `resume` and `revise` in a build's worktree
+  (buildme's `buildme-*` worktrees) whose copy of the change records the
+  branch, the checkout is that worktree and nothing is pushed: the revision
+  reaches the feature branch with that build's push. Otherwise the checkout is
+  `--project-dir` itself when it is on that branch, else the worktree
   `<worktrees root>/pm-spec-<branch>`, the root restated from buildme's
-  `git_ops.worktrees_root` (`$WORKSPACE/.worktrees`, else
-  `<repo>/../.worktrees`).
-- `prepare` needs an `origin` remote and fetches it. It creates the worktree
-  when missing: on the local branch when there is one, else from
-  `origin/<branch>`, else a new branch from `origin/<default>`. Then it
-  fast-forwards the checkout to `origin/<branch>`, and refuses one that has
-  diverged from it, naming both shas.
+  `git_ops.worktrees_root` (`$WORKSPACE/.worktrees`, else `../.worktrees`
+  beside the repository's main checkout).
+- `prepare` needs an `origin` remote and fetches it. It creates pm-spec's
+  worktree when missing, with a detached HEAD (no local branch, so a build can
+  check the branch out): at `origin/<branch>`, else at `origin/<default>`.
+  Then it fast-forwards the checkout to `origin/<branch>`, and refuses one
+  that has diverged from it, naming both shas.
 - `adopt` takes a change dir in `--project-dir` that records no branch (one
   handed off before pm-spec used a branch, or specs written by hand): it
   copies the change dir, and the children it lists, into the worktree when
   the worktree lacks it, and commits them there. The originals are never
   deleted.
-- `push` runs `git push -u origin <branch>`, never with force.
+- `push` runs `git push origin HEAD:refs/heads/<branch>`, never with force.
 
 `shell=False`, fixed argv, through `git_ops._git`.
 """
@@ -53,8 +58,13 @@ from .run import EXIT_FAILED, EXIT_REFUSED, Stop
 log = logging.getLogger(__name__)
 
 NETWORK_TIMEOUT_S = 300
-PREFIX = "change/"
 WORKTREE_PREFIX = "pm-spec-"
+# buildme's build worktrees (`git_ops.worktree_dir_name`), and the one it
+# merges the default branch in (`feature_branch.WORKTREE_PREFIX`).
+BUILD_WORKTREE_PREFIX = "buildme-"
+BUILDME_MERGE_PREFIX = "buildme-feature-"
+# The characters `git check-ref-format` refuses anywhere in a branch name.
+_BAD_CHARS = " ~^:?*[\\"
 
 
 @dataclass
@@ -97,8 +107,76 @@ def worktrees_root(repo: Path) -> Path:
     return repo.parent / ".worktrees"
 
 
+def main_checkout(repo: Path) -> Path:
+    """The repository's main checkout, which buildme's worktrees root is
+    beside; *repo* itself when git cannot say."""
+    common = _out(["rev-parse", "--path-format=absolute", "--git-common-dir"], repo)
+    if common and Path(common).name == ".git":
+        return Path(common).parent.resolve()
+    return repo
+
+
 def worktree_path(repo: Path, branch: str) -> Path:
-    return worktrees_root(repo) / (WORKTREE_PREFIX + branch.replace("/", "-"))
+    return worktrees_root(main_checkout(repo)) / (
+        WORKTREE_PREFIX + branch.replace("/", "-")
+    )
+
+
+def name(ticket: str, change: str) -> str:
+    """The feature branch of a change with *ticket*: `<TICKET>-<change>`."""
+    return f"{ticket}-{change}"
+
+
+def _own_ticket(change_dir: Path) -> str:
+    try:
+        raw = read_change_meta(change_dir).get("ticket_refs") or {}
+    except (OSError, UnicodeError, ValueError):
+        return ""
+    value = raw.get("epic") if isinstance(raw, dict) else None
+    return str(value).strip() if value else ""
+
+
+def _parent(change_dir: Path) -> str:
+    try:
+        value = read_change_meta(change_dir).get("parent")
+    except (OSError, UnicodeError, ValueError):
+        return ""
+    return value if isinstance(value, str) else ""
+
+
+def tickets(change_dir: Path) -> list[str]:
+    """The change's own ticket ref, then each parent's up the chain, nearest
+    first, skipping those with none: `[]` when there is no ticket anywhere.
+    A parent is read beside *change_dir* (`specs/changes/<parent>`)."""
+    found, seen, here = [], set(), Path(change_dir)
+    while here.name not in seen and len(seen) < 10:
+        seen.add(here.name)
+        if here.is_dir() and (own := _own_ticket(here)) and own not in found:
+            found.append(own)
+        parent = _parent(here) if here.is_dir() else ""
+        if not parent:
+            break
+        here = here.parent / normalize_change_name(parent)
+    return found
+
+
+def _ticket_refusal(ticket: str, change: str, repo: Path) -> str | None:
+    """Why *ticket* cannot start the branch name, or None."""
+    full = name(ticket, change)
+    if _out(["check-ref-format", "--branch", full], repo) is not None:
+        return None
+    bad = sorted({c for c in ticket if c in _BAD_CHARS or ord(c) < 32 or ord(c) == 127})
+    if bad:
+        why = (
+            "it holds "
+            + ", ".join(repr(c) for c in bad)
+            + ", which git refuses in a branch name"
+        )
+    elif ".." in ticket or "@{" in ticket:
+        why = "it holds '..' or '@{', which git refuses in a branch name"
+    else:
+        why = "git check-ref-format refuses it as the start of a branch name"
+    return f"the ticket id {ticket!r} cannot start the branch name {full!r}: {why}"
 
 
 def default_branch(repo: Path) -> str | None:
@@ -122,15 +200,26 @@ def _recorded(change_dir: Path) -> str:
 
 
 def _worktrees(repo: Path) -> list[tuple[Path, str]]:
-    """`(path, branch)` of every worktree of *repo* with a branch checked out."""
+    """`(path, branch)` of every worktree of *repo*; the branch is "" for a
+    detached HEAD."""
     listed = _out(["worktree", "list", "--porcelain"], repo) or ""
-    found, path = [], None
+    found: list[tuple[Path, str]] = []
     for line in listed.splitlines():
         if line.startswith("worktree "):
-            path = Path(line[len("worktree ") :])
-        elif line.startswith("branch refs/heads/") and path is not None:
-            found.append((path, line[len("branch refs/heads/") :]))
+            found.append((Path(line[len("worktree ") :]), ""))
+        elif line.startswith("branch refs/heads/") and found:
+            found[-1] = (found[-1][0], line[len("branch refs/heads/") :])
     return found
+
+
+def _in_build_worktree(repo: Path) -> bool:
+    """Whether *repo* is one of buildme's build worktrees: a linked worktree
+    named `buildme-<change>` (not its merge worktree)."""
+    return (
+        repo.name.startswith(BUILD_WORKTREE_PREFIX)
+        and not repo.name.startswith(BUILDME_MERGE_PREFIX)
+        and main_checkout(repo).resolve() != repo.resolve()
+    )
 
 
 def local_change_dir(project_dir: Path, change: str, *, archived: bool) -> Path:
@@ -145,10 +234,37 @@ def local_change_dir(project_dir: Path, change: str, *, archived: bool) -> Path:
     return active
 
 
+def _copy(
+    repo: Path, project_dir: Path, offset: Path, change: str, *, archived: bool
+) -> tuple[Path | None, str]:
+    """The change's dir this run starts from and the branch it records:
+    `--project-dir`'s copy when it records one; else the copy in a worktree
+    of the repository that is on the branch it records, or is pm-spec's own
+    worktree for it; else `--project-dir`'s copy recording none, if it is
+    there. `(None, "")` when there is no copy."""
+    local = local_change_dir(project_dir, change, archived=archived)
+    if _recorded(local):
+        return local, _recorded(local)
+    for path, on in _worktrees(repo):
+        copy = local_change_dir(path / offset, change, archived=archived)
+        mark = _recorded(copy)
+        if mark and (
+            on == mark or path.resolve() == worktree_path(repo, mark).resolve()
+        ):
+            return copy, mark
+    return (local, "") if local.is_dir() else (None, "")
+
+
 def place(
-    project_dir: Path, change: str, flag: str = "", *, command: str = "new"
+    project_dir: Path,
+    change: str,
+    flag: str = "",
+    *,
+    command: str = "new",
+    ticket: str = "",
 ) -> Place:
-    """The branch and the checkout this run writes in (module docstring)."""
+    """The branch and the checkout this run writes in (module docstring).
+    *ticket* is `--ticket-ref`."""
     project_dir = Path(project_dir).expanduser().resolve()
     change = normalize_change_name(change)
     repo_text = _out(["rev-parse", "--show-toplevel"], project_dir)
@@ -156,38 +272,47 @@ def place(
         _refuse(f"{project_dir} is not in a git work tree")
     repo = Path(repo_text).resolve()
     offset = project_dir.relative_to(repo)
-    local = local_change_dir(project_dir, change, archived=command == "revise")
-    recorded = _recorded(local)
-    branch = flag or recorded
-    if not branch:
-        for path, name in _worktrees(repo):
-            copy = local_change_dir(path / offset, change, archived=command == "revise")
-            if _recorded(copy) == name:
-                branch = name
-                break
-    branch = branch or PREFIX + change
+    copy, recorded = _copy(
+        repo, project_dir, offset, change, archived=command == "revise"
+    )
+    ticket = ticket.strip()
+    chain = tickets(copy) if copy is not None else []
+    known = ([ticket] if ticket else []) + [t for t in chain if t != ticket]
+    if not known and copy is None and command != "new":
+        _refuse(
+            f"there is no change {change} to {command}: start it with "
+            f"`new {change} --ticket-ref <ticket id>`"
+        )
+    if not known:
+        _refuse(
+            f"{change} has no ticket ref, and pm-spec puts a change's specs on a branch named "
+            f"after its ticket (<TICKET>-{change}); pass --ticket-ref <ticket id>, then run again"
+        )
+    why = _ticket_refusal(known[0], change, repo)
+    if why:
+        _refuse(f"{why}; pass another --ticket-ref, then run again")
+    branch = flag or recorded or name(known[0], change)
+    if flag and not any(flag.startswith(f"{t}-") for t in known):
+        _refuse(
+            f"--branch {flag!r} does not start with the ticket id ({known[0]}-): a change's "
+            f"branch is <TICKET>-<name>, for example {name(known[0], change)}"
+        )
     if _out(["check-ref-format", "--branch", branch], repo) is None:
         _refuse(f"{branch!r} is not a valid branch name")
     current = _out(["symbolic-ref", "--quiet", "--short", "HEAD"], project_dir) or ""
-    if current == branch:
-        return Place(branch, repo, project_dir, repo, own_worktree=False, push=True)
-    if command != "new" and recorded == branch:
+    if command != "new" and recorded == branch and _in_build_worktree(repo):
         log.info(
-            "%s records %s and %s is on %s: working in place, pushing nothing",
-            local,
-            branch,
-            project_dir,
+            "%s is a build's worktree (on %s) and %s records %s: working in place, "
+            "pushing nothing",
+            repo,
             current or "a detached HEAD",
+            copy,
+            branch,
         )
         return Place(branch, repo, project_dir, repo, own_worktree=False, push=False)
+    if current == branch:
+        return Place(branch, repo, project_dir, repo, own_worktree=False, push=True)
     dest = worktree_path(repo, branch)
-    for path, name in _worktrees(repo):
-        if name == branch and path.resolve() != dest.resolve():
-            _refuse(
-                f"{branch} is checked out in {path}; pm-spec writes in its own worktree, {dest}. "
-                f"Run it with --project-dir {path / offset} to write there, or check another "
-                "branch out there, then run again"
-            )
     return Place(branch, repo, dest / offset, dest, own_worktree=True, push=True)
 
 
@@ -220,18 +345,8 @@ def prepare(where: Place) -> None:
     branch, checkout = where.branch, where.checkout
     if where.own_worktree and not checkout.exists():
         checkout.parent.mkdir(parents=True, exist_ok=True)
-        if _out(["rev-parse", "--verify", "-q", f"refs/heads/{branch}"], repo):
-            argv = ["worktree", "add", str(checkout), branch]
-        elif _remote(repo, branch):
-            argv = [
-                "worktree",
-                "add",
-                "--track",
-                "-b",
-                branch,
-                str(checkout),
-                f"origin/{branch}",
-            ]
+        if _remote(repo, branch):
+            start = f"origin/{branch}"
         else:
             default = default_branch(repo)
             if default is None:
@@ -239,27 +354,19 @@ def prepare(where: Place) -> None:
                     f"origin has neither {branch} nor a default branch to start it from; "
                     "push a first commit to origin, then run again"
                 )
-            argv = [
-                "worktree",
-                "add",
-                "--no-track",
-                "-b",
-                branch,
-                str(checkout),
-                f"origin/{default}",
-            ]
+            start = f"origin/{default}"
+        argv = ["worktree", "add", "--detach", str(checkout), start]
         added = git_ops._git(argv, repo)
         if added.returncode:
             _fail(
                 f"git {' '.join(argv)} failed: {(added.stderr or added.stdout).strip()}"
             )
-        log.info("WORKTREE %s on %s", checkout, branch)
-    elif where.own_worktree and (checkout.resolve(), branch) not in {
-        (path.resolve(), name) for path, name in _worktrees(repo)
+        log.info("WORKTREE %s at %s, for %s", checkout, start, branch)
+    elif where.own_worktree and checkout.resolve() not in {
+        path.resolve() for path, _ in _worktrees(repo)
     }:
         _refuse(
-            f"{checkout} exists but is not a worktree of {repo} with {branch} checked out; "
-            "move it aside, then run again"
+            f"{checkout} exists but is not a worktree of {repo}; move it aside, then run again"
         )
     remote = _remote(checkout, branch)
     head = _out(["rev-parse", "HEAD"], checkout)
@@ -292,13 +399,30 @@ def record(change_dir: Path, branch: str) -> None:
         write_change_meta(change_dir, {"branch": branch})
 
 
-def adopt(where: Place, source: Path, change: str) -> bool:
+def record_ticket(change_dir: Path, ticket: str) -> None:
+    """Write *ticket* into *change_dir*'s `.change.yaml` as its own ticket ref
+    (`ticket_refs.epic`, the children's refs kept) when it has none."""
+    if not ticket or not change_dir.is_dir() or _own_ticket(change_dir):
+        return
+    try:
+        raw = read_change_meta(change_dir).get("ticket_refs") or {}
+    except (OSError, UnicodeError, ValueError):
+        raw = {}
+    children = raw.get("children") if isinstance(raw, dict) else None
+    write_change_meta(
+        change_dir,
+        {"ticket_refs": {"epic": ticket, "children": list(children or [])}},
+    )
+
+
+def adopt(where: Place, source: Path, change: str, ticket: str = "") -> bool:
     """Copy a change dir that records no branch from *source*
     (`--project-dir`) into pm-spec's worktree, with the children its
-    `.change.yaml` lists, record the branch in each and commit each there.
-    False, with nothing written, when there is nothing to adopt: the worktree
-    holds the change already, *source* does not, or *source*'s copy records
-    a branch. The originals stay where they are."""
+    `.change.yaml` lists, record the branch in each (and *ticket*,
+    `--ticket-ref`, in the change's when it has no ticket ref) and commit
+    each there. False, with nothing written, when there is nothing to adopt:
+    the worktree holds the change already, *source* does not, or *source*'s
+    copy records a branch. The originals stay where they are."""
     if not where.own_worktree:
         return False
     change = normalize_change_name(change)
@@ -324,6 +448,8 @@ def adopt(where: Place, source: Path, change: str) -> bool:
             ignore=shutil.ignore_patterns("run.lock"),
         )
         record(target / name, where.branch)
+        if name == change:
+            record_ticket(target / name, ticket)
         moved.append(name)
     for name in moved:
         try:
@@ -356,9 +482,10 @@ class PushFailed(RuntimeError):
 
 
 def push(where: Place) -> None:
-    """`git push -u origin <branch>`, never with force. Raises PushFailed with git's words."""
+    """`git push origin HEAD:refs/heads/<branch>`, never with force. Raises
+    PushFailed with git's words."""
     pushed = git_ops._git(
-        ["push", "-u", "origin", where.branch],
+        ["push", "origin", f"HEAD:refs/heads/{where.branch}"],
         where.checkout,
         timeout=NETWORK_TIMEOUT_S,
     )

@@ -274,9 +274,21 @@ def repo(tmp_path) -> Path:
     return make_repo(tmp_path / "proj")
 
 
-def worktree(repo: Path, branch: str = "change/throttle") -> Path:
-    """pm-spec's worktree of *branch* for the checkout *repo* (WORKSPACE unset)."""
-    return repo.parent / ".worktrees" / ("pm-spec-" + branch.replace("/", "-"))
+TICKET = "ENG-1"
+BRANCH = f"{TICKET}-throttle"
+
+
+def worktree(repo: Path, branch: str = "") -> Path:
+    """pm-spec's worktree of *branch* for the checkout *repo* (WORKSPACE unset);
+    with no *branch*, the one pm-spec worktree there (a test's own
+    `--ticket-ref` names the branch), else `ENG-1-throttle`'s."""
+    root = repo.parent / ".worktrees"
+    if not branch:
+        made = sorted(root.glob("pm-spec-*")) if root.is_dir() else []
+        if len(made) == 1:
+            return made[0]
+        branch = BRANCH
+    return root / ("pm-spec-" + branch.replace("/", "-"))
 
 
 def origin(repo: Path) -> Path:
@@ -284,8 +296,12 @@ def origin(repo: Path) -> Path:
 
 
 def run(repo: Path, *argv: str) -> int:
-    """The command line, in-process: `<command> <change> --project-dir <repo> ...`."""
+    """The command line, in-process: `<command> <change> --project-dir <repo> ...`;
+    `new` gets `--ticket-ref ENG-1` unless the test names one, as pm-spec
+    refuses a change with no ticket."""
     command, change, *rest = argv
+    if command == "new" and "--ticket-ref" not in rest:
+        rest = [*rest, "--ticket-ref", TICKET]
     return cli.main([command, change, "--project-dir", str(repo), *rest])
 
 
@@ -296,7 +312,7 @@ def source_dir(repo: Path, name: str = "throttle") -> Path:
 
 
 def change_dir(repo: Path, name: str = "throttle") -> Path:
-    """The change's dir where pm-spec writes it: its worktree of `change/throttle`,
+    """The change's dir where pm-spec writes it: its worktree of `ENG-1-throttle`,
     the branch every change in these tests (a child's too) is on."""
     return worktree(repo) / "specs" / "changes" / name
 

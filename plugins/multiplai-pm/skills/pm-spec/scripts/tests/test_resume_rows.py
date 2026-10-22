@@ -237,7 +237,7 @@ def test_S3_split_killed_before_the_child_dirs_exist(
         f"SPEC:SPLIT:{parent}",
         f"SPEC:CHILD:{api}",
         f"SPEC:CHILD:{ui}",
-        "SPEC:BRANCH:change/throttle",
+        "SPEC:BRANCH:ENG-1-throttle",
     ]
 
     other, _ = baseline(
