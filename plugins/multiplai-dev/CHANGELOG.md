@@ -15,6 +15,44 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.100.0] - 2026-10-22
+
+### Changed
+- buildme builds from the change's feature branch, where pm-spec 0.8.0
+  pushes the specs: `build --branch <name>`, else `change/<change>` when
+  origin has it, else the branch the change dir's `.change.yaml` records. The
+  build's worktree starts from `origin/<branch>`, the specs are read as that
+  branch holds them (the checkout you run it in need not have them), and its
+  pull request targets that branch. The pull request from the feature branch
+  to your default branch is yours to open; buildme never opens or merges it.
+- Before a build starts, and in an epic at the start of every run and before
+  each later wave of children, buildme merges origin's default branch into
+  the feature branch and pushes it, never forced. A conflict is aborted,
+  leaves the branch as it was, builds nothing, and exits `3` with the new
+  marker `FEATURE_BRANCH:CONFLICT:<branch>:<files>`: merge by hand, push,
+  and run the build again.
+- An epic's children all start from the feature branch and their pull
+  requests target it; a child that depends on others starts after they
+  merged into it, so it builds on their work and on any specs revision
+  pushed there since. With `epic.merge` unset, the children's pull requests
+  now merge automatically (`auto`) when the feature branch is not the
+  default branch; `epic.merge: manual` in `specs/config.yaml` still leaves
+  them to you. A pull request with no checks at all merges once none appear
+  for two minutes after buildme's own push.
+- A resume whose specs were revised on the feature branch since its worktree
+  was cut refuses with `SPEC:NOT_READY` and the `git merge` to run.
+
+### Removed
+- The refusals of a change dir with uncommitted changes, of a first-wave
+  child whose base carried commits outside the epic's change dirs, and of a
+  dependent child whose base lacked its specs commit: every build now reads
+  its specs from the feature branch.
+
+### Migration
+- Specs handed off by a pm-spec before 0.8.0 (ready and committed in your
+  checkout, no feature branch on origin) refuse with
+  `Run /multiplai-pm:pm-spec resume <name> first`. Run it, then the build.
+
 ## [0.99.0] - 2026-10-22
 
 ### Changed
