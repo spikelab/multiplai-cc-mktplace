@@ -170,6 +170,33 @@ async def test_publish_retry_rechecks_changed_inputs(accepted_build):
     assert push.call_count == 1
 
 
+def test_a_build_on_a_feature_branch_opens_its_pr_against_it(
+    accepted_build, monkeypatch
+):
+    """T4: the PR of a build of a change on a feature branch targets it."""
+    config, state, _, push = accepted_build
+    config.git.pr = "draft"
+    config.feature_branch = "feat/contract"
+    state.verification = final_verification(
+        config.test_command,
+        config.project_dir,
+        parallel=config.parallel_tests,
+        plan_revision=state.spec_gen.revision,
+    ).model_dump()
+    opened = []
+
+    def pr_skill(argv, cwd=None, timeout=None):
+        opened.append(argv)
+        return git_ops.GitResult(argv, 0, "PR:https://example.invalid/pull/1\n", "")
+
+    monkeypatch.setattr(git_ops, "_run_pr_skill", pr_skill)
+    assert orchestrator._run_publish(
+        config, state, ProgressWriter(config.progress_file_path())
+    )
+    push.assert_called_once()
+    assert opened and opened[0][opened[0].index("--base") + 1] == "feat/contract"
+
+
 def test_push_refuses_stale_verification(accepted_build):
     config, state, _, push = accepted_build
     state.verification = final_verification(

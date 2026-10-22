@@ -1,11 +1,13 @@
-"""End to end: pm-spec writes and readies the specs, buildme builds from them.
+"""End to end: pm-spec writes and readies the specs on the change's feature
+branch and pushes it, buildme builds from that branch.
 
 pm-spec runs as its own command line in its own environment
 (`uv run --package pm-spec-pipeline`, through `pm_spec_driver.py`, its model
 replaced); buildme runs in-process with its model-calling steps replaced, up
-to the start of TDD. Editing one requirement after the handoff makes the next
-build refuse with `SPEC:NOT_READY`. buildme never imports `pm_spec_pipeline`:
-the change dir and `multiplai_core.specs` are all the two share.
+to the start of TDD. Each test has a real bare origin. Editing one
+requirement on the feature branch after the handoff makes the next build
+refuse with `SPEC:NOT_READY`. buildme never imports `pm_spec_pipeline`: the
+change dir on the branch and `multiplai_core.specs` are all the two share.
 """
 
 from __future__ import annotations
@@ -20,7 +22,8 @@ import pytest
 from build_pipeline.orchestrator import run_orchestrator
 from multiplai_core.specs import is_ready
 
-from tests.test_git_ops import make_repo
+from tests.spec_fixtures import ready_specs
+from tests.test_git_ops import make_bare_origin, make_repo
 from tests.test_ready_specs import CHANGE, Models, _args, _config
 
 pytestmark = pytest.mark.no_handoff
@@ -71,13 +74,14 @@ def _pm_spec(sandbox: Path, repo: Path, *argv: str) -> subprocess.CompletedProce
     )
 
 
-@pytest.mark.skipif(
-    shutil.which("uv") is None, reason="uv runs pm-spec in its own environment"
-)
-@pytest.mark.asyncio
-async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
-    tmp_path, monkeypatch, capsys
-):
+def _git(cwd: Path, *argv: str) -> str:
+    return subprocess.run(
+        ["git", *argv], cwd=cwd, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def _setup(tmp_path: Path, monkeypatch) -> Path:
+    """The user's checkout, on main, with a bare origin holding main."""
     monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
     monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
     from build_pipeline import orchestrator
@@ -86,10 +90,56 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
         orchestrator, "_run_spec_extract_step", lambda config, state, progress: None
     )
     repo = make_repo(tmp_path / "proj")
+    make_bare_origin(repo, tmp_path / "origin.git")
+    _git(repo, "push", "-q", "origin", "main")
+    return repo
+
+
+async def _build_to_tdd(repo: Path, models: Models) -> tuple[int | None, dict]:
+    """buildme in *repo*, up to the start of TDD: its exit code (None when
+    it reached TDD) and what the TDD stand-in saw."""
+    reached = {}
+
+    async def tdd(config, args, standalone=True):
+        reached["change_dir"] = config.change_dir
+        raise ReachedTdd
+
+    p = models.patches()
+    with (
+        p[0],
+        p[1],
+        p[2],
+        p[3],
+        p[4],
+        patch("build_pipeline.tdd_engine.run_tdd_engine", tdd),
+    ):
+        try:
+            rc = await run_orchestrator(
+                _config(repo, spec_only=False), _args(repo, spec_only=False)
+            )
+        except ReachedTdd:
+            rc = None
+    return rc, reached
+
+
+needs_uv = pytest.mark.skipif(
+    shutil.which("uv") is None, reason="uv runs pm-spec in its own environment"
+)
+
+
+@needs_uv
+@pytest.mark.asyncio
+async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
+    tmp_path, monkeypatch, capsys
+):
+    """T9."""
+    repo = _setup(tmp_path, monkeypatch)
+    head = _git(repo, "rev-parse", "HEAD")
     prd = tmp_path / "prd.md"
     prd.write_text(PRD)
 
-    # pm-spec: the specs, checked, marked ready and committed.
+    # pm-spec: the specs, checked, marked ready, committed on feat/<change>
+    # in its own worktree, and pushed.
     proc = _pm_spec(
         tmp_path,
         repo,
@@ -105,81 +155,83 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
         "--no-epic-split",
     )
     assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
-    change_dir = repo / "specs" / "changes" / CHANGE
+    branch = f"feat/{CHANGE}"
+    spec_tree = tmp_path / ".worktrees" / f"pm-spec-feat-{CHANGE}"
+    change_dir = spec_tree / "specs" / "changes" / CHANGE
     assert f"SPEC:READY:{change_dir}:" in proc.stdout
+    assert f"SPEC:BRANCH:{branch}" in proc.stdout
     assert is_ready(change_dir)[0]
-    assert (
-        subprocess.run(
-            ["git", "status", "--porcelain", "--", "specs"],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        == ""
+    assert _git(repo, "rev-parse", "HEAD") == head
+    assert not (repo / "specs").exists(), "the user's checkout is not written"
+    assert _git(tmp_path / "origin.git", "rev-parse", branch) == _git(
+        spec_tree, "rev-parse", "HEAD"
     )
 
-    # buildme: plans from them in its worktree and starts TDD.
-    reached = {}
-
-    async def tdd(config, args, standalone=True):
-        reached["change_dir"] = config.change_dir
-        raise ReachedTdd
-
+    # buildme: finds the specs on origin's feat/<change>, plans from them in
+    # its worktree and starts TDD.
     models = Models()
-    p = models.patches()
-    with (
-        p[0],
-        p[1],
-        p[2],
-        p[3],
-        p[4],
-        patch("build_pipeline.tdd_engine.run_tdd_engine", tdd),
-    ):
-        with pytest.raises(ReachedTdd):
-            await run_orchestrator(
-                _config(repo, spec_only=False), _args(repo, spec_only=False)
-            )
+    rc, reached = await _build_to_tdd(repo, models)
+    assert rc is None, capsys.readouterr().out
+    wt = tmp_path / "ws" / ".worktrees" / f"buildme-{CHANGE}"
     built = reached["change_dir"]
-    assert (
-        built
-        == tmp_path
-        / "ws"
-        / ".worktrees"
-        / f"buildme-{CHANGE}"
-        / "specs"
-        / "changes"
-        / CHANGE
-    )
+    assert built == wt / "specs" / "changes" / CHANGE
+    assert _git(wt, "merge-base", "--is-ancestor", f"origin/{branch}", "HEAD") == ""
     for name in ("proposal.md", "use-cases.md", "requirements/fixture.md"):
         assert (built / name).read_bytes() == (change_dir / name).read_bytes(), name
     assert (built / "design.md").is_file() and (built / "tasks.md").is_file()
     generated = {c.args[0] for c in models.generate.await_args_list}
     assert generated == {"design", "tasks"}, generated
 
-    # One requirement edited after the handoff: the next build refuses.
-    requirement = built / "requirements" / "fixture.md"
+    # One requirement edited on the feature branch after the handoff: the
+    # next build, from a teammate's fresh clone, refuses.
+    requirement = change_dir / "requirements" / "fixture.md"
     requirement.write_text(requirement.read_text() + "\nThe value SHALL be 2.\n")
+    _git(spec_tree, "commit", "-qam", "edit a requirement")
+    _git(spec_tree, "push", "-q", "origin", branch)
+    other = tmp_path / "teammate"
+    _git(tmp_path, "clone", "-q", str(tmp_path / "origin.git"), str(other))
+    monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws2"))
     capsys.readouterr()
     models = Models()
-    p = models.patches()
-    with (
-        p[0],
-        p[1],
-        p[2],
-        p[3],
-        p[4],
-        patch("build_pipeline.tdd_engine.run_tdd_engine", tdd),
-    ):
-        rc = await run_orchestrator(
-            _config(repo, spec_only=False), _args(repo, spec_only=False)
-        )
+    rc, _ = await _build_to_tdd(other, models)
     out = capsys.readouterr().out
     assert rc == 2
-    assert "SPEC:NOT_READY:the specs changed after they were marked ready" in out
-    # The edited copy is the worktree's, so the advice names that checkout.
     assert (
-        f"Run /multiplai-pm:pm-spec {CHANGE} --project-dir {built.parent.parent.parent} first"
-        in out
+        f"SPEC:NOT_READY:specs/changes/{CHANGE} at origin/{branch}: the specs changed "
+        "after they were marked ready" in out
     )
+    assert f"Run /multiplai-pm:pm-spec {CHANGE} first" in out
+    assert not (tmp_path / "ws2").exists(), "no worktree"
     models.generate.assert_not_awaited()
+
+
+@needs_uv
+@pytest.mark.asyncio
+async def test_an_old_handoff_is_refused_until_pm_spec_resume_moves_it(
+    tmp_path, monkeypatch, capsys
+):
+    """T8: specs a pm-spec from before the feature branch handed off (ready
+    and committed on the user's main, no feature branch) are refused with
+    `pm-spec resume <name>`; that resume moves them onto `feat/<name>` and
+    pushes it, and the build then runs."""
+    repo = _setup(tmp_path, monkeypatch)
+    old = repo / "specs" / "changes" / CHANGE
+    ready_specs(old, repo)
+
+    models = Models()
+    rc, _ = await _build_to_tdd(repo, models)
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert f"Run /multiplai-pm:pm-spec resume {CHANGE} first" in out
+    models.generate.assert_not_awaited()
+
+    proc = _pm_spec(
+        tmp_path, repo, "resume", CHANGE, "--project-dir", str(repo), "--trust-repo"
+    )
+    assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
+    assert f"SPEC:BRANCH:feat/{CHANGE}" in proc.stdout
+    assert old.is_dir(), "the original is never deleted"
+
+    rc, reached = await _build_to_tdd(repo, Models())
+    assert rc is None, capsys.readouterr().out
+    assert (reached["change_dir"] / "design.md").is_file()
