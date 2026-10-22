@@ -394,7 +394,7 @@ def test_a_child_refuses_a_config_yaml_that_is_not_on_its_base_ref(tmp_path, mon
     subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "config"], cwd=project, check=True)
     config = BuildConfig(project_dir=project, change_name="c")
     config.base_ref = base
-    state = BuildState(change_name="c", mode="brief", tier="advanced")
+    state = BuildState(change_name="c", tier="advanced")
     with pytest.raises(intake.ConfigNotCommittedError, match="Push it, or pull"):
         asyncio.run(orchestrator._run_bootstrap(config, state, None, None))
     assert state.worktree_path is None
@@ -439,11 +439,11 @@ def test_a_build_inside_its_own_worktree_is_not_refused_on_its_base_ref(tmp_path
     monkeypatch.setattr(orchestrator, "_setup_worktree", setup)
     config = BuildConfig(project_dir=project, change_name="c")
     config.base_ref = base
-    rebound = BuildState(change_name="c", mode="brief", tier="advanced", worktree_path=str(project))
+    rebound = BuildState(change_name="c", tier="advanced", worktree_path=str(project))
     with pytest.raises(Reached):
         asyncio.run(orchestrator._run_bootstrap(config, rebound, None, None))
     with pytest.raises(intake.ConfigNotCommittedError):
-        asyncio.run(orchestrator._run_bootstrap(config, BuildState(change_name="c", mode="brief",
+        asyncio.run(orchestrator._run_bootstrap(config, BuildState(change_name="c",
                                                                     tier="advanced"), None, None))
 
 
@@ -826,7 +826,7 @@ def test_the_build_branches_from_base_ref_and_counts_an_empty_branch_against_it(
 
     config = BuildConfig(project_dir=project, change_name="c")
     config.base_ref = base
-    state = BuildState(change_name="c", mode="brief", tier="advanced")
+    state = BuildState(change_name="c", tier="advanced")
     orchestrator._setup_worktree(config, state)
     assert state.branch == "buildme/c-2"
     assert _sha(Path(state.worktree_path)) == base != _sha(project)
@@ -860,7 +860,7 @@ def test_the_pr_targets_the_branch_its_base_ref_is_on(tmp_path, monkeypatch, on_
     config = BuildConfig(project_dir=project, change_name="c")
     config.specs_dir = project / "specs"
     config.base_ref = base
-    state = BuildState(change_name="c", mode="brief", tier="advanced",
+    state = BuildState(change_name="c", tier="advanced",
                        state_file=str(config.state_file_path()))
     asyncio.run(orchestrator._run_bootstrap(config, state, ChangeManager(config.specs_dir),
                                             config.state_file_path()))
