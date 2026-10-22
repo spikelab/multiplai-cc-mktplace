@@ -77,6 +77,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from multiplai_core.specs import CHANGE_META_FILE
 
 from .. import budget, git_ops, intake, stop_record
 from ..config import git_toggles
@@ -111,6 +112,10 @@ PR_FIELDS = "number,state,headRefOid,mergeable,mergeStateStatus"
 
 class ReadFailed(Exception):
     """A `git`, `gh` or `ps` read failed, so what it would have said is not known."""
+
+
+class Unrelated(Exception):
+    """A child's base would carry commits outside the epic's change dirs (`Coordinator._outside_specs`)."""
 
 
 class StartFailed(Exception):
@@ -376,6 +381,7 @@ class Coordinator:
     budget_stop: float | None = None     # the spend that stopped launches, once reached
     shares: dict[str, Share] = field(default_factory=dict)   # running fixers' --max-usd, per child
     merge_lock: asyncio.Lock = field(default_factory=asyncio.Lock)   # item 35: one merge at a time
+    outside: str | None = None           # `_outside_specs`, once read: "" when nothing is outside
 
     def __post_init__(self) -> None:
         self.project_dir = Path(self.config.project_dir)
@@ -593,8 +599,61 @@ class Coordinator:
         commit does (`_specs_missing`). None when origin has no default-branch
         ref: the child branches from the source checkout's HEAD."""
         if not c.depends_on:
+            outside = await self._outside_specs()
+            if outside:
+                raise Unrelated(outside)
             return self.specs_sha
         return await base_sha(self.repo, need_fetch=True)
+
+    def _epics_change(self, changes: str, path: str) -> bool:
+        """Whether *path* is in a change dir under *changes* whose `.change.yaml`
+        at `specs_sha` names this epic as its `parent`: one pm-spec wrote for
+        this epic and no longer lists (a dropped child)."""
+        if not path.startswith(f"{changes}/"):
+            return False
+        name = path[len(changes) + 1:].split("/", 1)[0]
+        res = _git(self.repo, "show", f"{self.specs_sha}:{changes}/{name}/{CHANGE_META_FILE}")
+        if not res.ok:
+            return False
+        try:
+            meta = yaml.safe_load(res.stdout)
+        except yaml.YAMLError:
+            return False
+        return isinstance(meta, dict) and meta.get("parent") == self.epic.name
+
+    async def _outside_specs(self) -> str | None:
+        """Why a child with no dependency cannot branch from `specs_sha`: a
+        commit between origin's default branch (after a fetch, which may
+        fail) and it touches a path outside the parent's and the children's
+        change dirs, which the child's PR would carry. None when none does,
+        or origin has no default-branch ref. Read once per run."""
+        if self.outside is None:
+            self.outside = ""
+            origin = await base_sha(self.repo, need_fetch=False)
+            if origin is not None:
+                self.outside = self._paths_outside(origin) or ""
+        return self.outside or None
+
+    def _paths_outside(self, origin: str) -> str | None:
+        changes = Path(self.config.specs_dir).resolve() / "changes"
+        try:
+            rel = changes.relative_to(self.repo.resolve()).as_posix()
+        except ValueError:
+            return f"{changes} is not inside {self.repo}"
+        dirs = [f"{rel}/{self.epic.name}/", *(f"{rel}/{self.epic.name}-{cid}/" for cid in self.children)]
+        res = _git(self.repo, "log", "--format=", "--name-only", "--no-renames", f"{origin}..{self.specs_sha}")
+        if not res.ok:
+            return (f"cannot list the commits between origin's default branch ({origin[:12]}) and the specs "
+                    f"commit {self.specs_sha[:12]}: {res.stderr.strip()[-300:]}")
+        outside = sorted({p for p in res.stdout.splitlines() if p and not any(p.startswith(d) for d in dirs)})
+        outside = [p for p in outside if not self._epics_change(rel, p)]
+        if not outside:
+            return None
+        more = f" and {len(outside) - 5} more" if len(outside) > 5 else ""
+        return (f"the commits between origin's default branch ({origin[:12]}) and the specs commit "
+                f"{self.specs_sha[:12]} touch {', '.join(outside[:5])}{more}, outside the epic's change dirs; "
+                "a child that depends on nothing branches from the specs commit, so its PR would carry them. "
+                "Merge them into origin's default branch, or move them off this branch, then re-run")
 
     def _specs_missing(self, c: Child, base: str) -> str | None:
         """Why *base* cannot be *c*'s base: its change dir there is not the one
@@ -616,9 +675,11 @@ class Coordinator:
     async def _launch(self, c: Child) -> bool:
         """Start *c*. False when it was not started, with nothing written for
         it but its status: a first launch whose base could not be fetched,
-        whose specs/config.yaml is not the base's (B1.S22), or, for a child
-        with dependencies, whose base does not hold its change dir as the
-        specs commit does. The next run then fetches again."""
+        whose specs/config.yaml is not the base's (B1.S22), for a child with
+        no dependency whose base carries commits outside the epic's change
+        dirs (`_outside_specs`), or, for a child with dependencies, whose base
+        does not hold its change dir as the specs commit does. The next run
+        then fetches again."""
         if c.status == "failed":
             c.relaunched = True
         argv = c.argv
@@ -627,6 +688,10 @@ class Coordinator:
                 base = await self._base(c)
             except ReadFailed as e:       # no launch until a fetch answers
                 c.status, c.reason = "unknown", f"cannot get a base that holds its dependencies' merges: {e}"
+                self._save()
+                return False
+            except Unrelated as e:
+                c.status, c.relaunched, c.reason = "failed", True, str(e)
                 self._save()
                 return False
             missing = self._specs_missing(c, base) if c.depends_on and base else None

@@ -229,6 +229,22 @@ def test_a_dependant_whose_base_lacks_its_specs_is_not_launched(tmp_path, monkey
     assert revised[:12] in b["reason"]
 
 
+def test_a_first_wave_child_never_carries_unrelated_local_commits(tmp_path, monkeypatch):
+    """(i) A local commit not on origin touches a path outside the epic's
+    change dirs: a child with no dependency, which branches from the specs
+    commit, would carry it into its PR. It is not launched; it is `failed`
+    with the reason, and nothing is recorded for it."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN)
+    (e.project / "notes.txt").write_text("local work\n")
+    _git(e.project, "add", "notes.txt")
+    _git(e.project, "-c", "commit.gpgsign=false", "commit", "-qm", "unrelated local work")
+    assert e.run() == 1
+    assert e.build_records("a") == []
+    a = e.status()["a"]
+    assert a["status"] == "failed"
+    assert "notes.txt" in a["reason"] and "outside the epic's change dirs" in a["reason"]
+
+
 def _archive(e: Epic, child: str) -> Path:
     """What a merged `--auto` child's PR leaves in the checkout after a pull:
     its change dir moved to specs/archive/<date>-<child>/, committed."""
