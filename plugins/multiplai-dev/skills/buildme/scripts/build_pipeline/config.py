@@ -536,7 +536,9 @@ class EpicSettings:
     """`epic:` block: how an approved epic runs its children
     (plan-buildme-epic-mode-2026-10-12.md, item 16a). `max_parallel`: children
     building at once. `max_review_rounds`: review rounds per child PR.
-    `merge`: `auto` or `manual` (a human merges). `max_usd`: one ceiling for
+    `merge`: `auto` or `manual` (a human merges); `merge_set` is whether
+    config.yaml sets it, since unset the coordinator merges `auto` when the
+    PRs target a feature branch (`Coordinator.__post_init__`). `max_usd`: one ceiling for
     the whole epic, None for none. `round_worth`: which Code MEDIUM earns
     another review round (`epic.review.decide`): `breaks`, one the verifier
     did not rate `correctness-only` or `hygiene`; `any`, every one."""
@@ -544,6 +546,7 @@ class EpicSettings:
     max_parallel: int = 2
     max_review_rounds: int = 3
     merge: Literal["auto", "manual"] = "manual"
+    merge_set: bool = False
     max_usd: float | None = None
     round_worth: Literal["breaks", "any"] = "breaks"
 
@@ -784,8 +787,13 @@ class BuildConfig:
     findings: FindingsSettings = field(default_factory=FindingsSettings)
     epic: EpicSettings = field(default_factory=EpicSettings)
     # `build --base-ref`: the commit a new worktree branches from (an epic's
-    # coordinator passes origin's default branch). Empty: the source HEAD.
+    # coordinator passes `origin/<feature branch>`; a build that found the
+    # change's feature branch sets it to that). Empty: the source HEAD.
     base_ref: str = ""
+    # `build --branch`, else the change's feature branch as
+    # `feature_branch.resolve` found it: where pm-spec pushed the specs, what
+    # the build starts from and what its PR targets. Empty: none.
+    feature_branch: str = ""
     # The checkout the build was started in, when a resume re-bound the config
     # to the build's existing worktree (`orchestrator._rebind_to_existing_worktree`);
     # None otherwise. The readiness check compares its specs with the worktree's.
@@ -1423,6 +1431,7 @@ class BuildConfig:
         if getattr(args, "pr_ready", False):
             self.git.pr = "ready"
         self.base_ref = getattr(args, "base_ref", "") or ""
+        self.feature_branch = getattr(args, "branch", "") or ""
         self.epic_child = bool(getattr(args, "epic_child", False))
 
     def rebind_project_dir(self, new_project_dir: Path) -> None:
@@ -1521,6 +1530,7 @@ class BuildConfig:
                 epic_cfg.get("max_review_rounds", 3), "epic.max_review_rounds", 3
             ),
             merge=merge,
+            merge_set="merge" in epic_cfg,
             max_usd=max_usd,
             round_worth=worth,
         )

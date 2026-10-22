@@ -2,9 +2,10 @@
 
 buildme builds only from a change whose proposal, use cases and requirements
 pm-spec has marked ready in `.change.yaml` (`multiplai_core.specs.is_ready`),
-and, for a build that branches a worktree, only once they are committed.
-`ready_specs` writes a minimal valid set where one is missing, marks it
-ready, and commits it when the project is a git repo.
+and, for a build that branches a worktree, only from the change's feature
+branch on origin, where pm-spec pushes them. `ready_specs` writes a minimal
+valid set where one is missing, marks it ready, and commits it when the
+project is a git repo; `publish` pushes that commit to `origin/feat/<change>`.
 """
 
 from __future__ import annotations
@@ -117,3 +118,63 @@ def never_marked(change_dir: Path) -> bool:
         return "spec_status" not in read_change_meta(change_dir)
     except (OSError, ValueError):
         return True
+
+
+def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+
+
+def publish(project_dir: Path, change: str, branch: str = "") -> str | None:
+    """Play pm-spec's push: HEAD of *project_dir*'s repository goes to
+    `feat/<change>` (or *branch*) on origin, when origin lacks that branch.
+    A repository with no origin gets a bare one beside it,
+    `<repo>.origin.git`, holding HEAD as its default branch, whose
+    pre-receive hook refuses every push but to that branch and `feat/*`: as
+    a repository with no origin did, it refuses the build's own push, so a
+    test that never stubbed a PR opens none. Returns the branch, or None
+    when *project_dir* is in no repository with a commit."""
+    project_dir = Path(project_dir)
+    if not project_dir.is_dir():
+        return None
+    top = _git(project_dir, "rev-parse", "--show-toplevel")
+    if (
+        top.returncode
+        or _git(project_dir, "rev-parse", "--verify", "-q", "HEAD").returncode
+    ):
+        return None
+    repo = Path(top.stdout.strip())
+    branch = branch or f"feat/{change}"
+    if "origin" not in _git(repo, "remote").stdout.split():
+        bare = repo.parent / f"{repo.name}.origin.git"
+        on = (
+            _git(repo, "symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip()
+            or "main"
+        )
+        if not bare.exists():
+            subprocess.run(
+                ["git", "init", "-q", "--bare", "-b", on, str(bare)],
+                check=True,
+                capture_output=True,
+            )
+            hook = bare / "hooks" / "pre-receive"
+            hook.write_text(
+                "#!/bin/sh\n"
+                "while read old new ref; do\n"
+                '  case "$ref" in\n'
+                f"    refs/heads/{on}|refs/heads/feat/*) ;;\n"
+                '    *) echo "this test origin takes no push to $ref" >&2; exit 1 ;;\n'
+                "  esac\n"
+                "done\n"
+            )
+            hook.chmod(0o755)
+        _git(repo, "remote", "add", "origin", str(bare))
+        _git(repo, "push", "-q", "origin", f"HEAD:refs/heads/{on}")
+    _git(repo, "fetch", "-q", "origin")
+    if _git(
+        repo, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{branch}"
+    ).returncode:
+        pushed = _git(repo, "push", "-q", "origin", f"HEAD:refs/heads/{branch}")
+        if pushed.returncode:
+            return None
+        _git(repo, "fetch", "-q", "origin")
+    return branch

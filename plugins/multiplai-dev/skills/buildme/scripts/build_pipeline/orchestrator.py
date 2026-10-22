@@ -41,13 +41,21 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     budget_mod.configure(
         max_tokens=config.budget_max_tokens, max_usd=config.budget_max_usd
     )
+    # The change's feature branch, where pm-spec pushed its specs
+    # (`feature_branch.py`): found before anything else reads the specs.
+    rc = _find_feature_branch(config)
+    if rc is not None:
+        return rc
     # An epic: pm-spec split this change and its `.change.yaml` lists the
-    # children. Read in the caller's checkout, before any worktree re-binding:
-    # the children build from the commit that holds their ready specs there.
+    # children. Read on the feature branch (else in the caller's checkout),
+    # before any worktree re-binding.
     from .epic import phase as epic_phase
 
     if epic_phase.is_epic(config):
         return await epic_phase.run_epic_from_specs(config, args)
+    rc = _merge_into_feature_branch(config)
+    if rc is not None:
+        return rc
     # Resume re-binding, before anything derives a path from the config: a
     # previous run's state file lives INSIDE its worktree, so a plain
     # config.state_file_path() lookup against the source repo would miss it
@@ -638,6 +646,80 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 )
 
 
+def _find_feature_branch(config: BuildConfig) -> int | None:
+    """Set `config.feature_branch` to the change's feature branch
+    (`feature_branch.resolve`, after `git fetch origin`). Skipped for an
+    epic's child and with `--base-ref`, which name their base themselves, and
+    when the project is not in a repository with an `origin` remote. A
+    failed fetch is a warning: origin's refs are read as they are, and a
+    build that then merges into the branch fails on its own fetch.
+    `SPEC:NOT_READY` (exit 2) when the branch `--branch` or `.change.yaml`
+    names is not on origin; None otherwise."""
+    from . import feature_branch, readiness
+
+    if not config.change_name or _epic_child(config) or config.base_ref:
+        return None
+    repo = git_ops.repo_root(config.project_dir)
+    if repo is None or not git_ops.has_remote(repo):
+        return None
+    failed = feature_branch.fetch(repo)
+    if failed is not None:
+        log.warning("git fetch origin failed in %s: %s", repo, failed)
+    flag = config.feature_branch
+    branch = feature_branch.resolve(repo, config.change_name, flag, config.change_dir)
+    if branch is None:
+        return None
+    if not feature_branch.on_origin(repo, branch):
+        named = "--branch" if flag else f"{config.change_dir / '.change.yaml'}"
+        log.error(
+            "REFUSED change=%s reason=no-feature-branch branch=%s",
+            config.change_name,
+            branch,
+        )
+        return readiness.refuse_not_ready(
+            config.change_name,
+            f"origin has no branch {branch}, which {named} names; pm-spec pushes the change's "
+            "specs there",
+            resume=config.change_dir.is_dir(),
+        )
+    config.feature_branch = branch
+    log.info("FEATURE_BRANCH change=%s branch=%s", config.change_name, branch)
+    return None
+
+
+def _merge_into_feature_branch(config: BuildConfig) -> int | None:
+    """Before a worktree build of a change on a feature branch: merge origin's
+    default branch into it and push (`feature_branch.merge_default`), then
+    build from `origin/<branch>` (`config.base_ref`). Skipped for an epic's
+    child (the coordinator merges before each wave) and with `--base-ref`.
+    `FEATURE_BRANCH:CONFLICT` exit 3 on a conflict, exit 1 when git fails."""
+    from . import feature_branch
+
+    branch = config.feature_branch
+    if not branch or not config.git.worktree or _epic_child(config) or config.base_ref:
+        return None
+    repo = git_ops.repo_root(config.project_dir)
+    if repo is None:
+        return None
+    merged = feature_branch.merge_default(repo, branch)
+    if merged.outcome == "conflict":
+        log.error(
+            "REFUSED change=%s reason=feature-branch-conflict files=%s",
+            config.change_name,
+            merged.files,
+        )
+        return feature_branch.conflict_exit(branch, merged.files)
+    if merged.outcome == "failed":
+        print(
+            f"ERROR: cannot bring {branch} up to date with origin's default branch: {merged.error}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+    config.base_ref = feature_branch.ref(branch)
+    return None
+
+
 def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
     """Refuse a build whose specs are not ready, before anything is written.
 
@@ -649,19 +731,20 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
     the specs were never marked and a proposal and requirements are on disk,
     unless a checkpoint from before buildme stopped generating them is still
     short of their generation (item 21). An open `spec_issues` prints
-    `SPEC:ISSUES:<path>`, exit 4 (rows S11, S12). A first run that will branch
-    a worktree from HEAD refuses a change dir with uncommitted changes, since
-    the worktree would not hold them; with `--base-ref`, the change dir as
-    that ref holds it must be ready and hold the revision the change dir
-    marked ready (`_base_ref_reason`), since the worktree is cut from it.
+    `SPEC:ISSUES:<path>`, exit 4 (rows S11, S12). A first worktree run with
+    a base (`--base-ref`, or `origin/<feature branch>`) reads the change dir
+    as the base holds it, which is what the worktree cut from it holds
+    (`_refuse_unless_ready_at_base`). One with no base refuses specs that are
+    ready in the checkout but on no feature branch (`_old_handoff_reason`):
+    `pm-spec resume <name>` moves them onto it.
 
     A worktree build's resume reads the copy in its own worktree; the
     not-ready advice then names `--project-dir <worktree>`. When the change
-    dir in the checkout the build was cut from was marked ready again since,
-    with other specs, the resume refuses and names where they are
-    (`_newer_source_reason`, row S7) instead of building the older copy. A
-    finished build's checkpoint is not checked: its run only reports the
-    result.
+    dir on the feature branch (for a build with none, in the checkout the
+    build was cut from) was marked ready again since, with other specs, the
+    resume refuses and names where they are (`_newer_source_reason`, row S7)
+    instead of building the older copy. A finished build's checkpoint is not
+    checked: its run only reports the result.
     """
     from multiplai_core.specs import CHANGE_META_FILE, is_ready, read_change_meta
 
@@ -676,11 +759,22 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
         if prior is not None and prior.phase == BuildPhase.COMPLETE:
             return None
     change_dir = state_path.parent if state_path.exists() else config.change_dir
+    if prior is None and config.git.worktree and config.base_ref:
+        return _refuse_unless_ready_at_base(config)
+    if prior is None and config.git.worktree:
+        old = _old_handoff_reason(config, change_dir)
+        if old:
+            log.error("REFUSED change=%s reason=no-feature-branch", config.change_name)
+            return readiness.refuse_not_ready(config.change_name, old, resume=True)
     source = (
         _source_change_dir(config, prior, change_dir) if prior is not None else None
     )
     in_worktree = source is not None
-    if source is not None:
+    if source is not None and config.feature_branch and prior.worktree_path:
+        newer = _newer_on_branch(config, prior, change_dir)
+        if newer:
+            return newer
+    elif source is not None:
         newer = _newer_source_reason(prior, change_dir, source)
         if newer:
             source, reason = newer
@@ -730,40 +824,148 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
             "REFUSED change=%s reason=spec-issues file=%s", config.change_name, issues
         )
         return readiness.refuse_issues(issues)
-    if prior is None and config.git.worktree:
-        try:
-            dirty = readiness.uncommitted(config.project_dir, change_dir)
-        except git_ops.GitLifecycleError as e:
-            # Not a checkout git can read: bootstrap's preflight says why.
-            log.warning("Could not check %s for uncommitted changes: %s", change_dir, e)
-            dirty = []
-        if dirty:
-            log.error(
-                "REFUSED change=%s reason=specs-uncommitted paths=%s",
-                config.change_name,
-                dirty,
-            )
-            return readiness.refuse_not_ready(
-                config.change_name,
-                f"{change_dir} has uncommitted changes ({', '.join(dirty[:5])}"
-                f"{', ...' if len(dirty) > 5 else ''}); the build's worktree branches from HEAD, "
-                f"which does not hold them",
-                resume=True,
-            )
-    if prior is None and config.git.worktree and config.base_ref:
-        why = _base_ref_reason(config, change_dir)
-        if why:
-            log.error(
-                "REFUSED change=%s reason=base-ref-specs detail=%s",
-                config.change_name,
-                why,
-            )
-            return readiness.refuse_not_ready(
-                config.change_name,
-                why,
-                advice=f"Build from a --base-ref that holds the ready specs in {change_dir}, then run the build again",
-            )
     return None
+
+
+def _old_handoff_reason(config: BuildConfig, change_dir: Path) -> str | None:
+    """Why a first worktree run with no base cannot build specs that are ready
+    in the checkout: they are on no feature branch on origin, where the build
+    would start. None when they are not ready (the not-ready refusal says
+    why) or the project is in no repository (bootstrap's preflight says why)."""
+    from multiplai_core.specs import is_ready
+
+    repo = git_ops.repo_root(config.project_dir)
+    if repo is None or not is_ready(change_dir)[0]:
+        return None
+    from . import feature_branch
+    from .change_manager import normalize_change_name
+
+    branch = feature_branch.PREFIX + normalize_change_name(config.change_name)
+    where = (
+        f"origin has no {branch}"
+        if git_ops.has_remote(repo)
+        else f"{repo} has no origin remote"
+    )
+    return (
+        f"the specs in {change_dir} are ready but on no feature branch ({where}); "
+        "a build starts from the branch pm-spec pushed them to"
+    )
+
+
+def _refuse_unless_ready_at_base(config: BuildConfig) -> int | None:
+    """The first-run check of a worktree build with a base: the change dir as
+    `config.base_ref` holds it must be there, ready (`is_ready`) and with no
+    open `spec_issues`, since the build's worktree is cut from it. None when
+    it is, or when git cannot place the change dir (bootstrap's preflight
+    says why)."""
+    import tempfile
+
+    from multiplai_core.specs import is_ready, read_change_meta
+
+    from . import readiness
+
+    name, base = config.change_name, config.base_ref
+    repo = git_ops.repo_root(config.project_dir)
+    if repo is None:
+        return None
+    try:
+        rel = Path(config.change_dir).resolve().relative_to(repo.resolve()).as_posix()
+    except ValueError:
+        return None
+    # The checkout's own copy recording no branch: an old handoff, which
+    # `pm-spec resume` moves onto the feature branch.
+    local = Path(config.change_dir)
+    old = local.is_dir() and not _meta(local).get("branch")
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            copy = readiness.specs_at(repo, base, rel, Path(tmp))
+        except git_ops.GitLifecycleError as e:
+            log.error("REFUSED change=%s reason=base-unreadable detail=%s", name, e)
+            return readiness.refuse_not_ready(name, f"cannot read {rel} at {base}: {e}")
+        if copy is None:
+            log.error("REFUSED change=%s reason=specs-not-on-base base=%s", name, base)
+            return readiness.refuse_not_ready(
+                name,
+                f"{base} does not hold {rel}, and the build's worktree is cut from it",
+                resume=old,
+            )
+        ready, why = is_ready(copy)
+        if not ready:
+            try:
+                marked = read_change_meta(copy).get("spec_status") is not None
+            except (OSError, UnicodeError, ValueError):
+                marked = False
+            on_disk = (copy / "proposal.md").is_file() and any(
+                (copy / "requirements").glob("*.md")
+            )
+            log.error(
+                "REFUSED change=%s reason=spec-not-ready base=%s detail=%s",
+                name,
+                base,
+                why,
+            )
+            return readiness.refuse_not_ready(
+                name, f"{rel} at {base}: {why}", resume=not marked and on_disk
+            )
+        issues = readiness.open_issues(copy)
+        if issues is not None:
+            try:
+                shown = f"{base}:{rel}/{issues.relative_to(copy).as_posix()}"
+            except ValueError:
+                shown = f"{base}:{issues}"
+            log.error("REFUSED change=%s reason=spec-issues file=%s", name, shown)
+            return readiness.refuse_issues_at(shown, name)
+    return None
+
+
+def _meta(change_dir: Path) -> dict:
+    from multiplai_core.specs import read_change_meta
+
+    try:
+        return read_change_meta(change_dir)
+    except (OSError, UnicodeError, ValueError):
+        return {}
+
+
+def _newer_on_branch(
+    config: BuildConfig, prior: BuildState, change_dir: Path
+) -> int | None:
+    """Row S7 for a build on a feature branch: refuse a resume when the change
+    dir on `origin/<feature branch>` was marked ready again after the build's
+    worktree was cut, with other specs than the copy the build reads
+    (`_newer_source_reason`). Exit 2, or None."""
+    from . import feature_branch, readiness
+
+    worktree = Path(prior.worktree_path)
+    rel = feature_branch.rel_to(worktree, change_dir)
+    if rel is None:
+        return None
+    branch = config.feature_branch
+    try:
+        with feature_branch.Copy(worktree, branch, rel) as copy:
+            newer = (
+                _newer_source_reason(prior, change_dir, copy, label=f"origin/{branch}")
+                if copy is not None
+                else None
+            )
+    except (git_ops.GitLifecycleError, OSError) as e:
+        log.warning("Could not read %s on origin/%s: %s", rel, branch, e)
+        return None
+    if newer is None:
+        return None
+    log.error(
+        "REFUSED change=%s reason=newer-specs-on-branch branch=%s",
+        config.change_name,
+        branch,
+    )
+    return readiness.refuse_not_ready(
+        config.change_name,
+        newer[1],
+        advice=(
+            f"Merge origin/{branch} into the build's branch in {worktree} "
+            f"(`git -C {worktree} merge origin/{branch}`), then run the build again"
+        ),
+    )
 
 
 def _source_change_dir(
@@ -794,7 +996,7 @@ def _source_change_dir(
 
 
 def _newer_source_reason(
-    prior: BuildState, change_dir: Path, source: Path
+    prior: BuildState, change_dir: Path, source: Path, *, label: str | None = None
 ) -> tuple[Path, str] | None:
     """`(source, reason)` when *source*, the change dir in the checkout this
     worktree build was cut from, is ready with other specs than it held when
@@ -804,7 +1006,8 @@ def _newer_source_reason(
     The worktree's own copy may be revised in place (`pm-spec revise
     --project-dir <worktree>`, rows S11, S14): the source is then unchanged
     and the build goes on. With no `base_sha` (an older checkpoint), the
-    source counts as newer whenever it differs from the copy."""
+    source counts as newer whenever it differs from the copy. *label* names
+    the source in the reason in place of its path (a copy of a branch's)."""
     from multiplai_core.specs import is_ready, spec_revision
 
     from . import readiness
@@ -831,48 +1034,10 @@ def _newer_source_reason(
         if rel and readiness.saved_revision_at(root, prior.base_sha, rel) == theirs:
             return None
     return source, (
-        f"the specs in {source} were marked ready again after this build's worktree was cut, "
+        f"the specs in {label or source} were marked ready again after this build's worktree was cut, "
         f"and differ from the copy the build reads in {change_dir} (spec_revision "
         f"{str(theirs)[:12]})"
     )
-
-
-def _base_ref_reason(config: BuildConfig, change_dir: Path) -> str | None:
-    """Why a first run with `--base-ref` cannot build: the change dir as the
-    ref holds it, which is what the worktree cut from it reads, is missing,
-    not ready (`is_ready`), or ready with another revision than the change
-    dir marked ready here. None when it can, or when git cannot place the
-    change dir (bootstrap's preflight says why)."""
-    import tempfile
-
-    from multiplai_core.specs import is_ready
-
-    from . import readiness
-
-    repo = git_ops.repo_root(config.project_dir)
-    if repo is None:
-        return None
-    try:
-        rel = Path(change_dir).resolve().relative_to(repo.resolve()).as_posix()
-    except ValueError:
-        return None
-    base = config.base_ref
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
-            copy = readiness.specs_at(repo, base, rel, Path(tmp))
-        except git_ops.GitLifecycleError as e:
-            return f"cannot read {rel} at --base-ref {base}: {e}"
-        if copy is None:
-            return f"--base-ref {base} does not hold {rel}, and the build's worktree is cut from it"
-        ready, why = is_ready(copy)
-        if not ready:
-            return f"{rel} at --base-ref {base}, which the build's worktree is cut from: {why}"
-        if readiness.saved_revision(copy) != readiness.saved_revision(change_dir):
-            return (
-                f"{rel} at --base-ref {base}, which the build's worktree is cut from, holds other "
-                f"specs than the ones marked ready in {change_dir}"
-            )
-    return None
 
 
 def _record_interrupt(
@@ -2141,11 +2306,12 @@ def _run_publish(
         return True
 
     sections = [Path(p) for p in state.publish_sections]
-    # An epic's child opens its PR against the default branch. Its --base-ref is
-    # the local commit that holds the epic's ready specs, which no origin branch
-    # holds until a sibling built on it pushes its own branch, or origin's
-    # default sha.
-    base = None if _epic_child(config) else _pr_base_branch(worktree, config.base_ref)
+    # A build on a feature branch (an epic's child too: the coordinator passes
+    # `--branch`) opens its PR against that branch. An epic's child started
+    # before that flag targets the default branch, as it did then.
+    base = config.feature_branch or (
+        None if _epic_child(config) else _pr_base_branch(worktree, config.base_ref)
+    )
     pr_argv = _pr_open_argv(
         config.project_dir,
         docs_dir,

@@ -175,13 +175,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--epic-child",
         action="store_true",
         help="This build is an epic's child (the coordinator passes it): "
-        "no spec-extract, and the PR targets the default branch",
+        "no spec-extract",
     )
     build.add_argument(
         "--base-ref",
         default="",
         help="The commit a new worktree branches from (default: the source "
         "checkout's HEAD); a build that re-binds to its worktree ignores it",
+    )
+    build.add_argument(
+        "--branch",
+        default="",
+        help="The change's feature branch on origin, where pm-spec pushed its specs "
+        "(default: feat/<change> when origin has it, else the branch its "
+        ".change.yaml records); the build starts from it and its PR targets it",
     )
     build.add_argument(
         "--force",

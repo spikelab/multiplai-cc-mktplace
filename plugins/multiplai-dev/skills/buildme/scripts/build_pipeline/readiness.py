@@ -8,7 +8,7 @@ because of them:
 
 - `SPEC:NOT_READY:<reason>` and the line naming the pm-spec command, exit 2:
   the specs are not marked ready, changed after they were, or (for a build
-  that branches from them) are not all committed.
+  that branches from them) are not on the change's feature branch.
 - `SPEC:ISSUES:<path>`, exit 4: buildme found a problem in the requirements
   and wrote it to `spec-issues.md` for `pm-spec revise`; `.change.yaml`
   `spec_issues` names the file until pm-spec clears it.
@@ -143,6 +143,17 @@ def refuse_issues(path: Path) -> int:
     print(
         f"Run /multiplai-pm:pm-spec revise {change_dir.name}{where}, then run the build again",
         flush=True,
+    )
+    return EXIT_SPEC_ISSUES
+
+
+def refuse_issues_at(shown: str, name: str) -> int:
+    """`refuse_issues` for an issues file read on a branch, not on disk:
+    *shown* is `<ref>:<path>`. pm-spec finds the change's branch itself, so
+    the revise line names no `--project-dir`."""
+    print(f"{MARKER_ISSUES}:{shown}", flush=True)
+    print(
+        f"Run /multiplai-pm:pm-spec revise {name}, then run the build again", flush=True
     )
     return EXIT_SPEC_ISSUES
 

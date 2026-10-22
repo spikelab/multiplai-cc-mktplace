@@ -11,10 +11,15 @@ epic's own project, in its own process group, with its
 stdout and stderr going to the attempt's log file (never a pipe), so a child
 outlives a killed coordinator. A child is ready once every child it depends on
 has merged; at most `epic.max_parallel` build at once, and one starts only
-after the last one printed `WORKTREE:` or exited. A child with no dependency
-branches from the local commit that holds the ready specs, so its PR carries
-that commit and nothing is pushed before the build; one with dependencies
-branches from origin's default branch after they merged (`Coordinator._base`).
+after the last one printed `WORKTREE:` or exited. Every child starts from the
+epic's feature branch, `origin/<branch>` after a `git fetch origin` (the branch
+pm-spec pushed the specs to), and its PR targets that branch: a dependent child
+starts after its dependencies merged into it. At the start of every run, and
+before the first launch of each later wave (a dependency level) in the run,
+origin's default branch is merged into the feature branch and pushed
+(`feature_branch.merge_default`); a conflict launches nothing more and the run
+exits 3 with `FEATURE_BRANCH:CONFLICT:<branch>:<files>`. The pull request from
+the feature branch to the release branch is the user's.
 
 Every run starts from disk: the records under `agents/` (`records.py`) say
 what each child did, and a started record with no result is an attempt that
@@ -36,12 +41,16 @@ Its stop and resume rows are PR D2's table.
 
 A child whose review left no blocker is merged (PR E, items 35-42;
 `_merge`, `merge.py`). Under `epic.merge: auto` the merge step merges
-`origin/<default>` into the child's branch in its worktree, has an agent
-resolve version, CHANGELOG and lockfile conflicts, runs the tests, pushes,
-waits for the PR's required checks and runs `gh pr merge --merge`, one
-merge at a time. Under `manual` (the default) nothing is merged:
-the PR is waited on, and the run exits 3 with `EPIC:MERGE_WAITING` while it
-is open. Its stop and resume rows are PR E's table.
+`origin/<feature branch>` into the child's branch in its worktree, has an
+agent resolve version, CHANGELOG and lockfile conflicts, runs the tests,
+pushes, waits for the PR's required checks and runs `gh pr merge --merge`,
+one merge at a time. A PR with no checks at all merges once none appeared
+for `CHECKS_APPEAR` seconds after the step's own push (at once when it
+pushed nothing): buildme's own review is then the only gate. Under `manual`
+nothing is merged: the PR is waited on, and the run exits 3 with
+`EPIC:MERGE_WAITING` while it is open. With `epic.merge` unset, it is `auto`
+when the feature branch is not origin's default branch, else `manual`
+(`Coordinator.__post_init__`). Its stop and resume rows are PR E's table.
 
 Spend (PR B2): before each launch, when `epic.max_usd` is set and the epic's
 spend (`spend.py`: the records' `spend` plus the review ledger) has reached
@@ -62,6 +71,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import io
 import json
 import logging
@@ -76,11 +86,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from multiplai_core.specs import CHANGE_META_FILE
 
 from build_pipeline.budget import BudgetExceededError
 
-from .. import budget, git_ops, intake, stop_record
+from .. import budget, feature_branch, git_ops, intake, stop_record
 from ..config import git_toggles
 from ..models import AgentResult
 from . import CHILD_ENV, fix, merge, records, review, spend, store
@@ -117,10 +126,6 @@ PR_FIELDS = "number,state,headRefOid,mergeable,mergeStateStatus"
 
 class ReadFailed(Exception):
     """A `git`, `gh` or `ps` read failed, so what it would have said is not known."""
-
-
-class Unrelated(Exception):
-    """A child's base would carry commits outside the epic's change dirs (`Coordinator._outside_specs`)."""
 
 
 class StartFailed(Exception):
@@ -230,34 +235,6 @@ async def _fetch_origin(repo: Path) -> str | None:
             await proc.wait()
     if proc.returncode != 0:
         return err.decode(errors="replace").strip()[-400:] or f"exit {proc.returncode}"
-    return None
-
-
-async def base_sha(repo: Path, *, need_fetch: bool) -> str | None:
-    """`git fetch origin`, then origin's default branch's sha (item 12). A
-    fetch that fails or times out raises ReadFailed when *need_fetch* (a child
-    with dependencies, whose base must hold their merges); otherwise the
-    remote ref is used as it is. No ref at all gives None."""
-    failed = await _fetch_origin(repo)
-    if failed is not None:
-        if need_fetch:
-            raise ReadFailed(f"git fetch origin failed: {failed}")
-        log.warning("git fetch origin in %s failed: %s", repo, failed)
-    default = git_ops.default_branch(repo)
-    sha = _git(
-        repo,
-        "rev-parse",
-        "--verify",
-        "--quiet",
-        f"refs/remotes/origin/{default}^{{commit}}",
-    )
-    if sha.returncode == 0 and sha.stdout.strip():
-        return sha.stdout.strip()
-    log.warning(
-        "no origin/%s in %s: the child branches from the source checkout's HEAD",
-        default,
-        repo,
-    )
     return None
 
 
@@ -454,7 +431,7 @@ class Coordinator:
     args: object
     epic_dir: Path
     epic: store.Epic
-    specs_sha: str  # the local commit that holds the ready specs
+    branch: str  # the epic's feature branch: every child's base and PR target
     children: dict[str, Child] = field(default_factory=dict)
     signal_sent: int | None = None
     budget_stop: float | None = None  # the spend that stopped launches, once reached
@@ -464,14 +441,23 @@ class Coordinator:
     merge_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock
     )  # item 35: one merge at a time
-    outside: str | None = (
-        None  # `_outside_specs`, once read: "" when nothing is outside
+    waves: set[int] = field(
+        default_factory=set
+    )  # the dependency levels this run launched a child of
+    conflict: list[str] | None = (
+        None  # the files a merge of main into the branch conflicted in
     )
 
     def __post_init__(self) -> None:
         self.project_dir = Path(self.config.project_dir)
         self.repo = git_ops.repo_root(self.project_dir) or self.project_dir
         self.settings = self.config.epic
+        # Decision 4: the children's PRs target the feature branch, so unless
+        # config.yaml says otherwise they merge on buildme's own review.
+        if not getattr(self.settings, "merge_set", True) and self.branch != (
+            feature_branch.default_name(self.repo)
+        ):
+            self.settings = dataclasses.replace(self.settings, merge="auto")
         self.slug = store.slug_repo_name(self.repo)
         for c in self.epic.children:
             self.children[c.id] = Child(c.id, list(c.depends_on))
@@ -488,12 +474,13 @@ class Coordinator:
 
     # -- argv -----------------------------------------------------------------
 
-    def new_argv(self, cid: str, base: str | None) -> list[str]:
+    def new_argv(self, cid: str) -> list[str]:
         """Item 11's command for a first launch: the child's own change, whose
-        ready specs pm-spec wrote. Each child runs its own codebase analysis
-        and research (`--skip-research` only when the parent run had it), and
-        no spec-extract (`--epic-child`, see `epic.CHILD_ENV`). The path is
-        absolute."""
+        ready specs pm-spec wrote, started from `origin/<feature branch>`
+        (`--base-ref`) with its PR against the branch (`--branch`). Each child
+        runs its own codebase analysis and research (`--skip-research` only
+        when the parent run had it), and no spec-extract (`--epic-child`, see
+        `epic.CHILD_ENV`). The path is absolute."""
         argv = [
             "python",
             "-m",
@@ -509,9 +496,11 @@ class Coordinator:
             "--pr-ready",
             "--project-dir",
             str(self.project_dir.absolute()),
+            "--base-ref",
+            feature_branch.ref(self.branch),
+            "--branch",
+            self.branch,
         ]
-        if base:
-            argv += ["--base-ref", base]
         if getattr(self.config, "skip_research", False):
             argv.append("--skip-research")
         if getattr(self.config, "accept_unknown_spend", False):
@@ -760,126 +749,46 @@ class Coordinator:
 
     # -- launching and watching -------------------------------------------------
 
-    async def _base(self, c: Child) -> str | None:
-        """The commit *c* first branches from. A child with no dependency
-        branches from the local commit that holds the ready specs
-        (`specs_sha`), so its PR carries that commit and nothing is pushed
-        before the build. A child with dependencies branches from origin's
-        default branch (`base_sha`, after a fetch that must work), which holds
-        their merges, and so the specs commit an earlier child's PR carried;
-        `_launch` checks that it holds this child's change dir as the specs
-        commit does (`_specs_missing`). None when origin has no default-branch
-        ref: the child branches from the source checkout's HEAD."""
-        if not c.depends_on:
-            outside = await self._outside_specs()
-            if outside:
-                raise Unrelated(outside)
-            return self.specs_sha
-        return await base_sha(self.repo, need_fetch=True)
-
-    def _epics_change(self, changes: str, path: str) -> bool:
-        """Whether *path* is in a change dir under *changes* whose `.change.yaml`
-        at `specs_sha` names this epic as its `parent`: one pm-spec wrote for
-        this epic and no longer lists (a dropped child)."""
-        if not path.startswith(f"{changes}/"):
-            return False
-        name = path[len(changes) + 1 :].split("/", 1)[0]
-        res = _git(
-            self.repo, "show", f"{self.specs_sha}:{changes}/{name}/{CHANGE_META_FILE}"
-        )
-        if not res.ok:
-            return False
-        try:
-            meta = yaml.safe_load(res.stdout)
-        except yaml.YAMLError:
-            return False
-        return isinstance(meta, dict) and meta.get("parent") == self.epic.name
-
-    async def _outside_specs(self) -> str | None:
-        """Why a child with no dependency cannot branch from `specs_sha`: a
-        commit between origin's default branch (after a fetch, which may
-        fail) and it touches a path outside the parent's and the children's
-        change dirs, which the child's PR would carry. None when none does,
-        or origin has no default-branch ref. Read once per run."""
-        if self.outside is None:
-            self.outside = ""
-            origin = await base_sha(self.repo, need_fetch=False)
-            if origin is not None:
-                self.outside = self._paths_outside(origin) or ""
-        return self.outside or None
-
-    def _paths_outside(self, origin: str) -> str | None:
-        changes = Path(self.config.specs_dir).resolve() / "changes"
-        try:
-            rel = changes.relative_to(self.repo.resolve()).as_posix()
-        except ValueError:
-            return f"{changes} is not inside {self.repo}"
-        dirs = [
-            f"{rel}/{self.epic.name}/",
-            *(f"{rel}/{self.epic.name}-{cid}/" for cid in self.children),
+    def _level(self, cid: str, seen: frozenset = frozenset()) -> int:
+        """*cid*'s wave: 0 with no dependency, else one more than its deepest dependency's."""
+        deps = [
+            d
+            for d in self.children[cid].depends_on
+            if d in self.children and d not in seen
         ]
-        res = _git(
-            self.repo,
-            "log",
-            "--format=",
-            "--name-only",
-            "--no-renames",
-            f"{origin}..{self.specs_sha}",
-        )
-        if not res.ok:
-            return (
-                f"cannot list the commits between origin's default branch ({origin[:12]}) and the specs "
-                f"commit {self.specs_sha[:12]}: {res.stderr.strip()[-300:]}"
-            )
-        outside = sorted(
-            {
-                p
-                for p in res.stdout.splitlines()
-                if p and not any(p.startswith(d) for d in dirs)
-            }
-        )
-        outside = [p for p in outside if not self._epics_change(rel, p)]
-        if not outside:
-            return None
-        more = f" and {len(outside) - 5} more" if len(outside) > 5 else ""
-        return (
-            f"the commits between origin's default branch ({origin[:12]}) and the specs commit "
-            f"{self.specs_sha[:12]} touch {', '.join(outside[:5])}{more}, outside the epic's change dirs; "
-            "a child that depends on nothing branches from the specs commit, so its PR would carry them. "
-            "Merge them into origin's default branch, or move them off this branch, then re-run"
-        )
+        return 1 + max((self._level(d, seen | {cid}) for d in deps), default=-1)
 
-    def _specs_missing(self, c: Child, base: str) -> str | None:
-        """Why *base* cannot be *c*'s base: its change dir there is not the one
-        the specs commit holds (missing, or another version). None when it is."""
-        rel = (
-            Path(self.config.specs_dir).resolve()
-            / "changes"
-            / f"{self.epic.name}-{c.id}"
+    async def _merge_main(self) -> str | None:
+        """Merge origin's default branch into the feature branch and push
+        (`feature_branch.merge_default`). None when done or nothing was new;
+        a conflict sets `conflict` and returns its reason; another failure
+        returns git's words."""
+        merged = await asyncio.to_thread(
+            feature_branch.merge_default, self.repo, self.branch
         )
-        try:
-            rel = rel.relative_to(self.repo.resolve()).as_posix()
-        except ValueError:
-            return f"{rel} is not inside {self.repo}"
-        trees = []
-        for rev in (base, self.specs_sha):
-            res = _git(self.repo, "rev-parse", "--verify", "--quiet", f"{rev}:{rel}")
-            trees.append(res.stdout.strip() if res.ok and res.stdout.strip() else None)
-        if trees[0] is not None and trees[0] == trees[1]:
-            return None
-        return (
-            f"origin's default branch at {base[:12]} does not hold {rel} as the commit with the ready "
-            f"specs ({self.specs_sha[:12]}) does; merge that commit into origin's default branch, then re-run"
-        )
+        if merged.outcome == "conflict":
+            self.conflict = merged.files
+            log.error(
+                "EPIC %s: merging origin's default branch conflicts in %s",
+                self.branch,
+                merged.files,
+            )
+            return f"merging origin's default branch into {self.branch} conflicts in {', '.join(merged.files)}"
+        if merged.outcome == "failed":
+            return f"cannot merge origin's default branch into {self.branch}: {merged.error}"
+        return None
 
     async def _launch(self, c: Child) -> bool:
-        """Start *c*. False when it was not started, with nothing written for
-        it but its status: a first launch whose base could not be fetched,
-        whose specs/config.yaml is not the base's (B1.S22), for a child with
-        no dependency whose base carries commits outside the epic's change
-        dirs (`_outside_specs`), or, for a child with dependencies, whose base
-        does not hold its change dir as the specs commit does. The next run
-        then fetches again."""
+        """Start *c* from `origin/<feature branch>`. Before the first launch
+        of a wave (`_level`) that is not the run's first, origin's default
+        branch is merged into the feature branch (`_merge_main`); then `git
+        fetch origin` must work. False when it was not started, with nothing
+        written for it but its status: the merge conflicted (*c* stays
+        pending and nothing more is launched) or failed, the fetch failed, the
+        branch is gone from origin, or its specs/config.yaml is not the
+        branch's (B1.S22). The next run then fetches again."""
+        if self.conflict is not None:
+            return False
         if c.status == "failed":
             c.relaunched = True
         argv = c.argv
@@ -891,46 +800,67 @@ class Coordinator:
                 c.id,
             )
             argv = None
+        base = feature_branch.ref(self.branch)
+        if argv is not None and (
+            _opt(argv, "--base-ref") != base or _opt(argv, "--branch") != self.branch
+        ):
+            # Saved before the children started from the feature branch.
+            log.info(
+                "EPIC child %s: its saved command does not start from %s; building a new one",
+                c.id,
+                base,
+            )
+            argv = None
+        level = self._level(c.id)
+        if level not in self.waves:
+            why = await self._merge_main() if self.waves else None
+            if why is not None:
+                if self.conflict is None:
+                    c.status, c.reason = "unknown", why
+                    self._save()
+                return False
+            self.waves.add(level)
+        failed = await _fetch_origin(self.repo)
+        sha = (
+            feature_branch._remote_sha(self.repo, self.branch)
+            if failed is None
+            else None
+        )
+        if sha is None:
+            c.status, c.reason = (
+                "unknown",
+                f"cannot start from {base}: "
+                + (
+                    f"git fetch origin failed: {failed}"
+                    if failed
+                    else f"origin has no {self.branch}"
+                ),
+            )
+            self._save()
+            return False
+        if intake.config_yaml_off_ref(self.project_dir, base):
+            c.status, c.relaunched = "failed", True
+            c.reason = f"in {self.project_dir}: {intake.CONFIG_NOT_ON_BASE}"
+            self._save()
+            return False
         if argv is None:
-            try:
-                base = await self._base(c)
-            except ReadFailed as e:  # no launch until a fetch answers
-                c.status, c.reason = (
-                    "unknown",
-                    f"cannot get a base that holds its dependencies' merges: {e}",
-                )
-                self._save()
-                return False
-            except Unrelated as e:
-                c.status, c.relaunched, c.reason = "failed", True, str(e)
-                self._save()
-                return False
-            missing = self._specs_missing(c, base) if c.depends_on and base else None
-            if missing:
-                c.status, c.relaunched, c.reason = "failed", True, missing
-                self._save()
-                return False
-            if base and intake.config_yaml_off_ref(self.project_dir, base):
-                c.status, c.relaunched = "failed", True
-                c.reason = f"in {self.project_dir}: {intake.CONFIG_NOT_ON_BASE}"
-                self._save()
-                return False
-            argv = self.new_argv(c.id, base)
+            argv = self.new_argv(c.id)
         # A saved command must use this invocation's explicit acceptance, not
         # a stale flag from a previous epic run.
         argv = [arg for arg in argv if arg != "--accept-unknown-spend"]
         if getattr(self.config, "accept_unknown_spend", False):
             argv.append("--accept-unknown-spend")
-        head = argv[argv.index("--base-ref") + 1] if "--base-ref" in argv[:-1] else None
-        c.attempt = records.start(self.epic_dir, "build", c.id, argv, head_sha=head)
+        c.attempt = records.start(self.epic_dir, "build", c.id, argv, head_sha=sha)
         c.status, c.argv, c.reason = "running", argv, ""
         self._save()
         c.proc = _spawn(argv, c.attempt.log)
         log.info(
-            "EPIC child %s: launched pid %d (change %s)",
+            "EPIC child %s: launched pid %d (change %s) from %s at %s",
             c.id,
             c.proc.pid,
             _opt(argv, "--change"),
+            base,
+            sha[:12],
         )
         # One start at a time: worktree creation in one repo is not run concurrently.
         while c.proc.poll() is None and not records.marker(
@@ -1733,14 +1663,14 @@ class Coordinator:
 
     def _merge_head(self, c: Child, head: str) -> bool:
         """Under `auto`: *head* is the last clean reviewed head with only the
-        merge step's merges of `origin/<default>` on top."""
+        merge step's merges of `origin/<feature branch>` on top."""
         reviewed, w = self._clean_head(c), self._merge_worktree(c)
         return (
             self.settings.merge == "auto"
             and reviewed is not None
             and w is not None
             and head != reviewed
-            and merge.merges_onto(w, head, reviewed, git_ops.default_branch(w))
+            and merge.merges_onto(w, head, reviewed, self.branch)
         )
 
     async def _after_review(self, c: Child, head: str) -> None:
@@ -1779,7 +1709,7 @@ class Coordinator:
         self._save()
 
     async def _merge(self, c: Child) -> None:
-        """Items 35-40 under `auto`: merge `origin/<default>` into *c*'s
+        """Items 35-40 under `auto`: merge `origin/<feature branch>` into *c*'s
         branch, push it and merge its PR, one merge at a time. Every git command, check and stop record runs on `<W>` (item 36).
         A stop by an exception or a signal first saves `merge_stop` (item 39)."""
         w = self._merge_worktree(c)
@@ -1805,7 +1735,8 @@ class Coordinator:
         reviewed, name = self._clean_head(c), merge.branch(w)
         if name is None:
             return self._merge_park(c, f"cannot read the branch checked out in {w}")
-        default, origin_ref = git_ops.default_branch(w), f"refs/remotes/origin/{name}"
+        # The PR's target, which `merge.py` calls `default`: the feature branch.
+        default, origin_ref = self.branch, f"refs/remotes/origin/{name}"
         _merge_point(self, c, "start")
         if not merge.merging(w) and await asyncio.to_thread(
             merge.unpushed_merge, w, reviewed, name, default
@@ -1892,8 +1823,8 @@ class Coordinator:
         *,
         check: bool = True,
     ) -> str | None:
-        """40.1-40.4: check, merge `origin/<default>`, resolve, test, commit and
-        push. "merged" or "up to date"; None when the child parked or is
+        """40.1-40.4: check, merge `origin/<default>` (the feature branch),
+        resolve, test, commit and push. "merged" or "up to date"; None when the child parked or is
         `unknown`. *check* False: item 38 aborted a merge, so restart at 40.2."""
         why = merge.ready(w, reviewed, origin_ref, default) if check else None  # 40.1
         if why:
@@ -2470,6 +2401,13 @@ class Coordinator:
             log.error("EPIC %s", refused)
             print(f"ERROR:{refused}", file=sys.stderr, flush=True)
             return 2
+        why = await self._merge_main()  # Decision 5, before anything is written
+        if self.conflict is not None:
+            return feature_branch.conflict_exit(self.branch, self.conflict)
+        if why is not None:
+            log.error("EPIC %s", why)
+            print(f"ERROR:{why}", file=sys.stderr, flush=True)
+            return 1
         run_dir = _new_run_dir(self.epic_dir)
         self._recover()
         self._read_prs([c for c in self.children.values() if c.status == "built"])
@@ -2551,6 +2489,8 @@ class Coordinator:
                 file=sys.stderr,
                 flush=True,
             )
+        if self.conflict is not None:  # nothing more was launched
+            return feature_branch.conflict_exit(self.branch, self.conflict)
         if (
             self.budget_stop is not None
         ):  # the spend at exit, the running children's included
@@ -2591,6 +2531,10 @@ class Coordinator:
         while True:
             self._reap_reviews()
             ready = self._resolve()
+            if (
+                self.conflict is not None
+            ):  # a merge of main conflicted: launch nothing more
+                ready = []
             running = sum(
                 c.status in ("running", "reviewing") for c in self.children.values()
             )
@@ -2680,18 +2624,17 @@ def _new_run_dir(epic_dir: Path) -> Path:
     return path
 
 
-async def run_epic(
-    config, args, epic_dir: Path, epic: store.Epic, specs_sha: str
-) -> int:
-    """Build an epic's children (item 11); *specs_sha* is the local commit
-    that holds their ready specs. Returns 0 when nothing is
+async def run_epic(config, args, epic_dir: Path, epic: store.Epic, branch: str) -> int:
+    """Build an epic's children (item 11) from its feature branch *branch*,
+    which holds their ready specs. Returns 0 when nothing is
     left to do, 1 when a child failed or its state is unknown, or a child's PR
     head has no finished review (`Coordinator._unreviewed`), 3 with `EPIC:MERGE_WAITING:<urls>` while a
-    child waits on an open PR or with `EPIC:BUDGET:<spent>` once `epic.max_usd` is reached,
-    128 + the signal when stopped."""
+    child waits on an open PR, with `EPIC:BUDGET:<spent>` once `epic.max_usd` is reached
+    or with `FEATURE_BRANCH:CONFLICT:<branch>:<files>` when merging origin's default
+    branch into *branch* conflicts, 128 + the signal when stopped."""
     from . import lock as epic_lock
 
     assert epic_lock.held(epic_dir), (
         "the coordinator runs under the epic lock its build holds"
     )
-    return await Coordinator(config, args, Path(epic_dir), epic, specs_sha).run()
+    return await Coordinator(config, args, Path(epic_dir), epic, branch).run()

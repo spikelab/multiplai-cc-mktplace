@@ -1,29 +1,30 @@
 """What `/buildme <parent>` does when pm-spec split the parent (Decision 11).
 
-pm-spec writes the epic: the parent's `.change.yaml` lists `children` (child
-change names, `<parent>-<id>`, in wave order) and each child's `.change.yaml`
-lists `depends_on` (child change names, `[]` for none). buildme reads only
-those records, never pm-spec's own state, and never scans for `parent`: the
-list says which children the epic has.
+pm-spec writes the epic on the parent's feature branch, which it pushes: the
+parent's `.change.yaml` lists `children` (child change names,
+`<parent>-<id>`, in wave order) and each child's `.change.yaml` lists
+`depends_on` (child change names, `[]` for none). buildme reads only those
+records, as `origin/<feature branch>` holds them (`is_epic` too), never
+pm-spec's own state, and never scans for `parent`: the list says which
+children the epic has.
 
 `run_epic_from_specs` checks, writing nothing until every check passes:
 
+- the parent is on a feature branch (`config.feature_branch`); one ready
+  only in the checkout is an old handoff, which `pm-spec resume <parent>`
+  moves onto its branch;
 - every listed child is named `<parent>-<id>`, has its change dir (or
   merged: its change dir is in specs/archive/, or the saved epic.json says
   so), and its `depends_on` names only listed children, with no cycle;
 - every listed child's specs are ready (`multiplai_core.specs.is_ready`),
-  a merged one's aside;
-- the parent's change dir and every listed child's (a merged one's aside)
-  have no uncommitted change (`readiness.uncommitted`) and are in HEAD,
-  because each child that depends on nothing branches from that commit.
+  a merged one's aside.
 
 Any failure prints `SPEC:NOT_READY:<reason>` and the pm-spec line, and exits
-2. Then it reads HEAD's sha once (the commit that holds the ready specs),
-takes the epic lock, loads or starts `epic.json` with the children as the
-change dirs list them now (the saved status of each child still listed is
-kept), and runs the coordinator. The parent's run writes nothing into the
-parent's change dir: no checkpoint, progress file or board record, which
-would leave it uncommitted for the next run.
+2. Then it takes the epic lock, loads or starts `epic.json` with the children
+as the change dirs list them now (the saved status of each child still
+listed is kept), and runs the coordinator on the feature branch: each child
+starts from it and its PR targets it. The parent's run writes nothing into
+the parent's change dir: no checkpoint, progress file or board record.
 """
 
 from __future__ import annotations
@@ -31,11 +32,12 @@ from __future__ import annotations
 import logging
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 from multiplai_core.specs import archived_change_dirs, is_ready, read_change_meta
 
-from .. import git_ops, readiness
+from .. import feature_branch, git_ops, readiness
 from . import lock as epic_lock
 from . import store
 
@@ -50,19 +52,38 @@ def _error(message: str) -> None:
     print(f"ERROR:{message}", file=sys.stderr, flush=True)
 
 
-def _children(config) -> list:
-    """The parent's `.change.yaml` `children`, or [] when it has none or cannot be read."""
+def _children(change_dir: Path) -> list:
+    """The `.change.yaml` `children` of *change_dir*, or [] when it has none or cannot be read."""
     try:
-        meta = read_change_meta(Path(config.change_dir))
+        meta = read_change_meta(Path(change_dir))
     except (OSError, UnicodeError, ValueError):
         return []
     children = meta.get("children")
     return children if isinstance(children, list) else []
 
 
+def _specs_rel(config) -> tuple[Path, str] | None:
+    """The repository and `specs/` relative to it, or None outside one."""
+    repo = git_ops.repo_root(Path(config.project_dir))
+    if repo is None:
+        return None
+    rel = feature_branch.rel_to(repo, Path(config.specs_dir))
+    return (repo, rel) if rel is not None else None
+
+
 def is_epic(config) -> bool:
-    """True when the change's `.change.yaml` lists a non-empty `children` (pm-spec split it)."""
-    return bool(_children(config))
+    """True when the change's `.change.yaml` lists a non-empty `children`
+    (pm-spec split it): on `origin/<feature branch>` when the change has one,
+    else in the checkout."""
+    where = _specs_rel(config) if config.feature_branch else None
+    if where is None:
+        return bool(_children(Path(config.change_dir)))
+    repo, rel = where
+    name = Path(config.change_dir).name
+    with feature_branch.Copy(
+        repo, config.feature_branch, f"{rel}/changes/{name}"
+    ) as copy:
+        return copy is not None and bool(_children(copy))
 
 
 def _cycle(graph: dict[str, list[str]]) -> list[str] | None:
@@ -191,20 +212,6 @@ def _read_children(
     return children, None, merged
 
 
-def _uncommitted_reason(project: Path, change_dir: Path) -> str | None:
-    """Why *change_dir* cannot be built from HEAD: uncommitted changes, or git cannot tell."""
-    try:
-        paths = readiness.uncommitted(project, change_dir)
-    except git_ops.GitLifecycleError as e:
-        return f"cannot tell whether {change_dir} is committed: {e}"
-    if paths:
-        return (
-            f"{change_dir} has uncommitted changes ({', '.join(paths)}); the children branch from the "
-            "commit that holds the specs, so commit them first"
-        )
-    return None
-
-
 async def run_epic_from_specs(config, args) -> int:
     """Build the children pm-spec split *config*'s change into, in dependency
     order, with the coordinator's review, fix and merge loops. Returns the
@@ -212,44 +219,42 @@ async def run_epic_from_specs(config, args) -> int:
     refused (`SPEC:NOT_READY`) or another process holds the epic lock, with
     nothing written."""
     name = config.change_name
-    parent_dir = Path(config.change_dir)
     project = Path(config.project_dir)
-    changes = parent_dir.parent
-
     repo = git_ops.repo_root(project) or project
-    epic_dir = store.epic_dir_for(repo, name)
-    children, refused, merged = _read_children(
-        name, _children(config), changes, _saved(epic_dir)
-    )
-    if refused:
-        return readiness.refuse_not_ready(*refused)
-    live = [c for c in children if f"{name}-{c.id}" not in merged]
-    for c in live:
-        child = f"{name}-{c.id}"
-        ready, why = is_ready(changes / child)
-        if not ready:
-            return readiness.refuse_not_ready(child, f"child {child}: {why}")
-    for change_dir, advice in (
-        (parent_dir, name),
-        *((changes / f"{name}-{c.id}", f"{name}-{c.id}") for c in live),
-    ):
-        why = _uncommitted_reason(project, change_dir)
-        if why:
-            return readiness.refuse_not_ready(advice, why)
-
-    specs_sha = git_ops.rev_parse_head(project)
-    if specs_sha is None:
+    branch = config.feature_branch
+    where = _specs_rel(config)
+    if not branch or where is None:
         return readiness.refuse_not_ready(
-            name, f"cannot read HEAD in {project}, the commit that holds the specs"
+            name,
+            f"the epic {name} is ready in {config.change_dir} but on no feature branch "
+            f"(origin has no {feature_branch.PREFIX}{name}); its children start from the branch "
+            "pm-spec pushed the specs to",
+            resume=True,
         )
-    for c in live:
-        rel = _rel(repo, changes / f"{name}-{c.id}")
-        if rel is None or _tree(repo, specs_sha, rel) is None:
+    epic_dir = store.epic_dir_for(repo, name)
+    with tempfile.TemporaryDirectory(prefix="buildme-epic-") as tmp:
+        _, rel = where
+        try:
+            for sub in ("changes", "archive"):
+                feature_branch.specs_at(repo, branch, f"{rel}/{sub}", Path(tmp))
+        except git_ops.GitLifecycleError as e:
             return readiness.refuse_not_ready(
-                f"{name}-{c.id}",
-                f"child {name}-{c.id}: its change dir is not in HEAD ({specs_sha[:12]}); "
-                "the children branch from the commit that holds the specs, so commit it first",
+                name, f"cannot read {rel} on origin/{branch}: {e}"
             )
+        changes = Path(tmp) / rel / "changes"
+        children, refused, merged = _read_children(
+            name, _children(changes / name), changes, _saved(epic_dir)
+        )
+        if refused:
+            return readiness.refuse_not_ready(*refused)
+        live = [c for c in children if f"{name}-{c.id}" not in merged]
+        for c in live:
+            child = f"{name}-{c.id}"
+            ready, why = is_ready(changes / child)
+            if not ready:
+                return readiness.refuse_not_ready(
+                    child, f"child {child} on origin/{branch}: {why}"
+                )
 
     try:
         epic_lock.hold(epic_dir, name)
@@ -271,16 +276,16 @@ async def run_epic_from_specs(config, args) -> int:
         if any(c.id == cid for c in children)
     }
     log.info(
-        "EPIC %s: %d children from the change dirs, specs at %s",
+        "EPIC %s: %d children from the change dirs on origin/%s",
         name,
         len(children),
-        specs_sha[:12],
+        branch,
     )
     # The coordinator runs under the lock this process holds now (item 6).
     from . import coordinator
 
     try:
-        return await coordinator.run_epic(config, args, epic_dir, epic, specs_sha)
+        return await coordinator.run_epic(config, args, epic_dir, epic, branch)
     except (
         Exception
     ) as e:  # the summary is written; exit 1 as any build's unexpected error
@@ -298,20 +303,3 @@ def _saved(epic_dir: Path) -> store.Epic | None:
         )
     except store.EpicFileError:
         return None
-
-
-def _rel(repo: Path, path: Path) -> str | None:
-    """*path* relative to the repository root, in POSIX form; None outside it."""
-    try:
-        return Path(path).resolve().relative_to(Path(repo).resolve()).as_posix()
-    except ValueError:
-        return None
-
-
-def _tree(repo: Path, rev: str, rel: str) -> str | None:
-    """The object id of *rel* at *rev*; None when *rev* does not hold it or git cannot tell."""
-    res = git_ops._run(
-        ["git", "rev-parse", "--verify", "--quiet", f"{rev}:{rel}"], cwd=repo
-    )
-    out = res.stdout.strip()
-    return out if res.ok and out else None

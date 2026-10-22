@@ -23,7 +23,7 @@ import pytest
 from build_pipeline.models import BlockStatus, BuildPhase
 from build_pipeline.state import BuildState
 
-from tests.spec_fixtures import ready_specs
+from tests.spec_fixtures import publish, ready_specs
 from tests.stop_resume_driver import AUDIT_USD, BLOCK_USD, BLOCKS, SPEC_USD
 from tests.test_git_ops import make_bare_origin, make_repo
 
@@ -49,6 +49,7 @@ class Sandbox:
         subprocess.run(
             ["git", "push", "-q", "origin", "main"], cwd=self.repo, check=True
         )
+        publish(self.repo, "feat")  # and its push to the feature branch
         self.ws = root / "ws"
         for name in ("home", "claude-config", "conf", "data"):
             (root / name).mkdir()
@@ -164,11 +165,13 @@ def _usd(state: BuildState) -> float:
 
 
 def _snapshot(*roots: Path) -> dict[str, bytes]:
+    """Every file under *roots*, but `.git/FETCH_HEAD`, which the `git fetch
+    origin` every build starts with rewrites."""
     return {
         str(p): p.read_bytes()
         for root in roots
         for p in sorted(root.rglob("*"))
-        if p.is_file()
+        if p.is_file() and not (p.name == "FETCH_HEAD" and p.parent.name == ".git")
     }
 
 

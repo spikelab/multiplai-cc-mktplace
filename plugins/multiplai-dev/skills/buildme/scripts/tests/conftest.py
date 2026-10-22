@@ -145,20 +145,32 @@ def pm_spec_handoff(monkeypatch, request):
     """Play pm-spec's handoff for tests of what buildme does with ready specs:
     when a build starts (or resumes) on a change pm-spec never marked (no
     `spec_status`), write any missing specs, mark them ready and commit
-    them, then run buildme's own readiness check unchanged. A change that
-    was marked and then edited is left as it is, so the check still refuses
-    it. Tests of the refusal itself use `@pytest.mark.no_handoff`."""
+    them; for a worktree build of ready specs, push that commit to
+    `origin/feat/<change>` (`spec_fixtures.publish`, which gives a repository
+    with no origin a bare one beside it). Then buildme runs unchanged. A
+    change that was marked and then edited is left as it is, so the check
+    still refuses it. Tests of the refusal itself use
+    `@pytest.mark.no_handoff`."""
     if request.node.get_closest_marker("no_handoff"):
         return
     from build_pipeline import orchestrator
+    from multiplai_core.specs import is_ready
 
-    from tests.spec_fixtures import never_marked, ready_specs
+    from tests.spec_fixtures import never_marked, publish, ready_specs
 
-    real = orchestrator._refuse_unless_ready
+    real = orchestrator._find_feature_branch
 
-    def handoff(config, state_path):
+    def handoff(config):
         if config.change_name and never_marked(config.change_dir):
             ready_specs(config.change_dir, config.project_dir)
-        return real(config, state_path)
+        if (
+            config.change_name
+            and config.git.worktree
+            and not config.base_ref
+            and not orchestrator._epic_child(config)
+            and is_ready(config.change_dir)[0]
+        ):
+            publish(config.project_dir, config.change_name, config.feature_branch)
+        return real(config)
 
-    monkeypatch.setattr(orchestrator, "_refuse_unless_ready", handoff)
+    monkeypatch.setattr(orchestrator, "_find_feature_branch", handoff)
