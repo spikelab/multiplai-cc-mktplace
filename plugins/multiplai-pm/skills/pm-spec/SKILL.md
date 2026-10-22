@@ -32,9 +32,12 @@ are not marked ready or were edited since.
    more, the answer cannot be one change), checked in code, asked once more,
    then the run fails.
    Several: each child becomes `specs/changes/<name>-<id>/` with its own plan
-   (`plan.md`) as its interview input, the run prints `SPEC:SPLIT:<dir>` and
-   one `SPEC:CHILD:<dir>` per child in dependency order, and exits 0. Specify
-   each child with `resume <name>-<id>`. `--no-epic-split` keeps one change.
+   (`plan.md`) as its interview input, and its `.change.yaml` records `parent`
+   and `depends_on` (the names of the child changes it depends on, `[]` for
+   none; a split run again on changed inputs updates it). The run prints
+   `SPEC:SPLIT:<dir>` and one `SPEC:CHILD:<dir>` per child in dependency
+   order, and exits 0. Specify each child with `resume <name>-<id>`.
+   `--no-epic-split` keeps one change.
 4. **Artifacts.** `proposal.md`, then `use-cases.md`, then
    `requirements/<capability>.md` one capability at a time, each from a call
    with no tools. With a PRD, the proposal's `## Sources` names the PRD

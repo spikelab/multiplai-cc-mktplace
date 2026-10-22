@@ -21,6 +21,17 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-22
+
+### Added
+- `pm-spec`: when it splits a change into children, each child's
+  `.change.yaml` now says which other children it depends on, as
+  `depends_on: [<child change name>, ...]` (`[]` when it depends on none).
+  When the parent's inputs change and the split runs again, a child that
+  already exists keeps its files, and its `depends_on` is updated to match
+  the new split. `/multiplai-dev:buildme` will read this list to build an
+  epic's children in order.
+
 ## [0.7.0] - 2026-10-21
 
 ### Added
