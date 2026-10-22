@@ -5,7 +5,7 @@ pm-spec has marked ready in `.change.yaml` (`multiplai_core.specs.is_ready`),
 and, for a build that branches a worktree, only from the change's feature
 branch on origin, where pm-spec pushes them. `ready_specs` writes a minimal
 valid set where one is missing, marks it ready, and commits it when the
-project is a git repo; `publish` pushes that commit to `origin/feat/<change>`.
+project is a git repo; `publish` pushes that commit to `origin/change/<change>`.
 """
 
 from __future__ import annotations
@@ -126,10 +126,10 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
 
 def publish(project_dir: Path, change: str, branch: str = "") -> str | None:
     """Play pm-spec's push: HEAD of *project_dir*'s repository goes to
-    `feat/<change>` (or *branch*) on origin, when origin lacks that branch.
+    `change/<change>` (or *branch*) on origin, when origin lacks that branch.
     A repository with no origin gets a bare one beside it,
     `<repo>.origin.git`, holding HEAD as its default branch, whose
-    pre-receive hook refuses every push but to that branch and `feat/*`: as
+    pre-receive hook refuses every push but to that branch and `change/*`: as
     a repository with no origin did, it refuses the build's own push, so a
     test that never stubbed a PR opens none. Returns the branch, or None
     when *project_dir* is in no repository with a commit."""
@@ -143,7 +143,7 @@ def publish(project_dir: Path, change: str, branch: str = "") -> str | None:
     ):
         return None
     repo = Path(top.stdout.strip())
-    branch = branch or f"feat/{change}"
+    branch = branch or f"change/{change}"
     if "origin" not in _git(repo, "remote").stdout.split():
         bare = repo.parent / f"{repo.name}.origin.git"
         on = (
@@ -161,7 +161,7 @@ def publish(project_dir: Path, change: str, branch: str = "") -> str | None:
                 "#!/bin/sh\n"
                 "while read old new ref; do\n"
                 '  case "$ref" in\n'
-                f"    refs/heads/{on}|refs/heads/feat/*) ;;\n"
+                f"    refs/heads/{on}|refs/heads/change/*) ;;\n"
                 '    *) echo "this test origin takes no push to $ref" >&2; exit 1 ;;\n'
                 "  esac\n"
                 "done\n"

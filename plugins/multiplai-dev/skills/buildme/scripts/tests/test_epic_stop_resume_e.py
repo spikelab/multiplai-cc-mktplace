@@ -451,13 +451,19 @@ def test_E_S12_a_user_edit_in_the_worktree_parks_and_is_left_alone(
     """E.S12: the project is the subdirectory `p`; after a stop before the merge
     (`start`) or before the push (`push`), the user edits a file inside the
     project or outside it. 40.1 (or 37.1) refuses on `<W>`; the child parks;
-    the worktree is as the user left it."""
+    the worktree is as the user left it (the run's `git fetch` moves only
+    the remote-tracking refs)."""
+
+    def local(state: dict) -> dict:
+        refs = state["refs"].splitlines()
+        return {**state, "refs": [x for x in refs if "\trefs/remotes/" not in x]}
+
     r = MergeRoot(tmp_path, monkeypatch, sub="p")
     _killed(r, _die_at_point(r, at))
     (r.w / where).write_text("the user's edit\n")
-    before = repo_state(r.w)
+    before = local(repo_state(r.w))
     assert r.run() == 0
-    assert repo_state(r.w) == before and _parked(r)
+    assert local(repo_state(r.w)) == before and _parked(r)
     assert where.split("/")[-1] in r.status()["reason"]
     assert r.step_pushes() == [] and len(r.calls("merge-tests")) == (
         1 if at == "push" else 0
@@ -486,7 +492,7 @@ def test_E_S17_a_second_merge_stopped_before_its_commit_passes_item_38_by_origin
 ):
     """E.S17: both runs are killed while a's PR waits for its checks (E.S8),
     the first merge pushed; main then raises the version again (E.S13), so
-    each resume merges `origin/main` a second time. The stopped run stops
+    each resume merges `origin/change/e` a second time. The stopped run stops
     there with conflicts, before the commit: HEAD is `origin/<branch>`, not
     the reviewed head. Item 38 passes through `origin_ref`, the merge is
     aborted and done again (as E.S2), and the end matches the run that never
@@ -511,8 +517,8 @@ def test_E_S17_a_second_merge_stopped_before_its_commit_passes_item_38_by_origin
     _ends_merged(stopped, clean)
     _assert_same(stopped, clean, ONE_MERGE * 2, base=ONE_MERGE * 2)
     for r in (stopped, clean):
-        assert r.origin("plugin.json", "main") == RESOLVED2["plugin.json"]
-        assert r.origin("CHANGELOG.md", "main") == RESOLVED2["CHANGELOG.md"]
+        assert r.origin("plugin.json", "change/e") == RESOLVED2["plugin.json"]
+        assert r.origin("CHANGELOG.md", "change/e") == RESOLVED2["CHANGELOG.md"]
         assert len(r.step_pushes()) == 2 and len(r.calls("merge-agent")) == 2
 
 
@@ -641,7 +647,7 @@ def test_E_S26_a_merge_park_retries_once_the_worktree_is_clean(tmp_path, monkeyp
     (r.w / "notes.txt").unlink()
     ran.clear()
     assert r.run() == 0  # retried: the same conflict parks it again
-    assert ("merge", "--no-ff", "--no-commit", "origin/main") in ran and r.merging()
+    assert ("merge", "--no-ff", "--no-commit", "origin/change/e") in ran and r.merging()
     assert _parked(r)["reason"] == reason
     assert (
         r.calls("merge-agent") == []

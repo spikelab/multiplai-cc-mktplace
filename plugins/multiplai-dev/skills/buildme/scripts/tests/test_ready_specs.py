@@ -76,10 +76,10 @@ def repo(tmp_path, monkeypatch):
 
 def _handoff(repo: Path) -> Path:
     """pm-spec's handoff: the specs ready and committed, and pushed to
-    `origin/feat/<change>`. Returns the checkout's change dir."""
+    `origin/change/<change>`. Returns the checkout's change dir."""
     change_dir = _source_change(repo)
     ready_specs(change_dir, repo)
-    assert publish(repo, CHANGE) == f"feat/{CHANGE}"
+    assert publish(repo, CHANGE) == f"change/{CHANGE}"
     return change_dir
 
 
@@ -87,12 +87,12 @@ def _revise_on_branch(repo: Path, at: Path) -> Path:
     """`pm-spec revise` in its own worktree of the feature branch: the
     requirement fixed, marked ready again, committed and pushed."""
     _git(repo, "fetch", "-q", "origin")
-    _git(repo, "worktree", "add", "-q", "--detach", str(at), f"origin/feat/{CHANGE}")
+    _git(repo, "worktree", "add", "-q", "--detach", str(at), f"origin/change/{CHANGE}")
     change_dir = at / "specs" / "changes" / CHANGE
     (change_dir / "requirements" / "fixture.md").write_text(REVISED)
     mark_ready(change_dir)
     assert commit_specs(at, change_dir, "specs: revised on the branch")
-    _git(at, "push", "-q", "origin", f"HEAD:refs/heads/feat/{CHANGE}")
+    _git(at, "push", "-q", "origin", f"HEAD:refs/heads/change/{CHANGE}")
     return change_dir
 
 
@@ -293,7 +293,7 @@ class TestStartRefusal:
         out = capsys.readouterr().out
         assert rc == 2
         assert "SPEC:NOT_READY:" in out
-        assert f"origin has no feat/{CHANGE}" in out
+        assert f"origin has no change/{CHANGE}" in out
         assert f"Run /multiplai-pm:pm-spec resume {CHANGE} first" in out
         assert not (tmp_path / "ws").exists()
         models.generate.assert_not_awaited()
@@ -303,10 +303,10 @@ class TestStartRefusal:
         self, repo, tmp_path, capsys
     ):
         """T4: run from a checkout that lacks the change dir, the build finds
-        the specs on `origin/feat/<change>` and starts from that branch (its
+        the specs on `origin/change/<change>` and starts from that branch (its
         PR's target: `test_completion_contract`)."""
         change_dir = _handoff(repo)
-        pushed = _git(repo, "rev-parse", f"origin/feat/{CHANGE}")
+        pushed = _git(repo, "rev-parse", f"origin/change/{CHANGE}")
         _git(repo, "reset", "-q", "--hard", "HEAD~1")
         assert not change_dir.exists()
         config = _config(repo)
@@ -315,7 +315,7 @@ class TestStartRefusal:
             rc = await run_orchestrator(config, _args(repo))
 
         assert rc == 0, capsys.readouterr().out
-        assert config.feature_branch == f"feat/{CHANGE}"
+        assert config.feature_branch == f"change/{CHANGE}"
         wt = _worktree(tmp_path)
         assert _git(wt, "merge-base", "--is-ancestor", pushed, "HEAD") == ""
         assert (wt / "specs" / "changes" / CHANGE / "design.md").is_file()
@@ -353,7 +353,7 @@ class TestStartRefusal:
                 _worktree(tmp_path),
                 "merge-base",
                 "--is-ancestor",
-                f"origin/feat/{CHANGE}",
+                f"origin/change/{CHANGE}",
                 "HEAD",
             )
             == ""
@@ -457,7 +457,7 @@ class TestDesignSpecIssue:
         assert "later on main" not in _git(worktree, "log", "--format=%s")
         # The resume merged origin's main into the feature branch (Decision 5).
         assert "later on main" in _git(
-            repo, "log", "--format=%s", f"origin/feat/{CHANGE}"
+            repo, "log", "--format=%s", f"origin/change/{CHANGE}"
         )
 
 
@@ -803,16 +803,16 @@ class TestTheCopyTheBuildReads:
         out = capsys.readouterr().out
         assert rc == 2, out
         assert (
-            f"SPEC:NOT_READY:the specs in origin/feat/{CHANGE} were marked ready again"
+            f"SPEC:NOT_READY:the specs in origin/change/{CHANGE} were marked ready again"
             in out
         )
         assert (
-            f"Merge origin/feat/{CHANGE} into the build's branch in {wt} "
-            f"(`git -C {wt} merge origin/feat/{CHANGE}`)" in out
+            f"Merge origin/change/{CHANGE} into the build's branch in {wt} "
+            f"(`git -C {wt} merge origin/change/{CHANGE}`)" in out
         )
         assert len(models.prompts) == asked and _tree(built) == before
 
-        _git(wt, "merge", "-q", "--no-edit", f"origin/feat/{CHANGE}")
+        _git(wt, "merge", "-q", "--no-edit", f"origin/change/{CHANGE}")
         rc = await _build(repo, models)
         out = capsys.readouterr().out
         assert rc == 0, out

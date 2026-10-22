@@ -274,7 +274,7 @@ def repo(tmp_path) -> Path:
     return make_repo(tmp_path / "proj")
 
 
-def worktree(repo: Path, branch: str = "feat/throttle") -> Path:
+def worktree(repo: Path, branch: str = "change/throttle") -> Path:
     """pm-spec's worktree of *branch* for the checkout *repo* (WORKSPACE unset)."""
     return repo.parent / ".worktrees" / ("pm-spec-" + branch.replace("/", "-"))
 
@@ -296,7 +296,7 @@ def source_dir(repo: Path, name: str = "throttle") -> Path:
 
 
 def change_dir(repo: Path, name: str = "throttle") -> Path:
-    """The change's dir where pm-spec writes it: its worktree of `feat/throttle`,
+    """The change's dir where pm-spec writes it: its worktree of `change/throttle`,
     the branch every change in these tests (a child's too) is on."""
     return worktree(repo) / "specs" / "changes" / name
 

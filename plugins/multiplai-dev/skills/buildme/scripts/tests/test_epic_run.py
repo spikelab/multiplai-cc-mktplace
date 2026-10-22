@@ -88,7 +88,7 @@ class Epic:
             )
         )
         return coordinator.Coordinator(
-            config or self.config, None, self.dir, epic, self.specs
+            config or self.config, None, self.dir, epic, "change/e"
         )
 
     def run(self, **over) -> int:
@@ -339,7 +339,8 @@ def test_a_child_alive_after_the_stop_wait_keeps_no_result(tmp_path, monkeypatch
 def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
     """Item 11, from pm-spec's split: the child's own change, no plan, mode,
     context or research path (each child does its own research and codebase
-    analysis), and a child with no dependency branches from the specs commit."""
+    analysis); every child starts from origin's feature branch and its PR
+    targets it."""
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
     assert e.run() == 3 and merge_waiting() == [
         pr_url("e-a"),
@@ -363,7 +364,9 @@ def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
         "--project-dir",
         str(e.project),
         "--base-ref",
-        e.specs,
+        "origin/change/e",
+        "--branch",
+        "change/e",
         "--skip-research",
     ]
     for flag in (
@@ -385,7 +388,7 @@ def test_a_childs_saved_command_marks_it_an_epic_child(tmp_path, monkeypatch):
     from build_pipeline.__main__ import build_parser
 
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
-    argv = e.coord().new_argv("a", None)
+    argv = e.coord().new_argv("a")
     assert (
         BuildConfig.from_cli_args(build_parser().parse_args(argv[3:])).epic_child
         is True
@@ -409,27 +412,25 @@ def test_a_parent_that_skipped_research_skips_it_in_each_child(tmp_path, monkeyp
     for a in [a for a in records.attempts(e.dir) if a.kind == "build"]:
         assert "--skip-research" in a.started["argv"]
     e.config.skip_research = False
-    assert "--skip-research" not in e.coord().new_argv("a", None)
+    assert "--skip-research" not in e.coord().new_argv("a")
 
 
-def test_a_child_with_no_dependency_branches_from_the_unpushed_specs_commit(
+def test_each_child_starts_from_the_feature_branch_as_origin_holds_it_then(
     tmp_path, monkeypatch
 ):
-    """Decision 11: origin holds neither the specs commit nor anything after
-    it, and nothing is pushed before the build; origin moves right after a's
-    first launch, and b, launched next, still branches from the specs commit.
-    a's relaunch reuses its first command (item 15)."""
+    """Every child starts from origin's change/e as it is at its launch: a
+    first, from the commit pm-spec pushed; change/e moves right after a's
+    first launch, and b, launched next, starts from where it moved to. a's
+    relaunch reuses its first command (item 15)."""
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit": 1}, {}]})
     origin = tmp_path / "o" / "r.git"
-    assert e.specs == _sha(e.project) != _sha(origin, "main")
-    assert (
-        subprocess.run(["git", "cat-file", "-e", e.specs], cwd=origin).returncode != 0
-    )
+    assert e.specs == _sha(origin, "change/e") != _sha(origin, "main")
     real, moved = coordinator._spawn, []
 
     def spawn(argv, log_path):
         proc = real(argv, log_path)
-        moved.append(moved[0] if moved else move_origin(tmp_path))
+        if not moved:
+            moved.append(_push_feature(tmp_path))
         return proc
 
     monkeypatch.setattr(coordinator, "_spawn", spawn)
@@ -443,16 +444,22 @@ def test_a_child_with_no_dependency_branches_from_the_unpushed_specs_commit(
         for a in records.attempts(e.dir)
         if a.child == "a" and a.kind == "build"
     ]
-    assert first[first.index("--base-ref") + 1] == e.specs
+    assert first[first.index("--base-ref") + 1] == "origin/change/e"
     assert again == first  # the relaunch is the same command
-    assert (
-        (tmp_path / "bases" / "a").read_text()
-        == (tmp_path / "bases" / "b").read_text()
-        == e.specs
+    assert (tmp_path / "bases" / "b").read_text() == moved[0] != e.specs
+    assert _sha(origin, "main") != moved[0]  # nothing went to main
+
+
+def _push_feature(root: Path) -> str:
+    """One more commit on origin's change/e, from another clone; its sha."""
+    other = root / "feature-clone"
+    subprocess.run(
+        ["git", "clone", "-q", "-b", "change/e", str(root / "o" / "r.git"), str(other)],
+        check=True,
     )
-    assert (
-        subprocess.run(["git", "cat-file", "-e", e.specs], cwd=origin).returncode != 0
-    )  # nothing pushed
+    _commit(other, "f.txt", "f\n", "feature moved")
+    subprocess.run(["git", "push", "-q", "origin", "change/e"], cwd=other, check=True)
+    return _sha(other)
 
 
 def test_a_subdirectory_project_builds_its_children_in_that_subdirectory(
@@ -466,14 +473,14 @@ def test_a_subdirectory_project_builds_its_children_in_that_subdirectory(
     config.project_dir = e.project / "sub"
     config.project_dir.mkdir()
     coord = e.coord(config)
-    argv = coord.new_argv("a", None)
+    argv = coord.new_argv("a")
     assert argv[argv.index("--project-dir") + 1] == str(e.project / "sub")
     assert coord.repo == e.project
     assert coord._child_project(coord.children["a"]) == e.project / "sub"
 
 
 def test_a_hung_fetch_times_out(tmp_path, monkeypatch):
-    """`git fetch` before a launch is bounded: a hung one gives origin's ref as it is."""
+    """`git fetch` before a launch is bounded: a hung one is a failed fetch."""
     use_workspace(monkeypatch, tmp_path)
     project = make_project(tmp_path)
     shim = tmp_path / "gitbin"
@@ -485,10 +492,8 @@ def test_a_hung_fetch_times_out(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f"{shim}:{os.environ['PATH']}")
     monkeypatch.setattr(coordinator, "FETCH_TIMEOUT", 1)
     began = time.monotonic()
-    assert asyncio.run(coordinator.base_sha(project, need_fetch=False)) == _sha(project)
+    assert asyncio.run(coordinator._fetch_origin(project)) == "timed out after 1s"
     assert time.monotonic() - began < 10
-    with pytest.raises(coordinator.ReadFailed, match="timed out"):
-        asyncio.run(coordinator.base_sha(project, need_fetch=True))
 
 
 def test_a_pr_is_found_through_the_worktree_list(tmp_path, monkeypatch):
@@ -629,11 +634,11 @@ def _commit(repo: Path, rel: str, text: str, msg: str) -> str:
 def test_a_config_yaml_not_on_origin_launches_no_dependant_until_pushed(
     tmp_path, monkeypatch, capsys
 ):
-    """B1.S22: a child with dependencies branches from origin's default
-    branch, so a specs/config.yaml committed but not pushed is refused before
-    its first launch, and no started record keeps the old base. Once pushed,
-    the next run fetches again and launches it on the new sha. A child with
-    no dependency branches from the local commit, which holds the file."""
+    """B1.S22: a child starts from origin's feature branch, so a
+    specs/config.yaml committed in the checkout but not pushed there is
+    refused before its first launch, and no started record keeps the old
+    base. Once pushed, the next run fetches again and launches it on the new
+    sha."""
     e = Epic(tmp_path, monkeypatch)
     assert e.run() == 3
     for cid in ("api", "ui"):
@@ -657,13 +662,13 @@ def test_a_config_yaml_not_on_origin_launches_no_dependant_until_pushed(
             "--no-rebase",
             "--no-edit",
             "origin",
-            "main",
+            "change/e",
         ],
         cwd=e.project,
         check=True,
     )
     subprocess.run(
-        ["git", "push", "-q", "origin", "HEAD:main"], cwd=e.project, check=True
+        ["git", "push", "-q", "origin", "HEAD:change/e"], cwd=e.project, check=True
     )
     assert (
         e.run() == 3
@@ -676,8 +681,8 @@ def test_a_config_yaml_not_on_origin_launches_no_dependant_until_pushed(
     ]
     assert (
         docs[0].started["argv"][docs[0].started["argv"].index("--base-ref") + 1]
-        == pushed
-        == docs[0].started["head_sha"]
+        == "origin/change/e"
+        and docs[0].started["head_sha"] == pushed
     )
 
 
@@ -693,9 +698,11 @@ def _git_shim(root: Path, on_fetch: str) -> Path:
     return d
 
 
-def test_a_failed_fetch_launches_no_dependant(tmp_path, monkeypatch):
-    """A dependant needs a base that holds its dependencies' merges: when `git
-    fetch` fails, it is `unknown` and gets no record; the next run fetches."""
+def test_a_failed_fetch_launches_no_dependant(tmp_path, monkeypatch, capsys):
+    """A run starts by merging origin's main into the feature branch, which
+    needs a fetch: when `git fetch` fails, the run exits 1 having written
+    nothing and launched nothing; the next run fetches, merges main in and
+    launches the dependant on it."""
     e = Epic(tmp_path, monkeypatch)
     assert e.run() == 3
     for cid in ("api", "ui"):
@@ -704,9 +711,10 @@ def test_a_failed_fetch_launches_no_dependant(tmp_path, monkeypatch):
     shim = _git_shim(tmp_path, "echo 'fatal: unable to access origin' >&2; exit 1")
     monkeypatch.setenv("PATH", f"{shim}:{path}")
     moved = move_origin(tmp_path)
+    capsys.readouterr()
     assert e.run() == 1
+    assert "git fetch origin failed" in capsys.readouterr().err
     assert sorted(e.launches()) == ["api", "ui"]
-    assert e.status()["docs"] == "unknown" and "git fetch origin" in e.reasons()["docs"]
     assert [a.child for a in records.attempts(e.dir) if a.child == "docs"] == []
     monkeypatch.setenv("PATH", path)
     assert (
@@ -717,8 +725,16 @@ def test_a_failed_fetch_launches_no_dependant(tmp_path, monkeypatch):
     docs = [
         a for a in records.attempts(e.dir) if a.child == "docs" and a.kind == "build"
     ]
-    assert len(docs) == 1 and docs[0].started["head_sha"] == moved
-    assert (tmp_path / "bases" / "docs").read_text() == moved
+    assert len(docs) == 1
+    head = docs[0].started["head_sha"]
+    assert (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", moved, head],
+            cwd=tmp_path / "o" / "r.git",
+        ).returncode
+        == 0
+    )
+    assert (tmp_path / "bases" / "docs").read_text() == head
 
 
 @pytest.mark.parametrize(
@@ -728,7 +744,8 @@ def test_a_signal_during_a_slow_fetch_stops_the_children_and_writes_the_summary(
     tmp_path, monkeypatch, sig
 ):
     """B1.S1: a runs while the fetch before b's launch hangs (both depend on
-    x, which merged, so both fetch). The signal is handled at once: a's group
+    x, which merged, so both fetch; the run's first two fetches find the
+    feature branch and merge main into it). The signal is handled at once: a's group
     is stopped, the fetch is killed, b gets no record (nothing new on disk),
     and the run's summary is written."""
     e = Epic(
@@ -745,8 +762,9 @@ def test_a_signal_during_a_slow_fetch_stops_the_children_and_writes_the_summary(
     marker, fetching = tmp_path / "fetched", tmp_path / "fetching"
     shim = _git_shim(
         tmp_path,
-        f"if [ -e {marker} ]; then echo $$ > {fetching}.tmp; "
-        f"mv {fetching}.tmp {fetching}; exec sleep 60; fi\ntouch {marker}",
+        f"n=$(cat {marker} 2>/dev/null || echo 0); echo $((n + 1)) > {marker}\n"
+        f"if [ $n -ge 3 ]; then echo $$ > {fetching}.tmp; "
+        f"mv {fetching}.tmp {fetching}; exec sleep 60; fi",
     )
     monkeypatch.setenv("PATH", f"{shim}:{os.environ['PATH']}")
     monkeypatch.setattr(coordinator, "STOP_WAIT", 3000.0)
@@ -918,27 +936,6 @@ def test_the_coordinator_puts_back_the_signal_handlers_it_found(tmp_path, monkey
     finally:
         for s, handler in before.items():
             signal.signal(s, handler)
-
-
-def test_no_origin_default_branch_launches_without_base_ref(tmp_path, monkeypatch):
-    """origin has no default-branch ref (`base_sha` gives None): a child with
-    dependencies gets no --base-ref, so it branches from the source
-    checkout's HEAD."""
-    use_workspace(monkeypatch, tmp_path)
-    repo = tmp_path / "solo"
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
-    _commit(repo, "README.md", "x\n", "init")
-    subprocess.run(
-        ["git", "init", "-q", "--bare", str(tmp_path / "empty.git")], check=True
-    )
-    subprocess.run(
-        ["git", "remote", "add", "origin", str(tmp_path / "empty.git")],
-        cwd=repo,
-        check=True,
-    )
-    assert asyncio.run(coordinator.base_sha(repo, need_fetch=True)) is None
-    e = Epic(tmp_path / "e", monkeypatch, answer=INDEPENDENT)
-    assert "--base-ref" not in e.coord().new_argv("a", None)
 
 
 # --- waiting for a dependency's merge ----------------------------------------------
@@ -1238,7 +1235,7 @@ def test_epic_acceptance_reaches_new_and_saved_child_commands(
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
     e.config.accept_unknown_spend = accept
     coord = e.coord()
-    argv = coord.new_argv("a", None)
+    argv = coord.new_argv("a")
     assert ("--accept-unknown-spend" in argv) is accept
     c = coord.children["a"]
     # Historical argv may carry the previous invocation's flag; current intent wins.

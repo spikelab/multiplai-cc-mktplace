@@ -146,26 +146,34 @@ def pm_spec_handoff(monkeypatch, request):
     when a build starts (or resumes) on a change pm-spec never marked (no
     `spec_status`), write any missing specs, mark them ready and commit
     them; for a worktree build of ready specs, push that commit to
-    `origin/feat/<change>` (`spec_fixtures.publish`, which gives a repository
+    `origin/change/<change>` (`spec_fixtures.publish`, which gives a repository
     with no origin a bare one beside it). Then buildme runs unchanged. A
     change that was marked and then edited is left as it is, so the check
-    still refuses it. Tests of the refusal itself use
+    still refuses it, and so is an epic's parent (its `.change.yaml` lists
+    `children`), which pm-spec never marks. Tests of the refusal itself use
     `@pytest.mark.no_handoff`."""
     if request.node.get_closest_marker("no_handoff"):
         return
     from build_pipeline import orchestrator
-    from multiplai_core.specs import is_ready
+    from multiplai_core.specs import is_ready, read_change_meta
 
     from tests.spec_fixtures import never_marked, publish, ready_specs
 
     real = orchestrator._find_feature_branch
 
+    def parent(change_dir) -> bool:
+        try:
+            return bool(read_change_meta(change_dir).get("children"))
+        except (OSError, UnicodeError, ValueError):
+            return False
+
     def handoff(config):
-        if config.change_name and never_marked(config.change_dir):
+        if not config.change_name or parent(config.change_dir):
+            return real(config)
+        if never_marked(config.change_dir):
             ready_specs(config.change_dir, config.project_dir)
         if (
-            config.change_name
-            and config.git.worktree
+            config.git.worktree
             and not config.base_ref
             and not orchestrator._epic_child(config)
             and is_ready(config.change_dir)[0]

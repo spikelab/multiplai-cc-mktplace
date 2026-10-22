@@ -138,7 +138,7 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
     prd = tmp_path / "prd.md"
     prd.write_text(PRD)
 
-    # pm-spec: the specs, checked, marked ready, committed on feat/<change>
+    # pm-spec: the specs, checked, marked ready, committed on change/<change>
     # in its own worktree, and pushed.
     proc = _pm_spec(
         tmp_path,
@@ -155,8 +155,8 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
         "--no-epic-split",
     )
     assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
-    branch = f"feat/{CHANGE}"
-    spec_tree = tmp_path / ".worktrees" / f"pm-spec-feat-{CHANGE}"
+    branch = f"change/{CHANGE}"
+    spec_tree = tmp_path / ".worktrees" / f"pm-spec-change-{CHANGE}"
     change_dir = spec_tree / "specs" / "changes" / CHANGE
     assert f"SPEC:READY:{change_dir}:" in proc.stdout
     assert f"SPEC:BRANCH:{branch}" in proc.stdout
@@ -167,7 +167,7 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
         spec_tree, "rev-parse", "HEAD"
     )
 
-    # buildme: finds the specs on origin's feat/<change>, plans from them in
+    # buildme: finds the specs on origin's change/<change>, plans from them in
     # its worktree and starts TDD.
     models = Models()
     rc, reached = await _build_to_tdd(repo, models)
@@ -212,7 +212,7 @@ async def test_an_old_handoff_is_refused_until_pm_spec_resume_moves_it(
 ):
     """T8: specs a pm-spec from before the feature branch handed off (ready
     and committed on the user's main, no feature branch) are refused with
-    `pm-spec resume <name>`; that resume moves them onto `feat/<name>` and
+    `pm-spec resume <name>`; that resume moves them onto `change/<name>` and
     pushes it, and the build then runs."""
     repo = _setup(tmp_path, monkeypatch)
     old = repo / "specs" / "changes" / CHANGE
@@ -229,7 +229,7 @@ async def test_an_old_handoff_is_refused_until_pm_spec_resume_moves_it(
         tmp_path, repo, "resume", CHANGE, "--project-dir", str(repo), "--trust-repo"
     )
     assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
-    assert f"SPEC:BRANCH:feat/{CHANGE}" in proc.stdout
+    assert f"SPEC:BRANCH:change/{CHANGE}" in proc.stdout
     assert old.is_dir(), "the original is never deleted"
 
     rc, reached = await _build_to_tdd(repo, Models())

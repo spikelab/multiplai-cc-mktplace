@@ -187,7 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--branch",
         default="",
         help="The change's feature branch on origin, where pm-spec pushed its specs "
-        "(default: feat/<change> when origin has it, else the branch its "
+        "(default: change/<change> when origin has it, else the branch its "
         ".change.yaml records); the build starts from it and its PR targets it",
     )
     build.add_argument(

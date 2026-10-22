@@ -21,6 +21,37 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-22
+
+### Changed
+- pm-spec now puts a change's specs on a branch of their own and pushes it.
+  The branch is `change/<name>`, since a change can be a fix as well as a
+  feature; `--branch <name>` (on every command) names another, for example
+  `--branch fix/login-timeout`. pm-spec creates the branch from origin's
+  default branch when origin does not have it, writes in its own worktree
+  under `$WORKSPACE/.worktrees/` (`pm-spec-<branch>`), commits there and runs
+  `git push -u origin <branch>`, so your checkout and its branch are left as
+  they were. It opens no pull request and talks to no ticket system. After
+  `SPEC:READY` it prints `SPEC:BRANCH:<branch>`. An epic's children go on the
+  parent's branch.
+- A repository with no `origin` remote is refused: the specs reach buildme
+  through the branch on origin.
+- A second run reuses the worktree and fast-forwards it to origin's branch;
+  one that has diverged from origin is refused, naming both commits.
+- A push that fails keeps the commit, exits `1` and says so; `pm-spec resume
+  <name>` then retries only the push.
+- `pm-spec revise <name> --project-dir <build worktree>`, the line buildme
+  prints, commits the revision on the build's branch and pushes nothing: it
+  reaches the feature branch through that build's pull request.
+
+### Migration
+- Specs a pm-spec before 0.8.0 handed off (ready and committed on your
+  branch, with no feature branch) are refused by buildme with
+  `Run /multiplai-pm:pm-spec resume <name> first`. That resume copies the
+  change dir (and an epic's children) onto `change/<name>`, commits it as
+  `specs(<name>): moved to change/<name>` and pushes it; your copy stays
+  where it is, to delete when you choose.
+
 ## [0.7.2] - 2026-10-22
 
 ### Fixed

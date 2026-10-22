@@ -10,7 +10,7 @@
     python -m pm_spec_pipeline revise <change> [--project-dir DIR] [--branch NAME] [--from-respec]
         [--trust-repo] [--max-usd USD]
 
-The specs are written on the change's feature branch (`feat/<change>`, or
+The specs are written on the change's feature branch (`change/<change>`, or
 `--branch`), in pm-spec's own worktree of it, and pushed to origin
 (`branch.py`).
 

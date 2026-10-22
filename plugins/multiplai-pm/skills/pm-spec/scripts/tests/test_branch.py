@@ -1,5 +1,5 @@
 """The change's feature branch: pm-spec writes the specs in its own worktree of
-`feat/<change>` and pushes it (`pm_spec_pipeline.branch`). Each test runs
+`change/<change>` and pushes it (`pm_spec_pipeline.branch`). Each test runs
 against a real bare `origin`; the user's checkout is left as it was."""
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def on_origin(repo: Path, rev: str, path: str) -> str:
     return git(origin(repo), "show", f"{rev}:{path}")
 
 
-def clone(repo: Path, at: Path, branch: str = "feat/throttle") -> Path:
+def clone(repo: Path, at: Path, branch: str = "change/throttle") -> Path:
     """Another person's clone of origin, on *branch*."""
     git(repo.parent, "clone", "-q", "-b", branch, str(origin(repo)), str(at))
     return at
@@ -53,52 +53,52 @@ def test_new_puts_the_specs_on_feat_change_from_origins_main_and_pushes_it(
     out = capsys.readouterr().out
     wt = worktree(repo)
     cdir = change_dir(repo)
-    # Written only in pm-spec's worktree, on feat/throttle cut from origin/main.
+    # Written only in pm-spec's worktree, on change/throttle cut from origin/main.
     assert tree(repo) == before
     assert git(repo, "rev-parse", "HEAD") == head
     assert git(repo, "symbolic-ref", "--short", "HEAD") == "main"
     assert git(repo, "status", "--porcelain") == ""
-    assert git(wt, "symbolic-ref", "--short", "HEAD") == "feat/throttle"
+    assert git(wt, "symbolic-ref", "--short", "HEAD") == "change/throttle"
     assert git(wt, "merge-base", "--is-ancestor", head, "HEAD") == ""
-    assert meta(cdir)["branch"] == "feat/throttle"
+    assert meta(cdir)["branch"] == "change/throttle"
     assert is_ready(cdir) == (True, "")
-    # Pushed: origin's feat/throttle is the worktree's HEAD and holds the ready record.
-    assert git(origin(repo), "rev-parse", "feat/throttle") == git(
+    # Pushed: origin's change/throttle is the worktree's HEAD and holds the ready record.
+    assert git(origin(repo), "rev-parse", "change/throttle") == git(
         wt, "rev-parse", "HEAD"
     )
     pushed = yaml.safe_load(
-        on_origin(repo, "feat/throttle", "specs/changes/throttle/.change.yaml")
+        on_origin(repo, "change/throttle", "specs/changes/throttle/.change.yaml")
     )
-    assert pushed["spec_status"] == "ready" and pushed["branch"] == "feat/throttle"
+    assert pushed["spec_status"] == "ready" and pushed["branch"] == "change/throttle"
     assert git(origin(repo), "rev-parse", "main") == head
     assert state(cdir)["handoff"]["pushed"] is True
     lines = out.splitlines()
     ready = lines.index(ready_line(out))
-    assert lines[ready + 1] == "SPEC:BRANCH:feat/throttle"
+    assert lines[ready + 1] == "SPEC:BRANCH:change/throttle"
 
 
 def test_branch_names_the_feature_branch(repo, model, capsys):
-    assert run(repo, "new", "throttle", "--auto", "--branch", "feat/limits") == 0
-    assert "SPEC:BRANCH:feat/limits" in capsys.readouterr().out
-    cdir = worktree(repo, "feat/limits") / "specs" / "changes" / "throttle"
-    assert meta(cdir)["branch"] == "feat/limits"
-    assert git(origin(repo), "rev-parse", "feat/limits") == git(
-        worktree(repo, "feat/limits"), "rev-parse", "HEAD"
+    assert run(repo, "new", "throttle", "--auto", "--branch", "fix/login-timeout") == 0
+    assert "SPEC:BRANCH:fix/login-timeout" in capsys.readouterr().out
+    cdir = worktree(repo, "fix/login-timeout") / "specs" / "changes" / "throttle"
+    assert meta(cdir)["branch"] == "fix/login-timeout"
+    assert git(origin(repo), "rev-parse", "fix/login-timeout") == git(
+        worktree(repo, "fix/login-timeout"), "rev-parse", "HEAD"
     )
     assert not worktree(repo).exists()
 
 
 def test_a_branch_origin_has_already_is_started_from_origin(repo, model, tmp_path):
     other = clone(repo, tmp_path / "other", "main")
-    git(other, "checkout", "-q", "-b", "feat/throttle")
+    git(other, "checkout", "-q", "-b", "change/throttle")
     write(other / "notes.md", "on the branch already\n")
     git(other, "add", "-A")
     git(other, "commit", "-q", "-m", "notes")
-    git(other, "push", "-q", "origin", "feat/throttle")
+    git(other, "push", "-q", "origin", "change/throttle")
     assert run(repo, "new", "throttle", "--auto") == 0
     wt = worktree(repo)
     assert (wt / "notes.md").read_text() == "on the branch already\n"
-    assert git(origin(repo), "rev-parse", "feat/throttle") == git(
+    assert git(origin(repo), "rev-parse", "change/throttle") == git(
         wt, "rev-parse", "HEAD"
     )
 
@@ -111,7 +111,7 @@ def test_a_second_run_reuses_the_worktree_and_fast_forwards_it(repo, model, tmp_
     write(other / "notes.md", "pushed by someone else\n")
     git(other, "add", "-A")
     git(other, "commit", "-q", "-m", "notes")
-    git(other, "push", "-q", "origin", "feat/throttle")
+    git(other, "push", "-q", "origin", "change/throttle")
     theirs = git(other, "rev-parse", "HEAD")
     calls = len(model.calls)
     assert run(repo, "resume", "throttle") == 0
@@ -119,7 +119,7 @@ def test_a_second_run_reuses_the_worktree_and_fast_forwards_it(repo, model, tmp_
     assert git(wt, "rev-parse", "HEAD") == theirs
     assert (wt / "notes.md").is_file()
     assert sorted(p.name for p in (repo.parent / ".worktrees").iterdir()) == [
-        "pm-spec-feat-throttle"
+        "pm-spec-change-throttle"
     ]
 
 
@@ -137,7 +137,7 @@ def test_a_worktree_diverged_from_origin_is_refused_naming_both_shas(
     write(other / "theirs.md", "remote\n")
     git(other, "add", "-A")
     git(other, "commit", "-q", "-m", "theirs")
-    git(other, "push", "-q", "origin", "feat/throttle")
+    git(other, "push", "-q", "origin", "change/throttle")
     theirs = git(other, "rev-parse", "HEAD")
     capsys.readouterr()
     calls = len(model.calls)
@@ -158,12 +158,12 @@ def test_a_failed_push_keeps_the_commit_and_resume_retries_only_the_push(
     assert run(repo, "new", "throttle", "--auto") == 1
     out = capsys.readouterr().out
     cdir, wt = change_dir(repo), worktree(repo)
-    assert "git push origin feat/throttle` failed" in out and "SPEC:READY" not in out
+    assert "git push origin change/throttle` failed" in out and "SPEC:READY" not in out
     assert is_ready(cdir) == (True, "")
     handoff = state(cdir)["handoff"]
     assert handoff["committed"] is True and handoff["pushed"] is False
     assert git(wt, "rev-parse", "HEAD") == handoff["commit"]
-    assert git(origin(repo), "branch", "--list", "feat/throttle") == ""
+    assert git(origin(repo), "branch", "--list", "change/throttle") == ""
 
     hook.unlink()
     calls = len(model.calls)
@@ -171,8 +171,8 @@ def test_a_failed_push_keeps_the_commit_and_resume_retries_only_the_push(
     out = capsys.readouterr().out
     assert len(model.calls) == calls
     assert git(wt, "rev-parse", "HEAD") == handoff["commit"]  # no second commit
-    assert git(origin(repo), "rev-parse", "feat/throttle") == handoff["commit"]
-    assert ready_line(out) and "SPEC:BRANCH:feat/throttle" in out
+    assert git(origin(repo), "rev-parse", "change/throttle") == handoff["commit"]
+    assert ready_line(out) and "SPEC:BRANCH:change/throttle" in out
     assert state(cdir)["handoff"]["pushed"] is True
 
 
@@ -209,8 +209,8 @@ def test_a_change_handed_off_before_branches_is_moved_onto_its_branch(
     git(repo, "add", "specs")
     git(repo, "commit", "-q", "-m", "specs(throttle): ready for build")
     git(repo, "worktree", "remove", "--force", str(wt))
-    git(repo, "branch", "-D", "feat/throttle")
-    git(repo, "push", "-q", "origin", "--delete", "feat/throttle")
+    git(repo, "branch", "-D", "change/throttle")
+    git(repo, "push", "-q", "origin", "--delete", "change/throttle")
     assert is_ready(source_dir(repo)) == (True, "")
     before = tree(repo)
     capsys.readouterr()
@@ -221,16 +221,16 @@ def test_a_change_handed_off_before_branches_is_moved_onto_its_branch(
     out = capsys.readouterr().out
     assert len(model.calls) == calls
     assert tree(repo) == before  # the original is never deleted
-    assert meta(change_dir(repo))["branch"] == "feat/throttle"
+    assert meta(change_dir(repo))["branch"] == "change/throttle"
     assert is_ready(change_dir(repo)) == (True, "")
     assert (
-        git(wt, "log", "-1", "--format=%s") == "specs(throttle): moved to feat/throttle"
+        git(wt, "log", "-1", "--format=%s") == "specs(throttle): moved to change/throttle"
     )
-    assert git(origin(repo), "rev-parse", "feat/throttle") == git(
+    assert git(origin(repo), "rev-parse", "change/throttle") == git(
         wt, "rev-parse", "HEAD"
     )
     assert f"SPEC:READY:{change_dir(repo)}:" in out
-    assert "SPEC:BRANCH:feat/throttle" in out
+    assert "SPEC:BRANCH:change/throttle" in out
 
 
 def test_revise_in_a_builds_worktree_commits_there_and_pushes_nothing(
@@ -240,7 +240,7 @@ def test_revise_in_a_builds_worktree_commits_there_and_pushes_nothing(
     committed on the build's branch and reaches the feature branch through
     that build's pull request."""
     assert run(repo, "new", "throttle", "--auto") == 0
-    pushed = git(origin(repo), "rev-parse", "feat/throttle")
+    pushed = git(origin(repo), "rev-parse", "change/throttle")
     build = repo.parent / ".worktrees" / "buildme-throttle"
     git(
         repo,
@@ -250,7 +250,7 @@ def test_revise_in_a_builds_worktree_commits_there_and_pushes_nothing(
         "-b",
         "buildme/throttle",
         str(build),
-        "origin/feat/throttle",
+        "origin/change/throttle",
     )
     cdir = build / "specs" / "changes" / "throttle"
     write(cdir / "spec-issues.md", ISSUES)
@@ -262,9 +262,9 @@ def test_revise_in_a_builds_worktree_commits_there_and_pushes_nothing(
 
     out = capsys.readouterr().out
     assert f"SPEC:READY:{cdir}:" in out
-    assert "reaches feat/throttle through that branch's pull request" in out
+    assert "reaches change/throttle through that branch's pull request" in out
     assert git(build, "symbolic-ref", "--short", "HEAD") == "buildme/throttle"
     assert git(build, "log", "-1", "--format=%s").startswith("specs(throttle)")
     assert git(build, "status", "--porcelain", "--", "specs") == ""
-    assert git(origin(repo), "rev-parse", "feat/throttle") == pushed
+    assert git(origin(repo), "rev-parse", "change/throttle") == pushed
     assert git(origin(repo), "branch", "--list", "buildme/throttle") == ""

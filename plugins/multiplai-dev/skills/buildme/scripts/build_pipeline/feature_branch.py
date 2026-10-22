@@ -1,11 +1,11 @@
 """The change's feature branch: where pm-spec pushed its specs, what every build
 of the change starts from, and what its pull requests target.
 
-pm-spec pushes a change's ready specs to `feat/<change>` on origin (or the
+pm-spec pushes a change's ready specs to `change/<change>` on origin (or the
 branch its `--branch` named, which each `.change.yaml` records as `branch`).
 buildme builds from that branch:
 
-- `resolve` names the branch: `build --branch`, else `feat/<change>` when
+- `resolve` names the branch: `build --branch`, else `change/<change>` when
   origin has it (after `git fetch origin`), else the `branch` the change's
   `.change.yaml` in the checkout records. None when none applies: specs
   handed off before pm-spec pushed, or none at all.
@@ -33,7 +33,7 @@ from . import git_ops, readiness
 
 log = logging.getLogger(__name__)
 
-PREFIX = "feat/"
+PREFIX = "change/"
 WORKTREE_PREFIX = "buildme-feature-"
 MARKER_CONFLICT = "FEATURE_BRANCH:CONFLICT"
 EXIT_CONFLICT = 3

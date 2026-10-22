@@ -101,7 +101,7 @@ def git(cwd: Path, *a: str) -> str:
 
 
 def push_files(
-    root: Path, files: dict[str, str], message: str, branch: str = "feat/e"
+    root: Path, files: dict[str, str], message: str, branch: str = "change/e"
 ) -> str:
     """Commit *files* onto origin's *branch* from a scratch clone; the new sha."""
     clone = root / "scratch"
@@ -147,7 +147,7 @@ class FakeAgent:
 class MergeRoot:
     """Main holds BASE; an approved chain (b waits on a); a's build commits
     *child_files*; test command `fake-tests` (answering *tests*) unless
-    *command* is None. *main* is pushed onto origin's feat/e, the PR's
+    *command* is None. *main* is pushed onto origin's change/e, the PR's
     base, at the `start` seam (the feature branch moving: a sibling merged
     into it, or main merged in). *sub*: the project's
     subdirectory, holding every path above; *outside* is pushed with *main*
@@ -231,7 +231,7 @@ class MergeRoot:
 
     @property
     def moved(self) -> str | None:
-        """The commit `point` pushed onto origin's feat/e; a file, so a run in a forked child counts."""
+        """The commit `point` pushed onto origin's change/e; a file, so a run in a forked child counts."""
         flag = self.root / "moved"
         return flag.read_text() if flag.exists() else None
 
@@ -322,7 +322,7 @@ def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(
     head = git(r.w, "rev-parse", "HEAD").strip()
     assert git(r.w, "rev-parse", "HEAD^2").strip() == r.moved
     assert merge.merges_onto(
-        r.w, head, r.tries("review")[-1].started["head_sha"], "feat/e"
+        r.w, head, r.tries("review")[-1].started["head_sha"], "change/e"
     )
     assert r.status()["status"] == "built" and r.status()["merge_stop"] is None
     r.set_checks([PASSED])
@@ -356,7 +356,7 @@ def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(
             rel,
         )
         assert not merge.merges_onto(
-            r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "feat/e"
+            r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "change/e"
         ), rel
         git(r.w, "reset", "-q", "--hard", head)
     (r.w / "uv.lock").write_text(
@@ -374,7 +374,7 @@ def test_version_and_changelog_conflicts_are_resolved_tested_and_pushed(
         "uv.lock",
     )
     assert not merge.merges_onto(
-        r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "feat/e"
+        r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "change/e"
     )
 
 
@@ -404,7 +404,7 @@ def test_a_clean_merge_is_tested_and_pushed_and_not_reviewed_again(
     head = git(r.w, "rev-parse", "HEAD").strip()
     assert git(r.w, "rev-parse", "HEAD^2").strip() == r.moved
     assert merge.merges_onto(
-        r.w, head, r.tries("review")[-1].started["head_sha"], "feat/e"
+        r.w, head, r.tries("review")[-1].started["head_sha"], "change/e"
     )
     assert r.status()["status"] == "built" and r.status()["merge_stop"] is None
     r.set_checks([PASSED])
@@ -436,7 +436,7 @@ def test_a_clean_merge_is_tested_and_pushed_and_not_reviewed_again(
             rel,
         )
         assert not merge.merges_onto(
-            r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "feat/e"
+            r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "change/e"
         ), rel
         git(r.w, "reset", "-q", "--hard", head)
 
@@ -469,7 +469,7 @@ def test_a_source_file_conflict_parks_listing_it_and_stays_parked(
     st = r.status()
     assert st["status"] == "parked" and st["merge_park"] == st["reason"]
     assert st["reason"].startswith(
-        "merging origin/feat/e conflicts in app.py, which the merge step may not resolve; "
+        "merging origin/change/e conflicts in app.py, which the merge step may not resolve; "
         f"git -C {r.w} merge --abort, then re-run"
     )
     assert r.calls("merge-agent") == [] and r.step_pushes() == [] and r.merging()
@@ -611,13 +611,13 @@ def test_a_merge_that_fails_without_starting_parks_and_leaves_nothing(
         "merge",
         "--no-ff",
         "--no-commit",
-        "origin/feat/e",
+        "origin/change/e",
         stderr="fatal: refusing to merge unrelated histories\n",
     )
     assert r.run() == 0
     assert (
         _parked_reason(r)
-        == "git merge origin/feat/e failed: fatal: refusing to merge unrelated histories"
+        == "git merge origin/change/e failed: fatal: refusing to merge unrelated histories"
     )
     assert not r.merging() and git(r.w, "status", "--porcelain") == ""
     assert r.tries("merge-tests") == [] and r.step_pushes() == []
@@ -805,7 +805,7 @@ def test_a_version_both_sides_raised_alike_is_raised_past_main_and_pushed(
     )
     reviewed = r.tries("review")[-1].started["head_sha"]
     assert merge.merges_onto(
-        r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "feat/e"
+        r.w, git(r.w, "rev-parse", "HEAD").strip(), reviewed, "change/e"
     )
 
 
@@ -911,7 +911,7 @@ def test_over_budget_a_merge_needing_no_agent_still_runs(tmp_path, monkeypatch, 
     else:
         assert r.run() == 0 and r.merging()
         assert r.status()["reason"].startswith(
-            "merging origin/feat/e conflicts in app.py, which the merge step may "
+            "merging origin/change/e conflicts in app.py, which the merge step may "
             "not resolve"
         )
     assert r.calls("merge-agent") == []
@@ -1034,9 +1034,11 @@ def test_40_1_parks_a_worktree_behind_the_reviewed_head_naming_what_to_run(
     tmp_path, monkeypatch
 ):
     """40.1 (E.S25): the review passed at a head pushed from another clone,
-    which <W> lacks; its HEAD, older, is on `origin/<branch>`. Parks, nothing
-    merged, with what to run: fetch, then fast-forward; each re-run before
-    that parks again, and the one after merges onto the reviewed head."""
+    which <W> lacks; its HEAD, older, is on `origin/<branch>`. The run
+    fetches first (to merge main into the feature branch), so <W>'s repo has
+    the head: it parks, nothing merged, with the fast-forward to run; a
+    re-run before that parks again, and the one after merges onto the
+    reviewed head."""
     r = MergeRoot(tmp_path, monkeypatch, merge_mode="manual")
     assert r.run() == 3
     prs = json.loads((r.root / "prs.json").read_text())
@@ -1045,13 +1047,12 @@ def test_40_1_parks_a_worktree_behind_the_reviewed_head_naming_what_to_run(
     )
     (r.root / "prs.json").write_text(json.dumps(prs))
     r.config.epic = EpicSettings(max_parallel=2, merge="auto")
-    assert r.run() == 0
-    assert r.status()["reason"].endswith(
-        f"which {r.w} has not fetched; git -C {r.w} fetch origin, then re-run"
-    )
-    assert not r.merging() and r.calls("merge-tests") == [] and r.step_pushes() == []
-    git(r.w, "fetch", "-q", "origin")
-    assert r.run() == 0 and r.status()["merge_park"]
+    for _ in range(2):
+        assert r.run() == 0 and r.status()["merge_park"]
+        assert r.status()["reason"].endswith(
+            f"is behind the reviewed head {new[:12]}, pushed from elsewhere; "
+            f"git -C {r.w} merge --ff-only {new}, then re-run"
+        )
     assert r.status()["reason"].endswith(
         f"is behind the reviewed head {new[:12]}, pushed from elsewhere; "
         f"git -C {r.w} merge --ff-only {new}, then re-run"
@@ -2723,8 +2724,8 @@ def test_two_children_merge_in_turn_resolving_their_version_conflict(
         ["CHANGELOG.md", "plugin.json"]
     ]
     assert {r.status(cid)["status"] for cid in "ab"} == {"merged"}
-    assert r.origin("plugin.json", "feat/e") == plugin("0.3.0")
-    assert r.origin("CHANGELOG.md", "feat/e") == changelog(
+    assert r.origin("plugin.json", "change/e") == plugin("0.3.0")
+    assert r.origin("CHANGELOG.md", "change/e") == changelog(
         ("0.3.0", f"Child {second}."), ("0.2.0", f"Child {first}."), ("0.1.0", "First.")
     )
     assert len(r.calls("merge-tests")) == 1 and len(r.step_pushes()) == 1
@@ -2965,7 +2966,7 @@ def test_a_commit_pushed_to_the_pr_during_the_checks_is_never_merged(
             r.run() == 0 and r.status()["status"] == "parked" and r.fakes.merges() == []
         )
         assert (
-            f"is not the reviewed head {foreign.read_text().strip()[:12]}"
+            f"is behind the reviewed head {foreign.read_text().strip()[:12]}"
             in r.status()["reason"]
         )
         assert len(r.tries("review")) == 2
@@ -2977,7 +2978,7 @@ def test_a_commit_pushed_to_the_pr_during_the_checks_is_never_merged(
         [call] = r.fakes.merges()
         assert call["argv"][-1] == head
     assert (
-        git(r.root / "o" / "r.git", "ls-tree", "--name-only", "feat/e")
+        git(r.root / "o" / "r.git", "ls-tree", "--name-only", "change/e")
         .split()
         .count("evil.txt")
         == 0
@@ -3097,8 +3098,8 @@ def test_behind_starts_again_at_40_1_and_merges_the_new_commit(tmp_path, monkeyp
         and len(r.step_pushes()) == 2
     )
     assert (
-        r.origin("y.txt", "feat/e") == "y\n"
-        and r.origin("plugin.json", "feat/e") == RESOLVED["plugin.json"]
+        r.origin("y.txt", "change/e") == "y\n"
+        and r.origin("plugin.json", "change/e") == RESOLVED["plugin.json"]
     )
 
 

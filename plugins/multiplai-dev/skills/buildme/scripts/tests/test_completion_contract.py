@@ -176,7 +176,7 @@ def test_a_build_on_a_feature_branch_opens_its_pr_against_it(
     """T4: the PR of a build of a change on a feature branch targets it."""
     config, state, _, push = accepted_build
     config.git.pr = "draft"
-    config.feature_branch = "feat/contract"
+    config.feature_branch = "change/contract"
     state.verification = final_verification(
         config.test_command,
         config.project_dir,
@@ -194,7 +194,7 @@ def test_a_build_on_a_feature_branch_opens_its_pr_against_it(
         config, state, ProgressWriter(config.progress_file_path())
     )
     push.assert_called_once()
-    assert opened and opened[0][opened[0].index("--base") + 1] == "feat/contract"
+    assert opened and opened[0][opened[0].index("--base") + 1] == "change/contract"
 
 
 def test_push_refuses_stale_verification(accepted_build):

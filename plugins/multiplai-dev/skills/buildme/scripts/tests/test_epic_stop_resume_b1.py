@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
 import time
 from pathlib import Path
 
@@ -388,10 +389,18 @@ def test_B1_S13_user_edit_in_a_stopped_childs_worktree_is_left_alone(
         if a.child == "a" and a.kind == "build"
     ]
     assert len(argvs) == 2 and argvs[0] == argvs[1]
-    assert (
-        moved not in argvs[1]
-        and (stopped.root / "bases" / "b").read_text() == stopped.specs
-    )
+    # b starts from the feature branch once the run merged origin's moved
+    # main into it: the specs commit and the move are both in its base.
+    base = (stopped.root / "bases" / "b").read_text()
+    assert moved not in argvs[1]
+    for held in (moved, stopped.specs):
+        assert (
+            subprocess.run(
+                ["git", "merge-base", "--is-ancestor", held, base],
+                cwd=stopped.root / "o" / "r.git",
+            ).returncode
+            == 0
+        )
     _assert_same(
         stopped,
         clean,

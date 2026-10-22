@@ -15,7 +15,7 @@ them ("How the row tests compare").
   read-only calls.
 - An epic is pm-spec's records (`approve`): each child's ready specs and
   `depends_on`, the parent's `children`, committed and pushed to the epic's
-  feature branch, origin's `feat/<parent>`.
+  feature branch, origin's `change/<parent>`.
 - A kill is a forked child exiting 137 at a named seam (`run_killed`), as
   `row_helpers.run_killed_at` does for git calls.
 """
@@ -223,11 +223,11 @@ def approve(
     it: each child's change dir with ready specs, `parent`, `depends_on`
     (change names) and the feature `branch`, and the parent's `children` (in
     the answer's order); then commit the change dirs in the project and push
-    that commit to origin's `feat/<parent>`, as pm-spec does (with the real
+    that commit to origin's `change/<parent>`, as pm-spec does (with the real
     `git`, so no fake root logs it). Returns that commit's sha. *log* is
     unused, kept so the callers stay as they were."""
     parent = config.change_name
-    branch = f"feat/{parent}"
+    branch = f"change/{parent}"
     changes = config.specs_dir / "changes"
     names = []
     for c in answer.children:

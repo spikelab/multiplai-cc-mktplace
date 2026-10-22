@@ -158,34 +158,6 @@ def refuse_issues_at(shown: str, name: str) -> int:
     return EXIT_SPEC_ISSUES
 
 
-def uncommitted(project_dir: Path, path: Path) -> list[str]:
-    """The paths under *path* that differ from HEAD (staged, unstaged or
-    untracked), buildme's own bookkeeping files left out. Raises
-    `git_ops.GitLifecycleError` when git cannot answer."""
-    project_dir = Path(project_dir)
-    try:
-        rel = Path(path).resolve().relative_to(project_dir.resolve()).as_posix() or "."
-    except ValueError:
-        raise git_ops.GitLifecycleError(f"{path} is not inside {project_dir}") from None
-    res = git_ops._run(
-        [
-            "git",
-            "status",
-            "--porcelain",
-            "--untracked-files=all",
-            "--",
-            rel,
-            *git_ops.BOOKKEEPING_EXCLUDES,
-        ],
-        cwd=project_dir,
-    )
-    if not res.ok:
-        raise git_ops.GitLifecycleError(
-            f"{res.command} failed: {res.stderr.strip()[-300:]}"
-        )
-    return [line[3:] for line in res.stdout.splitlines() if line.strip()]
-
-
 def saved_revision(change_dir: Path) -> str | None:
     """The `spec_revision` `.change.yaml` records (what was marked ready), or
     None when there is none or it cannot be read."""

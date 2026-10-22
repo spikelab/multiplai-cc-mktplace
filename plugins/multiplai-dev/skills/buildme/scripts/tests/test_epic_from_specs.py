@@ -1,7 +1,7 @@
 """The epic entry fed by pm-spec (plan-pm-spec-split-2026-10-21.md, Decision
 11, and plan-spec-feature-branch-2026-10-22.md): `/buildme <parent>` reads the
 parent's `children` and each child's `depends_on` from the change dirs as the
-epic's feature branch on origin (`feat/<parent>`) holds them, refuses
+epic's feature branch on origin (`change/<parent>`) holds them, refuses
 `SPEC:NOT_READY` (exit 2, nothing written) unless every listed child is
 ready there, and runs the coordinator. Every child starts from that branch
 and its PR targets it; one with dependencies starts after they merged into
@@ -64,9 +64,9 @@ def _commit_all(project: Path, msg: str) -> str:
         "merge",
         "-q",
         "--no-edit",
-        "origin/feat/e",
+        "origin/change/e",
     )
-    _git(project, "push", "-q", "origin", "HEAD:refs/heads/feat/e")
+    _git(project, "push", "-q", "origin", "HEAD:refs/heads/change/e")
     return _git(project, "rev-parse", "HEAD")
 
 
@@ -157,7 +157,7 @@ def test_a_listed_child_not_ready_is_refused(tmp_path, monkeypatch, capsys):
     assert rc == 2
     lines = out.splitlines()
     assert lines[0].startswith(
-        "SPEC:NOT_READY:child e-ui on origin/feat/e: the specs changed after they were marked ready"
+        "SPEC:NOT_READY:child e-ui on origin/change/e: the specs changed after they were marked ready"
     )
     assert lines[1] == "Run /multiplai-pm:pm-spec e-ui first"
     _assert_nothing_written(e)
@@ -188,18 +188,18 @@ def test_a_child_not_ready_on_the_feature_branch_is_refused(
         "clone",
         "-q",
         "-b",
-        "feat/e",
+        "change/e",
         str(tmp_path / "o" / "r.git"),
         str(other),
     )
     req = other / "specs" / "changes" / "e-ui" / "requirements" / "cap-ui.md"
     req.write_text(req.read_text() + "\nThe system SHALL do more.\n")
     _git(other, "-c", "commit.gpgsign=false", "commit", "-qam", "edit after ready")
-    _git(other, "push", "-q", "origin", "feat/e")
+    _git(other, "push", "-q", "origin", "change/e")
     rc, out = e.refused(capsys)
     assert rc == 2
     assert out.splitlines()[0].startswith(
-        "SPEC:NOT_READY:child e-ui on origin/feat/e: the specs changed after they were marked ready"
+        "SPEC:NOT_READY:child e-ui on origin/change/e: the specs changed after they were marked ready"
     )
     _assert_nothing_written(e)
 
@@ -208,10 +208,10 @@ def test_an_epic_with_no_feature_branch_is_refused_with_pm_spec_resume(
     tmp_path, monkeypatch, capsys
 ):
     """T8 for an epic: a split handed off before pm-spec pushed (ready and
-    committed in the checkout, no `feat/e` on origin) is refused with
+    committed in the checkout, no `change/e` on origin) is refused with
     `pm-spec resume e`."""
     e = Epic(tmp_path, monkeypatch)
-    _git(e.project, "push", "-q", "origin", "--delete", "feat/e")
+    _git(e.project, "push", "-q", "origin", "--delete", "change/e")
     _git(e.project, "fetch", "-q", "--prune", "origin")
     rc, out = e.refused(capsys)
     assert rc == 2
@@ -276,9 +276,9 @@ def test_a_split_buildme_cannot_build_from_is_refused(
 def test_a_dependant_starts_from_the_feature_branch_after_its_dependency_merged(
     tmp_path, monkeypatch
 ):
-    """(f) a starts from origin's feat/e, the commit pm-spec pushed; b waits
-    for a, and once a's PR merged into feat/e, b starts from feat/e, which
-    then holds a's merge. Both PRs target feat/e; origin's main is untouched."""
+    """(f) a starts from origin's change/e, the commit pm-spec pushed; b waits
+    for a, and once a's PR merged into change/e, b starts from change/e, which
+    then holds a's merge. Both PRs target change/e; origin's main is untouched."""
     e = Epic(
         tmp_path, monkeypatch, answer=CHAIN, steps={"a": [{"commit": {"a.txt": "a\n"}}]}
     )
@@ -289,14 +289,14 @@ def test_a_dependant_starts_from_the_feature_branch_after_its_dependency_merged(
     assert e.status()["b"]["status"] == "waiting" and e.build_records("b") == []
     e.fakes.set_pr(pr_url("e-a"), "MERGED")
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
-    feature = _git(tmp_path / "o" / "r.git", "rev-parse", "feat/e")
+    feature = _git(tmp_path / "o" / "r.git", "rev-parse", "change/e")
     for cid in ("a", "b"):
         argv = e.build_records(cid)[0].started["argv"]
-        assert argv[argv.index("--base-ref") + 1] == "origin/feat/e"
-        assert argv[argv.index("--branch") + 1] == "feat/e"
+        assert argv[argv.index("--base-ref") + 1] == "origin/change/e"
+        assert argv[argv.index("--branch") + 1] == "change/e"
     assert (tmp_path / "bases" / "b").read_text() == feature != e.specs
-    assert _git(tmp_path / "o" / "r.git", "show", "feat/e:a.txt") == "a"
-    assert {p["base"] for p in e.fakes.prs().values()} == {"feat/e"}
+    assert _git(tmp_path / "o" / "r.git", "show", "change/e:a.txt") == "a"
+    assert {p["base"] for p in e.fakes.prs().values()} == {"change/e"}
     assert _git(tmp_path / "o" / "r.git", "rev-parse", "main") == main
 
 
@@ -304,7 +304,7 @@ def test_a_specs_revision_pushed_mid_epic_is_what_a_later_child_builds(
     tmp_path, monkeypatch
 ):
     """(g) T7: after a merged, pm-spec revised b's specs and pushed them to
-    feat/e: b starts from the branch with the revision, and nothing compares
+    change/e: b starts from the branch with the revision, and nothing compares
     it with an earlier specs commit."""
     e = Epic(tmp_path, monkeypatch, answer=CHAIN)
     e.config.epic = EpicSettings(max_parallel=2, merge="manual")
@@ -370,7 +370,7 @@ def e_new_argv(e: Epic, cid: str) -> list[str]:
     from build_pipeline.epic import coordinator
 
     coord = coordinator.Coordinator(
-        e.config, args_for(e.config), e.dir, store.load_epic(e.dir), "feat/e"
+        e.config, args_for(e.config), e.dir, store.load_epic(e.dir), "change/e"
     )
     return coord.new_argv(cid)
 

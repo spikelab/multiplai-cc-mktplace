@@ -1,6 +1,6 @@
 ---
 name: pm-spec
-description: Writes the "what" of a change before anyone builds it — an interview, a proposal, use cases and requirements one capability at a time, a UI or output-format prototype when the change has one — then checks with one read-only agent that the specs agree with each other, and hands off a ready record, a tickets.json and a commit of the change dir, pushed on the change's feature branch (feat/<name>), for /multiplai-dev:buildme to build from. Takes a PRD and a ticket's text (with its child items) as inputs. revise fixes requirements issues buildme raised later.
+description: Writes the "what" of a change before anyone builds it — an interview, a proposal, use cases and requirements one capability at a time, a UI or output-format prototype when the change has one — then checks with one read-only agent that the specs agree with each other, and hands off a ready record, a tickets.json and a commit of the change dir, pushed on the change's feature branch (change/<name>), for /multiplai-dev:buildme to build from. Takes a PRD and a ticket's text (with its child items) as inputs. revise fixes requirements issues buildme raised later.
 when_to_use: 'Triggers: pm-spec, write the spec, spec this change, specify a feature, turn this PRD into specs, spec this ticket, revise the specs, fix spec-issues.md, /multiplai-pm:pm-spec'
 ---
 
@@ -11,7 +11,7 @@ them ready to build, on the change's feature branch, which it pushes. buildme
 then builds from that branch, and refuses specs that are not marked ready or
 were edited since.
 
-**The feature branch.** The specs go on `feat/<name>` (`--branch` names
+**The feature branch.** The specs go on `change/<name>` (`--branch` names
 another), and every `.change.yaml` pm-spec writes records it as `branch:`. A
 split's children use the parent's branch. pm-spec needs an `origin` remote
 (else exit 2) and fetches it first. It writes in a worktree of its own,
@@ -166,7 +166,7 @@ from the skill's `scripts/` folder; other relative paths are read from
 | `--prototype`, `--no-prototype` | new | Force the prototype on or off (default: `prototype: {enabled: auto}` in `specs/config.yaml`). |
 | `--no-epic-split` | new | Keep the work as one change. |
 | `--from-respec` | revise | Read `respec.md` instead of `spec-issues.md`. |
-| `--branch NAME` | all | The feature branch (default: the one the change's `.change.yaml` records, else `feat/<name>`). |
+| `--branch NAME` | all | The feature branch (default: the one the change's `.change.yaml` records, else `change/<name>`). |
 | `--trust-repo` | all | Say the repository is trusted (same as `PM_SPEC_TRUST_REPO=1`). |
 | `--max-usd USD` | all | Spend cap for the change's run, counted across resumes (default 20). |
 

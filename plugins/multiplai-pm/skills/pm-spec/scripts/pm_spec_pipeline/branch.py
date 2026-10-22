@@ -1,6 +1,6 @@
 """The change's feature branch, and the checkout pm-spec writes it in.
 
-A change's specs live on a feature branch on `origin`: `feat/<change>`, or
+A change's specs live on a feature branch on `origin`: `change/<change>`, or
 the name `--branch` gives. A child of an epic uses its parent's branch. pm-spec
 writes in a worktree of its own, so the checkout it was started from
 (`--project-dir`) is never touched:
@@ -9,7 +9,7 @@ writes in a worktree of its own, so the checkout it was started from
   the one the change's `.change.yaml` in `--project-dir` records (`branch`),
   else the branch of a worktree of the repository whose copy of the change
   records that branch (the parent's worktree holds a new child's change dir),
-  else `feat/<change>`. The checkout is `--project-dir` itself when it is on
+  else `change/<change>`. The checkout is `--project-dir` itself when it is on
   that branch; for `resume` and `revise`, also when its copy of the change
   records the branch while another branch is checked out (a build's worktree,
   whose revision reaches the feature branch through that build's pull
@@ -53,7 +53,7 @@ from .run import EXIT_FAILED, EXIT_REFUSED, Stop
 log = logging.getLogger(__name__)
 
 NETWORK_TIMEOUT_S = 300
-PREFIX = "feat/"
+PREFIX = "change/"
 WORKTREE_PREFIX = "pm-spec-"
 
 
