@@ -89,16 +89,9 @@ starting commit with `--apply`, and commits the capability files it writes to
 the build branch (`SPEC_EXTRACT:BASELINE <n>`; `uncommitted` follows when there
 is no build branch to commit to, and a full build then commits them with its
 first block's commit). Spec generation then reads them. Turn it off
-with `spec_extract: false` in `specs/config.yaml`. An epic's child builds skip
-it: the parent runs it, and each child with no dependency, in the epic's own
-repository, branches from the parent's commit that holds the baseline, so the
-registry reaches main with the first merged child PR; every child's PR
-targets the default branch. A child that waits on a dependency branches from
-origin's default branch after that merge, as does every child once that
-branch holds a registry, and every child when the baseline commit would carry
-anything else origin's default branch does not hold (a feature branch,
-unpushed commits, a commit added before a resume, other files in the same
-commit); a child built in another repository builds without a baseline. When spec-extract fails the
+with `spec_extract: false` in `specs/config.yaml`. An epic runs none: the
+parent's run builds nothing itself and its child builds skip it, so the
+children build without a baseline. When spec-extract fails the
 build goes on without a baseline, except in two cases that end the build with
 exit `1` without leaving the phase: another spec-extract run still holds the
 same commit's run folder (`SPEC_EXTRACT:RUNNING`), or the failure left
@@ -362,6 +355,21 @@ Pushes the build's branch and opens a **draft** PR. Runs **after** the archive
 move, so the pushed branch carries the archived layout and the move itself is a
 committed change rather than an uncommitted rename sitting in the worktree. See
 [Git Lifecycle](#git-lifecycle).
+
+### Epic builds
+
+When pm-spec split the change, the parent's `.change.yaml` lists `children`
+and each child's lists `depends_on`. `build --change <parent>` then checks every
+listed child (named `<parent>-<id>`, present, ready, its `depends_on` naming
+listed children with no cycle) and that the parent's and each child's change
+dir is committed and in `HEAD`, refusing with `SPEC:NOT_READY` (exit `2`) and
+nothing written otherwise. It then runs each child as its own `build --change
+<parent>-<id> --auto --trust-repo --epic-child --pr-ready` subprocess in
+dependency order: a child with no dependency branches from `HEAD` (the local
+commit that holds the ready specs, so its PR carries that commit and nothing
+is pushed first), and a dependent child from origin's default branch once its
+dependencies merged. The coordinator's review, fix and merge loops are the
+ones in SKILL.md. Children in another repository are not supported for now.
 
 ## Git Lifecycle
 

@@ -51,9 +51,14 @@ time, not derived from a tag.
   `.change.yaml` lists `children`) builds the children in their `depends_on`
   order, with the same review, fix and merge loops as before. It refuses with
   `SPEC:NOT_READY` when any listed child is not ready, or when the parent's or
-  a child's change dir has uncommitted changes. Each child's worktree branches
-  from the local commit that holds the ready specs, so each child PR carries
-  that commit and nothing is pushed before the build.
+  a child's change dir has uncommitted changes. A child with no dependency
+  branches from the local commit that holds the ready specs, so its PR carries
+  that commit and nothing is pushed before the build; a child that waits on a
+  dependency branches from origin's default branch once that dependency merged,
+  and is not launched (it fails, naming the commit to merge) when that branch
+  does not hold its specs as that commit does. Each child runs as
+  `build --change <parent>-<id>`. An epic now runs no spec-extract, so its
+  children build without a `specs/registry` baseline.
 
 ### Removed
 - buildme `build` flags: `--mode` (`scratch`, `brief`, `only`),
@@ -80,6 +85,11 @@ time, not derived from a tag.
   `Run /multiplai-pm:pm-spec resume <name> first`; after pm-spec marks them
   ready (and they are committed), re-run the same build command and it
   continues from its checkpoint. Nothing is changed by the refusal.
+- An epic that an earlier buildme split and approved (`split.md`) is not
+  continued: its parent has no `children` list, so it refuses with
+  `SPEC:NOT_READY`. Child PRs already open are kept; split the rest again with
+  pm-spec. A child's saved command from before this release uses removed flags,
+  so re-running it by hand stops with a usage error.
 
 ## [0.98.1] - 2026-10-21
 
