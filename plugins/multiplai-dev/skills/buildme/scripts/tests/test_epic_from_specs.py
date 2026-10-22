@@ -229,6 +229,54 @@ def test_a_dependant_whose_base_lacks_its_specs_is_not_launched(tmp_path, monkey
     assert revised[:12] in b["reason"]
 
 
+def _archive(e: Epic, child: str) -> Path:
+    """What a merged `--auto` child's PR leaves in the checkout after a pull:
+    its change dir moved to specs/archive/<date>-<child>/, committed."""
+    dest = e.config.specs_dir / "archive" / f"2026-10-22-{child}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _git(e.project, "mv", f"specs/changes/{child}", str(dest.relative_to(e.project)))
+    _commit_all(e.project, f"specs: archive {child}")
+    return dest
+
+
+def test_a_merged_childs_archived_change_dir_does_not_stop_the_resume(tmp_path, monkeypatch):
+    """(h) a merged and its change dir moved to specs/archive/ (children run
+    with --auto): the next run takes a as merged and launches b."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN)
+    assert e.run() == 3
+    e.fakes.set_pr(pr_url("e-a"), "MERGED")
+    _archive(e, "e-a")
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
+    assert e.status()["a"]["status"] == "merged"
+    assert len(e.build_records("b")) == 1 and len(e.build_records("a")) == 1
+
+
+def test_a_listed_child_gone_and_never_merged_is_still_refused(tmp_path, monkeypatch, capsys):
+    """A listed child whose change dir is gone, with no archive and no
+    merged status saved, is refused as before."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN)
+    _git(e.project, "rm", "-rq", "specs/changes/e-a")
+    _commit_all(e.project, "drop e-a")
+    rc, out = e.refused(capsys)
+    assert rc == 2
+    assert "SPEC:NOT_READY:child e-a: its change dir" in out and "does not exist" in out
+    _assert_nothing_written(e)
+
+
+def test_a_child_saved_as_merged_whose_dir_is_gone_is_accepted(tmp_path, monkeypatch):
+    """The saved status says merged and the archive is not in this checkout
+    (pulled elsewhere, or archived under another date): accepted, with the
+    saved dependencies."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN)
+    assert e.run() == 3
+    e.fakes.set_pr(pr_url("e-a"), "MERGED")
+    assert e.run() == 3 and e.status()["a"]["status"] == "merged"
+    _git(e.project, "rm", "-rq", "specs/changes/e-a")
+    _commit_all(e.project, "e-a gone")
+    rc = e.run()
+    assert rc == 3 and e.status()["a"]["status"] == "merged"
+
+
 # --- epic.json -----------------------------------------------------------------------
 
 def test_an_epic_json_from_before_pm_spec_loads(tmp_path):
