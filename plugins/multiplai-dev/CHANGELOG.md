@@ -15,6 +15,33 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.100.0] - 2026-10-22
+
+### Added
+- **`/multiplai-dev:design-system`: one set of design tokens for every HTML
+  page a skill builds.** Keep your design systems in one folder
+  (`MULTIPLAI_DESIGN_SYSTEMS`, an absolute path) and name the default
+  (`MULTIPLAI_DESIGN_SYSTEM`), in the environment or in `multiplai.conf`.
+  With neither set, pages use a neutral theme shipped with the plugin: greys,
+  one blue accent, system fonts, light and dark. Each design system is a
+  `tokens.css` (colours, fonts, type scale, spacing, radius, measure) plus a
+  `README.md`, and optionally `fonts.css` and `components.md`.
+  `python -m design_system list | show | path | check | create`:
+  - `check` fails a token missing from the light block or from either dark
+    block, a text/background pair below WCAG AA (4.5:1), a colour it cannot
+    read, and `</style` in a CSS file, and prints every contrast ratio;
+  - `create` copies the neutral theme to a new name and never overwrites;
+  - a name that does not exist is an error listing the names that do. It
+    never falls back to neutral.
+
+### Changed
+- **learn-stack's guide and deepen's architecture report use the design
+  system's colours and fonts.** learn-stack's page no longer hardcodes a
+  teal accent and dark Prism code blocks, and its code theme follows the
+  reader's light or dark setting. `render_report.py` takes
+  `--design-system-dir`, and without it uses the neutral theme. The report
+  now follows the reader's light or dark setting too.
+
 ## [0.99.0] - 2026-10-22
 
 ### Changed
