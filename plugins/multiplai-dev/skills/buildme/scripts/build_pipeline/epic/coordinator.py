@@ -454,10 +454,11 @@ class Coordinator:
         self.settings = self.config.epic
         # Decision 4: the children's PRs target the feature branch, so unless
         # config.yaml says otherwise they merge on buildme's own review.
-        if not getattr(self.settings, "merge_set", True) and self.branch != (
-            feature_branch.default_name(self.repo)
-        ):
-            self.settings = dataclasses.replace(self.settings, merge="auto")
+        if self.settings.merge is None:
+            auto = self.branch != feature_branch.default_name(self.repo)
+            self.settings = dataclasses.replace(
+                self.settings, merge="auto" if auto else "manual"
+            )
         self.slug = store.slug_repo_name(self.repo)
         for c in self.epic.children:
             self.children[c.id] = Child(c.id, list(c.depends_on))
@@ -2213,7 +2214,7 @@ class Coordinator:
         why = f"gh pr merge refused: {res.stderr.strip()[-400:]} (mergeStateStatus {view.get('mergeStateStatus')})"
         if view.get("mergeStateStatus") == "BEHIND":
             log.info(
-                "EPIC child %s: %s; merging origin's default branch again", c.id, why
+                "EPIC child %s: %s; merging origin/%s again", c.id, why, self.branch
             )
             return why
         self._merge_park(c, why)
@@ -2576,7 +2577,8 @@ class Coordinator:
                 continue
             # Nothing runs and nothing is ready: read once more (item 15a).
             self._read_prs(self._waited_on())
-            if self._resolve() or self._review_due():
+            again = self._resolve()
+            if (again and self.conflict is None) or self._review_due():
                 continue
             self._save()
             return 0

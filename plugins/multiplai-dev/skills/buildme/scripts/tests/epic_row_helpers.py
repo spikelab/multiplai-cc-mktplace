@@ -14,7 +14,8 @@ them ("How the row tests compare").
 - Calls: only launches and writing calls are logged (`CallLog`), never
   read-only calls.
 - An epic is pm-spec's records (`approve`): each child's ready specs and
-  `depends_on`, the parent's `children`, committed locally and never pushed.
+  `depends_on`, the parent's `children`, committed and pushed to the epic's
+  feature branch, origin's `feat/<parent>`.
 - A kill is a forked child exiting 137 at a named seam (`run_killed`), as
   `row_helpers.run_killed_at` does for git calls.
 """
@@ -219,11 +220,14 @@ def approve(
     config: BuildConfig, answer: EpicSplitAnswer, log: CallLog | None = None
 ) -> str:
     """Write the split pm-spec makes of *config*'s change as *answer* gives
-    it: each child's change dir with ready specs, `parent` and `depends_on`
-    (change names), and the parent's `children` (in the answer's order); then
-    commit the change dirs in the project, locally, pushing nothing. Returns
-    that commit's sha. *log* is unused, kept so the callers stay as they were."""
+    it: each child's change dir with ready specs, `parent`, `depends_on`
+    (change names) and the feature `branch`, and the parent's `children` (in
+    the answer's order); then commit the change dirs in the project and push
+    that commit to origin's `feat/<parent>`, as pm-spec does (with the real
+    `git`, so no fake root logs it). Returns that commit's sha. *log* is
+    unused, kept so the callers stay as they were."""
     parent = config.change_name
+    branch = f"feat/{parent}"
     changes = config.specs_dir / "changes"
     names = []
     for c in answer.children:
@@ -237,10 +241,11 @@ def approve(
                 "schema": "spec-driven",
                 "parent": parent,
                 "depends_on": [f"{parent}-{dep}" for dep in c.depends_on],
+                "branch": branch,
             },
         )
         write_ready_specs(d, c.id)
-    write_change_meta(config.change_dir, {"children": names})
+    write_change_meta(config.change_dir, {"children": names, "branch": branch})
     project = Path(config.project_dir)
     rels = [
         os.path.relpath(p, project)
@@ -256,6 +261,18 @@ def approve(
         f"specs({parent}): ready",
         "--",
         *rels,
+    )
+    subprocess.run(
+        [real_git(), "push", "-q", "origin", f"HEAD:refs/heads/{branch}"],
+        cwd=project,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [real_git(), "fetch", "-q", "origin"],
+        cwd=project,
+        check=True,
+        capture_output=True,
     )
     return _git(project, "rev-parse", "HEAD").strip()
 
@@ -442,17 +459,19 @@ with (root / "prs.lock").open("a") as held:     # two builds ending at once both
     fcntl.flock(held, fcntl.LOCK_EX)
     prs = json.loads(prs_file.read_text()) if prs_file.exists() else {{}}
     new = url not in prs
-    prs.setdefault(url, {{"branch": branch, "state": "OPEN", **step.get("pr", {{}})}})
-    if new and prs[url]["state"] == "MERGED":   # merged on GitHub: origin's main carries the branch, specs and all
+    prs.setdefault(url, {{"branch": branch, "base": opt("--branch") or "main", "state": "OPEN",
+                          **step.get("pr", {{}})}})
+    into = prs[url]["base"]
+    if new and prs[url]["state"] == "MERGED":   # merged on GitHub: the PR's base carries the branch
         lander = root / ("lander-" + repo)
         if not lander.exists():
             subprocess.run(["{git}", "clone", "-q", str(root / "o" / (repo + ".git")), str(lander)],
                            check=True, capture_output=True)
-        for cmd in (["fetch", "-q", "origin"], ["checkout", "-q", "-B", "main", "origin/main"],
+        for cmd in (["fetch", "-q", "origin"], ["checkout", "-q", "-B", into, "origin/" + into],
                     ["fetch", "-q", top, "refs/heads/" + branch],
                     ["-c", "commit.gpgsign=false", "merge", "-q", "--no-ff", "-m",
                      f"Merge pull request {{url}} from {{branch}}", "FETCH_HEAD"],
-                    ["push", "-q", "origin", "main"]):
+                    ["push", "-q", "origin", into]):
             subprocess.run(["{git}", *cmd], cwd=lander, check=True, capture_output=True)
     (root / f"prs.{{os.getpid()}}.tmp").write_text(json.dumps(prs))
     os.replace(root / f"prs.{{os.getpid()}}.tmp", prs_file)     # readers never see half a file
@@ -473,9 +492,9 @@ call: `refuse`, refused with that stderr; `queue`, exits 0 and only queues
 the PR; `lost`, merges and exits 1; `offline`, refused, then every later
 `gh` call fails. `pr merge` is logged to `<root>/merges.log`; it is refused
 when `--match-head-commit` is not origin's branch, or while origin's branch
-lacks origin's main (`BEHIND`, as a branch rule requiring it to be up to
-date), and otherwise merges the branch into origin's main from a scratch
-clone and marks the PR `MERGED`. A PR's `lag`: after origin's branch
+lacks the PR's base (`BEHIND`, as a branch rule requiring it to be up to
+date), and otherwise merges the branch into origin's base (the build's
+`--branch`, else main) from a scratch clone and marks the PR `MERGED`. A PR's `lag`: after origin's branch
 moves, the next `lag` `pr view` and `pr checks` reads still show its
 previous head, whose checks are `old_checks` (none when absent), and `pr
 merge` compares `--match-head-commit` with that head, as GitHub did on
@@ -494,7 +513,8 @@ def at(origin, *a):
 
 def behind(origin, pr):
     pushed = at(origin, "rev-parse", "-q", "--verify", "refs/heads/" + pr["branch"]).stdout.strip()
-    return bool(pushed) and at(origin, "merge-base", "--is-ancestor", "refs/heads/main", pushed).returncode != 0
+    base = "refs/heads/" + pr.get("base", "main")
+    return bool(pushed) and at(origin, "merge-base", "--is-ancestor", base, pushed).returncode != 0
 
 
 def shown(url, pr, pushed, consume=True):
@@ -594,10 +614,11 @@ elif a[:2] in (["pr", "checks"], ["pr", "merge"]):
     merger = root / ("merger-" + origin.stem)
     if not merger.exists():
         subprocess.run(["{git}", "clone", "-q", str(origin), str(merger)], check=True, capture_output=True)
-    for cmd in (["fetch", "-q", "origin"], ["checkout", "-q", "-B", "main", "origin/main"],
+    into = pr.get("base", "main")
+    for cmd in (["fetch", "-q", "origin"], ["checkout", "-q", "-B", into, "origin/" + into],
                 ["-c", "commit.gpgsign=false", "merge", "-q", "--no-ff", "-m",
                  f"Merge pull request #{{number(url.rsplit('/', 1)[1])}} from {{pr['branch']}}",
-                 "origin/" + pr["branch"]], ["push", "-q", "origin", "main"]):
+                 "origin/" + pr["branch"]], ["push", "-q", "origin", into]):
         subprocess.run(["{git}", *cmd], cwd=merger, check=True, capture_output=True)
     import fcntl
     with (root / "prs.lock").open("a") as held:     # as the fake build writes it
@@ -1016,8 +1037,8 @@ class Fakes:
 
     def set_pr(self, url: str, state: str) -> None:
         """Set a PR's state. `MERGED` also merges its branch into origin's
-        main, as a merge on GitHub does, so a later child's base holds what
-        it carried (the specs commit, for a child that branched from it)."""
+        copy of the PR's base (the feature branch), as a merge on GitHub
+        does, so a later child's base holds what it carried."""
         if state == "MERGED" and self.prs()[url]["state"] != "MERGED":
             self._land(url)
         self._update_prs(url, state=state)
@@ -1028,6 +1049,7 @@ class Fakes:
         git = real_git()
         repo = url.split("/")[-3]
         branch = self.prs()[url]["branch"]
+        into = self.prs()[url].get("base", "main")
         checkouts = json.loads((self.root / "checkouts.json").read_text())
         source = self.root / checkouts.get(repo, "p")
         clone = self.root / f"lander-{repo}"
@@ -1049,7 +1071,7 @@ class Fakes:
                 )
             for cmd in (
                 ["fetch", "-q", "origin"],
-                ["checkout", "-q", "-B", "main", "origin/main"],
+                ["checkout", "-q", "-B", into, f"origin/{into}"],
                 ["fetch", "-q", str(source), f"refs/heads/{branch}"],
                 [
                     "-c",
@@ -1061,7 +1083,7 @@ class Fakes:
                     f"Merge pull request {url} from {branch}",
                     "FETCH_HEAD",
                 ],
-                ["push", "-q", "origin", "main"],
+                ["push", "-q", "origin", into],
             ):
                 subprocess.run([git, *cmd], cwd=clone, check=True, capture_output=True)
 

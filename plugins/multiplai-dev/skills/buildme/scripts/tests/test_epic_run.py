@@ -69,7 +69,7 @@ class Epic:
         self.project = make_project(root)
         self.fakes = Fakes(root, monkeypatch, steps)
         self.config = make_build(self.project)
-        self.config.epic = EpicSettings(max_parallel=parallel)
+        self.config.epic = EpicSettings(max_parallel=parallel, merge="manual")
         self.answer = answer
         self.specs = approve(self.config, answer, CallLog(root / "split.log"))
         self.dir = self.data / "buildme" / "epics" / "o-r--e"
@@ -1081,8 +1081,9 @@ def test_an_unexpected_error_still_writes_the_summary(tmp_path, monkeypatch):
         ),
         (
             "epic:\n  max_parallel: 0\n  max_review_rounds: x\n  merge: yes-please\n  max_usd: lots\n",
-            EpicSettings(),
+            EpicSettings(merge="manual"),
         ),
+        ("epic:\n  merge: manual\n", EpicSettings(merge="manual")),
         ("epic: [1]\n", EpicSettings()),
     ],
 )
@@ -1093,8 +1094,9 @@ def test_epic_keys_defaults_and_fallbacks(tmp_path, yaml_text, want):
     config.specs_dir = tmp_path / "specs"
     config._load_specs_config()
     assert config.epic == want
+    # Unset, `merge` is None: the coordinator chooses (`auto` on a feature branch).
     assert EpicSettings() == EpicSettings(
-        max_parallel=2, max_review_rounds=3, merge="manual", max_usd=None
+        max_parallel=2, max_review_rounds=3, merge=None, max_usd=None
     )
 
 

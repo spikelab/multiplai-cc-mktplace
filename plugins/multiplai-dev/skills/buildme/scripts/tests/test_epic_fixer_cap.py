@@ -512,7 +512,9 @@ def test_a_fixer_stopped_at_the_epics_remaining_budget_stops_the_epic(
     assert e.kinds() == ["build", "review", "post", "fix"]
     assert len(e.fakes.fix_launches()) == 1 and len(e.fakes.post_launches()) == 1
 
-    e.config.epic = EpicSettings(max_parallel=2, max_review_rounds=6, max_usd=100.0)
+    e.config.epic = EpicSettings(
+        max_parallel=2, max_review_rounds=6, max_usd=100.0, merge="manual"
+    )
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a")]
     assert e.kinds() == ["build", "review", "post", "fix", "fix", "review"]
     again = e.fixes()[1]
@@ -809,7 +811,9 @@ def _holding(monkeypatch, spent: float, share: float, at_launch: float, now: flo
     from build_pipeline.epic import coordinator
 
     coord = object.__new__(coordinator.Coordinator)
-    coord.settings = EpicSettings(max_parallel=2, max_review_rounds=6, max_usd=20.0)
+    coord.settings = EpicSettings(
+        max_parallel=2, max_review_rounds=6, max_usd=20.0, merge="manual"
+    )
     coord.children = {"a": None, "b": None}
     coord.shares = {"a": coordinator.Share(share, at_launch)}
     coord.budget_stop = None

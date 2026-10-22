@@ -536,17 +536,16 @@ class EpicSettings:
     """`epic:` block: how an approved epic runs its children
     (plan-buildme-epic-mode-2026-10-12.md, item 16a). `max_parallel`: children
     building at once. `max_review_rounds`: review rounds per child PR.
-    `merge`: `auto` or `manual` (a human merges); `merge_set` is whether
-    config.yaml sets it, since unset the coordinator merges `auto` when the
-    PRs target a feature branch (`Coordinator.__post_init__`). `max_usd`: one ceiling for
+    `merge`: `auto` or `manual` (a human merges); None when config.yaml does
+    not set it, which the coordinator runs as `auto` when the PRs target a
+    feature branch, else `manual` (`Coordinator.__post_init__`). `max_usd`: one ceiling for
     the whole epic, None for none. `round_worth`: which Code MEDIUM earns
     another review round (`epic.review.decide`): `breaks`, one the verifier
     did not rate `correctness-only` or `hygiene`; `any`, every one."""
 
     max_parallel: int = 2
     max_review_rounds: int = 3
-    merge: Literal["auto", "manual"] = "manual"
-    merge_set: bool = False
+    merge: Literal["auto", "manual"] | None = None
     max_usd: float | None = None
     round_worth: Literal["breaks", "any"] = "breaks"
 
@@ -1503,8 +1502,8 @@ class BuildConfig:
             log.warning("Invalid budget.max_usd=%r — ignoring", raw_usd)
 
     def _load_epic(self, epic_cfg: dict) -> None:
-        merge = epic_cfg.get("merge", "manual")
-        if merge not in ("auto", "manual"):
+        merge = epic_cfg.get("merge")
+        if merge not in ("auto", "manual", None):
             log.warning(
                 "Invalid epic.merge value %r in config.yaml — using 'manual'", merge
             )
@@ -1530,7 +1529,6 @@ class BuildConfig:
                 epic_cfg.get("max_review_rounds", 3), "epic.max_review_rounds", 3
             ),
             merge=merge,
-            merge_set="merge" in epic_cfg,
             max_usd=max_usd,
             round_worth=worth,
         )
