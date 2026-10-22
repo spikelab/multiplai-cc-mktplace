@@ -359,7 +359,7 @@ jobs:
         working-directory: plugins/multiplai-pm/skills/pm-spec/scripts
         run: |
           uv run --project ../../../../.. --package pm-spec-pipeline \
-            --extra dev python -m pytest tests/ -q
+            --extra dev python -m pytest tests/ -q -n auto
 
   review-viewer-tests:
     name: review-viewer tests

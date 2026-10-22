@@ -14,14 +14,14 @@ dependencies = [
 [project.optional-dependencies]
 # jsonschema checks tickets.json against references/tickets.schema.json in the
 # tests only; the pipeline itself never validates with it.
-dev = ["pytest", "pytest-asyncio", "jsonschema"]
+dev = ["pytest", "pytest-asyncio", "pytest-xdist>=3.8", "jsonschema"]
 
 # The same as the `dev` extra, as a dependency group: `uv run` installs the
 # default group without being asked, so the bare
 # `uv run --directory <this dir> python -m pytest tests/` works too. CI uses
 # `--package pm-spec-pipeline --extra dev` like the other members.
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "jsonschema"]
+dev = ["pytest", "pytest-asyncio", "pytest-xdist>=3.8", "jsonschema"]
 
 [build-system]
 requires = ["hatchling"]
